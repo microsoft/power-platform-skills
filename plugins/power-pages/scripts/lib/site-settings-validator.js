@@ -3,6 +3,7 @@ const { SITE_SETTING_FILE_SUFFIX, loadYamlRecordsWithErrors, listYamlFiles } = r
 const { addFinding, findUnexpectedKeys, findMissingKeys, summarize } = require('./powerpages-validation-utils');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const WEB_API_FIELDS_SETTING_REGEX = /^Webapi\/[^/]+\/fields$/i;
 
 const SITE_SETTING_ALLOWED_KEYS = new Set([
   'description',
@@ -75,6 +76,19 @@ function validateSiteSettings(projectRoot) {
     const hasEnvironmentVariableSchema = Object.prototype.hasOwnProperty.call(setting, 'envvar_schema');
     const hasSource = Object.prototype.hasOwnProperty.call(setting, 'source');
     const hasValue = Object.prototype.hasOwnProperty.call(setting, 'value');
+
+    const isWebApiFieldsSetting = WEB_API_FIELDS_SETTING_REGEX.test(String(setting.name || ''));
+    const hasWildcardField = hasValue
+      && String(setting.value).split(',').some(column => column.trim() === '*');
+    if (isWebApiFieldsSetting && hasWildcardField) {
+      // Power Pages stops supporting wildcard Web API field access on September 14, 2026.
+      // Existing sites must replace it with the exact case-sensitive LogicalNames from metadata.
+      addFinding(findings, 'error', `Web API fields setting "${setting.name}" uses unsupported wildcard field access. Replace it with explicit, case-sensitive Dataverse LogicalNames.`, {
+        filePath: setting.filePath,
+        fileName,
+        settingName: setting.name,
+      });
+    }
 
     if (hasEnvironmentVariableSchema) {
       if (String(setting.envvar_schema || '').trim() === '') {

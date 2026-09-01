@@ -84,3 +84,22 @@ test('validateSiteSettings rejects environment-variable-backed settings with val
   const result = validateSiteSettings(projectRoot);
   assert.ok(findingMessages(result.findings).some(message => message.includes('must not define "value"')));
 });
+
+test('validateSiteSettings rejects wildcard Web API fields', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    '.powerpages-site/site-settings/Webapi-product-fields.sitesetting.yml',
+    [
+      'id: e9981fe5-6724-4111-8341-6045bd001091',
+      'name: Webapi/product/fields',
+      'value: "productid,*"',
+      '',
+    ].join('\n')
+  );
+
+  const result = validateSiteSettings(projectRoot);
+  assert.ok(findingMessages(result.findings).some(message =>
+    message.includes('uses unsupported wildcard field access')
+  ));
+});

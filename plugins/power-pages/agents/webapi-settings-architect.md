@@ -32,7 +32,7 @@ The Power Pages Web API `Webapi/<table>/fields` site setting performs **case-sen
 
 Dataverse stores two forms of every column name:
 
-- **LogicalName**: Always all-lowercase (e.g., `cr4fc_productname`) — **this is what the Web API fields setting requires**
+- **LogicalName**: The case-sensitive name returned by Dataverse metadata (e.g., `cr4fc_productname`) — **this is what the Web API fields setting requires**
 - **SchemaName**: PascalCase with publisher prefix (e.g., `Cr4fc_ProductName`) — used in some tools but **NOT valid** in the fields setting
 
 This agent always queries Dataverse to get the exact LogicalName and uses it as the authoritative source. Column names from code, type definitions, or documentation are **never trusted directly** — they are cross-referenced against Dataverse and corrected if they differ.
@@ -95,7 +95,7 @@ name: Webapi/cra5b_product/enabled
 value: true
 ```
 
-**Fields setting (lists specific columns by default; use `*` only for aggregate OData scenarios):**
+**Fields setting (explicit column list):**
 
 ```yaml
 description: Allowed fields for cra5b_product Web API access
@@ -104,7 +104,9 @@ name: Webapi/cra5b_product/fields
 value: cra5b_productid,cra5b_name,cra5b_description,cra5b_price,cra5b_imageurl
 ```
 
-Note which tables already have Web API enabled and which fields are currently exposed.
+Note which tables already have Web API enabled and which fields are currently exposed. If an
+existing fields setting uses a wildcard, plan to replace it with every validated column required
+by the site's reads, writes, filters, ordering, aggregates, and file/image operations.
 
 ---
 
@@ -223,7 +225,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitio
 
 The script outputs JSON: `{ "status": <code>, "data": { "value": [...] } }`. Each entry in `value` contains `LogicalName`, `SchemaName`, `DisplayName`, `AttributeType`, and `IsPrimaryId`.
 
-**Important:** The query returns both `LogicalName` (all-lowercase, authoritative) and `SchemaName` (PascalCase). Always use `LogicalName` for the site settings fields list.
+**Important:** The query returns both `LogicalName` and `SchemaName`. Always copy the case-sensitive `LogicalName` value exactly as Dataverse returns it for the site settings fields list.
 
 Store the results as a lookup map for each table:
 
@@ -254,27 +256,29 @@ This step catches the casing mismatches that cause 403 errors. For each table, c
 
 ### 5.1 Build Validation Map
 
-For each table, create a case-insensitive lookup from Dataverse results:
+For each table, create an exact lookup from Dataverse results:
 
 ```
-lowercase("LogicalName") → exact LogicalName
+"LogicalName" → column metadata
 ```
 
-Since Dataverse LogicalNames are already all-lowercase, this map effectively allows matching code references regardless of their casing.
+Create a second, case-insensitive lookup only to diagnose casing mistakes. Values written to the
+fields list must always come from the exact `LogicalName` returned by Dataverse.
 
 ### 5.2 Validate Each Column
 
 For each column referenced in code (from Step 3.3):
 
-1. **Normalize** the code column name to lowercase
-2. **Check for OData lookup format**: If the name matches `_<name>_value`, strip the prefix `_` and suffix `_value` to get the base logical name, then look up that base name in the Dataverse map
-3. **Look up** in the Dataverse map
-4. Classify the result:
+1. **Preserve** the column name's casing from code
+2. **Check for OData lookup format**: If the name matches `_<name>_value`, strip the prefix `_` and suffix `_value` to get the base logical name
+3. **Look up** the name in the exact Dataverse map
+4. If the exact lookup fails, check the diagnostic case-insensitive map to identify a casing mismatch
+5. Classify the result:
 
 | Scenario | Action |
 |----------|--------|
 | Exact match (code = Dataverse) | Include in fields list as-is |
-| Case mismatch (code ≠ Dataverse but lowercase matches) | **Use the Dataverse LogicalName** and log a warning |
+| Case mismatch (code differs but the diagnostic case-insensitive lookup matches) | **Use the Dataverse LogicalName** and log a warning |
 | OData lookup format (`_<name>_value`) matched to a Lookup column | Include **both** the LogicalName AND the `_<name>_value` format (see 5.3) |
 | Not found in Dataverse | **Exclude** from fields list and flag as a potential error |
 | In Dataverse but not in code | Note as available but not currently used |
@@ -321,7 +325,7 @@ Column Validation for cra5b_product:
 
 **If any case mismatches are found**, add a prominent warning:
 
-> **WARNING: Case mismatches detected.** The following columns in code use incorrect casing. The `Webapi/<table>/fields` site setting requires exact Dataverse LogicalNames (all lowercase). Using incorrect casing causes 403 Forbidden errors. The proposed site settings use the corrected Dataverse LogicalNames.
+> **WARNING: Case mismatches detected.** The following columns in code use incorrect casing. The `Webapi/<table>/fields` site setting requires the exact case-sensitive Dataverse LogicalName. Using incorrect casing causes 403 Forbidden errors. The proposed site settings use the values returned by Dataverse metadata.
 
 **If any lookup columns are found**, add a note:
 
@@ -349,7 +353,7 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROO
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
-**CRITICAL: For normal CRUD/read scenarios, the `--value` for fields settings MUST use exact Dataverse LogicalNames (all lowercase), comma-separated, with NO spaces after commas. NEVER use SchemaName (PascalCase) or any other casing variant. Every column name must have been validated against Dataverse in Step 5. If the table has File or Image columns accessed via the Web API, OR the site uses aggregate OData queries (`$apply`, `aggregate`, grouped totals), use `*` instead — the `/$value` download endpoint internally does `SELECT *`, so an explicit column list causes 403.**
+**CRITICAL: The `--value` for every fields setting MUST be an explicit list of exact, case-sensitive Dataverse LogicalNames, comma-separated, with NO spaces after commas. Wildcard field access is unsupported beginning September 14, 2026. NEVER use SchemaName or change a LogicalName's casing. Every column name must have been validated against Dataverse in Step 5. Include File or Image column LogicalNames used by file operations. For aggregate OData queries, include every grouping key, aggregate input, filter column, and ordered column referenced by `$apply`.**
 
 **CRITICAL: Lookup columns MUST include BOTH the LogicalName AND the `_<name>_value` OData format.** See Step 5.3.
 
@@ -384,7 +388,7 @@ Then include:
 
 2. **Column validation summary** — How many columns were validated, any mismatches found, any columns excluded
 3. **Lookup columns** — List which columns are lookups and confirm both forms are included
-4. **Security notes** — Confirm that wildcard `*` is only used for tables with File/Image columns or aggregate OData scenarios; all other tables use explicit column lists
+4. **Security notes** — Confirm that every fields setting uses the smallest explicit column list required by the site
 5. **Script invocations** — The exact `create-site-setting.js` commands for each setting (from section 6.1)
 6. **Any discovery steps skipped** due to auth errors
 7. **Dataverse validation status** — Whether column names were validated against Dataverse or only inferred from code/manifest
@@ -421,9 +425,9 @@ After creating all files, return a summary to the calling context:
 ## Critical Constraints
 
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the `create-site-setting.js` script via `Bash`. The script handles all formatting (unquoted booleans, UUIDs, alphabetical fields) automatically.
-- **CASE-SENSITIVE COLUMN NAMES**: The `Webapi/<table>/fields` site setting is case-sensitive. Always use the exact Dataverse LogicalName (all lowercase). Never use SchemaName (PascalCase), DisplayName, or any other variant. Column names from code must be cross-validated against Dataverse before inclusion.
+- **CASE-SENSITIVE COLUMN NAMES**: The `Webapi/<table>/fields` site setting is case-sensitive. Always use the exact Dataverse LogicalName returned by metadata. Never use SchemaName, DisplayName, or any other variant. Column names from code must be cross-validated against Dataverse before inclusion.
 - **LOOKUP COLUMNS NEED BOTH FORMS**: For every lookup column, include both the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields list. Missing either form causes 403 errors — the LogicalName is needed for writes, the `_..._value` form is needed for reads.
-- **Use `*` for tables with File/Image columns or aggregate OData scenarios**: If a table has **File** or **Image** columns that will be accessed via the Web API, the `Webapi/<table>/fields` setting **must use `*`** (wildcard). The `/$value` download endpoint internally performs `SELECT *`; an explicit column list causes `403 "Attribute * not enabled for Web Api"`. Also use `*` when the site relies on aggregate OData queries (`$apply`, `aggregate`, grouped totals). For all other tables, default to specific validated column logical names.
+- **EXPLICIT FIELDS ONLY**: Wildcard field access is unsupported beginning September 14, 2026. Include each required File/Image column by LogicalName. For aggregate OData, include every column referenced by grouping, aggregation, filtering, or ordering.
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
 - **Security**: Never log or display the full auth token. Use it only in API request headers.
@@ -432,10 +436,10 @@ After creating all files, return a summary to the calling context:
 
 When the invoking skill's prompt signals **AI-only read mode** (e.g. `/add-ai-webapi` delegating through `/integrate-webapi`), the fields-list rules tighten for every table in scope:
 
-- **Fields list = exactly the primary's `$select` / `$expand` columns.** No more, no less. Extra columns expand the allowlist without any caller using them.
+- **Fields list = exactly the columns required by every site call against the table.** Start with the primary's `$select` / `$expand` columns. If the same table is used by an aggregate query elsewhere, add every grouping key, aggregate input, filter column, and ordered column that query references. Extra columns expand the allowlist without any caller using them.
 - **Omit the primary key column.** The Power Pages summarization endpoint carries the record id in the URL path, not in `$select`. Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid` — match that pattern.
 - **Lookup columns use the `_<col>_value` OData read form only.** Do NOT include the LogicalName write form (`<col>`) unless the same table has non-AI mutation code elsewhere in the site. In pure AI-only targets there are no writes, so the write form adds attackable surface without any reader.
-- **Case-sensitivity and Dataverse-as-authority rules still apply** — all the above LogicalNames must still be the exact lowercase forms returned by the Dataverse metadata API.
-- **File/Image and aggregate exceptions still apply** — if the summarised table also has File/Image columns or aggregate OData elsewhere, `*` still wins.
+- **Case-sensitivity and Dataverse-as-authority rules still apply** — all the above LogicalNames must exactly match the case returned by the Dataverse metadata API.
+- **File/Image and aggregate columns remain explicit** — add only the File/Image columns and aggregate-query columns that the site actually uses.
 
 The forcing function is the invoking skill's prompt. This section documents the contract so reviewers can verify it without reading downstream skill files.

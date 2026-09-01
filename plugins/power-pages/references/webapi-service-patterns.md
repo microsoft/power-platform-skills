@@ -32,7 +32,7 @@ export interface ProductEntity {
 
 **Naming rules:**
 - Interface: PascalCase table name + `Entity` suffix
-- Properties: exact Dataverse logical names (all lowercase with publisher prefix)
+- Properties: exact, case-sensitive Dataverse LogicalNames with the publisher prefix
 - Lookup raw values: `_<navigation_property>_value`
 - Expanded lookups: PascalCase navigation property with nested object type
 - Always include `[key: string]: unknown` for formatted value annotation access
@@ -151,7 +151,7 @@ body['cr4fc_Category@odata.bind'] = `/cr4fc_categories(${categoryId})`;
 body['_cr4fc_categoryid_value'] = categoryId; // ❌ Does NOT work
 ```
 
-**Common error:** If you get an "Undeclared Property" error on POST/PATCH, you are likely using the logical name (all lowercase) instead of the **Navigation Property name** (case-sensitive, matches the schema name).
+**Common error:** If you get an "Undeclared Property" error on POST/PATCH, you are likely using the case-sensitive LogicalName instead of the **Navigation Property name** (case-sensitive, matches the schema name).
 
 **To clear a lookup**, set the `@odata.bind` annotation to `null`:
 
@@ -506,7 +506,7 @@ Only create these methods if the target table actually has File or Image columns
 | Using `Accept: application/json` for download | Empty or error response | Use `Accept: */*` for blob downloads |
 | Using file MIME type as upload `Content-Type` (e.g. `image/png`) | `400 "Stream was not readable"` — OData routes to JSON deserializer instead of binary handler | Always use `Content-Type: application/octet-stream` for uploads |
 | Missing `Content-Type: application/octet-stream` on download | `404` — OData pipeline can't route to binary file handler | Add `Content-Type: application/octet-stream` to download headers |
-| Explicit column list in `Webapi/<table>/fields` with file columns | `403 "Attribute * not enabled for Web Api"` on `/$value` download — the endpoint internally does `SELECT *` | Set field allowlist to `*` when the table has File or Image columns |
+| File/Image column omitted from `Webapi/<table>/fields` | `403 Forbidden` on `/$value` download | Add the File/Image column's exact Dataverse LogicalName to the explicit fields list |
 
 ---
 

@@ -67,6 +67,24 @@ test('create-site-setting rejects mixing environment-variable and value inputs',
   assert.match(result.stderr, /cannot be combined with --value or --description/);
 });
 
+test('create-site-setting rejects wildcard Web API fields', (t) => {
+  const projectRoot = createTempProject(t);
+  const result = runCreateSiteSetting([
+    '--projectRoot', projectRoot,
+    '--name', 'Webapi/test/fields',
+    '--value', 'test_name,*',
+    '--description', 'Allowed test fields',
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires an explicit comma-separated column list/);
+});
+
+test('create-site-setting allows wildcard values for unrelated settings', (t) => {
+  const yaml = getWrittenYaml(t, 'HTTP/Access-Control-Allow-Origin', '*');
+  assert.match(yaml, /^value: "\*"$/m);
+});
+
 // --- YAML quoting edge cases ---
 //
 // The YAML writer must quote values that would change meaning when read back

@@ -106,6 +106,15 @@ Parse the JSON output and carry the findings into the audit. Treat:
 
 These findings should be included in the final audit report even if the later code/Dataverse analysis also finds additional issues.
 
+If the validator reports wildcard field access in a `Webapi/<table>/fields` setting, add this
+critical finding to the report:
+
+- **Severity:** `critical`
+- **Title:** `Unsupported wildcard Web API fields for <table>`
+- **Reasoning:** The fields setting uses wildcard access, which is unsupported beginning September 14, 2026
+- **Fix:** Replace the wildcard with every required, case-sensitive Dataverse LogicalName returned by metadata
+- **Details:** Include the site-setting file path and setting name from the validator finding
+
 After Step 3.1 determines the environment URL, if this audit is running locally with Dataverse access available, rerun the shared validator with live relationship verification enabled and merge any additional findings:
 
 ```bash

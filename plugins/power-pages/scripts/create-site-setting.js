@@ -68,6 +68,16 @@ if (!usesEnvironmentVariable && valueType === 'boolean' && settingValue !== 'tru
   process.exit(1);
 }
 
+const isWebApiFieldsSetting = /^Webapi\/[^/]+\/fields$/i.test(settingName);
+const hasWildcardField = !usesEnvironmentVariable
+  && settingValue.split(',').some(column => column.trim() === '*');
+if (isWebApiFieldsSetting && hasWildcardField) {
+  // Power Pages stops supporting wildcard Web API field access on September 14, 2026.
+  // Reject it here so generated site settings remain deployable after that cutoff.
+  console.error('Error: Webapi/<table>/fields requires an explicit comma-separated column list; wildcard field access is unsupported beginning September 14, 2026.');
+  process.exit(1);
+}
+
 const siteSettingsDir = path.join(projectRoot, '.powerpages-site', 'site-settings');
 if (!fs.existsSync(siteSettingsDir)) {
   console.error(`Error: Site settings directory not found at ${siteSettingsDir}`);
