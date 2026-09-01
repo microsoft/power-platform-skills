@@ -1778,11 +1778,11 @@ async function runSdkBuild(spec, opts = {}) {
   // The consequence is environment-visible and is handled below: an environment that does not declare
   // the member cannot host business rules AT ALL.
   //
-  // MEASURED by fanning out across 142 reachable environments (2026-08-31): 14 declare the member,
-  // 128 do not, and 13 of the 14 deploy a real two-clause rule. So the gate is the COMMON case, not
-  // an edge case. Note also that declaring the member is NOT the same as it working — one environment
-  // answers a real push with a server-side `MissingMethodException`, which is a platform defect there
-  // rather than anything about the rule. See the `businessRuleApiUnavailable` handling.
+  // MEASURED across a broad sample of environments: only a small minority declare the member, so the
+  // gate is the COMMON case, not an edge case. Note also that declaring the member is NOT the same as
+  // it working — some environments answer a real push with a server-side `MissingMethodException`,
+  // which is a platform defect there rather than anything about the rule. See the
+  // `businessRuleApiUnavailable` handling.
   if (has('business-rules')) {
     // Warn ONCE per build, not once per rule: on an environment without the member every rule skips,
     // and N copies of the same paragraph buries the rest of the build output.

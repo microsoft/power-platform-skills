@@ -57,9 +57,9 @@ apart deliberately.
   client-side workflow-XAML compiler it used to fall back on was removed upstream, because it covered
   4 of the 7 action types and a single clause and therefore silently narrowed a rule into something
   that did not say what the author wrote. An environment that does not declare that member **cannot
-  host business rules** — measured across 142 reachable environments, only 14 declare the member,
-  and 13 of those 14 deploy a real rule (the 14th fails with a server-side MissingMethodException,
-  a platform defect on that environment rather than a rule-shape problem). The build then skips them,
+  host business rules** — and that is the common case rather than an edge case. Where the member is
+  declared, a rule can still fail with a server-side MissingMethodException, which is a platform
+  defect on that environment rather than a rule-shape problem. The build then skips them,
   warns once naming the member, and builds everything else normally; `--verify` reports them as *not
   applicable on this environment* rather than missing, so the exit code, the deployed baseline and
   the `--changed-only` snapshot are unaffected.
