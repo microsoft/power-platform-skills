@@ -699,7 +699,7 @@ New skill (migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap
 
 ---
 
-### 6.32 `migrate-webapi-selectall` (4 calls / 3 gates + 1 data prompt)
+### 6.32 `migrate-webapi-selectall` (6 calls / 5 gates + 1 sub-prompt)
 
 Reviews traditional and SPA sites for deprecated Web API wildcard fields settings, derives least-privilege columns from every call chain, and applies only a complete approved migration.
 

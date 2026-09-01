@@ -56,7 +56,8 @@ function executeInlineRenderer(html) {
     addEventListener() {},
   };
 
-  vm.runInNewContext(inline[1], { document, console, window: { scrollTo() {} } });
+  const fakeWindow = { scrollTo() {}, matchMedia: () => ({ matches: false }) };
+  vm.runInNewContext(inline[1], { document, console, window: fakeWindow });
   return elements;
 }
 

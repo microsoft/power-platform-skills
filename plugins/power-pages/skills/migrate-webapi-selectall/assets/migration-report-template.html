@@ -276,6 +276,8 @@ renderList(document.getElementById('explicitList'), explicits, 'explicit', 'Conf
   'No already-explicit field settings were found in any configuration scope.');
 
 const navButtons = Array.from(document.querySelectorAll('.nav-btn'));
+// An explicit behavior overrides the CSS reduced-motion rule.
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 function selectTab(btn) {
   navButtons.forEach(b => {
     const on = b === btn;
@@ -285,7 +287,7 @@ function selectTab(btn) {
     b.tabIndex = on ? 0 : -1;
     document.getElementById('tab-' + b.dataset.tab).classList.toggle('active', on);
   });
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  window.scrollTo({ top: 0, behavior: reduceMotion.matches ? 'auto' : 'smooth' });
 }
 navButtons.forEach((btn, index) => {
   btn.addEventListener('click', () => selectTab(btn));
