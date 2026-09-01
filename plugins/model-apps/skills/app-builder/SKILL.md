@@ -1,7 +1,7 @@
 ---
 name: app-builder
 version: 0.8.1
-description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
+description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, business rules, business process flows, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", "add a business process flow", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
@@ -72,6 +72,13 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   the requirement is field-level and declarative — it is visible in the maker, survives solution
   export, and needs no web resource. Use form JS when the logic needs a real API call, cross-record
   work, or anything beyond the four supported actions.
+- **Guided processes** — `businessProcessFlows[]`: the staged bar across the top of a record
+  (ordered stages, each with steps bound to that table's columns; a step with no field is a
+  checklist item). Reach for one when the user describes work moving through **phases** — "triage →
+  investigate → resolve", "lead → qualify → close". Author it `Active` (the default) or the stage bar
+  does not appear at all. v1 is single-entity and linear: cross-entity stages, branching, stage
+  actions and security-role grants are **rejected** by the spec gate, so offer Maker for those rather
+  than writing them into the spec.
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
 - **App shell** — the app module + sitemap, with per-subarea icons. Turn on the **modern shell** with
@@ -519,6 +526,9 @@ canonical control cells / the `/bag/c` events region via the SDK's generic `addE
 → **business rules** (`businessRules[]` — authored as the workflow object model through the bound
 `CreateProcessWithWfomJson` member and activated; **skipped with a warning** on an environment that
 does not declare that member) →
+**business process flows** (`businessProcessFlows[]`; a category-4 process compiled from the
+authored stages and activated — this goes through the SDK's generic artifact surface, a plain
+`workflows` row, so it is NOT subject to the bound-member gate above) →
 **command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
 the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
@@ -558,7 +568,8 @@ child view id. Each step emits `[n/total]`.
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
   (both tracked SDK follow-ups). The security surface today is role-per-persona plus per-form role
-  assignment, and both of those ship.
+  assignment, and both of those ship. Also out of scope: the BPF knobs the spec gate rejects
+  (cross-entity stages, branching, stage actions, security-role grants).
 - **Environment-gated (may not work where you are running):**
   - **Business rules** (`businessRules[]`). The SDK writes a rule through the bound
     `CreateProcessWithWfomJson` member — the same one the modern business-rule designer uses — and
@@ -569,6 +580,8 @@ child view id. Each step emits `[n/total]`.
     edge case. The build **skips** the rules, warns once naming the
     member, and builds everything else normally, so an app is never left half-created. If rules are
     essential, verify the environment first.
+    **Business process flows are NOT affected by this gate** — a BPF is written as an ordinary
+    `workflows` row through the SDK's generic artifact surface, with no bound member involved.
 - Supported: the full data model — all column types, **AutoNumber primary**, global choices, status
   reasons, alternate keys, **N:N + junction-with-payload**; **`required` reconciled on existing
   columns** (an explicit `required` converges on rebuild; an omitted one never demotes);

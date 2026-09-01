@@ -21,6 +21,19 @@ an environment that supports them**.
 
 ### Added
 
+- **`businessProcessFlows[]` — guided, staged processes on a table.** Author the stage bar users work
+  through: ordered stages, each with steps bound to that table's columns (a step with no field is a
+  checklist item). Deployed as a category-4 business process flow and activated on create, because an
+  inactive flow is invisible rather than merely inert. Every step's field is checked against the
+  flow's own table, since the platform accepts a step bound to nothing and renders it that way; a flow
+  name must be unique across the whole spec (Dataverse derives the stored name from it, ignoring the
+  table), and every stage needs at least one step or the platform invents one for you.
+  Additive on rebuild, torn down with the app, and a new `business-process-flows` build phase (16
+  now). v1 is single-entity and linear — cross-entity stages, branching, stage actions and
+  security-role grants are rejected rather than silently dropped, so a flow never deploys as
+  something other than what you wrote. Unlike `businessRules[]`, a BPF is written as an ordinary
+  `workflows` row through the SDK's generic artifact surface, so it is **not** subject to the
+  bound-member environment gate above.
 - **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
   `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form;
   undo with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)
@@ -40,6 +53,11 @@ an environment that supports them**.
 
 ### Fixed
 
+- **A `businessRules[]`-only edit is no longer treated as "nothing changed."** The spec diff that
+  drives `--changed-only` had no entry for the business-rules phase, so an edit to a rule classified
+  as a **no-op** and the run did nothing at all. Both it and the new business-process-flows phase now
+  diff correctly and force a full build, recording the edit as debt because the additive engine does
+  not reapply changes to a rule or flow that already exists.
 - **Dashboards survive a download again** — the SDK could not deserialize a dashboard it had
   serialized, so no tiles were recovered and the download failed without `--allow-lossy-download`.
   ([#478])
@@ -88,7 +106,7 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   create. Every field is checked against the rule's own entity, because a rule naming a column that
   does not exist is accepted by the platform and then simply never fires. Operators `Equals` ·
   `DoesNotEqual`. Additive on rebuild, torn down with the app, and a new `business-rules` build
-  phase (15 now).
+  phase.
 - **Custom grid rendering (preview) — `entities[].columns[].visualization`.** Render a column as a
   radial dial, line chart, heat map or star rating in every grid and view that shows it. Per-column,
   so it is declared once rather than per view. Where the platform has not provisioned the preview the

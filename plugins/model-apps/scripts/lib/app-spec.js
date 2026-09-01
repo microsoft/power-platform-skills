@@ -451,6 +451,64 @@ const BUSINESS_RULE_DATA_TYPES = ['String', 'Memo', 'Picklist', 'State', 'Status
 // which cannot be resolved before the forms phase has run.
 const BUSINESS_RULE_SCOPES = ['Entity'];
 
+// --- Business process flows (BPF) ---------------------------------------------------------------
+//
+// A BPF is a `workflows` row (category 4 / type 1 / businessprocesstype 0) whose XAML the platform
+// reads to materialize the read-only `processstage` rows. The vendored SDK owns that serialization;
+// the plugin owns the judgment below.
+//
+// v1 is deliberately a SINGLE-ENTITY, linear flow: ordered stages, each with ordered steps bound to
+// columns of that same entity. The SDK's artifact additionally models `category`, `nextStageId`,
+// `relationshipName`, `branch`, stage `actions` and `securityRoles`, and those are NOT exposed here:
+//   * cross-entity stages / branching change what the flow MEANS and need live verification per
+//     shape before being offered;
+//   * `securityRoles` needs role IDs (the SDK grants CRUD privileges on the backing table that
+//     ACTIVATION creates, via `reconcileBpfSecurityRoles({ roleId, access })`) — that is the
+//     `security` phase's job, not this one, and is tracked as a follow-up.
+// Offering a knob the build cannot verify is how a spec deploys something the author did not mean.
+const BPF_STATUSES = ['Active', 'Draft'];
+
+// Mirror of the vendored SDK's BPF `uniquename` derivation:
+//   uniqueName || `new_${name.toLowerCase().replace(/[^a-z0-9]/g, '') || 'businessprocessflow'}`
+// Two properties of it drive the collision check below, and both are easy to get wrong:
+//   * it IGNORES the entity, so two flows on DIFFERENT tables can derive one unique name; and
+//   * it strips case and punctuation, so "Ticket Handling" and "ticket-handling" derive the same one.
+// The plugin does not supply an explicit `uniqueName` (bpfDef leaves it to the SDK), so an author has
+// no way to disambiguate. This is not merely a name clash: ACTIVATION creates an org-owned backing
+// TABLE named after the derived value, so the second flow cannot deploy at all.
+function bpfUniqueName(name) {
+  const normalized = String(name === undefined || name === null ? '' : name).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return `new_${normalized || 'businessprocessflow'}`;
+}
+
+// The keys a stage / step may carry. Everything else is REJECTED rather than dropped: the SDK's own
+// normalizers copy a fixed key set (stage: id/name/entityLogicalName/steps + category/nextStageId/
+// relationshipName/actions/branch; step: id/name/fieldName/required) and discard the rest, so an
+// unmapped key an author wrote — a stage `branch`, or the very plausible `fieldLogicalName` instead of
+// `field` — would otherwise validate clean and deploy as if it had never been written.
+const BPF_STAGE_KEYS = new Set(['name', 'entity', 'steps']);
+const BPF_STEP_KEYS = new Set(['name', 'field', 'required']);
+
+// The column logical names an entity legitimately exposes to a rule / process step: its declared
+// columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
+// column on the referencing table, just declared elsewhere in the spec).
+//
+// Shared by the business-rule and BPF validators — they ask the identical question, and an answer
+// that drifts between them would let one accept a field the other rejects.
+function declaredColumnLogicals(spec, entitySchemaName) {
+  const ent = (spec.entities || []).find((e) => e && e.schemaName === entitySchemaName);
+  const cols = new Set();
+  if (!ent) return cols;
+  if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(String(ent.primaryAttribute.schemaName).toLowerCase());
+  for (const c of ent.columns || []) if (c && c.schemaName) cols.add(String(c.schemaName).toLowerCase());
+  for (const rel of spec.relationships || []) {
+    if (rel && rel.referencing === entitySchemaName && rel.lookup && rel.lookup.schemaName) {
+      cols.add(String(rel.lookup.schemaName).toLowerCase());
+    }
+  }
+  return cols;
+}
+
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
 //
 // This is the SINGLE definition used by all three entry points an LCID can arrive from, so they can
@@ -1160,16 +1218,7 @@ function validateAppSpec(spec, opts = {}) {
     }
 
     // Columns the rule may reference: the entity's own declared columns plus its primary name.
-    const ent = (spec.entities || []).find((e) => e && e.schemaName === r.entity);
-    const cols = new Set();
-    if (ent) {
-      if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(String(ent.primaryAttribute.schemaName).toLowerCase());
-      for (const c of ent.columns || []) if (c && c.schemaName) cols.add(String(c.schemaName).toLowerCase());
-      // A lookup created by a relationship is a real column on the referencing table.
-      for (const rel of spec.relationships || []) {
-        if (rel && rel.referencing === r.entity && rel.lookup && rel.lookup.schemaName) cols.add(String(rel.lookup.schemaName).toLowerCase());
-      }
-    }
+    const cols = declaredColumnLogicals(spec, r.entity);
     const checkField = (field, what) => {
       if (!field) { errors.push(`${label}: ${what} needs a field`); return; }
       if (cols.size && !cols.has(String(field).toLowerCase())) {
@@ -1234,6 +1283,112 @@ function validateAppSpec(spec, opts = {}) {
       }
       if (a.type === 'SetFieldValue' && a.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(a.dataType)) {
         errors.push(`${label}: action dataType must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
+      }
+    }
+  }
+  // Business process flows. Same discipline as business rules and for the same reason: the platform
+  // accepts a BPF whose step names a column that does not exist, materializes its stages, and then
+  // simply renders a step bound to nothing — no error at deploy time, and nothing downstream to
+  // catch it. So every field is checked against the flow's own entity here.
+  const bpfUniques = new Map();
+  for (const p of spec.businessProcessFlows || []) {
+    const label = `business process flow '${(p && p.name) || '(unnamed)'}'`;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) { errors.push('businessProcessFlows[] entries must be objects'); continue; }
+    if (!p.name) errors.push(`${label}: name is required`);
+    else {
+      // Keyed on the DERIVED unique name, not on (entity, name). The build identifies a flow by
+      // (entity, name) for reuse, but the SERVER identity the SDK derives ignores the entity and
+      // strips case/punctuation — so an (entity, name) key would let two flows through that cannot
+      // both exist. See bpfUniqueName.
+      const unique = bpfUniqueName(p.name);
+      const clash = bpfUniques.get(unique);
+      if (clash !== undefined) {
+        errors.push(`${label}: collides with '${clash}' — both derive the Dataverse unique name '${unique}' (the derivation lower-cases the name, strips punctuation, and ignores the table). Activation creates a backing table with that name, so the second flow cannot deploy. Rename one, e.g. "${p.name} (Cases)".`);
+      } else {
+        bpfUniques.set(unique, p.name);
+      }
+    }
+    if (!p.entity || !entityNames.has(p.entity)) { errors.push(`${label}: references unknown entity '${p.entity}'`); continue; }
+    if (p.status !== undefined && !BPF_STATUSES.includes(p.status)) {
+      errors.push(`${label}: status must be ${BPF_STATUSES.join('|')}`);
+    }
+    if (p.order !== undefined && (!Number.isInteger(p.order) || p.order < 1)) {
+      errors.push(`${label}: order must be a positive integer (it becomes the workflow's processorder)`);
+    }
+    // Allow-list the flow's own keys for the same reason as the stage/step ones below: naming only the
+    // three knobs we knew about left others (the SDK also models `globalActions`) neither mapped nor
+    // rejected — silently dropped, which is the failure this guard exists to prevent.
+    const BPF_FLOW_KEYS = new Set(['name', 'entity', 'description', 'status', 'order', 'stages']);
+    for (const k of Object.keys(p)) {
+      if (!BPF_FLOW_KEYS.has(k)) {
+        errors.push(`${label}: unsupported key '${k}' (allowed: ${[...BPF_FLOW_KEYS].join(', ')}). Security-role grants, branching and process actions are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker after the flow deploys.`);
+      }
+    }
+    const cols = declaredColumnLogicals(spec, p.entity);
+    if (!Array.isArray(p.stages) || !p.stages.length) {
+      errors.push(`${label}: stages[] is required (a flow with no stage is not a process)`);
+      continue;
+    }
+    const stageNames = new Set();
+    for (const st of p.stages) {
+      if (!st || typeof st !== 'object' || Array.isArray(st)) { errors.push(`${label}: each stage must be an object`); continue; }
+      if (!st.name) { errors.push(`${label}: every stage needs a name`); continue; }
+      if (stageNames.has(st.name)) errors.push(`${label}: duplicate stage name '${st.name}'`);
+      stageNames.add(st.name);
+      // Reject an unmapped stage key rather than dropping it. `branch`, `actions`, `nextStageId`,
+      // `category` and `relationshipName` are STAGE-level in the SDK's model — which is exactly where
+      // an author would write them — and bpfDef maps only name/entity/steps, so without this they
+      // would vanish silently.
+      for (const k of Object.keys(st)) {
+        if (!BPF_STAGE_KEYS.has(k)) {
+          errors.push(`${label}: stage '${st.name}' has unsupported key '${k}' (allowed: ${[...BPF_STAGE_KEYS].join(', ')}). Branching, stage actions and cross-entity flow are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker.`);
+        }
+      }
+      // v1 is single-entity: a stage on another table is a cross-entity flow, which changes what the
+      // process means (it spans records) and is rejected rather than silently retargeted.
+      if (st.entity !== undefined && st.entity !== p.entity) {
+        errors.push(`${label}: stage '${st.name}' targets '${st.entity}' — cross-entity flows are not supported; every stage must be on ${p.entity}`);
+      }
+      if (st.steps !== undefined && !Array.isArray(st.steps)) {
+        errors.push(`${label}: stage '${st.name}': steps must be an array`);
+        continue;
+      }
+      // A stage MUST carry at least one step. The SDK's createDefault substitutes a placeholder step
+      // literally named "New Step" when a stage has none, so an empty stage deploys a step the author
+      // never wrote (and the SDK's own `stage-needs-step` rule never fires, because the placeholder is
+      // injected before it looks).
+      if (!(st.steps || []).length) {
+        errors.push(`${label}: stage '${st.name}' has no steps — a stage with none deploys a placeholder step named "New Step" that you did not author`);
+      }
+      const stepNames = new Set();
+      for (const step of st.steps || []) {
+        if (!step || typeof step !== 'object' || Array.isArray(step)) { errors.push(`${label}: stage '${st.name}': each step must be an object`); continue; }
+        if (!step.name) { errors.push(`${label}: stage '${st.name}': every step needs a name`); continue; }
+        if (stepNames.has(step.name)) errors.push(`${label}: stage '${st.name}': duplicate step name '${step.name}'`);
+        stepNames.add(step.name);
+        // Same reason as the stage allow-list, and the likeliest instance of it: a step written with
+        // `fieldLogicalName` (the name used elsewhere in the SDK's own artifact shapes) is dropped by
+        // the step normalizer and deploys bound to nothing.
+        for (const k of Object.keys(step)) {
+          if (!BPF_STEP_KEYS.has(k)) {
+            errors.push(`${label}: stage '${st.name}' step '${step.name}' has unsupported key '${k}' (allowed: ${[...BPF_STEP_KEYS].join(', ')}${k === 'fieldLogicalName' ? " — the column key is 'field'" : ''})`);
+          }
+        }
+        // `field` is optional: a step with no field is a valid checklist item in a BPF, and the SDK
+        // emits it as a step whose control has no DataFieldName. Only a field that IS given has to
+        // resolve.
+        if (step.field !== undefined) {
+          if (cols.size && !cols.has(String(step.field).toLowerCase())) {
+            errors.push(`${label}: stage '${st.name}' step '${step.name}' references '${step.field}', which is not a column on ${p.entity}`);
+          }
+        } else if (step.required === true) {
+          // "Required" with nothing to fill in cannot be satisfied, so the stage could never be
+          // completed — the platform would not complain, the user just gets stuck.
+          errors.push(`${label}: stage '${st.name}' step '${step.name}' is required but binds no field`);
+        }
+        if (step.required !== undefined && typeof step.required !== 'boolean') {
+          errors.push(`${label}: stage '${st.name}' step '${step.name}': required must be a boolean`);
+        }
       }
     }
   }
@@ -1949,6 +2104,9 @@ module.exports = {
   BUSINESS_RULE_ACTIONS,
   BUSINESS_RULE_ACTION_TYPES,
   BUSINESS_RULE_DATA_TYPES,
+  BPF_STATUSES,
+  bpfUniqueName,
+  declaredColumnLogicals,
   BUSINESS_RULE_SCOPES,
   migrateAppSpec,
   columnTypeMap,

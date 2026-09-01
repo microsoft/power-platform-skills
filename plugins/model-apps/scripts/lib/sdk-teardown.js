@@ -53,7 +53,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -407,6 +407,36 @@ const KIND_HANDLERS = {
     },
     tolerateNotFound: true,
   },
+  businessProcessFlows: {
+    // Same shape as a business rule — a `workflows` row the SDK does not model as a deletable
+    // artifact kind — so resolve and delete it over queryRecords/deleteRecord.
+    //
+    // Scoped by (category 4, businessprocesstype 0, name, primaryentity): a same-named process on
+    // another table, and a same-named TASK FLOW on this one, are both left alone.
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        // DEFINITION rows only (see bpfFilter in sdk-build.js). Activating a process makes the
+        // platform create a `type 2` activated copy parented to the definition; it refuses to delete
+        // that copy directly (405) and removes it with its parent, so an unfiltered query would
+        // produce a guaranteed per-flow teardown failure — the exact bug fixed for business rules.
+        filter: bpfFilter(target.name, target.entity),
+        top: 50,
+      });
+      return (rows || []).map((r) => ({ id: r.workflowid, name: target.name, statecode: r.statecode }));
+    },
+    async del(sdk, item) {
+      // Deactivate before delete: Dataverse refuses to delete an activated process. An activated BPF
+      // additionally owns a backing TABLE (logical name = the workflow's uniquename) that the
+      // platform creates on activation and removes with the process — so this delete is what cleans
+      // that up too, and skipping it would strand a table this app created.
+      if (item.statecode === 1) {
+        try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
+      }
+      return sdk.deleteRecord('workflow', item.id);
+    },
+    tolerateNotFound: true,
+  },
   commands: {
     // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
     // resolveArtifact('command', { entity }) returns that single per-entity artifact and
@@ -687,6 +717,13 @@ function planTeardown(spec) {
   for (const r of spec.businessRules || []) {
     const entity = String(r.entity).toLowerCase();
     steps.push({ kind: 'businessRules', phase: 'business-rules', label: `business rule "${r.name}" (${entity})`, target: { entity, name: r.name } });
+  }
+  // Business process flows, for the same reasons and in the same position: an activated BPF is a
+  // workflow row bound to the entity (plus a platform-owned backing table), so it has to go before
+  // the table it references and is not something a table delete cascades away.
+  for (const p of spec.businessProcessFlows || []) {
+    const entity = String(p.entity).toLowerCase();
+    steps.push({ kind: 'businessProcessFlows', phase: 'business-process-flows', label: `business process flow "${p.name}" (${entity})`, target: { entity, name: p.name } });
   }
   // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
   // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV

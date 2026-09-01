@@ -166,13 +166,47 @@ apart deliberately.
   `success`→`saved` rename that silently disarmed the 412 guard. `sdk-uptake-contract.test.js`
   compares `AI_APP_SETTING` to the SDK's map and asserts the gate/per-app names stay distinct.
 
+### Business process flows — 🧪 tested (not yet live-verified)
+- `businessProcessFlows[]` — the staged process bar on a record: ordered `stages[]`, each with
+  ordered `steps[]` bound to columns of the same table (a step with no `field` is a checklist item).
+  `status` defaults to `Active` because an inactive BPF is not merely inert, it is **invisible** —
+  the stage bar does not render at all.
+- Deployed as a `workflows` row (**category 4 / type 1 / businessprocesstype 0**) whose XAML the
+  vendored SDK compiles from the authored stages; an `Active` flow is activated in the same push
+  (`statecode 1` / `statuscode 2`). Every query in build, verify and teardown goes through one
+  `bpfFilter`, which scopes to the DEFINITION row and excludes both the platform's activated `type 2`
+  copy and same-named **task flows** (also category 4) — the two mistakes that cost real time on
+  business rules.
+- Additive on rebuild (matched by `entity` + `name`, reused if present, Active/Draft state converged
+  in both directions); torn down with the app, deactivate-then-delete, before its table. A new
+  `business-process-flows` build phase sits next to `business-rules` (16 now).
+- **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching,
+  stage actions and security-role grants; the spec gate **rejects** those keys — as an allow-list at
+  flow, stage *and* step level — rather than ignoring them, so a flow never quietly deploys as
+  something other than what was authored. The allow-list shape matters: the SDK's normalizers copy a
+  fixed key set and discard the rest, so a stage `branch` or a step's `fieldLogicalName` (instead of
+  `field`) would otherwise pass validation and deploy bound to nothing. `securityRoles` needs role ids
+  and belongs to the `security` phase (a BPF's grants are privileges on the backing table that
+  activation creates) — tracked as a follow-up.
+- Two platform facts the validator encodes, both found by adversarial review and measured against the
+  bundle: a flow **name must be unique across the whole spec** (the derived `uniquename` ignores the
+  table and strips case/punctuation, and activation creates a backing table with that name, so two
+  colliding flows cannot both deploy); and a stage must carry **at least one step** (the SDK
+  substitutes a placeholder named "New Step" for an empty stage).
+- Unblocked a defect in the vendored SDK, fixed upstream and re-vendored: the hybrid XML grammar walk
+  descended into TEXT nodes, and `@xmldom/xmldom` (what the SDK's DOM shim installs headlessly)
+  exposes a text node's `childNodes` as `null` where jsdom returns an empty NodeList. Every BPF push
+  therefore threw `TypeError: Cannot read properties of null (reading 'length')` in the vendored
+  bundle — input-independent — while the SDK's own jsdom-only suite stayed green. Pinned by a real-bundle
+  test here and by a `@jest-environment node` regression upstream.
+
 ### Edit flow (download → edit → rebuild) — ✅ verified live
 - `download-model-app.js` pulls a **deployed app** back into an editable App Spec (+ page code, icons, referenced entities, and the app's **real unmanaged solution** — `recoverAppSolution` enumerates the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions, so the spec names the right container for a later clean teardown); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). The app-shell phase **re-syncs the sitemap + components of any existing app** (fetch → recompute-from-spec → push → publish), so subarea add/rename/reorder edits land for **page-less apps too** — not just generative-page apps — and `--only app-shell` can force the rewrite. **Classic DashBoard subareas are *designed* to round-trip** — the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them. **This now works end to end.** It previously did not: the vendored SDK’s `fetchArtifact(‘dashboard’, …)` threw `Cannot read properties of null (reading ‘length’)` while deserializing the `<parameters>` block it had itself serialized, so no tiles were recovered and the subarea was dropped — which failed the whole download unless `--allow-lossy-download` was passed. Root cause upstream: the grammar walk descended into **text** nodes, and the bundled XML parser returns `null` for a text node’s children. Fixed in the SDK and re-vendored; measured across the re-vendor as **0/4 → 4/4** round-trips (list tile, both chart-parameter spellings, and a tile with an empty parameter value), and pinned by `scripts/tests/dashboard-roundtrip.test.js`, which feeds a serialized dashboard straight back in. ([#478](https://github.com/microsoft/power-platform-skills/issues/478)) **Round-trip scope (not yet "complete"):** tables, sitemap/appShell, generative pages, icons, dashboards, and solution round-trip; **forms, views, charts, and commands do NOT yet** — view hydration was tried and reverted (LIVE-verified the deployed savedquery set can't reliably distinguish author views from Dataverse's auto-generated Active/Inactive/QuickFind system views). All survive on the live app (a rebuild preserves them by discovery) but are absent from the downloaded spec, so edit them in Maker or a fresh spec.
 - Live regression on the edit path found + fixed **4 bugs**, then re-verified clean.
 - `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing). Sitemap checks are **element-scoped**: an area/subarea icon is matched on its own `<Area>`/`<SubArea>` element, and a **dashboard subarea** is verified by resolving the dashboard id (systemform type 0, by name) and matching the sitemap's `DefaultDashboard` — so a value reused elsewhere can't produce a false pass. **Multi-area sitemaps** and the dashboard-subarea path were re-verified live (positive + negative).
 
 ### Teardown — ✅ verified live
-- `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (app → dashboards → commands → forms → **security roles** → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references); **web resources are removed AFTER tables** (a table's icon web resource is referenced by the table).
+- `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (app → dashboards → commands → business rules → business process flows → forms → **security roles** → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references); **web resources are removed AFTER tables** (a table's icon web resource is referenced by the table). A business rule / business process flow is deactivated before it is deleted, because Dataverse refuses to delete an activated process.
 - **Classifier-safe** (every id resolved from a spec-declared name via an exact-match, entity-scoped filter), dry-run by default, best-effort continue, not-found aware, undeletable (system/managed) artifacts recorded as `skipped`. A **restricted system solution** (`Active`/`Default`/`Basic`) is skipped rather than attempted (Dataverse 400s any delete of one), so a downloaded spec that defaulted its solution to `Default` tears down cleanly. An already-gone relationship (Dataverse 400 *"…but 0 were found"*) is tolerated as deleted, like the table not-found case.
 
 ### Tooling & internals — ✅ verified live

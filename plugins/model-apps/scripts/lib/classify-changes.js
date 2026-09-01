@@ -36,6 +36,10 @@ const identityOf = {
   form: (f) => `${low(f.entity)}|${f.formType || 'Main'}|${f.name || ''}`,
   page: (p) => `${p.key || p.name}`,
   webResource: (w) => `${w.name}`,
+  // A rule and a flow are both identified by (entity, name) — the same pair the build's reuse query
+  // and the teardown resolver use, so the classifier cannot disagree with them about which is which.
+  businessRule: (r) => `${low(r.entity)}|${r.name}`,
+  businessProcessFlow: (p) => `${low(p.entity)}|${p.name}`,
 };
 
 function low(s) { return String(s == null ? '' : s).toLowerCase(); }
@@ -213,6 +217,11 @@ function classifyChanges(current, prior) {
       case 'commands': merge(classifyAdditive(cur, prior, 'commands', 'command', 'commands')); break;
       case 'dashboards': merge(classifyAdditive(cur, prior, 'dashboards', 'dashboard', 'dashboards')); break;
       case 'web-resources': merge(classifyAdditive(cur, prior, 'web-resources', 'webResource', 'webResources')); break;
+      // Both are additive discover-reconcile: the engine creates what is missing and explicitly does
+      // NOT reapply edits to an existing rule/flow ("recreate to change"), so an edit is real debt
+      // rather than something the full build converges.
+      case 'business-rules': merge(classifyAdditive(cur, prior, 'business-rules', 'businessRule', 'businessRules')); break;
+      case 'business-process-flows': merge(classifyAdditive(cur, prior, 'business-process-flows', 'businessProcessFlow', 'businessProcessFlows')); break;
       default:
         // An unrecognized changed phase must never silently pass as fast (fail-closed).
         fullReasons.push(`${phase}: changed — no fast-path shape recognized`);

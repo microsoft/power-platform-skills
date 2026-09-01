@@ -358,6 +358,10 @@ function planFor(spec, opts) {
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
   if (has('business-rules')) for (const r of spec.businessRules || []) items.push({ phase: 'business-rules', label: `business rule "${r.name}" on ${r.entity}` });
+  if (has('business-process-flows')) for (const p of spec.businessProcessFlows || []) {
+    const stages = (p.stages || []).length;
+    items.push({ phase: 'business-process-flows', label: `business process flow "${p.name}" on ${p.entity} (${stages} stage${stages === 1 ? '' : 's'})` });
+  }
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
@@ -857,6 +861,58 @@ function businessRuleFilter(name, entityLogical) {
   return `category eq 2 and type eq 1 and name eq '${odataLit(name)}' and primaryentity eq '${odataLit(String(entityLogical).toLowerCase())}'`;
 }
 
+// A BPF is a `workflows` row like a business rule, but a DIFFERENT category, so it needs its own
+// filter rather than a parameterized one — sharing it would invite passing the wrong category.
+//
+// category 4 = BusinessProcessFlow; type 1 = definition (activating a process creates a `type 2`
+// activated copy the platform owns and refuses to delete directly — see businessRuleFilter for the
+// full story, which cost real time there). `businessprocesstype eq 0` excludes TASK FLOWS, which are
+// also category 4; without it a task flow with the same name would be adopted as this flow.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow
+function bpfFilter(name, entityLogical) {
+  return `category eq 4 and type eq 1 and businessprocesstype eq 0 and name eq '${odataLit(name)}' and primaryentity eq '${odataLit(String(entityLogical).toLowerCase())}'`;
+}
+
+// Map one App Spec `businessProcessFlows[]` entry to the vendored SDK's BpfArtifact shape.
+//
+// Pure: spec shape -> SDK shape. Three normalizations that are easy to get wrong:
+//   1. `entity` (a spec schemaName) becomes `entityLogicalName`, lower-cased — Dataverse logical
+//      names are lower-case and the XAML binds on them.
+//   2. Each stage repeats the entity. The SDK models a per-stage entity (that is how a cross-entity
+//      flow is expressed); v1 validates them equal, and stamping it here keeps the artifact valid
+//      rather than relying on the adapter's `''` default.
+//   3. The step's column key is `fieldName`, NOT `fieldLogicalName`. The adapter's step normalizer
+//      copies exactly `id`/`name`/`fieldName`/`required` and DROPS anything else, so a mis-named key
+//      is silently discarded and the step deploys bound to nothing. Measured against the real bundle
+//      and pinned in bpf-real-bundle.test.js.
+//
+// Ids are deliberately NOT minted here: the adapter assigns any missing stage/step id itself, and a
+// stable id would only matter for an edit-in-place path the build does not have (a flow is
+// reused-as-is or created whole).
+function bpfDef(flow) {
+  const entityLogicalName = String(flow.entity).toLowerCase();
+  const def = {
+    name: flow.name,
+    entityLogicalName,
+    // Draft unless the author asks otherwise. A BPF is inert until activated, and activation is what
+    // makes it appear on the form, so Active is the useful default — same reasoning as businessRuleDef.
+    status: flow.status || 'Active',
+    stages: (flow.stages || []).map((st) => ({
+      name: st.name,
+      entityLogicalName,
+      steps: (st.steps || []).map((step) => ({
+        name: step.name,
+        ...(step.field !== undefined ? { fieldName: String(step.field).toLowerCase() } : {}),
+        ...(step.required !== undefined ? { required: step.required } : {}),
+      })),
+    })),
+  };
+  if (flow.description !== undefined) def.description = flow.description;
+  if (flow.order !== undefined) def.order = flow.order;
+  return def;
+}
+
+
 // The (entity, formType, name) triple the App Spec uses to identify a form. Used to address a form
 // from a LATER phase: `forms[].securityRoles` is applied during `security`, because a persona's role
 // does not exist until then, and by that point the forms phase has finished and only the entity's
@@ -1066,7 +1122,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1941,6 +1997,71 @@ async function runSdkBuild(spec, opts = {}) {
           }
           return reason;
         },
+      });
+    }
+  }
+
+  // 6b-post. Business process flows. Additive discover-reconcile, exactly like business rules and for
+  // the same reasons: a flow is identified by (entity, name), and pushing unconditionally on every
+  // rebuild would stack duplicate processes on the table. Unlike a rule, a BPF goes through the SDK's
+  // GENERIC artifact surface (createArtifact -> pushArtifact) — there is no bound member and no
+  // fallback path, so there is no double-write hazard to sweep up after.
+  if (has('business-process-flows')) {
+    for (const flow of spec.businessProcessFlows || []) {
+      const entityLogical = String(flow.entity).toLowerCase();
+      const key = `${entityLogical}|${flow.name}`;
+      const existing = await provision.queryRecords('workflow', {
+        select: ['workflowid', 'statecode', 'createdon'],
+        // Definition rows only, and BusinessFlow only — see bpfFilter.
+        filter: bpfFilter(flow.name, entityLogical),
+        // Ordered and > 1 for the same reason as business rules: `top: 1` unordered adopts an
+        // ARBITRARY row, and seeing more than one is the only way to report a pre-existing duplicate.
+        orderBy: 'createdon asc',
+        top: 50,
+      });
+      const existingId = existing && existing[0] && existing[0].workflowid;
+      if (existingId) {
+        if ((existing || []).length > 1 && typeof opts.warn === 'function') {
+          opts.warn(`business process flow "${flow.name}" on ${flow.entity}: ${existing.length} definitions exist with this name — the oldest is being reused. Remove the extras in Maker so users are not offered the same process twice.`);
+        }
+        // Exists, but a flow left in Draft is invisible on the form — "exists, so skip" would report
+        // success over a process nobody can run. Converge the one property that is cheap and safe to
+        // reconcile, in BOTH directions, exactly as the business-rule phase does.
+        const wantActive = (flow.status || 'Active') === 'Active';
+        const isActive = existing[0].statecode === 1;
+        if (wantActive !== isActive) {
+          // statecode 1 / statuscode 2 = Activated; 0 / 1 = Draft. Best-effort, NOT a build halt: a
+          // process the platform refuses to toggle should not block an otherwise-good app, and
+          // `--verify` reports the real deployed state.
+          const target = wantActive ? { statecode: 1, statuscode: 2 } : { statecode: 0, statuscode: 1 };
+          const verb = wantActive ? 'activated' : 'deactivated';
+          try {
+            await provision.updateRecord('workflow', existingId, target);
+            runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (existed in the wrong state — ${verb})`);
+          } catch (e) {
+            if (typeof opts.warn === 'function') {
+              opts.warn(`business process flow "${flow.name}" on ${flow.entity} exists but could not be ${verb} (${e && e.message}). It is ${isActive ? 'still running' : 'inert'}. Delete it and rebuild to recreate it cleanly.`);
+            }
+            runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists but could not be ${verb})`);
+          }
+        } else {
+          runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists — reuse; stage edits aren't applied on rebuild, recreate to change)`);
+        }
+        result.created.businessProcessFlows[key] = existingId;
+        continue;
+      }
+      const stageCount = (flow.stages || []).length;
+      await runner.run('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (${stageCount} stage${stageCount === 1 ? '' : 's'})`, async () => {
+        // The whole flow — including its stages and steps — is carried on the CREATE payload. The
+        // adapter normalizes and id-stamps the stage/step tree there, so unlike a business rule's
+        // condition tree there is no element-surface follow-up to make.
+        const art = provision.createArtifact('bpf', bpfDef(flow));
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('bpf', art.id), `business process flow ${flow.name}`, opts.warn);
+        result.created.businessProcessFlows[key] = pushed.id;
+        // componentType 29 (workflow) — a BPF is a workflow row, so it ships in the solution the same
+        // way a business rule does. Without this the process is left out of the solution and does not
+        // travel on export/import.
+        await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
       });
     }
   }
@@ -2840,4 +2961,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };

@@ -713,6 +713,61 @@ custom control), but the spec validator emits a warning.
 - **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
   edits are **not** re-applied. Recreate the rule to change it.
 
+## businessProcessFlows[] (optional — guided, staged process on a table)
+
+A BPF is the stage bar across the top of a record: an ordered set of stages, each with steps the user
+works through. See
+[Create a business process flow](https://learn.microsoft.com/en-us/power-automate/create-business-process-flow).
+
+```jsonc
+{ "entity": "new_ticket", "name": "Ticket Handling",
+  "description": "How support tickets move to resolution",  // optional
+  "status": "Active",        // Active (default) | Draft — a Draft flow is deployed but does NOT
+                             // appear on the form
+  "order": 1,                // optional; the workflow's processorder when several flows apply
+  "stages": [
+    { "name": "Triage", "steps": [
+        { "name": "Subject",  "field": "new_subject", "required": true },
+        { "name": "Priority", "field": "new_priority" } ] },
+    { "name": "Resolve", "steps": [
+        { "name": "Resolution notes", "field": "new_notes" },
+        { "name": "Confirm with customer" } ] }   // a step with no field = a checklist item
+  ] }
+```
+
+- **Stages are ordered** (array order) and each needs a unique `name` **and at least one step**; steps
+  within a stage need unique names too. `stages[]` is required — a flow with no stage is not a
+  process. A stage with no steps is rejected because the SDK substitutes a placeholder step literally
+  named *"New Step"*, which would then appear on the stage bar without ever having been authored.
+- **A flow's `name` must be unique across the whole spec, not just per table.** The unique name
+  Dataverse stores is derived as `new_<name lower-cased, non-alphanumerics stripped>` — it **ignores
+  the table** — and activation creates a backing table with that name, so `"Ticket Handling"` on two
+  different tables (or `"Ticket Handling"` and `"ticket-handling"` on one) cannot both deploy.
+  Validation rejects the collision and names the derived value; rename one, e.g.
+  `"Ticket Handling (Cases)"`.
+- **A step's `field`** must be a column on the flow's own `entity` (its own columns, its primary
+  name, or a lookup a relationship creates). Like a business rule, the platform accepts a step bound
+  to a column that does not exist and simply renders it bound to nothing, so this is validated up
+  front. A step with **no** `field` is a valid checklist item; a step with `required: true` and no
+  field is rejected, because the stage could then never be completed.
+- **`status`** matters more than it does for a rule: an inactive BPF is not merely inert, it is
+  **invisible** — the stage bar does not render at all. `Active` is the default for that reason.
+- **v1 is single-entity and linear.** Every stage must be on the flow's own `entity`. The SDK also
+  models cross-entity stages, branching, stage actions and security-role grants; keys carrying them
+  are **rejected** at flow, stage **and** step level (the allowed keys are `name`/`entity`/
+  `description`/`status`/`order`/`stages`; per stage `name`/`entity`/`steps`; per step
+  `name`/`field`/`required`). The rejection is an allow-list rather than a list of known-bad names
+  because the SDK's own normalizers silently discard any key they do not copy — so an unguarded
+  `branch` on a stage, or `fieldLogicalName` instead of `field` on a step, would validate clean and
+  deploy as though it had never been written. Configure those in Maker after the flow deploys.
+- **Activation creates a backing table** (an org-owned table named after the flow's unique name)
+  that the platform manages. Teardown deactivates and deletes the flow, which removes it.
+- **Rebuild behaviour is additive**, exactly like business rules — a flow is matched by
+  `(entity, name)` and reused if present; only its Active/Draft **state** is converged. Stage and
+  step edits are **not** re-applied: recreate the flow to change its structure.
+- Verified by `--verify` on three axes: it exists, there is exactly **one** of it (duplicates would
+  offer users the same process twice), and its deployed state matches `status`.
+
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
 { "name": "Operations", "description": "Daily queue health for the support lead.", "tiles": [
