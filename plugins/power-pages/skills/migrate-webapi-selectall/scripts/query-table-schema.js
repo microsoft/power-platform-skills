@@ -9,12 +9,35 @@ const {
   validateDataverseEnvironmentUrl,
 } = require('../../../scripts/lib/validation-helpers');
 
-// Refresh the token every few tables so long runs never expire.
+// Refresh the token periodically so long runs never expire.
 const TABLES_PER_TOKEN_REFRESH = 4;
 // Retry ceilings bound transient Dataverse throttling delays safely.
 const MAX_RETRY_ATTEMPTS = 6;
 const BASE_RETRY_DELAY_MS = 1000;
 const MAX_RETRY_DELAY_MS = 30000;
+
+const HELP = `
+Retrieves Dataverse table schema for Web API wildcard migration analysis.
+
+Usage:
+  node query-table-schema.js --project-root <path> --environment-url <url>
+    (--table <name> | --tables-file <file>) --output <file>
+
+Options:
+  --project-root     Power Pages project root; input and output stay inside it
+  --environment-url  Dataverse environment URL
+  --table            Logical name or entity set name; repeatable
+  --tables-file      File of identifiers, one per line or a JSON array
+  --output           JSON schema snapshot to write, inside the project root
+  --help             Show this help message
+
+Exit codes:
+  0  Snapshot written; prints { output, tableCount } to stdout
+  1  Invalid arguments, unresolved table, auth failure, or query failure
+
+Example:
+  node query-table-schema.js --project-root . --environment-url https://contoso.crm.dynamics.com --table account --output docs/webapi-selectall-migration/table-schema.json
+`;
 
 function parseArgs(argv) {
   const options = { tables: [] };
@@ -375,13 +398,18 @@ function writeAtomicJson(projectRoot, filePath, value) {
     fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
     fs.renameSync(temporary, output);
   } catch (error) {
-    // Never strand a partial .tmp file in the caller's output directory.
+    // Never strand a partial .tmp file behind.
     fs.rmSync(temporary, { force: true });
     throw error;
   }
 }
 
 async function main() {
+  if (process.argv.includes('--help')) {
+    process.stdout.write(HELP);
+    return;
+  }
+
   let validated;
   try {
     validated = validateOptions(parseArgs(process.argv.slice(2)));

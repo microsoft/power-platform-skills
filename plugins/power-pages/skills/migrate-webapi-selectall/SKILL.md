@@ -1,14 +1,14 @@
 ---
 name: migrate-webapi-selectall
 description: >-
-  Reviews and migrates deprecated wildcard (*) values in Power Pages
-  Webapi/<table-1>/fields settings to least-privilege explicit Dataverse columns.
+  Reviews and migrates deprecated wildcard (*) values in Power Pages Web API
+  fields site settings to least-privilege explicit Dataverse columns.
   Use whenever a user mentions Web API wildcard or select-all remediation,
   fields settings containing *, data-exposure review, wildcard deprecation
   readiness, or Web API failures after wildcard retirement. Applies to both
   traditional sites using HTML, CSS, JavaScript, Liquid, and downloaded YAML,
-  and SPA sites using React, Vue, Angular, Astro, or TypeScript. The agent
-  must inspect every source Web API call and consumer, report exact fixes for every
+  and SPA sites using React, Vue, Angular, Astro, or TypeScript. The agent must
+  inspect every source Web API call and consumer, report exact fixes for every
   wildcard, report every already-explicit configuration, apply approved edits,
   and verify no wildcard remains.
 user-invocable: true
@@ -21,7 +21,7 @@ model: opus
 
 # Migrate Power Pages Web API Wildcards
 
-Replace every deprecated `Webapi/<table-1>/fields = *` value with the smallest
+Replace every deprecated `Webapi/<table>/fields = *` value with the smallest
 explicit column set proven by the site's actual Web API behavior.
 
 The LLM owns source discovery, call-chain reasoning, field decisions, report
@@ -53,19 +53,28 @@ Support both:
    rows first.
 8. Keep reports free of absolute local paths, tokens, URLs, data values,
    filter literals, request bodies, response bodies, and source snippets, and
-   build them only from the bundled HTML template.
+   build them only by rendering the bundled template with the bundled script.
 9. Preserve unrelated YAML structure and values.
 10. Verify with a fresh discovery pass, not remembered inventory.
-11. Leave only the HTML report in the migration output directory.
+11. Leave only the rendered report and its icon in the migration output
+    directory.
+12. Never download or upload site content until the user has explicitly
+    confirmed the environment, website, site type, data model, and deployment
+    profile. Neither transfer can be reverted.
+13. Run smoke tests only after explicit approval, and never issue POST, PATCH,
+    PUT, or DELETE Web API calls against a deployed site. Testing a write
+    destroys real record data.
 
 Read [references/column-analysis.md](references/column-analysis.md) before
 analyzing calls. Read
 [references/configuration-and-reporting.md](references/configuration-and-reporting.md)
-before inventorying settings or writing the report.
+before inventorying settings or writing the report. Read
+[references/site-transfer.md](references/site-transfer.md) before any download
+or upload.
 
 ## Phase 1: Prepare
 
-**Goal:** Resolve the project and protect existing work.
+**Goal:** Resolve the project, confirm the site, and protect existing work.
 
 1. Create all seven tasks from [Progress tracking](#progress-tracking).
 2. Resolve `PROJECT_ROOT` from `$ARGUMENTS` or the current directory.
@@ -78,10 +87,29 @@ before inventorying settings or writing the report.
    settings; do not create or select another solution.
 5. Inspect git status. Never discard, hide, or include unrelated user changes.
 6. Run `node --version`.
-7. Confirm `assets/migration-report-template.html` is readable, and stop if it
-   is missing.
+7. Confirm `assets/migration-report-template.html` and
+   `scripts/render-migration-report.js` are readable, and stop if either is
+   missing.
+8. Read [references/site-transfer.md](references/site-transfer.md), then
+   confirm the environment, website name and `WebSiteId`, site type, data
+   model, deployment profile, and target path with the user. Check each
+   against `pac auth who`, `pac env who`, and `pac pages list`, and stop on
+   any mismatch. Never infer one from a folder name or an active default.
 
-**Output:** Project root, site layouts, solution context, and git state.
+Analyzing the wrong site produces confident, wrong fixes, so settle identity
+before reading any setting. Download only when the user wants a fresh copy or
+`PROJECT_ROOT` holds no site content; downloading replaces local files and
+cannot be reverted.
+
+<!-- gate: migrate-webapi-selectall:1.download-site | category=consent | cancel-leaves=nothing -->
+
+> 🚦 **Gate (consent · migrate-webapi-selectall:1.download-site):** Approve the download only after displaying the confirmed environment, website name and ID, site type, data model, target path, and the exact command. Canceling leaves local content untouched and continues against the existing copy.
+
+Use `AskUserQuestion`: `Download the confirmed site` or `Use the local copy`.
+Repeat step 3 after any download.
+
+**Output:** Project root, site layouts, solution context, git state, confirmed
+site identity, and a downloaded copy when approved.
 
 ## Phase 2: Build the complete inventory
 
@@ -97,8 +125,8 @@ Use `Glob`, `Grep`, and `Read` to inspect:
 - `.powerpages-site/site-settings/`;
 - deployment-profile and environment-specific copies.
 
-Record every `Webapi/<table-1>/fields` and `Webapi/<table-1>/enabled` entry with its
-relative file, line, scope, key style, and current value. Classify fields
+Record every `Webapi/<table>/fields` and `Webapi/<table>/enabled` entry with
+its relative file, line, scope, key style, and current value. Classify fields
 settings as:
 
 - `wildcard`;
@@ -154,10 +182,11 @@ For each source candidate, record relative path, line, method, endpoint
 expression, and wrapper chain. A comment, example, or non-table endpoint still
 needs an explicit disposition. Excluded build outputs are never recorded.
 
-Copy `assets/migration-report-template.html` unchanged to
-`docs/webapi-selectall-migration/migration-report.html`. Populate its tokens
-and table bodies with the settings inventory. Preserve the template version,
-element IDs, headings, table columns, and CSS. Do not propose fields yet.
+Write the settings inventory to
+`docs/webapi-selectall-migration/migration-report.json` and render the draft
+report as described in
+[references/configuration-and-reporting.md](references/configuration-and-reporting.md).
+Do not propose fields yet.
 
 Stop if any in-scope source or configuration file cannot be read.
 
@@ -227,7 +256,8 @@ For every source inventory row:
 3. Follow conditional branches, spreads, dynamic arrays, and runtime
    configuration.
 4. Map the entity set to its logical table using the schema package.
-5. Apply every rule in `references/column-analysis.md`.
+5. Apply every rule in
+   [references/column-analysis.md](references/column-analysis.md).
 6. Record requirements per owning logical table, not merely per request.
 7. Classify the row as `mapped`, `non-table`, or `not-a-call`.
 8. Leave the row unresolved if any runtime branch or consumer remains unknown.
@@ -259,7 +289,7 @@ For each wildcard setting:
 4. Produce the exact replacement:
 
    ```text
-   Webapi/<table-1>/fields = <column-name-1>,<column-name-2>,<column-name-3>
+   Webapi/<table>/fields = <column-name-1>,<column-name-2>,<column-name-3>
    ```
 
 5. Keep the proposal unresolved if it is empty or any evidence is incomplete.
@@ -306,17 +336,14 @@ Never offer a subset of wildcard fixes.
 
 **Goal:** Update source projections and every wildcard setting.
 
-1. If the worktree is clean, create a local git checkpoint. If it is dirty,
-   preserve user changes and clearly record that no automatic checkpoint was
-   created.
-2. Use `Edit` to add approved `$select` projections. Preserve methods, filters,
+1. Use `Edit` to add approved `$select` projections. Preserve methods, filters,
    ordering, expansion, pagination, encoding, Liquid expressions, and error
    handling.
-3. Use `Edit` to replace every wildcard value in every scope and profile.
+2. Use `Edit` to replace every wildcard value in every scope and profile.
    Preserve identifiers, key names, quoting, indentation, comments, and
    unrelated values.
-4. Apply already-explicit changes only when included in the selected approval.
-5. Re-read every changed block immediately and update report status.
+3. Apply already-explicit changes only when included in the selected approval.
+4. Re-read every changed block immediately and update report status.
 
 If any edit fails or a file changed since review, stop. Do not continue with a
 partial configuration set and do not perform a broad rollback over user work.
@@ -329,7 +356,7 @@ partial configuration set and do not perform a broad rollback over user work.
 
 1. Repeat Phase 2 discovery from scratch.
 2. Confirm every configuration scope contains zero
-   `Webapi/<table-1>/fields` wildcard values.
+   `Webapi/<table>/fields` wildcard values.
 3. Compare each migrated value with its approved exact replacement.
 4. Reopen every call site and replay the coverage analysis:
    - mapped table and method remain correct;
@@ -339,9 +366,8 @@ partial configuration set and do not perform a broad rollback over user work.
 5. Run the existing project build for SPA sites. For traditional sites,
    inspect edited JavaScript and Liquid syntax and use existing site tests when
    available.
-6. Confirm the report retains template version `1`, keeps every static
-   section, and contains no unresolved `__TOKEN__` values.
-7. Finalize the report status and counts.
+6. Finalize the report status and every entry status, then delete the previous
+   `migration-report.html` and re-render it from the updated data file.
 
 Do not claim full hardening while explicit configuration gaps remain. Use the
 partial status defined in the reporting contract when applicable.
@@ -352,46 +378,69 @@ partial status defined in the reporting contract when applicable.
 
 **Goal:** Publish only verified changes.
 
-Before requesting deployment approval, show the confirmed PAC environment and
-the exact command. For traditional sites, also select the reviewed deployment
-profile and use `default` only when the user explicitly confirms it. A
-different environment or profile requires a separate deployment approval.
+Re-confirm every identity detail in
+[references/site-transfer.md](references/site-transfer.md) with the user
+immediately before uploading, and display the exact command. Select the
+deployment profile the user reviewed, and use `default` only when they name
+it. Any change of environment, website, data model, or profile requires a
+separate deployment approval.
 
 <!-- gate: migrate-webapi-selectall:7.deploy | category=final | cancel-leaves=local-migration -->
 
-> 🚦 **Gate (final · migrate-webapi-selectall:7.deploy):** Approve the verified migration for the displayed environment and deployment profile. Canceling preserves local edits and the final report without changing the live site.
+> 🚦 **Gate (final · migrate-webapi-selectall:7.deploy):** Approve the verified migration for the displayed environment, website, site type, data model, and deployment profile. Canceling preserves local edits and the final report without changing the live site.
 
 Use `AskUserQuestion`: `Deploy now` or `Keep local only`.
 
-- Reconfirm that the active PAC environment matches the confirmed target.
+- Re-run `pac auth who` and `pac env who`, and stop on any mismatch.
+  `pac pages upload-code-site` accepts no `--environment` and targets whatever
+  the active authentication profile reports.
 - For SPA sites, confirm `.powerpages-site` contains the approved
   configuration edits, run the existing production build, then run
-  `pac pages upload-code-site --rootPath "<PROJECT_ROOT>"`.
-- For traditional sites, run
-  `pac pages upload --path "<PROJECT_ROOT>" --deploymentProfile "<PROFILE>"`.
+  `pac pages upload-code-site --rootPath "<PROJECT_ROOT>" --siteName
+  "<SITE_NAME>"`.
+- For traditional sites, run `pac pages upload --path "<PROJECT_ROOT>"
+  --environment "<ENVIRONMENT>" --modelVersion "<Standard|Enhanced>"
+  --deploymentProfile "<PROFILE>"`.
 
-After deployment, smoke-test each affected workflow. Treat HTTP 403 responses
-as evidence to investigate and never restore `*`. Do not add a column under
-the prior approval. Return to Phase 3, update the exact plan and report, repeat
-the Phase 4 approval, independently verify in Phase 6, and obtain a new
-Phase 7 deployment approval.
+Never substitute one upload command for the other. Each corrupts the other
+site type, and the damage cannot be reverted.
+
+After deployment, list the read paths a smoke test would exercise: GET calls,
+`$select` projections, `$expand`, FetchXML, and aggregates. Never run one
+unprompted.
+
+<!-- gate: migrate-webapi-selectall:7.smoke-test | category=progress | cancel-leaves=deployed-migration-unverified -->
+
+> 🚦 **Gate (progress · migrate-webapi-selectall:7.smoke-test):** Approve the listed read-path smoke test against the deployed site. Canceling skips it and reports the deployed migration as unverified.
+
+Use `AskUserQuestion`: `Run the read-path smoke test` or `Skip verification`.
+
+Never issue write, file, or image requests. Ask the user to exercise those
+paths themselves against disposable records.
+
+Treat HTTP 403 responses as evidence to investigate and never restore `*`. Do
+not add a column under the prior approval. Return to Phase 3, update the exact
+plan and report, repeat the Phase 4 approval, independently verify in Phase 6,
+and obtain a new Phase 7 deployment approval.
 
 Delete every working file created during the migration, keeping only
-`docs/webapi-selectall-migration/migration-report.html`:
+`docs/webapi-selectall-migration/migration-report.html` and the
+`power-pages-icon.png` the renderer places beside it:
 
 - `table-identifiers.txt` and `table-identifiers-pass-<N>.txt`;
-- `table-schema.json` and `table-schema.pass-<N>.json`.
+- `table-schema.json` and `table-schema.pass-<N>.json`;
+- `migration-report.json`.
 
 Delete only files this migration created, and confirm the directory holds the
-report alone. Skip cleanup while returning to an earlier phase, and delete the
-regenerated files once that pass finishes.
+report and its icon alone. Skip cleanup while returning to an earlier phase,
+and delete the regenerated files once that pass finishes.
 
 Record usage by following
 `${PLUGIN_ROOT}/references/skill-tracking-reference.md` with
 `--skillName "MigrateWebapiSelectall"`.
 
 Summarize wildcard counts, explicit reviews, source edits, report path,
-verification, deployment, and checkpoint status.
+verification, deployment, and every path left unverified.
 
 ## Progress tracking
 
@@ -399,7 +448,7 @@ Create these tasks before Phase 1:
 
 | Task subject | activeForm | Description |
 |---|---|---|
-| Prepare migration project | Preparing migration project | Resolve layouts, solution context, and git state |
+| Prepare migration project | Preparing migration project | Confirm the site, then resolve layouts and git state |
 | Inventory Web API usage | Inventorying Web API usage | Find every configuration and source call |
 | Resolve actual columns | Resolving actual columns | Retrieve schema and trace every consumer |
 | Review migration plan | Reviewing migration plan | Present exact fixes and evidence |

@@ -4,6 +4,16 @@ Use these rules to determine the smallest explicit field list that preserves
 each Power Pages Web API operation. Read every call chain and consumer; static
 search results are an inventory, not the final answer.
 
+## Contents
+
+- [Evidence priority](#evidence-priority)
+- [Endpoint mapping](#endpoint-mapping)
+- [Read operations](#read-operations)
+- [Write operations](#write-operations)
+- [File and image operations](#file-and-image-operations)
+- [Dynamic code](#dynamic-code)
+- [Configuration proposal](#configuration-proposal)
+
 ## Evidence priority
 
 Prefer evidence in this order:
@@ -27,7 +37,7 @@ missing source.
 ## Endpoint mapping
 
 Power Pages request paths use `EntitySetName`.
-`Webapi/<table-1>/fields` settings use the table logical name. These names are
+`Webapi/<table>/fields` settings use the table logical name. These names are
 not reliably related by pluralization, so map them through the schema snapshot.
 
 Classify search, summarization, cloud-flow, and server-logic routes under

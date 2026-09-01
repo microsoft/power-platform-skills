@@ -19,7 +19,7 @@ sitesetting.yml
 ```
 
 ```yaml
-- adx_name: Webapi/<table-1>/fields
+- adx_name: Webapi/<table>/fields
   adx_sitesettingid: <site-setting-id-1>
   adx_value: <column-name-1>,<column-name-2>
 ```
@@ -33,7 +33,7 @@ SPA sites can contain the same aggregate shape at
 
 ```yaml
 id: <site-setting-id-1>
-name: Webapi/<table-1>/fields
+name: Webapi/<table>/fields
 value: <column-name-1>,<column-name-2>
 ```
 
@@ -48,7 +48,7 @@ are separate scopes even when they contain the same setting name.
 
 For each scope:
 
-- pair `Webapi/<table-1>/enabled` with `Webapi/<table-1>/fields`;
+- pair `Webapi/<table>/enabled` with `Webapi/<table>/fields`;
 - identify missing, duplicate, wildcard, and already-explicit field settings;
 - preserve record identifiers, key style, quoting, comments, and unrelated
   values;
@@ -60,45 +60,81 @@ overbroad record permissions.
 
 ## Report
 
-Copy the bundled template unchanged, then fill it in:
+Write the report data, then render it. Never hand-write report HTML; the
+renderer is the encoding boundary that keeps setting names, column names, and
+paths as data.
+
+Write the data file to:
 
 ```text
-${PLUGIN_ROOT}/skills/migrate-webapi-selectall/assets/migration-report-template.html
+docs/webapi-selectall-migration/migration-report.json
 ```
 
-```text
-docs/webapi-selectall-migration/migration-report.html
+```json
+{
+  "REPORT_STATUS": "Complete | Partial | Draft | Failed",
+  "SCOPE_NOTE": "<one sentence naming the configuration scopes, deployment profiles, and source call sites reviewed>",
+  "WILDCARD_DATA": [
+    {
+      "setting": "Webapi/<table>/fields",
+      "status": "Pending | Migrated | Removed | Blocked",
+      "usages": [
+        {
+          "location": "<relative path>:<line>",
+          "detail": "<what this call site reads>"
+        }
+      ],
+      "fields": [
+        "<column-name-1>",
+        "<column-name-2>"
+      ],
+      "finding": "<evidence proving this column set>",
+      "fix": "<what was changed, or what is still required>"
+    }
+  ],
+  "EXPLICIT_DATA": [
+    {
+      "setting": "Webapi/<table>/fields",
+      "status": "Least privilege | Incomplete | Overbroad",
+      "usages": [
+        {
+          "location": "<relative path>:<line>",
+          "detail": "<what this call site reads>"
+        }
+      ],
+      "fields": [
+        "<configured-column-1>"
+      ],
+      "finding": "<comparison against observed usage>",
+      "fix": "<proposed change, or no change required>"
+    }
+  ]
+}
 ```
 
-The asset is the format contract. Preserve its template version, static HTML,
-section IDs, headings, table columns, accessibility attributes, and CSS. Do
-not add sections, styling, or scripts.
+Both arrays are required and may be empty. One setting gets one entry, however
+many call sites it has: list every call site in `usages` so the report shows the
+same table read through different wrappers or pages. `status` selects the badge
+tone and the counters, so use the listed values. Use `Pending` in the draft
+report before replacements are proposed, and `Blocked` for a wildcard whose
+replacement cannot be proven, stating in its `fix` what the user has to decide.
+Use an empty `fields` array when a setting is removed or blocked.
 
-Replace each token exactly once:
+Render with:
 
-```text
-REPORT_STATUS            Complete | Partial | Draft | Failed
-GENERATED_AT             ISO 8601 date and time
-WILDCARD_FOUND_COUNT     wildcard fields settings discovered
-WILDCARD_FIXED_COUNT     wildcards replaced and verified
-WILDCARD_REMAINING_COUNT wildcards still present
-EXPLICIT_SETTING_COUNT   already-explicit settings reviewed
-SCOPE_NOTE               one sentence naming the configuration scopes,
-                         deployment profiles, and source call sites reviewed
-WILDCARD_ROWS            one table row per wildcard setting
-EXPLICIT_ROWS            one table row per already-explicit setting
+```bash
+node "${PLUGIN_ROOT}/skills/migrate-webapi-selectall/scripts/render-migration-report.js" --output "<PROJECT_ROOT>/docs/webapi-selectall-migration/migration-report.html" --data "<PROJECT_ROOT>/docs/webapi-selectall-migration/migration-report.json"
 ```
 
-Build row tokens only from `<tr>` and `<td>` elements matching the template's
-column order. Use one row spanning the full column count when a collection is
-empty. Put `Blocked` and the reason in the wildcard status cell when a
-replacement cannot be proven.
+The renderer refuses to overwrite, so delete the previous
+`migration-report.html` before re-rendering an updated report. It stamps the
+generated time itself, and also writes `power-pages-icon.png` beside the
+report; leave that file in place.
 
-Escape `&`, `<`, `>`, `"`, and `'` in every dynamic value. Record only
-relative paths, line numbers, table names, and column names. Never include
-absolute local paths, source snippets, request or response bodies, tokens,
-environment URLs, hostnames, filter literals, record identifiers, or user
-data.
+Record only relative paths, line numbers, table names, and column names. Never
+include absolute local paths, source snippets, request or response bodies,
+tokens, environment URLs, hostnames, filter literals, record identifiers, or
+user data.
 
 ## Completion criteria
 

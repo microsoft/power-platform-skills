@@ -705,10 +705,12 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
+| `migrate-webapi-selectall:1.download-site` | gate | consent | 1 | Approves an optional site download after confirming environment, website name and ID, site type, data model, and target path. | nothing |
 | `migrate-webapi-selectall:2.confirm-scope` | gate | plan | 2 | Confirms all configuration scopes, wildcard and explicit counts, and the source call inventory before schema retrieval. | draft migration report |
 | Phase 3 environment URL | sub-prompt | — | 3.1 | Collects the environment URL only when project and PAC context cannot resolve it. This is read-only metadata input and grants no write consent. | draft migration report |
 | `migrate-webapi-selectall:4.apply-plan` | gate | consent | 4 | Approves every wildcard replacement, required source projection, selected explicit hardening, and local edits. No partial wildcard option is offered. | reviewed migration report |
-| `migrate-webapi-selectall:7.deploy` | gate | final | 7 | Approves one independently verified deployment to the displayed environment and profile. Repeat for another target. | local migration |
+| `migrate-webapi-selectall:7.deploy` | gate | final | 7 | Approves one independently verified deployment after re-confirming environment, website, site type, data model, and profile. Repeat for another target. | local migration |
+| `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
 
 ---
 ### Cross-plugin shared skills — out of catalog scope
