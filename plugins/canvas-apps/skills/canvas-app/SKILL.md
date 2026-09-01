@@ -115,11 +115,11 @@ After all builders finish:
   - `QACHK-GALLERY-ROW-FITS-CONTENT` is `N/A` despite the screen containing a Gallery;
   - `QACHK-ACTION-LABEL-FIT` is `PASS` while a multiword action directly under vertical
     AutoLayout lacks `Width: =Parent.Width`;
-    `PASS` is valid after a complete inspection finds no defect; never reject it solely
-    because the screen has many controls.
-    This costs one cheap turn. The defects these checks catch — clipped headings, invisible
-    buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
-    app ships broken while reporting clean.
+  `PASS` is valid after a complete inspection finds no defect; never reject it solely
+  because the screen has many controls.
+  This costs one cheap turn. The defects these checks catch — clipped headings, invisible
+  buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
+  app ships broken while reporting clean.
 - A self-QA follow-up is not a rebuild or a screen-generation re-dispatch. Tell the
   builder to inspect and repair the existing target file, then return the corrected
   `QA:` line without regenerating the screen.
