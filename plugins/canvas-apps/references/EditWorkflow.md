@@ -94,8 +94,8 @@ Synced files: [absolute working-directory paths]
 The planner writes the plan index, shared plan, and one screen brief per dispatch row. It
 does not edit any `.pa.yaml` file in EDIT mode.
 
-If it returns `Status: Tooling Blocked`, follow the skill's one-time general-purpose
-planner fallback before entering Planned Build Handoff.
+If it returns `Status: Tooling Blocked`, apply its complete inline artifact payloads
+verbatim as required by the skill before entering Planned Build Handoff.
 
 Wait for the planner to finish, then return to **Planned Build Handoff** in the
 `canvas-app` skill.

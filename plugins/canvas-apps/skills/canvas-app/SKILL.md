@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.4
+version: 3.0.5
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -19,7 +19,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.4`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.5`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -107,9 +107,10 @@ CREATE and complex EDIT workflows return here after the planner finishes.
    did not, compile now and resolve every `App`-level diagnostic before dispatching.
    For EDIT mode, compile after applying the before-builder app changes and resolve
    App-level diagnostics before dispatching.
-9. Invoke `canvas-screen-builder` once per dispatch row, in waves of
-   **at most three**. Fire the wave's invocations together in one message, wait for that
-   wave to return, then dispatch the next.
+9. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
+   and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
+   assignment. Run these workers in waves of **at most three**. Fire each wave together,
+   wait for it to return, then dispatch the next.
 
 Never dispatch more than three builders at once. Larger fan-outs have hung without
 returning, and waves of three get you the first compile sooner, which is where systemic
@@ -119,11 +120,9 @@ If any pre-dispatch check fails, do not start builders. Re-invoke the planner wi
 specific defects and repeat the checks on the corrected artifacts.
 
 If the planner reports that writing is unavailable or denied, or returns without the
-required artifacts for that reason, invoke a general-purpose agent with `Task` once. Give
-it the same assignment and the planner's complete inline artifact payloads, and instruct
-it to write those payloads verbatim with `apply_patch` without redesign or rediscovery.
-Do not create the planner artifacts in the orchestrator. If the fallback also cannot
-write, stop and report the tooling failure.
+required artifacts for that reason, write the planner's complete inline artifact payloads
+verbatim with `apply_patch`; do not redesign or rediscover them. If any payload is absent
+or cannot be written, stop and report the tooling failure.
 If the planner returns `Status: Provenance Blocked`, stop without a fallback; mixed prompt
 generations cannot produce trustworthy artifacts.
 
@@ -232,20 +231,15 @@ After all builders finish:
 - If a builder returns `Status: Blocked`, re-invoke the planner to correct that screen
   brief, then rerun only the affected builder. Never ask a builder to guess missing
   definitions.
-- If a builder returns `Status: Tooling Blocked` because file mutation was unavailable
-  or denied, invoke a general-purpose agent with `Task` once for that screen. Give it the
-  same assignment and instruct it to read and follow
-  `${PLUGIN_ROOT}/agents/canvas-screen-builder.md`, including its referenced authoring and
-  QA guides, while using `apply_patch` for the target file. Apply the same QA and
-  functional-report checks to its result. This is a tooling fallback, not permission to
-  bypass a genuine `Status: Blocked` planning defect. If the fallback cannot write, stop
-  and report the exact tooling failure.
+- If a general-purpose screen worker cannot write its target, stop and report the exact
+  tooling failure. Do not retry with a custom screen builder whose write restriction is
+  already known.
 - If a builder returns `Status: Provenance Blocked`, stop the wave without a fallback and
   report the mismatched plugin root or contract version.
 - `Status: Blocked` is the **only** reason to repair a brief and rerun its specialist
-  generation. `Status: Tooling Blocked` follows the one-time fallback above. Compile
-  diagnostics trigger neither path. Once a screen file exists, repair it in place with
-  targeted edits; regenerating it discards prior fixes and does not converge.
+  generation. Tooling failures stop the run. Compile diagnostics trigger neither path.
+  Once a screen file exists, repair it in place with targeted edits; regenerating it
+  discards prior fixes and does not converge.
 - In EDIT mode, apply the `### After builders` group of `## App Changes` in
   `[working directory]/canvas-app-plan.md` to `[working directory]/App.pa.yaml`. The `### Before builders` group was
   already applied at pre-dispatch. If a group says `None`, do not edit the file for it.

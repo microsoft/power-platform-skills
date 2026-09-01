@@ -28,6 +28,8 @@ hooks.json                     ← Copilot-format hooks: userPromptTransformed
 hooks/
   hooks.json                   ← Claude-format hooks: UserPromptSubmit
   inject-sync-reminder.cs      ← File-based .NET app that emits the sync reminder for both hosts
+scripts/
+  validate-canvas-acceptance.cs ← Blocks completion when final evidence does not cover the plan
 references/
   YamlSyntax.md                ← .pa.yaml structure, syntax rules, and parse-error triage
   ControlGuide.md              ← Control selection, property contracts, enums, and versions
@@ -67,7 +69,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
 | `canvas-app-planner` | `canvas-app` | Receives the approved plan, discovers resources, validates CREATE-mode `App.pa.yaml`, and writes a compact dispatch index, shared conventions, and one self-sufficient brief per screen. |
-| `canvas-screen-builder` | `canvas-app` | Creates or modifies exactly one screen from its shared plan and screen brief, then reports every named self-QA outcome. Builders run in waves of at most three; `canvas-app` owns compilation. |
+| `canvas-screen-builder` | `canvas-app` | Defines the one-screen implementation and self-QA contract. External-plugin general-purpose workers follow this file in waves of at most three; `canvas-app` owns compilation. |
 
 ## MCP Tools
 

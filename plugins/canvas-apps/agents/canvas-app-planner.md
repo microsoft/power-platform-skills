@@ -59,13 +59,13 @@ version equals the supplied contract version and the QA guide defines
 `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the working
 directory.
 
-Use `apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. Attempt the write
-once. If the tool is unavailable or the call is denied, return
-`Status: Tooling Blocked`, the exact tool failure, and the complete intended contents of
-the plan index, shared plan, every screen brief, and CREATE-mode `App.pa.yaml` as labeled
-inline payloads. Complete discovery and compose those payloads before attempting the first
-write. Do not return a successful-looking handoff or claim that no write tool exists
-without attempting `apply_patch`.
+Complete discovery and compose every artifact before attempting the first write. Use
+`apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. If the tool is
+unavailable or the call is denied, return `Status: Tooling Blocked`, the exact tool
+failure, and the complete intended contents of the plan index, shared plan, every screen
+brief, and CREATE-mode `App.pa.yaml` as labeled inline payloads. The orchestrator writes
+those payloads verbatim. Do not return a successful-looking handoff or claim that no write
+tool exists without attempting `apply_patch`.
 
 Plan in functional-first order: shared state and stable identity, complete executable
 workflows, observable evidence, responsive/accessibility behavior, then visual polish.
