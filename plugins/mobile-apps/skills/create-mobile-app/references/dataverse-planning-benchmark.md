@@ -110,7 +110,11 @@ because unrelated detail-request latency varied between the two runs.
 - First factual progress milestone appears within 30 seconds.
 - Gate 2/data-model readiness targets 10–15 minutes, quality first.
 - Any inventory-only or core candidate needed for reuse/extend/adapt triggers
-  one bounded full-detail snapshot expansion.
+  an exact incremental full-detail snapshot expansion. New names continue
+  automatically; already-attempted names never cause a duplicate read.
+- Metadata unavailability alone does not block planning. Unresolved
+  required-existing or incompatible targets become explicit `Defer` decisions;
+  user input is required only for a remaining business-semantic choice.
 - Every typed entity concept keeps its primary candidate and at most one
   ambiguity candidate; non-entity concepts keep no candidates.
 - Strong multiword proposed-name collisions are loaded immediately.

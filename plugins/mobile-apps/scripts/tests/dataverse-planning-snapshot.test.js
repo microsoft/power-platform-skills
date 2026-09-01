@@ -465,28 +465,71 @@ test('advisory candidate detail failure is recorded and does not abort the snaps
   });
 });
 
-test('explicit candidate detail failure remains required and throws', async () => {
+test('explicit candidate detail failure is recorded for a Defer decision', async () => {
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['activitypointer'],
+    concepts: ['activities'],
+    request: async (_method, apiPath) => {
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: [entity('activitypointer', 'Activity')] } };
+      }
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 400, error: 'abstract metadata type is unsupported' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(snapshot.tables, []);
+  assert.deepEqual(snapshot.exactNameResolution, {
+    requestedTables: ['activitypointer'],
+    loadedTables: ['activitypointer'],
+    unavailableTables: [],
+  });
+  assert.deepEqual(snapshot.detailLoadFailures, [{
+    logicalName: 'activitypointer',
+    selectionReasons: ['concept:activities:exact-covered', 'explicit-table'],
+    status: 400,
+    error: 'abstract metadata type is unsupported',
+    required: true,
+  }]);
+  assert.equal(validateSnapshot(snapshot).valid, true);
+});
+
+test('authentication failure during detail loading still requires user action', async () => {
   await assert.rejects(
     createSnapshot({
       environmentUrl: 'https://example.crm.dynamics.com',
       tenantId: 'tenant-1',
-      tableNames: ['activitypointer'],
-      concepts: ['activities'],
-      request: async (_method, apiPath) => {
-        if (apiPath.startsWith('EntityDefinitions?')) {
-          return { status: 200, data: { value: [entity('activitypointer', 'Activity')] } };
-        }
-        if (apiPath.includes('/Attributes?$select=')) {
-          return { status: 400, error: 'abstract metadata type is unsupported' };
-        }
-        return { status: 200, data: { value: [] } };
+      inventory: [entity('new_product', 'Product')],
+      concepts: ['products'],
+      request: async () => {
+        throw new Error('Failed to get Azure CLI token. Run az login first.');
       },
     }),
-    /activitypointer attributes failed \(400\): abstract metadata type is unsupported/,
+    /Failed to get Azure CLI token/,
   );
 });
 
-test('lookup sub-metadata failure skips advisory tables and blocks required tables', async () => {
+test('transport failure during detail loading still requires retry or user action', async () => {
+  const timeout = Object.assign(new Error('connect ETIMEDOUT'), { status: 0 });
+  await assert.rejects(
+    createSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com',
+      tenantId: 'tenant-1',
+      inventory: [entity('new_product', 'Product')],
+      concepts: ['products'],
+      request: async () => {
+        throw timeout;
+      },
+    }),
+    /ETIMEDOUT/,
+  );
+});
+
+test('lookup sub-metadata failure records both advisory and required tables', async () => {
   const request = async (_method, apiPath) => {
     if (apiPath.startsWith('EntityDefinitions?')) {
       return { status: 200, data: { value: [entity('new_product', 'Product')] } };
@@ -517,15 +560,16 @@ test('lookup sub-metadata failure skips advisory tables and blocks required tabl
   assert.equal(advisory.detailLoadFailures[0].logicalName, 'new_product');
   assert.match(advisory.detailLoadFailures[0].error, /lookup metadata unavailable/);
 
-  await assert.rejects(
-    createSnapshot({
-      environmentUrl: 'https://example.crm.dynamics.com',
-      tenantId: 'tenant-1',
-      tableNames: ['new_product'],
-      request,
-    }),
-    /new_product lookup metadata failed \(404\): lookup metadata unavailable/,
-  );
+  const required = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['new_product'],
+    request,
+  });
+  assert.deepEqual(required.tables, []);
+  assert.equal(required.detailLoadFailures[0].required, true);
+  assert.deepEqual(required.exactNameResolution.loadedTables, ['new_product']);
+  assert.equal(validateSnapshot(required).valid, true);
 });
 
 test('snapshot captures detailed metadata, evidence, and timing shape without network access', async () => {
@@ -1004,24 +1048,57 @@ test('old snapshots do not fabricate bounded exact discovery names', async () =>
   assert.equal(expanded.inventoryFacts.requiredExactNameTables, 0);
 });
 
-test('exact-name expansion fails closed when required detail metadata is unreadable', async () => {
+test('exact-name expansion records unreadable detail metadata for Defer', async () => {
   const base = validSnapshotBase({
     inputs: { concepts: ['activities'], explicitTableNames: [], proposedTableNames: [] },
     inventory: [normalizeInventoryForTest(entity('activitypointer', 'Activity'))],
   });
 
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    tableNames: ['activitypointer'],
+    request: async (_method, apiPath) => {
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 403, error: 'metadata forbidden' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(expanded.expansion.loadedTables, []);
+  assert.deepEqual(expanded.expansion.unavailableTables, ['activitypointer']);
+  assert.equal(expanded.expansion.failedDetailedCandidates, 1);
+  assert.deepEqual(expanded.detailLoadFailures, [{
+    logicalName: 'activitypointer',
+    selectionReasons: ['explicit-expansion'],
+    status: 403,
+    error: 'metadata forbidden',
+    required: true,
+  }]);
+  assert.deepEqual(expanded.exactNameResolution, {
+    requestedTables: ['activitypointer'],
+    loadedTables: ['activitypointer'],
+    unavailableTables: [],
+  });
+  assert.equal(validateSnapshot(expanded).valid, true);
+});
+
+test('exact-name expansion propagates terminal authentication failures', async () => {
+  const base = validSnapshotBase({
+    inputs: { concepts: ['products'], explicitTableNames: [], proposedTableNames: [] },
+    inventory: [normalizeInventoryForTest(entity('new_product', 'Product'))],
+  });
+  const unauthorized = Object.assign(new Error('token refresh failed'), { status: 401 });
+
   await assert.rejects(
     expandSnapshot({
       snapshot: base,
-      tableNames: ['activitypointer'],
-      request: async (_method, apiPath) => {
-        if (apiPath.includes('/Attributes?$select=')) {
-          return { status: 403, error: 'metadata forbidden' };
-        }
-        return { status: 200, data: { value: [] } };
+      tableNames: ['new_product'],
+      request: async () => {
+        throw unauthorized;
       },
     }),
-    /activitypointer attributes failed \(403\): metadata forbidden/,
+    /token refresh failed/,
   );
 });
 
@@ -1134,7 +1211,7 @@ test('evidence renderer emits compact deterministic planning facts', () => {
   assert.match(markdown, /\*\*Total\*\*.*\*\*78 ms\*\*/);
 });
 
-test('evidence renderer reports skipped advisory detail failures', () => {
+test('evidence renderer reports unavailable detail metadata', () => {
   const snapshot = validSnapshotBase({
     candidateRanking: [{
       concept: 'activities',
@@ -1173,8 +1250,8 @@ test('evidence renderer reports skipped advisory detail failures', () => {
 
   const markdown = renderPlanningEvidence(snapshot);
   assert.match(markdown, /activitypointer.*detail unavailable/);
-  assert.match(markdown, /Skipped advisory detail failures/);
-  assert.match(markdown, /activitypointer.*concept:activities.*400.*abstract metadata type is unsupported/);
+  assert.match(markdown, /Unavailable detail metadata/);
+  assert.match(markdown, /activitypointer.*no.*concept:activities.*400.*abstract metadata type is unsupported/);
 });
 
 test('atomic output replaces the target and leaves no sibling temporary file', (t) => {
@@ -1186,7 +1263,7 @@ test('atomic output replaces the target and leaves no sibling temporary file', (
   assert.deepEqual(fs.readdirSync(directory), ['evidence.md']);
 });
 
-test('planning contracts require the snapshot-only path and bounded expansion', () => {
+test('planning contracts require snapshot-only and monotonic incremental expansion', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const architect = fs.readFileSync(
     path.join(pluginRoot, 'agents', 'data-model-architect.md'),
@@ -1238,14 +1315,25 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(createSkill, /--project-root "<working_dir>" --summary/);
   assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
   assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
-  assert.match(createSkill, /--proposed-tables "<exact comma-separated logical names>"/);
+  assert.match(createSkill, /DETAIL_ATTEMPTED_NAMES/);
+  assert.match(createSkill, /selectedTables` with `detailLevel: full`/);
+  assert.match(createSkill, /detailLevel: core` is not fully attempted/);
+  assert.match(createSkill, /PROPOSED_CHECKED_NAMES/);
+  assert.match(createSkill, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
+  assert.match(createSkill, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
+  assert.match(createSkill, /--proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>"/);
   assert.match(createSkill, /preserve and branch on the exact stderr first line/);
-  assert.match(createSkill, /collision-only expansion allowance/);
+  assert.match(createSkill, /do not issue another network request/i);
+  assert.match(createSkill, /No-progress fallback/);
+  assert.match(createSkill, /Ask the user only when the remaining choice changes business semantics/);
+  assert.doesNotMatch(createSkill, /A second detailed-metadata signal is `BLOCKED`/);
+  assert.doesNotMatch(createSkill, /A second proposed-name signal is `BLOCKED`/);
   assert.match(createSkill, /connector-only.*skip every command/s);
   assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
   assert.doesNotMatch(createSkill, /legacy-unverified/);
-  assert.match(createSkill, /does not accept an unresolved\s+`Unverified` plan/s);
-  assert.match(createSkill, /BLOCKED: Dataverse planning metadata unavailable for exact target decisions/);
+  assert.match(createSkill, /unresolved\s+metadata never authorizes a write/s);
+  assert.match(createSkill, /ask only for the user action that can resolve\s+the problem/s);
+  assert.match(createSkill, /classify the affected exact or advisory table as `Defer`/);
   assert.match(createSkill, /10–15 minute target/);
   assert.doesNotMatch(snapshotScript, /execFileSync/);
 });

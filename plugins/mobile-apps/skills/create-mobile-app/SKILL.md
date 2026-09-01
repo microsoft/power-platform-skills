@@ -577,20 +577,22 @@ only, has a five-minute TTL, fails open on corruption or identity mismatch, and
 is never read by `--reconcile-exact`. After any metadata publish, invalidate it
 with `dataverse-inventory-cache.js --file "$INVENTORY_CACHE_PATH" --invalidate`.
 
-If environment resolution, token acquisition, inventory, required exact-name
-metadata/detail loading, parsing, or evidence rendering fails, surface the
-exact failure and **do not** treat an unreadable response as an empty inventory:
+If environment resolution, token acquisition, terminal transport access, broad
+inventory, exact-name identity resolution, parsing, or evidence rendering
+fails, surface the exact failure and **do not** treat an unreadable response as
+an empty inventory:
 
-- For every `required` Dataverse plan, stop planning with a visible
-  `BLOCKED: Dataverse planning metadata unavailable for exact target decisions`
-  result. Do not dispatch a snapshot-only architect and do not proceed toward
-  Dataverse mutation. The mutation workflow does not accept an unresolved
-  `Unverified` plan as an executable contract.
-- A concept-selected candidate is advisory unless it is also named by
-  `--tables`. If advisory detail metadata is unsupported, abstract, or
-  inaccessible, keep the snapshot, record it in `detailLoadFailures`, list it
-  in the evidence appendix, and continue. Explicit `--tables` and bounded
-  exact-name expansions remain required and fail closed.
+- These failures prevent creation of a trustworthy foreground snapshot. Stop
+  before architect dispatch and ask only for the user action that can resolve
+  the problem, such as signing in, selecting another environment, or retrying
+  after access is restored. Do not proceed toward Dataverse mutation.
+- Individual table-detail failures do not stop planning. Keep the snapshot,
+  record each failure in `detailLoadFailures`, list it in the evidence
+  appendix, and classify the affected exact or advisory table as `Defer` at
+  Gate 1 unless the user chooses a materially different business design.
+- `Defer` is non-executable. Step 8 still requires fresh complete evidence for
+  every approved `Reuse`, `Extend`, `Create`, or `Adapt` operation; unresolved
+  metadata never authorizes a write.
 - `--proposed-tables` performs collision checks only. Missing proposed names
   are not required-table failures and must never be selected for detail loading
   solely because they were proposed.
@@ -734,7 +736,23 @@ If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even l
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
-Use the plugin-wide protocol in [`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+Use the plugin-wide protocol in [`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries for ordinary non-Dataverse context; `BLOCKED:` stops and records under `## Blocks`. The two structured Dataverse metadata signals below use monotonic name tracking instead of the generic retry cap. Unknown first lines are malformed and must be treated as `BLOCKED`.
+
+Initialize two in-memory sets from the current validated snapshot before
+handling either signal:
+
+- `DETAIL_ATTEMPTED_NAMES` — every logical name already present in
+  `selectedTables` with `detailLevel: full`,
+  `exactNameResolution.unavailableTables`, or `detailLoadFailures`. A
+  `selectedTables` entry with `detailLevel: core` is not fully attempted and
+  remains eligible for one full-detail expansion.
+- `PROPOSED_CHECKED_NAMES` — every logical name in
+  `proposedNameChecks.checked`.
+
+Expansion is monotonic: each network request contains only names not already in
+the applicable set, and no expansion reruns broad inventory discovery. There
+is no fixed expansion-round count. Continue automatically while the planner
+identifies new exact names derived from the approved brief or current evidence.
 
 **Data-model exact-name expansion:** when the planner or direct architect
 returns exactly
@@ -742,9 +760,17 @@ returns exactly
 de-duplicate those names. This signal is valid only in `required` mode with a
 validated base snapshot, whether it came from the planner or the direct
 architect fallback; receiving it in `connector-only` mode is `BLOCKED`.
-Perform one bounded foreground expansion. Reuse the existing snapshot
-inventory, issue at most one exact-name metadata query for requested names
-absent from it, and do not run another broad inventory query:
+Compute `NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES`.
+
+- If `NEW_DETAIL_NAMES` is non-empty, perform the exact foreground expansion
+  below for only those names. Reuse the existing snapshot inventory and do not
+  run another broad inventory query.
+- If it is empty, do not issue another network request. Re-dispatch with the
+  explicit fact that every requested name was already attempted. The architect
+  must use the current full evidence, or classify an unavailable/incompatible
+  dependency as `Defer`. It may ask the user only when a genuine business
+  choice remains, such as choosing between a shared existing system of record
+  and a new app-owned table.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
@@ -752,7 +778,7 @@ node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
   --output "$SNAPSHOT_PATH" \
-  --tables "<exact comma-separated logical names>" \
+  --tables "<NEW_DETAIL_NAMES as exact comma-separated logical names>" \
   --combined-base-read \
   --read-concurrency 1 \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
@@ -775,15 +801,26 @@ node -e '
 ```
 
 Print the expansion's requested/loaded/unavailable names and timings
-immediately, then re-dispatch the same planner or architect once with the same
-snapshot/architect-evidence paths. A second detailed-metadata signal is `BLOCKED`; do not
-loop, broaden concepts, or defer exact validation to mutation.
+immediately, add every attempted name to `DETAIL_ATTEMPTED_NAMES`, then
+re-dispatch the same planner or architect with the same
+snapshot/architect-evidence paths. A later detail signal is handled by the same
+set-difference rule. Never repeat a name, broaden concepts, or defer exact
+validation to mutation.
 
 **Data-model proposed-name expansion:** when the planner or direct architect
 returns exactly
 `NEEDS_CONTEXT: proposed-dataverse-names:<logical names>`, sort and de-duplicate
 those names. This signal is valid only in `required` mode with a validated
-snapshot. Perform one collision-only foreground expansion:
+snapshot. Compute
+`NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES`.
+
+- If `NEW_PROPOSED_NAMES` is non-empty, perform the collision-only foreground
+  expansion below for only those names.
+- If it is empty, do not issue another network request. Re-dispatch with the
+  existing present/missing results. A checked-missing name can support
+  `Create`; a collision must be reconciled as `Reuse`, `Extend`, or `Adapt`.
+  If `Adapt` produces a new final logical name, that new name flows through
+  this same set-difference rule automatically.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
@@ -791,7 +828,7 @@ node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
   --output "$SNAPSHOT_PATH" \
-  --proposed-tables "<exact comma-separated logical names>" \
+  --proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>" \
   --combined-base-read \
   --read-concurrency 1 \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
@@ -803,10 +840,20 @@ node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
 ```
 
 This expansion checks collisions only; it does not treat absent proposed names
-as required existing tables or load their details. Re-dispatch once. A second
-proposed-name signal is `BLOCKED`. If a collision is found and the architect
-needs compatibility facts, it may then use the separate one-time
-`detailed-dataverse-metadata` expansion for that existing table.
+as required existing tables or load their details. Add every checked name to
+`PROPOSED_CHECKED_NAMES` and re-dispatch. Later proposed-name signals use the
+same set-difference rule. If a collision is found and the architect needs
+compatibility facts, it may request incremental
+`detailed-dataverse-metadata` for that existing table.
+
+**No-progress fallback:** if an agent repeats a metadata signal containing only
+already-attempted names after receiving the explicit no-new-names instruction,
+do not block the create flow for another metadata retry. Run the existing
+inline data-model revision path against the current compact evidence. Preserve
+safe decisions, classify unresolved required-existing or incompatible targets
+as `Defer`, regenerate and validate the contract, and present the result at
+Gate 1. Ask the user only when the remaining choice changes business semantics;
+do not ask merely because metadata is unavailable.
 
 Planner-only early-return signals are handled before the status switch: `INDUSTRY_CONFIRM_REQUESTED:` routes to Step 3.0a; `DESIGN_VIBE_REQUESTED:` routes to Step 3a. After the handoff, re-spawn the planner and process its new first line through this switch.
 
@@ -946,10 +993,11 @@ node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
 
 The same validation MUST run before Gate 1 is shown in the planner and inline
 paths. On exit `3`, preserve and branch on the exact stderr first line:
-`NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-names>` consumes the
-bounded detail-expansion allowance, while
-`NEEDS_CONTEXT: proposed-dataverse-names:<sorted-names>` consumes the separate
-collision-only expansion allowance. Never rewrite one signal as the other.
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-names>` uses the incremental
+detail set-difference path, while
+`NEEDS_CONTEXT: proposed-dataverse-names:<sorted-names>` uses the separate
+incremental collision-check path. Never rewrite one signal as the other or
+repeat a network request for an already-attempted name.
 Exit `2` is `BLOCKED`. Do not approve Reuse, Extend, or Adapt from `core` or
 missing detail, or Create/Adapt names without checked-missing collision
 evidence. Do not fall back to parsing the Markdown ER diagram when a sidecar

@@ -19,7 +19,11 @@ function table(logicalName, detailLevel = 'full') {
   };
 }
 
-function snapshot(tables, proposedChecks = []) {
+function snapshot(tables, proposedChecks = [], detailLoadFailures = []) {
+  const inventoryNames = new Set([
+    ...tables.map((item) => item.logicalName),
+    ...detailLoadFailures.map((failure) => failure.logicalName),
+  ]);
   return {
     version: 3,
     purpose: 'foreground-planning',
@@ -27,13 +31,13 @@ function snapshot(tables, proposedChecks = []) {
     tenantId: 'tenant-1',
     generatedAt: '2026-08-28T00:00:00.000Z',
     inputs: { concepts: [], explicitTableNames: [], proposedTableNames: [] },
-    inventory: tables.map((item) => ({ logicalName: item.logicalName, customizable: true })),
-    inventoryFacts: { customizableTables: tables.length, exactNameTables: 0, requiredExactNameTables: 0, proposedCollisionTables: 0, totalTables: tables.length },
+    inventory: [...inventoryNames].map((logicalName) => ({ logicalName, customizable: true })),
+    inventoryFacts: { customizableTables: inventoryNames.size, exactNameTables: 0, requiredExactNameTables: 0, proposedCollisionTables: 0, totalTables: inventoryNames.size },
     candidateRanking: [],
     selectedCandidateEvidence: [],
     tables,
-    detailLoadFailures: [],
-    detailLoadSummary: { attemptedCandidates: tables.length, loadedCandidates: tables.length, failedCandidates: 0 },
+    detailLoadFailures,
+    detailLoadSummary: { attemptedCandidates: tables.length + detailLoadFailures.length, loadedCandidates: tables.length, failedCandidates: detailLoadFailures.length },
     proposedNameChecks: {
       checked: proposedChecks,
       collisions: proposedChecks.filter((item) => item.status === 'collision'),
@@ -160,6 +164,34 @@ test('full evidence satisfies existing-table decisions', () => {
     snapshot([table('new_reuse'), table('new_extend')]),
   );
   assert.deepEqual(result, {
+    valid: true,
+    errors: [],
+    contextNames: [],
+    proposedContextNames: [],
+  });
+});
+
+test('attempted unavailable detail metadata must be deferred', () => {
+  const failure = {
+    logicalName: 'new_target',
+    selectionReasons: ['concept:targets'],
+    status: 500,
+    error: 'metadata unavailable',
+    required: false,
+  };
+  const invalid = validatePlanningDecisions(
+    contract({ new_target: 'unverified' }),
+    snapshot([], [], [failure]),
+  );
+  assert.equal(invalid.valid, false);
+  assert.deepEqual(invalid.contextNames, ['new_target']);
+  assert.match(invalid.errors.join('; '), /must be deferred/);
+
+  const deferred = validatePlanningDecisions(
+    contract({ new_target: 'defer' }),
+    snapshot([], [], [failure]),
+  );
+  assert.deepEqual(deferred, {
     valid: true,
     errors: [],
     contextNames: [],

@@ -187,25 +187,32 @@ test('concurrent advisory failures are recorded and all pooled requests are GET-
   assert.deepEqual(new Set(methods), new Set(['GET']));
 });
 
-test('concurrent required detail failures remain fail-closed', async () => {
+test('concurrent required detail failures remain explicit and non-executable', async () => {
   const entities = ['new_alpha', 'new_beta'].map(entity);
-  await assert.rejects(
-    createSnapshot({
-      environmentUrl: 'https://example.crm.dynamics.com',
-      tenantId: 'tenant-1',
-      tableNames: ['new_beta'],
-      readConcurrency: 2,
-      request: async (method, apiPath) => {
-        assert.equal(method, 'GET');
-        if (apiPath.startsWith('EntityDefinitions?')) {
-          return { status: 200, data: { value: entities } };
-        }
-        if (apiPath.includes("LogicalName='new_beta'") && apiPath.includes('/Attributes?')) {
-          return { status: 500, error: 'planned required failure' };
-        }
-        return { status: 200, data: { value: [] } };
-      },
-    }),
-    /planned required failure/,
-  );
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['new_beta'],
+    readConcurrency: 2,
+    request: async (method, apiPath) => {
+      assert.equal(method, 'GET');
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: entities } };
+      }
+      if (apiPath.includes("LogicalName='new_beta'") && apiPath.includes('/Attributes?')) {
+        return { status: 500, error: 'planned required failure' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(snapshot.tables, []);
+  assert.deepEqual(snapshot.detailLoadFailures, [{
+    logicalName: 'new_beta',
+    selectionReasons: ['explicit-table'],
+    status: 500,
+    error: 'planned required failure',
+    required: true,
+  }]);
+  assert.deepEqual(snapshot.exactNameResolution.loadedTables, ['new_beta']);
 });

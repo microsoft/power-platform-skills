@@ -1098,13 +1098,26 @@ function selectDetailedCandidates(entities, tableNames, concepts, options = {}) 
 
 function normalizeDetailLoadFailure(entity, reasons, error) {
   const status = Number(error?.status);
+  const selectionReasons = [...reasons].sort();
   return {
     logicalName: entity.LogicalName,
-    selectionReasons: [...reasons].sort(),
+    selectionReasons,
     status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null,
     error: String(error?.metadataError || error?.message || error || 'unknown error'),
-    required: false,
+    required: selectionReasons.some(
+      (reason) => reason === 'explicit-table' || reason === 'explicit-expansion',
+    ),
   };
+}
+
+function isPlanningAccessFailure(error) {
+  const status = Number(error?.status);
+  if (status === 0 || status === 401) return true;
+  const message = String(
+    error?.metadataError || error?.message || error || '',
+  );
+  return /failed to get .*token|token acquisition|run az login|not logged in|authentication required|etimedout|econnrefused|econnreset|enotfound|network error|socket hang up/i
+    .test(message);
 }
 
 function applyDetailLoadOutcomes(candidateRanking, selectedEvidence, tables, failures) {
@@ -1758,14 +1771,14 @@ function validateSnapshot(snapshot, expected = {}) {
         if (typeof failure.error !== 'string' || !failure.error.trim()) {
           errors.push(`${prefix}.error must be a non-empty string`);
         }
-        if (failure.required !== false) {
-          errors.push(`${prefix}.required must be false`);
-        }
-        if (failure.selectionReasons?.some(
+        const hasRequiredReason = failure.selectionReasons?.some(
           (reason) => reason === 'explicit-table' || reason === 'explicit-expansion',
-        )) {
-          errors.push(`${prefix}.selectionReasons must be advisory`);
-      }
+        );
+        if (typeof failure.required !== 'boolean') {
+          errors.push(`${prefix}.required must be a boolean`);
+        } else if (failure.required !== Boolean(hasRequiredReason)) {
+          errors.push(`${prefix}.required must match explicit selection reasons`);
+        }
     }
   }
   if (snapshot?.detailLoadSummary === undefined) {
@@ -1929,7 +1942,6 @@ async function createSnapshot({
   const selectedEvidenceByName = new Map(
     selection.selectedEvidence.map((item) => [item.logicalName.toLowerCase(), item]),
   );
-  const requiredNameSet = new Set(requiredNames.map((name) => name.toLowerCase()));
   const adaptiveRead = adaptiveReadRequest(request, readConcurrency);
   let outcomes;
   try {
@@ -1946,7 +1958,7 @@ async function createSnapshot({
             failure: null,
           };
         } catch (error) {
-          if (requiredNameSet.has(entity.LogicalName.toLowerCase())) throw error;
+          if (isPlanningAccessFailure(error)) throw error;
           const evidence = selectedEvidenceByName.get(entity.LogicalName.toLowerCase());
           return {
             table: null,
@@ -1975,9 +1987,6 @@ async function createSnapshot({
     elapsedMs: detailCompletedAt - totalStartedAt,
   });
   const totalCompletedAt = nowMs();
-  const detailedNames = new Map(
-    tables.map((table) => [table.logicalName.toLowerCase(), table.logicalName]),
-  );
   const detailOutcomes = applyDetailLoadOutcomes(
     selection.candidateRanking,
     selection.selectedEvidence,
@@ -2031,8 +2040,7 @@ async function createSnapshot({
     exactNameResolution: {
       requestedTables: requiredNames,
       loadedTables: requiredNames
-        .filter((logicalName) => detailedNames.has(logicalName.toLowerCase()))
-        .map((logicalName) => detailedNames.get(logicalName.toLowerCase())),
+        .filter((logicalName) => availableEntityNames.has(logicalName.toLowerCase())),
       unavailableTables: requiredUnavailableTables,
     },
     timings: {
@@ -2336,18 +2344,58 @@ async function expandSnapshot({
     elapsedMs: selectionCompletedAt - totalStartedAt,
   });
 
+  const expandedEvidence = new Map(
+    (snapshot.selectedCandidateEvidence || [])
+      .filter((item) => !refreshedUnavailableKeys.has(item.logicalName.toLowerCase()))
+      .map((item) => [
+        item.logicalName.toLowerCase(),
+        {
+          logicalName: item.logicalName,
+          reasons: new Set(item.reasons),
+          detailLevel: item.detailLevel || null,
+        },
+      ]),
+  );
   const adaptiveRead = adaptiveReadRequest(request, readConcurrency);
-  let loadedTables;
+  let loadOutcomes;
   try {
-    loadedTables = await mapWithConcurrency(
+    loadOutcomes = await mapWithConcurrency(
       entitiesToLoad,
       parseReadConcurrency(readConcurrency),
-      (entity) => loadDetailedEntity(adaptiveRead.request, entity, { combinedBaseRead }),
+      async (entity) => {
+        try {
+          return {
+            table: await loadDetailedEntity(
+              adaptiveRead.request,
+              entity,
+              { combinedBaseRead },
+            ),
+            failure: null,
+          };
+        } catch (error) {
+          if (isPlanningAccessFailure(error)) throw error;
+          const priorEvidence = expandedEvidence.get(entity.LogicalName.toLowerCase());
+          return {
+            table: null,
+            failure: normalizeDetailLoadFailure(
+              entity,
+              [...(priorEvidence?.reasons || []), 'explicit-expansion'],
+              error,
+            ),
+          };
+        }
+      },
       { currentConcurrency: adaptiveRead.currentConcurrency },
     );
   } finally {
     adaptiveRead.dispose();
   }
+  const loadedTables = loadOutcomes
+    .filter((outcome) => outcome.table)
+    .map((outcome) => outcome.table);
+  const newDetailLoadFailures = loadOutcomes
+    .filter((outcome) => outcome.failure)
+    .map((outcome) => outcome.failure);
   const newlyLoadedTables = loadedTables
     .filter((table) => !originalTables.has(table.logicalName.toLowerCase()))
     .map((table) => table.logicalName);
@@ -2365,7 +2413,7 @@ async function expandSnapshot({
     milestoneId: 'expansion-loaded',
     attemptedDetailedCandidates: entitiesToLoad.length,
     loadedDetailedCandidates: loadedTables.length,
-    failedDetailedCandidates: 0,
+    failedDetailedCandidates: newDetailLoadFailures.length,
     newlyLoadedTables: newlyLoadedTables.length,
     upgradedTables: upgradedTables.length,
     reloadedTables: reloadedTables.length,
@@ -2384,20 +2432,8 @@ async function expandSnapshot({
   const detailedNames = new Set(mergedTables
     .filter((table) => (table.detailLevel || 'full') === 'full')
     .map((table) => table.logicalName.toLowerCase()));
-  const expandedEvidence = new Map(
-    (snapshot.selectedCandidateEvidence || [])
-      .filter((item) => !refreshedUnavailableKeys.has(item.logicalName.toLowerCase()))
-      .map((item) => [
-        item.logicalName.toLowerCase(),
-        {
-          logicalName: item.logicalName,
-          reasons: new Set(item.reasons),
-          detailLevel: item.detailLevel || null,
-        },
-      ]),
-  );
   for (const logicalName of requestedNames) {
-    if (!detailedNames.has(logicalName.toLowerCase())) continue;
+    if (!inventoryByName.has(logicalName.toLowerCase())) continue;
     const key = logicalName.toLowerCase();
     const evidence = expandedEvidence.get(key) || {
       logicalName,
@@ -2414,8 +2450,8 @@ async function expandSnapshot({
     || snapshot.exactNameResolution?.requestedTables
     || [];
   const allExactNames = uniqueLogicalNames([...previousExactNames, ...requestedNames]);
-  const allExactAvailable = new Map(
-    rawInventory.map((entity) => [logicalNameOf(entity).toLowerCase(), logicalNameOf(entity)]),
+  const allExactAvailable = new Set(
+    rawInventory.map((entity) => logicalNameOf(entity).toLowerCase()),
   );
   const allDetailedNames = new Map(
     mergedTables
@@ -2426,8 +2462,9 @@ async function expandSnapshot({
     (failure) => (
       !allDetailedNames.has(failure.logicalName.toLowerCase())
       && !refreshedUnavailableKeys.has(failure.logicalName.toLowerCase())
+      && !requestedNameKeys.has(failure.logicalName.toLowerCase())
     ),
-  );
+  ).concat(newDetailLoadFailures);
   const expandedSelectedEvidence = [...expandedEvidence.values()]
     .sort((left, right) => left.logicalName.localeCompare(right.logicalName))
     .map((item) => ({
@@ -2605,8 +2642,7 @@ async function expandSnapshot({
     exactNameResolution: {
       requestedTables: allExactNames,
       loadedTables: allExactNames
-        .filter((logicalName) => allDetailedNames.has(logicalName.toLowerCase()))
-        .map((logicalName) => allDetailedNames.get(logicalName.toLowerCase())),
+        .filter((logicalName) => allExactAvailable.has(logicalName.toLowerCase())),
       unavailableTables: allExactNames.filter(
         (logicalName) => !allExactAvailable.has(logicalName.toLowerCase()),
       ),
@@ -2625,10 +2661,12 @@ async function expandSnapshot({
       newlyLoadedTables,
       upgradedTables,
       reloadedTables,
-      unavailableTables: unavailableRequestedTables,
+      unavailableTables: requestedNames.filter(
+        (logicalName) => !detailedNames.has(logicalName.toLowerCase()),
+      ),
       attemptedDetailedCandidates: entitiesToLoad.length,
       loadedDetailedCandidates: loadedTables.length,
-      failedDetailedCandidates: 0,
+      failedDetailedCandidates: newDetailLoadFailures.length,
     },
   };
 }

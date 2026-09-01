@@ -15,6 +15,7 @@ function normalize(value) {
 function validatePlanningDecisions(contract, snapshot) {
   const errors = [];
   const contextNames = new Set();
+  const fullDetailContextNames = new Set();
   const proposedContextNames = new Set();
   const contractValidation = validateContract(contract);
   if (!contractValidation.valid) {
@@ -34,6 +35,10 @@ function validatePlanningDecisions(contract, snapshot) {
   }
 
   const detailed = new Map(snapshot.tables.map((table) => [normalize(table.logicalName), table]));
+  const unavailableDetails = new Set(
+    (snapshot.detailLoadFailures || []).map((failure) => normalize(failure.logicalName)),
+  );
+  const deferRequiredNames = new Set();
   const proposedChecks = new Map(
     (snapshot.proposedNameChecks?.checked || []).map(
       (check) => [normalize(check.logicalName), normalize(check.status)],
@@ -41,10 +46,15 @@ function validatePlanningDecisions(contract, snapshot) {
   );
   for (const table of contract.tables || []) {
     const decision = normalize(table.plannedDecision);
+    if (unavailableDetails.has(normalize(table.logicalName)) && decision !== 'defer') {
+      contextNames.add(table.logicalName);
+      deferRequiredNames.add(table.logicalName);
+    }
     if (FULL_DETAIL_DECISIONS.has(decision)) {
       const evidence = detailed.get(normalize(table.logicalName));
       if (!evidence || (evidence.detailLevel || 'full') !== 'full') {
         contextNames.add(table.logicalName);
+        fullDetailContextNames.add(table.logicalName);
       }
     }
     if (decision === 'create' || decision === 'adapt') {
@@ -76,9 +86,12 @@ function validatePlanningDecisions(contract, snapshot) {
   return {
     valid: contextNames.size === 0 && proposedContextNames.size === 0 && errors.length === 0,
     errors: [
-      ...(contextNames.size === 0
+      ...(fullDetailContextNames.size === 0
         ? []
         : ['reuse, extend, and adapt decisions require full Dataverse detail evidence']),
+      ...(deferRequiredNames.size === 0
+        ? []
+        : ['tables with attempted unavailable detail metadata must be deferred']),
       ...(proposedContextNames.size === 0
         ? []
         : ['create and adapt decisions require proposed-name collision evidence']),
