@@ -246,6 +246,55 @@ async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
   return out;
 }
 
+// Read the two app-shell settings the BUILD writes but the download previously dropped, so a
+// downloaded spec round-trips them instead of silently reverting an app to the classic shell when it
+// is rebuilt into a fresh environment (#514).
+//
+// Only an EXPLICIT app-scope override is emitted. An absent row means "inherits the environment", and
+// the build treats an omitted field the same way — so omitting is the faithful representation, and
+// emitting a value for an inherited setting would invent an override the app never had.
+//
+// Encoding, and the trap it hides:
+//   NewLookAlwaysOn            stored as the string 'true' / 'false'
+//   HeaderAndNavigationRefresh stored as a Number TRI-STATE where 2 = on, 1 = OFF, 0 = platform
+//                              default. A truthy read reports 1 — which means disabled — as enabled,
+//                              which is the same mistake that made `ai.appFeatures: false` disable a
+//                              live app's features.
+const SHELL_SETTINGS = {
+  NewLookAlwaysOn: { field: 'newLook', decode: (v) => (String(v).toLowerCase() === 'true' ? true : (String(v).toLowerCase() === 'false' ? false : undefined)) },
+  HeaderAndNavigationRefresh: { field: 'headerNavigationRefresh', decode: (v) => (String(v) === '2' ? true : (String(v) === '1' ? false : undefined)) },
+};
+
+async function readAppShellSettings(sdk, appId) {
+  const out = {};
+  try {
+    const defs = await sdk.queryRecords('settingdefinition', {
+      select: ['settingdefinitionid', 'uniquename'],
+      filter: Object.keys(SHELL_SETTINGS).map((n) => `uniquename eq '${n}'`).join(' or '),
+      top: 10,
+    });
+    const byId = new Map((defs || []).map((d) => [String(d.settingdefinitionid).toLowerCase(), d.uniquename]));
+    if (!byId.size) return out;
+    const rows = await sdk.queryRecords('appsetting', {
+      select: ['value', '_settingdefinitionid_value'],
+      filter: `_parentappmoduleid_value eq ${appId}`,
+      top: 50,
+    });
+    for (const r of rows || []) {
+      const name = byId.get(String(r && r._settingdefinitionid_value).toLowerCase());
+      const spec = name && SHELL_SETTINGS[name];
+      if (!spec) continue;
+      const decoded = spec.decode(r.value);
+      if (decoded !== undefined) out[spec.field] = decoded;
+    }
+  } catch {
+    // Best-effort, like every other capture here: a tenant without these setting definitions, or a
+    // caller without read access to appsettings, still gets a usable spec. Losing an optional shell
+    // setting must never fail a download.
+  }
+  return out;
+}
+
 async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
   const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [] };
   try {
@@ -1035,7 +1084,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // read didn't surface it: `appUnique` is the authoritative value (from the appmodule query) and is
     // guaranteed present here (the sitemap gate above bails when it's falsy). This is what lets a rebuild
     // resolve the EXISTING app by identity after a display-name rename instead of creating a duplicate.
-    app: async () => ({ ...app, uniquename: (app && app.uniquename) || appUnique }),
+    app: async () => ({ ...app, uniquename: (app && app.uniquename) || appUnique, ...(await readAppShellSettings(sdk, appId)) }),
     pages: async () => pages,
     entities: async () => entities,
     webResources: async () => webResources,
@@ -1180,4 +1229,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

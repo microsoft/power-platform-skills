@@ -1373,3 +1373,84 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
   }
   assert.doesNotMatch(written.join(''), /restricted to specific security roles/);
 });
+
+
+// Minimal hydrateSpec input: only the app block varies across the #514 tests, so everything else is
+// a fixed stub. Keeps each assertion about the one field it is testing.
+const makeRead = (over = {}) => ({
+  // hydrateSpec walks app.siteMap.areas, so the stub has to carry a (minimal) sitemap.
+  app: async () => ({ siteMap: { areas: [] }, ...(over.app || { name: 'A', description: '', uniquename: 'p_a' }) }),
+  pages: async () => [],
+  entities: async () => [],
+  webResources: async () => [],
+  solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+});
+// --- #514: the app-shell settings the build writes but the download used to drop ------------------
+// A live app had NewLookAlwaysOn=true and HeaderAndNavigationRefresh=2 (the only app in its org with
+// either) and the downloaded spec carried neither. Rebuilding it into a FRESH environment would have
+// produced a classic-shell app with nothing reporting the loss.
+//
+// Plugin gap, not an SDK one: the SDK already exposes getAppSettings/retrieveSetting; the download
+// called neither.
+test('#514: hydrateSpec round-trips newLook and headerNavigationRefresh when the app overrides them', async () => {
+  const { hydrateSpec } = require('../lib/hydrate-spec.js');
+  const spec = await hydrateSpec(makeRead({
+    app: { name: 'A', description: '', uniquename: 'p_a', newLook: true, headerNavigationRefresh: true },
+  }));
+  assert.strictEqual(spec.app.newLook, true);
+  assert.strictEqual(spec.app.headerNavigationRefresh, true);
+});
+
+test('#514: an app with NO override omits them, so the rebuild keeps inheriting', async () => {
+  // Omitting is the faithful representation: the build leaves an omitted field alone, so emitting a
+  // value for an inherited setting would invent an override the app never had.
+  const { hydrateSpec } = require('../lib/hydrate-spec.js');
+  const spec = await hydrateSpec(makeRead({ app: { name: 'A', description: '', uniquename: 'p_a' } }));
+  assert.ok(!('newLook' in spec.app), 'no newLook key when the app has no override');
+  assert.ok(!('headerNavigationRefresh' in spec.app), 'no headerNavigationRefresh key either');
+});
+
+test('#514: an explicit OFF round-trips as false, not as absent', async () => {
+  // false and absent mean different things: false is an explicit override, absent is inheritance.
+  const { hydrateSpec } = require('../lib/hydrate-spec.js');
+  const spec = await hydrateSpec(makeRead({
+    app: { name: 'A', description: '', uniquename: 'p_a', newLook: false, headerNavigationRefresh: false },
+  }));
+  assert.strictEqual(spec.app.newLook, false);
+  assert.strictEqual(spec.app.headerNavigationRefresh, false);
+});
+
+test('#514: readAppShellSettings decodes the header tri-state, where 1 means DISABLED', async () => {
+  // THE trap. HeaderAndNavigationRefresh is a Number tri-state: 2 = on, 1 = OFF, 0 = platform
+  // default. A truthy read reports 1 as enabled, which is the same class of mistake that made
+  // `ai.appFeatures: false` silently disable a live app's features.
+  const { readAppShellSettings } = require('../download-model-app.js');
+  const sdk = (headerValue, newLookValue) => ({
+    queryRecords: async (entity) => {
+      if (entity === 'settingdefinition') {
+        return [
+          { settingdefinitionid: 'd1', uniquename: 'NewLookAlwaysOn' },
+          { settingdefinitionid: 'd2', uniquename: 'HeaderAndNavigationRefresh' },
+        ];
+      }
+      return [
+        { _settingdefinitionid_value: 'd1', value: newLookValue },
+        { _settingdefinitionid_value: 'd2', value: headerValue },
+      ];
+    },
+  });
+
+  assert.deepStrictEqual(await readAppShellSettings(sdk('2', 'true'), 'app-1'), { newLook: true, headerNavigationRefresh: true }, '2 = on');
+  assert.deepStrictEqual(await readAppShellSettings(sdk('1', 'false'), 'app-1'), { newLook: false, headerNavigationRefresh: false }, '1 = DISABLED, not enabled');
+  // 0 is "platform default", which is not an override at all — it must not be emitted either way.
+  assert.deepStrictEqual(await readAppShellSettings(sdk('0', 'false'), 'app-1'), { newLook: false }, '0 = platform default, so no header key');
+});
+
+test('#514: a tenant without the setting definitions still downloads cleanly', async () => {
+  // Best-effort: losing an optional shell setting must never fail a download.
+  const { readAppShellSettings } = require('../download-model-app.js');
+  const noDefs = { queryRecords: async () => [] };
+  assert.deepStrictEqual(await readAppShellSettings(noDefs, 'app-1'), {});
+  const throws = { queryRecords: async () => { throw new Error('no access to appsettings'); } };
+  assert.deepStrictEqual(await readAppShellSettings(throws, 'app-1'), {});
+});
