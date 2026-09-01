@@ -802,3 +802,27 @@ test('REGRESSION: the same status-only rule applies to business rules', () => {
   const r = classifyChanges(rule('Active'), rule('Draft'));
   assert.deepStrictEqual(r.debt, [], `got ${JSON.stringify(r.debt)}`);
 });
+
+test('REAL BUNDLE: the 30-stage / 30-step ceilings match the SDK rule, not a magic number of ours', () => {
+  // MEASURED: neither `createArtifact` nor `pushArtifact` enforces these — both happily accept 31
+  // stages and 31 steps. The SDK's `too-many-stages` / `too-many-steps` rules live in a validator the
+  // plugin never calls, so the spec-level ceiling is the ONLY enforcement on the path we use. That
+  // makes it worth pinning, and it cannot be pinned behaviourally: assert the bundle still states the
+  // same number, so a re-vendor that changes the limit fails here rather than letting the spec quietly
+  // reject flows the platform would now accept (or accept ones it would not).
+  const bundle = fs.readFileSync(BUNDLE, 'utf8');
+  const stageRule = bundle.match(/a BPF allows at most (\d+) stages/);
+  const stepRule = bundle.match(/a stage allows at most (\d+) steps/);
+  assert.ok(stageRule, "the bundle no longer states a stage ceiling — re-check what the SDK enforces");
+  assert.ok(stepRule, "the bundle no longer states a step ceiling — re-check what the SDK enforces");
+  assert.strictEqual(Number(stageRule[1]), 30, 'the SDK stage ceiling changed; update BPF_MAX_STAGES');
+  assert.strictEqual(Number(stepRule[1]), 30, 'the SDK step ceiling changed; update BPF_MAX_STEPS');
+
+  // And the spec agrees with that number at exactly the boundary, in both directions.
+  const stages = (n) => Array.from({ length: n }, (_, i) => ({ name: `S${i}`, steps: [{ name: 'x', field: 'new_notes' }] }));
+  const steps = (n) => [{ name: 'S', steps: Array.from({ length: n }, (_, i) => ({ name: `P${i}`, field: 'new_notes' })) }];
+  assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: stages(30) }]), [], 'the spec accepts the ceiling');
+  assert.ok(errorsFor([{ ...FLOW, stages: stages(31) }]).some((e) => /at most 30/.test(e)), 'and rejects one over');
+  assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: steps(30) }]), []);
+  assert.ok(errorsFor([{ ...FLOW, stages: steps(31) }]).some((e) => /at most 30 per stage/.test(e)));
+});
