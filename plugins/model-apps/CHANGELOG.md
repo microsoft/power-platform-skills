@@ -22,18 +22,18 @@ an environment that supports them**.
 ### Added
 
 - **`businessProcessFlows[]` — guided, staged processes on a table.** Author the stage bar users work
-  through: ordered stages, each with steps bound to that table's columns (a step with no field is a
-  checklist item). Deployed as a category-4 business process flow and activated on create, because an
-  inactive flow is invisible rather than merely inert. Every step's field is checked against the
-  flow's own table, since the platform accepts a step bound to nothing and renders it that way; a flow
-  name must be unique across the whole spec (Dataverse derives the stored name from it, ignoring the
-  table), and every stage needs at least one step or the platform invents one for you.
-  Additive on rebuild, torn down with the app, and a new `business-process-flows` build phase (16
-  now). v1 is single-entity and linear — cross-entity stages, branching, stage actions and
-  security-role grants are rejected rather than silently dropped, so a flow never deploys as
-  something other than what you wrote. Unlike `businessRules[]`, a BPF is written as an ordinary
-  `workflows` row through the SDK's generic artifact surface, so it is **not** subject to the
-  bound-member environment gate above.
+  through: ordered stages, each with steps bound to that table's columns. **Every step must bind a
+  field** — the platform refuses one without (`datafieldname of ControlStep cannot be null or empty`),
+  so bind a Boolean flag for a manual check-off. Deployed as a category-4 flow and activated on
+  create, because an inactive flow is invisible rather than merely inert. A flow name must be unique
+  across the whole spec (Dataverse derives the stored name from it, ignoring the table), every stage
+  needs at least one step or the platform invents one for you, and the SDK's 30-stage / 30-step
+  ceilings are enforced up front. Additive on rebuild, torn down with the app (including the backing
+  table activation creates), and a new `business-process-flows` build phase (16 now). v1 is
+  single-entity and linear — cross-entity stages, branching, stage actions and security-role grants
+  ([#513]) are rejected rather than silently dropped, so a flow never deploys as something other than
+  what you wrote. Unlike `businessRules[]`, a BPF goes through the SDK's generic artifact surface, so
+  it is **not** subject to the bound-member environment gate above.
 - **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
   `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form;
   undo with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)
@@ -93,6 +93,7 @@ an environment that supports them**.
 [#494]: https://github.com/microsoft/power-platform-skills/issues/494
 [#495]: https://github.com/microsoft/power-platform-skills/issues/495
 [#496]: https://github.com/microsoft/power-platform-skills/issues/496
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
 
 ## [2.5.0]
 

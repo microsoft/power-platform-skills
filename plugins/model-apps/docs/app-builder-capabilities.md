@@ -166,11 +166,13 @@ apart deliberately.
   `success`→`saved` rename that silently disarmed the 412 guard. `sdk-uptake-contract.test.js`
   compares `AI_APP_SETTING` to the SDK's map and asserts the gate/per-app names stay distinct.
 
-### Business process flows — 🧪 tested (not yet live-verified)
+### Business process flows — ✅ verified live
 - `businessProcessFlows[]` — the staged process bar on a record: ordered `stages[]`, each with
-  ordered `steps[]` bound to columns of the same table (a step with no `field` is a checklist item).
-  `status` defaults to `Active` because an inactive BPF is not merely inert, it is **invisible** —
-  the stage bar does not render at all.
+  ordered `steps[]` bound to columns of the same table. **Every step must bind a `field`**: the
+  platform refuses a step without one (`datafieldname of ControlStep cannot be null or empty`), so
+  there is no field-less "checklist" step — bind a Boolean flag for a manual check-off. `status`
+  defaults to `Active` because an inactive BPF is not merely inert, it is **invisible** — the stage
+  bar does not render at all.
 - Deployed as a `workflows` row (**category 4 / type 1 / businessprocesstype 0**) whose XAML the
   vendored SDK compiles from the authored stages; an `Active` flow is activated in the same push
   (`statecode 1` / `statuscode 2`). Every query in build, verify and teardown goes through one
@@ -178,8 +180,11 @@ apart deliberately.
   copy and same-named **task flows** (also category 4) — the two mistakes that cost real time on
   business rules.
 - Additive on rebuild (matched by `entity` + `name`, reused if present, Active/Draft state converged
-  in both directions); torn down with the app, deactivate-then-delete, before its table. A new
-  `business-process-flows` build phase sits next to `business-rules` (16 now).
+  in both directions, and re-added to the solution on every run so a failed component add is repaired
+  rather than inherited); torn down with the app, deactivate-then-delete, before its table. Deleting
+  an activated flow cascades a **backing-table** drop and regularly runs past the client's 60s HTTP
+  timeout, so teardown polls the row rather than reporting a failure for work the server completed.
+  A new `business-process-flows` build phase sits next to `business-rules` (16 now).
 - **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching,
   stage actions and security-role grants; the spec gate **rejects** those keys — as an allow-list at
   flow, stage *and* step level — rather than ignoring them, so a flow never quietly deploys as
@@ -187,7 +192,11 @@ apart deliberately.
   fixed key set and discard the rest, so a stage `branch` or a step's `fieldLogicalName` (instead of
   `field`) would otherwise pass validation and deploy bound to nothing. `securityRoles` needs role ids
   and belongs to the `security` phase (a BPF's grants are privileges on the backing table that
-  activation creates) — tracked as a follow-up.
+  activation creates) — tracked in
+  [#513](https://github.com/microsoft/power-platform-skills/issues/513).
+- **Live-verified**: build (11 created, verify 8/8), rebuild (flow reused, solution component
+  re-added), and teardown (exit 0, with an independent query confirming both the workflow row and its
+  activation-created backing table are gone). An invalid spec is refused pre-flight with no writes.
 - Two platform facts the validator encodes, both found by adversarial review and measured against the
   bundle: a flow **name must be unique across the whole spec** (the derived `uniquename` ignores the
   table and strips case/punctuation, and activation creates a backing table with that name, so two
