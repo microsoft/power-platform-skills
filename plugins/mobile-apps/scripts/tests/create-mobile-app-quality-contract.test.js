@@ -12,6 +12,10 @@ const sampleDataSkill = fs.readFileSync(
   path.join(pluginRoot, 'skills', 'add-sample-data', 'SKILL.md'),
   'utf8',
 );
+const buildPlanProtocol = fs.readFileSync(
+  path.join(pluginRoot, 'skills', 'create-mobile-app', 'references', 'build-plan.md'),
+  'utf8',
+);
 
 test('template preparation is delegated to the deterministic script', () => {
   const start = skill.indexOf('### Step 5 — Prepare existing template');
@@ -58,6 +62,56 @@ test('app identity and Power Apps initialization respect existing state', () => 
   assert.match(initialize, /CONFIG_ENV_ID=/);
   assert.match(initialize, /initialization skipped/);
   assert.match(initialize, /existing power\.config\.json targets/);
+});
+
+test('live Build Plan starts after proceed and remains separate from design preview', () => {
+  const setup = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'references', 'phase-0-setup.md'),
+    'utf8',
+  );
+  const previewIndex = setup.indexOf('### Step 2c — Plan preview');
+  const appIdentityIndex = setup.indexOf('scripts/lib/app-identity.js', previewIndex);
+  const buildPlanIndex = setup.indexOf('launch its loopback server', appIdentityIndex);
+  assert.ok(previewIndex >= 0);
+  assert.ok(appIdentityIndex > previewIndex);
+  assert.ok(buildPlanIndex > appIdentityIndex);
+  assert.doesNotMatch(setup.slice(0, previewIndex), /_build_plan\.html|mobile-build-plan\.js/);
+
+  assert.match(buildPlanProtocol, /mobile-build-plan\.js" serve/);
+  assert.match(buildPlanProtocol, /127\.0\.0\.1/);
+  assert.match(buildPlanProtocol, /tokenless standalone `_build_plan\.html`/);
+  assert.match(buildPlanProtocol, /never parses HTML or Mermaid back into a\s+contract/);
+  assert.match(buildPlanProtocol, /invalidates Gate 1 and every downstream approval/);
+  for (const phase of [
+    'requirements',
+    'experience',
+    'data-model',
+    'architecture',
+    'design',
+    'scaffold',
+    'dataverse',
+    'navigation',
+    'screens',
+    'validation',
+  ]) {
+    assert.match(buildPlanProtocol, new RegExp(`\\b${phase}\\b`));
+  }
+
+  const scaffoldStart = skill.indexOf('# Scaffold and Experience Approval');
+  const scaffoldEnd = skill.indexOf('# Data, Native Capabilities, and Connectors');
+  const scaffold = skill.slice(scaffoldStart, scaffoldEnd);
+  assert.match(scaffold, /separate from `_build_plan\.html`/);
+  assert.match(scaffold, /at most three phone frames/);
+  assert.match(scaffold, /remain state controls on those frames rather than routes/);
+});
+
+test('browser data-model edits are checked before approvals and mutation', () => {
+  const editChecks = skill.match(/mobile-build-plan-edits\.json/g) || [];
+  assert.ok(editChecks.length >= 4, 'expected edit-journal checks at approval and mutation boundaries');
+  assert.match(skill, /newer data-model revision cancels the pending handoff/);
+  assert.match(skill, /newer edit blocks Step 8 and returns through Gate 1/);
+  assert.match(buildPlanProtocol, /After\s+`.tmp\/dataverse-metadata-execution-journal\.json`/);
+  assert.match(buildPlanProtocol, /subsequent schema work belongs to `\/edit-app`/);
 });
 
 test('offline setup follows materialized Dataverse data and never infers connector-only from absence', () => {

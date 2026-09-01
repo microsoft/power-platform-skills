@@ -147,7 +147,11 @@ After the prereq sanity check passes:
 
 Expected: a short wizard plus four approval gates, then scaffolding, table
 creation, and parallel screen builds. Before implementation, you review an
-interactive HTML preview of the primary product journey.
+interactive HTML preview of the primary product journey. After the rough-plan
+gate, `_build_plan.html` stays open as a live view of the plan, data model,
+screens, approvals, and build progress. Before Dataverse execution, its
+structured editor can add or update tables, columns, and relationships; those
+changes invalidate Gate 1 and downstream approvals for review.
 
 ## Quick examples
 
@@ -170,7 +174,9 @@ What happens:
    journey preview → final implementation confirmation
 5. **Design system** — materializes the approved Product Experience into
    `brand/design-system.md`, `brand/tokens.ts`, and `_plan_preview.html`.
-   Inspection styling is an explicit option, not the no-brand default.
+    The preview retains state controls but shows at most three journey frames:
+    entry, representative core work, and outcome. Inspection styling is an
+    explicit option, not the no-brand default.
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, validates a screen-builder canary, then builds supporting screens in bounded parallel waves
 7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
 
@@ -253,7 +259,7 @@ Example edit flows:
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Product Experience Compiler orchestrator — extracts UX DNA and adaptive scope, compiles a workflow journey and revision-bound screen build packs, runs four approval gates including an interactive HTML experience preview, then applies data/native/connectors and builds screens in parallel |
+| `/create-mobile-app` | ✅ v0 | Foreground Product Experience Compiler orchestrator — keeps a live `_build_plan.html` companion updated across planning and implementation, supports validated pre-execution data-model edits, runs four approval gates including a separate three-frame experience preview, then applies data/native/connectors and builds screens in parallel |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts an approved schema contract or routes planning through `/setup-datamodel --plan-only`. |
 | `/setup-datamodel` | ✅ v0 | Foreground Dataverse and connector planner. Discovers existing metadata, proposes reuse / extend / create decisions, validates a structured contract, and can return plan-only artifacts to `/create-mobile-app` or `/edit-app`. |

@@ -1,5 +1,10 @@
 # Navigation and Screen Preparation
 
+Follow the retained
+[`Live Build Plan protocol`](./build-plan.md). Mark `navigation` active before
+Step 10b and complete only after layouts, shared code, skeletons, routes, and
+the navigation TypeScript gate are valid.
+
 ### Step 10b — Wire navigation layout
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.

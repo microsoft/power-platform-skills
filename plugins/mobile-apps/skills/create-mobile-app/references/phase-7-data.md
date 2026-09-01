@@ -1,5 +1,11 @@
 # Data, Native Capabilities, and Connectors
 
+Follow the retained
+[`Live Build Plan protocol`](./build-plan.md). Keep `dataverse` current around
+Step 8, including a completed connector-only milestone when applicable. Use
+`architecture` warnings for capability/connector concerns without rewriting
+the approved scope.
+
 ### Step 7 — Auth config
 
 **Print before starting:**
@@ -112,6 +118,11 @@ Print:
 Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.json` only.
 
 ### Step 8 — Apply data model
+
+Before any reconciliation, manifest generation, or Dataverse write, check
+`.tmp/mobile-build-plan-edits.json` and the approval receipt as required by the
+Build Plan protocol. A newer edit blocks Step 8 and returns through Gate 1;
+the mutation phase cannot create or refresh its own approval.
 
 If `<dataverse_planning_mode> = connector-only`, verify the approved
 `## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`

@@ -1,5 +1,10 @@
 # Screen Generation and Launch
 
+Follow the retained
+[`Live Build Plan protocol`](./build-plan.md). Update `screens` after every
+canary/supporting channel attempt and wave, and wrap each executable quality
+gate with `validation` active/complete or warning/failed state.
+
 ### Step 11 — Build screens with one parallel builder type
 
 Build mode is not a user-facing question. The foreground owns work orders,
@@ -318,6 +323,11 @@ generate/open the QR image where supported, and persist the terminal ID in
 Offer `/debug-app` only after the user reports a concrete native symptom.
 
 ### Step 13 — Summary
+
+Before printing the summary, record the Build Plan's final `validation`
+milestone with `--overall-status complete`. Then stop only the retained live
+Build Plan process/terminal so its tokenless completed `_build_plan.html`
+snapshot remains available. Do not stop Metro.
 
 Run `planning-timings.js --summary` and report `foregroundPlanningMs`, each
 screen-build channel, aggregate `screenBuildMs`, `screenValidationMs`,

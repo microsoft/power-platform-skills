@@ -1,5 +1,10 @@
 # Foreground Planning and Approval Contracts
 
+Follow the retained
+[`Live Build Plan protocol`](./build-plan.md). Mark `experience`, `data-model`,
+and `architecture` active/complete around their owning work below. Mark the
+owning phase `waiting` during Gates 1–2 and return it to `active` for a repair.
+
 ### Step 3 — Plan in the foreground
 
 Planning uses one path on every host. The foreground skill owns requirement
@@ -343,6 +348,11 @@ Map, journey, and per-screen pack summaries. Discovery diagnostics belong in
 All questions and approvals use foreground `AskUserQuestion` and plan mode.
 No child may ask the user or enter/exit plan mode.
 
+Immediately before each approval and again after each response, check
+`.tmp/mobile-build-plan-edits.json` as specified by the Build Plan protocol.
+A newer data-model revision cancels the pending handoff, reruns only affected
+validators/rendering, and reopens Gate 1 before any downstream approval.
+
 Gate 1 reviews Product Experience, Product Scope, requirement coverage, and the
 data model. Gate 2 reviews capabilities, persistence ownership, connectors,
 screen graph/navigation, Workflow Journey, and pack compilation. In
@@ -364,6 +374,10 @@ the final implementation confirmation. No mutation begins until the current
 approval receipt binds all four required states and artifact hashes.
 
 ## Step 3.7 — Prefix and Dataverse execution gate
+
+Recheck `.tmp/mobile-build-plan-edits.json` before normalizing or binding the
+schema contract. Never restamp an approval receipt invalidated by a browser
+edit; return through Gate 1 and every invalidated downstream gate.
 
 In Dataverse-required mode, verify the approved structured contract and plan use
 the detected publisher prefix. Correct mechanical prefix drift in both outputs,

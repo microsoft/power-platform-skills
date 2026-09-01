@@ -56,7 +56,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
    Scope, and data model; Gate 2 approves architecture/capabilities/connectors;
    Gate 3 approves the materialized design and interactive HTML journey
    preview; Gate 4 confirms implementation. Graph/spec compilation does not
-   create extra user gates.
+  create extra user gates. `_build_plan.html` is a separate live execution
+  companion opened only after Step 2c `proceed`; it derives from canonical
+  contracts, uses revision-checked pre-Dataverse data-model edits, and never
+  replaces the at-most-three-frame `_plan_preview.html` design review.
 7. **Persisted semantic contracts** — `native-app-plan.md` is the human plan.
    Deterministic execution uses Product Experience, Product Scope, Workflow
    Journey, and compiled screen-build-pack JSON sidecars under `.tmp/`.

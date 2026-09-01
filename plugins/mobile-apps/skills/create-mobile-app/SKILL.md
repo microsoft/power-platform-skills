@@ -68,6 +68,12 @@ pipeline state and artifact revisions before skipping any phase.
 | Screen waves, validation, Metro, summary | 11–13 | [`references/phase-11-screens.md`](${CLAUDE_SKILL_DIR}/references/phase-11-screens.md) |
 | Spawn/tool failure only | on demand | [`references/degraded-hosts.md`](${CLAUDE_SKILL_DIR}/references/degraded-hosts.md) |
 
+After Step 2c `proceed`, read and retain the
+[`Live Build Plan protocol`](${CLAUDE_SKILL_DIR}/references/build-plan.md).
+Apply its milestone updates through Step 13 and its edit-journal check before
+every approval or mutation. It is the only owner of `_build_plan.html`; the
+design workflow continues to own the separate `_plan_preview.html`.
+
 ## Runtime flags and compatibility
 
 - `--consolidated-review` opts into one review of the same four plan sections

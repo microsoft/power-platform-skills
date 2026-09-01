@@ -1,5 +1,10 @@
 # Scaffold and Experience Approval
 
+Follow the retained
+[`Live Build Plan protocol`](./build-plan.md). Mark `scaffold` active before
+Step 5 and complete only after Step 6.6 passes. Mark `design` active during
+Step 6.75, `waiting` during Gates 3–4, and complete only after Gate 4 approval.
+
 ### Step 4 — Auth & environment selection
 
 ```bash
@@ -308,6 +313,11 @@ uses the four prompts below.
 Open or print `file://<working_dir>/_plan_preview.html` according to
 `<visual_companion>`, then use `EnterPlanMode` with:
 
+This design-system preview remains separate from `_build_plan.html` and shows
+at most three phone frames: primary-journey entry, representative core or
+signature work, and outcome. Loading, empty, error, permission, success, and
+offline conditions remain state controls on those frames rather than routes.
+
 ```text
 ## Gate 3 of 4 — Product Experience
 
@@ -336,6 +346,10 @@ approval, mark Gate 3 approved in `native-app-plan.md` and set
 and preview hashes.
 
 #### Gate 4 — Final implementation confirmation
+
+Before entering Gate 4, recheck `.tmp/mobile-build-plan-edits.json`. If a
+newer data-model revision exists, do not approve implementation; return through
+Gate 1 and the downstream gates identified by the invalidated receipt.
 
 Use `EnterPlanMode` once more with the exact implementation summary:
 

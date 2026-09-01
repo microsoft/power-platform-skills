@@ -434,6 +434,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
 name, path, environment data, or credential. An `edit` or `abort` response
 must not run this command.
 
+Now read
+[`build-plan.md`](${CLAUDE_SKILL_DIR}/references/build-plan.md), record the
+completed `requirements` milestone, launch its loopback server as a
+long-running background process, and open the returned `launchUrl` once. This
+is the first point where `_build_plan.html` or any Build Plan artifact may be
+created. Retain the process/terminal handle through Step 13; never copy its
+token-bearing URL into persisted project documentation.
+
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.
 - Cost when user aborts late (after Step 3 starts): 5-10 min + dirty working dir + frustration.

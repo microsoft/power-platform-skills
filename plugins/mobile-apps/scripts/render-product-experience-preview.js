@@ -78,10 +78,13 @@ function selectPreviewScreens(compiled, journey) {
   );
 
   let selectedIds;
-  if (journeyIds.length <= 5) {
+  if (journeyIds.length <= 3) {
     selectedIds = journeyIds;
   } else {
-    const indexes = unique([0, 1, Math.floor(journeyIds.length / 2), journeyIds.length - 2, journeyIds.length - 1]);
+    // Three frames keep Gate 3 review focused: the journey entry, its representative
+    // core/signature step, and the final outcome. Loading, empty, error, and offline
+    // conditions remain interactive states on those frames rather than extra screens.
+    const indexes = [0, Math.floor((journeyIds.length - 1) / 2), journeyIds.length - 1];
     selectedIds = indexes.map((index) => journeyIds[index]);
   }
 
