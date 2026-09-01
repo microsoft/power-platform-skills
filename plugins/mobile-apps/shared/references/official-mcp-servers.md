@@ -72,7 +72,7 @@ the latest non-prerelease GA version (`2.0.5`) instead of the prerelease
 
 These push workflows require the listed official MCP server/tool surfaces
 before any cloud mutation or read-back. If a required server is missing,
-disconnected, or missing a required tool, **stop immediately** and give these
+disconnected, or missing a required tool, give these
 Copilot CLI steps in this exact order:
 
 ```text
@@ -83,14 +83,17 @@ Copilot CLI steps in this exact order:
 ```
 
 Require the second `/mcp` check to show the named server as **connected** and
-the required tool(s) present before continuing. Do **not** silently fall back
-to shell CLIs when a required vendor MCP server or tool is unavailable. The
-only CLI exceptions are the already-documented safe gaps that apply **after**
-MCP readiness is established.
+the required tool(s) present before continuing. Firebase and Azure workflows
+remain blocked when their required MCP surfaces are unavailable. The sole
+pre-readiness exception is `/setup-push-wif`: after the recovery sequence
+fails, it may use the official authenticated `gcloud` CLI through
+`scripts/run-allowlisted-gcloud.js`. Never call `gcloud` directly for
+provisioning, add commands outside the checked-in allowlist during an active
+provisioning run, or extend this exception to Firebase or Azure.
 
 | Workflow | Required server(s) | Required tool(s) that must be visible before the workflow continues |
 |---|---|---|
 | `/setup-fcm` | `firebase` | `mcp__firebase__firebase_get_environment`, `mcp__firebase__firebase_login`, `mcp__firebase__firebase_update_environment`, `mcp__firebase__firebase_list_projects`, `mcp__firebase__firebase_get_project`, `mcp__firebase__firebase_create_project`, `mcp__firebase__firebase_list_apps`, `mcp__firebase__firebase_create_app`, `mcp__firebase__firebase_get_sdk_config` |
 | `/setup-apns` | `firebase` | `mcp__firebase__firebase_get_environment`, `mcp__firebase__firebase_login`, `mcp__firebase__firebase_update_environment`, `mcp__firebase__firebase_list_projects`, `mcp__firebase__firebase_get_project`, `mcp__firebase__firebase_list_apps` |
-| `/setup-push-wif` | `gcloud`, `azure` | `mcp__gcloud__run_gcloud_command`, `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role` |
+| `/setup-push-wif` | `azure`; `gcloud` preferred | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`; use `mcp__gcloud__run_gcloud_command` when available, otherwise the guarded official CLI fallback |
 | `/setup-push-service-account` | `azure` | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`, `mcp__azure__functionapp`, `mcp__azure__appservice` |

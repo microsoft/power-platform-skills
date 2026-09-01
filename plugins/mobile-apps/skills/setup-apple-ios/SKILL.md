@@ -132,7 +132,7 @@ reconfirms plan identity and explicitly approves replacing only
 Have the user run in their own uncaptured terminal:
 
 ```bash
-bundle exec fastlane ios apple_preflight \
+bundle exec fastlane apple_preflight \
   team_id:<TEAM_ID> bundle_id:<BUNDLE_ID>
 ```
 
@@ -164,7 +164,7 @@ node "${PLUGIN_ROOT}/scripts/validate-apple-identifier-capability.js" \
 Otherwise have the user run:
 
 ```bash
-bundle exec fastlane ios ensure_identifier_capabilities \
+bundle exec fastlane ensure_identifier_capabilities \
   team_id:<TEAM_ID> bundle_id:<BUNDLE_ID> app_name:<SHELL-SAFE_APP_NAME>
 ```
 

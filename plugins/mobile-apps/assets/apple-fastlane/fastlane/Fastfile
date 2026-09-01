@@ -11,16 +11,53 @@ require_relative "lib/apple_profiles"
 
 default_platform(:ios)
 
-def authenticated_apple_portal
-  require "spaceship"
-  require "logger"
+class ApplePortalStageError < StandardError
+  attr_reader :code
 
-  # Authentication belongs to fastlane's interactive terminal. The specialized
-  # client refuses cached sessions and avoids Spaceship's temporary request/service-
-  # key files, keeping account/session diagnostics out of captured or persistent logs.
-  interactive_client = Class.new(Spaceship::PortalClient) do
+  def initialize(code)
+    @code = code
+    super(code)
+  end
+end
+
+module ApplePortalRuntime
+  module_function
+
+  def with_stage(code)
+    yield
+  rescue Spaceship::ProgramLicenseAgreementUpdated,
+         Spaceship::InsufficientPermissions,
+         Spaceship::InvalidUserCredentialsError,
+         Spaceship::NoUserCredentialsError
+    raise
+  rescue StandardError
+    raise ApplePortalStageError, code
+  end
+
+  def safe_preflight_runtime_code(error)
+    case error
+    when NoMethodError then "preflight-no-method"
+    when NameError then "preflight-name-error"
+    when TypeError then "preflight-type-error"
+    when SystemCallError, IOError then "preflight-file-error"
+    else "preflight-runtime"
+    end
+  end
+
+  def authenticated_portal
+    require "spaceship"
+    require "logger"
+
+    # Authentication belongs to fastlane's interactive terminal. The specialized
+    # client refuses cached sessions and avoids Spaceship's temporary request/service-
+    # key files, keeping account/session diagnostics out of captured or persistent logs.
+    interactive_client = Class.new(Spaceship::PortalClient) do
       def has_valid_session
         false
+      end
+
+      def store_cookie(path: nil)
+        true
       end
 
       def itc_service_key
@@ -38,48 +75,69 @@ def authenticated_apple_portal
       end
     end
 
-  portal = interactive_client.new
-  portal.logger = Logger.new(File::NULL)
-  apple_id = UI.input("Apple ID (enter only in this terminal):")
-  apple_password = UI.password("Apple password (hidden terminal prompt):")
-  portal.login(apple_id, apple_password)
-  apple_id = nil
-  apple_password = nil
-  portal
+    portal = with_stage("portal-client-initialization") { interactive_client.new }
+    portal.logger = Logger.new(File::NULL)
+    apple_id = UI.input("Apple ID (enter only in this terminal):")
+    apple_password = UI.password("Apple password (hidden terminal prompt):")
+    with_stage("authentication-service") do
+      portal.login(apple_id, apple_password)
+    end
+    apple_id = nil
+    apple_password = nil
+    portal
+  end
 end
 
 class ApplePortalPreflightAdapter
   def probe(team_id:, bundle_id:)
-    portal = authenticated_apple_portal
-    team_found = portal.teams.any? { |team| team["teamId"] == team_id }
+    portal = ApplePortalRuntime.authenticated_portal
+    team_found = ApplePortalRuntime.with_stage("team-access-service") do
+      portal.teams.any? { |team| team["teamId"] == team_id }
+    end
     return { team_found: false } unless team_found
 
     portal.team_id = team_id
-    pending = portal.list_pending_agreements
+    pending = ApplePortalRuntime.with_stage("agreements-read-service") do
+      portal.list_pending_agreements
+    end
 
     # These read-only list operations prove access to all three Certificates,
     # Identifiers & Profiles surfaces without downloading signing assets or profiles.
-    apps = portal.apps(mac: false)
-    certificate_types =
+    apps = ApplePortalRuntime.with_stage("identifiers-read-service") do
+      portal.apps(mac: false)
+    end
+    certificate_types = ApplePortalRuntime.with_stage("certificates-response-processing") do
       Spaceship::Portal::Certificate::APPLE_CERTIFICATE_TYPE_IDS.keys +
-      Spaceship::Portal::Certificate::IOS_CERTIFICATE_TYPE_IDS.keys
-    portal.certificates(certificate_types.uniq, mac: false)
-    portal.provisioning_profiles(mac: false)
+        Spaceship::Portal::Certificate::IOS_CERTIFICATE_TYPE_IDS.keys
+    end
+    ApplePortalRuntime.with_stage("certificates-read-service") do
+      portal.certificates(certificate_types.uniq, mac: false)
+    end
+    ApplePortalRuntime.with_stage("profiles-read-service") do
+      portal.provisioning_profiles(mac: false)
+    end
+
+    pending_agreements = ApplePortalRuntime.with_stage("agreements-response-processing") do
+      MobileAppApplePreflight.pending_agreements?(pending)
+    end
+    identifier_present = ApplePortalRuntime.with_stage("identifiers-response-processing") do
+      apps.any? { |app| app["identifier"] == bundle_id }
+    end
 
     {
       team_found: true,
-      pending_agreements: MobileAppApplePreflight.pending_agreements?(pending),
+      pending_agreements: pending_agreements,
       identifiers_readable: true,
       certificates_readable: true,
       profiles_readable: true,
-      identifier_present: apps.any? { |app| app["identifier"] == bundle_id }
+      identifier_present: identifier_present
     }
   end
 end
 
 class ApplePortalIdentifierAdapter
   def initialize
-    @portal = authenticated_apple_portal
+    @portal = ApplePortalRuntime.authenticated_portal
   end
 end
 
@@ -90,7 +148,7 @@ class ApplePortalCertificateAdapter
     }.freeze
 
     def initialize(keychain_path:, certificate_action:, portal: nil)
-      @portal = portal || authenticated_apple_portal
+      @portal = portal || ApplePortalRuntime.authenticated_portal
       @keychain_path = keychain_path
       @certificate_action = certificate_action
     end
@@ -99,7 +157,7 @@ end
 
 class ApplePortalProfileAdapter
       def initialize(keychain_path:, profile_action:, portal: nil, xcode_version: nil)
-        @portal = portal || authenticated_apple_portal
+        @portal = portal || ApplePortalRuntime.authenticated_portal
         @keychain_path = keychain_path.to_s
         @profile_action = profile_action
         @xcode_version = xcode_version
@@ -760,10 +818,12 @@ lane :apple_preflight do |options|
     UI.user_error!("APPLE_PREFLIGHT_BLOCKED=cip-permissions")
   rescue Spaceship::InvalidUserCredentialsError, Spaceship::NoUserCredentialsError
     UI.user_error!("APPLE_PREFLIGHT_BLOCKED=authentication")
-  rescue StandardError
+  rescue ApplePortalStageError => error
+    UI.user_error!("APPLE_PREFLIGHT_BLOCKED=#{error.code}")
+  rescue StandardError => error
     # Raw Apple/Fastlane exceptions can contain account or session diagnostics.
-    # Return a stable category rather than copying the exception into output.
-    UI.user_error!("APPLE_PREFLIGHT_BLOCKED=apple-service")
+    # Map only safe exception classes; never copy messages or backtraces.
+    UI.user_error!("APPLE_PREFLIGHT_BLOCKED=#{ApplePortalRuntime.safe_preflight_runtime_code(error)}")
   end
 end
 
@@ -811,7 +871,7 @@ lane :ensure_identifier_capabilities do |options|
 end
 
 desc "Register one hidden-input device or a confirmed external JSON/CSV/Apple batch"
-lane :register_devices do
+lane :register_apple_devices do
   reject_external_apple_credentials!
   UI.user_error!("Apple device registration must run in an interactive terminal.") unless $stdin.tty?
   team_id = UI.input("Approved Apple Team ID:")

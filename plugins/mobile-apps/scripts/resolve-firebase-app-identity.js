@@ -273,12 +273,22 @@ function unwrapFirebaseAppsList(input) {
 }
 
 function summarizeFirebaseApp(record) {
+  const platform = typeof record.platform === 'string' ? record.platform.toUpperCase() : null;
+  const namespace = typeof record.namespace === 'string' ? record.namespace : null;
   const summary = {
     appId: typeof record.appId === 'string' ? record.appId : null,
     displayName: typeof record.displayName === 'string' ? record.displayName : null,
-    platform: typeof record.platform === 'string' ? record.platform.toUpperCase() : null,
-    packageName: typeof record.packageName === 'string' ? record.packageName : null,
-    bundleId: typeof record.bundleId === 'string' ? record.bundleId : null,
+    platform,
+    packageName: typeof record.packageName === 'string'
+      ? record.packageName
+      : platform === 'ANDROID'
+        ? namespace
+        : null,
+    bundleId: typeof record.bundleId === 'string'
+      ? record.bundleId
+      : platform === 'IOS'
+        ? namespace
+        : null,
   };
   if (Object.values(summary).every((value) => value === null)) {
     throw new SafeError(
@@ -475,7 +485,7 @@ function parseFirebaseMcpAppsYaml(raw) {
   //   - name: projects/example/androidApps/1:123:android:abc
   //     appId: 1:123:android:abc
   //     platform: ANDROID
-  //     packageName: com.contoso.app
+  //     namespace: com.contoso.app
   // Native app identity fields are scalar, so reject nested collections, tags,
   // anchors, and block scalars rather than accepting general-purpose YAML.
   const records = [];

@@ -1,5 +1,6 @@
 {
   "allow": [
+    "config list",
     "projects describe",
     "projects get-iam-policy",
     "projects add-iam-policy-binding",

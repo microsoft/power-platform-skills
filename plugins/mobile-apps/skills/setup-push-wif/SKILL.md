@@ -28,10 +28,10 @@ Provision or prove:
 
 Never create or download a Google service-account key.
 
-## MCP readiness gate
+## Google tool readiness gate
 
-Before any cloud read-back, verify the official `/setup-push-wif` surfaces. If
-either server or any required tool is unavailable, STOP and give:
+Before any cloud read-back, require the Azure MCP surfaces and prefer the
+official gcloud MCP surface. If gcloud MCP is unavailable, first give:
 
 ```text
 /mcp
@@ -40,11 +40,14 @@ either server or any required tool is unavailable, STOP and give:
 /mcp
 ```
 
-Require the second `/mcp` check to show both servers connected with the
-required tools.
+If the second `/mcp` still lacks gcloud, offer the official CLI fallback.
+Continue only after explicit approval, `gcloud --version` succeeds, the active
+Google account is confirmed, and every Google operation is routed through
+`scripts/run-allowlisted-gcloud.js`. If Azure MCP is unavailable, stop; it has
+no general CLI fallback.
 
-The non-negotiable boundary is pinned
-`@google-cloud/gcloud-mcp@0.5.3` plus `@azure/mcp@2.0.5`:
+The supported boundary is pinned `@google-cloud/gcloud-mcp@0.5.3` or the
+guarded official CLI fallback, plus `@azure/mcp@2.0.5`:
 
 - `mcp__gcloud__run_gcloud_command` owns every Google Cloud operation. It
   prepends the `gcloud` executable itself, so pass one tokenized command whose
@@ -54,6 +57,15 @@ The non-negotiable boundary is pinned
   {"args":["config","list","account","--format=json"]}
   ```
 
+- In fallback mode, replace each MCP call with:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- \
+    config list account --format=json
+  ```
+
+  Never invoke `gcloud` directly for inventory, mutation, IAM, or API
+  enablement.
 - Azure MCP uses `mcp__azure__subscription`, `mcp__azure__group`, and
   `mcp__azure__role`; call the namespace tool plus
   routed command/parameters, including `role_assignment_list` for RBAC
@@ -63,8 +75,8 @@ The non-negotiable boundary is pinned
   Do not invent `mcp__azure__azmcp_role_assignment_list` or
   `keyvault_secret_list`.
 - Keep `az` only for Entra identity/credential work and the documented
-  secret-safe Key Vault metadata/write gap. Do not silently fall back to
-  `gcloud` CLI or replace covered Azure MCP reads with ad-hoc CLI calls.
+  secret-safe Key Vault metadata/write gap. Do not replace covered Azure MCP
+  reads with ad-hoc CLI calls.
 
 ## Required execution order
 

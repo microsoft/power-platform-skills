@@ -22,11 +22,18 @@ key.
 
 ## 1. Tool and secret boundaries
 
-- Use pinned `@google-cloud/gcloud-mcp@0.5.3` and `@azure/mcp@2.0.5`
-  semantics.
-- Use `mcp__gcloud__run_gcloud_command` for every Google Cloud read,
-  mutation, IAM operation, and read-back. Its `args` is one tokenized command,
-  starts with the subcommand, and contains no shell syntax.
+- Prefer pinned `@google-cloud/gcloud-mcp@0.5.3` and use
+  `@azure/mcp@2.0.5` semantics.
+- When available, use `mcp__gcloud__run_gcloud_command` for every Google Cloud
+  read, mutation, IAM operation, and read-back. Its `args` is one tokenized
+  command, starts with the subcommand, and contains no shell syntax.
+- If gcloud MCP remains unavailable after `/mcp`, `/setup`, `/restart`, and
+  `/mcp`, the user may approve the official CLI fallback. Require `gcloud
+  --version`, confirm the active account, and execute every Google operation as
+  `node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- <args>`. The
+  wrapper invokes no shell and rejects command families outside
+  `shared/mcp/gcloud-allowlist.json`. Keep explicit project/location flags and
+  the same read-back and mutation confirmations as the MCP path.
 - Use Azure namespace tools `mcp__azure__subscription`,
   `mcp__azure__group`, and `mcp__azure__role`; call the namespace tool plus
   routed command/parameters. Use `role_assignment_list` for RBAC inventory.
@@ -36,7 +43,8 @@ key.
   `mcp__azure__azmcp_role_assignment_list` or `keyvault_secret_list`.
 - Keep `az` only for Entra app/service-principal/credential work and
   secret-safe Key Vault metadata/write operations. Never replace covered Azure
-  MCP reads with `az`, and never use CLI/REST instead of gcloud MCP.
+  MCP reads with `az`. Do not call `gcloud` directly; the guarded wrapper is
+  the only CLI fallback.
 
 Never print, echo, persist, or place in argv, files, flow definitions,
 `memory-bank.md`, or captured output any client secret, JWT, access token,
@@ -46,11 +54,18 @@ process.
 
 ## 2. Inputs and live inventory
 
-Read `memory-bank.md`. Verify the active Azure identity and the gcloud MCP
-account:
+Read `memory-bank.md`. Verify the active Azure identity and Google Cloud
+account. With gcloud MCP:
 
 ```json
 {"args":["config","list","account","--format=json"]}
+```
+
+With the approved CLI fallback:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- \
+  config list account --format=json
 ```
 
 Collect tenant ID, subscription, Key Vault and secret names, Firebase/Google
@@ -172,7 +187,8 @@ Stop if neither app claim exists; never weaken to tenant-only trust.
 
 ## 6. Google WIF and IAM
 
-Use one gcloud MCP call per command. Example read-back:
+Use one gcloud MCP call per command, or one guarded wrapper invocation per
+command in fallback mode. Example MCP read-back:
 
 ```json
 {

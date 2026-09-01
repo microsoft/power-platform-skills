@@ -258,6 +258,22 @@ test('accepts the official Firebase MCP empty framework metadata', () => {
   );
 });
 
+test('uses official Firebase MCP namespace as the platform identity', () => {
+  const apps = parseFirebaseMcpAppsYaml([
+    '- name: >-',
+    '    projects/field-ops/iosApps/1:123:ios:exact',
+    '  appId: 1:123:ios:exact',
+    '  displayName: Field Service iOS',
+    '  platform: IOS',
+    '  namespace: com.contoso.fieldservice',
+  ].join('\n'));
+
+  const result = matchFirebaseApp(apps, 'ios', 'com.contoso.fieldservice');
+
+  assert.strictEqual(result.status, 'match');
+  assert.strictEqual(result.app.bundleId, 'com.contoso.fieldservice');
+});
+
 test('rejects nested or tagged Firebase MCP YAML instead of interpreting it', () => {
   assert.throws(
     () => parseFirebaseMcpAppsYaml([

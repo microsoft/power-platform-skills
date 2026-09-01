@@ -36,7 +36,7 @@ Have the user run:
 ```bash
 node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
   --project-root . --timeout 3600 -- \
-  /usr/bin/env bundle exec fastlane ios ensure_signing_certificates \
+  /usr/bin/env bundle exec fastlane ensure_signing_certificates \
   team_id:<TEAM_ID>
 ```
 
@@ -72,7 +72,7 @@ This lane is additive and idempotent. It never displays inventory, disables or
 removes devices, or manages certificates/profiles. The user runs:
 
 ```bash
-bundle exec fastlane ios register_devices
+bundle exec fastlane register_apple_devices
 ```
 
 Never accept a UDID in chat, `AskUserQuestion`, lane options, argv, environment,
@@ -105,7 +105,7 @@ Have the user run:
 ```bash
 node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
   --project-root . --timeout 3600 -- \
-  /usr/bin/env bundle exec fastlane ios ensure_provisioning_profiles \
+  /usr/bin/env bundle exec fastlane ensure_provisioning_profiles \
   team_id:<TEAM_ID> bundle_id:<BUNDLE_ID>
 ```
 

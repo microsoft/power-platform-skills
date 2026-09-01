@@ -31,10 +31,10 @@ Authenticate and verify Apple team access, permissions, and agreements
 
 Create/reuse one exact iOS identifier and enable Push Notifications in Developer Portal only
 
-### register_devices
+### register_apple_devices
 
 ```sh
-[bundle exec] fastlane register_devices
+[bundle exec] fastlane register_apple_devices
 ```
 
 Register one hidden-input device or a confirmed external JSON/CSV/Apple batch

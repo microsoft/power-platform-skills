@@ -94,9 +94,13 @@ gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.
   config retrieval. `/setup-fcm` is the MCP owner for this surface. Do not fall
   back to `firebase-tools`, raw REST calls, or browser automation when that
   MCP is unavailable.
-- **gcloud MCP required for `/setup-push-wif`** — use the vendor-official
+- **gcloud MCP preferred for `/setup-push-wif`** — use the vendor-official
   gcloud MCP for Google Cloud IAM/WIF/API enablement and other Google-side WIF
-  operations. Do not fall back to the `gcloud` CLI for push provisioning.
+  operations when available. If that MCP surface is unavailable after the
+  documented recovery sequence, `/setup-push-wif` may use an authenticated
+  official `gcloud` CLI only through `scripts/run-allowlisted-gcloud.js`.
+  Firebase setup remains Firebase-MCP-only, and no other skill may broaden this
+  fallback.
 - **Azure MCP required for covered operations** — use the vendor-official Azure
   MCP in namespace mode (`mcp__azure__role`, `mcp__azure__functionapp`,
   `mcp__azure__appservice`) for the bounded GA `2.0.5`

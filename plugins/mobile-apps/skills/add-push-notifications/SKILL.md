@@ -39,7 +39,8 @@ Push cloud setup around this skill is **official MCP-first**. `/setup-fcm` is
 the only supported Firebase owner and requires the vendor-official Firebase MCP
 only; do not substitute `firebase-tools`, `gcloud`, or browser automation from
 here. `/setup-push-wif` separately owns Google-side WIF provisioning through
-gcloud MCP, `/setup-push-service-account` owns the Azure compatibility path,
+gcloud MCP or its guarded official CLI fallback,
+`/setup-push-service-account` owns the Azure compatibility path,
 and FlowAgent remains the only Power Automate mutation path.
 
 **Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)** —

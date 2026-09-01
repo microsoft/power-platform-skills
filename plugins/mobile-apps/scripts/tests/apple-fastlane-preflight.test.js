@@ -141,7 +141,17 @@ test('Fastfile keeps authentication interactive and profile setup guarded', () =
   assert.match(fastfile, /UI\.input\("Apple ID/);
   assert.match(fastfile, /UI\.password\("Apple password/);
   assert.match(fastfile, /portal\.login\(apple_id, apple_password\)/);
+  assert.match(fastfile, /ApplePortalRuntime\.authenticated_portal/);
+  assert.doesNotMatch(fastfile, /def authenticated_apple_portal/);
+  assert.doesNotMatch(fastfile, /portal = authenticated_apple_portal/);
+  assert.match(fastfile, /with_stage\("authentication-service"\)/);
+  assert.match(fastfile, /ApplePortalRuntime\.with_stage\("identifiers-response-processing"\)/);
+  assert.match(fastfile, /APPLE_PREFLIGHT_BLOCKED=#\{error\.code\}/);
+  assert.match(fastfile, /safe_preflight_runtime_code\(error\)/);
+  assert.match(fastfile, /when NoMethodError then "preflight-no-method"/);
+  assert.match(fastfile, /ApplePortalRuntime\.safe_preflight_runtime_code\(error\)/);
   assert.match(fastfile, /def has_valid_session\s+false/m);
+  assert.match(fastfile, /def store_cookie\(path: nil\)\s+true/m);
   assert.doesNotMatch(fastfile, /Tempfile|\/tmp/);
   assert.match(fastfile, /Logger\.new\(File::NULL\)/);
   assert.match(fastfile, /\$stdin\.tty\?/);
@@ -151,6 +161,7 @@ test('Fastfile keeps authentication interactive and profile setup guarded', () =
   assert.match(fastfile, /UI\.password\("Device UDID/);
   assert.match(fastfile, /register_device\(name:/);
   assert.match(fastfile, /register_devices\(devices_file:/);
+  assert.match(fastfile, /lane :register_apple_devices/);
   assert.match(fastfile, /MATCHED_COUNT=.*ENABLED=/);
   assert.doesNotMatch(fastfile, /udid:\s*options/);
   assert.match(fastfile, /lane :ensure_signing_certificates/);
