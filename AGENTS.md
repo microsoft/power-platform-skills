@@ -6,6 +6,52 @@ This file provides guidance to AI Agents when working with code in this reposito
 
 A **plugin marketplace** for Power Platform development by Microsoft. The Open Plugins marketplace manifest (`marketplace.json`) references individual plugins in `plugins/`. Each plugin has its own `AGENTS.md` with plugin-specific guidance.
 
+## This Repo Is PUBLIC — keep internal detail out of it
+
+Everything here — code, docs, commit messages, PR descriptions, and branch names — is world-readable.
+Write for a reader outside Microsoft who cannot see any internal system.
+
+**Do not commit:**
+
+- **Internal hosts, repos or paths** — `*.ghe.com` links, internal repo names, or a path into an
+  internal repo's doc tree. Naming one discloses its existence and its structure.
+- **References to internal documents**, including indexes into them — "spec rank 14",
+  "Group N P1", "(resolves C2, I1)", "see the R1 review". A reader who cannot open the document
+  gets nothing from the pointer, and it advertises the document.
+- **Real environment, tenant or org identifiers** — Dataverse environment names/URLs, tenant GUIDs,
+  subscription ids. These name real infrastructure. In examples use an obvious placeholder
+  (`https://contoso.crm.dynamics.com`, `<envUrl>`); to record that something was live-verified, keep
+  the **claim** and drop the environment ("live-verified", not "live-verified on <envname>").
+- **Internal review process** — who or which model reviewed something, how many rounds, internal
+  finding ids. "Adversarially reviewed" is a useful signal; the rest is internal.
+- **Exploratory design docs for UNBUILT work** — roadmaps, prioritisation, and candid notes on
+  limitations. A design doc for something that **shipped** is fine and often valuable (see
+  `plugins/model-apps/docs/`); a proposal for something that has not is internal.
+- **Pointers to files that are not in the repo** — a citation nobody can resolve is noise at best.
+
+**Fine to commit:** ADO / `AB#` work-item ids (opaque, and `AB#` is the standard Azure Boards ↔
+GitHub link syntax), and the location of a first-party source repo a maintainer needs in order to
+rebuild a vendored bundle. Both carry real "why" context and disclose no content.
+
+**When you must record internal context**, put it in the PR conversation or an internal doc — not in
+a committed file. When editing an existing doc, keep this rule in mind for the lines around your
+change, not just the ones you add.
+
+**CI enforcement (partial).** `node scripts/validate-no-real-environments.js` (wired into the
+`validate-repository-metadata` workflow) fails the build when a real Dataverse host, tenant, or
+previously-removed identifier appears under `plugins/model-apps/**` or `evals/model-apps/**`. It
+matches on *shape* — `org<8 hex>` is what Dataverse auto-generates, so it is rejected even though it
+starts with the otherwise-allowed word `org` — rather than only re-catching known strings. Run it
+locally after touching eval fixtures or any file that quotes an environment URL.
+
+The scan is **scoped to model-apps only**, and this is a real gap rather than an oversight: other
+plugins still carry pre-existing references of this class (for example real `org<8 hex>` orgs cited
+in power-pages provenance comments), so widening the scan today would fail unrelated PRs. Scrub a
+plugin first, then add it to `SCAN_PATHS`. The guard also cannot see the *local part* of a UPN, so
+`firstname.lastname@contoso.onmicrosoft.com` passes — use a role word (`maker@`, `tester@`).
+Captured `pac auth list` transcripts are the most common source of all three; when scrubbing one,
+prefer an **equal-length** placeholder so the fixed-width table stays aligned.
+
 ## Repository Structure
 
 ```

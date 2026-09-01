@@ -45,11 +45,17 @@ able to tell what moved from the docs alone):
 | `AGENTS.md` (this file — `CLAUDE.md` symlinks to it) | Per-component behavioral specs, the canonical file tree, conventions, build/test | You add/rename a script, change a component's behavior, or change how to build/test |
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
 | [`docs/app-builder-roadmap.md`](docs/app-builder-roadmap.md) | `/app-builder` **roadmap / TODO** (Complete + Pending by phase) | You ship or reprioritize an app-builder capability |
+| [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
 
 Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
 tree and teardown order both did before).
+
+**This repo is public.** Before adding to any of these docs, re-read the repo-root `AGENTS.md` →
+*"This Repo Is PUBLIC"*. The docs here have already had to be scrubbed once for internal repo paths,
+a real Dataverse environment name, review provenance, and indexes into documents an outside reader
+cannot open. Record that kind of context in the PR conversation instead.
 
 ## app-builder — intent → model-driven app
 
@@ -117,7 +123,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `@odata.nextLink` pagination (`queryRecords({ paginate:true })`), so it verifies EVERY app in the
   environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still
   fails **closed** rather than scanning a partial list. Classic `dashboards[]` are opt-in.
-  **All Dataverse access is via the SDK**, so metadata is persisted under
+  **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
+  sanctioned exceptions elsewhere), so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. The 14 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
@@ -132,7 +139,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the pages phase (uploads just the changed page, skips the full build) — gated on an identity-bound
   snapshot (`.maker-workspace/apply-snapshot.json`); any non-page edit (or an edit to a pre-existing app)
   falls back to a full build. Teardown tombstones+deletes the snapshot. See
-  [`docs/changed-only-design.md`](docs/changed-only-design.md) for the v1 scope + contract.
+  [`docs/app-builder-design.md`](docs/app-builder-design.md) for the v1 scope + contract.
   **App TABLE components are pinned by OData REFERENCE** (ADO 6612527). The SDK sends
   `{ '@odata.id': '<EntitySetName>(<MetadataId>)' }` per sitemap table, NOT an `@odata.type` instance:
   `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old instance
@@ -362,8 +369,7 @@ feature-flags.json             ← Default-OFF feature flags (currently connecto
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
   app-builder-roadmap.md       ← /app-builder roadmap / TODO (Complete + Pending by phase)
-  app-builder-staged-flow-design.md ← Historical staged-flow design notes
-  changed-only-design.md       ← /app-builder --changed-only design contract
+  app-builder-design.md        ← /app-builder design record (Part I staged flow · Part II --changed-only)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-connector-builder.md ← Orchestrator-invoked connector gate/discovery; writes connector bindings
@@ -423,6 +429,9 @@ scripts/
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
+    spec-shape.js              ← shared structural normalization for both authoring gates
+    surface-resolver.js        ← pure: resolve personas[].jobs[].surfaces[] to the spec artifacts that satisfy them
+    role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
     odata.js                   ← OData literal escaping helpers
     genpage-cli.js             ← pac model genpage upload/list/download wrapper
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
@@ -537,6 +546,45 @@ values in `feature-flags.json` at the plugin root.
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
 
+**Each gated feature has a SINGLE OWNER agent, and every entry point must go through it or the
+shared helper.** Both currently-gated features gate at the same five places, so the rule is stated
+once here and only the per-feature specifics are tabled below:
+
+1. **Discovery** — the owner agent runs the probe first; planners/edit-planners delegate to it and
+   never gate inline.
+2. **Scripts** — each entry-point script calls the shared `exitIf<Feature>Disabled()` helper (DRY —
+   never an inlined gate) and fails closed with exit 3 when OFF.
+3. **Deploy** — the SKILL phase **re-probes** the flag and treats an absent/malformed bindings
+   section as *no bindings*, so a plan authored while the flag was ON cannot deploy after it goes OFF.
+4. **ALM** — solution packaging honours the flag (or documents why it needs no gate).
+5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
+   binding table, never on an absent/sentinel section.
+
+| | `connectors` | `custom-api` |
+|---|---|---|
+| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` |
+| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` |
+| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` |
+| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 |
+| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) |
+| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` |
+
+One connectors-only nuance: at Phase 4.5 the `/genpage` orchestrator re-probes and passes the
+verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch — **that dispatch
+value wins over the plan's `## Connector Bindings` section.**
+
+Both flags currently ship **OFF**, each waiting on cross-repo dependencies:
+
+- **`connectors`** — the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
+  authoring control (power-platform-ux), and the maker/admin ECS setting must all release first.
+- **`custom-api`** — the AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime`
+  plus the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb to
+  persist `actionBindings` into `config.json`, and the `GenUxPluginActionAllowList` ECS setting.
+  Note the maker-facing name is "Custom API" while the shipped wire contract stays
+  `actionBindings` / `executeAction` (see `references/custom-api.md`).
+
+## TSX source lexer — known limits
+
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
 parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
@@ -564,51 +612,6 @@ Residual limits, accepted deliberately:
 
 Neither shape occurs in the corpus, and both fail *loudly* (exit 3, retryable) rather than
 silently. If you hit one, widen the tests first.
-
-**Connectors gate — the single owner is `genpage-connector-builder`.** Every connector
-entry point must go through it or the helper; the checklist of places that gate:
-
-1. Discovery + codegen — the top-level `/genpage` orchestrator dispatches
-   `genpage-connector-builder`, which runs the initial probe. At Phase 4.5 the
-   orchestrator re-probes with
-   `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` and passes the
-   verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch;
-   this dispatch value wins over the plan's `## Connector Bindings` section.
-2. Scripts — `list-connections.js` / `create-connection-reference.js` (`exitIfConnectorsDisabled`).
-3. Deploy — SKILL Phase 4.5 **re-probes** the flag and treats absent/malformed
-   `## Connector Bindings` as no bindings (a plan authored while ON must not deploy
-   connectors after OFF).
-4. ALM — the `--connection-refs` branch of `add-page-to-solution.js`.
-5. Codegen — `genpage-page-builder` emits connector code only when the plan has an
-   actual binding table (never on an absent/sentinel section).
-
-The **`connectors`** flag currently ships OFF: GenPage connector support needs the
-pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
-(power-platform-ux), and the maker/admin ECS setting to all be released first.
-
-**Custom API gate — the single owner is `genpage-customapi-builder`.** Every Custom API
-entry point must go through it or the helper; the checklist of places that gate:
-
-1. Discovery — `genpage-customapi-builder` runs the probe first (planner + edit-planner
-   delegate to it; they do not gate inline).
-2. Scripts — `list-custom-apis.js` (`exitIfCustomApiDisabled`).
-3. Deploy — SKILL Phase 4.6 **re-probes** the flag and treats absent/malformed
-   `## Custom API Bindings` as no bindings (a plan authored while ON must not deploy
-   Custom API bindings after OFF).
-4. ALM — none needed: `config.json`'s `actionBindings` travels inside the page's
-   `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate
-   deployment prerequisite, bound by name).
-5. Codegen — `genpage-page-builder` emits `executeAction` / `executeFunction` /
-   `listBoundActions` code only when the plan has an actual binding table (never on an
-   absent/sentinel section).
-
-The **`custom-api`** flag currently ships OFF: GenPage Custom API invocation needs the
-AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime` plus the UCI and
-Controls host runtimes, a pac CLI `model genpage upload --actions` verb
-(PowerPlatform-Scale-AdminTools) to persist `actionBindings` into `config.json`, and the
-`GenUxPluginActionAllowList` ECS setting to all be released first. Note the maker-facing name
-is "Custom API" while the shipped wire contract stays `actionBindings` / `executeAction`
-(see `references/custom-api.md`).
 
 ## Hooks & Validators
 
@@ -680,7 +683,42 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
 
-## Skill Authoring Guidelines
+## Dataverse Access From Scripts
+
+**Default: go through the vendored SDK.** Anything the SDK models — tables, columns, relationships,
+views, charts, forms, commands, dashboards, app modules, sitemaps, solutions, roles, settings — is
+read and written through `createMakerSdk`. That is not style: the SDK persists metadata under
+`<app-folder>/.maker-workspace/` for reuse and edits, resolves artifact identity the same way the
+build does, and owns retry/pagination behaviour. A read that bypasses it can disagree with the write
+about which artifact it is talking about.
+
+Two escape hatches exist, and both are deliberate. The maker SDK models the *maker* surface; parts of
+Dataverse simply are not in it.
+
+| Hatch | Use for | Examples in tree |
+|---|---|---|
+| `dataverseRequest()` in `lib/dataverse-auth.js` (and the `dataverse-request.js` CLI) | Dataverse surfaces the SDK does not model at all | `WhoAmI` (`check-auth.js`), `customapis` (`list-custom-apis.js`), `connectionreferences` (`create-connection-reference.js`), solution-component adds (`add-page-to-solution.js`) |
+| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | `entityPrivileges` in `verify-model-app.js` — `fetchEntityMetadata` returns `{logicalName, displayName, entitySetName, attributes, relationships}` and drops `Privileges` entirely. The projection's omission is permanent (it is disk-cached and best-effort, the wrong contract for a security read) and pinned by an SDK guardrail test. **Transitional:** the SDK is gaining a dedicated `getEntityPrivileges()`; switch to it and drop this raw read once the vendored bundle carries it |
+
+**Prefer `dataverseRequest()` over the raw client.** It already handles the API path, auth, headers
+and timeouts. Reach for `httpClient` only when you must share the exact client instance the SDK is
+using, as the verify reader does.
+
+When you do go direct, all four of these apply:
+
+1. **Comment WHY the SDK cannot serve it** — name the SDK method you would otherwise call and what it
+   drops or lacks. "Deliberately not `sdk.fetchEntityMetadata`" is the difference between a
+   documented exception and something a later reader "simplifies" back into a silent bug.
+2. **Absolute URL including `/api/data/v9.2`** when using the raw `httpClient`. It is the transport
+   the SDK drives, so it takes full request URLs and validates them with `new URL(url)` for its
+   same-origin guard — a relative path throws there rather than resolving against the org.
+3. **GUIDs unquoted.** Record ids and `_x_value` lookups are `Edm.Guid`; `id eq '<guid>'` fails with
+   *"A binary operator with incompatible types was detected"*. See `references/troubleshooting.md`.
+4. **Test the reader itself, not only an injected stub.** The `entityPrivileges` URL bug shipped
+   because every test injected a fake reader into `verifySpec`, so the real one was never executed —
+   and `verify-spec` catches per-entity read failures, so it would have failed silently on every live
+   run rather than crashing. Drive at least one test through the real client's request seam.
+
 
 - Keep SKILL.md under 500 lines
 - Use short, descriptive `name` field (e.g., `genpage`)

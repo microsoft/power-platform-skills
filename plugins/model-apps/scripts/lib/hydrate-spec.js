@@ -124,7 +124,7 @@ async function hydrateSpec(read) {
           // a rebuild reuses this id (reconcilePageIds authority #1) instead of minting a new one, even for
           // a page the user added in Maker that our manifest never knew about. A portable fresh-authored
           // spec has no pageIds; a downloaded edit-snapshot does — that is the intended distinction.
-          // See references/app-spec-schema.md (pages[].pageId) and docs/changed-only-design.md.
+          // See references/app-spec-schema.md (pages[].pageId) and docs/app-builder-design.md.
           ...(p.pageId ? { pageId: p.pageId } : {}),
           ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),

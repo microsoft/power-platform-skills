@@ -55,7 +55,11 @@ function makeSdk(env, spec, workspaceDir) {
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
-  return { sdk, provisionSdk, cleanup };
+  // `httpClient` is returned so the caller can wire verify's role-privilege reader, which needs the
+  // raw client (and the org URL) to compose an absolute `EntityDefinitions(...)?$select=Privileges`
+  // request — the SDK's entity metadata projects `Privileges` away. Returning the SAME instance
+  // rather than constructing a second one keeps token acquisition and retry state shared.
+  return { sdk, provisionSdk, httpClient, cleanup };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -431,7 +435,7 @@ async function main() {
   };
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir);
+  const { sdk, provisionSdk, httpClient, cleanup } = makeSdk(env, spec, workspaceDir);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply
@@ -484,7 +488,13 @@ async function main() {
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
       sdk, provisionSdk, journal,
-      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir })),
+      // `httpClient` + `envUrl` are threaded through so the role-privileges check actually RUNS
+      // here. verify-spec skips it unless BOTH `rolePrivileges` and `entityPrivileges` readers are
+      // present, and `entityPrivileges` needs the raw client and the org URL to compose an absolute
+      // EntityDefinitions request. Omitting them degraded silently: `--apply --verify` reported a
+      // clean PASS having never checked what any persona's role actually grants. Caught live —
+      // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
+      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env })),
     };
     if (changedOnly && opts.apply) {
       // #changed-only: the flow decides fast (pages-only via the sdk-build seams) vs full, gated on the

@@ -16,8 +16,8 @@ D:\Projects\power-platform-skills\plugins\model-apps
 
 ## Environment
 
-- Active Profile: aurora365-user1@auroratstgeo.onmicrosoft.com
-- URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
+- Active Profile: contoso-user001@contosotest1.onmicrosoft.com
+- URL: https://contosobapenv0002.crm10.dynamics.com/
 - App: Service Hub (22222222-1111-2222-3333-444444444444)
 - Languages: English (1033) only
 - Solution: Default

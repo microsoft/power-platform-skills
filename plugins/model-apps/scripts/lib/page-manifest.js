@@ -3,7 +3,7 @@
 // carries the FULL design-time page semantics — { schemaVersion, pages:[{ key, name, pageId, purpose,
 // dataSources, navigatesTo, pageInput, source }], design } — so a download→edit→rebuild round-trip
 // restores intent + navigation that pac's page download (name + resolved-GUID source only) drops. It
-// travels inside the solution and survives export/import. See docs/app-builder-staged-flow-design.md §7.3.
+// travels inside the solution and survives export/import. See docs/app-builder-design.md §7.3.
 // PURE: the engine reads/writes the web-resource bytes; this module only shapes/parses strings (no I/O,
 // no SDK handle).
 

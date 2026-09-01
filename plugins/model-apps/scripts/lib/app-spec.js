@@ -355,7 +355,7 @@ function resolveChoiceValue(byLabel, v, isMulti) {
 // Valid validation profiles. `deploy` (default) is the strictest — every page must be implemented
 // (a real .tsx). `design`/`plan` allow intent-only pages (author designs pages before generate-pages
 // writes their .tsx). `structural` ignores page implementation (teardown/cleanup only cares about refs).
-// See docs/app-builder-staged-flow-design.md §7.1.
+// See docs/app-builder-design.md §7.1.
 const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 
 // Normalize a page's implementation source into a discriminated shape:
@@ -1202,7 +1202,7 @@ function canonicalPersonaName(persona) {
 //   - wrap a legacy top-level `codeFile` into `source: { kind: 'tsx', codeFile }`
 //   - rewrite name-based references (appShell page subareas + navigatesTo.targetKey) to keys
 // Idempotent: a spec already at schemaVersion >= 2 is returned as-is. Runs on load before validate,
-// so downstream code only ever sees the v2 shape. See docs/app-builder-staged-flow-design.md §7.3.
+// so downstream code only ever sees the v2 shape. See docs/app-builder-design.md §7.3.
 //
 // Two-pass design: pass 1 mints ALL keys first so nameToKey is fully populated before any
 // rewrite. A single rewrite pass (pass 2) then replaces every name-ref exactly once, preventing

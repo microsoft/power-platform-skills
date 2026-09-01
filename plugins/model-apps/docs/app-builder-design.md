@@ -1,17 +1,36 @@
-# Design — `/app-builder` staged flow architecture
+# `/app-builder` — design record
+
+The two design records the `/app-builder` engine cites, in one file. They were previously
+`app-builder-staged-flow-design.md` and `changed-only-design.md`; the content is unchanged.
+
+- **Part I — staged-flow architecture.** The shipped architecture and the reasoning behind it.
+  Its **numbered sections are cited from code** (§6, §7, §9, §11, §13, §14), so the numbers are
+  load-bearing: keep them stable, and never renumber. (The numbering skips §16 and §17 — those
+  were removed without shifting anything else, for exactly this reason.)
+- **Part II — `--changed-only` safe partial apply.** The v1 scope and safety contract for the
+  partial-apply mode built on top of Part I. Read it before touching that mode.
+
+Current status of shipped/pending capabilities lives in
+[`app-builder-roadmap.md`](./app-builder-roadmap.md) — this file is the "why", the roadmap is the
+"what/where". Wiring and flow diagrams live in [`architecture.md`](./architecture.md).
+
+---
+
+# Part I — staged-flow architecture
 
 > **Status: IMPLEMENTED / LANDED.** This is the design record for the `/app-builder` staged-flow
 > architecture that shipped — the engine now runs it (staged flow, design-only author, generate-pages
-> stage, structural evals, fail-closed safety). It began as a re-architecture proposal (revised after
-> Sol architectural review R1; the four Critical findings were verified against the engine code and
-> resolved — see **§17 Sol R1 → resolutions**) and was subsequently implemented, reviewed, and
+> stage, structural evals, fail-closed safety). It began as a re-architecture proposal and was
+> subsequently implemented, reviewed, and
 > live-verified. It is retained as the **design rationale** the engine's code cites by section (§6, §7,
-> §9, §11, §13, §14); the section numbers are load-bearing — keep them stable.
+> §9, §11, §13, §14); the section numbers are load-bearing — keep them stable, and do not renumber
+> when trimming (§16 and §17 were removed without shifting anything else, which is why the numbering
+> skips them).
 >
 > **Current status of shipped/pending capabilities lives in [`app-builder-roadmap.md`](./app-builder-roadmap.md)**
 > (the canonical roadmap), not here — this doc is the "why", the roadmap is the "what/where". The
 > `--changed-only` partial-apply mode built ON TOP of this staged flow has its own contract in
-> [`changed-only-design.md`](./changed-only-design.md).
+> **Part II** below.
 >
 > The App Spec **core** contract and the 13 engine phase names are unchanged; the staged flow is an
 > additive naming/orchestration layer over them.
@@ -74,7 +93,7 @@ parity oracle. But the **flow around it** had five concrete problems:
 
 ---
 
-## 5. Execution model (corrected — resolves Critical C1)
+## 5. Execution model
 
 **Why the first draft was wrong.** `runSdkBuild` allocates a **fresh** `result.created` map on
 every invocation (`sdk-build.js:540`). Downstream phases resolve dependencies from that
@@ -141,7 +160,7 @@ invocations. `data` executes in run 1; `generate-pages` in the main loop; `ui`/`
 
 **Renamed** from the first draft: the code-gen stage is **`generate-pages`**, never `pages` — the
 engine phase `pages` (upload, a member of stage `app`) keeps its name, and using one word for
-both was ambiguous (reviewer Minor 2). **One namespace** is used for stage names across
+both was ambiguous. **One namespace** is used for stage names across
 narration, journal, and CLI.
 
 **`--stage <name>` sugar** on `build-model-app.js` maps a stage to its phase range internally
@@ -153,12 +172,12 @@ stage/phase selectors are **rejected** (today `resolvePhases` silently ignores u
 
 ---
 
-## 7. Author redesign & App Spec schema (resolves C2, I1)
+## 7. Author redesign & App Spec schema
 
 Author stops emitting `.tsx`. It produces a **design-only** spec and freezes it via consent gates
 (two shape-level design checkpoints + the single plan-mode build approval, R2 unchanged).
 
-### 7.1 Validation profiles (resolves C2)
+### 7.1 Validation profiles
 
 `validateAppSpec` is currently unconditional and requires every page's `codeFile`
 (`build-model-app.js:98`, `app-spec.js:431-438`), so an intent-only spec fails before the first
@@ -182,7 +201,7 @@ unconditional; `build-model-app.js:97-101`, `teardown-model-app.js:62-65`, `veri
 | teardown / partial cleanup | `structural` (no `codeFile` required) |
 | default programmatic build | `deploy` |
 
-### 7.2 Page shape — discriminated source (resolves I1, C4 key ambiguity)
+### 7.2 Page shape — discriminated source
 
 One `pages[]` collection; implementation state is **explicit**, not a nullable field:
 
@@ -243,7 +262,7 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
 
 ---
 
-## 8. Generate-pages stage & agent contracts (resolves I2)
+## 8. Generate-pages stage & agent contracts
 
 After run 1 (tables exist), the **main loop**:
 
@@ -271,7 +290,7 @@ After run 1 (tables exist), the **main loop**:
 
 ---
 
-## 9. Cross-page navigation & the `PAGEREF_` resolver (resolves C4)
+## 9. Cross-page navigation & the `PAGEREF_` resolver
 
 Reuse `/genpage`'s navigation contract (`references/rules.md` 299–356): navigate via
 `Xrm.Navigation.navigateTo({ pageType:'generative', pageId, data })`; custom ids go in `data:`
@@ -308,7 +327,7 @@ duplicates and orphans. The `app` stage instead:
 
 ---
 
-## 10. Look-and-feel: a **page** design contract (resolves I5)
+## 10. Look-and-feel: a **page** design contract
 
 `appDef` has no theme field or mutation (`sdk-build.js:516-518`), so a `spec.design` cannot drive
 the model-driven shell today. Scope honestly:
@@ -323,7 +342,7 @@ the model-driven shell today. Scope honestly:
 
 ---
 
-## 11. Safety & autopilot — fail-closed destructive ops (resolves C3)
+## 11. Safety & autopilot — fail-closed destructive ops
 
 Consent is mode-aware; **autopilot mode is also eval mode** (both non-interactive).
 
@@ -373,7 +392,7 @@ working dir when autopilot. The user approves the whole app shape at once.
 
 ---
 
-## 13. Verify & evals (resolves I3, I4)
+## 13. Verify & evals
 
 ### 13.1 Verify extended to pages (I4)
 
@@ -406,7 +425,7 @@ navigation resolution end-to-end.
 
 ---
 
-## 14. Engine mechanics & module extraction (resolves I6)
+## 14. Engine mechanics & module extraction
 
 `sdk-build.js` is ~1099 lines; the precedent for pure modules is `artifact-intent.js`. Extract:
 
@@ -466,55 +485,6 @@ artifact-specific SDK mutator — SDK **T2/T7 pass**).
 + pipeline id in the CLI/journal; adapted genpage agent contracts + `Task` in the SKILL
 `allowed-tools`; round-trip metadata in `download-model-app.js`/`hydrate-spec.js`.
 
-## 16. Doc-sync checklist (expanded — Minor 1)
-
-`SKILL.md`, `references/authoring-flow.md`, `references/app-spec-schema.md`,
-`docs/architecture.md` (stage diagram), `AGENTS.md`, `CHANGELOG.md`, the README section, **plus the
-contract/round-trip/agent files most affected**: `app-spec.js`, `hydrate-spec.js`,
-`download-model-app.js`, `verify-spec.js`, the genpage agent/plan contracts, and the eval docs.
-
----
-
-## 17. Sol R1 → resolutions
-
-| # | Finding | Resolution |
-|---|---|---|
-| **C1** | Phase ranges not composable across invocations (`result.created` per run) | §5 — data pre-build → code-gen → **one full idempotent build**; run 2's discovery rehydrates `result.created` (the proven `create==edit` path). Stages are vocabulary, not write invocations. |
-| **C2** | Intent spec fails validation; `--verify`/`--only publish`/data examples are no-ops | §7.1 validation **profiles** (`design`/`plan`/`deploy`); standalone verify via `verify-model-app.js`; §6 correct stage→command mapping with required flags. |
-| **C3** | Destructive ops not fail-closed | §11 read-only **`op-diff.js`** planner; hard `--allow-destructive` gate incl. teardown; create fails on collision; approval bound to env/app/spec-hash/op-hash; env var suppresses questions only. |
-| **C4** | `PAGEREF_` source mutation not portable/idempotent | §9 stable `key`; **symbolic source preserved**; **staging-file** deployment derivative; fail-closed enumeration + create-absent-first + single resolved upload; pure `pageref-resolver.js`; sitemap-finalize commit; forward-only recovery. |
-| **I1** | Bare optional `codeFile` weakens contract | §7.2 discriminated `source:{intent|tsx}` + `schemaVersion` + stable keys + path confinement + duplicate checks; `sitemapSlot` dropped (appShell authoritative). |
-| **I2** | Reused agents don't fit the boundary | §8 generate a page-build contract for `page-builder` (owns new+edit); `edit-planner` becomes headless (no consent tools); add `Task` to SKILL `allowed-tools`. |
-| **I3** | `.tsx` snapshots are the wrong oracle | §13.2 structural/compile/nav/verified-column/token oracles; new `schema-facts` extractor for data-model. |
-| **I4** | Verify doesn't cover page invariants | §13.1 page existence/`GenPageId`/no-unresolved-`PAGEREF_` checks; verify stage mandatory + fail-closed. |
-| **I5** | Shell-theme alignment unsupported | §10 scope `spec.design` to a **page** contract + Fluent-token mapping + validation; shell theme deferred. |
-| **I6** | Stage state / perf / module ownership | §14 pipeline id + stage-attempt metadata; extract `stages.js`/`pageref-resolver.js`/`op-diff.js`/`schema-facts.js`; reject unknown selectors; **DAG removed** (single full run 2). |
-| **Minor 1/2** | Doc-sync gaps; 6-vs-7 stage ambiguity | §16 expanded doc-sync; §6 rename to `generate-pages`, one namespace, author counted as the design stage. |
-
-### 17.1 Sol R2 (confirming pass) → resolutions
-
-R2 **verified C1 sound** (run 2 rehydrates every `appDef` dependency, incl. existing pages) and
-passed I2/I3/I5 + both Minors. The remaining PARTIALs + new findings are closed as:
-
-- **New Critical — safe page deployment/recovery** → §9 protocol (staging files; fail-closed
-  enumeration; create-absent-first + immediate manifest persist; single resolved upload;
-  sitemap-finalize commit).
-- **Execution-semantics contradiction (DAG vs single run 2)** → §14: DAG removed; `--stage`
-  apply-safe only for `data`; run 1 omits `--sample-data`.
-- **Safety-plan realism** → §11: v1 scope limited to detectable ops; reuse reconciliation /
-  `diffArtifact`; scoped (not blanket) collision; TOCTOU re-check.
-- **Stable-key persistence (foundational)** → §7.3: durable `<app>_pagemanifest` web resource +
-  download reverse-normalization + legacy migration.
-- **Full-build retry idempotency** → §14: commands/dashboards become discover-reconcile.
-- **Validation/verification boundaries** → §7.1 per-caller profile matrix; §13.1 verify each nav
-  edge → actual target `GenPageId`.
-
-**R3 (convergence pass)** confirmed the execution model sound and closed the last two items: the
-**page manifest** is now a versioned durable contract with full semantic metadata + an explicit
-create/update/add-to-solution/teardown lifecycle + `pageId`s validated against enumeration (§7.3),
-and **command/dashboard reconcile** is **additive-only** in v1 with removals deferred to `op-diff`
-(§14).
-
 ## 18. SDK-alignment (target after rework)
 
 - **T1 canonical desired state** — restored: `sitemapSlot` dropped (single source = `appShell`);
@@ -545,3 +515,136 @@ and **command/dashboard reconcile** is **additive-only** in v1 with removals def
   same deployed state as a single full build.
 - **Data-driven offline harness** (`evals/model-apps/app-builder/`) with the §13.2 oracles.
 - **Live tier:** keep `smoke-eval.js`; add a multi-page navigation case.
+
+
+---
+
+# Part II — `--changed-only` safe partial apply
+
+Status: **implemented; PROD-readiness reviewed; live-verified.** The design went through several
+adversarial review rounds before implementation (v1 *unsafe* → v7 *safe-to-implement*), and the
+implementation was reviewed again with all Critical/High findings fixed and covered by tests.
+This is the canonical spec for the multi-deliverable build.
+
+## v1 scope + contract (READ THIS)
+v1 wires exactly ONE convergent shape end-to-end: **page-content re-upload** (a `.tsx` byte edit to an
+existing page). Everything else — view-append, sitemap, form, or any data-model/AI/chart/command/
+dashboard/web-resource change — routes to a **full build** (always safe; a full build converges the first
+four and additive-SKIPS the rest, which then incur sticky debt). The user-facing contract:
+- **`--changed-only` bootstraps its baseline from a FRESH build.** The eligible baseline is written only
+  when the app did **not** exist when the run started (a first `--apply --changed-only`). Running the
+  first build with a plain `--apply` (no snapshot) and *then* `--changed-only` yields an **ineligible**
+  baseline (the additive engine may not have converged a pre-existing app) → every run full-builds until a
+  clean teardown+rebuild. **Use `--changed-only` from the first build to opt in.**
+- **Use `--changed-only` consistently.** A plain `--apply` in between invalidates the snapshot (→ next
+  `--changed-only` re-baselines via a full build). Mixing the two de-optimizes but never corrupts.
+- **Concurrent Maker edit of the SAME changed page is unsupported** (PAC page upload has no CAS) — the
+  fast path re-uploads only the *changed* pages, so an unchanged page is never clobbered; a page you edit
+  in both the spec and Maker is overwritten by the spec (the intended deploy). Documented as a follow-up.
+
+## Deferred to follow-ups (v1 does NOT implement; tracked in the roadmap)
+Pre-mutation live page-content drift verifier; `expectedSitemap` population + pre/post sitemap projection
+equality (sitemap fast shape unwired in v1); a `clearDebtMatching` production caller (v1 clears debt only
+via teardown+rebuild); unifying `contentPath` confinement between hashing and the build; view/form/sitemap
+fast submodes. None are reachable on the v1 pages-only fast path.
+
+## Why this is hard
+`/app-builder`'s build engine is **ADDITIVE, not convergent**: existing chart/command/dashboard defs and
+web-resource CONTENT are *skipped* on rebuild (`sdk-build.js:685-695,985-996,1114-1153`), and the I1 gate
+(`build-model-app.js:149-158`) forbids partial `--apply` because `result.created` (the artifact-id map)
+is per-invocation and phases read each other's ids from it. So a naive "run only changed phases" would
+silently **bless edits that never deployed**. The whole design is therefore **fail-closed**.
+
+## Core invariant (replaces I1)
+A partial `--apply` is allowed ONLY via `--changed-only`, and ONLY when: an identity-validated snapshot
+exists with `eligible:true` and **empty debt**; every consumed id re-resolves live by semantic identity;
+the diff is a subset of the four PROVEN-CONVERGENT shapes; no sitemap drift; and — after the apply — an
+EXACT projection verifier proves each touched artifact's deployed state equals the spec. **Every**
+state-changing op (full apply, fast apply, teardown) first atomically writes `eligible:false`
+(write-before-mutate) and aborts if that guard write fails. `eligible:true` is reached again ONLY via a
+verified fast run or a proven-fresh/rebaseline full build with empty debt. Anything not provably safe ⇒
+full build / HALT.
+
+## The four convergent shapes (the ONLY fast-path edits in v1)
+1. **page** — `.tsx` byte change to an EXISTING page, unchanged key→pageId map (re-upload only, sitemap
+   write skipped).
+2. **form (explicit layout)** — field-set add(first-section)/remove, placement-exact (all other tab/
+   section/cell/isRequired/events/quickView/autoSubgrids/subgrid identical).
+3. **view** — pure APPEND of columns (no width/order/filter/sort/removal); default-view enrichment
+   suppressed.
+4. **app-shell sitemap** — structural sitemap change only (app.description/icon excluded).
+Additions of NEW top-level artifacts, removals, and charts/commands/dashboards/web-resource-content/AI ⇒
+full build, and they incur sticky **debt**.
+
+## Snapshot envelope (`<workspace>/apply-snapshot.json`, schema 3, atomic)
+`{ schema, orgId (live WhoAmI), envUrl, appUniqueName, appId, solutionUniqueName, generation (uuid),
+eligible (bool), debt:[{artifactType,identity,reason}], priorSpec (canonical, no rows), expectedSitemap
+(normalized projection), artifacts:{ pages:{key:{pageId,sourceSha,deployedSha}}, forms:{entity|formType|
+name:{formId,projSha}}, views:{entity|name:{viewId,projSha}}, app:{sitemapSha}, webResources, entities,
+charts, commands, dashboards } }`. Written temp→fsync→rename, under one build-wide lease + generation CAS,
+ONLY after effective success (apply+verify).
+
+## Eligibility state machine (durable, fail-closed)
+- **INVALIDATE (→false) before any write** of every full/unsupported/fast apply and teardown; abort if
+  the invalidation write fails.
+- **debt** accrues on any unsupported change/removal; `eligible:true` requires empty debt; debt clears
+  ONLY by proven-fresh recreation (artifact absent before build) or an exact verifier — never by a plain
+  full rebuild that re-skips a stale artifact.
+- **teardown TOMBSTONE**: teardown writes `eligible:false` + `teardown-in-progress` debt BEFORE deleting
+  anything, and deletes the envelope ONLY after teardown success + verified live absence; a partial/
+  crashed teardown leaves the tombstone (so a surviving artifact can't be rebaselined).
+
+## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
+Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification
+alone is not trusted): `formProjection` (placement-exact), `sitemapProjection` (GUID/env-url normalized),
+and page source-vs-deployed dual hashing. Adversarial tests: form-placement collision, page dual-hash,
+sitemap normalization (`scripts/tests/projection.test.js`).
+
+## Phase submodes + phase-local publish
+On `--changed-only`, phases run in restricted submodes — forms `fieldReconcileOnly` (no promote/
+deactivate/events/quickviews), app-shell `prerequisiteResolveOnly`/`finalizeSitemapOnly` (no icon/
+sitemap-solution re-ensure), pages `selectedKeysOnly` (whole-app read-only safety checks retained, only
+changed keys uploaded), views append-only. NO whole-spec publish (`PublishAllXml`) — phase-local publish
+of the touched artifacts only. A pre-mutation live-projection equality check refuses to overwrite a
+Maker-drifted artifact (PAC page upload has no CAS — the residual concurrent-edit race is documented as
+unsupported).
+
+**CONFIRMED landmine (validated against `sdk-build.js`) — the pages-only fast path MUST skip the sitemap
+finalize.** The pages phase's finalize (`sdk-build.js:1428-1437`) rebuilds the WHOLE sitemap via
+`appDef(spec, result.created)` and writes `/siteMap` + `components`. In a pages-only run `result.created`
+holds only `app`+`pages`, so `appDef` (a) THROWS on any dashboard subarea (`:610-611`,
+`result.dashboards` empty) and (b) rebuilds `components` from empty `result.forms/views/charts` (`:635`),
+stripping the app's form/view/chart component registrations. A pure page-content re-upload leaves the
+key→pageId map unchanged, so the sitemap needs no rewrite — the fast path seeds `result.created.app` from
+live discovery, uploads only the changed page(s) to their existing pageIds, SKIPS the finalize, and
+publishes just the page. Two sdk-build seams (flag-gated, full-build path byte-identical): seed
+`result.created.app` from `opts.resolvedAppId`, and skip `:1428-1437` under the changed-only page submode.
+
+## Sequenced deliverables
+1. ✅ Projection/verifier framework + 3 adversarial tests. 2. ✅ Content hashing + fix the shipped
+`phase-diff` foundation (`.tsx`/`contentPath` edits visible to the diff, fail-closed). 3. ✅ Envelope —
+pure state machine (`apply-snapshot.js`) + I/O store (`apply-snapshot-store.js`) + `indexArtifacts`
+(`apply-snapshot-index.js`), wired into the live build (persist/invalidate) + teardown (tombstone/delete).
+4. ✅ Phase submodes (v1) — the pages-only sdk-build seams: seed `result.created.app` from
+`opts.changedOnly.resolvedAppId`, skip the sitemap finalize, and `selectedKeysOnly` (upload only changed
+keys) + measured `pageDeployedShas`. (view/sitemap/form submodes deferred — see follow-ups.)
+5. ✅ Classifier (`classify-changes.js`) + the `build-model-app.js --changed-only` FLOW
+(`changed-only-flow.js`): `--changed-only` flag, live identity (WhoAmI orgId + app discovery),
+snapshot read→eligibility gate→classify→pages-only fast apply via the seams (or full fallback),
+invalidate-before-write + fresh-create-only baseline + verify-gated re-bless + generation fencing, I1-gate
+exception. 6. ✅ Full offline tests (919 green). 7. ✅ Implementation review — adversarial, max effort;
+all Critical/High findings fixed with tests (see the fix commit + this doc's v1
+contract/deferred sections). 8. ✅ **Live regression PASSED** (a scratch environment, 2026-07-27): (1) fresh
+`--apply --changed-only` → full build, verify 9/9, **eligible** snapshot (orgId/appId bound, debt 0);
+(2) `.tsx` byte edit → `--apply --changed-only` → **FAST pages-only** (2 steps not 12, same pageId =
+UPDATE, new measured deployedSha, verify 9/9, snapshot **re-blessed eligible**); (3) chart edit →
+`--apply --changed-only` → **full-build fallback**, verify 9/9, snapshot **INELIGIBLE** with sticky
+`chart-edit-not-convergent` + `uncertified-baseline` debt; (4) `teardown --apply` → app cascade removed,
+snapshot **tombstoned then deleted** (0 leftovers). 9. ✅ Docs — design + roadmap + CHANGELOG + AGENTS.md.
+
+## Build-time notes (from the final Sol pass)
+- Live-absence verification covers the UNION of prior-snapshot identities, current spec, generated
+  artifacts, and all debt entries — not merely the current spec.
+- Debt-clearing verifiers must match the specific debt reason (placement verify can't clear
+  event/quick-view debt).
+- Keep crash/failure-injection tests + a live PAC page-upload publication/concurrency test.

@@ -71,41 +71,36 @@ are in [`architecture.md`](architecture.md).
 
 ---
 
-## 🎯 MVP gaps vs the MDA Agentic Authoring spec
+## 🎯 MVP gaps
 
-Evaluated 2026-08-12 against `powerplatform-modelpages-ade/docs/topics/ModelBuilder/MDA-Agentic-Authoring-spec.md`
-(§3 MVP definition + §5 stack rank). **9 of 10 core P0 _primitives_ are ✅ complete** — roles + JTBDs as first-class planning outputs,
-data model + sample data, auto-number + dedup, Active/Inactive + authored views, main forms, charts,
-gen-page landings, custom SVG sitemap icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart),
-Insight Card summaries (`ai.summaries`), and
+Assessed 2026-08-12. **9 of 10 core P0 _primitives_ are ✅ complete** — roles + JTBDs as first-class planning outputs,
+data model + sample data, auto-number + dedup, Active/Inactive + authored views, main forms, charts,
+gen-page landings, custom SVG sitemap icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart),
+Insight Card summaries (`ai.summaries`), and
 the dedup/verify quality gates. The open MVP items:
 
-- 🔲 **Wave 2 (header/navigation refresh) enabled by default** (spec rank 3, P0) — set the app-module header/nav
-  refresh flag on new apps, and turn it on when editing an app that isn't on it yet (spec rank 20). Not set today.
-- ✅ **Roles + JTBD as first-class planning outputs** (spec rank 1, P0) — the Level-(c) design flow now models
+- 🔲 **Wave 2 (header/navigation refresh) enabled by default** (P0) — set the app-module header/nav
+  refresh flag on new apps, and turn it on when editing an app that isn't on it yet. Not set today.
+- ✅ **Roles + JTBD as first-class planning outputs** (P0) — the Level-(c) design flow now models
   **personas** and their **jobs-to-be-done**: the author declares the entity access each job needs, the builder
   unions it into one security role per persona, and the plan/preview surfaces the proposed roles for review. Built
   on the SDK security surface (`createPersonaRole`). JTBD-driven view/summary/sitemap coherence (below) still builds
   further on this.
 - 🔲 **Default-on + coherence wiring** — the AI agents, Insight Card summaries, and (once added) Wave 2 exist as
   primitives, but the SKILL flow must **enable them by default** and author **JTBD-quality** content (entity-specific
-  summary prompts per the §4 Group G guidelines, the _right_ view columns). A ✅ primitive is necessary but not
-  sufficient for the spec's coherence bar.
+  summary prompts, the _right_ view columns). A ✅ primitive is necessary but not sufficient for a coherent app.
 
 Important, P1 (not MVP-gating; tracked here for visibility):
-- ✅ **Security roles per persona** (spec rank 14, Group N P1) — `personas[]` authors one security role per persona,
+- ✅ **Security roles per persona** — `personas[]` authors one security role per persona,
   sized from its jobs-to-be-done, and grants the app to each role so it **opens for non-admins**, not just sysadmins.
   Idempotent + converging (replace-privileges), fail-closed on a foreign same-name role, torn down with the app.
-  **Column-level (field) security** and **access teams / hierarchy security** (Group N P3) remain a tracked SDK
+  **Column-level (field) security** and **access teams / hierarchy security** remain a tracked SDK
   follow-up.
-- 🔲 **Rich AI descriptions on every artifact** (rank 22) · **quick-find / relevance-search config** (rank 23) ·
-  **custom app theme + logo** (rank 18 — the `design` block styles gen pages, not the app theme).
+- 🔲 **Rich AI descriptions on every artifact** · **quick-find / relevance-search config** ·
+  **custom app theme + logo** (the `design` block styles gen pages, not the app theme).
 
-P0.5 stretch (not built): **modern grid visualizations by default** (rank 11, contingent on the SDK grid-customizer)
-and **MCP server + Catalyst by default** (rank 12). The spec's §5 stack rank carries a status column annotated from
-this roadmap; it is refreshed on `master` in `powerplatform-modelpages-ade` (last synced 2026-08-12, plugin v2.4.3).
-**Keep the two in step** — when a row here flips, update that column in the same pass, or the spec silently goes
-stale (ranks 1 / 14 / 29 sat wrong for two weeks after the persona work shipped).
+P0.5 stretch (not built): **modern grid visualizations by default** (contingent on the SDK grid-customizer)
+and **MCP server + Catalyst by default**.
 
 ---
 
@@ -138,7 +133,7 @@ stale (ranks 1 / 14 / 29 sat wrong for two weeks after the persona work shipped)
   (case-sensitive; only bare names are lower-cased); `collectSitemap` skips platform-path icons. So
   download→edit→rebuild on a real app with custom/OOB nav icons no longer fails validation or silently
   loses the icon. Adversarially reviewed (Sol + Opus — Opus caught a residual area-icon case-corruption,
-  fixed); **live-verified on aurorabapenv03468** (entity-subarea `VectorIcon` lands in the deployed sitemap
+  fixed); **live-verified** (entity-subarea `VectorIcon` lands in the deployed sitemap
   XML; the reporter's exact OOB `…/CDSEntity` icon rebuilds `ok:true`; round-trip clean). **Follow-up
   (now resolved — see below):** deploying a `/WebResources/<pub>/icons/x.svg` reference to a DIFFERENT env
   originally rendered a broken icon (the WR was assumed pre-existing).
@@ -205,7 +200,7 @@ stale (ranks 1 / 14 / 29 sat wrong for two weeks after the persona work shipped)
   `resolveExistingFormId` for the same identity. `FORM_TYPE_CODE`/`FORM_GUID_RE` live in the shared
   `app-spec.js`. `artifactIdentityQuery('form')` is also type-scoped. Reviewed adversarially across three
   rounds (Sol — the name-only-identity flaw was pervasive; all High/Medium findings fixed). Live-repro
-  `zava_javavendor` (three "Information" forms) unblocked; **live-verified end-to-end on aurora** (build a
+  `zava_javavendor` (three "Information" forms) unblocked; **live-verified end-to-end** (build a
   table → it gets 3 same-named "Information" forms → edit the Main without a halt → the edit lands on the
   Main ONLY, Quick View/Card untouched → teardown resolves the Main type-scoped). Locked by resolver /
   preflight / verify / teardown / validation unit tests. **Follow-up:** a quick-view control already
@@ -217,7 +212,7 @@ stale (ranks 1 / 14 / 29 sat wrong for two weeks after the persona work shipped)
 - 🔲 **Conditional `updateTable` (If-Match / skip-if-unchanged)** — the SDK's `updateTable` does an unconditional GET→PUT of the whole `EntityDefinitions` row (strips `@odata.etag`, no `If-Match`), so a concurrent Maker edit to another property of the SAME table in the GET→PUT window is last-writer-wins. This is pre-existing (icons/audit already use `updateTable`); the quick-create flag adds one more caller. Follow-ups: preserve the ETag + conditional PUT (retry/surface 412), and skip the PUT when the requested flag is already set (avoids a redundant write on every opted-in rebuild). Same class as the build's `requireSuccessfulPush` 412 posture for artifacts.
 
 ### Phase: Forms, views & data-load polish (from the 2026-07-15 V1↔V2 comparison review)
-Source: `IMPROVEMENTS-07-15-app-builder.md` (Project Management V1/V2 diff + a sample data-load). **Status 2026-07-27: all 8 addressed — the "Allow quick create" table flag (#8) now ships; auto-GENERATING the Quick Create form's field layout remains a follow-up (see below).** Severity from the source doc.
+From a review comparing two generated Project Management apps plus a sample data-load. **Status 2026-07-27: all 8 addressed — the "Allow quick create" table flag (#8) now ships; auto-GENERATING the Quick Create form's field layout remains a follow-up (see below).** Severity as assessed in that review.
 - ✅ **[High] Validate lookup binds; stop silent data-load lookup failures** — DONE. `validateAppSpec` now validates `$parents` (junction) the same as `$parent` and flags a `$parent`/`$parents.match` that resolves to no parent sample row (the bind would be dropped and the lookup left unset); `buildSeedGroup` THROWS (fail loud) on an unresolvable parent instead of silently skipping. Runs inside `runner.run` (clean phase failure). `app-spec.js` sampleData validation + `entity-provision.js` buildSeedGroup.
 - ✅ **[Medium] Don't truncate parent lookups in default-view enrichment** — DONE. `defaultViewColumns` now reserves the parent-lookup slots up front and caps *scalar* columns at the remaining budget, then appends every lookup — so a lookup-heavy table never drops a parent link (`sdk-build.js`). Teardown's `{ includeLookups:false }` reset path unchanged.
 - ✅ **[Medium] Normalize N:N relationship schema-name ordering** — DONE. `manyToManySchemaName` sorts the two entity logical names alphabetically before composing, so the N:N name is stable regardless of `entity1`/`entity2` declaration order (`app-spec.js`). 1:N keeps its semantic `referenced_referencing` order; explicit `schemaName` still wins.
@@ -234,12 +229,27 @@ Source: `IMPROVEMENTS-07-15-app-builder.md` (Project Management V1/V2 diff + a s
 - 🔲 **Spec templates** — domain starters (support desk, CRM, asset tracking) as one-shot scaffolds.
 
 ### Phase: Quality & docs
+- ✅ **Security-role and jobs-to-be-done verification (2026-08-14)** — both **metadata-only**:
+  - **`verify` now proves what a persona role GRANTS, not just that it exists.** The `role` check
+    only asserted a row carrying the SDK marker, so a role built with the wrong access — or one whose
+    privilege write failed after the row landed — verified clean. The new `role-privileges` check
+    resolves each declared `(entity, access)` to its Dataverse `PrivilegeId` from the **same
+    metadata source the SDK writes against** and asserts the role holds it at **at least** the
+    declared depth. Deliberately a **subset** check (`lib/role-privileges.js` explains why equality
+    would false-fail on `appAccess` injection, max-scope union, and shared privileges), and
+    **fail-closed** on an unreadable role or table.
+  - **`surfaces[]` is no longer documentary.** `lib/surface-resolver.js` resolves every
+    `personas[].jobs[].surfaces[]` entry against the spec's own views/forms/pages/dashboards/tables
+    /sitemap titles; `spec-lint` **warns** when one matches nothing (a warning, not an error — a
+    surface may legitimately name an OOB artifact), and `verify` adds a `job-surface` rollup that
+    reports a *deployed* failure as the job it broke ("persona P can no longer do job J") rather
+    than only "view X is missing".
 - ✅ **Sample-run UX fixes (2026-07-27, from a live Property-Listings build).**
   - ✅ **#1 live build status.** A long build now writes `<workspace>/.maker-workspace/build-status.json` (a single-object snapshot — `state`/`steps`/`lastPhase`/`lastLabel` — overwritten every step) alongside the `build-log.jsonl` trace, and prints a `▸ live progress:` path at start. So a multi-minute build is observable even when the launching shell buffers stdout. SKILL.md now tells the agent to stream (Tee, not Select-Object) and read the status file.
   - ✅ **#2 wireframes shown.** SKILL.md Phase-1 preview step now REQUIRES pasting the `preview-app.js`/`preview-form.js` wireframe output to the user (not summarizing "looks right") before the approval gate — the user must see the forms/sitemap/pages they approve.
   - ✅ **#3 (foundation) track the diff.** After a successful full apply the CLI persists `last-applied.json`; a later dry-run prints `▸ Changed since last apply: <phases>` (pure `phase-diff.js`, stable-stringify deep-equal). **Still open (tracked below): actually running ONLY the changed phases on `--apply`.**
   - ✅ **#5 auto-number reseed lint.** `spec-lint` now WARNS that sampleData for a table whose primary is auto-numbered with no single-column alternate key will DUPLICATE on every re-run (and blocks refreshing data with `--sample-data` on an edit) — nudging a natural alternate key.
-- 🔄 **#3 execution / #7 — SAFE `--changed-only` partial apply (Preview; implemented + review-hardened + LIVE-VERIFIED).** Design **Sol-approved (7 rounds)** + implementation **adversarially reviewed (GPT-5.6 Sol + Claude Opus, max effort; all Critical/High fixed with tests)** + **live regression PASSED on aurorabapenv03468** (baseline→eligible, page edit→fast pages-only, chart edit→full fallback+debt, teardown→snapshot deleted). Canonical spec [`docs/changed-only-design.md`](./changed-only-design.md) (read its **v1 scope + contract**). Because the engine is ADDITIVE-not-convergent, the partial apply is **fail-closed**: identity-bound schema-3 snapshot (live orgId/env/app match, appId required), a durable eligibility state machine + sticky debt + teardown tombstone + generation-fenced CAS. **v1 wires ONE shape end-to-end — page-content re-upload**: `--apply --changed-only` after a FRESH baseline runs ONLY the pages phase for a `.tsx` byte edit (uploads just the changed keys — never clobbers an unchanged page — skips the sitemap finalize, records the measured deployed hash, re-blesses only when page verify passes); anything else falls back to a full build. Deliverables ①–⑨ ✅ (919 offline tests green + live regression). Off by default; opt in with `--changed-only`. **Follow-ups (deferred): pre-mutation live page-content drift verifier; view/sitemap/form fast submodes + `expectedSitemap` gating; `clearDebtMatching` production caller; unify `contentPath` confinement.**
+- 🔄 **#3 execution / #7 — SAFE `--changed-only` partial apply (Preview; implemented + review-hardened + LIVE-VERIFIED).** Design **design-reviewed** + implementation **adversarially reviewed** all Critical/High fixed with tests + **live regression PASSED** (baseline→eligible, page edit→fast pages-only, chart edit→full fallback+debt, teardown→snapshot deleted). Canonical spec [`docs/app-builder-design.md`](./app-builder-design.md) (read its **v1 scope + contract**). Because the engine is ADDITIVE-not-convergent, the partial apply is **fail-closed**: identity-bound schema-3 snapshot (live orgId/env/app match, appId required), a durable eligibility state machine + sticky debt + teardown tombstone + generation-fenced CAS. **v1 wires ONE shape end-to-end — page-content re-upload**: `--apply --changed-only` after a FRESH baseline runs ONLY the pages phase for a `.tsx` byte edit (uploads just the changed keys — never clobbers an unchanged page — skips the sitemap finalize, records the measured deployed hash, re-blesses only when page verify passes); anything else falls back to a full build. Deliverables ①–⑨ ✅ (919 offline tests green + live regression). Off by default; opt in with `--changed-only`. **Follow-ups (deferred): pre-mutation live page-content drift verifier; view/sitemap/form fast submodes + `expectedSitemap` gating; `clearDebtMatching` production caller; unify `contentPath` confinement.**
 - 🔲 **#4 page visual preview before deploy.** The generated `.tsx` is only structurally grep-checked; the user never *sees* the page (they hit the double-render live). Add a page preview/screenshot gate before the page is uploaded.
 - 🔲 **#6 lifecycle status modeling.** The skill authored "Listing/Offer/Showing Status" as plain Choices, so the record `statecode` (Active/Inactive) is disconnected from business status (a "Sold" row is still an "active record", and `activeOnly` views need an extra Choice filter to compensate). Steer lifecycle fields toward Dataverse `statusReasons` (statecode/statuscode), which the App Spec already supports.
 - 🔲 **#8 approval gate shows artifacts, not counts.** The plan gate presents a phase-count table; the user approves counts, not the reviewable data model / wireframes. Fold the wireframe (#2) + a data-model summary into the approval gate.
@@ -247,7 +257,7 @@ Source: `IMPROVEMENTS-07-15-app-builder.md` (Project Management V1/V2 diff + a s
 - 🔲 **Workspace reuse** — load `.maker-workspace/` metadata to skip re-discovery on iterative runs.
 - 🔲 **Worked samples** — a Form-JS spec (web resource + onchange handler) and a dashboard spec in `samples/`.
 - 🔲 **Refresh `authoring-flow.md`** Level (a) column-type list (still shows the pre-Tier-1 short list).
-- 🔲 **KNOWN BEHAVIOR — an authored view named identically to a stock default view unions onto it.** An authored `views[]` entry whose name equals the Dataverse stock default ("Active/Inactive &lt;PluralName&gt;") is matched by `findArtifact('view', {name,entity})` and **reconciled (unioned) onto that stock default** rather than created as a new view. `reconcileView` (`sdk-build.js`) updates only `/columns`, so the authored **filters and sort are silently ignored** and the stock `createdon` is kept. Live-observed on `aurorabapenv03468` (2026-07). **Mitigated:** `spec-lint` now WARNS when a view name matches the stock-default pattern (recommending a distinct name). **Still to decide (design call):** whether to also (a) fully reconcile a detected default view (columns + filters + sort) or (b) hard-reject the collision — deferred pending a decision; the warning makes it loud in the meantime.
+- 🔲 **KNOWN BEHAVIOR — an authored view named identically to a stock default view unions onto it.** An authored `views[]` entry whose name equals the Dataverse stock default ("Active/Inactive &lt;PluralName&gt;") is matched by `findArtifact('view', {name,entity})` and **reconciled (unioned) onto that stock default** rather than created as a new view. `reconcileView` (`sdk-build.js`) updates only `/columns`, so the authored **filters and sort are silently ignored** and the stock `createdon` is kept. Live-observed on `a scratch environment` (2026-07). **Mitigated:** `spec-lint` now WARNS when a view name matches the stock-default pattern (recommending a distinct name). **Still to decide (design call):** whether to also (a) fully reconcile a detected default view (columns + filters + sort) or (b) hard-reject the collision — deferred pending a decision; the warning makes it loud in the meantime.
 - 🔲 **Review follow-ups deferred from the 2026-07-27 Sol PROD-readiness review (pre-prod-acceptable, documented here so they aren't lost).**
   - **Existing old-style sub-grid migration.** `addSubgrids` is idempotent by relationship (`hasSubgrid`), so a rebuild does NOT move a sub-grid that a *previous, pre-#5 build* placed as a half-width cell into the new full-width section, nor re-apply a changed label/view. No deployed apps predate #5 (the skill is pre-prod and the edit path is teardown+rebuild-fresh), so there is nothing to migrate today; this is consistent with the documented additive-build limitation (edits aren't re-applied in place). Revisit if in-place convergence lands.
   - **Self-referential / cyclic sample-data binds.** A sample row that `$parent`-binds to its own entity can't be seeded (the record-graph seeder resolves `@odata.bind` before the current group's ids exist). Not yet rejected at lint — needs SDK confirmation before a hard reject so a case the SDK *can* handle isn't blocked. Rare; document + revisit.
@@ -269,7 +279,7 @@ SDK doesn't package.
 - 🔴 **Power Fx command on-click** — same component-library blocker (A). **JavaScript** on-click **ships**.
 - 🟡 **Titled command groups** — a titled group needs a parent command-bar row the adapter doesn't synthesize for from-scratch commands (re-confirmed live: Dataverse 400 "Group button must have parentappactionid"). Buttons emit as loose controls; **flyout / split-button menus do work**. **Unblock:** SDK synthesis of the parent group rows.
 - 🟡 **Interactive (type 10) dashboards** — different formxml machinery (streams/tiles keyed by cell id); the tile generator targets Standard (type 0). **Unblock:** an interactive-dashboard tile generator.
-- ⚠ **Business-rule validation** — org-gated on the Aurora test orgs (missing the `*ProcessWithWfomJson` action) so it can't be live-verified here, and the modern path is Power-Fx-flavored. Build behind a capability flag once an org supports it.
+- ⚠ **Business-rule validation** — org-gated on the available test orgs (missing the `*ProcessWithWfomJson` action) so it can't be live-verified here, and the modern path is Power-Fx-flavored. Build behind a capability flag once an org supports it.
 - 🟡 **Explicit app-component re-pin on an app EDIT** — a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is not re-pinned as an explicit app component: the SDK's generic surface can't add a missing `components` object to a fetched app (`setAppDefinition` was retired). Low impact — the chart is still added to the solution and shows on its table's chart pane; rebuild the app fresh, or surface the chart via a dashboard/sitemap subarea, if it must be an explicit component. **Unblock:** an SDK component-set API for a fetched app, or fetch populating `components`.
 
 ---

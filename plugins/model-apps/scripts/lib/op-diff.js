@@ -5,7 +5,7 @@
 // and — for teardown — the pure teardown plan, it classifies the ops an apply WOULD perform and
 // surfaces the DESTRUCTIVE ones so the caller can fail closed unless --allow-destructive is set. This
 // module performs NO I/O and holds NO SDK handle: the caller fetches state read-only and passes it in,
-// keeping classification pure and offline-testable. See docs/app-builder-staged-flow-design.md §11
+// keeping classification pure and offline-testable. See docs/app-builder-design.md §11
 // (safety/autopilot) and §14 (additive commands/dashboards).
 //
 // It REUSES the existing single sources of truth rather than reimplementing them:
