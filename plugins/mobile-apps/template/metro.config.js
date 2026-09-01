@@ -1,5 +1,5 @@
 const { getDefaultConfig } = require('expo/metro-config');
-const { withPowerNativeMetroLogging } = require('@microsoft/power-apps-native-host/metro-logger');
+const { withPowerNativeMetroLogging } = require('@microsoft/power-apps-native-host/config/metroLogger');
 
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
 // Add Metro config changes in this function only.
