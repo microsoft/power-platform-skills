@@ -1,10 +1,10 @@
 ---
 name: canvas-app
-version: 3.0.2
+version: 3.0.3
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas, mcp__canvas-authoring__describe_control
+allowed-tools: Read, Write, Edit, apply_patch, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas, mcp__canvas-authoring__describe_control
 ---
 
 # Create or Edit a Canvas App
@@ -25,7 +25,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 4. Call `sync_canvas` with that absolute working directory before reading or editing app
    files. Do not proceed if sync fails.
 
-Always use absolute paths for app files. Never edit `_EditorState.pa.yaml`; Studio owns it.
+Always use absolute paths for app files.
 
 ## Route the Request
 
@@ -129,41 +129,29 @@ unrecognized. Confirm it matches a remaining dispatch row and leave it in place.
 
 After all builders finish:
 
-- Build a final functional acceptance matrix from `## Action Contracts`. For every row,
-  record the generated entry control, event property, mutated or queried source, and
-  observable-result control. Inspect the generated YAML rather than trusting builder
-  summaries. A row passes only when all four are present and use the contract's source of
-  truth.
+- Build `[working directory]/canvas-app-acceptance.md` from the final generated YAML, not builder
+  summaries. Include one row per `## Action Contracts` entry with the exact entry control,
+  event formula, source and stable identity, observer formula, reachability result, and
+  `PASS` or `FAIL`. Record failed links explicitly; never copy a generic builder claim.
 - Apply a primary-record lifecycle gate whenever the request includes creation,
-  correction, removal/cancellation, or review:
-  - creation writes every required field and exposes the created record immediately;
-  - edit loads a selected record by stable identity, preserves unchanged fields, writes
-    changed fields, and exposes the updated values;
-  - delete/remove has reachable confirmation and cancel paths and removes or transitions
-    the selected record by stable identity;
-  - approve/reject actions update the same status field rendered by lists, filters, and
-    dashboards.
-  Repair the owning screen in place when any lifecycle link is missing.
-- Apply a shared-source gate to every search, filter, ordering, alert, KPI, dashboard, and
-  report. Trace its visible result back to the collection or source changed by mutations.
-  Reject copied counters, seed-only collections, screen-local snapshots, or filters and
-  metrics that read a different source.
-- Apply an initial-viewport action gate to every primary destination and required action.
-  Confirm its control is visible, enabled when its preconditions hold, at least 44px in
-  each interactive dimension, inside the screen bounds, and not covered by another
-  visible control. A button below a clipped form or inside a zero-height container does
-  not pass.
-- Check each builder's `Functional:` section before accepting its `QA:` line. It must
+  correction, removal/cancellation, or review. Trace create, edit, delete, approve, and
+  reject through stable identity, source mutation, unchanged-field preservation, and
+  immediate evidence.
+- Apply a shared-source gate to every search, filter, ordering, alert, KPI, dashboard,
+  visualization, and report. Reject copied counters, seed-only collections, screen-local
+  snapshots, or observers that read a different source from mutations.
+- Apply an initial-task-path gate to every primary destination and required action.
+  Confirm its control is visible, enabled when preconditions hold, at least 44px in each
+  interactive dimension, inside its parent bounds, and unobscured at phone width.
+- Check each builder's `Functional:` section before accepting its QA report. It must
   contain exactly one `PASS` trace per Required Action in that screen's brief, and each
   trace must name the precondition, control event, source/stable-ID operation,
   postcondition, and observer/evidence. A missing link, generic claim, or `BLOCKED` result
   sends that screen back for targeted repair and a corrected trace; do not accept
   checklist `PASS` as a substitute.
-- Check each builder's `QA:` line. It must list an outcome for every check in
-  `${PLUGIN_ROOT}/references/QAChecks.md`. Treat these as unrun and send the screen back for self-QA
-  only — not a rebuild — before you compile:
-  - a missing or truncated `QA:` line, a line that omits any check listed in
-    `${PLUGIN_ROOT}/references/QAChecks.md`, or a bare fix count;
+- Check each builder's QA coverage, repairs, and N/A lines. Treat these as unrun and send
+  the screen back for self-QA only — not a rebuild — before you compile:
+  - missing `QA coverage: 1-44 COMPLETE`, repair, or N/A lines;
   - an outcome that contradicts the screen structure — for example,
     `QACHK-CROSS-AXIS-ALIGNMENT` is `N/A` despite AutoLayout children,
     `QACHK-ACCESSIBLE-LABEL-MISSING` is `N/A` despite content or input controls,
@@ -178,8 +166,8 @@ After all builders finish:
   buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
   app ships broken while reporting clean.
 - A self-QA follow-up is not a rebuild or a screen-generation re-dispatch. Tell the
-  builder to inspect and repair the existing target file, then return the corrected
-  `QA:` line without regenerating the screen.
+  builder to inspect and repair the existing target file, then return the corrected QA
+  coverage, repairs, and N/A lines without regenerating the screen.
 - Compare every repeated navigation block against `[working directory]/canvas-app-shared.md`: same
   destination items, same order, no extra brand/label injected into one screen's nav,
   and width formulas that fit the narrowest target. This is an app-wide check builders
@@ -229,8 +217,8 @@ After all builders finish:
   `[working directory]/_EditorState.pa.yaml` after all builders finish. If it says `None`, leave the
   file unchanged.
 - Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
-- After the final successful compile, do not call `Write`, `Edit`, or any mutation tool.
-  If any app YAML changes afterward, compile again before reporting completion.
+- After the final successful compile, do not mutate app YAML. Any later repair invalidates
+  that result and requires another final compile.
 
 ## Shared Invariants
 
@@ -261,13 +249,10 @@ After all builders finish:
 8. Keep mock data compact: roughly 5-8 short rows per collection.
 9. Builders own exactly one screen file. The planner owns CREATE-mode `App.pa.yaml`.
    The orchestrator owns EDIT-mode `App.pa.yaml`.
-10. Compile `App.pa.yaml` before dispatching builders and compile again after each builder
-    wave. Never defer the first compile until every file is written.
-11. Do not report completion until the workspace compiles clean, every Action Contract
-    passes the final functional acceptance matrix, and no app YAML mutation occurred after
-    the final successful compile. Otherwise report the exact blocked contract or remaining
-    diagnostic.
-12. Require only prompt- or approved-plan-derived actions. Never add universal CRUD across
-    every entity as a default. Treat role-scoped management of all primary records as a
-    lifecycle requirement, and never omit or hide an action once it is included in an
-    Action Contract.
+10. Compile `App.pa.yaml` before dispatching builders and compile after each builder wave.
+11. Do not report completion until the workspace compiles clean, every Action Contract has
+    a passing evidence row in `[working directory]/canvas-app-acceptance.md`, and no app YAML mutation
+    occurred after the final successful compile.
+12. Require only prompt- or approved-plan-derived actions. Treat role-scoped management of
+    primary records as a lifecycle requirement, but do not add universal CRUD to every
+    entity.

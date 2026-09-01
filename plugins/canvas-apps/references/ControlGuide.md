@@ -153,6 +153,29 @@ ItemDisplayText: =ThisItem.Value
 A dropdown whose options all appear empty is almost always this mistake. When `Items` is
 already a single-column table you can omit `ItemDisplayText` entirely.
 
+`Default` is not evaluated in the dropdown's per-item scope. Do not use
+`Default: =First(Self.Items)`, which can fail because `Self.Items` is unavailable there.
+Use an explicit record compatible with `Items`, or a record from the same source:
+
+```yaml
+Items: '=[{Value:"All"},{Value:"Open"},{Value:"Closed"}]'
+Default: '=First([{Value:"All"},{Value:"Open"},{Value:"Closed"}])'
+```
+
+For a bounded Gallery, calculate its height with `Self.TemplateHeight`.
+`Self.TemplateSize` is not a supported runtime property even when `TemplateSize` is the
+authored YAML property:
+
+```yaml
+Height: =CountRows(Self.Items) * Self.TemplateHeight
+```
+
+For charts, `ItemColorSet` is a color-table literal, not a table of records:
+
+```yaml
+ItemColorSet: =[RGBA(0,102,204,1), RGBA(16,124,65,1)]
+```
+
 ## Properties are per-control — never transfer them by analogy
 
 Three traps produce most `Unknown property` errors.
@@ -401,7 +424,7 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 - `LayoutGap` — spacing between items
 - `LayoutOverflowY` — vertical overflow (`Scroll` for scrollable containers)
 - `FillPortions` — proportional sizing
-- `PaddingTop`/`Bottom`/`Left`/`Right` — container padding
+- `PaddingTop`/`PaddingBottom`/`PaddingLeft`/`PaddingRight` — container padding
 
 ## Troubleshooting
 

@@ -1,8 +1,8 @@
 # Validation Workflow
 
-The orchestrator owns compilation of the finished workspace and the final summary.
-Completion is fail-closed: a successful compile is valid only when it occurs after the
-last app-YAML mutation and the final functional acceptance matrix has no blocked row.
+The orchestrator owns compilation, evidence-based functional acceptance, and the final
+summary. Completion is fail-closed: the final successful compile must occur after the last
+app-YAML mutation.
 
 ## Contents
 
@@ -21,8 +21,8 @@ Compilation is not a final step. Four gates precede completion:
 2. The orchestrator confirms that result before dispatching builders.
 3. The orchestrator compiles after each **wave** of builders returns, before dispatching
    the next wave.
-4. After all functional and layout repairs, the orchestrator performs one final compile
-   and makes no further app-YAML mutation before the summary.
+4. After functional and layout repairs, the orchestrator compiles once more and makes no
+   further app-YAML mutation before the summary.
 
 Gate 3 exists because builders work from a shared plan. A defect in the first wave is
 almost certainly repeated in every later screen. Catching it after three files is cheap;
@@ -175,24 +175,17 @@ diagnostic history, and a fresh agent would have to rediscover all of it.
 
 ### Verify before you summarize
 
-The summary must describe a compile you actually observed. Before writing it, confirm that
-**no `.pa.yaml` file has been edited since the last successful `compile_canvas`.** If one
-has, compile again — a clean result from before your last edit says nothing about what you
-shipped.
-
 Immediately before the summary:
 
-1. Confirm the final functional acceptance matrix contains one passing row for every
-   Action Contract.
-2. Call `compile_canvas`, even if an earlier compile was clean.
+1. Confirm `[working directory]/canvas-app-acceptance.md` has one evidence row for every Action Contract
+   and no failed row.
+2. Call `compile_canvas`, even when an earlier compile was clean.
 3. Stop modifying `.pa.yaml` files after that call.
-4. If the final compile is not clean, or any subsequent mutation becomes necessary, do
-   not claim completion; repair and repeat this four-step gate.
+4. If the compile fails or another repair is necessary, repair and repeat this gate.
 
-Edits to non-compiled artifacts do not invalidate the result:
-`[working directory]/canvas-app-plan.md`, `[working directory]/canvas-app-shared.md`, and
-`[working directory]/*.screen-plan.md` are planning documents, and updating one after the
-final compile is fine.
+Edits to non-compiled artifacts do not invalidate the result: `[working directory]/canvas-app-plan.md`,
+`[working directory]/canvas-app-shared.md`, `[working directory]/canvas-app-acceptance.md`, and
+`[working directory]/*.screen-plan.md` are planning or evidence documents.
 
 ## 2. Functional Conformance
 
@@ -209,6 +202,20 @@ For each scenario, record one result:
 - `FAIL` when any link is missing, contradictory, stale, bound to another source or field,
   dependent on an unstated runtime assumption, or supported only by navigation,
   notification, input text, or static copy.
+
+Write the result to `[working directory]/canvas-app-acceptance.md`:
+
+```markdown
+Runtime evaluation: NOT RUN
+
+| Action | Entry control | Event formula | Source / stable ID | Observer formula | Reachability | Result |
+|--------|---------------|---------------|--------------------|------------------|--------------|--------|
+| [action] | [control] | [exact formula] | [source and identity] | [exact formula] | [path and bounds] | PASS |
+```
+
+The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN` is
+required because symbolic inspection is not browser execution. Replace it only when a
+fresh runtime evaluator returns a recorded result for this generated app.
 
 For mutations, also compare the handler, write set, proof set, receipt bindings, and
 downstream observer one-for-one. For filters, verify the concrete selector value is
@@ -243,6 +250,8 @@ For CREATE:
 
 **Compiled clean** after [N] pass(es).
 **Functional readiness:** [passed]/[total] scenarios passed static conformance.
+**Acceptance evidence:** `[working directory]/canvas-app-acceptance.md`.
+**Runtime evaluation:** NOT RUN.
 ```
 
 For EDIT:
@@ -256,6 +265,8 @@ For EDIT:
 
 **Compiled clean** after [N] pass(es).
 **Functional readiness:** [passed]/[total] scenarios passed static conformance.
+**Acceptance evidence:** `[working directory]/canvas-app-acceptance.md`.
+**Runtime evaluation:** NOT RUN.
 ```
 
 If diagnostics remain after the convergence budget is exhausted, report them explicitly

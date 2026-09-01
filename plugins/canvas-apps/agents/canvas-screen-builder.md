@@ -10,6 +10,7 @@ tools:
   - Read
   - Write
   - Edit
+  - apply_patch
   - view
   - create
   - edit
@@ -18,6 +19,9 @@ tools:
 # Canvas Screen Builder
 
 You own exactly one screen file.
+
+Use `apply_patch` for the assigned disk-backed screen file. Do not report that writing is
+unavailable while `apply_patch` is present.
 
 Your invocation includes:
 
@@ -94,9 +98,9 @@ Do not fix unrelated pre-existing issues.
 - Keep one mutable source of truth per domain entity. Search, filters, ordering, alerts,
   KPIs, dashboards, and reports must derive from that same source rather than a copied
   counter, seed-only collection, or screen-local duplicate.
-- Give every required primary action a concrete initial-viewport path. Its control must
-  remain visible, enabled when preconditions hold, at least 44px in each interactive
-  dimension, inside its parent bounds, and unobscured by overlays or sibling panels.
+- Give every required primary action a concrete initial-task path. Its control must remain
+  visible, enabled when preconditions hold, at least 44px in each interactive dimension,
+  inside its parent bounds, and unobscured by overlays or sibling panels.
 - Every control you **add** carries your assigned control name prefix. Control names are
   unique across the whole app, and you cannot see the other screens — the prefix is the
   only thing preventing a collision. This applies to repeated UI blocks such as nav bars
@@ -185,6 +189,11 @@ Do not fix unrelated pre-existing issues.
     `BadgeColor.Warning`.
   - Every property used appears in that control's definition and every property value
     starts with `=`.
+  - A `ModernDropdown` default is an explicit record compatible with `Items`, never
+    `First(Self.Items)`.
+  - A Gallery height formula uses `Self.TemplateHeight`, not `Self.TemplateSize`.
+  - A chart `ItemColorSet` uses a color-table literal such as `[RGBA(...), RGBA(...)]`,
+    not `Table(Color, ...)`.
   These are pre-save checks, not only self-QA checks: invalid whole-screen YAML may make
   the document server reject the write before the file exists to inspect.
 - If a whole-file write returns `failedToSave` or `ServerException`, do not submit the
@@ -211,9 +220,8 @@ Do not fix unrelated pre-existing issues.
    sampled: a check you skipped is a defect you shipped, and most of them have no compile
    diagnostic behind them, so nothing downstream will catch it.
 4. For Modify, scope checks to changed or added content.
-5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as
-   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting" describes. You report the line; do not
-   summarize it as a total.
+5. Record complete check coverage and list only repairs and non-applicable checks, using
+   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting". Do not emit 44 unsupported `PASS` claims.
 6. For each Required Action, record a compact transition trace:
    `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
    observer -> evidence`. Mark `PASS` only when every link is present in the generated
@@ -228,20 +236,21 @@ the first builder returns, so return promptly rather than polishing indefinitely
 Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
-QA: 1 [outcome] · 2 [outcome] · …
-Fixes: [fix summary, or "clean"]
+QA coverage: 1-44 COMPLETE
+QA repairs: [QACHK identifiers and counts, or "none"]
+QA N/A: [QACHK identifiers, or "none"]
 Functional:
 - [Action]: PASS — [precondition] -> [control.event] -> [source and stable ID operation] -> [postcondition] -> [observer and visible evidence]
 Status: Done
 ```
 
-The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return without it is
-incomplete, and the orchestrator will send the screen back.
+The QA coverage, repairs, and N/A lines are required. Coverage means the persisted YAML
+was inspected; it is not evidence that a functional transition works.
 
 The `Functional:` section must contain exactly one trace per Required Action. A trace that
 omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
-34, or 35 says `PASS`. Never return `Status: Done` when lifecycle identity,
-shared-source derivation, or initial-viewport reachability is unresolved.
+34, 35, 42, 43, or 44 says `PASS`. Never return `Status: Done` when lifecycle identity,
+shared-source derivation, or initial-task-path reachability is unresolved.
 
 ## Constraints
 

@@ -11,6 +11,7 @@ tools:
   - Read
   - Write
   - Edit
+  - apply_patch
   - view
   - create
   - edit
@@ -49,6 +50,9 @@ exact visible affordance in the plan index. If discovery cannot support an inter
 exactly, record an explicit approximation and reason; never silently rename buttons as
 "drag-style", call buttons "handles", or put copy in the app that promises an interaction
 the controls do not provide.
+
+Use `apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. Do not report that
+writing is unavailable while `apply_patch` is present.
 
 Plan in functional-first order: shared state and stable identity, complete executable
 workflows, observable evidence, responsive/accessibility behavior, then visual polish.

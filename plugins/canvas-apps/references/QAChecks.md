@@ -77,8 +77,8 @@ are not part of the identifier.
   reports read a different source from mutations
 
 Agents that write `.pa.yaml` files MUST run these checks against their own
-output before returning, and fix every issue inline. Report the outcome of
-**every** check by number in the result summary, as described below.
+output before returning, and fix every issue inline. Report complete coverage plus only
+repairs and non-applicable checks, as described below.
 
 ---
 
@@ -88,30 +88,27 @@ output before returning, and fix every issue inline. Report the outcome of
 2. Apply the checks in order. Checks 1-5 come first because each one invalidates the
    whole file or the whole compile, and the flood of misleading diagnostics that follows
    hides every other problem
-3. For every issue found: apply the fix directly using `Edit`
-4. Record an outcome for **every** check, by number — not a total
+3. For every issue found: apply the fix directly using `apply_patch`
+4. Record complete coverage, every repair, and every non-applicable check
 5. Do NOT re-run `compile_canvas` here — the orchestrator does that
 
 All checks are safe: they tighten existing YAML, never delete semantic content.
 
 ### Reporting
 
-A count of fixes is not evidence that a check ran. Report one line per check, using
-exactly these outcomes:
+A long row of self-asserted `PASS` values is not evidence that a check ran. Use this
+compact, machine-scannable form:
 
 ```text
-QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(30) ·
-    8 PASS · 9 PASS · 10 PASS · 11 PASS · 12 PASS · 13 PASS · 14 PASS · 15 PASS ·
-    16 PASS · 17 PASS · 18 FIXED(4) · 19 PASS · 20 PASS · 21 PASS · 22 FIXED(3) ·
-    23 FIXED(4) · 24 PASS · 25 N/A · 26 N/A · 27 PASS · 28 N/A · 29 PASS ·
-    30 N/A · 31 PASS · 32 PASS · 33 PASS · 34 PASS · 35 PASS · 36 PASS ·
-    37 N/A · 38 PASS · 39 PASS · 40 PASS · 41 PASS
+QA coverage: 1-44 COMPLETE
+QA repairs: QACHK-MISSING-FORMULA-PREFIX FIXED(7) · QACHK-CONTAINER-MIN-SIZE FIXED(2)
+QA N/A: QACHK-GRID-CONTRACT · QACHK-TIMER-LIFECYCLE · QACHK-MANUAL-BOUNDS
 ```
 
-- `PASS` — you inspected every control the check applies to and found nothing.
-- `FIXED(n)` — you found and repaired `n` occurrences.
-- `N/A` — the construct the check targets does not appear on this screen (no gallery, no
-  `ModernCard`). Use this honestly; it is not a synonym for "did not check".
+- `COMPLETE` means the persisted file was inspected against every check.
+- `FIXED(n)` names each check that caused a repair and its occurrence count.
+- `N/A` names each check whose construct does not appear on the screen. It is not a
+  synonym for "did not check".
 
 `QACHK-CROSS-AXIS-ALIGNMENT`, `QACHK-ACCESSIBLE-LABEL-MISSING` and
 `QACHK-LOW-CONTRAST-TEXT` apply frequently, but their outcomes still depend on the file:
@@ -1523,21 +1520,14 @@ approximation and report it as blocked or approximate; never ship a blank region
 clipped form, inside a zero-height container, covered by an overlay, permanently disabled,
 or too small to target reliably.
 
-**Detect:** For every Required Actions entry point:
-
-1. Trace the visible path from the screen's initial state to the action.
-2. Confirm every control on that path has a visible ancestor chain and is not permanently
-   disabled.
-3. Confirm the action is at least 44px high and 44px wide, or is a full-width row action
-   with an equivalent target area.
-4. Evaluate its bounds at desktop, tablet, and phone widths and reject clipping or
-   intersection with another visible control.
-5. When the action is below the initial viewport, require an obvious working scroll or
-   menu affordance whose own control passes these checks.
+**Detect:** Trace every Required Actions entry point from the screen's initial state.
+Confirm its ancestor chain is visible, its enabled precondition is satisfiable, its target
+is at least 44px by 44px, and its bounds do not intersect another visible control at
+desktop, tablet, or phone widths. An action below the initial viewport needs an obvious
+working scroll or menu affordance that passes the same checks.
 
 **Fix:** Move the action into the initial task path, repair the containing layout, enlarge
-its target, or expose it through an immediately visible menu. Do not satisfy reachability
-with hidden text, a disabled placeholder, or an ambiguous card click.
+its target, or expose it through an immediately visible menu.
 
 **Exception:** A destructive confirmation action may begin hidden when a reachable
 delete/remove entry point makes it visible.
@@ -1546,50 +1536,34 @@ delete/remove entry point makes it visible.
 
 ## Check 43 — `QACHK-LIFECYCLE-IDENTITY` (selected-record mutation targets the wrong row)
 
-**Problem:** Edit, delete, approve, reject, and delivery/status actions can appear wired
-while targeting display text, gallery position, a stale copied record, or the first row
-instead of the record selected by the user.
+**Problem:** Edit, delete, approve, reject, and status actions can appear wired while
+targeting display text, gallery position, a stale copied record, or the first row.
 
-**Detect:** For every selected-record mutation:
+**Detect:** For every selected-record mutation, trace the selected stable ID or record
+object through edit prepopulation, the mutation target, preservation of unchanged fields,
+and the immediate result observer. Review/status actions must write the same status field
+that filters, badges, dashboards, and reports render.
 
-1. Identify the selected record and its stable ID or stable selected-record object.
-2. Confirm edit inputs load from that selection before save.
-3. Confirm `Patch`, `UpdateIf`, `Remove`, or `RemoveIf` targets the same identity.
-4. Confirm unchanged fields are preserved and the handler does not construct a partial
-   replacement that drops required data.
-5. Confirm the immediate result list/detail selects or removes the same identity.
-6. For review/status transitions, confirm every decision writes the same status field that
-   downstream filters, badges, dashboards, and reports render.
+**Fix:** Store the selected stable ID or record, mutate that identity, and bind post-action
+evidence to the same source and identity.
 
-**Fix:** Store the selected stable ID or record, load the edit state from it, and perform
-all lifecycle mutations against that identity. Bind post-action evidence to the same
-source and identity.
-
-**Exception:** A create action has no prior identity, but it must assign a unique stable ID
-that later edit and delete actions use.
+**Exception:** Create has no prior identity, but must assign a unique stable ID used by
+later lifecycle actions.
 
 ---
 
 ## Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` (derived UI reads stale or unrelated data)
 
-**Problem:** CRUD can update one collection while search, filters, ordering, alerts, KPIs,
-dashboards, and reports read seed data, copied counters, or another screen-local
-collection. Each surface looks plausible but does not react to user actions.
+**Problem:** CRUD can update one collection while filters, ordering, alerts, KPIs,
+dashboards, and reports read seed data, copied counters, or a screen-local collection.
 
-**Detect:** For every mutable entity:
+**Detect:** Identify the authoritative mutable source. Confirm every mutation writes it
+and every search, filter, ordering, alert, KPI, visualization, and report derives from it
+using the same field semantics.
 
-1. Identify the authoritative mutable source named by the plan.
-2. Confirm create, edit, delete, and state-transition handlers write that source.
-3. Confirm search and filter `Items` formulas read that source directly.
-4. Confirm ordering uses an explicit sort over that source and the field mutations update.
-5. Confirm alerts and KPIs derive their predicates and counts from that source at render
-   time rather than values copied during navigation or initialization.
-6. Confirm dashboards, visualizations, and reports group and aggregate that source with
-   the same field semantics used by forms and lists.
-
-**Fix:** Remove duplicate or copied state and bind all dependent surfaces to the
-authoritative source or a named formula derived from it. If caching is required, update or
-refresh the cache in every successful mutation path.
+**Fix:** Remove duplicate or copied state and bind dependent surfaces to the authoritative
+source or a named formula derived from it. Refresh any intentional cache on every
+successful mutation path.
 
 **Exception:** An immutable version snapshot may use a separate source when the plan
 explicitly defines snapshot identity and comparison semantics.
