@@ -894,8 +894,8 @@ function bpfDef(flow) {
   const def = {
     name: flow.name,
     entityLogicalName,
-    // Draft unless the author asks otherwise. A BPF is inert until activated, and activation is what
-    // makes it appear on the form, so Active is the useful default — same reasoning as businessRuleDef.
+    // Active unless the author asks for Draft. A BPF is not merely inert when inactive — the stage
+    // bar does not render at all — so Active is the only useful default.
     status: flow.status || 'Active',
     stages: (flow.stages || []).map((st) => ({
       name: st.name,
@@ -2048,6 +2048,20 @@ async function runSdkBuild(spec, opts = {}) {
           runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists — reuse; stage edits aren't applied on rebuild, recreate to change)`);
         }
         result.created.businessProcessFlows[key] = existingId;
+        // Reconcile solution membership on the REUSE path too. `addSolutionComponent` is otherwise
+        // only reached by the create branch, so a run where the flow was created but the component
+        // add failed (or a flow created by an earlier build of a different solution) would be reused
+        // forever and never join this solution — leaving it out of export/import with nothing in the
+        // output saying so. The SDK treats an already-present component as success, so this is safe
+        // to re-issue every build; a failure here is a warning, not a halt, because the flow itself
+        // is correct and blocking the build over solution bookkeeping would be worse than reporting it.
+        try {
+          await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
+        } catch (e) {
+          if (typeof opts.warn === 'function') {
+            opts.warn(`business process flow "${flow.name}" on ${flow.entity} exists but could not be added to solution '${sol.uniqueName}' (${e && e.message}). The flow works, but it will not travel on solution export until it is added.`);
+          }
+        }
         continue;
       }
       const stageCount = (flow.stages || []).length;

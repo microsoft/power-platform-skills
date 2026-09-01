@@ -53,7 +53,9 @@ const FLOW = {
   entity: 'new_ticket',
   stages: [
     { name: 'Triage', steps: [{ name: 'Subject', field: 'new_subject', required: true }] },
-    { name: 'Resolve', steps: [{ name: 'Notes', field: 'new_notes' }, { name: 'Confirm with customer' }] },
+    // Every step binds a column: the platform rejects a step with no `datafieldname`, so there is no
+    // field-less "checklist" step to fixture here. See the step-field test below.
+    { name: 'Resolve', steps: [{ name: 'Notes', field: 'new_notes' }, { name: 'Confirmed with customer', field: 'new_owner' }] },
   ],
 };
 const errorsFor = (flows) => (validateAppSpec(specWith(flows), { profile: 'plan' }).errors || []);
@@ -147,11 +149,23 @@ test('REAL BUNDLE: the derived uniquename really does ignore the table and the p
   }
 });
 
-test('a required step that binds no field is rejected — the stage could never be completed', () => {
+// The platform rejects a step with no bound column:
+//   HTTP 400 ... Attribute - datafieldname of ControlStep cannot be null or empty
+// This was originally modelled as optional ("a checklist item"), which validated fine and then HALTED
+// a live build in the business-process-flows phase — after the solution, table, columns, views and
+// forms were already created. Isolated by A/B live: the identical flow with every step bound deploys
+// and activates cleanly.
+test('a step that binds no field is rejected — the platform requires a datafieldname', () => {
+  const errs = errorsFor([{ ...FLOW, stages: [{ name: 'A', steps: [{ name: 'Call the customer' }] }] }]);
+  assert.ok(errs.some((e) => /binds no field/.test(e)), `expected a step-field error, got ${JSON.stringify(errs)}`);
+  // The message has to tell the author what to do instead, not just say no.
+  assert.ok(errs.some((e) => /datafieldname of ControlStep/.test(e)), 'must quote the platform error so it is searchable');
+  assert.ok(errs.some((e) => /Boolean/.test(e)), 'must name the workaround (bind a Boolean flag)');
+  // A required-but-unbound step is the same defect, and must not slip through a different branch.
   assert.ok(errorsFor([{ ...FLOW, stages: [{ name: 'A', steps: [{ name: 'Nothing', required: true }] }] }])
-    .some((e) => /required but binds no field/.test(e)));
-  // But an UNBOUND step is legitimate: a checklist item the user ticks.
-  assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: [{ name: 'A', steps: [{ name: 'Call the customer' }] }] }]), []);
+    .some((e) => /binds no field/.test(e)));
+  // A bound step is still fine.
+  assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: [{ name: 'A', steps: [{ name: 'Call the customer', field: 'new_owner' }] }] }]), []);
 });
 
 test('status and order are constrained', () => {
@@ -205,7 +219,7 @@ test('bpfDef maps onto the SDK artifact shape — and uses `fieldName`, not `fie
   // would deploy bound to nothing.
   assert.deepStrictEqual(def.stages, [
     { name: 'Triage', entityLogicalName: 'new_ticket', steps: [{ name: 'Subject', fieldName: 'new_subject', required: true }] },
-    { name: 'Resolve', entityLogicalName: 'new_ticket', steps: [{ name: 'Notes', fieldName: 'new_notes' }, { name: 'Confirm with customer' }] },
+    { name: 'Resolve', entityLogicalName: 'new_ticket', steps: [{ name: 'Notes', fieldName: 'new_notes' }, { name: 'Confirmed with customer', fieldName: 'new_owner' }] },
   ]);
 });
 
@@ -214,7 +228,7 @@ test('bpfDef omits absent optionals rather than emitting undefined', () => {
   const def = bpfDef(FLOW);
   assert.ok(!('description' in def), 'no description key when none was authored');
   assert.ok(!('order' in def), 'no order key when none was authored');
-  assert.deepStrictEqual(Object.keys(def.stages[1].steps[1]), ['name'], 'an unbound step carries only its name');
+  assert.deepStrictEqual(Object.keys(def.stages[1].steps[1]), ['name', 'fieldName'], 'a step with no `required` carries only name + fieldName');
 });
 
 test('bpfDef lower-cases the entity everywhere it appears', () => {
@@ -468,8 +482,12 @@ test('teardown removes each flow BEFORE the table it is bound to', async () => {
   const kinds = steps.map((s) => s.kind);
   const flowAt = kinds.indexOf('businessProcessFlows');
   assert.ok(flowAt > -1, `a flow step must be planned; got ${JSON.stringify(kinds)}`);
-  const tableAt = kinds.indexOf('tables');
-  if (tableAt > -1) assert.ok(flowAt < tableAt, 'an activated flow is a workflow row bound to the entity — it cannot be left for the table delete to cascade');
+  // The kind is SINGULAR (`table`) — planTeardown emits kind 'table' with phase 'tables'. Guarding on
+  // 'tables' made `tableAt` permanently -1, so the ordering assertion below never ran and moving BPF
+  // teardown after the table delete stayed green. Assert the index is real before comparing.
+  const tableAt = kinds.indexOf('table');
+  assert.ok(tableAt > -1, `a table step must be planned; got ${JSON.stringify(kinds)}`);
+  assert.ok(flowAt < tableAt, 'an activated flow is a workflow row bound to the entity — it cannot be left for the table delete to cascade');
   assert.deepStrictEqual(steps[flowAt].target, { entity: 'new_ticket', name: 'Ticket Handling' });
 });
 
@@ -591,4 +609,178 @@ test('an ADDED flow forces a full build with NO debt — a full build creates it
   const r = classifyChanges(current, prior);
   assert.strictEqual(r.verdict, 'full');
   assert.deepStrictEqual(r.debt, []);
+});
+
+// --- 6. regressions found by live testing and multi-model review ---------------------------------
+// Each block below guards a defect that ALREADY SHIPPED in the first cut of this feature. They are
+// grouped here rather than scattered so the provenance stays attached to the assertion.
+
+test('REGRESSION: an object-valued businessProcessFlows is a validation error, not a TypeError', () => {
+  // `businessProcessFlows` was missing from spec-shape COLLECTIONS, so a mid-edit object reached the
+  // phase`s for...of and threw `object is not iterable`. businessRules already handled this; the new
+  // collection repeated the mistake it documents.
+  const spec = specWith([FLOW]);
+  spec.businessProcessFlows = { name: 'X', entity: 'new_ticket', stages: [] };
+  let errs;
+  assert.doesNotThrow(() => { errs = validateAppSpec(spec, { profile: 'plan' }).errors || []; });
+  assert.ok(errs.some((e) => /businessProcessFlows must be an array/.test(e)), `got ${JSON.stringify(errs)}`);
+});
+
+test('REGRESSION: object-valued stages and steps are validation errors too', () => {
+  for (const [label, flow] of Object.entries({
+    stages: { ...FLOW, stages: { name: 'S' } },
+    steps: { ...FLOW, stages: [{ name: 'S', steps: { name: 'x' } }] },
+  })) {
+    const spec = specWith([flow]);
+    let errs;
+    assert.doesNotThrow(() => { errs = validateAppSpec(spec, { profile: 'plan' }).errors || []; }, `${label} threw`);
+    assert.ok(errs.length, `${label}: expected a validation error`);
+  }
+});
+
+test('REGRESSION: a non-string flow name is rejected before the SDK lower-cases it', () => {
+  // The SDK derives the unique name via `.toLowerCase()`, so a non-string died inside the bundle.
+  assert.ok(errorsFor([{ ...FLOW, name: {} }]).some((e) => /name must be a non-empty string/.test(e)));
+  assert.ok(errorsFor([{ ...FLOW, name: '   ' }]).some((e) => /name (is required|must be a non-empty string)/.test(e)));
+});
+
+test('REGRESSION: a non-string description is rejected', () => {
+  assert.ok(errorsFor([{ ...FLOW, description: {} }]).length, 'a non-string description must not reach the SDK');
+});
+
+test('REGRESSION: the SDK stage/step ceilings are enforced as spec errors', () => {
+  const many = (n) => Array.from({ length: n }, (_, i) => ({ name: `S${i}`, steps: [{ name: 'x', field: 'new_notes' }] }));
+  assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: many(30) }]), [], '30 stages is allowed');
+  assert.ok(errorsFor([{ ...FLOW, stages: many(31) }]).some((e) => /at most 30/.test(e)), '31 stages must be rejected');
+
+  const steps = (n) => [{ name: 'S', steps: Array.from({ length: n }, (_, i) => ({ name: `Step${i}`, field: 'new_notes' })) }];
+  assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: steps(30) }]), [], '30 steps is allowed');
+  assert.ok(errorsFor([{ ...FLOW, stages: steps(31) }]).some((e) => /at most 30 per stage/.test(e)), '31 steps must be rejected');
+});
+
+test('REGRESSION: a REUSED flow is still added to the solution', async () => {
+  // addSolutionComponent was only on the create path, so a flow created by an earlier run whose
+  // component add failed would be reused forever and never travel on export.
+  const { calls } = await buildFlow([{ workflowid: 'w-existing', statecode: 1, createdon: '2020-01-01T00:00:00Z' }]);
+  const added = calls.filter((c) => c[0] === 'addSolutionComponent');
+  assert.strictEqual(added.length, 1, `a reused flow must still be added to the solution; calls: ${JSON.stringify(calls.map((c) => c[0]))}`);
+  assert.strictEqual(added[0][1].componentId, 'w-existing');
+});
+
+test('REGRESSION: a failing solution add on the reuse path warns, it does not halt', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionWithFlows([{ workflowid: 'w-existing', statecode: 1, createdon: '2020-01-01T00:00:00Z' }]);
+  provision.addSolutionComponent = async () => { throw new Error('component add refused'); };
+  const warnings = [];
+  const res = await runSdkBuild(specWith([FLOW]), { sdk, provisionSdk: provision, apply: true, phases: ['business-process-flows'], warn: (m) => warnings.push(m) });
+  assert.strictEqual(res.ok, true, 'solution bookkeeping must not fail an otherwise-good build');
+  assert.ok(warnings.some((w) => /could not be added to solution/.test(w)), `got ${JSON.stringify(warnings)}`);
+});
+
+test('REGRESSION: a transport TIMEOUT on the flow delete is resolved by POLLING, not reported as failure', async () => {
+  // Deleting an activated BPF cascades a backing-TABLE drop, measured live at longer than the 60s
+  // client timeout on two of three runs. The server completes anyway, so reporting the timeout as a
+  // failure told the operator to clean up something already gone.
+  //
+  // The row is STILL PRESENT at the moment the client times out — a single re-read reproduces the
+  // false failure, which is exactly what the first version of this fix did. So the row here only
+  // disappears on the third probe.
+  const handler = KIND_HANDLERS.businessProcessFlows;
+  let queried = 0;
+  const sdk = {
+    queryRecords: async () => { queried++; return queried < 3 ? [{ workflowid: 'w1' }] : []; },
+    updateRecord: async () => {},
+    deleteRecord: async () => { throw new Error('Transport failure reaching https://example.crm.dynamics.com/api/data/v9.0/workflows(w1): Request failed: Request timed out'); },
+  };
+  const realDelay = global.setTimeout;
+  global.setTimeout = (fn) => realDelay(fn, 0);   // keep the test fast; the polling shape is what matters
+  try {
+    await assert.doesNotReject(() => handler.del(sdk, { id: 'w1', statecode: 1 }));
+  } finally {
+    global.setTimeout = realDelay;
+  }
+  assert.ok(queried >= 3, `must keep polling until the row is gone; polled ${queried}x`);
+});
+
+test('REGRESSION: a probe that itself fails does not end the wait early', async () => {
+  const handler = KIND_HANDLERS.businessProcessFlows;
+  let queried = 0;
+  const sdk = {
+    queryRecords: async () => { queried++; if (queried < 3) throw new Error('probe blew up'); return []; },
+    updateRecord: async () => {},
+    deleteRecord: async () => { throw new Error('Request timed out'); },
+  };
+  const realDelay = global.setTimeout;
+  global.setTimeout = (fn) => realDelay(fn, 0);
+  try {
+    await assert.doesNotReject(() => handler.del(sdk, { id: 'w1', statecode: 1 }));
+  } finally {
+    global.setTimeout = realDelay;
+  }
+  assert.ok(queried >= 3, 'a failed probe is not evidence the row survived');
+});
+
+test('REGRESSION: a timeout is NOT swallowed when the row survives the whole wait', async () => {
+  const handler = KIND_HANDLERS.businessProcessFlows;
+  let queried = 0;
+  const sdk = {
+    queryRecords: async () => { queried++; return [{ workflowid: 'w1' }]; },  // never goes away: a real failure
+    updateRecord: async () => {},
+    deleteRecord: async () => { throw new Error('Request timed out'); },
+  };
+  const realDelay = global.setTimeout;
+  global.setTimeout = (fn) => realDelay(fn, 0);
+  try {
+    await assert.rejects(() => handler.del(sdk, { id: 'w1', statecode: 1 }), /timed out/);
+  } finally {
+    global.setTimeout = realDelay;
+  }
+  // The budget must be bounded by ATTEMPTS: a wall-clock deadline cannot be shortened by stubbing the
+  // sleep, so this exact case blocked the suite for four real minutes.
+  assert.ok(queried > 1 && queried <= 20, `polled a bounded number of times; got ${queried}`);
+});
+
+test('REGRESSION: a real HTTP error on delete is never re-read away', async () => {
+  const handler = KIND_HANDLERS.businessProcessFlows;
+  let queried = 0;
+  const sdk = {
+    queryRecords: async () => { queried++; return []; },
+    updateRecord: async () => {},
+    deleteRecord: async () => { throw new Error('HTTP 403 from .../workflows(w1): principal lacks prvDeleteWorkflow'); },
+  };
+  await assert.rejects(() => handler.del(sdk, { id: 'w1', statecode: 1 }), /403/);
+  assert.strictEqual(queried, 0, 'a status-carrying error means something specific and must not be second-guessed');
+});
+
+test('REGRESSION: a status-only edit is a full build but NOT permanent debt', () => {
+  // The build DOES converge status (the reuse branch flips statecode in both directions), so filing
+  // `-edit-not-convergent` debt claimed a divergence that a rebuild removes. Anything else about the
+  // flow genuinely is not reapplied, so it must still be recorded.
+  const { classifyChanges } = require('../lib/classify-changes.js');
+  const draft = specWith([{ ...FLOW, status: 'Draft' }]);
+  const active = specWith([{ ...FLOW, status: 'Active' }]);
+
+  const statusOnly = classifyChanges(active, draft);
+  assert.deepStrictEqual(statusOnly.debt, [], `a status-only edit is reconciled; got ${JSON.stringify(statusOnly.debt)}`);
+  assert.ok(statusOnly.changedPhases.includes('business-process-flows'), 'it still needs a full build');
+  assert.ok(statusOnly.fullReasons.some((r) => /status changed — reconciled/.test(r)), JSON.stringify(statusOnly.fullReasons));
+
+  // A stage edit is NOT converged and must still be debt.
+  const restaged = specWith([{ ...FLOW, stages: [{ name: 'Only', steps: [{ name: 'S', field: 'new_notes' }] }] }]);
+  const stageEdit = classifyChanges(restaged, draft);
+  assert.ok(stageEdit.debt.some((d) => /edit-not-convergent/.test(d.reason)), `a stage edit is real debt; got ${JSON.stringify(stageEdit.debt)}`);
+});
+
+test('REGRESSION: the same status-only rule applies to business rules', () => {
+  // Business rules converge status in their reuse branch too, so they shared the bug and the fix.
+  const { classifyChanges } = require('../lib/classify-changes.js');
+  const rule = (status) => ({
+    solution: { uniqueName: 'BPF', displayName: 'BPF', publisherPrefix: 'new' },
+    app: { name: 'BPF App', description: '' },
+    entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', pluralName: 'Tickets', primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' } }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Records', subAreas: [{ entity: 'new_ticket', title: 'Tickets' }] }] }] },
+    businessRules: [{ name: 'R', entity: 'new_ticket', status, conditions: [], actions: [] }],
+  });
+  const r = classifyChanges(rule('Active'), rule('Draft'));
+  assert.deepStrictEqual(r.debt, [], `got ${JSON.stringify(r.debt)}`);
 });

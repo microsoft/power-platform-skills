@@ -433,7 +433,40 @@ const KIND_HANDLERS = {
       if (item.statecode === 1) {
         try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
       }
-      return sdk.deleteRecord('workflow', item.id);
+      try {
+        return await sdk.deleteRecord('workflow', item.id);
+      } catch (e) {
+        // Because the delete cascades a TABLE drop, it is slow — MEASURED live at longer than the
+        // client's 60s HTTP timeout on two of three runs. The server keeps working after the client
+        // gives up, so a timeout here says nothing about whether the flow was removed; reporting it
+        // as a failure made teardown exit non-zero and tell the operator to go clean up something
+        // that was, in fact, already gone.
+        //
+        // So on a TRANSPORT failure only (never on a real HTTP error, which carries a status and a
+        // meaning), POLL for the row to disappear and let the environment decide the verdict.
+        // Polling rather than a single re-read is the whole point: measured, the row is still present
+        // at the moment the client times out and only disappears ~1-2 minutes later, so a single peek
+        // reproduces exactly the false failure this exists to remove.
+        const transport = /timed out|timeout|socket hang up|ECONNRESET|ETIMEDOUT|Transport failure/i.test(String((e && e.message) || ''));
+        if (!transport) throw e;
+        // Bounded by ATTEMPTS, not by wall-clock. A time-based deadline cannot be shortened by a test
+        // that stubs the sleep, so the "row never disappears" case would genuinely block a unit test
+        // for the full budget — which it did, taking the suite from 28s to 242s.
+        const POLL_ATTEMPTS = 16;
+        const POLL_INTERVAL_MS = 15000;   // ~4 minutes total; measured worst case is well inside that
+        for (let attempt = 1; ; attempt++) {
+          let rows;
+          try {
+            rows = await sdk.queryRecords('workflow', { select: ['workflowid'], filter: `workflowid eq ${item.id}`, top: 1 });
+          } catch {
+            // A failed probe is not evidence either way; keep waiting until the budget runs out.
+            rows = [{ unknown: true }];
+          }
+          if (!(rows || []).length) return undefined;
+          if (attempt >= POLL_ATTEMPTS) throw e;
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        }
+      }
     },
     tolerateNotFound: true,
   },

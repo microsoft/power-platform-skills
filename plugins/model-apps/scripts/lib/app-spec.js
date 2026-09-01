@@ -488,6 +488,10 @@ function bpfUniqueName(name) {
 // `field` — would otherwise validate clean and deploy as if it had never been written.
 const BPF_STAGE_KEYS = new Set(['name', 'entity', 'steps']);
 const BPF_STEP_KEYS = new Set(['name', 'field', 'required']);
+// Hard ceilings the vendored SDK enforces on a BPF. Pinned here so an over-large flow is a spec
+// error, not a throw from inside the bundle in a late build phase.
+const BPF_MAX_STAGES = 30;
+const BPF_MAX_STEPS = 30;
 
 // The column logical names an entity legitimately exposes to a rule / process step: its declared
 // columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
@@ -1295,7 +1299,11 @@ function validateAppSpec(spec, opts = {}) {
     const label = `business process flow '${(p && p.name) || '(unnamed)'}'`;
     if (!p || typeof p !== 'object' || Array.isArray(p)) { errors.push('businessProcessFlows[] entries must be objects'); continue; }
     if (!p.name) errors.push(`${label}: name is required`);
-    else {
+    else if (typeof p.name !== 'string' || !p.name.trim()) {
+      // The SDK derives the server unique name by lower-casing this value, so a non-string reaches
+      // `.toLowerCase()` and dies with a TypeError inside the bundle rather than a spec error here.
+      errors.push(`${label}: name must be a non-empty string`);
+    } else {
       // Keyed on the DERIVED unique name, not on (entity, name). The build identifies a flow by
       // (entity, name) for reuse, but the SERVER identity the SDK derives ignores the entity and
       // strips case/punctuation — so an (entity, name) key would let two flows through that cannot
@@ -1325,9 +1333,17 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
     const cols = declaredColumnLogicals(spec, p.entity);
+    validateDescription(p.description, label, errors);
     if (!Array.isArray(p.stages) || !p.stages.length) {
       errors.push(`${label}: stages[] is required (a flow with no stage is not a process)`);
       continue;
+    }
+    // The SDK enforces a hard ceiling of 30 stages per flow and 30 steps per stage. Without these
+    // the spec validates, the build runs, and the SDK throws in a late phase with the earlier
+    // artifacts already created — the same half-built-app failure the step-field rule above exists
+    // to prevent.
+    if (p.stages.length > BPF_MAX_STAGES) {
+      errors.push(`${label}: ${p.stages.length} stages — the platform allows at most ${BPF_MAX_STAGES}`);
     }
     const stageNames = new Set();
     for (const st of p.stages) {
@@ -1360,6 +1376,9 @@ function validateAppSpec(spec, opts = {}) {
       if (!(st.steps || []).length) {
         errors.push(`${label}: stage '${st.name}' has no steps — a stage with none deploys a placeholder step named "New Step" that you did not author`);
       }
+      if ((st.steps || []).length > BPF_MAX_STEPS) {
+        errors.push(`${label}: stage '${st.name}' has ${st.steps.length} steps — the platform allows at most ${BPF_MAX_STEPS} per stage`);
+      }
       const stepNames = new Set();
       for (const step of st.steps || []) {
         if (!step || typeof step !== 'object' || Array.isArray(step)) { errors.push(`${label}: stage '${st.name}': each step must be an object`); continue; }
@@ -1374,17 +1393,21 @@ function validateAppSpec(spec, opts = {}) {
             errors.push(`${label}: stage '${st.name}' step '${step.name}' has unsupported key '${k}' (allowed: ${[...BPF_STEP_KEYS].join(', ')}${k === 'fieldLogicalName' ? " — the column key is 'field'" : ''})`);
           }
         }
-        // `field` is optional: a step with no field is a valid checklist item in a BPF, and the SDK
-        // emits it as a step whose control has no DataFieldName. Only a field that IS given has to
-        // resolve.
-        if (step.field !== undefined) {
-          if (cols.size && !cols.has(String(step.field).toLowerCase())) {
-            errors.push(`${label}: stage '${st.name}' step '${step.name}' references '${step.field}', which is not a column on ${p.entity}`);
-          }
-        } else if (step.required === true) {
-          // "Required" with nothing to fill in cannot be satisfied, so the stage could never be
-          // completed — the platform would not complain, the user just gets stuck.
-          errors.push(`${label}: stage '${st.name}' step '${step.name}' is required but binds no field`);
+        // `field` is REQUIRED on every step. This was originally modelled as optional — a step with
+        // no field was documented as a "checklist item" — but the platform rejects it outright:
+        //
+        //   HTTP 400 from .../api/data/v9.0/workflows(<id>)
+        //   Attribute - datafieldname of ControlStep cannot be null or empty
+        //
+        // MEASURED live, and isolated by A/B: the identical flow with every step bound to a column
+        // deploys and activates cleanly. Because the push happens in a late phase, accepting the
+        // shape here meant the build HALTED after the solution, table, columns, views and forms were
+        // already created — the author got a half-built app and a platform error naming an internal
+        // XAML element they never wrote. So it is rejected up front, where it is actionable.
+        if (step.field === undefined) {
+          errors.push(`${label}: stage '${st.name}' step '${step.name}' binds no field — every step must set 'field' (the platform rejects a step with no column: "datafieldname of ControlStep cannot be null or empty"). For a manual check-off, bind a Boolean column such as a "Confirmed" flag.`);
+        } else if (cols.size && !cols.has(String(step.field).toLowerCase())) {
+          errors.push(`${label}: stage '${st.name}' step '${step.name}' references '${step.field}', which is not a column on ${p.entity}`);
         }
         if (step.required !== undefined && typeof step.required !== 'boolean') {
           errors.push(`${label}: stage '${st.name}' step '${step.name}': required must be a boolean`);

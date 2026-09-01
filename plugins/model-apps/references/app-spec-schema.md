@@ -731,7 +731,7 @@ works through. See
         { "name": "Priority", "field": "new_priority" } ] },
     { "name": "Resolve", "steps": [
         { "name": "Resolution notes", "field": "new_notes" },
-        { "name": "Confirm with customer" } ] }   // a step with no field = a checklist item
+        { "name": "Confirmed with customer", "field": "new_confirmed" } ] }
   ] }
 ```
 
@@ -745,11 +745,14 @@ works through. See
   different tables (or `"Ticket Handling"` and `"ticket-handling"` on one) cannot both deploy.
   Validation rejects the collision and names the derived value; rename one, e.g.
   `"Ticket Handling (Cases)"`.
-- **A step's `field`** must be a column on the flow's own `entity` (its own columns, its primary
-  name, or a lookup a relationship creates). Like a business rule, the platform accepts a step bound
-  to a column that does not exist and simply renders it bound to nothing, so this is validated up
-  front. A step with **no** `field` is a valid checklist item; a step with `required: true` and no
-  field is rejected, because the stage could then never be completed.
+- **Every step must bind a `field`**, and it must be a column on the flow's own `entity` (its own
+  columns, its primary name, or a lookup a relationship creates). The platform rejects a step with no
+  column outright — `datafieldname of ControlStep cannot be null or empty` — so there is no such
+  thing as a field-less "checklist" step; for a manual check-off, bind a Boolean column such as a
+  `Confirmed` flag. Like a business rule, the platform *accepts* a step bound to a column that does
+  not exist and simply renders it bound to nothing, so the column is validated up front too.
+- **At most 30 stages per flow and 30 steps per stage** — ceilings the SDK enforces, checked here so
+  an over-large flow is a spec error rather than a failure in a late build phase.
 - **`status`** matters more than it does for a rule: an inactive BPF is not merely inert, it is
   **invisible** — the stage bar does not render at all. `Active` is the default for that reason.
 - **v1 is single-entity and linear.** Every stage must be on the flow's own `entity`. The SDK also
