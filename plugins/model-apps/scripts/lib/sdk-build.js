@@ -2508,22 +2508,39 @@ async function runSdkBuild(spec, opts = {}) {
     let aiSummaryGateWarned = false;
     // Tables whose skipped publish may have left a committed `msdyn_aimodel` row behind.
     const pendingAiSummarySweeps = [];
+    // `tables` keys are documented as entity schemaNames matched CASE-INSENSITIVELY, and
+    // `selectSummaryTables` honours that when deciding what to build. Looking the override back up by
+    // exact (or merely lower-cased) key therefore selected the table but dropped its `instruction` and
+    // `columns` whenever the author's spelling differed from the entity's — silently substituting the
+    // generated default prompt for the one they wrote. Build the same case-folded index the selector
+    // uses so the two agree.
+    const summaryOverrides = new Map();
+    for (const [key, val] of Object.entries((spec.ai.summaries && spec.ai.summaries.tables) || {})) {
+      summaryOverrides.set(String(key).toLowerCase(), val);
+    }
+    const DUPLICATE_MODEL_REASON = 'a model with this name already exists';
     const aiSummaryUnsupported = (err) => {
       const detail = `${(err && err.message) || ''} ${JSON.stringify((err && err.cause) || '')}`;
       // Match the platform's own error CODE, not the prose: the message is localized and the status
       // alone (403/400) is also what a plain privilege or validation failure returns, which must
-      // still halt.
+      // still halt. `err.cause` carries the parsed error BODY (where `code` lives) while `err.message`
+      // carries only the localized text, so both are searched — on a non-English org the code is
+      // reachable only through `cause`.
       //
       // `DuplicateRecordKey` is in this set for a specific, measured reason. `configureRowSummary`
       // CREATES the `msdyn_aimodel` row and THEN publishes it, so on a gated environment the licence
       // check fails at publish with the row already committed:
       //   HTTP 400 ... "code":"DuplicateRecordKey" ... Cannot insert duplicate key row in object
       //   'dbo.msdyn_AIModelBase' with unique index 'ndx_Uniquename'. The duplicate key value is
-      //   (zza_ticket row summary, ...)
+      //   (<table> row summary, ...)
       // on the NEXT build. Without this, skipping the licence gate would make the first build pass
       // and every rebuild fail — strictly worse than failing consistently. The orphan is also swept
       // below so the row does not accumulate.
-      return /ModelNotSupported|not supported in this environment|DuplicateRecordKey/i.test(detail)
+      //
+      // The two are reported as DIFFERENT reasons: telling an operator their environment is
+      // unlicensed when the real cause is a leftover row sends them to the wrong place entirely.
+      if (/DuplicateRecordKey/i.test(detail)) return DUPLICATE_MODEL_REASON;
+      return /ModelNotSupported|not supported in this environment/i.test(detail)
         ? 'unsupported in this environment'
         : false;
     };
@@ -2553,33 +2570,43 @@ async function runSdkBuild(spec, opts = {}) {
         }
       } catch { /* no read access to msdyn_aimodel is not a build failure */ }
     };
-    for (const logical of tables) {
-      const ent = (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === String(logical).toLowerCase());
-      if (!ent) continue;
-      const override = spec.ai.summaries && spec.ai.summaries.tables && (spec.ai.summaries.tables[logical] || spec.ai.summaries.tables[String(logical).toLowerCase()]);
-      await runner.run('ai-features', `row summary for ${logical}`, async () => {
-        const promptSpec = buildPromptSpec(ent, { spec, override });
-        const res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
-        result.created.ai.summaries[logical] = res;
-        return res.modelId;
-      }, {
-        skipIf: (err) => {
-          const reason = aiSummaryUnsupported(err);
-          if (!reason) return false;
-          result.skipped.aiSummaries.push(logical);
-          pendingAiSummarySweeps.push(logical);
-          // Warn ONCE per build: on a gated environment every table skips for the same reason, and
-          // N copies of the same paragraph buries the rest of the output.
-          if (!aiSummaryGateWarned && typeof opts.warn === 'function') {
-            aiSummaryGateWarned = true;
-            opts.warn(`AI row summaries were NOT created: this environment does not license the row-summary (AI Builder) capability, so there is no supported way to author them here — the org's 'EnableFormInsights' setting can read ON and the publish still be refused. Everything else in the app was built normally. Re-run against a licensed environment, or set ai.summaries.default to "off" (with no per-table enabled:true) to stop requesting them.`);
-          }
-          return reason;
-        },
-      });
+    try {
+      for (const logical of tables) {
+        const ent = (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === String(logical).toLowerCase());
+        if (!ent) continue;
+        const override = summaryOverrides.get(String(logical).toLowerCase());
+        await runner.run('ai-features', `row summary for ${logical}`, async () => {
+          const promptSpec = buildPromptSpec(ent, { spec, override });
+          const res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
+          result.created.ai.summaries[logical] = res;
+          return res.modelId;
+        }, {
+          skipIf: (err) => {
+            const reason = aiSummaryUnsupported(err);
+            if (!reason) return false;
+            result.skipped.aiSummaries.push(logical);
+            pendingAiSummarySweeps.push(logical);
+            // Warn ONCE per build: on a gated environment every table skips for the same reason, and
+            // N copies of the same paragraph buries the rest of the output.
+            if (!aiSummaryGateWarned && typeof opts.warn === 'function') {
+              aiSummaryGateWarned = true;
+              opts.warn(reason === DUPLICATE_MODEL_REASON
+                ? `AI row summaries were NOT created: an AI model named "<table> row summary" already exists for a table in this spec, so the platform refused to create another (duplicate key on 'ndx_Uniquename'). This is normally residue from an earlier run whose publish was refused after the model row was committed; the leftover row is removed so the next build can retry. Everything else in the app was built normally.`
+                : `AI row summaries were NOT created: this environment does not license the row-summary (AI Builder) capability, so there is no supported way to author them here — the org's 'EnableFormInsights' setting can read ON and the publish still be refused. Everything else in the app was built normally. Re-run against a licensed environment, or set ai.summaries.default to "off" (with no per-table enabled:true) to stop requesting them.`);
+            }
+            return reason;
+          },
+        });
+      }
+    } finally {
+      // In a `finally` on purpose: a LATER table failing for an unrelated (non-skippable) reason
+      // throws out of the loop, and without this the orphan already queued by an EARLIER skipped
+      // table would never be swept — leaving exactly the duplicate-key residue this sweep exists to
+      // remove, and making every future rebuild fail on it.
+      //
+      // Swept here rather than inside `skipIf` because `skipIf` is synchronous and cannot await.
+      for (const logical of pendingAiSummarySweeps) await sweepOrphanSummaryModel(logical);
     }
-    // Sweep AFTER the loop: `skipIf` is synchronous, so the cleanup cannot be awaited inside it.
-    for (const logical of pendingAiSummarySweeps) await sweepOrphanSummaryModel(logical);
   }
 
   // 7c. Security (persona roles). Author ONE security role per persona (role name = persona), sized to

@@ -2483,13 +2483,35 @@ test('ai-features phase: a skipped summary sweeps the orphan msdyn_aimodel row i
 test('ai-features phase: DuplicateRecordKey (the orphan from a previous gated run) also skips, not halts', async () => {
   const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
   const { sdk } = mockSdk();
+  const warnings = [];
   sdk.configureRowSummary = async () => {
     const e = new Error('HTTP 400 from .../AIModelPublish: {"error":{"code":"DuplicateRecordKey","message":"Cannot insert duplicate key row in object \'dbo.msdyn_AIModelBase\' with unique index \'ndx_Uniquename\'."}}');
     e.statusCode = 400;
     throw e;
   };
-  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: (m) => warnings.push(m) });
   assert.ok(result.ok, 'a rebuild against a gated org must not fail where the first build passed');
+  assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
+  // A leftover row is NOT a licensing problem. Telling the operator their environment is unlicensed
+  // sends them to the Admin Center for a condition the build just cleaned up itself.
+  assert.ok(warnings.some((w) => /already exists/i.test(w)), `expected a duplicate-specific warning; got ${JSON.stringify(warnings)}`);
+  assert.ok(!warnings.some((w) => /does not license/i.test(w)), 'must NOT claim the environment is unlicensed');
+});
+
+// The org's language decides whether the platform's `code` reaches us via `message` or only via the
+// parsed body on `cause`. A fixture that embeds the code in BOTH cannot tell the two apart, so this
+// one puts it ONLY on `cause` — which is what a non-English tenant actually produces.
+test('ai-features phase: the gate is recognised from err.cause alone (localized message)', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
+  const { sdk } = mockSdk();
+  sdk.configureRowSummary = async () => {
+    const e = new Error('Ce scenario n est pas pris en charge dans cet environnement.');
+    e.statusCode = 403;
+    e.cause = { error: { code: 'ModelNotSupported', message: 'Ce scenario n est pas pris en charge dans cet environnement.' } };
+    throw e;
+  };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  assert.ok(result.ok, 'a localized gate error must still be recognised');
   assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
 });
 
@@ -2501,6 +2523,56 @@ test('ai-features phase: a failing orphan sweep never turns the skip back into a
   const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
   assert.ok(result.ok, 'cleanup is best-effort and must stay non-fatal');
   assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
+});
+
+// Distinct from the case above: there the QUERY fails, so the inner per-row catch is never reached.
+// This one finds the row and fails the DELETE, which is the only thing that inner catch guards.
+test('ai-features phase: a failing orphan DELETE is also non-fatal', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
+  const { sdk } = mockSdk();
+  sdk.configureRowSummary = async () => { throw modelNotSupported(); };
+  sdk.queryRecords = async (entity) => (entity === 'msdyn_aimodel' ? [{ msdyn_aimodelid: 'orphan-1' }] : []);
+  sdk.deleteRecord = async () => { throw new Error('HTTP 403: no delete privilege on msdyn_aimodel'); };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  assert.ok(result.ok, 'an undeletable orphan must not fail the build');
+  assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
+});
+
+// A later table failing for an UNRELATED reason throws out of the loop. Without a `finally` the
+// orphan already queued by an earlier skipped table is never swept, leaving exactly the duplicate-key
+// residue the sweep exists to remove.
+test('ai-features phase: an orphan queued before a LATER fatal error is still swept', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_customer: { enabled: true }, new_ticket: { enabled: true } } } } });
+  const { sdk, calls } = mockSdk();
+  const seen = [];
+  sdk.configureRowSummary = async (promptSpec) => {
+    seen.push(promptSpec.entityLogicalName);
+    // First table hits the environment gate (queues a sweep); the second dies for another reason.
+    if (seen.length === 1) throw modelNotSupported();
+    throw new Error('HTTP 500 from .../AIModelPublish: internal server error');
+  };
+  sdk.queryRecords = async (entity) => (entity === 'msdyn_aimodel' ? [{ msdyn_aimodelid: 'orphan-1' }] : []);
+  sdk.deleteRecord = async (entity, id) => { calls.push({ name: 'deleteRecord', args: [entity, id] }); };
+  await assert.rejects(
+    () => runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} }),
+    /internal server error/,
+    'the unrelated failure must still surface',
+  );
+  const deletes = find(calls, 'deleteRecord').filter((c) => c.args[0] === 'msdyn_aimodel');
+  assert.strictEqual(deletes.length, 1, 'the queued orphan is swept even though the build then failed');
+});
+
+// `tables` keys are documented as case-insensitive, and `selectSummaryTables` honours that when
+// choosing what to build. Looking the override back up by exact key selected the table but dropped
+// the author's `instruction`/`columns`, silently substituting the generated default prompt.
+test('ai-features phase: a differently-cased tables[] key keeps its instruction', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { NEW_Ticket: { enabled: true, instruction: 'Summarise the ticket in two sentences.' } } } } });
+  const { sdk, calls } = mockSdk();
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'] });
+  assert.ok(result.ok);
+  const summaryCalls = find(calls, 'configureRowSummary');
+  assert.strictEqual(summaryCalls.length, 1, 'the case-insensitive key still selects the table');
+  assert.match(String(summaryCalls[0].args[0].instruction || ''), /two sentences/, 'the AUTHORED instruction must reach the SDK, not the generated default');
 });
 
 test('ai-features phase: spec without spec.ai is a no-op', async () => {
