@@ -551,7 +551,7 @@ const KIND_HANDLERS = {
   form: {
     async resolve(sdk, target) {
       // Resolve by (entity, name, TYPE) or a pinned formId — NOT name alone — so tearing down a Main form
-      // never ALSO deletes the table's same-named Quick View / Card siblings (Sol review: the old name-only
+      // never ALSO deletes the table's same-named Quick View / Card siblings (the old name-only
       // resolveArtifact returned every match and del() deleted each). resolveExistingFormId returns the ONE
       // intended form (null if absent → nothing to delete; throws on a residual (entity,type,name) collision
       // → teardown halts fail-closed rather than delete an arbitrary form).
@@ -869,7 +869,7 @@ function planTeardown(spec) {
   // app.icon is set — that image is a declared webResources[] entry handled by the loop above.
   // ALSO skipped when the derived name collides with a DECLARED webResources[] entry: if that entry is
   // `external:true` the loop deliberately protected it (a shared nav icon named `<appUnique>_icon`), so
-  // this derived delete must not clobber the skip and delete a shared resource (Sol review, High); if it
+  // this derived delete must not clobber the skip and delete a shared resource; if it
   // is a normal declared entry the loop already scheduled it, so skipping here just avoids a duplicate.
   if (spec.app && spec.solution && !spec.app.icon) {
     const generatedIcon = `${appUniqueName(spec)}_icon`;

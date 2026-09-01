@@ -192,7 +192,7 @@ async function hydrateSpec(read) {
     solution,
     // Round-trip the app's REAL, immutable uniquename so a rebuild resolves the EXISTING app by identity
     // (appUniqueName prefers this over the display-name derivation) — survives a display-name rename and
-    // never creates a duplicate app (Sol review). Omitted for a legacy read that didn't surface it.
+    // never creates a duplicate app. Omitted for a legacy read that didn't surface it.
     app: { name: app.name, description: app.description || '', ...(app.uniquename ? { uniqueName: app.uniquename } : {}) },
     entities,
     webResources,

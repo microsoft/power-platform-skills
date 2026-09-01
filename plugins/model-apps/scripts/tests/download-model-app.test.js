@@ -866,7 +866,7 @@ test('recoverAppSolution enumerates ALL memberships and returns the real unmanag
   };
   const sol = await recoverAppSolution(sdk, APP);
   assert.deepStrictEqual(sol, { uniqueName: 'NucleoLive2' }, 'returns ONLY the real solution uniquename');
-  assert.strictEqual(publisherQueried, false, 'no publisher lookup — the prefix is NOT sourced from an arbitrary solution membership (Sol review)');
+  assert.strictEqual(publisherQueried, false, 'no publisher lookup — the prefix is NOT sourced from an arbitrary solution membership');
 });
 
 test('recoverAppSolution ignores managed solutions and returns null when only system/managed remain', async () => {

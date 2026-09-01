@@ -629,7 +629,7 @@ const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
 //   genuinely IS 'new': when the prefix is UNVERIFIED we cannot trust `startsWith(ownPrefix)`, so a genuine
 //   own custom icon (e.g. `crba3_nav.svg` while the fallback prefix is `new`) would fail the own-prefix test
 //   and — without this guard — be silently skipped with NO warning, re-introducing the exact broken-icon bug
-//   this fix exists to prevent (Opus review, Medium). So when `prefixResolved` is false we do NOT re-declare
+//   this fix exists to prevent . So when `prefixResolved` is false we do NOT re-declare
 //   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
 //   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
 //   ref is a system icon present in every env, so it stays silent (no false alarm).
@@ -654,7 +654,7 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
   // PASS 1 — path-derived custom icons (safety-gated). Done FIRST so a name referenced BOTH by a platform
   // path AND by a bare name is classified by the STRICTER path rules (and flagged `external`) before the
   // lenient bare pass can re-declare it as deletable — otherwise the overlap silently loses teardown
-  // protection and a shared nav icon gets deleted (Sol review, High).
+  // protection and a shared nav icon gets deleted.
   for (const name of [...(customRefs || []), ...(navRefs || [])]) {
     const key = String(name).toLowerCase();
     if (seen.has(key)) continue;
@@ -999,7 +999,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // survives a rebuild into a fresh env that lacks it — but ONLY when it belongs to THIS app's own
   // publisher (`solution.publisherPrefix`). A FOREIGN-prefix / OOB reference is left as a bare reference:
   // re-declaring it would make the build try to createWebResource under an unregistered prefix on a fresh
-  // env → a hard BuildHalt, turning a cosmetic broken icon into a failed build (Opus review).
+  // env → a hard BuildHalt, turning a cosmetic broken icon into a failed build.
   const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs);
   if (unresolvedIcons && unresolvedIcons.length) {
     // A custom nav icon we couldn't safely round-trip: either an own-prefix WR that's absent on the source
