@@ -208,14 +208,33 @@ Write the result to `[working directory]/canvas-app-acceptance.md`:
 ```markdown
 Runtime evaluation: NOT RUN
 
+## Action Contract Acceptance
+
 | Action | Entry control | Event formula | Source / stable ID | Observer formula | Reachability | Result |
 |--------|---------------|---------------|--------------------|------------------|--------------|--------|
 | [action] | [control] | [exact formula] | [source and identity] | [exact formula] | [path and bounds] | PASS |
+
+## Functional Test Matrix Results
+
+| Scenario | Static trace result | Evidence |
+|----------|---------------------|----------|
+| [scenario] | PASS | [Action Contract and observer] |
 ```
 
 The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN` is
 required because symbolic inspection is not browser execution. Replace it only when a
 fresh runtime evaluator returns a recorded result for this generated app.
+
+The first line of the file must be exactly `Runtime evaluation: NOT RUN`; do not place a
+heading before it. The Action Contract table has exactly one row per Action Contract. The
+scenario table separately records every Functional Test Matrix row. Copy event and
+observer formulas verbatim from final YAML. In the table, replace formula newlines with
+`<br>` and escape `|` as `\|`; do not paraphrase an exact formula into an action summary.
+Before writing the final response, reopen the artifact and repair it if the first line,
+any required row, or any exact formula is missing.
+
+Do not replace `NOT RUN` with another value unless a runtime evaluator actually executed
+against this app and the artifact records its run ID or result URL and score.
 
 For mutations, also compare the handler, write set, proof set, receipt bindings, and
 downstream observer one-for-one. For filters, verify the concrete selector value is
@@ -236,6 +255,10 @@ This is a deterministic static conformance gate because the prompt environment h
 runtime interaction tool. Report it as functional readiness, not as proof of runtime
 execution. A fresh browser evaluation remains the authority for the external functional
 grade.
+
+Never report an unqualified percentage such as `100% functional` or `18/18 (100%)`.
+Always include `static conformance` in the same sentence and immediately state the runtime
+evaluation status.
 
 ## 3. Summary
 

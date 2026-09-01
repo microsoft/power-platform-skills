@@ -20,8 +20,15 @@ tools:
 
 You own exactly one screen file.
 
-Use `apply_patch` for the assigned disk-backed screen file. Do not report that writing is
-unavailable while `apply_patch` is present.
+Read the supplied plugin root's `skills/canvas-app/SKILL.md` and
+`references/QAChecks.md`. Stop with `Status: Provenance Blocked` unless the observed skill
+version equals the supplied contract version and the QA guide defines
+`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the target
+file or working directory.
+
+Use `apply_patch` for the assigned disk-backed screen file. Attempt the write once. If the
+tool is unavailable or the call is denied, return `Status: Tooling Blocked` with the exact
+tool failure; do not return `Status: Blocked`, which is reserved for missing brief context.
 
 Your invocation includes:
 
@@ -32,6 +39,8 @@ Your invocation includes:
 - Control name prefix
 - Shared plan: `[working directory]/canvas-app-shared.md`
 - Screen brief: an absolute `[working directory]/*.screen-plan.md` path
+- Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
+- Skill contract version read by the orchestrator from that root's `SKILL.md`
 
 ## 1. Read Only Assigned Context
 
@@ -237,7 +246,7 @@ Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
 QA coverage: 1-44 COMPLETE
-QA repairs: [QACHK identifiers and counts, or "none"]
+QA repairs: [QACHK-NAME FIXED(n), or "none"]
 QA N/A: [QACHK identifiers, or "none"]
 Functional:
 - [Action]: PASS — [precondition] -> [control.event] -> [source and stable ID operation] -> [postcondition] -> [observer and visible evidence]
@@ -245,7 +254,9 @@ Status: Done
 ```
 
 The QA coverage, repairs, and N/A lines are required. Coverage means the persisted YAML
-was inspected; it is not evidence that a functional transition works.
+was inspected; it is not evidence that a functional transition works. Do not append the
+legacy numbered `QA:` checklist or claim complete coverage when the supplied guide does
+not define all 44 checks.
 
 The `Functional:` section must contain exactly one trace per Required Action. A trace that
 omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,

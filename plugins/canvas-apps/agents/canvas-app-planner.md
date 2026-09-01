@@ -41,6 +41,8 @@ Your invocation includes:
 - Working directory: an absolute path supplied by the orchestrator
 - Plan index: `[working directory]/canvas-app-plan.md`
 - Shared plan: `[working directory]/canvas-app-shared.md`
+- Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
+- Skill contract version read by the orchestrator from that root's `SKILL.md`
 - User requirements and approved plan
 - CREATE context: target users and device
 - EDIT context: current app state and synced files
@@ -51,8 +53,19 @@ exactly, record an explicit approximation and reason; never silently rename butt
 "drag-style", call buttons "handles", or put copy in the app that promises an interaction
 the controls do not provide.
 
-Use `apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. Do not report that
-writing is unavailable while `apply_patch` is present.
+Before discovery, read the supplied plugin root's `skills/canvas-app/SKILL.md` and
+`references/QAChecks.md`. Stop with `Status: Provenance Blocked` unless the observed skill
+version equals the supplied contract version and the QA guide defines
+`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the working
+directory.
+
+Use `apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. Attempt the write
+once. If the tool is unavailable or the call is denied, return
+`Status: Tooling Blocked`, the exact tool failure, and the complete intended contents of
+the plan index, shared plan, every screen brief, and CREATE-mode `App.pa.yaml` as labeled
+inline payloads. Complete discovery and compose those payloads before attempting the first
+write. Do not return a successful-looking handoff or claim that no write tool exists
+without attempting `apply_patch`.
 
 Plan in functional-first order: shared state and stable identity, complete executable
 workflows, observable evidence, responsive/accessibility behavior, then visual polish.

@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.3
+version: 3.0.4
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -17,12 +17,18 @@ $ARGUMENTS
 
 Canvas Authoring tools operate on a local directory containing the app YAML.
 
-1. Reuse the current directory when it already contains `App.pa.yaml`.
-2. Otherwise, reuse the single immediate child directory containing `App.pa.yaml`, when
+1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
+   current directory, app workspace, repository root, or a sibling worktree.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.4`.
+   Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
+   `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
+   observed paths and versions; do not mix prompt generations.
+3. Reuse the current directory when it already contains `App.pa.yaml`.
+4. Otherwise, reuse the single immediate child directory containing `App.pa.yaml`, when
    exactly one exists.
-3. Otherwise, derive a short kebab-case folder name from the app name or requirements,
+5. Otherwise, derive a short kebab-case folder name from the app name or requirements,
    create it with `Bash`, and resolve its absolute path.
-4. Call `sync_canvas` with that absolute working directory before reading or editing app
+6. Call `sync_canvas` with that absolute working directory before reading or editing app
    files. Do not proceed if sync fails.
 
 Always use absolute paths for app files.
@@ -86,6 +92,14 @@ CREATE and complex EDIT workflows return here after the planner finishes.
    Verify each brief's assignment matches its dispatch row and includes every Action
    Contract owned by that screen under `## Required Actions` and every scenario it
    exercises under `## Functional Test Scenarios`.
+   Before dispatch, read every brief and reject it when:
+   - a used control lacks its exact creation keywords, supported input-property names, or
+     the full `Enum name:` and compile-ready enum literal required by discovery;
+   - a Required Action is only an identifier or summary instead of its complete
+     precondition, event, source/stable identity, postcondition, observer, and evidence;
+   - a Functional Test Scenario is only an identifier instead of complete
+     Given/When/Then text, boundary conditions, and expected evidence; or
+   - it contains an unresolved placeholder or delegates discovery to the builder.
 7. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
    `[working directory]/App.pa.yaml` now. Screens bind to those collections, formulas and variables, and
    compiling them against a stale `App.pa.yaml` produces a flood of false name errors.
@@ -104,6 +118,15 @@ defects surface.
 If any pre-dispatch check fails, do not start builders. Re-invoke the planner with the
 specific defects and repeat the checks on the corrected artifacts.
 
+If the planner reports that writing is unavailable or denied, or returns without the
+required artifacts for that reason, invoke a general-purpose agent with `Task` once. Give
+it the same assignment and the planner's complete inline artifact payloads, and instruct
+it to write those payloads verbatim with `apply_patch` without redesign or rediscovery.
+Do not create the planner artifacts in the orchestrator. If the fallback also cannot
+write, stop and report the tooling failure.
+If the planner returns `Status: Provenance Blocked`, stop without a fallback; mixed prompt
+generations cannot produce trustworthy artifacts.
+
 Pass each builder only:
 
 ```text
@@ -115,6 +138,7 @@ Control name prefix: [prefix from dispatch row]
 Shared plan: `[working directory]/canvas-app-shared.md`
 Screen brief: `[working directory]/[file-base].screen-plan.md`
 Plugin root: ${PLUGIN_ROOT}
+Skill contract version: [version read from ${PLUGIN_ROOT}/skills/canvas-app/SKILL.md]
 ```
 
 The target file, YAML key, and name prefix are authoritative. Modify actions preserve the
@@ -152,6 +176,8 @@ After all builders finish:
 - Check each builder's QA coverage, repairs, and N/A lines. Treat these as unrun and send
   the screen back for self-QA only — not a rebuild — before you compile:
   - missing `QA coverage: 1-44 COMPLETE`, repair, or N/A lines;
+  - any legacy `QA: 1 PASS` checklist or repair entry that does not use
+    `QACHK-NAME FIXED(n)`;
   - an outcome that contradicts the screen structure — for example,
     `QACHK-CROSS-AXIS-ALIGNMENT` is `N/A` despite AutoLayout children,
     `QACHK-ACCESSIBLE-LABEL-MISSING` is `N/A` despite content or input controls,
@@ -165,6 +191,8 @@ After all builders finish:
   This costs one cheap turn. The defects these checks catch — clipped headings, invisible
   buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
   app ships broken while reporting clean.
+- If any builder says checks 42-44 are undefined, stop instead of rerunning self-QA.
+  Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - A self-QA follow-up is not a rebuild or a screen-generation re-dispatch. Tell the
   builder to inspect and repair the existing target file, then return the corrected QA
   coverage, repairs, and N/A lines without regenerating the screen.
@@ -204,11 +232,20 @@ After all builders finish:
 - If a builder returns `Status: Blocked`, re-invoke the planner to correct that screen
   brief, then rerun only the affected builder. Never ask a builder to guess missing
   definitions.
-- `Status: Blocked` is the **only** reason to rerun screen generation from a brief.
-  Compile diagnostics are not. Once a screen file exists you repair it in place with
-  targeted edits. Re-running generation rewrites the whole screen from scratch, discards
-  the fixes already applied, and produces a fresh crop of defects. That loop does not
-  converge.
+- If a builder returns `Status: Tooling Blocked` because file mutation was unavailable
+  or denied, invoke a general-purpose agent with `Task` once for that screen. Give it the
+  same assignment and instruct it to read and follow
+  `${PLUGIN_ROOT}/agents/canvas-screen-builder.md`, including its referenced authoring and
+  QA guides, while using `apply_patch` for the target file. Apply the same QA and
+  functional-report checks to its result. This is a tooling fallback, not permission to
+  bypass a genuine `Status: Blocked` planning defect. If the fallback cannot write, stop
+  and report the exact tooling failure.
+- If a builder returns `Status: Provenance Blocked`, stop the wave without a fallback and
+  report the mismatched plugin root or contract version.
+- `Status: Blocked` is the **only** reason to repair a brief and rerun its specialist
+  generation. `Status: Tooling Blocked` follows the one-time fallback above. Compile
+  diagnostics trigger neither path. Once a screen file exists, repair it in place with
+  targeted edits; regenerating it discards prior fixes and does not converge.
 - In EDIT mode, apply the `### After builders` group of `## App Changes` in
   `[working directory]/canvas-app-plan.md` to `[working directory]/App.pa.yaml`. The `### Before builders` group was
   already applied at pre-dispatch. If a group says `None`, do not edit the file for it.

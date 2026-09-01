@@ -109,6 +109,9 @@ QA N/A: QACHK-GRID-CONTRACT · QACHK-TIMER-LIFECYCLE · QACHK-MANUAL-BOUNDS
 - `FIXED(n)` names each check that caused a repair and its occurrence count.
 - `N/A` names each check whose construct does not appear on the screen. It is not a
   synonym for "did not check".
+- Do not emit the legacy numbered `QA: 1 PASS` checklist.
+- `1-44 COMPLETE` is invalid if the loaded guide does not define checks 42, 43, and 44.
+  Report `Status: Provenance Blocked` instead of fabricating outcomes for missing checks.
 
 `QACHK-CROSS-AXIS-ALIGNMENT`, `QACHK-ACCESSIBLE-LABEL-MISSING` and
 `QACHK-LOW-CONTRAST-TEXT` apply frequently, but their outcomes still depend on the file:
