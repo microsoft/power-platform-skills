@@ -77,7 +77,7 @@ function validateSiteSettings(projectRoot) {
     const hasSource = Object.prototype.hasOwnProperty.call(setting, 'source');
     const hasValue = Object.prototype.hasOwnProperty.call(setting, 'value');
 
-    const isWebApiFieldsSetting = WEB_API_FIELDS_SETTING_REGEX.test(String(setting.name || ''));
+    const isWebApiFieldsSetting = WEB_API_FIELDS_SETTING_REGEX.test(String(setting.name || '').trim());
     const hasWildcardField = hasValue
       && String(setting.value).split(',').some(column => column.trim() === '*');
     if (isWebApiFieldsSetting && hasWildcardField) {

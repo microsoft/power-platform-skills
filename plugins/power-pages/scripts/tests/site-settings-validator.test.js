@@ -103,3 +103,22 @@ test('validateSiteSettings rejects wildcard Web API fields', (t) => {
     message.includes('uses unsupported wildcard field access')
   ));
 });
+
+test('validateSiteSettings rejects wildcard Web API fields when the setting name has whitespace', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    '.powerpages-site/site-settings/Webapi-product-fields-whitespace.sitesetting.yml',
+    [
+      'id: e9981fe5-6724-4111-8341-6045bd001091',
+      'name: " Webapi/product/fields "',
+      'value: "*"',
+      '',
+    ].join('\n')
+  );
+
+  const result = validateSiteSettings(projectRoot);
+  assert.ok(findingMessages(result.findings).some(message =>
+    message.includes('uses unsupported wildcard field access')
+  ));
+});

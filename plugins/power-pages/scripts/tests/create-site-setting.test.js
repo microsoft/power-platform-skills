@@ -80,6 +80,19 @@ test('create-site-setting rejects wildcard Web API fields', (t) => {
   assert.match(result.stderr, /requires an explicit comma-separated column list/);
 });
 
+test('create-site-setting rejects wildcard Web API fields when the setting name has whitespace', (t) => {
+  const projectRoot = createTempProject(t);
+  const result = runCreateSiteSetting([
+    '--projectRoot', projectRoot,
+    '--name', ' Webapi/test/fields ',
+    '--value', '*',
+    '--description', 'Allowed test fields',
+  ]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires an explicit comma-separated column list/);
+});
+
 test('create-site-setting allows wildcard values for unrelated settings', (t) => {
   const yaml = getWrittenYaml(t, 'HTTP/Access-Control-Allow-Origin', '*');
   assert.match(yaml, /^value: "\*"$/m);

@@ -68,7 +68,7 @@ if (!usesEnvironmentVariable && valueType === 'boolean' && settingValue !== 'tru
   process.exit(1);
 }
 
-const isWebApiFieldsSetting = /^Webapi\/[^/]+\/fields$/i.test(settingName);
+const isWebApiFieldsSetting = /^Webapi\/[^/]+\/fields$/i.test(settingName.trim());
 const hasWildcardField = !usesEnvironmentVariable
   && settingValue.split(',').some(column => column.trim() === '*');
 if (isWebApiFieldsSetting && hasWildcardField) {
