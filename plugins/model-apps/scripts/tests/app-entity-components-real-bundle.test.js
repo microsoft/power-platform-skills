@@ -21,6 +21,19 @@ const fs = require('node:fs');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const { appDef } = require('../lib/sdk-build.js');
+// Every app the PLUGIN creates carries an icon: `ensureAppIcon` (sdk-build.js) resolves the author's
+// `spec.app.icon` or generates an SVG web resource, and `appDef` passes its id as
+// `iconWebResourceId`. These tests drive the SDK directly, so they must supply one too or they are
+// exercising a path production never takes.
+//
+// The SDK now REQUIRES it: `appmodule.webresourceid` is a required attribute, and when no explicit id
+// is given it auto-resolves an IMAGE web resource (PNG/JPG/GIF/ICO/SVG) and throws
+// `APP_ICON_UNRESOLVED` if the environment has none. Previously it fell back to ANY unmanaged web
+// resource — which on an org whose images are all managed returned a JAVASCRIPT file, and the platform
+// rejected the create with an opaque "dependent component WebResource does not exist". Failing fast
+// with a clear message is the better behaviour; these tests just have to stop relying on the old
+// silent fallback. A synthetic id is right here — the mock transport never dereferences it.
+const APP_ICON_ID = '11111111-2222-3333-4444-555555555555';
 
 const APP_ID = '11111111-1111-1111-1111-111111111111';
 const APP_UNIQUE_ID = '33333333-3333-3333-3333-333333333333';
@@ -97,7 +110,7 @@ function freshSdk(tables, opts = {}) {
 
 async function pushApp(sdk, tables) {
   const def = appDef(specFor(tables), { forms: {}, views: {}, charts: {}, dashboards: {} });
-  const art = sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_customermanagement', description: '', siteMap: def.siteMap, components: def.components });
+  const art = sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_customermanagement', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   return sdk.pushArtifact('app', art.id);
 }
 const addComponentsCall = (reqs) => reqs.find((r) => r.method === 'POST' && /AddAppComponents/i.test(r.url));
@@ -193,7 +206,7 @@ test('REAL BUNDLE: an app with no sitemap tables neither pins nor verifies (no p
       appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ url: 'https://x/y', title: 'Link' }] }] }] } },
     { forms: {}, views: {}, charts: {}, dashboards: {} }
   );
-  const art = sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_pageless', description: '', siteMap: def.siteMap, components: def.components });
+  const art = sdk.createArtifact('app', { name: def.name, uniqueName: 'contoso_pageless', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await assert.doesNotReject(sdk.pushArtifact('app', art.id));
   const call = addComponentsCall(reqs);
   const refs = call ? (call.body.Components || []).filter((c) => c['@odata.id']) : [];

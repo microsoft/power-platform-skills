@@ -26,7 +26,11 @@ test('navigatesTo.targetKey must resolve to a known page key', () => {
   const s = base();
   s.pages = [
     { key: 'ov', name: 'Overview', source: { kind: 'intent' }, navigatesTo: [{ targetKey: 'detail', data: { orderId: 'string' } }] },
-    { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string' } } },
+    // `detail` is sitemap-placed (every page must be), so it is reachable from the nav with no
+    // orderId — `directEntry` is what the author says happens then. Without it this spec is
+    // rejected, which is the point: previously it validated and generated a page that read
+    // undefined context on a path a user can reach by clicking the nav entry.
+    { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string' } }, directEntry: { behavior: 'selector' } },
   ];
   // Place every page in the sitemap so the every-page-placed rule (Task 3) does not fail this spec.
   s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' }, { page: 'detail', title: 'Detail' });
@@ -109,4 +113,86 @@ test('navigatesTo/pageInput/design validation is skipped for legacy (non-v2) spe
   // navigatesTo / pageInput / design validation is gated on isV2, so no errors from those.
   assert.ok(!r.errors.some((e) => /navigatesTo|pageInput|design/.test(e)),
     `unexpected v2-only errors on legacy spec: ${JSON.stringify(r.errors)}`);
+});
+
+// The sitemap-placement invariant and pageInput used to CONFLICT with no way for an author to
+// satisfy both: every page must be a sitemap subarea (the sitemap is download's only membership
+// oracle, so a nav-only page is invisible and gets duplicated on rebuild), yet a detail page needs
+// caller-supplied context. Being in the sitemap means the page is ALSO reachable from the nav with
+// no input at all — a state nothing previously made the author account for, so the generated page
+// read undefined context on a path a user reaches by clicking. `directEntry` is that answer.
+test('a page with pageInput must declare directEntry (it is sitemap-placed, so nav entry supplies nothing)', () => {
+  const s = base();
+  s.pages = [
+    { key: 'ov', name: 'Overview', source: { kind: 'intent' }, navigatesTo: [{ targetKey: 'detail', data: { orderId: 'string' } }] },
+    { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string' } } },
+  ];
+  s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' }, { page: 'detail', title: 'Detail' });
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false, 'pageInput without directEntry must be rejected');
+  assert.ok(r.errors.some((e) => /declares pageInput .* but no directEntry/.test(e)), JSON.stringify(r.errors));
+
+  // Supplying it makes the same spec valid.
+  s.pages[1].directEntry = { behavior: 'selector' };
+  assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
+});
+
+test('directEntry.behavior is constrained to the behaviours the generator can actually implement', () => {
+  const s = base();
+  s.pages = [
+    { key: 'ov', name: 'Overview', source: { kind: 'intent' }, navigatesTo: [{ targetKey: 'detail', data: { orderId: 'string' } }] },
+    { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string' } }, directEntry: { behavior: 'shrug' } },
+  ];
+  s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' }, { page: 'detail', title: 'Detail' });
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.ok(r.errors.some((e) => /directEntry.behavior must be one of/.test(e)), JSON.stringify(r.errors));
+
+  for (const behavior of ['selector', 'emptyState']) {
+    s.pages[1].directEntry = { behavior };
+    assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, behavior + ': ' + JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
+  }
+});
+
+// The input-contract trace. An input nothing supplies is either a typo or a page that can only ever
+// be entered directly; both produce a page reading a key no caller ever sets.
+test('every pageInput key must be produced by an incoming navigatesTo edge', () => {
+  const s = base();
+  s.pages = [
+    { key: 'ov', name: 'Overview', source: { kind: 'intent' }, navigatesTo: [{ targetKey: 'detail', data: { orderId: 'string' } }] },
+    // `customerId` is declared but no page navigates with it.
+    { key: 'detail', name: 'Detail', source: { kind: 'intent' }, pageInput: { data: { orderId: 'string', customerId: 'string' } }, directEntry: { behavior: 'selector' } },
+  ];
+  s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' }, { page: 'detail', title: 'Detail' });
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /'customerId'.*no page navigates to it with that data/.test(e)), JSON.stringify(r.errors));
+
+  // Producing it on the edge resolves it.
+  s.pages[0].navigatesTo[0].data.customerId = 'string';
+  assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
+});
+
+test('a page with no pageInput needs no directEntry', () => {
+  const s = base();
+  s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'intent' } }];
+  s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' });
+  assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
+});
+
+// The modern ("new look") shell is a per-app SETTING, not an appmodule column — `navigationtype` is
+// Single/Multi *session* and unrelated. Boolean-only, because a string "false" is truthy in JS and
+// would turn the new look ON for an author who wrote it to stay off.
+test('app.newLook must be a boolean', () => {
+  const s = base();
+  s.app.newLook = 'false';
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.ok(r.errors.some((e) => /app.newLook must be a boolean/.test(e)), JSON.stringify(r.errors));
+
+  for (const v of [true, false]) {
+    const ok = base();
+    ok.app.newLook = v;
+    assert.strictEqual(validateAppSpec(ok, { profile: 'plan' }).ok, true, String(v) + ': ' + JSON.stringify(validateAppSpec(ok, { profile: 'plan' }).errors));
+  }
+  // Absent is fine — the new look is opt-in.
+  assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true);
 });
