@@ -177,6 +177,19 @@ These apply **only** once section 1 has authorized instrumentation. They never
 justify adding telemetry on their own.
 
 - **Destructure it with the other props:** `const { dataApi, pageInput, appInsights } = props;`
+- **Call it straight off the prop — never wrap it in a `useRef`.** Read
+  `appInsights?.trackEvent(...)` directly from the destructured value at the call
+  site. Do **not** mirror it into a ref (`const telemetryRef = useRef(appInsights)`)
+  to "keep the latest reference" for an effect that omits it from its dependency
+  array. Telemetry is fire-and-forget, so the value captured by that render's
+  closure is always good enough — there is no stale-reference bug to defend
+  against. The ref is pure ceremony, and the usual way of maintaining it
+  (`telemetryRef.current = appInsights` in the component body) is a
+  **mutation during render**, which React does not permit. For the same reason,
+  do **not** add `appInsights` to a `useEffect` dependency array: the host hands a
+  new props object on every render, so depending on it re-fires the effect
+  (exactly the failure mode Rule 15 exists to prevent). Depend on the readiness
+  boolean as usual and let the effect close over `appInsights`.
 - **The prop is optional and is frequently absent** (older runtimes, the authoring
   and preview surfaces, the feature turned off). **Always** call through optional
   chaining - `appInsights?.trackEvent(...)`. Never store it in a non-optional
@@ -345,6 +358,23 @@ try {
 // BAD: non-optional access crashes wherever the prop is absent
 // (preview, older runtimes, feature off).
 props.appInsights.trackEvent('Saved');
+
+// BAD: mirroring the prop into a ref "so the effect sees the latest one".
+// Telemetry is fire-and-forget, so closing over the prop is already correct —
+// and assigning to `.current` in the component body mutates during render.
+const telemetryRef = useRef(appInsights);
+telemetryRef.current = appInsights;          // mutation during render
+useEffect(() => {
+    telemetryRef.current?.startTrack('OrdersLoad');
+}, [dataReady]);
+
+// GOOD: call the destructured prop directly; the effect closes over it.
+useEffect(() => {
+    appInsights?.startTrack('OrdersLoad');
+    // Do NOT add `appInsights` here — the host hands a new props object every
+    // render, so depending on it re-fires the effect (Rule 15).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [dataReady]);
 
 // BAD: reporting an expected empty state as an error. Zero rows is a normal outcome.
 if (rows.length === 0) {
