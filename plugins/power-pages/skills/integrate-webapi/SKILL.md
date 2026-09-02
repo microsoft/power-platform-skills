@@ -104,7 +104,7 @@ Inspect `$ARGUMENTS`. If the text begins with the sentinel `[AI-READ-ONLY]`, the
 - Skip the Phase 3 interactive table confirmation and use the provided `tables` list verbatim (user has already confirmed in the caller).
 - The Phase 4.1 `webapi-integration` prompt restricts operations to **read-only** (list + get by id).
 - The Phase 6 Path B agent prompts apply the hardened AI-only posture documented in each agent's "AI-only read mode" section.
-- The Phase 6 Path A script invocations use `--read` only for table permissions and omit primary keys / lookup write forms from `Webapi/<table>/fields`.
+- The Phase 6 Path A script invocations use `--read` only for table permissions. Field settings still include each required attribute's LogicalName and SchemaName; lookups also include `_<LogicalName>_value`.
 - No `AskUserQuestion` prompts are issued for Phase 3 or Phase 6.2 — the caller owns those decisions.
 - **Defer all git commits to the caller.** Skip Phase 4.4 (`git add -A && git commit`) and Phase 6.5 (permissions/settings commit) entirely. The caller is batching changes into one or two commits at orchestrator-defined milestones; an unprompted commit here turns one logical change into three. Print the file lists you would have committed so the caller can reproduce them.
 - **Suppress the end-of-skill deploy prompt.** Skip Phase 6.1 (deploy-now ask when `.powerpages-site` is missing — the caller has already gated on this), Phase 7.3 (final deploy ask), and Phase 7.4 (post-deploy notes). The caller owns the single end-of-orchestration deploy decision; nesting deploy prompts inside the delegation gives the user 2–3 redundant asks per run. Return the integration summary (Phase 7.2) without trailing deploy/notes.
@@ -399,9 +399,9 @@ If the user chooses to upload an existing diagram:
 2. Parse the diagram into structured format:
    - **Web roles**: Match with existing roles from `.powerpages-site/web-roles/` by name to get their UUIDs
    - **Table permissions**: Permission name, table logical name, web role UUID(s), scope, CRUD flags (read/create/write/delete/append/appendto), parent permission and relationship name (if Parent scope)
-   - **Site settings**: `Webapi/<table>/enabled` and `Webapi/<table>/fields` — **CRITICAL: fields must list every required column LogicalName explicitly, including columns used by aggregate OData queries**
+   - **Site settings**: `Webapi/<table>/enabled` and `Webapi/<table>/fields` — **CRITICAL: fields must follow `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`, including both metadata names and lookup read properties**
 
-3. **Validate column names against Dataverse** — Even when using a user-provided diagram, query Dataverse for each table's column LogicalNames and verify that every column in the `Webapi/<table>/fields` values uses the exact Dataverse LogicalName (case-sensitive). Correct any mismatches before creating files.
+3. **Validate column names against Dataverse** — Even when using a user-provided diagram, query Dataverse for each table's `LogicalName`/`SchemaName` pairs. Expand every required attribute according to `${PLUGIN_ROOT}/references/webapi-field-allowlist.md` before creating files.
 
 4. Cross-check with existing configuration in `.powerpages-site/` to identify which permissions and site settings are new vs. already exist.
 
@@ -453,7 +453,7 @@ Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${PLUGIN
 
 **Prompt (default — full CRUD):**
 
-> "Analyze this Power Pages code site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalNames. Propose site settings with case-sensitive validated column names. After I approve the plan, create the site setting YAML files using the deterministic scripts."
+> "Analyze this Power Pages code site and propose Web API site settings. The following tables have been integrated with Web API: [list of tables integrated in Phase 4]. Check for existing site settings and query Dataverse for exact column LogicalName/SchemaName pairs. Apply `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`. After I approve the plan, create the site setting YAML files using the deterministic scripts."
 
 **Prompt (AI-only read mode active):** append to the default prompt:
 
@@ -461,12 +461,12 @@ Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${PLUGIN
 >
 > - `Webapi/<table>/fields` must contain **exactly** the columns required by every site call against the table. Start with the primary's `$select` / `$expand`; if the table is also used by an aggregate query, add its grouping keys, aggregate inputs, filter columns, and ordered columns.
 > - Do **not** include the primary key column. The summarization endpoint carries the record id in the URL path; Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid`.
-> - For lookup columns, include **only** the `_<col>_value` OData read form. Do NOT add the write form `<col>` unless the same table has non-AI mutation code elsewhere.
-> - Still query Dataverse for exact LogicalNames (case-sensitive) — case mismatches produce 403."
+> - For lookup columns, include the LogicalName, SchemaName, and `_<LogicalName>_value`.
+> - Query Dataverse for both exact metadata names and preserve their casing."
 
 The agent will:
 
-1. Analyze the site, query Dataverse for exact column LogicalNames
+1. Analyze the site and query Dataverse for exact column LogicalName/SchemaName pairs
 2. Cross-validate column names (case-sensitive)
 3. Present the plan via plan mode for user approval
 4. After approval, create all site setting files using `create-site-setting.js`
@@ -535,17 +535,17 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROO
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
-**Important**: The `--value` for every fields setting MUST be an explicit comma-separated list of exact, case-sensitive Dataverse LogicalNames copied from metadata. Wildcard field access is unsupported beginning September 14, 2026. Using incorrect casing or omitting a required column causes 403 Forbidden errors.
+**Important**: The `--value` for every fields setting MUST follow `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`. Include the exact LogicalName and SchemaName for every required attribute; lookups also include `_<LogicalName>_value`. Wildcard field access is unsupported beginning September 14, 2026.
 
 **Aggregate queries**: Include every grouping key, aggregate input, filter column, and ordered column referenced by `$apply` in the explicit fields list.
 
-**Lookup columns**: For every lookup column, include **both** the LogicalName (`cr87b_categoryid`) AND the OData computed attribute (`_cr87b_categoryid_value`) in the fields value. The Power Pages Web API does a literal match — the LogicalName is needed for write operations, the `_..._value` form is needed for read operations (`$select`, `$filter`). Missing either form causes 403 errors.
+**Lookup columns**: For every lookup column, include the LogicalName (`cr87b_categoryid`), SchemaName (`Cr87b_CategoryId`), and OData read property (`_cr87b_categoryid_value`).
 
 **AI-only read mode (Phase 1.6 flag set)**: the fields-value rules tighten:
 
 - Include the exact columns required by every site call against the table. Start with the primary's `$select` / `$expand`; if the table is also used by an aggregate query, add its grouping keys, aggregate inputs, filter columns, and ordered columns.
 - Do NOT include the primary key. The summarization endpoint carries the record id in the URL path; Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid`.
-- For lookup columns, include only the `_<col>_value` read form. Omit the LogicalName write form — no write operations run against these tables in AI mode.
+- For lookup columns, include the LogicalName, SchemaName, and `_<LogicalName>_value` read property.
 - Keep File/Image and aggregate-query columns explicit, adding only the columns the site actually uses.
 
 ### 6.5 Git Commit
@@ -623,7 +623,7 @@ that covers AI-specific concerns (governance hierarchy, runtime version, Bing de
 Otherwise, after deployment (or if skipped), remind the user:
 
 - **Test the API**: Open the deployed site and verify Web API calls work in the browser's Network tab
-- **Check permissions**: If any API call returns 403, verify table permissions and site settings are correct. The most common cause is a column in the request missing from `Webapi/<table>/fields` or not matching the exact case-sensitive Dataverse LogicalName returned by metadata. For aggregate OData (`$apply`, aggregate, grouped totals), verify that every grouping key, aggregate input, filter column, and ordered column is listed explicitly.
+- **Check permissions**: If any API call returns 403, verify table permissions and site settings are correct. Confirm each required attribute has its exact LogicalName and SchemaName from metadata, and each lookup also has `_<LogicalName>_value`. For aggregate OData (`$apply`, aggregate, grouped totals), verify every grouping key, aggregate input, filter column, and ordered column.
 - **Disable innererror in production**: If `Webapi/error/innererror` was enabled for debugging, disable it before going live
 - **Web roles**: Users must be assigned the appropriate web roles to access protected APIs
 

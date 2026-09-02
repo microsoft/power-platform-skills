@@ -501,8 +501,8 @@ Invoke the `Skill` tool for `power-pages:integrate-webapi` with a single prompt:
 >   single end-of-orchestration deploy.
 
 `/integrate-webapi` detects the `[AI-READ-ONLY]` sentinel (its Phase 1.6) and runs its full flow
-with hardened prompts: read-only table permissions, minimal fields list (no PK, only `_<col>_value`
-for lookups), and a read-only service layer. It still presents plan-mode approval prompts to the
+with hardened prompts: read-only table permissions, no unused primary key, LogicalName/SchemaName
+pairs for required attributes, `_<LogicalName>_value` for lookups, and a read-only service layer. It still presents plan-mode approval prompts to the
 user for each architect — this skill does not suppress those.
 
 Wait for `/integrate-webapi` to complete. Re-check the file system:

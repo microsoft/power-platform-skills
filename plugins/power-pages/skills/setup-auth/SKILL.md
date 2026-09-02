@@ -1834,7 +1834,7 @@ Add to `src/services/authService.ts` (keep all related auth/profile logic in one
 |---|---|---|
 | `ProfileContact` | exported interface | Typed contact shape with `contactid` + the 8 editable fields (firstname, lastname, mobilephone, address1_line1, address1_city, address1_stateorprovince, address1_postalcode, address1_country) all typed `string \| null`. **DO NOT include emailaddress1 or middlename** — email is displayed read-only from `useAuth().user.email` (no Web API roundtrip needed for it), and middlename is intentionally excluded from the simple form. |
 | `ProfileUpdate` | exported type alias | `Partial<Omit<ProfileContact, 'contactid'>>` for the PATCH payload |
-| `getMyProfile` | exported async function | Signature: `(contactId: string): Promise<ProfileContact>`. GETs `/_api/contacts({contactId})?$select=contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country` (the `$select` value MUST exactly match the 9-entry list in Phase 8.1's `Webapi/contact/fields` site setting) with `credentials: 'same-origin'`. Throws on non-OK. Returns the parsed JSON. Dev-mode returns a mock object. |
+| `getMyProfile` | exported async function | Signature: `(contactId: string): Promise<ProfileContact>`. GETs `/_api/contacts({contactId})?$select=contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country`. Keep these 9 LogicalNames in `$select`; the fields setting also includes each matching SchemaName. Uses `credentials: 'same-origin'`, throws on non-OK, and returns the parsed JSON. Dev-mode returns a mock object. |
 | `updateMyProfile` | exported async function | Signature: `(contactId: string, payload: ProfileUpdate): Promise<void>`. PATCHes `/_api/contacts({contactId})` with body containing only DEFINED fields (skip `undefined` so partial updates don't blank-out unaffected columns — but DO send `null` for fields the user explicitly cleared). Headers: `Content-Type: application/json`, `If-Match: *`, `__RequestVerificationToken` from `fetchAntiForgeryToken()`. Throws on non-OK with parsed error message. Dev-mode is a no-op success. |
 | `applyContactUpdateLocally` | exported function | Signature: `(payload: ProfileUpdate): void`. Mirrors the saved `firstname` / `lastname` from `payload` back into `window.Microsoft.Dynamic365.Portal.User` (mutating `firstName` / `lastName` properties in place — note the camelCase on the snapshot, lowercase on the payload). Returns early if `window` or `Portal.User` is unavailable. Only mirrors `firstname` and `lastname` — the other fields aren't used by the header. **Without this helper, the header keeps showing the old name after a save until the next full page reload — see the "header refresh after save" requirement in 5.1.9.b.** |
 
@@ -2583,10 +2583,10 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
 
 When the user opted into the profile page (Phase 2.1), enable Web API on the `contact` entity. These settings tell the Power Pages server which entity + fields are reachable via `/_api/{entity}` so the SPA's `getMyProfile` and `updateMyProfile` can read and write the user's contact record.
 
-> **⚠ MANDATORY value for `Webapi/contact/fields`** — use this complete string verbatim. The executor MUST NOT trim it. All 9 entries must be present so the profile form can read AND write every editable field:
+> **⚠ MANDATORY value for `Webapi/contact/fields`** — use this complete string verbatim. It contains the LogicalName and SchemaName for all 9 required attributes:
 >
 > ```
-> contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country
+> Address1_City,Address1_Country,Address1_Line1,Address1_PostalCode,Address1_StateOrProvince,ContactId,FirstName,LastName,MobilePhone,address1_city,address1_country,address1_line1,address1_postalcode,address1_stateorprovince,contactid,firstname,lastname,mobilephone
 > ```
 >
 > This is `contactid` (for record identification) + the 8 editable fields listed in Phase 2.1 / Phase 5.1.9.b. **`emailaddress1` is NOT in this list** because email is displayed read-only in the Account Details section, sourced from `useAuth().user.email` — no Web API roundtrip needed for it. **`middlename` is NOT in this list** because it's intentionally excluded from the simple form. Skipping any entry from the list above causes the corresponding form input to silently fail with a 403 from the Web API.
@@ -2600,18 +2600,17 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --description "Enable Web API access for contact table (profile page)" \
   --type boolean
 
-# Allowed fields — USE THE EXACT VALUE BELOW (9 entries, all lowercase)
-# Case-sensitive: PascalCase or Title Case produces 403 even if the column exists
+# Allowed fields: exact LogicalName and SchemaName pairs for 9 attributes
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "Webapi/contact/fields" \
-  --value "contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country" \
+  --value "Address1_City,Address1_Country,Address1_Line1,Address1_PostalCode,Address1_StateOrProvince,ContactId,FirstName,LastName,MobilePhone,address1_city,address1_country,address1_line1,address1_postalcode,address1_stateorprovince,contactid,firstname,lastname,mobilephone" \
   --description "Fields allowed via Web API for profile page (read + write)"
 ```
 
-> **Field name format**: all entries in the `fields` value MUST be lowercase Dataverse LogicalNames. The Web API does case-sensitive literal matching — `FirstName` or `Firstname` will produce a 403 Forbidden response from the server even though the column exists. The list above is correct.
+> **Field name format**: follow `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`. The list above contains the exact Dataverse LogicalName and SchemaName for each required attribute.
 >
-> **Customizing the field list LATER**: if the user has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value AND add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx` AFTER the skill finishes. The skill itself MUST ship with exactly the 9 entries above — do not add or remove entries during scaffolding.
+> **Customizing the field list LATER**: if the user has custom contact columns they want to expose on the profile page (e.g., `cr123_jobtitle`), they can extend this `fields` value with both metadata names and add the matching field to the `ProfileContact` interface + form in `UserProfile.tsx` AFTER the skill finishes. The skill itself MUST ship with the 18 entries above.
 
 #### 8.1.x Create Table Permission for Contact (When INCLUDE_PROFILE_PAGE = true)
 

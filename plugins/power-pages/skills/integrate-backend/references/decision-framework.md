@@ -65,8 +65,8 @@ Use this framework to recommend the right backend integration approach for a Pow
 **Relationship to Web API:** AI Web API items for a given Dataverse table should be ordered **after** any regular Web API item for the same table (Web API sets up Layer 1/2; AI adds Layer 3 on top). Search Summary items can stand alone since they have no per-table prereqs.
 
 **Field-list drift caveat (when both items exist for the same table):** if `/integrate-webapi`
-has already configured `Webapi/<table>/fields` for full CRUD (including primary key and
-lookup write forms), the follow-up `/add-ai-webapi` run detects Layer 1/2 as `ready` and
+has already configured `Webapi/<table>/fields` for full CRUD (including the primary key),
+the follow-up `/add-ai-webapi` run detects Layer 1/2 as `ready` and
 skips its delegation — leaving the broader CRUD allowlist in place. The AI surface still
 works, but the fields list is broader than AI-only mode would produce. The
 `ai-webapi-settings-architect` agent flags this as an advisory in its plan; the user can

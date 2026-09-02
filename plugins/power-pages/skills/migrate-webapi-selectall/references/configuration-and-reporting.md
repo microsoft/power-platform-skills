@@ -144,6 +144,8 @@ The wildcard migration is complete only when:
 - every original wildcard has an approved explicit replacement;
 - every candidate source `/_api/` occurrence has a resolved disposition;
 - every proposed field has source or contract evidence and schema validation;
+- every required attribute has its exact LogicalName and SchemaName;
+- every required lookup also has `_<LogicalName>_value`;
 - every normal table GET has an explicit `$select`;
 - a fresh independent pass finds zero wildcard field settings;
 - the report includes every wildcard and already-explicit setting;

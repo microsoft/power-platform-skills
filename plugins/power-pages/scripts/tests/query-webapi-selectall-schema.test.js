@@ -20,6 +20,7 @@ const TABLE_ENTITY_SET_NAME_2 = 'table_2_set';
 const TABLE_PRIMARY_ID_2 = 'column_name_2_id';
 const COLUMN_NAME_1 = 'column_name_1';
 const LOOKUP_COLUMN_NAME_1 = 'lookup_column_name_1';
+const LOOKUP_SCHEMA_NAME_1 = 'Lookup_Column_Name_1';
 const RELATIONSHIP_NAME_1 = 'relationship_1';
 
 test('builds bounded metadata URLs for one table', () => {
@@ -32,6 +33,7 @@ test('builds bounded metadata URLs for one table', () => {
     `EntityDefinitions(LogicalName='${TABLE_LOGICAL_NAME_1}')/Attributes`
   ));
   assert.match(urls.attributes, /%24select=/);
+  assert.match(urls.attributes, /SchemaName/);
   assert.match(urls.manyToMany, /ManyToManyRelationships/);
 });
 
@@ -126,6 +128,7 @@ test('normalizes attributes and navigation metadata', () => {
     },
     [{
       LogicalName: LOOKUP_COLUMN_NAME_1,
+      SchemaName: LOOKUP_SCHEMA_NAME_1,
       AttributeType: 'Lookup',
       IsValidForRead: true,
       IsValidForCreate: { Value: true },
@@ -153,6 +156,7 @@ test('normalizes attributes and navigation metadata', () => {
     relationship: RELATIONSHIP_NAME_1,
   }]);
   assert.equal(normalized.attributes[0].isValidForCreate, true);
+  assert.equal(normalized.attributes[0].schemaName, LOOKUP_SCHEMA_NAME_1);
 });
 
 test('queries only resolved requested tables', async () => {
@@ -173,6 +177,7 @@ test('queries only resolved requested tables', async () => {
     if (/\/Attributes\?/.test(url)) {
       return [{
         LogicalName: COLUMN_NAME_1,
+        SchemaName: 'Column_Name_1',
         AttributeType: 'String',
         IsValidForRead: true,
         IsValidForCreate: true,
@@ -193,6 +198,7 @@ test('queries only resolved requested tables', async () => {
 
   assert.equal(result.tables.length, 1);
   assert.equal(result.tables[0].logicalName, TABLE_LOGICAL_NAME_1);
+  assert.equal(result.tables[0].attributes[0].schemaName, 'Column_Name_1');
   assert.equal(calls.filter(url => /\/Attributes\?/.test(url)).length, 1);
 });
 

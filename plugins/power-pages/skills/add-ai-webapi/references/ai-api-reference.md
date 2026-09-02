@@ -36,7 +36,7 @@ of those rules do **not** apply here:
 | Require `If-Match: *` | That header is for PATCH; not applicable. |
 | Table permissions should grant `create: true` / `write: true` for POST callers | AI callers need **`read: true` only**. |
 | `Webapi/<table>/fields` should include the primary key for CRUD | Primary key isn't needed — the record id is in the URL path, not a selected column. MS's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid`. |
-| Lookup columns need both the LogicalName and `_<col>_value` forms | Only the `_<col>_value` read form is needed. The LogicalName write form is only required if the same table has non-AI mutation code elsewhere. |
+| Lookup fields can list only the property used by `$select` | The fields setting needs the lookup's LogicalName, SchemaName, and `_<LogicalName>_value`, even for a read-only AI call. |
 
 **Runtime auth path.** When a request hits `/_api/summarization/data/v1.0/<table>(<id>)?...`, the
 Power Pages runtime walks this sequence before the generative layer sees any content:

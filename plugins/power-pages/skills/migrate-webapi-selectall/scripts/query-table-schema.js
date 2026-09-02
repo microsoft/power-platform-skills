@@ -147,7 +147,7 @@ function buildMetadataUrls(environmentUrl, logicalName) {
     attributes: metadataUrl(
       environmentUrl,
       `${resource}/Attributes`,
-      'LogicalName,AttributeType,IsValidForRead,IsValidForCreate,IsValidForUpdate'
+      'LogicalName,SchemaName,AttributeType,IsValidForRead,IsValidForCreate,IsValidForUpdate'
     ),
     oneToMany: metadataUrl(
       environmentUrl,
@@ -228,6 +228,7 @@ function normalizeTableMetadata(definition, attributes, relationships, manyToMan
     .filter(attribute => attribute.LogicalName)
     .map(attribute => ({
       logicalName: attribute.LogicalName,
+      schemaName: attribute.SchemaName || null,
       attributeType: attribute.AttributeType || null,
       isValidForRead: booleanValue(attribute.IsValidForRead),
       isValidForCreate: booleanValue(attribute.IsValidForCreate),

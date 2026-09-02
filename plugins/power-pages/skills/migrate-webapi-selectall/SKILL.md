@@ -284,15 +284,18 @@ For each wildcard setting:
 1. Union the proven requirements from every call site that reaches that
    logical table within the applicable site behavior.
 2. Validate each proposed name against the schema package.
-3. Link every proposed column to source path and line or a user-confirmed
+3. Expand each required attribute to its LogicalName and SchemaName. For a
+   lookup, also add `_<LogicalName>_value`, following
+   `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`.
+4. Link every proposed column to source path and line or a user-confirmed
    external contract.
-4. Produce the exact replacement:
+5. Produce the exact replacement:
 
    ```text
    Webapi/<table>/fields = <column-name-1>,<column-name-2>,<column-name-3>
    ```
 
-5. Keep the proposal unresolved if it is empty or any evidence is incomplete.
+6. Keep the proposal unresolved if it is empty or any evidence is incomplete.
 
 For each already-explicit setting:
 
@@ -360,7 +363,8 @@ partial configuration set and do not perform a broad rollback over user work.
 3. Compare each migrated value with its approved exact replacement.
 4. Reopen every call site and replay the coverage analysis:
    - mapped table and method remain correct;
-   - required setting columns are present;
+   - every required attribute has its LogicalName and SchemaName;
+   - every required lookup also has `_<LogicalName>_value`;
    - normal record GETs use explicit `$select`;
    - expanded, lookup, write, FetchXML, file, and image columns remain covered.
 5. Run the existing project build for SPA sites. For traditional sites,

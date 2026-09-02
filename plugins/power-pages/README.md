@@ -133,7 +133,7 @@ The skill first scans your codebase to find components using mock data, placehol
 - TypeScript entity types and domain mappers per table
 - CRUD service layer per table using `/_api/` endpoints with dual token headers and `@odata.bind` for lookups
 - Framework-specific patterns: React hooks, Vue composables, Angular injectable services
-- Table permission YAML files and site setting YAML files with explicit validated column lists
+- Table permission YAML files and site setting YAML files with each required column's validated Dataverse LogicalName and SchemaName
 
 **What gets updated:**
 
@@ -146,7 +146,7 @@ The skill first scans your codebase to find components using mock data, placehol
 
 Integrates Power Pages generative-AI summarization APIs into a Single Page Application (SPA) site: the **Search Summary API** (`/_api/search/v1.0/summary`) and the **Data Summarization API** (`/_api/summarization/data/v1.0/...`). Data Summarization can be configured for any record-detail or list page; Microsoft documents one ready-made recipe for a Copilot-style summary on a support-case detail page (`incident` table with `$select=description,title` and the portal-comments expand) — that recipe is available as a maker pick, not an automatic recommendation.
 
-The skill scans your code for search pages and record-detail / list pages and proposes which APIs to wire where. For any Data Summarization target that is missing its Web API prerequisites (Layer 1 `Webapi/<table>/*` settings, Layer 2 table permissions, or the shared `powerPagesApi.ts` client), the skill delegates to `/integrate-webapi` in an **AI-only read mode** — read-only permissions, minimal fields list (no primary key, only `_<col>_value` for lookups) — and to `/create-webroles` if no web role exists yet. Once Layer 1/2 is in place, the skill spawns the **AI Web API Integration** agent sequentially per target to create a single summarization service (`fetchSearchSummary`, `fetchDataSummary`) with correct CSRF handling, a framework-idiomatic wrapper, and real UI call sites. Finally, the **AI Web API Settings Architect** is invoked for Layer 3 to propose the `Summarization/Data/Enable` toggle and per-prompt `Summarization/prompt/<identifier>` settings.
+The skill scans your code for search pages and record-detail / list pages and proposes which APIs to wire where. For any Data Summarization target that is missing its Web API prerequisites (Layer 1 `Webapi/<table>/*` settings, Layer 2 table permissions, or the shared `powerPagesApi.ts` client), the skill delegates to `/integrate-webapi` in an **AI-only read mode** with read-only permissions and explicit field metadata pairs. Lookup fields also include `_<LogicalName>_value`. It delegates to `/create-webroles` if no web role exists yet. Once Layer 1/2 is in place, the skill spawns the **AI Web API Integration** agent sequentially per target to create a single summarization service (`fetchSearchSummary`, `fetchDataSummary`) with correct CSRF handling, a framework-idiomatic wrapper, and real UI call sites. Finally, the **AI Web API Settings Architect** is invoked for Layer 3 to propose the `Summarization/Data/Enable` toggle and per-prompt `Summarization/prompt/<identifier>` settings.
 
 **What gets created:**
 

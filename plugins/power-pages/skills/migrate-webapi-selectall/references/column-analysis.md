@@ -115,5 +115,11 @@ proven columns across all reads and writes. Every proposed column needs:
 - the operation requiring it;
 - its exact metadata-canonical name.
 
+Then apply `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`: every required
+attribute contributes its LogicalName and SchemaName, and every lookup also
+contributes `_<LogicalName>_value`. Keep request projections separate; the
+metadata pair expansion applies to the fields setting, not automatically to
+`$select`.
+
 Do not add every metadata attribute, speculative identifiers, unrelated
 server-side fields, or columns owned by expanded target tables.

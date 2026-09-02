@@ -3287,7 +3287,7 @@ The page is intentionally **simple by default**:
 ### Server-side requirements (set by the skill in Phase 8.1)
 
 - `Webapi/contact/enabled = true`
-- `Webapi/contact/fields = contactid,firstname,lastname,mobilephone,address1_line1,address1_city,address1_stateorprovince,address1_postalcode,address1_country` (9 entries, all lowercase Dataverse LogicalNames; mixed casing causes 403). `emailaddress1` is intentionally omitted because email is read-only in the UI; `middlename` is omitted to keep the form simple.
+- `Webapi/contact/fields = Address1_City,Address1_Country,Address1_Line1,Address1_PostalCode,Address1_StateOrProvince,ContactId,FirstName,LastName,MobilePhone,address1_city,address1_country,address1_line1,address1_postalcode,address1_stateorprovince,contactid,firstname,lastname,mobilephone` (LogicalName and SchemaName pairs for 9 attributes). `emailaddress1` is intentionally omitted because email is read-only in the UI; `middlename` is omitted to keep the form simple.
 - Table permission `My Profile - Edit Own Contact`: `entitylogicalname: contact`, `scope: 756150004` (Self), `read: true`, `write: true`, associated with the Authenticated Users web role
 
 Self scope ensures a user can read and update ONLY their own contact record. Even a crafted `PATCH /_api/contacts({someone-elses-id})` request from DevTools returns 403.
