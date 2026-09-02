@@ -68,6 +68,8 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 
 ### Step 0 — Resume check + fresh-template gate
 
+**Telemetry checkpoint: `template_gate`**
+
 If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing directory), check whether `<working_dir>/memory-bank.md` exists.
 
 - **Bank present** → read it. Identify the highest-numbered completed step. Inform the user:
@@ -96,6 +98,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
 `app-identity.js` mints `app.json` `expo.extra.telemetry.appInstanceId` — a random per-project ID that lets usage telemetry tell this app apart from other apps built in the same session, and recognize it again in later sessions. It is idempotent, so a resume or re-run keeps the original ID. It contains no app name, path, or environment data. Commit it: it is the app's identity, not a per-machine cache.
 
 ### Step 1 — Prerequisites
+
+**Telemetry checkpoint: `prerequisites`**
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
 
@@ -431,6 +435,8 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
 
 ### Step 3 — Plan (planner agent + 4 approval gates)
+
+**Telemetry checkpoint: `planning`**
 
 First, create the working and planning-artifact directories:
 
@@ -874,6 +880,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
 If the resolved environment doesn't match what the planner used in Step 3, ask the user for the intended environment ID and re-run `resolve-environment.js`. Capture the **environment ID** for Step 6.
 
 ### Step 5 — Prepare existing template
+
+**Telemetry checkpoint: `scaffold`**
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
 
@@ -1416,6 +1424,8 @@ Print:
 Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.json` only.
 
 ### Step 8 — Apply data model
+
+**Telemetry checkpoint: `data_model`**
 
 If `<dataverse_planning_mode> = connector-only`, verify the approved
 `## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`
@@ -2105,6 +2115,8 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 ### Step 11 — Build screens (parallel)
 
+**Telemetry checkpoint: `screens`**
+
 **Build mode is NEVER a user-facing question.** Do not ask "Build mode? parallel/inline" or any variant. The orchestrator decides automatically per the preflight below.
 
 **Quality rule — screen count/time is NOT a fallback trigger.** If `Task` can spawn `mobile-app:screen-builder`, always use screen-builder waves, even for 10+ screens. Do NOT write "given the scale/time, I'll write screens inline" or any equivalent shortcut. Screen-builder agents carry the quality checklist, domain-pattern rules, resolved-import discipline, safe-area/contrast/a11y checks, and per-screen return protocol. Inline mode exists only for host/tooling failure, not for convenience.
@@ -2271,6 +2283,8 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 ---
 
 ### Step 12 — Start dev server (background)
+
+**Telemetry checkpoint: `app_ready`**
 
 **Print before starting:**
 > "→ [Step 12/13] Launching Metro dev server in the background so you can scan the QR."
