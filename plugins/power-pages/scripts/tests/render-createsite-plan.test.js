@@ -68,6 +68,10 @@ const ENGLISH_LABELS = {
     title: 'Deployment & Review',
     description: 'Verification checklist and deployment options',
     verify: 'Before handoff — verify',
+    agentChecks: 'Agent verification',
+    agentChecksDescription: 'The agent will run and report these checks before handoff.',
+    makerReview: 'Maker review',
+    makerReviewDescription: 'Review these judgment-based items in the live preview.',
     options: 'Deployment options',
     recommended: 'Recommended',
   },
@@ -125,10 +129,16 @@ const SAMPLE_DATA = {
     { path: '/', page: 'Home' },
     { path: '/directory', page: 'Directory' },
   ],
-  REVIEW_DATA: [
-    'All pages load without console errors',
-    'Navigation links work and highlight the active page',
-  ],
+  REVIEW_DATA: {
+    agentChecks: [
+      'All pages load without console errors',
+      'Logical CSS and mixed-direction boundaries pass the bidirectional-readiness audit',
+    ],
+    makerReview: [
+      'Language and terminology are appropriate',
+      'Visual hierarchy feels natural in both directions',
+    ],
+  },
   DEPLOYMENT_DATA: [
     { title: 'Deploy now to Power Pages', description: 'Runs /deploy-site to publish.', recommended: true },
     { title: 'Skip for now', description: 'Continue locally, deploy later.' },
@@ -159,6 +169,10 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /#1E3A5F/);
   assert.match(html, /Directory/);
   assert.match(html, /Navbar/);
+  assert.match(html, /"agentChecks":\["All pages load without console errors"/);
+  assert.match(html, /"makerReview":\["Language and terminology are appropriate"/);
+  assert.match(html, /Agent verification/);
+  assert.match(html, /Maker review/);
   assert.match(html, /Deploy now to Power Pages/);
   assert.match(html, /<img class="logo" src="\.\/power-pages-icon\.png" alt="Power Pages" \/>/);
 
@@ -209,9 +223,20 @@ test('render-createsite-plan renders localized LTR labels and locale metadata', 
         title: 'Resumen',
         description: 'Plan de implementación para {siteName}',
       },
+      deployment: {
+        ...ENGLISH_LABELS.deployment,
+        agentChecks: 'Verificación del agente',
+        agentChecksDescription: 'El agente ejecutará e informará estas comprobaciones.',
+        makerReview: 'Revisión del creador',
+        makerReviewDescription: 'Revise estos elementos de criterio en la vista previa.',
+      },
       footer: { aiWarning: 'El contenido generado por IA puede ser incorrecto' },
     },
     SUMMARY: 'Un portal interno para consultores de Contoso.',
+    REVIEW_DATA: {
+      agentChecks: ['La dirección del documento coincide con la configuración regional'],
+      makerReview: ['La jerarquía visual resulta natural'],
+    },
   };
 
   const result = spawnSync(
@@ -227,6 +252,10 @@ test('render-createsite-plan renders localized LTR labels and locale metadata', 
   assert.match(html, /"overview":"Resumen"/);
   assert.match(html, /Plan de implementación para \{siteName\}/);
   assert.match(html, /Un portal interno para consultores de Contoso/);
+  assert.match(html, /"agentChecks":"Verificación del agente"/);
+  assert.match(html, /"makerReview":"Revisión del creador"/);
+  assert.match(html, /La dirección del documento coincide/);
+  assert.match(html, /La jerarquía visual resulta natural/);
   assert.match(html, /React/);
   assert.match(html, /--color-primary/);
   assert.match(html, /"route":"\/directory"/);
@@ -256,7 +285,18 @@ test('render-createsite-plan renders RTL metadata and direction-safe layout', ()
         title: 'نظرة عامة',
         description: 'خطة التنفيذ لـ {siteName}',
       },
+      deployment: {
+        ...ENGLISH_LABELS.deployment,
+        agentChecks: 'تحقق الوكيل',
+        agentChecksDescription: 'سيقوم الوكيل بتنفيذ هذه الفحوصات والإبلاغ عنها.',
+        makerReview: 'مراجعة المنشئ',
+        makerReviewDescription: 'راجع عناصر الحكم هذه في المعاينة المباشرة.',
+      },
       footer: { aiWarning: 'قد يكون المحتوى الذي تم إنشاؤه بواسطة الذكاء الاصطناعي غير صحيح' },
+    },
+    REVIEW_DATA: {
+      agentChecks: ['يتطابق اتجاه المستند مع الإعدادات المحلية'],
+      makerReview: ['يبدو التسلسل الهرمي المرئي طبيعياً'],
     },
   };
 
@@ -270,6 +310,8 @@ test('render-createsite-plan renders RTL metadata and direction-safe layout', ()
   const html = fs.readFileSync(outputPath, 'utf8');
   assert.match(html, /<html lang="ar-SA" dir="rtl">/);
   assert.match(html, /"overview":"نظرة عامة"/);
+  assert.match(html, /"agentChecks":"تحقق الوكيل"/);
+  assert.match(html, /"makerReview":"مراجعة المنشئ"/);
   assert.match(html, /border-inline-start/);
   assert.match(html, /border-inline-end/);
   assert.match(html, /padding-inline-start/);
@@ -279,6 +321,8 @@ test('render-createsite-plan renders RTL metadata and direction-safe layout', ()
     /(?:border|padding|margin)-(?:left|right)|text-align:\s*(?:left|right)|(?:^|[;{])(?:left|right):/m
   );
   assert.match(html, /\.page-route,[^{]+\{direction:ltr;unicode-bidi:isolate;\}/);
+  assert.match(html, /id="agentChecksContainer"/);
+  assert.match(html, /id="makerReviewContainer"/);
 });
 
 test('render-createsite-plan escapes string placeholders used in HTML text contexts', () => {
@@ -394,6 +438,10 @@ test('render-createsite-plan escapes </script> and < inside JSON data to prevent
         components: ['OK'],
       },
     ],
+    REVIEW_DATA: {
+      agentChecks: ['</script><script>window.__reviewPwned=1;</script>'],
+      makerReview: ['" onmouseover="window.__makerPwned=1'],
+    },
   };
 
   const result = spawnSync(
@@ -417,6 +465,10 @@ test('render-createsite-plan escapes </script> and < inside JSON data to prevent
   assert.ok(
     !html.includes('</script><script>window.__labelPwned=1;</script>'),
     'rendered HTML leaks a literal </script> from PLAN_LABELS'
+  );
+  assert.ok(
+    !html.includes('</script><script>window.__reviewPwned=1;</script>'),
+    'rendered HTML leaks a literal </script> from REVIEW_DATA'
   );
   assert.doesNotMatch(html, /data-recommended-label="[^"]*onmouseover=/);
   assert.match(html, /"text":"Summary with \\u003c\/script>\\u003cscript>window\.__summaryPwned=1;\\u003c\/script>/);
@@ -443,6 +495,47 @@ test('render-createsite-plan rejects missing localized labels', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /PLAN_LABELS is missing localized values/);
   assert.match(result.stderr, /footer\.aiWarning/);
+  assert.equal(fs.existsSync(outputPath), false);
+});
+
+test('render-createsite-plan rejects the legacy flat review checklist', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const legacy = {
+    ...SAMPLE_DATA,
+    REVIEW_DATA: ['All pages load without console errors'],
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(legacy)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /REVIEW_DATA must be an object with agentChecks and makerReview arrays/);
+  assert.equal(fs.existsSync(outputPath), false);
+});
+
+test('render-createsite-plan requires both review responsibility groups', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const missingMakerReview = {
+    ...SAMPLE_DATA,
+    REVIEW_DATA: {
+      agentChecks: ['Automated checks pass'],
+      makerReview: [],
+    },
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(missingMakerReview)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires non-empty string arrays: makerReview/);
   assert.equal(fs.existsSync(outputPath), false);
 });
 

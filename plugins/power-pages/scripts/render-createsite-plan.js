@@ -105,6 +105,10 @@ const requiredLabelPaths = [
   'deployment.title',
   'deployment.description',
   'deployment.verify',
+  'deployment.agentChecks',
+  'deployment.agentChecksDescription',
+  'deployment.makerReview',
+  'deployment.makerReviewDescription',
   'deployment.options',
   'deployment.recommended',
   'common.noneSpecified',
@@ -136,6 +140,21 @@ function validatePlanData(dataObject) {
     return [
       `SITE_DIRECTION "${dataObject.SITE_DIRECTION}" does not match ` +
       `${locale.locale}, which resolves to "${locale.direction}".`,
+    ];
+  }
+
+  if (!dataObject.REVIEW_DATA || Array.isArray(dataObject.REVIEW_DATA) ||
+      typeof dataObject.REVIEW_DATA !== 'object') {
+    return ['REVIEW_DATA must be an object with agentChecks and makerReview arrays.'];
+  }
+  const invalidReviewGroups = ['agentChecks', 'makerReview'].filter((group) => {
+    const entries = dataObject.REVIEW_DATA[group];
+    return !Array.isArray(entries) || !entries.length ||
+      entries.some((entry) => typeof entry !== 'string' || !entry.trim());
+  });
+  if (invalidReviewGroups.length) {
+    return [
+      `REVIEW_DATA requires non-empty string arrays: ${invalidReviewGroups.join(', ')}`,
     ];
   }
 

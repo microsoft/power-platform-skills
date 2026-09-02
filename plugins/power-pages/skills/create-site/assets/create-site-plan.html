@@ -104,6 +104,16 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .checklist-item{display:flex;align-items:flex-start;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);font-size:13px;color:var(--text);}
 .checklist-item:last-child{border-bottom:none;}
 .checklist-check{flex-shrink:0;width:18px;height:18px;border:1.5px solid var(--border-light);border-radius:4px;margin-top:1px;}
+.review-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;}
+.review-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-4);}
+.review-card-head{padding:16px 18px;border-bottom:1px solid var(--border);background:var(--surface2);}
+.review-card-title{font-size:14px;font-weight:700;color:var(--text-bright);}
+.review-card-desc{font-size:12px;color:var(--text-dim);margin-block-start:3px;line-height:1.5;}
+.review-card-agent{border-block-start:3px solid var(--accent);}
+.review-card-maker{border-block-start:3px solid var(--purple);}
+.review-card .checklist{border:0;border-radius:0;}
+.review-card-agent .checklist-check{border-color:var(--accent);background:var(--accent-bg);}
+.review-card-maker .checklist-check{border-color:var(--purple);background:var(--purple-bg);}
 .deploy-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
 .deploy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow-4);position:relative;}
 .deploy-card.recommended{border-color:var(--accent-border);background:linear-gradient(135deg,var(--accent-bg),transparent);}
@@ -123,6 +133,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   .content{padding:20px;}
   .type-grid{grid-template-columns:1fr;}
   .stats-grid{grid-template-columns:repeat(3,1fr);}
+  .review-grid{grid-template-columns:1fr;}
 }
 </style>
 </head>
@@ -217,7 +228,22 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       <p class="section-desc" data-label="deployment.description"></p>
 
       <h3 data-label="deployment.verify"></h3>
-      <div class="checklist" id="reviewContainer"></div>
+      <div class="review-grid">
+        <section class="review-card review-card-agent">
+          <div class="review-card-head">
+            <div class="review-card-title" data-label="deployment.agentChecks"></div>
+            <div class="review-card-desc" data-label="deployment.agentChecksDescription"></div>
+          </div>
+          <div class="checklist" id="agentChecksContainer"></div>
+        </section>
+        <section class="review-card review-card-maker">
+          <div class="review-card-head">
+            <div class="review-card-title" data-label="deployment.makerReview"></div>
+            <div class="review-card-desc" data-label="deployment.makerReviewDescription"></div>
+          </div>
+          <div class="checklist" id="makerReviewContainer"></div>
+        </section>
+      </div>
 
       <h3 data-label="deployment.options"></h3>
       <div class="deploy-grid" id="deploymentContainer"></div>
@@ -399,10 +425,14 @@ document.getElementById('routesBody').innerHTML = ROUTES.map(r =>
   '<tr><td class="path">'+esc(r.path)+'</td><td>'+esc(r.page)+'</td></tr>'
 ).join('');
 
-// --- Review checklist ---
-document.getElementById('reviewContainer').innerHTML = REVIEW.map(item =>
-  '<div class="checklist-item"><div class="checklist-check"></div><div>'+esc(item)+'</div></div>'
-).join('');
+// --- Review responsibilities ---
+function renderChecklist(containerId, items) {
+  document.getElementById(containerId).innerHTML = items.map(item =>
+    '<div class="checklist-item"><div class="checklist-check"></div><div>'+esc(item)+'</div></div>'
+  ).join('');
+}
+renderChecklist('agentChecksContainer', REVIEW.agentChecks);
+renderChecklist('makerReviewContainer', REVIEW.makerReview);
 
 // --- Deployment options ---
 document.getElementById('deploymentContainer').innerHTML = DEPLOYMENT.map(d =>

@@ -53,6 +53,8 @@ Scaffolds a complete code site from a framework template, applies your design di
   with a silent `en-US` fallback when the environment cannot be queried
 - Renders the implementation plan in the selected content language, including
   correct `lang`/`dir` metadata and an RTL-safe layout
+- Separates deterministic agent verification from linguistic, cultural, brand,
+  and visual checks that require maker review
 - Direction-neutral layouts work with LTR and RTL writing systems from the start
 - Script-aware fonts, locale-aware formatting, and mixed-direction content safety
 - Real images from Unsplash (no placeholders)

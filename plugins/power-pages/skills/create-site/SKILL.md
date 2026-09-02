@@ -450,7 +450,7 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` — `content` is an outline of what's on the page, `components` is shared component names used |
 | `COMPONENTS_DATA` | array | `[{ name, purpose, usedBy: [...] }]` — shared components with the page names that consume them |
 | `ROUTES_DATA` | array | `[{ path, page }]` — every route the router will register |
-| `REVIEW_DATA` | array of strings | Verification checklist items (e.g., "All pages load without console errors") |
+| `REVIEW_DATA` | object | `{ agentChecks: [...], makerReview: [...] }` using the responsibility contract below |
 | `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
 `PLAN_LABELS` must contain every key below. The English values describe each
@@ -524,6 +524,10 @@ Do not omit keys or fall back to English for individual labels.
     "title": "Deployment & Review",
     "description": "Verification checklist and deployment options",
     "verify": "Before handoff — verify",
+    "agentChecks": "Agent verification",
+    "agentChecksDescription": "The agent will run and report these checks before handoff.",
+    "makerReview": "Maker review",
+    "makerReviewDescription": "Review these judgment-based items in the live preview.",
     "options": "Deployment options",
     "recommended": "Recommended"
   },
@@ -548,9 +552,43 @@ routes, commands, locale tags, CSS variables, hex colors, identifiers, API
 names, and brand/product names. When a page or component `name` is also the
 planned code identifier, keep it unchanged; localize only human-readable
 display names. Use complete translated phrases rather than joining translated
-fragments in English word order. `REVIEW_DATA` remains one array in this task;
-responsibility grouping is handled separately by the bidi review-checklist
-change.
+fragments in English word order.
+
+Build `REVIEW_DATA` as two non-empty localized string arrays:
+
+```json
+{
+  "agentChecks": [
+    "The root document uses the canonical site locale and resolved writing direction",
+    "The bidirectional-readiness audit reports no errors; layout uses logical CSS and every physical exception is documented and verified",
+    "Representative routes work in the selected direction and a pseudo-opposite direction at desktop and narrow widths without console errors, broken reading order, or broken focus order",
+    "Unknown-direction content uses bdi or dir=auto, while URLs, email addresses, code, paths, GUIDs, and identifiers are explicitly isolated",
+    "Dates, numbers, currency, percentages, and relative time use locale-aware Intl formatting",
+    "Typography covers the selected script and expanded or opposite-direction text does not clip or overlap",
+    "Directional components, interactions, icons, and assets behave according to their reviewed mirror, preserve, or replace classification",
+    "Every route has zero critical or serious axe-core accessibility violations"
+  ],
+  "makerReview": [
+    "Language, terminology, tone, regional wording, and regulated content are appropriate",
+    "Visual hierarchy and reading flow feel natural in the selected direction and the opposite-direction preview",
+    "Typography remains readable and preserves the intended brand character",
+    "Icon and image direction choices are culturally and semantically appropriate",
+    "Text wrapping, expansion, and narrow-screen layouts remain visually acceptable"
+  ]
+}
+```
+
+Translate these as complete criteria rather than copying the English wording.
+The two groups communicate responsibility:
+
+- `agentChecks` are objective commitments the agent must execute and report
+  during Phases 5–7. They are not instructions for the maker.
+- `makerReview` contains linguistic, cultural, brand, and visual judgments that
+  automation cannot approve. The maker reviews them in the live preview during
+  Phase 7.
+
+Do not move subjective maker judgments into `agentChecks`, and do not ask the
+maker to repeat deterministic source, browser, or accessibility checks.
 
 ### 4.3 Render the HTML Plan
 
@@ -768,6 +806,12 @@ in both LTR and RTL. Use pseudo-opposite-direction content to check wrapping,
 navigation, forms, mixed names/identifiers, icons, calendars, and narrow/mobile
 layout even when no second real locale exists yet.
 
+Retain evidence for every applicable `REVIEW_DATA.agentChecks` item: audit
+result, routes/viewports exercised, direction used, mixed-content fixtures,
+font/text-expansion observations, component/asset classifications, console
+result, and any remediations. Do not mark an agent-owned criterion complete
+based only on visual inspection by the maker.
+
 ### 5.6 Clean Up the Live Status File
 
 Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
@@ -883,6 +927,10 @@ Present a summary table to the user:
 
 > **GATE: Do NOT proceed to Phase 7 until all pages pass axe-core with zero `critical` and `serious` violations.** Minor and moderate violations should also be fixed where possible, but are not blocking.
 
+Record the final axe-core result against the corresponding
+`REVIEW_DATA.agentChecks` item. Accessibility remains agent-owned; the maker is
+not asked to reproduce the automated audit.
+
 **Output**: Accessibility-verified site with zero critical/serious axe-core violations
 
 ---
@@ -913,10 +961,18 @@ Present a summary table to the user:
    | Git Commits         | 7     | scaffold + 6 feature commits |
    ```
 
-   Include `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION`. Ask the maker
-   to review linguistic correctness, terminology, tone, regional wording, and
-   any legal, medical, financial, or regulated text; automated checks cannot
-   validate language quality.
+   Include `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION`.
+
+   Then report the `REVIEW_DATA.agentChecks` criteria separately with the
+   evidence gathered in Phases 5–6. Every criterion must be reported as
+   **Passed** or **Blocked**, never as maker verification. Fix blocked
+   technical criteria before requesting approval.
+
+   Present `REVIEW_DATA.makerReview` as the maker's live-preview checklist.
+   Ask the maker to assess linguistic correctness, terminology, tone, regional
+   wording, regulated content, visual hierarchy and reading flow, brand
+   typography, directional imagery/icons, and text expansion. Automated checks
+   cannot approve these judgment-based criteria.
 
 3. Share the dev server URL with the user and list all available routes
 4. Ask the user to review using `AskUserQuestion`:
