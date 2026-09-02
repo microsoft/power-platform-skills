@@ -1,6 +1,6 @@
 ---
 name: add-native
-description: Public entry point for native device capabilities and native controls — camera, image picker, barcode/QR scanner, document picker, file picker, secure storage, file system, sharing, PDF generation/viewing, pen/signature capture, background GPS/geolocation tracking, or supported local file workflows — in a Power Apps mobile app. Also owns routing to internal camera/PDF/pen/geolocation implementation helpers and the guidance boundary between native wrappers and Dataverse File/Image host controls.
+description: Public entry point for native device capabilities and native controls — camera, image picker, barcode/QR scanner, document picker, file picker, secure storage, file system, sharing, haptic feedback, PDF generation/viewing, pen/signature capture, background GPS/geolocation tracking, or supported local file workflows — in a Power Apps mobile app. Also owns routing to internal camera/PDF/pen/geolocation implementation helpers and the guidance boundary between native wrappers and Dataverse File/Image host controls.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
@@ -52,6 +52,7 @@ Before adding any native control or wrapper, apply every gate: classify the inte
 | Open/preview an HTTPS or local file PDF | `/add-native pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ present and input is `https://` or `file://` | Do not pass `content://`, `blob:`, or `http://` URIs to the viewer |
 | Capture signature, ink, drawing, or sign-off | `/add-native pen-input` | `@microsoft/power-apps-native-pen-input` present | If persisted, plan Dataverse Image/File/child Evidence target first |
 | Continuous/background GPS tracking with durable Dataverse upload | `/add-native geolocation` | `@microsoft/power-apps-native-bglocation` present | Do not use one-shot `expo-location` for background tracking; do not use the `GeolocationExtension`/HostingSDK path |
+| Tactile feedback for presses, selections, and operation results | `/add-native haptics` | `expo-haptics` present | Use the typed wrapper and pair every haptic with visible UI feedback |
 | Store generated PDF/signature artifact | Generated Dataverse services after parent row exists | File/Image column or child Evidence/Attachment table exists | Never put File bytes in create/update JSON |
 | Native capability not listed in this table | Resolve from `package.json`, then add an inline wrapper only when the matching package is present and not runtime-banned | Exact relevant package present in `package.json` | If no relevant package exists, or the package is runtime-banned, add a transparency note and stop |
 
@@ -145,6 +146,7 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | `video` | `expo-video` | `src/native/video.ts` | Use for video playback only when package is present |
 | `sensors` | `expo-sensors` | `src/native/sensors.ts` | Use only for sensor APIs exposed by the installed package |
 | `screen-orientation` | `expo-screen-orientation` | `src/native/screenOrientation.ts` | Use only when package is present; do not edit native config |
+| `haptics`, `vibration-feedback`, `impact-feedback`, `selection-feedback`, `notification-feedback` | `expo-haptics` | `src/native/haptics.ts` | Impact, selection, and success/warning/error notification feedback |
 | `device-info` | `expo-device` / `expo-application` / `expo-cellular` | `src/native/deviceInfo.ts` | Read-only device/app/cellular metadata wrappers |
 | `date-time-picker` | `@react-native-community/datetimepicker` | screen-level component usage | Use directly in form screens per screen-builder rules; no `/add-native` wrapper required |
 
@@ -170,7 +172,7 @@ For custom workflows outside Dataverse File/Image form fields, use the `image-pi
 - Never put File column bytes in the create/update JSON body. File bytes are uploaded only after the parent row ID exists.
 - Screens must handle unsupported, cancelled, upload failed, and viewer failed states explicitly. Pen cancellation is a non-error result that screens can ignore.
 
-**Missing or banned packages:** `package.json` plus the runtime-ban list is authoritative. If the relevant package/control is absent, or the package is runtime-banned, stop with a transparency note. `expo-haptics` remains banned unless the screen-builder hard rule is explicitly removed; use visual-only feedback instead.
+**Missing or gated packages:** `package.json` plus the runtime gate is authoritative. If the relevant package/control is absent, stop with a transparency note.
 
 ## Workflow
 
@@ -188,7 +190,7 @@ test -f app.config.js && test -f power.config.json && test -f package.json
 
 If `$ARGUMENTS` includes a capability name, package name, or control name, use it. Otherwise look for a `## Native Capabilities` section in `native-app-plan.md` and present the planned capabilities for confirmation. If neither exists, prompt the user with the supported-capabilities list above plus any relevant installed package from `package.json` that directly matches their request.
 
-Normalize the capability name to lowercase, hyphenated form (e.g., `Camera` → `camera`, `ImagePicker` → `image-picker`, `SecureStore` → `secure-store`). Also normalize aliases: `take-photo` / `photo` / `camera-control` / `expo-camera` → `camera`; `gallery` / `pick-image` / `expo-image-picker` → `image-picker`; `scanner` / `barcode` / `qr` → `barcode-scanner`; `open-pdf` / `view-pdf` / `pdf-control` / `pdf-viewer-control` / `@microsoft/power-apps-native-pdf-viewer` → `pdf-viewer`; `native-pdf-viewer` → `pdf-viewer`; `generate-pdf` / `pdf-export` → `pdf-report`; `signature` / `sign-off` / `ink` / `draw` / `pen-control` / `@microsoft/power-apps-native-pen-input` → `pen-input`; `location-tracking` / `background-location` / `gps-tracking` / `geo-tracking` / `track-location` / `power-apps-native-bglocation` / `@microsoft/power-apps-native-bglocation` → `geolocation`.
+Normalize the capability name to lowercase, hyphenated form (e.g., `Camera` → `camera`, `ImagePicker` → `image-picker`, `SecureStore` → `secure-store`). Also normalize aliases: `take-photo` / `photo` / `camera-control` / `expo-camera` → `camera`; `gallery` / `pick-image` / `expo-image-picker` → `image-picker`; `scanner` / `barcode` / `qr` → `barcode-scanner`; `open-pdf` / `view-pdf` / `pdf-control` / `pdf-viewer-control` / `@microsoft/power-apps-native-pdf-viewer` → `pdf-viewer`; `native-pdf-viewer` → `pdf-viewer`; `generate-pdf` / `pdf-export` → `pdf-report`; `signature` / `sign-off` / `ink` / `draw` / `pen-control` / `@microsoft/power-apps-native-pen-input` → `pen-input`; `location-tracking` / `background-location` / `gps-tracking` / `geo-tracking` / `track-location` / `power-apps-native-bglocation` / `@microsoft/power-apps-native-bglocation` → `geolocation`; `vibration` / `vibration-feedback` / `impact-feedback` / `selection-feedback` / `notification-feedback` / `expo-haptics` → `haptics`.
 
 When the user asks for "location" or "GPS", disambiguate by intent: continuous/background tracking or durable Dataverse upload → `geolocation` (`@microsoft/power-apps-native-bglocation`); a single foreground coordinate read → `location` (`expo-location`). If the intent is unclear, ask once before routing.
 
@@ -240,7 +242,92 @@ Each wrapper exports:
 - Branch by supported native platform when a capability differs between iOS and Android
 - Screens import these wrappers only for non-Dataverse native workflows. Dataverse File/Image fields use `@microsoft/power-apps-native-host` controls from the File/Image Picker Ownership section above.
 
-**Coding the wrapper:** consult the module's published API docs (linked from its npm page) for method signatures and permission patterns. Use the secure-store skeleton below as the canonical example of the discriminated-union shape — then translate to the target module's API.
+#### Haptics wrapper
+
+For normalized capability `haptics`, generate `src/native/haptics.ts` with this contract:
+
+```ts
+import * as Haptics from 'expo-haptics';
+import { Platform } from 'react-native';
+
+export type HapticImpactStyle = 'light' | 'medium' | 'heavy' | 'soft' | 'rigid';
+export type HapticNotificationType = 'success' | 'warning' | 'error';
+export type HapticResult =
+  | { ok: true }
+  | { ok: false; reason: 'unsupported' | 'error'; message: string };
+
+const impactStyles: Record<HapticImpactStyle, Haptics.ImpactFeedbackStyle> = {
+  light: Haptics.ImpactFeedbackStyle.Light,
+  medium: Haptics.ImpactFeedbackStyle.Medium,
+  heavy: Haptics.ImpactFeedbackStyle.Heavy,
+  soft: Haptics.ImpactFeedbackStyle.Soft,
+  rigid: Haptics.ImpactFeedbackStyle.Rigid,
+};
+
+const notificationTypes: Record<HapticNotificationType, Haptics.NotificationFeedbackType> = {
+  success: Haptics.NotificationFeedbackType.Success,
+  warning: Haptics.NotificationFeedbackType.Warning,
+  error: Haptics.NotificationFeedbackType.Error,
+};
+
+async function runHaptic(effect: () => Promise<void>): Promise<HapticResult> {
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
+    return {
+      ok: false,
+      reason: 'unsupported',
+      message: 'Haptic feedback is available only on iOS and Android.',
+    };
+  }
+
+  try {
+    await effect();
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'error',
+      message: error instanceof Error ? error.message : 'The native haptic call failed.',
+    };
+  }
+}
+
+export function triggerImpact(style: HapticImpactStyle = 'medium'): Promise<HapticResult> {
+  return runHaptic(() => Haptics.impactAsync(impactStyles[style]));
+}
+
+export function triggerNotification(
+  type: HapticNotificationType = 'success'
+): Promise<HapticResult> {
+  return runHaptic(() => Haptics.notificationAsync(notificationTypes[type]));
+}
+
+export function triggerSelection(): Promise<HapticResult> {
+  return runHaptic(() => Haptics.selectionAsync());
+}
+```
+
+Screens call the wrapper only when haptics appear in the approved native-capabilities and per-screen plan. Choose feedback by semantics:
+
+- `triggerImpact('light' | 'medium' | 'heavy' | 'soft' | 'rigid')` for deliberate presses or physical-feeling actions.
+- `triggerSelection()` when a picker, segmented control, or other selection changes.
+- `triggerNotification('success' | 'warning' | 'error')` after the corresponding outcome is known.
+- Keep visual feedback as the primary signal. Inspect non-OK results and log them, but do not turn an otherwise successful business operation into a failure because tactile feedback is unavailable.
+
+Screen usage after a successful operation:
+
+```ts
+setSaveState({ kind: 'success', message: 'Saved' });
+const hapticResult = await triggerNotification('success');
+if (!hapticResult.ok) {
+  console.warn('[haptics] success feedback unavailable', hapticResult);
+}
+```
+
+No permission request or `app.config.js` change is required for `expo-haptics`.
+
+#### Other inline wrappers
+
+Consult the module's published API docs (linked from its npm page) for method signatures and permission patterns. Use the secure-store skeleton below as the canonical example of the discriminated-union shape, then translate it to the target module's API.
 
 Secure-store canonical skeleton:
 
@@ -288,7 +375,7 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 npx tsc --noEmit
 ```
 
-Fix any wrapper-side errors. Do NOT run platform-specific native build commands here — and you should not need to, because no native config changed.
+Fix any wrapper-side errors. Do not run platform-specific native build commands during normal `/add-native` use because the module is already part of the current template binary. When a template/base maintainer first adds `expo-haptics` or changes its version, that release must rebuild the Android and iOS base binaries so Expo autolinking includes the module.
 
 ### Step 7 — Summary
 
@@ -313,8 +400,9 @@ Sample usage:
     showToast('Camera permission required');
   }
 
-⚠️  No native rebuild required. Wrappers are pure JS — Metro hot-reload picks them up.
-    The underlying native module was already linked when the template was scaffolded.
+⚠️  No per-app native rebuild required when using a binary produced from the current
+    template. The underlying native module is already linked; wrapper edits are picked
+    up by Metro. Template/base dependency changes require a new native base build.
 ─────────────────────────────────────────────
 ```
 
