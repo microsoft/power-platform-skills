@@ -47,7 +47,7 @@ site changes.
 
 1. Detect project and existing localization.
 2. Gather and validate configuration.
-3. Present and approve the implementation plan.
+3. Render, open, and approve the implementation plan.
 4. Configure localization infrastructure.
 5. Extract and localize content.
 6. Verify localization independently.
@@ -275,7 +275,28 @@ third-party components. Do not modify files before plan approval.
 
 ## Phase 3: Plan and approve
 
-Present:
+Read
+`${PLUGIN_ROOT}/skills/add-localization/references/plan-data-contract.md`, then
+build and render the localization plan before asking for approval.
+
+### 3.1 Determine the plan language
+
+Render the artifact in the site's current source locale:
+
+- Existing valid localization: the existing pre-change default locale.
+- New setup with a valid detected root language: the detected locale.
+- New setup with missing/invalid root language: the Phase 2 locale selected to
+  represent the existing UI.
+
+Keep that source locale as the plan language even if this operation changes the
+resulting default. Resolve its canonical locale and direction with
+`localization-config.js`; use them as `SOURCE_LOCALE` and `SOURCE_DIRECTION`.
+Do not choose one of the added target locales merely because it is being added.
+
+### 3.2 Build the plan data
+
+Follow the exact contract in `references/plan-data-contract.md`. The artifact
+must include:
 
 - Framework evidence and invocation context.
 - Existing setup and conflicts.
@@ -294,13 +315,44 @@ Present:
   unavailable pending remediation.
 - Known limitations and any approved translation replacements.
 
-<!-- gate: add-localization:3.plan-approval | category=plan | cancel-leaves=nothing -->
+Write maker-facing plan text in `SOURCE_LOCALE`; preserve technical values
+unchanged. The renderer rejects malformed locale roles, default/source
+inconsistency, invalid actions/statuses, incomplete labels, and incorrect
+source direction.
+
+### 3.3 Render and open the plan
+
+Pick an output path under `<PROJECT_ROOT>/docs/`. Use
+`add-localization-plan.html` when available; otherwise choose a descriptive
+variant such as `add-localization-plan-v2.html`. Never overwrite an earlier
+plan.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/render-add-localization-plan.js" --output "<PROJECT_ROOT>/docs/add-localization-plan.html" --data-inline '<json-string>'
+```
+
+Use `--data-inline` so no plan-data JSON file is persisted. If the command is
+too large, use a temporary JSON file with `--data`, then delete that temporary
+file after rendering. Capture the renderer's returned output path and open that
+exact HTML file in the user's default browser.
+
+The HTML is a durable human-reference artifact only. Do not parse it during
+implementation or treat it as workflow state. Before implementation, retain
+the approved configuration in context; after implementation,
+`.powerpages-localization.json` and the site files are authoritative.
+
+Present a brief terminal summary with the artifact path, source/default/target
+locales, package/mode, file counts by action, readiness blockers, unavailable
+locales, and known limitations. Keep the terminal approval gate below; the HTML
+does not contain an approve button and opening it does not imply approval.
+
+<!-- gate: add-localization:3.plan-approval | category=plan | cancel-leaves=rendered-plan -->
 
 > 🚦 **Gate (plan · add-localization:3.plan-approval):** Approves the complete localization delta before dependencies or site files change.
 >
-> **Trigger:** The deterministic plan and file inventory have been presented.
+> **Trigger:** The deterministic plan and file inventory have been rendered to `docs/add-localization-plan*.html`, opened in the browser, and summarized in the terminal.
 > **Why we ask:** A wrong package, mode, default locale, or extraction scope can touch most visible UI files.
-> **Cancel leaves:** Nothing — discovery and validation were read-only.
+> **Cancel leaves:** The rendered HTML plan remains under `docs/` for reference; no dependencies, site implementation files, or external state changed.
 
 Use `AskUserQuestion`:
 
@@ -308,7 +360,9 @@ Use `AskUserQuestion`:
 |---|---|---|
 | How should the localization plan proceed? | Plan | Approve and implement (Recommended), Revise configuration, Cancel |
 
-Loop through Phase 2 for revisions. Do not install or edit before approval.
+Loop through Phase 2 for revisions. Render revisions to a new descriptive HTML
+filename and reopen the latest artifact. Do not install or edit before
+approval.
 
 After approval, emit the final configuration before Phase 4 changes any files:
 

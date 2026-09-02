@@ -176,6 +176,7 @@ Required, normalized vocabulary:
 | Value | Meaning |
 |---|---|
 | `nothing` | Clean exit. No Dataverse write, no filesystem write, no state change anywhere. |
+| `rendered-plan` | A human-readable HTML plan remains under `docs/`; no implementation files, dependencies, or external state changed. |
 | `localized-site-files` | Localization changes remain in the site files but are not deployed. |
 | `validated-stage-run` | A `deploymentstageruns` row remains on the host in validated-but-not-deployed state. |
 | `partial-manifest` | `.solution-manifest.json` written but not all components added to Dataverse. |
@@ -703,7 +704,7 @@ Most prompts gather validated configuration before the Phase 3 plan gate.
 | `add-localization:2.package` | not-a-gate | — | 2.4 | Use recommendation, propose a validated alternative, or cancel | — |
 | `add-localization:2.prerelease` | not-a-gate | — | 2.4 | Explicitly acknowledge an npm prerelease before it may enter the plan | — |
 | `add-localization:2.translation` | not-a-gate | — | 2.5 | Agent-generated translations, blank targets, or cancel | — |
-| `add-localization:3.plan-approval` | gate | plan | 3 | Approve exact package/mode/locale/file delta before installation or edits | nothing |
+| `add-localization:3.plan-approval` | gate | plan | 3 | Review the opened source-language `docs/add-localization-plan*.html`, then approve the exact package/mode/locale/file delta before installation or edits | rendered-plan |
 | `add-localization:7.review` | gate | plan | 7 | Accept verified localization or request revisions | localized-site-files |
 | `add-localization:8.deploy` | gate | plan | 8 | Direct invocation only — deploy now or skip; create-site child invocation suppresses this prompt | localized-site-files |
 

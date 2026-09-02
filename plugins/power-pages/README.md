@@ -394,6 +394,8 @@ Adds or extends multilingual localization for React, Vue, Angular, and Astro
 Power Pages code-site SPAs.
 
 - Detects and preserves existing localization configuration and translations
+- Renders and opens a persistent `docs/add-localization-plan.html` in the
+  site's current source language before the terminal approval gate
 - Validates canonical BCP-47 language tags against the bundled IANA registry
 - Recommends runtime localization for React/Vue, official static localization
   for Angular, and built-in static locale routes for Astro
