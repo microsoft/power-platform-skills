@@ -773,6 +773,16 @@ the applicable set, and no expansion reruns broad inventory discovery. There
 is no fixed expansion-round count. Continue automatically while the planner
 identifies new exact names derived from the approved brief or current evidence.
 
+**Data-model deterministic revision:** when the planner returns
+`NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>`, do not
+route it through the generic `NEEDS_CONTEXT` retry cap. Immediately run the
+existing inline data-model revision path with the same snapshot and compact
+evidence. Perform no metadata read and ask no user question. Reclassify known
+collisions or attempted unavailable detail as `Reuse`, `Extend`, `Adapt`, or
+`Defer` as the verified evidence permits, regenerate and validate the contract,
+and then present Gate 1. Ask the user only if the remaining alternatives change
+business semantics.
+
 **Data-model exact-name expansion:** when the planner or direct architect
 returns exactly
 `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>`, sort and
@@ -1017,10 +1027,17 @@ detail set-difference path, while
 `NEEDS_CONTEXT: proposed-dataverse-names:<sorted-names>` uses the separate
 incremental collision-check path. Never rewrite one signal as the other or
 repeat a network request for an already-attempted name.
-Exit `2` is `BLOCKED`. Do not approve Reuse, Extend, or Adapt from `core` or
-missing detail, or Create/Adapt names without checked-missing collision
-evidence. Do not fall back to parsing the Markdown ER diagram when a sidecar
-is missing or malformed.
+On exit `4`, preserve
+`NEEDS_REVISION: dataverse-plan-validation` plus its safe error lines and route
+them through the existing planner/direct-architect revision path with the same
+snapshot and compact evidence. This path performs no metadata read and asks no
+user question. If the same conflict survives re-dispatch, use the inline
+data-model revision path; ask the user only when choosing among materially
+different business designs. Exit `2` is reserved for an invalid
+contract/snapshot artifact and is `BLOCKED`. Do not approve Reuse, Extend, or
+Adapt from `core` or missing detail, or Create/Adapt names without
+checked-missing collision evidence. Do not fall back to parsing the Markdown
+ER diagram when a sidecar is missing or malformed.
 
 ### Step 4 — Auth & environment selection
 

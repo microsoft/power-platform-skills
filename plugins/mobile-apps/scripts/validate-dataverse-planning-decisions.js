@@ -9,7 +9,6 @@ const { validateSnapshot } = require('./create-dataverse-snapshot');
 const FULL_DETAIL_DECISIONS = new Set(['reuse', 'extend', 'adapt']);
 const CONTEXT_GATE_ERRORS = new Set([
   'reuse, extend, and adapt decisions require full Dataverse detail evidence',
-  'tables with attempted unavailable detail metadata must be deferred',
   'create and adapt decisions require proposed-name collision evidence',
 ]);
 
@@ -18,7 +17,19 @@ function normalize(value) {
 }
 
 function getBlockingErrors(result) {
-  return result.errors.filter((error) => !CONTEXT_GATE_ERRORS.has(error));
+  return result.errors.filter(
+    (error) => error.startsWith('contract: ') || error.startsWith('snapshot: '),
+  );
+}
+
+function getRevisionErrors(result) {
+  return result.errors.filter(
+    (error) => (
+      !CONTEXT_GATE_ERRORS.has(error)
+      && !error.startsWith('contract: ')
+      && !error.startsWith('snapshot: ')
+    ),
+  );
 }
 
 function validatePlanningDecisions(contract, snapshot) {
@@ -142,6 +153,12 @@ function main(argv = process.argv) {
       blockingErrors.forEach((error) => process.stderr.write(`${error}\n`));
       return 2;
     }
+    const revisionErrors = getRevisionErrors(result);
+    if (revisionErrors.length > 0) {
+      process.stderr.write('NEEDS_REVISION: dataverse-plan-validation\n');
+      revisionErrors.forEach((error) => process.stderr.write(`${error}\n`));
+      return 4;
+    }
     if (result.contextNames.length > 0) {
       process.stderr.write(
         `NEEDS_CONTEXT: detailed-dataverse-metadata:${result.contextNames.join(',')}\n`,
@@ -172,6 +189,7 @@ module.exports = {
   CONTEXT_GATE_ERRORS,
   FULL_DETAIL_DECISIONS,
   getBlockingErrors,
+  getRevisionErrors,
   main,
   validatePlanningDecisions,
 };

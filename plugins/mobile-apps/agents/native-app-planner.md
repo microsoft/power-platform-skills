@@ -153,9 +153,16 @@ After spawning, proceed immediately to Step 3 without waiting. Then, before writ
   Exit `3` must preserve the validator's exact stderr first line:
   `NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-logical-names>` or
   `NEEDS_CONTEXT: proposed-dataverse-names:<sorted-logical-names>`. Do not
-  rewrite one signal as the other. Exit `2` is `BLOCKED`; only exit `0` permits
-  embedding and Gate 1. A missing sidecar is `BLOCKED`, not a
-  Markdown-parsing fallback.
+  rewrite one signal as the other. Exit `4` begins with
+  `NEEDS_REVISION: dataverse-plan-validation`; re-spawn the architect with the
+  validator's safe error lines and the same snapshot/evidence paths. This is
+  an automatic decision revision: do not request more metadata or ask the
+  user. If the revised contract repeats the same validation conflict, return
+  `NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>` so the
+  foreground can use its inline revision fallback. Exit `2` is reserved for an
+  invalid contract/snapshot artifact and is `BLOCKED`; only exit `0` permits
+  embedding and Gate 1. A missing sidecar is `BLOCKED`, not a Markdown-parsing
+  fallback.
 - `DONE_WITH_CONCERNS: <list>` → apply the same sidecar and decision-evidence checks, embed section,
   and propagate concerns.
 - `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` → return that

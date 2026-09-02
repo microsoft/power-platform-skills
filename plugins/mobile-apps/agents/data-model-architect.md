@@ -130,6 +130,10 @@ If validation succeeds, this path is mandatory:
   describe them as detailed. A selected table with `detailLevel: core` lacks
   decision-bearing enrichment and cannot authorize Reuse, Extend, or Adapt.
   Proposed-name checks are collision evidence, not required existing-table discovery.
+  If the prompt includes `NEEDS_REVISION: dataverse-plan-validation`, revise
+  the conflicting decisions from this same evidence. Do not request another
+  metadata read or user answer merely because the previous contract proposed
+  an unavailable name.
 5. If a Reuse, Extend, or Adapt candidate, relationship target, or
   standard/managed dependency is absent from `selectedTables`, is represented
   only by a top candidate, or has `detailLevel: core`, stop and return exactly:

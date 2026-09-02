@@ -1294,6 +1294,7 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
   assert.match(planner, /validate-dataverse-planning-decisions\.js/);
   assert.match(planner, /only exit `0` permits\s+embedding and Gate 1/);
   assert.match(planner, /preserve the validator's exact stderr first line/);
+  assert.match(planner, /NEEDS_REVISION: dataverse-plan-validation/);
   assert.match(planner, /Do not\s+rewrite one signal as the other/);
   assert.match(planner, /Timing ownership/);
   assert.match(planner, /modelArchitect/);
@@ -1321,10 +1322,13 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
   assert.match(createSkill, /selectedTables` with `detailLevel: full`/);
   assert.match(createSkill, /detailLevel: core` is not fully attempted/);
   assert.match(createSkill, /PROPOSED_CHECKED_NAMES/);
+  assert.match(createSkill, /NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>/);
+  assert.match(createSkill, /do not[\s]+route it through the generic `NEEDS_CONTEXT` retry cap/i);
   assert.match(createSkill, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
   assert.match(createSkill, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
   assert.match(createSkill, /--proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>"/);
   assert.match(createSkill, /preserve and branch on the exact stderr first line/);
+  assert.match(createSkill, /On exit `4`[\s\S]*NEEDS_REVISION: dataverse-plan-validation/);
   assert.match(createSkill, /do not issue another network request/i);
   assert.match(createSkill, /No-progress fallback/);
   assert.match(createSkill, /Ask the user only when the remaining choice changes business semantics/);
