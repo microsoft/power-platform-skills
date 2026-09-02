@@ -74,7 +74,7 @@ const hasWildcardField = !usesEnvironmentVariable
 if (isWebApiFieldsSetting && hasWildcardField) {
   // Power Pages stops supporting wildcard Web API field access on September 14, 2026.
   // Reject it here so generated site settings remain deployable after that cutoff.
-  console.error('Error: Webapi/<table>/fields requires an explicit comma-separated column list; wildcard field access is unsupported beginning September 14, 2026.');
+  console.error('Error: Webapi/<table>/fields requires an explicit comma-separated allowlist with each attribute\'s Dataverse LogicalName and SchemaName, plus _<LogicalName>_value for lookups; wildcard field access is unsupported beginning September 14, 2026.');
   process.exit(1);
 }
 

@@ -82,8 +82,8 @@ function validateSiteSettings(projectRoot) {
       && String(setting.value).split(',').some(column => column.trim() === '*');
     if (isWebApiFieldsSetting && hasWildcardField) {
       // Power Pages stops supporting wildcard Web API field access on September 14, 2026.
-      // Existing sites must replace it with the exact case-sensitive LogicalNames from metadata.
-      addFinding(findings, 'error', `Web API fields setting "${setting.name}" uses unsupported wildcard field access. Replace it with explicit, case-sensitive Dataverse LogicalNames.`, {
+      // Existing sites need both metadata names, plus the computed read property for lookups.
+      addFinding(findings, 'error', `Web API fields setting "${setting.name}" uses unsupported wildcard field access. Replace it with each attribute's Dataverse LogicalName and SchemaName, plus _<LogicalName>_value for lookups.`, {
         filePath: setting.filePath,
         fileName,
         settingName: setting.name,

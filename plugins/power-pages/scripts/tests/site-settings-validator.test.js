@@ -100,7 +100,7 @@ test('validateSiteSettings rejects wildcard Web API fields', (t) => {
 
   const result = validateSiteSettings(projectRoot);
   assert.ok(findingMessages(result.findings).some(message =>
-    message.includes('uses unsupported wildcard field access')
+    message.includes('LogicalName and SchemaName, plus _<LogicalName>_value for lookups')
   ));
 });
 
