@@ -27,7 +27,8 @@ function getArg(name) {
 }
 
 const projectRoot = getArg('projectRoot');
-const settingName = getArg('name');
+const settingNameArg = getArg('name');
+const settingName = settingNameArg === null ? null : settingNameArg.trim();
 const settingValue = getArg('value');
 const description = getArg('description');
 const valueType = getArg('type') || 'string';
@@ -68,7 +69,7 @@ if (!usesEnvironmentVariable && valueType === 'boolean' && settingValue !== 'tru
   process.exit(1);
 }
 
-const isWebApiFieldsSetting = /^Webapi\/[^/]+\/fields$/i.test(settingName.trim());
+const isWebApiFieldsSetting = /^Webapi\/[^/]+\/fields$/i.test(settingName);
 const hasWildcardField = !usesEnvironmentVariable
   && settingValue.split(',').some(column => column.trim() === '*');
 if (isWebApiFieldsSetting && hasWildcardField) {

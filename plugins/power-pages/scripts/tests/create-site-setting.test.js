@@ -17,7 +17,7 @@ test('create-site-setting creates a value-backed site setting', (t) => {
   const projectRoot = createTempProject(t);
   const result = runCreateSiteSetting([
     '--projectRoot', projectRoot,
-    '--name', 'Webapi/test/enabled',
+    '--name', ' Webapi/test/enabled ',
     '--value', 'true',
     '--description', 'Enable test setting',
     '--type', 'boolean',
@@ -93,6 +93,26 @@ test('create-site-setting rejects wildcard Web API fields when the setting name 
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /requires an explicit comma-separated column list/);
+});
+
+test('create-site-setting detects duplicate names after trimming whitespace', (t) => {
+  const projectRoot = createTempProject(t);
+  const first = runCreateSiteSetting([
+    '--projectRoot', projectRoot,
+    '--name', 'Webapi/test/fields',
+    '--value', 'test_name',
+    '--description', 'Allowed test fields',
+  ]);
+  assert.equal(first.status, 0, first.stderr);
+
+  const duplicate = runCreateSiteSetting([
+    '--projectRoot', projectRoot,
+    '--name', ' Webapi/test/fields ',
+    '--value', 'test_name',
+    '--description', 'Duplicate test fields',
+  ]);
+  assert.equal(duplicate.status, 1);
+  assert.match(duplicate.stderr, /already exists/);
 });
 
 test('create-site-setting allows wildcard values for unrelated settings', (t) => {
