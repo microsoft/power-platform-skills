@@ -1,9 +1,16 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
-const { validatePlanningDecisions } = require('../validate-dataverse-planning-decisions');
+const {
+  getBlockingErrors,
+  validatePlanningDecisions,
+} = require('../validate-dataverse-planning-decisions');
 
 function table(logicalName, detailLevel = 'full') {
   return {
@@ -135,6 +142,47 @@ test('a proposed-name collision makes the approved decision invalid', () => {
   );
   assert.equal(result.valid, false);
   assert.match(result.errors.join('; '), /new_create is not available \(collision\)/);
+});
+
+test('hard planning errors take precedence over missing-context signals', () => {
+  const result = validatePlanningDecisions(
+    contract({ new_reuse: 'reuse', new_create: 'create' }),
+    snapshot([table('new_reuse', 'core')], [
+      { logicalName: 'new_create', status: 'collision', existing: {} },
+    ]),
+  );
+  assert.deepEqual(result.contextNames, ['new_reuse']);
+  assert.deepEqual(
+    getBlockingErrors(result),
+    ['proposed table name new_create is not available (collision)'],
+  );
+});
+
+test('validator CLI blocks hard errors before emitting context signals', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'planning-decisions-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const contractPath = path.join(directory, 'contract.json');
+  const snapshotPath = path.join(directory, 'snapshot.json');
+  fs.writeFileSync(
+    contractPath,
+    JSON.stringify(contract({ new_reuse: 'reuse', new_create: 'create' })),
+  );
+  fs.writeFileSync(
+    snapshotPath,
+    JSON.stringify(snapshot([table('new_reuse', 'core')], [
+      { logicalName: 'new_create', status: 'collision', existing: {} },
+    ])),
+  );
+
+  const result = spawnSync(process.execPath, [
+    path.resolve(__dirname, '..', 'validate-dataverse-planning-decisions.js'),
+    '--contract', contractPath,
+    '--snapshot', snapshotPath,
+  ], { encoding: 'utf8' });
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /new_create is not available \(collision\)/);
+  assert.doesNotMatch(result.stderr, /NEEDS_CONTEXT:/);
 });
 
 test('create many-to-many relationships require a checked missing intersect name', () => {

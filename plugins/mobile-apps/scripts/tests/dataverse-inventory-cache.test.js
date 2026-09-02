@@ -237,8 +237,9 @@ test('both successful metadata publish paths invalidate planning inventory', () 
     'add-dataverse',
     'SKILL.md',
   ), 'utf8');
-  const invalidations = skill.match(/node "\$\{CLAUDE_SKILL_DIR\}\/\.\.\/\.\.\/scripts\/dataverse-inventory-cache\.js"/g) || [];
+  const invalidations = skill.match(/node "\$\{PLUGIN_ROOT\}\/scripts\/dataverse-inventory-cache\.js"/g) || [];
   assert.equal(invalidations.length, 2);
+  assert.doesNotMatch(skill, /CLAUDE_SKILL_DIR.*dataverse-inventory-cache/);
   assert.match(skill, /After the `publish` phase succeeds[\s\S]*dataverse-inventory-cache\.js/);
   assert.match(skill, /After a 2xx publish[\s\S]*dataverse-inventory-cache\.js/);
 });

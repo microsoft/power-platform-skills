@@ -232,8 +232,12 @@ function createDataverseRequestExecutor({
       acquired = true;
       tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
     }
-    token = await tokenPromise;
-    tokenPromise = null;
+    const pendingToken = tokenPromise;
+    try {
+      token = await pendingToken;
+    } finally {
+      if (tokenPromise === pendingToken) tokenPromise = null;
+    }
     if (!token) {
       throw new Error('Failed to get Azure CLI token. Run `az login` first.');
     }

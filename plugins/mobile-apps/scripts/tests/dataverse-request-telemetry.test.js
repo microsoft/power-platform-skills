@@ -122,6 +122,26 @@ test('concurrent 401 responses share one token refresh', async () => {
   assert.equal(events.reduce((total, event) => total + event.tokenRefreshCount, 0), 1);
 });
 
+test('token acquisition can retry after an initial rejection', async () => {
+  let tokenCalls = 0;
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      if (tokenCalls === 1) throw new Error('temporary token failure');
+      return 'recovered-token';
+    },
+    sendRequest: async () => ({ statusCode: 200, body: '{"value":[]}', headers: {} }),
+  });
+
+  await assert.rejects(request('GET', 'first'), /temporary token failure/);
+  const recovered = await request('GET', 'second');
+
+  assert.equal(recovered.status, 200);
+  assert.equal(tokenCalls, 2);
+});
+
 test('a slow request cannot restore a token replaced by a concurrent refresh', async () => {
   let tokenCalls = 0;
   let releaseSlow;

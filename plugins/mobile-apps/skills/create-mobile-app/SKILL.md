@@ -479,12 +479,31 @@ Planning stays read-only. Branch on `<dataverse_planning_mode>`:
 ```bash
 node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage environmentResolution --action start
-PLANNING_ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache)
-ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
-ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
-test -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID" || {
-  echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."; exit 2;
-}
+if ! PLANNING_ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache); then
+  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+    --project-root "<working_dir>" --stage environmentResolution \
+    --action fail --reason environment-resolution-command-failed
+  exit 2
+fi
+if ! ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON"); then
+  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+    --project-root "<working_dir>" --stage environmentResolution \
+    --action fail --reason environment-resolution-parse-failed
+  exit 2
+fi
+if ! ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON"); then
+  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+    --project-root "<working_dir>" --stage environmentResolution \
+    --action fail --reason environment-resolution-parse-failed
+  exit 2
+fi
+if [ -z "$ACTIVE_ENV_URL" ] || [ -z "$ACTIVE_TENANT_ID" ]; then
+  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+    --project-root "<working_dir>" --stage environmentResolution \
+    --action fail --reason environment-resolution-incomplete
+  echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."
+  exit 2
+fi
 echo "✓ Planning environment resolved: $ACTIVE_ENV_URL (tenant $ACTIVE_TENANT_ID)"
 node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage environmentResolution --action finish

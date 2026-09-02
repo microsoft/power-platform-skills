@@ -7,9 +7,18 @@ const { validateContract } = require('./build-dataverse-operation-manifest');
 const { validateSnapshot } = require('./create-dataverse-snapshot');
 
 const FULL_DETAIL_DECISIONS = new Set(['reuse', 'extend', 'adapt']);
+const CONTEXT_GATE_ERRORS = new Set([
+  'reuse, extend, and adapt decisions require full Dataverse detail evidence',
+  'tables with attempted unavailable detail metadata must be deferred',
+  'create and adapt decisions require proposed-name collision evidence',
+]);
 
 function normalize(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function getBlockingErrors(result) {
+  return result.errors.filter((error) => !CONTEXT_GATE_ERRORS.has(error));
 }
 
 function validatePlanningDecisions(contract, snapshot) {
@@ -128,6 +137,11 @@ function main(argv = process.argv) {
     const snapshot = JSON.parse(fs.readFileSync(path.resolve(args.snapshot), 'utf8'));
     const result = validatePlanningDecisions(contract, snapshot);
     if (args.json) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    const blockingErrors = getBlockingErrors(result);
+    if (blockingErrors.length > 0) {
+      blockingErrors.forEach((error) => process.stderr.write(`${error}\n`));
+      return 2;
+    }
     if (result.contextNames.length > 0) {
       process.stderr.write(
         `NEEDS_CONTEXT: detailed-dataverse-metadata:${result.contextNames.join(',')}\n`,
@@ -155,7 +169,9 @@ function main(argv = process.argv) {
 if (require.main === module) process.exitCode = main();
 
 module.exports = {
+  CONTEXT_GATE_ERRORS,
   FULL_DETAIL_DECISIONS,
+  getBlockingErrors,
   main,
   validatePlanningDecisions,
 };

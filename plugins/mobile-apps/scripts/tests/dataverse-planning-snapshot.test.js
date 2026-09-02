@@ -1311,6 +1311,8 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
   assert.match(createSkill, /strongCollisionCandidates/);
   assert.match(createSkill, /coreCandidates/);
   assert.match(createSkill, /--stage environmentResolution --action start/);
+  assert.match(createSkill, /--stage environmentResolution[\s\S]*--action fail --reason environment-resolution-command-failed/);
+  assert.match(createSkill, /--action fail --reason environment-resolution-incomplete/);
   assert.match(createSkill, /--stage publisherPrefixDetection/);
   assert.match(createSkill, /--project-root "<working_dir>" --summary/);
   assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);

@@ -504,7 +504,7 @@ computed dependencies have already crossed the exact derived-metadata barrier;
 unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and invalidate the planning-only inventory cache:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
+node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
   --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
 ```
 
@@ -1058,7 +1058,7 @@ After a 2xx publish, invalidate the planning-only inventory cache before
 verification so a later planning run cannot reuse pre-publication inventory:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
+node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
   --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
 ```
 
