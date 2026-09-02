@@ -3,6 +3,7 @@
 const assert = require('node:assert');
 const test = require('node:test');
 
+const { compileOfflineIntegration } = require('../compile-offline-integration');
 const { compileScreenBuildPack } = require('../compile-screen-build-pack');
 const { SCREEN_BUDGETS } = require('../lib/product-experience-contracts');
 const { validateExperienceContract } = require('../validate-product-experience');
@@ -30,6 +31,17 @@ function screenIds(bundle) {
 
 function pack(bundle, screenId) {
   return bundle.buildPack.packs.find((item) => item.screenId === screenId);
+}
+
+function dataverseOfflineIntegration() {
+  return compileOfflineIntegration({
+    persistenceRevision: 'a'.repeat(64),
+    mode: 'dataverse',
+    offline: { selected: true, source: 'explicit-request' },
+    dataverseConceptIds: ['work-item'],
+    connectorConceptIds: [],
+    localConceptIds: [],
+  });
 }
 
 test('four concrete briefs pass the canonical contract pipeline without a universal screen count', () => {
@@ -104,18 +116,24 @@ test('flight commerce keeps checkout bounded and Profile reachable outside its t
   assert.ok(!bundle.scope.navigation.visibleTabIds.includes('profile'));
   assert.strictEqual(bundle.scope.screens.find((screen) => screen.id === 'checkout').classification, 'bounded-flow-step');
   assert.strictEqual(bundle.scope.newTables.length, 0);
-  assert.ok(bundle.scope.dataEntities.every((entity) => entity.realization === 'connector-source'));
+  assert.ok(bundle.scope.dataEntities.filter((entity) => entity.name !== 'Cart')
+    .every((entity) => entity.realization === 'connector-source'));
+  assert.strictEqual(
+    bundle.scope.dataEntities.find((entity) => entity.name === 'Cart').realization,
+    'transient-ui-state',
+  );
   assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
 });
 
-test('ICRC receiving embeds shipment scanning, preserves retry/offline states, and stays consolidated', () => {
+test('ICRC receiving embeds scanning, keeps retry in-product, and delegates offline UX', () => {
   const { bundle } = validateBundle('icrcReceiving');
-  const required = ['receive-items', 'inspect-packages', 'resolve-discrepancy', 'attach-evidence', 'handoff-custody'];
+  const required = ['receive-items', 'inspect-packages', 'resolve-discrepancy', 'attach-evidence', 'capture-location', 'handoff-custody'];
   assert.ok(required.every((id) => bundle.scope.requirements.some((item) => item.id === id)));
   assert.ok(!screenIds(bundle).some((id) => /scan|barcode|role|offline|retry/.test(id)));
   assert.strictEqual(pack(bundle, 'receiving').primaryActions[0].label, 'Scan or enter shipment');
   assert.ok(Object.hasOwn(pack(bundle, 'receiving').states, 'retry'));
-  assert.ok(bundle.buildPack.packs.every((item) => Object.hasOwn(item.states, 'offline')));
+  assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
+  assert.equal(dataverseOfflineIntegration().owner, 'offline-package');
   assert.strictEqual(bundle.scope.navigation.pattern, 'stack-only');
   assert.ok(bundle.scope.screens.length <= SCREEN_BUDGETS.complex.max);
   assert.strictEqual(
@@ -124,7 +142,7 @@ test('ICRC receiving embeds shipment scanning, preserves retry/offline states, a
   );
 });
 
-test('gym maintenance starts from shift work, embeds scanning, parameterizes equipment, and exposes Profile', () => {
+test('gym maintenance embeds scanning without inventing offline screens or states', () => {
   const { bundle } = validateBundle('gymMaintenance');
   const required = ['scan-equipment', 'inspect-equipment', 'record-defect', 'attach-evidence', 'record-repair', 'close-work'];
   assert.ok(required.every((id) => bundle.scope.requirements.some((item) => item.id === id)));
@@ -134,12 +152,13 @@ test('gym maintenance starts from shift work, embeds scanning, parameterizes equ
   assert.strictEqual(bundle.scope.screens.find((screen) => screen.id === 'equipment').parameterizedBy, 'equipmentType');
   assert.strictEqual(bundle.scope.navigation.profileScreenId, 'profile');
   assert.strictEqual(bundle.scope.navigation.profileAccess, 'account-action');
-  assert.ok(bundle.buildPack.packs.every((item) => Object.hasOwn(item.states, 'offline')));
+  assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
+  assert.equal(dataverseOfflineIntegration().adapter, 'dataverse-mobile-offline-profile');
 });
 
 test('IT asset tracking parameterizes record families and keeps permission/no-results as states', () => {
   const { bundle, scopeResult } = validateBundle('itAssetTracking');
-  const required = ['find-assets', 'assign-asset', 'transfer-asset', 'audit-condition', 'record-repair', 'retire-device'];
+  const required = ['find-assets', 'scan-barcode', 'print-barcode', 'assign-asset', 'transfer-asset', 'audit-condition', 'record-repair', 'retire-device'];
   assert.ok(required.every((id) => bundle.scope.requirements.some((item) => item.id === id)));
   assert.deepStrictEqual(bundle.scope.navigation.durableDestinationIds, ['inventory', 'work-queue', 'account']);
   assert.strictEqual(scopeResult.summary.parameterizedScreenCount, 3);
@@ -149,6 +168,10 @@ test('IT asset tracking parameterizes record families and keeps permission/no-re
   assert.ok(Object.hasOwn(pack(bundle, 'asset').states, 'permission'));
   assert.ok(!screenIds(bundle).some((id) => /permission|no-results|offline/.test(id)));
   assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
+  assert.strictEqual(
+    bundle.scope.dataEntities.find((entity) => entity.name === 'Barcode label').realization,
+    'transient-ui-state',
+  );
 });
 
 test('requirement coverage target drift is rejected by build-pack compilation', () => {

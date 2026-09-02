@@ -16,6 +16,7 @@ const FIELDS = new Set([
   'route',
   'targetPath',
   'pack',
+  'scenarioFacts',
   'routeContract',
   'typedSkeleton',
   'serviceSignatures',
@@ -77,6 +78,9 @@ function normalizeWorkOrder(value, { projectRoot, fileSystem = fs } = {}) {
   if (!isPlainObject(value.pack) || value.pack.screenId !== screenId) {
     throw new Error('pack must be the assigned screen build-pack entry');
   }
+  if (!isPlainObject(value.scenarioFacts) || value.scenarioFacts.screenId !== screenId) {
+    throw new Error('scenarioFacts must be the assigned canonical screen projection');
+  }
   if (!isPlainObject(value.routeContract)) throw new Error('routeContract must be an object');
   const targetPath = safeTarget(projectRoot, requiredString(value.targetPath, 'targetPath'), fileSystem);
   const normalized = {
@@ -86,6 +90,7 @@ function normalizeWorkOrder(value, { projectRoot, fileSystem = fs } = {}) {
     route,
     targetPath,
     pack: value.pack,
+    scenarioFacts: value.scenarioFacts,
     routeContract: value.routeContract,
     typedSkeleton: requiredString(value.typedSkeleton, 'typedSkeleton'),
     serviceSignatures: stringArray(value.serviceSignatures, 'serviceSignatures'),

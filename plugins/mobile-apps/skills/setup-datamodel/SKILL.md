@@ -21,6 +21,12 @@ evidence; and returns without approval or mutation. The calling foreground skill
 owns the combined plan approval. `/create-mobile-app` supplies
 `--persistence-contract`; plan-only must model only its
 `persistence.dataverseConceptIds` and reject connector/local/transient concepts.
+It does not infer or compile consumers. In `/create-mobile-app`, the calling
+foreground must follow the returned schema with its AI-owned
+`.tmp/data-model-usage-input.json`, run `validate-data-model-usage.js`, and run
+the same command with `--check` before approval or mutation. A standalone
+`--plan-only` call returns the validated schema to its caller, which owns that
+usage mapping and validation before using the schema.
 
 | Use this skill when | Use `/add-dataverse` directly when |
 |---|---|

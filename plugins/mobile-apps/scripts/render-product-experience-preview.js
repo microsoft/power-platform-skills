@@ -20,12 +20,19 @@ const {
   resolveContractPath,
   sha256Hex,
 } = require('./lib/product-experience-contracts');
+const {
+  projectScreenFacts,
+  validateScenarioFacts,
+} = require('./validate-fixture-scenarios');
 
 const TOOL = 'render-product-experience-preview';
-const USAGE = 'Usage: node render-product-experience-preview.js [--project-root <dir>] [--compiled <path>] [--tokens <path>] [--output <path>]';
+const USAGE = 'Usage: node render-product-experience-preview.js [--project-root <dir>] [--compiled <path>] [--scenario <path>] [--persistence <path>] [--navigation <path>] [--tokens <path>] [--output <path>]';
 const ARG_SPEC = {
   '--project-root': 'projectRoot',
   '--compiled': 'compiled',
+  '--scenario': 'scenario',
+  '--persistence': 'persistence',
+  '--navigation': 'navigation',
   '--tokens': 'tokens',
   '--output': 'output',
 };
@@ -78,7 +85,9 @@ function selectPreviewScreens(compiled, journey) {
   );
 
   let selectedIds;
-  if (journeyIds.length <= 3) {
+  if (journeyIds.length === 0) {
+    selectedIds = (compiled.screens || []).slice(0, 3).map((screen) => screen.screenId);
+  } else if (journeyIds.length <= 3) {
     selectedIds = journeyIds;
   } else {
     // Three frames keep Gate 3 review focused: the journey entry, its representative
@@ -86,11 +95,6 @@ function selectPreviewScreens(compiled, journey) {
     // conditions remain interactive states on those frames rather than extra screens.
     const indexes = [0, Math.floor((journeyIds.length - 1) / 2), journeyIds.length - 1];
     selectedIds = indexes.map((index) => journeyIds[index]);
-  }
-
-  for (const screen of compiled.screens || []) {
-    if (selectedIds.length >= Math.min(3, compiled.screens.length)) break;
-    if (!selectedIds.includes(screen.screenId)) selectedIds.push(screen.screenId);
   }
 
   return selectedIds.map((id) => byId.get(id)).filter(Boolean);
@@ -135,8 +139,17 @@ function imageDataUri(label, index, colors) {
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
 }
 
-function sampleImage(label, index, colors, className = '') {
-  return `<img class="${escapeHtml(className)}" src="${imageDataUri(label, index, colors)}" alt="${escapeHtml(label)}">`;
+function resolvedAssetSource(asset) {
+  const kind = asset?.source?.kind;
+  const value = String(asset?.source?.value || '');
+  if (kind === 'cdn' && /^https:\/\/[^\s]+$/.test(value)) return value;
+  if (kind === 'local' && !/^[/\\]|\.\.(?:[/\\]|$)/.test(value)) return value;
+  return null;
+}
+
+function sampleImage(label, index, colors, className = '', asset = null) {
+  const source = resolvedAssetSource(asset) || imageDataUri(label, index, colors);
+  return `<img class="${escapeHtml(className)}" src="${escapeHtml(source)}" alt="${escapeHtml(label)}" data-asset-key="${escapeHtml(asset?.key || 'generated-fallback')}">`;
 }
 
 function previewRecords(pack) {
@@ -147,7 +160,7 @@ function listItems(pack, colors, limit = 6) {
   return previewRecords(pack).slice(0, limit).map((record, index) => `
     <div class="record-row">
       ${record.mediaLabel
-    ? sampleImage(record.mediaLabel, index, colors, 'record-thumb')
+    ? sampleImage(record.mediaLabel, index, colors, 'record-thumb', record.scenarioMedia)
     : `<span class="record-index">${index + 1}</span>`}
       <span class="record-copy"><strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.subtitle)}</small>
         ${record.badge ? `<em>${escapeHtml(record.badge)}</em>` : ''}</span>
@@ -159,7 +172,7 @@ function tileItems(pack, colors, limit = 6) {
   return previewRecords(pack).slice(0, limit).map((record, index) => `
     <article class="tile-card">
       ${record.mediaLabel
-    ? sampleImage(record.mediaLabel, index, colors, 'tile-media')
+    ? sampleImage(record.mediaLabel, index, colors, 'tile-media', record.scenarioMedia)
     : `<div class="tile-media media-fallback">${index + 1}</div>`}
       <div class="tile-copy">${record.badge ? `<span class="choice-tag">${escapeHtml(record.badge)}</span>` : ''}
         <strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.subtitle)}</small>
@@ -179,7 +192,7 @@ function mediaBlock(pack, colors, label = pack.previewContent?.heroMediaLabel) {
   const mediaLabel = label || pack.media.fallback;
   return `<figure class="media-block media-${escapeHtml(pack.media.role)}"
     data-treatment="${escapeHtml(pack.media.treatment || '')}">
-    ${sampleImage(mediaLabel, 0, colors, 'hero-media')}
+    ${sampleImage(mediaLabel, 0, colors, 'hero-media', pack.scenarioMedia?.[0])}
     <figcaption>${escapeHtml(mediaLabel)}</figcaption>
   </figure>`;
 }
@@ -243,7 +256,7 @@ function renderComposition(pack, colors) {
   }
   if (kind === 'comparison') {
     return `${media}<div class="comparison">${records.slice(0, 4).map((record, index) => `
-      <article>${record.mediaLabel ? sampleImage(record.mediaLabel, index, colors, 'comparison-media') : ''}
+      <article>${record.mediaLabel ? sampleImage(record.mediaLabel, index, colors, 'comparison-media', record.scenarioMedia) : ''}
         <span class="choice-tag">${escapeHtml(record.badge || (index === 0 ? 'Recommended' : 'Option'))}</span>
         <strong>${escapeHtml(record.title)}</strong><small>${escapeHtml(record.subtitle)}</small>
         ${record.meta ? `<b>${escapeHtml(record.meta)}</b>` : ''}</article>`).join('')}</div>
@@ -335,10 +348,12 @@ function renderState(name, text) {
     ${name === 'error' ? '<button class="secondary-button">Try again</button>' : ''}</div>`;
 }
 
-function renderPhone(screen, index, colors, previewScreenIds) {
+function renderPhone(screen, index, colors, previewScreenIds, provenance) {
   const pack = screen.pack;
   const title = screen.title || pack.purpose;
-  return `<article class="phone" data-screen="${escapeHtml(screen.screenId)}" data-index="${index}">
+  return `<article class="phone" data-screen="${escapeHtml(screen.screenId)}" data-index="${index}"
+    data-run-id="${escapeHtml(provenance.runId)}" data-contract-fingerprint="${escapeHtml(provenance.fingerprint)}"
+    data-target-viewport="${escapeHtml(provenance.viewport)}">
     <div class="screen-label"><strong>${index + 1}. ${escapeHtml(String(title).toUpperCase())}</strong>
       <span>${escapeHtml(pack.userQuestion)}</span></div>
     <div class="phone-shell">
@@ -354,12 +369,73 @@ function renderPhone(screen, index, colors, previewScreenIds) {
     </div>
     <p class="phone-caption"><strong>${escapeHtml(pack.signatureInteraction.name)}</strong>
       ${escapeHtml(pack.signatureInteraction.description)}</p>
+    <p class="frame-provenance">${escapeHtml(screen.screenId)} · ${escapeHtml(provenance.viewport)} · ${escapeHtml(provenance.fingerprint.slice(0, 12))}</p>
   </article>`;
 }
 
-function renderHtml({ experience, compiled, journey, colors }) {
-  const screens = selectPreviewScreens(compiled, journey);
+function renderAllScreens(compiled, previewScreenIds) {
+  const rows = (compiled.screens || []).map((screen) => {
+    const pack = screen.pack;
+    return `<article class="graph-screen" data-graph-screen="${escapeHtml(screen.screenId)}">
+      <header><strong>${escapeHtml(screen.title || screen.screenId)}</strong>${previewScreenIds.has(screen.screenId) ? '<span>Storyboard</span>' : ''}</header>
+      <p>${escapeHtml(screen.route || 'Route pending')} · ${escapeHtml(screen.classification || 'screen')}</p>
+      <dl><div><dt>Primary action</dt><dd>${escapeHtml(pack.firstViewport?.primaryAction || 'Pending')}</dd></div>
+        <div><dt>Identity</dt><dd>${escapeHtml(pack.identityHierarchy?.primary || pack.hierarchy?.dominant || 'Pending')}</dd></div>
+        <div><dt>Media</dt><dd>${escapeHtml(pack.media?.role || 'none')}</dd></div>
+        <div><dt>States</dt><dd>${escapeHtml(Object.keys(pack.states || {}).join(', ') || 'None')}</dd></div></dl>
+    </article>`;
+  }).join('');
+  return `<details class="all-screens"><summary>All screens <span>${compiled.screens?.length || 0} in the approved graph</span></summary><div class="all-screen-grid">${rows}</div></details>`;
+}
+
+function applyScenarioFacts(compiled, scenario) {
+  if (!scenario) return compiled;
+  return {
+    ...compiled,
+    screens: (compiled.screens || []).map((screen) => {
+      const facts = projectScreenFacts(scenario, screen.screenId);
+      if (!facts) return screen;
+      const media = facts.media || [];
+      return {
+        ...screen,
+        scenarioFactsRevision: scenario.scenarioRevision,
+        scenarioRecordIds: facts.recordIds,
+        pack: {
+          ...screen.pack,
+          scenarioMedia: media,
+          previewContent: {
+            eyebrow: screen.pack.previewContent?.eyebrow,
+            headline: String(facts.headline ?? ''),
+            supportingText: String(facts.supportingText ?? ''),
+            ...(media[0] ? {
+              heroMediaLabel: media[0].source?.value || media[0].fallback,
+            } : {}),
+            metrics: facts.metrics || [],
+            records: (facts.records || []).map((record) => ({
+              ...record,
+              ...(record.media ? {
+                mediaLabel: record.media.source?.value || record.media.fallback,
+                scenarioMedia: record.media,
+              } : {}),
+            })),
+            fields: facts.fields || [],
+            summaryRows: facts.summaryRows || [],
+          },
+        },
+      };
+    }),
+  };
+}
+
+function renderHtml({ experience, compiled, journey, colors, scenario = null }) {
+  const scenarioCompiled = applyScenarioFacts(compiled, scenario);
+  const screens = selectPreviewScreens(scenarioCompiled, journey);
   const previewScreenIds = new Set(screens.map((screen) => screen.screenId));
+  const provenance = {
+    runId: scenario?.scenarios?.[0]?.id || scenario?.scenarioRevision?.slice(0, 12) || 'preview',
+    fingerprint: compiled.compiledRevision || sha256Hex(canonicalJson(compiled)),
+    viewport: '390x844',
+  };
   const productName = escapeHtml(experience.productName);
   const stateButtons = ['populated', 'loading', 'empty', 'error'];
   const screenTabs = screens.map((screen, index) =>
@@ -379,7 +455,7 @@ function renderHtml({ experience, compiled, journey, colors }) {
 .preview-grid{display:grid;grid-template-columns:repeat(3,minmax(280px,370px));gap:28px;padding:0 clamp(20px,5vw,72px) 56px;align-items:start;overflow-x:auto}.phone-shell{height:760px;border:10px solid #101419;border-radius:42px;background:var(--surface);box-shadow:0 24px 70px rgba(18,25,32,.18);overflow:hidden;display:grid;grid-template-rows:auto auto 1fr}.statusbar{background:#101419;color:white;padding:8px 18px 5px;font-size:10px;display:flex;justify-content:space-between}.phone header{padding:18px 20px 14px;position:relative;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 38%,var(--surface)),var(--surface))}.phone header small{color:var(--muted);font-weight:700}.phone h2{font-size:25px;margin:3px 0 0;line-height:1.1}.sample-badge{position:absolute;right:18px;top:18px;font-size:8px;font-weight:900;letter-spacing:.09em;background:var(--accent);color:var(--primary);padding:5px 7px;border-radius:6px}.phone main{overflow:auto;padding:4px 20px 24px}
 .phone h3{font-size:21px;line-height:1.2;margin:14px 0 8px}.phone p{color:var(--muted);line-height:1.45}.primary-button,.secondary-button{border:0;border-radius:14px;min-height:46px;padding:0 16px;font-weight:800;cursor:pointer}.primary-button{background:var(--primary);color:white}.secondary-button{background:var(--accent);color:var(--primary)}.primary-button:disabled,.secondary-button:disabled{cursor:not-allowed;filter:grayscale(.4);opacity:.62}.preview-region{position:relative}.preview-region[data-region="primary-action"]{position:sticky;bottom:-25px;z-index:4;margin:16px -20px -24px;padding:12px 20px 20px;border-top:1px solid var(--border);background:color-mix(in srgb,var(--surface) 96%,transparent);backdrop-filter:blur(12px)}.action-stack{display:grid;gap:8px}.below-fold{margin-top:14px}.navigation-context{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}.navigation-context span,.navigation-context{font-size:9px;color:var(--muted)}.navigation-context span{padding:5px 7px;border-radius:8px;background:var(--bg)}.phone-caption{font-size:13px;line-height:1.5;color:var(--muted);padding:0 8px}.phone-caption strong{display:block;color:var(--text);margin:14px 0 2px}
 .media-block{border-radius:22px;background:var(--bg);position:relative;display:block;padding:0;margin:12px 0 18px;font-weight:800;overflow:hidden;box-shadow:0 12px 30px color-mix(in srgb,var(--text) 10%,transparent)}.media-essential{height:220px}.media-supportive{height:150px}.media-incidental{height:92px}.hero-media{width:100%;height:100%;display:block;object-fit:cover}.media-block figcaption{position:absolute;left:12px;bottom:12px;max-width:82%;padding:7px 10px;border-radius:10px;background:color-mix(in srgb,var(--text) 78%,transparent);color:var(--surface);font-size:11px}.search,.fake-input,.composer{border:1px solid var(--border);background:var(--bg);border-radius:13px;padding:13px;color:var(--muted)}.search{margin:4px 0 12px;font-weight:700}.screen-intro{margin:12px 0 14px}.screen-intro h3{margin:5px 0 7px}.screen-intro p{margin:0;font-size:13px}.tile-grid,.metric-grid,.comparison,.trust-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.tile-grid.horizontal{display:flex;overflow:auto;padding-bottom:5px}.tile-grid.horizontal .tile-card{min-width:150px}.tile-card,.metric-grid>div,.comparison>article,.trust-item{background:var(--bg);border-radius:16px;overflow:hidden}.tile-card{display:grid;grid-template-rows:105px auto;border:1px solid color-mix(in srgb,var(--border) 80%,transparent)}.tile-media,.comparison-media{width:100%;height:100%;object-fit:cover;display:block}.media-fallback{display:grid;place-items:center;background:var(--accent);color:var(--primary);font-weight:900}.tile-copy{padding:11px;display:grid;gap:3px}.tile-copy strong{font-size:13px}.tile-copy small{font-size:10px;line-height:1.35}.tile-copy b{font-size:11px;color:var(--primary);margin-top:5px}.metric-grid>div{padding:13px;border:1px solid color-mix(in srgb,var(--border) 75%,transparent)}.metric-grid span{display:block;font-size:17px;line-height:1.15;font-weight:900;color:var(--primary)}small{display:block;color:var(--muted);margin-top:3px}.trust-item{display:flex;gap:8px;align-items:flex-start;font-size:11px;padding:11px;border:1px solid color-mix(in srgb,var(--success) 20%,var(--border))}.trust-item span{color:var(--success)}.record-list{margin:10px 0}.record-row,.settings-list>div{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:11px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}.record-thumb{width:54px;height:54px;object-fit:cover;border-radius:14px;background:var(--accent)}.record-index{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--accent);color:var(--primary);font-weight:900}.record-copy{min-width:0}.record-copy strong{font-size:13px}.record-copy small{font-size:10px;white-space:normal}.record-copy em{display:inline-block;margin-top:5px;padding:3px 6px;border-radius:6px;background:var(--accent);color:var(--primary);font-size:8px;font-style:normal;font-weight:900}.record-meta{font-size:10px;font-weight:800;color:var(--text);max-width:82px;text-align:right}.form-stack{display:grid;gap:10px;margin:13px 0}.form-stack.compact{grid-template-columns:1fr 1fr}.field{display:grid;gap:5px}.field>span:first-child{font-size:11px;font-weight:800}.fake-input{padding:11px;color:var(--text);min-height:49px}.fake-input strong{display:block;font-size:12px}.fake-input small{font-size:9px}.summary-card{margin:14px 0;padding:5px 14px;border:1px solid var(--border);border-radius:16px;background:color-mix(in srgb,var(--surface) 70%,var(--bg))}.summary-card>div{display:flex;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);font-size:11px}.summary-card>div:last-child{border-bottom:0}.summary-card .summary-total{font-size:13px;color:var(--primary)}.progress-track{height:7px;background:var(--bg);border-radius:99px;margin:8px 0 18px}.progress-track span{display:block;width:58%;height:100%;background:var(--primary);border-radius:99px}.check-list{display:grid;gap:9px;margin-top:14px}.check-list>div{display:flex;gap:10px;padding:11px;border-radius:13px;background:var(--bg)}.check-list strong{font-size:12px}.check-list small{font-size:10px}.confirmation{text-align:left;padding-top:20px}.confirmation>.checkmark{margin-left:auto;margin-right:auto}.confirmation>.screen-intro{text-align:center}.checkmark,.state-icon{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;margin:0 auto 16px;background:color-mix(in srgb,var(--success) 16%,var(--surface));color:var(--success);font-size:30px;font-weight:900}.comparison{grid-template-columns:1fr 1fr}.comparison>article{padding:11px;border:1px solid var(--border)}.comparison-media{height:105px;border-radius:11px;margin-bottom:10px}.comparison article strong{display:block;font-size:12px}.comparison article b{display:block;color:var(--primary);font-size:11px;margin-top:7px}.bubble{max-width:86%;padding:12px;border-radius:17px;margin:10px 0}.bubble strong{font-size:12px}.bubble small{font-size:10px}.incoming{background:var(--bg)}.outgoing{background:var(--accent);margin-left:auto}.composer{margin-top:24px;display:flex;justify-content:space-between}.calendar-head{display:flex;justify-content:space-between;padding:8px 0}.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:8px 0 15px}.calendar-grid span{display:grid;place-items:center;aspect-ratio:1;border-radius:8px;font-size:11px}.calendar-grid span:nth-child(11){background:var(--primary);color:white}.map-block{height:210px;border-radius:20px;background:repeating-linear-gradient(35deg,var(--bg),var(--bg) 18px,var(--border) 19px,var(--bg) 20px);position:relative;overflow:hidden;padding:16px}.map-line{position:absolute;height:5px;background:var(--primary);border-radius:99px;transform:rotate(-18deg)}.map-line.one{width:240px;left:15px;top:92px}.map-line.two{width:160px;left:85px;top:128px;transform:rotate(24deg)}.pin{position:absolute;width:28px;height:28px;border-radius:50% 50% 50% 0;background:var(--danger);color:white;display:grid;place-items:center;transform:rotate(-45deg);font-size:11px;font-weight:900}.pin::first-letter{transform:rotate(45deg)}.p1{left:38px;top:61px}.p2{left:132px;top:98px}.p3{right:30px;bottom:35px}.choice-tag{font-size:9px;font-weight:900;color:var(--primary);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}.state-view{display:none;text-align:left}.state-view.active{display:block}.state-view[data-state-view="loading"],.state-view[data-state-view="empty"],.state-view[data-state-view="error"]{padding-top:50px;text-align:center}.skeleton{height:48px;border-radius:12px;background:linear-gradient(90deg,var(--bg),var(--border),var(--bg));margin:12px 0}.skeleton.hero{height:180px}.skeleton.short{width:65%}
-body{background:#fff}.page-head,.controls{max-width:1800px;margin-left:auto;margin-right:auto}.preview-grid{grid-template-columns:repeat(var(--screen-count),minmax(300px,1fr));gap:18px;width:calc(100% - 48px);max-width:1800px;margin:0 auto 56px;padding:30px 28px 40px;overflow-x:auto;background:linear-gradient(180deg,#f8fafc,#f2f5f9);border:1px solid #e5e9ef;border-radius:24px}.phone,.phone.extra{display:block;min-width:300px}.screen-label{min-height:62px;padding:0 8px 12px;text-align:center}.screen-label strong{display:block;font-size:12px;letter-spacing:.035em;color:#111827}.screen-label span{display:block;max-width:240px;margin:5px auto 0;color:#667085;font-size:10px;line-height:1.35}.phone-shell{height:720px;border:1px solid #dfe4ea;border-radius:34px;background:var(--surface);box-shadow:0 16px 34px rgba(32,45,63,.12);overflow:hidden;display:grid;grid-template-rows:auto auto 1fr}.statusbar{background:var(--surface);color:var(--text);padding:10px 18px 5px}.phone header{padding:15px 18px 12px}.phone h2{font-size:22px}.sample-badge{right:16px;top:15px}.phone main{padding:4px 18px 24px}.phone-caption{display:none}.media-essential{height:205px}.tile-card{grid-template-rows:96px auto}.record-thumb{width:50px;height:50px}.phone.focused .phone-shell{outline:3px solid color-mix(in srgb,var(--primary) 35%,transparent);box-shadow:0 20px 46px color-mix(in srgb,var(--primary) 22%,transparent)}
+body{background:#fff}.page-head,.controls,.review-links{max-width:1800px;margin-left:auto;margin-right:auto}.review-links{display:flex;gap:8px;flex-wrap:wrap;padding:0 clamp(20px,5vw,72px) 18px}.review-links a{border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--primary);font-size:12px;font-weight:800;text-decoration:none}.preview-grid{grid-template-columns:repeat(var(--screen-count),minmax(300px,1fr));gap:18px;width:calc(100% - 48px);max-width:1800px;margin:0 auto 28px;padding:30px 28px 40px;overflow-x:auto;background:linear-gradient(180deg,#f8fafc,#f2f5f9);border:1px solid #e5e9ef;border-radius:24px}.phone,.phone.extra{display:block;min-width:300px}.screen-label{min-height:62px;padding:0 8px 12px;text-align:center}.screen-label strong{display:block;font-size:12px;letter-spacing:.035em;color:#111827}.screen-label span{display:block;max-width:240px;margin:5px auto 0;color:#667085;font-size:10px;line-height:1.35}.phone-shell{height:720px;border:1px solid #dfe4ea;border-radius:34px;background:var(--surface);box-shadow:0 16px 34px rgba(32,45,63,.12);overflow:hidden;display:grid;grid-template-rows:auto auto 1fr}.statusbar{background:var(--surface);color:var(--text);padding:10px 18px 5px}.phone header{padding:15px 18px 12px}.phone h2{font-size:22px}.sample-badge{right:16px;top:15px}.phone main{padding:4px 18px 24px}.phone-caption{display:none}.frame-provenance{font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace!important;color:var(--muted)!important;text-align:center}.media-product,.media-hero{height:205px}.media-supportive,.media-evidence{height:150px}.tile-card{grid-template-rows:96px auto}.record-thumb{width:50px;height:50px}.phone.focused .phone-shell{outline:3px solid color-mix(in srgb,var(--primary) 35%,transparent);box-shadow:0 20px 46px color-mix(in srgb,var(--primary) 22%,transparent)}.all-screens{width:calc(100% - 48px);max-width:1800px;margin:0 auto 56px;border:1px solid var(--border);border-radius:16px;background:var(--surface)}.all-screens>summary{cursor:pointer;padding:16px 18px;font-weight:900}.all-screens>summary span{color:var(--muted);font-weight:600;margin-left:8px}.all-screen-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1px;background:var(--border);border-top:1px solid var(--border)}.graph-screen{background:var(--surface);padding:15px;min-width:0}.graph-screen header{display:flex;justify-content:space-between;gap:8px}.graph-screen header span{font-size:9px;color:var(--primary);font-weight:900;text-transform:uppercase}.graph-screen p{font-size:11px}.graph-screen dl{margin:0}.graph-screen dl div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:8px;padding:5px 0;border-top:1px solid var(--border);font-size:10px}.graph-screen dt{color:var(--muted)}.graph-screen dd{margin:0;overflow-wrap:anywhere}
 @media(max-width:980px){.preview-grid{grid-template-columns:repeat(var(--screen-count),300px);justify-content:start}}@media(max-width:600px){.page-head{padding-top:22px}.preview-grid{width:calc(100% - 24px);grid-template-columns:repeat(var(--screen-count),286px);gap:16px;padding:24px 16px 32px}.phone{min-width:286px}.phone-shell{height:680px}}
 </style>
 </head>
@@ -387,10 +463,16 @@ body{background:#fff}.page-head,.controls{max-width:1800px;margin-left:auto;marg
 <section class="page-head"><div><div class="eyebrow">GATE 3 · PRODUCT EXPERIENCE</div>
 <h1>${productName}</h1><p>${escapeHtml(experience.primaryGoal)} · ${escapeHtml(experience.signatureExperience.description)}</p></div>
 <div class="eyebrow">${escapeHtml(compiled.productComplexity)} scope · ${screens.length} preview screens</div></section>
+<nav class="review-links" aria-label="Review planning workspace">
+  <a href="_build_plan.html#plan">Plan</a><a href="_build_plan.html#data">Data model</a>
+  <a href="_build_plan.html#architecture">Native capabilities &amp; connectors</a>
+  <a href="_build_plan.html#screens">Navigation</a>
+</nav>
 <section class="controls"><nav class="tabs" aria-label="Preview screens">${screenTabs}</nav>
 <div class="states" aria-label="Preview state">${stateButtons.map((state, index) =>
   `<button data-state="${state}" class="${index === 0 ? 'active' : ''}">${state[0].toUpperCase() + state.slice(1)}</button>`).join('')}</div></section>
-<section class="preview-grid" style="--screen-count:${screens.length}">${screens.map((screen, index) => renderPhone(screen, index, colors, previewScreenIds)).join('')}</section>
+<section class="preview-grid" style="--screen-count:${screens.length}">${screens.map((screen, index) => renderPhone(screen, index, colors, previewScreenIds, provenance)).join('')}</section>
+${renderAllScreens(scenarioCompiled, previewScreenIds)}
 <script>
 document.querySelectorAll('[data-state]').forEach(function(button){
   button.addEventListener('click',function(){
@@ -424,7 +506,17 @@ document.querySelectorAll('[data-target]').forEach(function(button){
 `;
 }
 
-function renderProductExperiencePreview({ experience, scope, journey, buildPack, compiled, colors }) {
+function renderProductExperiencePreview({
+  experience,
+  scope,
+  journey,
+  buildPack,
+  compiled,
+  scenario,
+  persistence = null,
+  navigation = null,
+  colors,
+}) {
   const expected = compileScreenBuildPack(buildPack, { experience, scope, journey });
   if (!expected.ok) return expected;
   if (canonicalJson(compiled) !== canonicalJson(expected.compiled)) {
@@ -435,20 +527,48 @@ function renderProductExperiencePreview({ experience, scope, journey, buildPack,
       warnings: [],
     };
   }
-  const screens = selectPreviewScreens(compiled, journey);
-  if (screens.length < Math.min(3, compiled.screens.length)) {
+  const scenarioValidation = validateScenarioFacts(scenario, {
+    scope,
+    journey,
+    compiled,
+    persistence,
+    navigation,
+  });
+  if (!scenarioValidation.ok) {
     return {
       ok: false,
       tool: TOOL,
-      errors: [finding('insufficient-preview-screens', 'preview must contain at least three user-facing screens when available')],
+      errors: scenarioValidation.errors,
       warnings: [],
     };
   }
-  const html = renderHtml({ experience, compiled, journey, colors });
+  const screens = selectPreviewScreens(compiled, journey);
+  const journeyScreenCount = unique((journey.journeys?.[0]?.steps || [])
+    .map((step) => step.surface?.screenId)).length;
+  const requiredFrameCount = journeyScreenCount > 0
+    ? Math.min(3, journeyScreenCount)
+    : Math.min(3, compiled.screens.length);
+  if (screens.length < requiredFrameCount) {
+    return {
+      ok: false,
+      tool: TOOL,
+      errors: [finding(
+        'insufficient-preview-screens',
+        `preview requires ${requiredFrameCount} primary-journey frame(s) but resolved ${screens.length}`,
+      )],
+      warnings: [],
+    };
+  }
+  const html = renderHtml({ experience, compiled, journey, colors, scenario });
   return {
     ok: true,
     tool: TOOL,
     screenIds: screens.map((screen) => screen.screenId),
+    allScreenIds: compiled.screens.map((screen) => screen.screenId),
+    runId: scenario.scenarios?.[0]?.id || scenario.scenarioRevision.slice(0, 12),
+    contractFingerprint: compiled.compiledRevision,
+    targetViewport: '390x844',
+    scenarioRevision: scenario.scenarioRevision,
     html,
     revision: sha256Hex(html),
     errors: [],
@@ -471,6 +591,7 @@ function main(argv) {
     journey: resolveContractPath(projectRoot, null, CONTRACT_ARTIFACTS['workflow-journey']),
     buildPack: resolveContractPath(projectRoot, null, CONTRACT_ARTIFACTS['screen-build-pack']),
     compiled: resolveContractPath(projectRoot, args.compiled, CONTRACT_ARTIFACTS['compiled-screen-build-pack']),
+    scenario: resolveContractPath(projectRoot, args.scenario, '.tmp/scenario-facts.json'),
     tokens: resolveContractPath(projectRoot, args.tokens, 'brand/tokens.ts'),
     output: resolveContractPath(projectRoot, args.output, '_plan_preview.html'),
   };
@@ -487,6 +608,15 @@ function main(argv) {
       journey: readJsonFile(paths.journey),
       buildPack: readJsonFile(paths.buildPack),
       compiled: readJsonFile(paths.compiled),
+      scenario: readJsonFile(paths.scenario),
+      persistence: (() => {
+        const file = resolveContractPath(projectRoot, args.persistence, '.tmp/persistence-contract.json');
+        return fs.existsSync(file) ? readJsonFile(file) : null;
+      })(),
+      navigation: (() => {
+        const file = resolveContractPath(projectRoot, args.navigation, '.tmp/navigation-manifest.json');
+        return fs.existsSync(file) ? readJsonFile(file) : null;
+      })(),
       colors: readColors(paths.tokens),
     };
   } catch (error) {
@@ -511,6 +641,7 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 module.exports = {
   escapeHtml,
   readColors,
+  applyScenarioFacts,
   renderHtml,
   renderProductExperiencePreview,
   selectPreviewScreens,

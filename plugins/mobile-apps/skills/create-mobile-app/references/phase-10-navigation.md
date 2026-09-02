@@ -17,6 +17,20 @@ Product Scope remains the planning authority. The manifest is its canonical,
 deterministic execution projection and must not be hand-edited to make a layout
 pass.
 
+Before writing any navigation or skeleton file, verify the all-mode usage
+binding from Phase 3:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+  --project-root "<working_dir>" --check
+```
+
+A failure returns to the owning Phase 3 contract and Gate 2. Do not repair
+usage by inferring a consumer from a route, screen, service, or table name, and
+do not restamp or recreate scenario values in this phase.
+
 #### Step 10b.1 — Resolve registrations from the manifest
 
 Use the manifest fields without adding or inferring destinations:
@@ -148,6 +162,12 @@ If the directory is empty (no data sources added yet), still write the section w
 
 This step analyzes the per-screen specs and generates **shared code that multiple screens will use** plus **typed skeleton files** for each screen. Builders then fill in the JSX rather than starting from zero. This cuts builder output by ~50% and eliminates import-path guessing errors.
 
+For every shared component, hook, and skeleton, consume only the screen's
+binding from `.tmp/scenario-facts.json` plus its referenced record IDs,
+relationships, media keys, and invariants. Use those values only through the
+later bounded work-order projection. Do not hardcode an independent sample
+name, status, date, metric, image URL, or fallback into a skeleton.
+
 ---
 
 #### 10.8a — Analyze plan for cross-screen patterns
@@ -190,6 +210,8 @@ For each screen in the plan's Screen Map that will be built by a screen-builder,
 2. The exported component function with typed props/params
 3. The hook calls (e.g. `useListData`, `useSearchFilter`, `useLocalSearchParams`)
 4. An empty return with a `// TODO: screen-builder fills JSX here` marker
+5. Typed placeholders for the screen's canonical scenario binding and media
+  keys when the compiled implementation contract requires them
 
 **Skeleton template for a Cursor List screen (`Pagination: cursor`):**
 ```tsx
@@ -394,6 +416,8 @@ npx tsc --noEmit
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
 ```
 
 If this fails, do not launch Step 11. Capture the full error list once, batch-fix layout names, route paths, skeleton imports, shared component exports, generated service imports, or hook signatures, then rerun the gate. Screen-builders should start only from a clean shell with typed skeletons that compile with `return null`.
@@ -408,6 +432,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
   --artifact "package=package.json" \
   --artifact "auth=auth.config.json" \
   --artifact "tamagui=tamagui.config.ts" \
+  --artifact "data-model-usage=.tmp/data-model-usage.json" \
   --artifact-tree "routes=app" \
   --artifact-tree "source=src"
 ```

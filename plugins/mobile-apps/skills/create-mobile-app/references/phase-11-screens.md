@@ -16,6 +16,17 @@ Do not change product scope, navigation, data model, operations, design, or
 assumptions during implementation. The approved compiled screen pack is the
 authority.
 
+Before creating work orders or dispatching any screen builder, rerun the
+all-mode usage binding check. A failure returns to Phase 3 and Gate 2; builders
+never repair or reinterpret this contract:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+  --project-root "<working_dir>" --check
+```
+
 ## Step 11.0 — Create channel-neutral work orders
 
 For each screen, read one entry from `.tmp/compiled-screen-build-pack.json` and
@@ -25,13 +36,23 @@ create `.tmp/screen-work-orders/<screenId>.unsealed.json` with:
 - route and parameter contract;
 - exact target path;
 - one screen build-pack entry;
+- that entry's deterministic `implementationContract` unchanged;
+- one `scenarioFacts` projection from `.tmp/scenario-facts.json`, containing
+  only this screen's binding, referenced records, relationships, media assets,
+  and applicable invariants;
 - complete typed skeleton;
 - only relevant generated-service signatures;
 - permitted token and signature-component interfaces;
-- exact states, test IDs, and accessibility requirements.
+- exact states, `Object.values(implementationContract.testIds)`, and
+  accessibility requirements.
 
 Do not include the whole Markdown plan, unrelated packs, generated source files,
-or multiple screens. Seal and budget it:
+the complete scenario artifact, or multiple screens. The scenario projection's
+`screenId` must equal the work-order screen ID. Seal and budget it:
+
+The builder may not invent fixture names, statuses, dates, counts, media URLs,
+or fallbacks. It renders the bounded scenario projection and reports a blocking
+contract gap when a required fact is absent.
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
@@ -192,6 +213,20 @@ passes its per-file validation, record it as `built` with the same command
 shape. Do not mark it `validated` yet; that state belongs to the wave quality
 gate.
 
+Every written screen must also pass the real TypeScript AST implementation
+contract before it can be recorded as built:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-implementation.js" \
+  --project-root "<working_dir>" \
+  --work-order ".tmp/screen-work-orders/<screenId>.json" \
+  --file "<target-file>"
+```
+
+This gate proves test IDs, focal identity, primary action, route parameters,
+domain-operation calls, scenario media key/fallback wiring, and sticky
+safe-area behavior from the TypeScript AST. It does not judge visual quality.
+
 Time screen execution by channel. Children in a wave run concurrently, so do
 not open overlapping timers on one stage. Measure wall time around each actual
 dispatch batch and append it after the batch completes:
@@ -223,6 +258,10 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <canary-files>
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <canary-files>
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+  --project-root "<working_dir>" --check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -285,8 +324,13 @@ For every returned screen:
 
 After each wave, run TypeScript, `check-routes.js`,
 `validate-navigation-layout.js --project-root <working_dir>`, and changed-screen
-quality validators. Capture complete findings once, group them by root cause,
-and repair affected screens in parallel. Do not advance with a failed gate.
+quality validators, then rerun
+`validate-data-model-usage.js --project-root <working_dir> --check` and
+`validate-fixture-scenarios.js --project-root <working_dir> --check`. The
+scenario check may be skipped only when its file and every bound upstream
+artifact are byte-unchanged from the prior successful wave fingerprint. Capture
+complete findings once, group them by root cause, and repair affected screens
+in parallel. Do not advance with a failed gate.
 
 After the wave gate passes, record every screen in that wave as `validated` by
 repeating `--screen-id <id>` with `--screen-status validated`. Product Scope
@@ -304,6 +348,10 @@ npx tsc --noEmit
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+  --project-root "<working_dir>" --check
 ```
 
 Reject oversized empty cards, repeated identical shells, placeholder icons where
@@ -323,6 +371,8 @@ Record the validated screen checkpoint:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
   --project-root "<working_dir>" --record --step "11.4" \
+  --artifact "data-model-usage=.tmp/data-model-usage.json" \
+  --artifact "scenario-facts=.tmp/scenario-facts.json" \
   --artifact-tree "routes=app" \
   --artifact-tree "source=src"
 ```
@@ -340,6 +390,10 @@ npx tsc --noEmit
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+  --project-root "<working_dir>" --check
 npx expo start
 ```
 

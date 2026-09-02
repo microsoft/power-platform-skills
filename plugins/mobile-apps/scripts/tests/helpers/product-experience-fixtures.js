@@ -184,13 +184,12 @@ function buildBuildPack(experience, scope, journey, overrides = {}) {
   return buildPack;
 }
 
-function defaultStates(label, { offline = false } = {}) {
+function defaultStates(label) {
   return {
     loading: `Skeleton of the ${label} layout`,
     empty: `Explains why ${label} is empty and what to do`,
     error: `States what failed on ${label} and offers a retry`,
     populated: `${label} with real content`,
-    ...(offline ? { offline: `${label} from the last synced snapshot, marked as such` } : {}),
   };
 }
 
@@ -299,9 +298,6 @@ function scenarioBundle(descriptor) {
     primaryGoal: descriptor.primaryGoal,
     ...descriptor.dimensions,
   });
-  const offlineSelected = ['intermittent', 'offline-first'].includes(
-    experience.operatingContext.connectivity,
-  );
 
   const jobId = descriptor.job.id;
   const steps = descriptor.steps.map((step, index) => normalizeStep(step, descriptor, index, descriptor.steps.length));
@@ -399,7 +395,7 @@ function scenarioBundle(descriptor) {
         dataOperation: step.dataOperation || { kind: 'read', entity: primaryEntity, classification: 'schema-backed' },
         entryCondition: step.entryCondition,
         exitCondition: step.exitCondition,
-        states: defaultStates(step.title, { offline: offlineSelected }),
+        states: defaultStates(step.title),
       })),
       successOutcome: descriptor.job.successOutcome,
       failureRecovery: descriptor.job.failureRecovery,
@@ -410,7 +406,12 @@ function scenarioBundle(descriptor) {
     || ['imagery', 'mixed-media', 'map-spatial'].includes(experience.contentEmphasis.primary);
 
   const buildPack = buildBuildPack(experience, scope, journey, {
-    packs: steps.map((step, index) => ({
+    packs: steps.map((step, index) => {
+      const mediaEnabled = mediaRequired || step.media;
+      const classification = scope.screens.find(
+        (screen) => screen.id === step.screenId,
+      )?.classification;
+      return {
       screenId: step.screenId,
       route: `/${step.screenId}`,
       purpose: step.purpose,
@@ -421,6 +422,20 @@ function scenarioBundle(descriptor) {
         primaryAction: step.primaryAction,
       },
       hierarchy: { dominant: step.dominant, supporting: step.supporting },
+      identityHierarchy: {
+        primary: step.dominant,
+        secondary: step.supporting,
+        technical: step.technicalIdentity || [],
+      },
+      chrome: {
+        role: classification === 'durable-destination' ? 'root'
+          : classification === 'modal-or-immersive-utility' ? 'immersive'
+            : 'back',
+        navigationTitle: step.title,
+      },
+      primaryActionPlacement: classification === 'durable-destination'
+        ? 'inline'
+        : 'sticky-bottom',
       primaryActions: [{
         label: step.primaryAction,
         outcome: step.primaryActionOutcome,
@@ -429,9 +444,14 @@ function scenarioBundle(descriptor) {
       secondaryActions: [],
       trustSignals: [{ label: step.trustSignal, classification: 'safe-presentation' }],
       decisionSupport: [{ label: step.decisionSupport, classification: 'safe-presentation' }],
-      media: mediaRequired || step.media
+      media: mediaEnabled
         ? {
-          role: step.media?.role || (experience.mediaStrategy.necessity === 'supportive' ? 'supportive' : 'essential'),
+          role: step.media?.role || (experience.mediaStrategy.necessity === 'supportive' ? 'supportive' : 'product'),
+          assetKeyOrFieldBinding: step.media?.assetKeyOrFieldBinding || `asset:${step.screenId}-media`,
+          aspectRatio: step.media?.aspectRatio || 1.5,
+          fit: step.media?.fit || 'cover',
+          focalPoint: step.media?.focalPoint || 'center',
+          firstViewport: step.media?.firstViewport !== false,
           treatment: step.media?.treatment || 'Full-bleed image at the top of the focal region',
           source: step.media?.source || 'sourced',
           fallback: step.media?.fallback || 'Typographic block using the record name',
@@ -441,14 +461,15 @@ function scenarioBundle(descriptor) {
         vocabulary: descriptor.vocabulary,
         contextualData: [{ label: step.contextLabel, classification: 'safe-presentation' }],
       },
-      states: defaultStates(step.title, { offline: offlineSelected }),
+      states: defaultStates(step.title),
       navigation: { incoming: step.incoming || [], outgoing: step.outgoing || [] },
       signatureInteraction: { name: step.signatureName, description: step.signatureDescription },
       forbiddenDefaults: [step.forbiddenDefault],
       dataAssumptions: step.dataAssumptions || [],
       previewContent: step.previewContent,
       composition: { kind: step.pattern, rationale: step.compositionRationale },
-    })),
+      };
+    }),
   });
 
   return { experience, scope, journey, buildPack };

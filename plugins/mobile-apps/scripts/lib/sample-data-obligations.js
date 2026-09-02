@@ -5,6 +5,10 @@ const {
   contractRevision,
   sha256Hex,
 } = require('./product-experience-contracts');
+const {
+  projectScreenFacts,
+  validateScenarioFacts,
+} = require('../validate-fixture-scenarios');
 
 function validateCompiledBinding(compiled, { experience, scope, journey }) {
   const expected = {
@@ -25,8 +29,26 @@ function validateCompiledBinding(compiled, { experience, scope, journey }) {
   }
 }
 
-function compileSampleDataObligations({ experience, scope, journey, compiled }) {
+function compileSampleDataObligations({
+  experience,
+  scope,
+  journey,
+  compiled,
+  scenario,
+  persistence = null,
+  navigation = null,
+}) {
   validateCompiledBinding(compiled, { experience, scope, journey });
+  const scenarioValidation = validateScenarioFacts(scenario, {
+    scope,
+    journey,
+    compiled,
+    persistence,
+    navigation,
+  });
+  if (!scenarioValidation.ok) {
+    throw new Error(scenarioValidation.errors.map((item) => item.message).join('; '));
+  }
 
   const coverageByScreen = new Map();
   for (const row of scope.requirementCoverage || []) {
@@ -59,10 +81,15 @@ function compileSampleDataObligations({ experience, scope, journey, compiled }) 
     journeyRevision: compiled.journeyRevision,
     buildPackRevision: compiled.buildPackRevision,
     compiledRevision: compiled.compiledRevision,
+    scenarioRevision: scenario.scenarioRevision,
     connectivity: experience.operatingContext.connectivity,
     domainVocabulary: [...(experience.domainVocabulary || [])],
     mediaStrategy: structuredClone(experience.mediaStrategy),
     requirements: structuredClone(scope.requirements || []),
+    records: structuredClone(scenario.records),
+    relationships: structuredClone(scenario.relationships),
+    scenarios: structuredClone(scenario.scenarios),
+    mediaAssets: structuredClone(scenario.mediaAssets),
     screens: compiled.screens.map((entry) => ({
       screenId: entry.screenId,
       jobIds: [...entry.jobIds],
@@ -73,7 +100,7 @@ function compileSampleDataObligations({ experience, scope, journey, compiled }) 
         ...entry.pack.primaryActions.map((action) => ({ ...structuredClone(action), priority: 'primary' })),
         ...entry.pack.secondaryActions.map((action) => ({ ...structuredClone(action), priority: 'secondary' })),
       ],
-      previewContent: structuredClone(entry.pack.previewContent),
+      scenarioFacts: projectScreenFacts(scenario, entry.screenId),
       trustSignals: structuredClone(entry.pack.trustSignals),
       decisionSupport: structuredClone(entry.pack.decisionSupport),
       media: structuredClone(entry.pack.media),

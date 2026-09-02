@@ -13,11 +13,17 @@ const {
 } = require('../render-product-experience-preview');
 const { bundleFor } = require('./helpers/product-experience-scenarios');
 const { cleanup, makeProjectDir, runCli, writeContracts } = require('./helpers/contract-cli');
+const { scenarioFactsForBundle } = require('./helpers/scenario-facts-fixtures');
 
 function prepare(projectRoot, bundle) {
   writeContracts(projectRoot, bundle);
   const compiled = runCli('compile-screen-build-pack.js', ['--project-root', projectRoot]);
   assert.strictEqual(compiled.code, 0);
+  const { scenario } = scenarioFactsForBundle(bundle);
+  fs.writeFileSync(
+    path.join(projectRoot, '.tmp', 'scenario-facts.json'),
+    `${JSON.stringify(scenario, null, 2)}\n`,
+  );
   fs.mkdirSync(path.join(projectRoot, 'brand'), { recursive: true });
   fs.writeFileSync(path.join(projectRoot, 'brand', 'tokens.ts'), `
 export const tokens = {
@@ -46,12 +52,12 @@ function screenHtml(html, screenId) {
 }
 
 function renderBundle(bundle) {
-  const result = compileScreenBuildPack(bundle.buildPack, bundle);
-  assert.strictEqual(result.ok, true, JSON.stringify(result.errors));
+  const { compiled, scenario } = scenarioFactsForBundle(bundle);
   return renderHtml({
     experience: bundle.experience,
-    compiled: result.compiled,
+    compiled,
     journey: bundle.journey,
+    scenario,
     colors: readColors('/path/that/does/not/exist'),
   });
 }
@@ -72,6 +78,18 @@ test('renderer creates a deterministic three-screen interactive commerce preview
     assert.match(html, /<strong>1\. DISCOVER<\/strong>/);
     assert.match(html, /<strong>3\. CONFIRMATION<\/strong>/);
     assert.strictEqual((html.match(/class="screen-label"/g) || []).length, 3);
+    assert.match(html, /<details class="all-screens">/);
+    assert.strictEqual((html.match(/data-graph-screen=/g) || []).length, 5);
+    assert.match(html, /data-graph-screen="product"/);
+    assert.match(html, /data-graph-screen="checkout"/);
+    assert.match(html, /data-run-id="[^"]+"/);
+    assert.match(html, /data-contract-fingerprint="[a-f0-9]{64}"/);
+    assert.match(html, /data-target-viewport="390x844"/);
+    assert.match(html, /class="frame-provenance"/);
+    assert.match(html, /href="_build_plan\.html#plan"/);
+    assert.match(html, /href="_build_plan\.html#data"/);
+    assert.match(html, /href="_build_plan\.html#architecture"/);
+    assert.match(html, /href="_build_plan\.html#screens"/);
     assert.doesNotMatch(html, /\.phone\.extra\{display:none\}/);
     assert.doesNotMatch(html, /phone\.style\.display/);
     assert.match(html, /phone\.classList\.toggle\('focused',phone===target\)/);
@@ -101,10 +119,43 @@ test('renderer creates a deterministic three-screen interactive commerce preview
     const second = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
     assert.strictEqual(second.code, 0);
     assert.strictEqual(second.json.revision, first.json.revision);
+    assert.deepStrictEqual(second.json.allScreenIds, [
+      'discover',
+      'product',
+      'cart',
+      'checkout',
+      'confirmation',
+    ]);
+    assert.match(second.json.contractFingerprint, /^[a-f0-9]{64}$/);
+    assert.strictEqual(second.json.targetViewport, '390x844');
     assert.strictEqual(fs.readFileSync(outputPath, 'utf8'), html);
   } finally {
     cleanup(projectRoot);
   }
+});
+
+test('resolved scenario CDN media renders directly and retains its stable asset key', () => {
+  const bundle = bundleFor('commerce');
+  const { compiled, scenario } = scenarioFactsForBundle(bundle);
+  const selectedScreen = selectPreviewScreens(compiled, bundle.journey)[0];
+  const binding = scenario.screenBindings.find(
+    (item) => item.screenId === selectedScreen.screenId && item.mediaAssetKeys.length > 0,
+  );
+  assert.ok(binding);
+  const asset = scenario.mediaAssets.find((item) => item.key === binding.mediaAssetKeys[0]);
+  asset.source = {
+    kind: 'cdn',
+    value: 'https://images.example.test/catalog/cloud-runner.jpg',
+  };
+  const html = renderHtml({
+    experience: bundle.experience,
+    compiled,
+    journey: bundle.journey,
+    scenario,
+    colors: readColors('/path/that/does/not/exist'),
+  });
+  assert.match(html, /https:\/\/images\.example\.test\/catalog\/cloud-runner\.jpg/);
+  assert.match(html, new RegExp(`data-asset-key="${asset.key}"`));
 });
 
 test('renderer escapes contract content before placing it in HTML', () => {
@@ -220,6 +271,31 @@ test('three-screen journeys use the same visible presentation board', () => {
   assert.match(html, /class="preview-grid" style="--screen-count:3"/);
   assert.strictEqual((html.match(/class="screen-label"/g) || []).length, 3);
   assert.doesNotMatch(html, /\.phone\.extra\{display:none\}|phone\.style\.display/);
+});
+
+test('one- and two-screen primary journeys are not padded with unrelated screens', () => {
+  const screens = Array.from({ length: 4 }, (_, index) => ({
+    screenId: `screen-${index}`,
+    pack: {},
+  }));
+  const compiled = { screens };
+  const journeyFor = (count) => ({
+    journeys: [{
+      steps: screens.slice(0, count).map((screen, index) => ({
+        order: index + 1,
+        surface: { screenId: screen.screenId },
+      })),
+    }],
+  });
+
+  assert.deepStrictEqual(
+    selectPreviewScreens(compiled, journeyFor(1)).map((screen) => screen.screenId),
+    ['screen-0'],
+  );
+  assert.deepStrictEqual(
+    selectPreviewScreens(compiled, journeyFor(2)).map((screen) => screen.screenId),
+    ['screen-0', 'screen-1'],
+  );
 });
 
 test('large-journey actions to omitted screens are visibly disabled', () => {

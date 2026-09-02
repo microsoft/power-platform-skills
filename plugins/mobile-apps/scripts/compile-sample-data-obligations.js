@@ -26,17 +26,28 @@ const { validateScopeContract } = require('./validate-product-scope');
 
 const TOOL = 'compile-sample-data-obligations';
 const DEFAULT_OUTPUT = '.tmp/sample-data-obligations.json';
-const USAGE = 'Usage: node compile-sample-data-obligations.js [--project-root <dir>] [--experience <path>] [--scope <path>] [--journey <path>] [--build-pack <path>] [--output <path>] [--check]';
+const USAGE = 'Usage: node compile-sample-data-obligations.js [--project-root <dir>] [--experience <path>] [--scope <path>] [--journey <path>] [--build-pack <path>] [--scenario <path>] [--persistence <path>] [--navigation <path>] [--output <path>] [--check]';
 const ARG_SPEC = {
   '--project-root': 'projectRoot',
   '--experience': 'experience',
   '--scope': 'scope',
   '--journey': 'journey',
   '--build-pack': 'buildPack',
+  '--scenario': 'scenario',
+  '--persistence': 'persistence',
+  '--navigation': 'navigation',
   '--output': 'output',
 };
 
-function compileObligations({ experience, scope, journey, buildPack }) {
+function compileObligations({
+  experience,
+  scope,
+  journey,
+  buildPack,
+  scenario,
+  persistence = null,
+  navigation = null,
+}) {
   const validations = [
     validateExperienceContract(experience),
     validateScopeContract(scope, experience),
@@ -59,6 +70,9 @@ function compileObligations({ experience, scope, journey, buildPack }) {
         scope,
         journey,
         compiled: buildResult.compiled,
+        scenario,
+        persistence,
+        navigation,
       }),
     };
   } catch (error) {
@@ -81,10 +95,16 @@ function main(argv) {
     scope: resolveContractPath(args.projectRoot, args.scope, CONTRACT_ARTIFACTS['product-scope']),
     journey: resolveContractPath(args.projectRoot, args.journey, CONTRACT_ARTIFACTS['workflow-journey']),
     buildPack: resolveContractPath(args.projectRoot, args.buildPack, CONTRACT_ARTIFACTS['screen-build-pack']),
+    scenario: resolveContractPath(args.projectRoot, args.scenario, '.tmp/scenario-facts.json'),
   };
   let contracts;
   try {
     contracts = Object.fromEntries(Object.entries(paths).map(([key, filePath]) => [key, readJsonFile(filePath)]));
+    const projectRoot = args.projectRoot ? path.resolve(args.projectRoot) : process.cwd();
+    const persistencePath = resolveContractPath(projectRoot, args.persistence, '.tmp/persistence-contract.json');
+    const navigationPath = resolveContractPath(projectRoot, args.navigation, '.tmp/navigation-manifest.json');
+    contracts.persistence = fs.existsSync(persistencePath) ? readJsonFile(persistencePath) : null;
+    contracts.navigation = fs.existsSync(navigationPath) ? readJsonFile(navigationPath) : null;
   } catch (error) {
     return fatal(TOOL, error.message);
   }

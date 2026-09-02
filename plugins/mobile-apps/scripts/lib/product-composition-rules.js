@@ -288,11 +288,29 @@ function validateBuildPackSemantics(buildPackContract, { experience, scope, jour
     const screen = scope ? (scope.screens || []).find((candidate) => candidate.id === pack.screenId) : null;
     const servesCoreJob = screen ? (screen.jobIds || []).some((id) => coreJobIds.has(id)) : false;
 
-    if (pack.states?.offline
-      && !['intermittent', 'offline-first'].includes(experience?.operatingContext?.connectivity)) {
+    const identity = pack.identityHierarchy || {};
+    if ((identity.technical || []).includes(identity.primary)) {
       errors.push(finding(
-        'offline-state-without-approved-context',
-        `screen "${pack.screenId}" declares an offline state while Product Experience connectivity is "${experience?.operatingContext?.connectivity || 'unknown'}"`,
+        'primary-identity-marked-technical',
+        `screen "${pack.screenId}" marks its primary recognizable identity as technical`,
+      ));
+    }
+    const expectedChromeRoles = screen?.classification === 'durable-destination'
+      ? new Set(['root'])
+      : screen?.classification === 'modal-or-immersive-utility'
+        ? new Set(['modal', 'immersive'])
+        : new Set(['back', 'modal']);
+    if (screen && !expectedChromeRoles.has(pack.chrome?.role)) {
+      errors.push(finding(
+        'screen-chrome-mismatch',
+        `screen "${pack.screenId}" classification "${screen.classification}" is incompatible with chrome role "${pack.chrome?.role || '(missing)'}"`,
+      ));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(pack.states || {}, 'offline')) {
+      errors.push(finding(
+        'screen-owned-offline-state',
+        `screen "${pack.screenId}" declares package-owned offline runtime UX; use the offline integration contract instead`,
       ));
     }
 
@@ -359,6 +377,24 @@ function validateBuildPackSemantics(buildPackContract, { experience, scope, jour
       ));
     }
     if (mediaRole && mediaRole !== 'none') {
+      const requiredMediaFields = [
+        'assetKeyOrFieldBinding',
+        'aspectRatio',
+        'fit',
+        'focalPoint',
+        'firstViewport',
+        'fallback',
+      ];
+      const missingMediaFields = requiredMediaFields.filter((field) => (
+        pack.media[field] === undefined || pack.media[field] === null || pack.media[field] === ''
+      ));
+      if (missingMediaFields.length > 0
+        || !/^(asset|field):/.test(pack.media.assetKeyOrFieldBinding || '')) {
+        errors.push(finding(
+          'media-realization-incomplete',
+          `screen "${pack.screenId}" media cannot be implemented from its declared binding, crop, viewport, and fallback fields`,
+        ));
+      }
       const hasPreviewMedia = Boolean(
         previewContent.heroMediaLabel
         || (previewContent.records || []).some((record) => record.mediaLabel),
@@ -491,6 +527,7 @@ function compileBuildPacks(buildPackContract, { experience, scope, journey }) {
         order: step.order,
         surfaceKind: step.surface.kind,
         satisfies: step.satisfies || [],
+        dataOperation: step.dataOperation || { kind: 'none', classification: 'safe-presentation' },
       });
     }
   }
@@ -501,6 +538,18 @@ function compileBuildPacks(buildPackContract, { experience, scope, journey }) {
       const scopeScreen = (scope?.screens || []).find((candidate) => candidate.id === pack.screenId) || null;
       const route = scopeScreen?.route || pack.route;
       const navigation = navigationManifest.screens[pack.screenId];
+      const journeySteps = (stepsByScreen.get(pack.screenId) || [])
+        .sort((left, right) => compareCodePoints(left.journeyId, right.journeyId) || left.order - right.order);
+      const mediaRequired = pack.media?.role && pack.media.role !== 'none';
+      const testIds = {
+        screen: `screen-${pack.screenId}`,
+        focal: `focal-${pack.screenId}`,
+        primaryAction: `primary-action-${pack.screenId}`,
+        ...(mediaRequired ? { media: `media-${pack.screenId}` } : {}),
+        ...(pack.primaryActionPlacement === 'sticky-bottom'
+          ? { stickyAction: `sticky-action-${pack.screenId}` }
+          : {}),
+      };
       return {
         screenId: pack.screenId,
         ...(route ? { route } : {}),
@@ -517,8 +566,22 @@ function compileBuildPacks(buildPackContract, { experience, scope, journey }) {
           backBehavior: navigation.backBehavior,
           safeAreaBottomRole: navigation.tabVisible ? 'tab-bar' : 'screen',
         },
-        journeySteps: (stepsByScreen.get(pack.screenId) || [])
-          .sort((left, right) => compareCodePoints(left.journeyId, right.journeyId) || left.order - right.order),
+        journeySteps,
+        implementationContract: {
+          testIds,
+          routeParams: [...String(route || '').matchAll(/\[([^\]]+)\]/g)]
+            .map((match) => match[1]),
+          requiredOperations: journeySteps
+            .map((step) => step.dataOperation)
+            .filter((operation) => operation.kind && operation.kind !== 'none'),
+          identityPrimary: pack.identityHierarchy.primary,
+          navigationTitle: pack.chrome.navigationTitle,
+          primaryActionLabel: pack.firstViewport.primaryAction,
+          primaryActionPlacement: pack.primaryActionPlacement,
+          mediaBinding: mediaRequired ? pack.media.assetKeyOrFieldBinding : null,
+          mediaFallback: mediaRequired ? pack.media.fallback : null,
+          safeAreaBottomRole: navigation.tabVisible ? 'tab-bar' : 'screen',
+        },
         compositionSignature: compositionSignature(pack),
         pack,
       };

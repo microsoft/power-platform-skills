@@ -43,6 +43,13 @@ function workOrder(root, screenId = 'home') {
     route: `/${screenId}`,
     targetPath: path.join(root, 'app', `${screenId}.tsx`),
     pack: { screenId, purpose: `Implement ${screenId}` },
+    scenarioFacts: {
+      screenId,
+      scenarioRevision: 'a'.repeat(64),
+      headline: `${screenId} fixture`,
+      recordIds: [],
+      media: [],
+    },
     routeContract: { route: `/${screenId}`, params: [] },
     typedSkeleton: `export default function ${screenId}() { return null; }`,
     serviceSignatures: ['RecordsService.getAll(options)'],

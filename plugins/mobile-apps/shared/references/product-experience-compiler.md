@@ -237,18 +237,17 @@ node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
   --project-root "<working_dir>"
 ```
 
-- Render at least three representative user-facing screens.
-- When the primary journey has five or fewer critical screens, render all of
-  them.
-- For larger apps, render Home/entry, the core workflow, and outcome/detail,
-  plus up to two additional screens needed to understand the primary journey.
-- Show every selected phone frame together on one presentation board. Keep all
-  critical screens visible simultaneously when the journey has five or fewer;
-  for larger journeys, show the five representative screens together.
+- Render one to three storyboard frames: Home/entry, signature/core action,
+  and outcome/detail when those distinct screens exist.
+- Use one or two frames when the primary journey genuinely has fewer than three
+  distinct critical screens.
+- Show every storyboard phone together on one presentation board, and expose
+  the complete screen graph plus required states in expandable `All screens`.
 - Use tabs and journey actions only to focus or scroll to a phone. They must
-  never replace or hide another selected screen.
+  never replace or hide another storyboard screen.
 - Use the approved design tokens, screen build packs, journey order, populated
-  sample content, and state controls.
+  scenario facts, media keys, and state controls. The HTML approves experience
+  intent and does not claim React Native or native pixel verification.
 
 Reject the preview before implementation when it:
 

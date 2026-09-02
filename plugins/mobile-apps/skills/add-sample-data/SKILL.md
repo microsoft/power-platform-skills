@@ -17,7 +17,7 @@ Populate Dataverse tables with realistic sample records so a freshly-scaffolded 
 - **Coverage over volume — every table in the manifest gets seeded.** The #1 failure mode of a freshly-scaffolded code app is a home / dashboard / list screen that renders an empty state on first launch because its source table has zero rows. An empty downstream table is **worse than a 3-row table.** Default to minimal-but-complete: small counts everywhere, no table left empty. Volume is a secondary knob — coverage is the contract.
 - **Insertion order matters.** Parent / referenced tables must be inserted before child / referencing tables so lookup IDs are available.
 - **Contextual data, not Lorem Ipsum.** Generate values that match column names + types. A `cr3e9_sitename` column in an inspection app gets "Westside Construction Site", not "Sample Name 1".
-- **Contracts lead; schema constrains.** For a generated app, derive records and edge states from the approved Product Experience, Product Scope, Workflow Journey, and compiled screen build packs. Use Dataverse metadata only to constrain payload shape, relationships, option values, and insertion order. A table or column name must never invent the product scenario.
+- **Scenario facts lead; schema constrains.** For a generated app, use the approved canonical scenario for records, relationships, media, invariants, and screen bindings. Product Experience, Product Scope, Workflow Journey, and compiled screen packs constrain meaning and behavior. Dataverse metadata constrains payload shape, option values, and insertion order. A table, column, or preview field must never invent product facts.
 - **Fail gracefully.** On insertion failure, log the error and continue with remaining records — never auto-rollback. The user can re-run after fixing the issue.
 - **Idempotent re-runs.** If a previous run partially completed, the second run reads `memory-bank.md`'s seeded-data table and skips records already inserted.
 - **Solution-scoped inserts.** Always pass `--solution <uniqueName>` so records land in our solution, not the default.
@@ -35,13 +35,19 @@ Before generating any row, inspect these canonical artifacts:
 .tmp/product-scope-contract.json
 .tmp/workflow-journey-contract.json
 .tmp/compiled-screen-build-pack.json
+.tmp/scenario-facts.json
 ```
 
-- If all four exist, run their existing validators, including `compile-screen-build-pack.js --check`, then compile the canonical sample-data projection:
+- If all five exist, run their existing validators, including
+  `compile-screen-build-pack.js --check` and
+  `validate-fixture-scenarios.js --check`, then compile and check the canonical
+  sample-data projection:
 
   ```bash
   node "${CLAUDE_SKILL_DIR}/../../scripts/compile-sample-data-obligations.js" \
     --project-root "<working_dir>"
+  node "${CLAUDE_SKILL_DIR}/../../scripts/compile-sample-data-obligations.js" \
+    --project-root "<working_dir>" --check
   ```
 
   Read `.tmp/sample-data-obligations.json` and treat it as the fixture source of truth. Stop when a contract is invalid, stale, or bound to a different revision. Never combine a current schema with stale product contracts.
@@ -50,7 +56,10 @@ Before generating any row, inspect these canonical artifacts:
 - Read Product Experience for the user's vocabulary, operating context, decision risk, media strategy, and forbidden defaults.
 - Read Product Scope for every core/supporting job, its evidence, the approved screen graph, and each data entity's realization.
 - Read Workflow Journey for ordered actions, data operations, success outcomes, failure recovery, and job-specific states.
-- Read the compiled screen build packs for the exact first-viewport records, metrics, fields, summary rows, trust signals, media labels, and action outcomes the approved preview promises.
+- Read the compiled screen packs for first-viewport structure, trust signals,
+  media roles, and action outcomes. Read scenario facts for every concrete
+  record, relationship, status, date, count, metric value, media key/source,
+  and fallback shown by the preview or app.
 
 Build a fixture-coverage matrix from `sample-data-obligations.json` before writing payloads. Each product-specific preview value or workflow state must map to either a seeded record/relationship, a deterministic calculation over seeded records, or an explicit local-UI value. Seed at least one coherent end-to-end journey and enough contrasting records to exercise every first-viewport status, queue, metric, and decision signal. Do not add records for screens, states, or offline behavior absent from the obligations.
 
@@ -65,13 +74,17 @@ src/generated/services/*/*.seed.json
 src/generated/services/*.seed.json
 ```
 
-Map seed objects to Dataverse payloads using `.datamodel-manifest.json`:
+Map seed objects to canonical scenario record IDs and then to Dataverse payloads
+using `.datamodel-manifest.json`:
 
 - Keep values only for real manifest columns.
 - Translate lookup references into exact `<schemaName>@odata.bind` keys from the manifest.
 - Keep picklist integers from the manifest; do not invent values from labels.
 - Skip local-only prototype fields that have no Dataverse column.
 - Preserve dependency-tier insertion order.
+- Reuse a seed value only when its ID and value equal the bound scenario fact.
+  Reject conflicting seed values; never let an older prototype seed override
+  the current scenario artifact.
 
 If a seed file cannot be mapped safely, fall back to generated contextual sample rows for that table and record `DONE_WITH_CONCERNS` in the summary. `--from-seed` is a preference, not permission to insert malformed data.
 

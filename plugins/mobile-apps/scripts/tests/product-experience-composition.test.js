@@ -218,7 +218,44 @@ test('compiled output carries canonical screen classification and navigation she
       scoped.classification === 'durable-destination' ? 'root' : 'back');
     assert.strictEqual(entry.navigationShell.safeAreaBottomRole,
       entry.navigationShell.tabVisible ? 'tab-bar' : 'screen');
+    assert.equal(entry.implementationContract.testIds.screen, `screen-${entry.screenId}`);
+    assert.equal(
+      entry.implementationContract.primaryActionLabel,
+      entry.pack.firstViewport.primaryAction,
+    );
+    assert.deepEqual(
+      entry.implementationContract.routeParams,
+      [...String(entry.route || '').matchAll(/\[([^\]]+)\]/g)].map((match) => match[1]),
+    );
   }
+});
+
+test('compiled output preserves human-first identity, chrome, and media realization', () => {
+  const bundle = bundleFor('commerce');
+  const compiled = compile(bundle).compiled;
+  for (const entry of compiled.screens) {
+    assert.equal(entry.pack.identityHierarchy.primary, entry.pack.hierarchy.dominant);
+    assert.ok(['root', 'back', 'modal', 'immersive'].includes(entry.pack.chrome.role));
+    assert.ok(entry.pack.chrome.navigationTitle);
+    if (entry.pack.media.role !== 'none') {
+      assert.match(entry.pack.media.assetKeyOrFieldBinding, /^(asset|field):/);
+      assert.ok(entry.pack.media.aspectRatio > 0);
+      assert.ok(['cover', 'contain'].includes(entry.pack.media.fit));
+      assert.ok(['center', 'top', 'subject-defined'].includes(entry.pack.media.focalPoint));
+      assert.equal(typeof entry.pack.media.firstViewport, 'boolean');
+    }
+  }
+});
+
+test('screen packs reject missing identity and incomplete media realization', () => {
+  const bundle = bundleFor('commerce');
+  const noIdentity = clone(bundle.buildPack);
+  delete noIdentity.packs[0].identityHierarchy;
+  assert.ok(codes(compileScreenBuildPack(noIdentity, bundle)).includes('schema'));
+
+  const incompleteMedia = clone(bundle.buildPack);
+  delete incompleteMedia.packs[0].media.assetKeyOrFieldBinding;
+  assert.ok(codes(compileScreenBuildPack(incompleteMedia, bundle)).includes('media-realization-incomplete'));
 });
 
 test('a user-facing screen with no build pack is rejected', () => {
@@ -271,12 +308,12 @@ test('a non-visual experience is not forced to invent media', () => {
   assert.deepStrictEqual(compile(bundle).errors, []);
 });
 
-test('an always-online experience cannot silently acquire offline screen states', () => {
+test('screen packs cannot own package-provided offline runtime states', () => {
   const bundle = bundleFor('analytics');
   assert.strictEqual(bundle.experience.operatingContext.connectivity, 'always-online');
   const buildPack = clone(bundle.buildPack);
   buildPack.packs[0].states.offline = 'Show the last synchronized metrics';
-  assert.ok(codes(compileScreenBuildPack(buildPack, bundle)).includes('offline-state-without-approved-context'));
+  assert.ok(codes(compileScreenBuildPack(buildPack, bundle)).includes('screen-owned-offline-state'));
 });
 
 test('declared media without a fallback or a source is rejected', () => {

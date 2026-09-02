@@ -118,6 +118,16 @@ test('every Product Scope concept requires exactly one compatible owner', () => 
   );
 });
 
+test('Product Scope concept names must remain unique after canonical normalization', () => {
+  assert.throws(
+    () => compilePersistenceContract(
+      scope({ 'Repair Log': 'existing-table', repair_log: 'existing-table' }),
+      decisions({}),
+    ),
+    /concept IDs collide at repair-log/,
+  );
+});
+
 test('native capabilities cannot silently select persistence or offline mode', () => {
   const input = decisions({ evidence: 'dataverse' });
   input.nativeCapabilities = [{

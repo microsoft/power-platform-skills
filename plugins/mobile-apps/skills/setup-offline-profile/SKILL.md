@@ -1,6 +1,6 @@
 ---
 name: setup-offline-profile
-description: Use when the user wants to enable offline mode for a Power Apps mobile app and create a Mobile Offline Profile in Dataverse — designs per-table row scope, relationships, columns, and sync frequency through a 3-gate approval flow.
+description: Use when an explicit offline integration for a Dataverse-backed Power Apps mobile app requires authoring a Mobile Offline Profile, or when a user explicitly invokes profile authoring for an existing project; designs per-table row scope, relationships, columns, and sync frequency through one consolidated configuration review.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode
 model: opus
@@ -16,9 +16,11 @@ model: opus
 
 # Setup Offline Profile
 
-End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (and any other compatible Power Apps client) can use to download data for offline access.
+End-to-end workflow for authoring a Dataverse Mobile Offline Profile that the app (and any other compatible Power Apps client) can use to download data for offline access.
 
-**Scope of v0**: authoring only. This skill creates the Dataverse entities (`mobileofflineprofile`, `mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes the full app-level offline config — profile metadata, per-table scope, and the temporary SDK-workaround fields — to `offline-profile.json`. **This skill does NOT modify `power.config.json`** (that file is owned by `npx power-apps init` and its schema is controlled upstream). It also does NOT scaffold an offline runtime (SQLite store, sync engine, write queue) in the generated app — that's gated on upstream `@microsoft/power-apps-native-host` runtime support.
+**Scope of v0**: this skill only authors the Dataverse Mobile Offline Profile. It creates the Dataverse entities (`mobileofflineprofile`, `mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes profile metadata, per-table scope, and required host configuration to `offline-profile.json`. It does not own product screens, routes, jobs, or domain tables, and it never adds an offline store, queue, sync engine, or package dependency. **This skill does NOT modify `power.config.json`** (that file is owned by `npx power-apps init` and its schema is controlled upstream).
+
+The template's existing `@microsoft/power-apps-native-offline` and `@microsoft/power-apps-native-host` integration owns runtime connection, queued, syncing, failed, retry, and conflict UX. This skill supplies `offline-profile.json` only when a Dataverse Mobile Offline Profile is required; runtime status/sync/retry/conflict UX remains package integration.
 
 **Out of scope for v0**:
 - Custom filter mode (`recorddistributioncriteria=3`, savedquery picker) — defer to v0.5
@@ -27,11 +29,33 @@ End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Design the profile in foreground → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+1. Verify invocation contracts, project, and auth → 2. Resolve mode (create vs extend) → 3. Design the profile in foreground → consolidated configuration review → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → 6. POST profile items → 7. POST associations and selected columns → 8. Validate + publish → 9. Persist artifacts → 10. Summary
 
 ---
 
 ### Step 1 — Verify project & auth
+
+First classify the invocation:
+
+- **Orchestrated `/create-mobile-app`:** the caller must pass
+  `--orchestrated-create`, `--persistence-contract
+  <working_dir>/.tmp/persistence-contract.json`, and
+  `--offline-integration-contract
+  <working_dir>/.tmp/offline-integration-contract.json`. Require both contracts;
+  a partial or missing pair is `BLOCKED`. Validate that the persistence mode is
+  `dataverse` or `mixed`, the integration contract is owned by
+  `offline-package`, its `persistenceRevision` matches, its adapter is
+  `dataverse-mobile-offline-profile` or `mixed-owner-offline-adapters` for the
+  corresponding mode, and `mobileOfflineProfileRequired` is `true`. The
+  orchestrated flow has already selected offline, so do not ask a selection or
+  opt-out question here. Profile configuration review remains required because
+  it controls Dataverse mutations.
+- **Standalone existing project:** a user may still explicitly invoke this
+  skill without the planning contracts. The explicit invocation is the offline
+  request; continue with the manifest/auth/profile checks below and do not
+  manufacture `.tmp/offline-integration-contract.json`. If either contract path
+  is supplied, require the complete valid pair rather than silently degrading
+  to standalone mode.
 
 ```bash
 test -f power.config.json && test -f app.config.js
@@ -67,6 +91,9 @@ STOP conditions:
 - Neither `.datamodel-manifest.json` nor `docs/plan-artifacts/.datamodel-manifest.json` → "Run `/add-dataverse` first — offline profiles require a data model."
 - Environment resolution failure → standard auth recovery (`az login --tenant <env-tenant>` or provide environment URL directly; see [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)).
 - Web-only + user declines override → STOP. Print: `Offline profile creation skipped — no native target.`
+- Orchestrated create is missing either canonical contract, or their revisions,
+  mode, owner, adapter, or profile requirement disagree → STOP before any
+  Dataverse read or write.
 
 #### Step 1a — Environment consistency check
 
@@ -79,7 +106,7 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 | `status` value | Action |
 |---|---|
 | (section absent) OR `status: none` | First-time run. Continue to Step 2. |
-| `status: not-applicable` | User previously opted out via `/create-mobile-app` Step 6.85 ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
+| `status: not-applicable` | Legacy marker from an older create flow. In orchestrated mode, the validated integration contract is authoritative; clear the marker and continue. In standalone mode, explicit invocation supersedes the marker; clear it and continue. Do not treat it as a current selection question. |
 | `status: done` AND a profile matching `profileId` still exists in env | Already complete. Print summary from the memory-bank block; ask user if they want to `/edit-offline-profile` (v0.2) or just exit. |
 | `status: done` BUT `GET /mobileofflineprofiles(<profileId>)` returns 404 | Profile was deleted externally (maker portal or another env). Treat as `none`; clear the section; continue to Step 2. |
 | `status: in-progress` AND profile exists in env | **Resume flow** — see below. |
@@ -149,8 +176,10 @@ Decision tree — evaluate in order:
 
 Read the model manifest, current Product Scope and screen build packs when
 present, live table availability flags, and existing profile state in extend
-mode. Build one in-memory configuration and render `_offline_section.md` for the
-existing review UI. No child agent participates.
+mode. Product Scope and packs are read-only evidence for profile scope/column
+selection; this skill never modifies them. Build one in-memory configuration
+and render `_offline_section.md` for the existing review UI. No child agent
+participates.
 
 For each table, apply this deterministic row-scope cascade in order:
 
@@ -698,9 +727,9 @@ Next steps:
   - /preview-offline-scope         → estimate download size before pushing the app (not yet implemented — v0.2)
   - /edit-offline-profile <table>  → re-scope one table (not yet implemented — v0.2)
 
-Note: The Expo runtime does not yet consume this profile automatically. The profile is now
-authored in Dataverse and any compatible Power Apps client (canvas, model-driven) will use it.
-Native runtime support remains deferred until upstream host support is confirmed.
+Runtime integration: the template passes offline-profile.json to PowerAppsProvider and the
+existing host/offline package owns connection, queued, syncing, failed, retry, and conflict UX.
+This skill does not add or modify product screens, routes, jobs, or domain tables.
 ```
 
 ## Status code (final line)

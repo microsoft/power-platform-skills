@@ -34,6 +34,41 @@ test('orchestrator and agent prompts stay within progressive-loading budgets', (
     bytes('shared/shared-instructions-core.md') <= 3 * 1024,
     'mandatory shared instructions exceed 3 KiB',
   );
+
+  const designRouter = read('skills/design-system/SKILL.md');
+  assert.ok(Buffer.byteLength(designRouter) <= 8 * 1024, 'design router exceeds 8 KiB');
+  assert.ok(designRouter.split('\n').length <= 150, 'design router exceeds 150 lines');
+  const automaticDesignReadSet = Buffer.byteLength(designRouter)
+    + bytes('skills/design-system/references/auto-experience.md')
+    + bytes('skills/design-system/references/design-system-schema.md')
+    + bytes('shared/shared-instructions-core.md');
+  assert.ok(
+    automaticDesignReadSet <= 26 * 1024,
+    `automatic design read set is ${automaticDesignReadSet} bytes`,
+  );
+});
+
+test('design router progressively loads optional modes', () => {
+  const router = read('skills/design-system/SKILL.md');
+  for (const reference of [
+    'auto-experience.md',
+    'brand-style-workflow.md',
+    'gallery-review.md',
+    'figma-extraction.md',
+    'lifecycle-migration.md',
+  ]) {
+    assert.match(router, new RegExp(reference.replace('.', '\\.')));
+  }
+  assert.match(router, /Choose the first matching route\. Do not preload references from another row/);
+
+  const automatic = read('skills/design-system/references/auto-experience.md');
+  assert.match(automatic, /Do not read input modes, style galleries, named directions/);
+  assert.match(automatic, /hierarchy and first-viewport order/);
+  assert.match(automatic, /media role, crop, fallback/);
+  assert.match(automatic, /accessibility, Dynamic Type, contrast, touch targets/);
+  assert.doesNotMatch(automatic, /\]\(\.\/input-modes\.md\)/);
+  assert.doesNotMatch(automatic, /\]\(\.\/figma-extraction\.md\)/);
+  assert.doesNotMatch(automatic, /\]\(\.\/gallery-review\.md\)/);
 });
 
 test('screen builder static required-reading set stays below 40 KiB', () => {
@@ -159,7 +194,7 @@ test('relative Markdown links in the mobile plugin resolve', () => {
   const walk = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const fullPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) walk(fullPath);
+      if (entry.isDirectory() && entry.name !== 'node_modules') walk(fullPath);
       else if (entry.name.endsWith('.md')) markdownFiles.push(fullPath);
     }
   };

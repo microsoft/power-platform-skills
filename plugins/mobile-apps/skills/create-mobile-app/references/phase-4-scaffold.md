@@ -266,10 +266,12 @@ After `/design-system` returns `DONE`, require
 and `_plan_preview.html`. Missing
 artifacts are `BLOCKED`; do not silently continue with a generic fallback.
 
-The preview is the **FIRST and ONLY HTML experience preview** in the flow. It
-must contain at least three representative user-facing screens and all
-critical screens in a primary journey of five or fewer. It must be selected
-from the Workflow Journey, not from List/Form/Detail archetypes.
+The preview is the **FIRST and ONLY HTML experience preview** in the flow. Its
+default storyboard contains one to three frames selected from the Workflow
+Journey: entry/root, signature/core action, and outcome/review when available.
+The expandable `All screens` area contains the complete graph and required
+states. It is not selected from List/Form/Detail archetypes and does not claim
+React Native or native pixel verification.
 
 Before continuing, verify the product-experience, scope, journey, and build-pack
 contracts:
@@ -383,6 +385,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
   --artifact "plan=native-app-plan.md" \
   --artifact "approval=.tmp/mobile-plan-status.json" \
   --artifact "build-pack=.tmp/compiled-screen-build-pack.json" \
+  --artifact "scenario-facts=.tmp/scenario-facts.json" \
   --artifact "preview=_plan_preview.html"
 ```
 

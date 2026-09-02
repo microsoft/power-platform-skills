@@ -27,6 +27,7 @@ const {
 const MAX_EDITS = 100;
 const STALE_DATA_MODEL_ARTIFACTS = [
   ARTIFACTS.pipeline,
+  ARTIFACTS.dataModelUsage,
   ARTIFACTS.dataverseManifest,
   '.tmp/dataverse-reconciliation-scope.json',
   '.tmp/dataverse-execution-reconciliation.json',
@@ -36,6 +37,8 @@ const UNDO_ARTIFACTS = [
   ARTIFACTS.dataModel,
   ARTIFACTS.scope,
   ARTIFACTS.approvals,
+  ARTIFACTS.scenarioFacts,
+  ARTIFACTS.offlineIntegration,
   PROGRESS_ARTIFACT,
   ...STALE_DATA_MODEL_ARTIFACTS,
 ];
@@ -430,6 +433,44 @@ function addAffected(affectedItems, kind, id, label = id) {
   }
 }
 
+function addUsageRemovalImpact(projectRoot, command, blockers, affectedItems) {
+  const usage = readJson(projectRoot, ARTIFACTS.dataModelUsage);
+  if (!usage) return;
+  const table = (usage.tables || []).find((item) => (
+    normalizedReference(item.tableLogicalName) === normalizedReference(command.tableLogicalName)
+  ));
+  if (!table) return;
+  let entry = table;
+  if (command.type === 'remove-column') {
+    entry = (table.fields || []).find((item) => (
+      normalizedReference(item.logicalName) === normalizedReference(command.columnLogicalName)
+    ));
+  } else if (command.type === 'remove-relationship') {
+    entry = (table.relationships || []).find((item) => (
+      normalizedReference(item.schemaName)
+        === normalizedReference(command.relationshipSchemaName)
+    ));
+  }
+  const consumers = Array.isArray(entry?.consumers)
+    ? entry.consumers.filter((consumer) => String(consumer?.id || '').trim())
+    : [];
+  if (consumers.length === 0) return;
+  const labels = consumers.map((consumer) => `${consumer.kind}:${consumer.id}`);
+  addBlocker(
+    blockers,
+    'usage-consumer-dependency',
+    `${command.type.replace('remove-', '')} is still used by ${labels.join(', ')}`,
+  );
+  for (const consumer of consumers) {
+    addAffected(
+      affectedItems,
+      'usage-consumer',
+      consumer.id,
+      `${consumer.kind}: ${consumer.id}`,
+    );
+  }
+}
+
 function prepareTableRemoval(projectRoot, contract, scope, command, blockers, affectedItems) {
   const table = findTable(contract, command.tableLogicalName);
   const references = tableReferences(table);
@@ -628,6 +669,7 @@ function prepareRemoval(projectRoot, currentContent, scope, command) {
   } else {
     throw new Error(`Unsupported data model removal: ${command.type || '(missing)'}`);
   }
+  addUsageRemovalImpact(projectRoot, command, blockers, affectedItems);
   return { affectedItems, blockers, contract, edited, nextScope };
 }
 
@@ -721,6 +763,7 @@ function invalidateApprovalReceipt(receipt, now) {
   const next = structuredClone(receipt);
   const keys = new Set([
     'dataModel',
+    'dataModelUsage',
     'nativeCapabilities',
     'connectors',
     'screenPlan',
@@ -914,7 +957,11 @@ function applyDataModelEdit(projectRoot, command, now = new Date().toISOString()
   };
   if (receipt) writes[ARTIFACTS.approvals] = receipt;
   if (scopeValidation) writes[ARTIFACTS.scope] = nextScope;
-  transactionalFiles(projectRoot, writes, STALE_DATA_MODEL_ARTIFACTS.filter(
+  const staleArtifacts = [
+    ...STALE_DATA_MODEL_ARTIFACTS,
+    ...(scopeValidation ? [ARTIFACTS.scenarioFacts, ARTIFACTS.offlineIntegration] : []),
+  ];
+  transactionalFiles(projectRoot, writes, staleArtifacts.filter(
     (relativePath) => fs.existsSync(resolveInsideProject(projectRoot, relativePath)),
   ));
   writeBuildPlan(projectRoot);

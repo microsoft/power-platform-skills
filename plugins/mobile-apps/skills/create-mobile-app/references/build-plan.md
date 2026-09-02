@@ -49,6 +49,28 @@ planning inputs are:
 - `.tmp/persistence-contract.json`
 - `.tmp/workflow-journey-contract.json`
 - `.tmp/compiled-screen-build-pack.json`
+- `.tmp/scenario-facts.json`
+- `.tmp/data-model-usage.json`
+
+Scenario facts are the sole concrete fixture authority for plan preview, sample
+obligations, prototype repositories, and bounded screen work orders. The browser
+shows only revision/binding health and record, scenario, screen-binding, media,
+and invariant counts. It never exposes raw values, relationships, paths, or
+media URLs and never revalidates scenario semantics itself.
+
+The usage artifact is present in every persistence mode. The browser projects
+only whether it is present and revision-bound plus compact requirement, table,
+field, relationship, and consumer-link counts. It never exposes the raw usage
+contract and never independently revalidates or infers its consumers; the
+runtime validator remains authoritative.
+
+`.tmp/offline-integration-contract.json` is conditional: it exists only when
+offline was explicitly selected and is watched through the same `ARTIFACTS`
+projection as the always-present contracts. The Build Plan sets
+`offlineIntegration.selected` from artifact existence, never from Product
+Experience connectivity. It exposes only the redacted owner, adapter, runtime
+states, and profile-required flag in Capabilities & data. Absence renders no
+offline capability.
 
 `.tmp/dataverse-concepts.json`, the foreground snapshot/evidence, and
 `.tmp/dataverse-schema-contract.json` exist only when the persistence mode is
@@ -67,7 +89,7 @@ content.
 |---|---|---|---|
 | Requirements confirmed at Step 2c | `requirements` | `active` | `complete` |
 | Product Experience and Product Scope | `experience` | `active` | `complete` |
-| Capabilities, connectors, concept owners, and compiled persistence | `architecture` | `active` | `complete` |
+| Capabilities, connectors, concept owners, compiled persistence, and conditional offline integration | `architecture` | `active` | `complete` |
 | Conditional Dataverse plan-only contract | `data-model` | `active` | `complete`, or `complete` with an owner-backed not-applicable detail |
 | Gate 1 or Gate 2 response | owning phase | `waiting` | `complete` or `active` for repair |
 | Template preparation and initialization | `scaffold` | `active` | `complete` after scaffold TypeScript gate |
@@ -111,6 +133,14 @@ for a table, column, or relationship. The local bridge:
 6. records whether the edit is schema-only or changes Product Scope/ownership,
    then invalidates the owning approval and downstream resume checkpoints.
 
+Every schema edit also invalidates `.tmp/data-model-usage.json`. The edit
+journal snapshots that compiled artifact with the other stale Data Model
+artifacts so Undo restores the exact prior file. Removal impact analysis reads
+the current compiled usage when present: a table, column, or relationship with
+canonical consumers is blocked and reports the affected consumer IDs. A typed
+system exemption alone is not a blocker; primary-name, relationship, key, and
+other existing schema safety rules still apply.
+
 Before entering any approval, before Step 3.7, and before every mutation phase,
 read `.tmp/mobile-build-plan-edits.json` when present and compare its last
 `revision` with the currently validated Data Model and persistence revisions.
@@ -119,6 +149,11 @@ If it changed since the prior check:
 - stop the current handoff;
 - read the canonical JSON files directly, never the HTML;
 - rerun Data Model, Product Scope, and persistence validation as applicable;
+- repair `.tmp/data-model-usage-input.json`, recompile usage, and rerun
+  `validate-data-model-usage.js --project-root "<working_dir>" --check`;
+- when Product Scope, persistence, navigation, Journey, or compiled packs
+  changed, repair `.tmp/scenario-facts-input.json`, recompile scenario facts,
+  and rerun `validate-fixture-scenarios.js --project-root "<working_dir>" --check`;
 - rerender affected human-plan sections;
 - reopen Gate 2 for a schema-only change within Dataverse-owned concepts;
 - reopen Gate 1, recompile persistence, and invalidate every mode-dependent
@@ -134,7 +169,7 @@ Never delete execution evidence to re-enable editing.
 
 ## Completion
 
-After final validation, record:
+After the final usage check and the other final validators pass, record:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" progress \

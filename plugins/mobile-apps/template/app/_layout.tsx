@@ -23,6 +23,9 @@ function isMissingOfflineProfile(error: unknown): boolean {
   );
 }
 
+// File presence is the Dataverse adapter activation boundary. PowerAppsProvider
+// and the installed offline package own runtime status, queue, sync, retry, and
+// conflict behavior; product screens do not recreate those states.
 let offlineProfile: Record<string, unknown> | undefined;
 try {
   offlineProfile = require('../offline-profile.json') as Record<string, unknown>;

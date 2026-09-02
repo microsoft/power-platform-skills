@@ -13,38 +13,41 @@ const {
   ACCEPTANCE_SCENARIOS,
   acceptanceBundle,
 } = require('./helpers/product-experience-acceptance-scenarios');
+const { scenarioFactsForBundle } = require('./helpers/scenario-facts-fixtures');
 const { cleanup, makeProjectDir, runCli, writeContracts } = require('./helpers/contract-cli');
 
 function obligationsFor(key) {
   const bundle = acceptanceBundle(key);
-  const buildResult = compileScreenBuildPack(bundle.buildPack, bundle);
-  assert.deepStrictEqual(buildResult.errors, []);
+  const { compiled, scenario } = scenarioFactsForBundle(bundle);
   return {
     bundle,
-    compiled: buildResult.compiled,
-    obligations: compileSampleDataObligations({ ...bundle, compiled: buildResult.compiled }),
+    compiled,
+    scenario,
+    obligations: compileSampleDataObligations({ ...bundle, compiled, scenario }),
   };
 }
 
 test('all four briefs compile to deterministic, revision-bound sample-data obligations', () => {
   for (const key of Object.keys(ACCEPTANCE_SCENARIOS)) {
-    const { bundle, compiled, obligations } = obligationsFor(key);
+    const { bundle, compiled, scenario, obligations } = obligationsFor(key);
     const again = obligationsFor(key).obligations;
     assert.strictEqual(obligations.obligationsRevision, again.obligationsRevision, key);
     assert.strictEqual(obligations.experienceRevision, contractRevision(bundle.experience));
     assert.strictEqual(obligations.scopeRevision, contractRevision(bundle.scope));
     assert.strictEqual(obligations.journeyRevision, contractRevision(bundle.journey));
     assert.strictEqual(obligations.compiledRevision, compiled.compiledRevision);
+    assert.strictEqual(obligations.scenarioRevision, scenario.scenarioRevision);
     assert.strictEqual(obligations.requirements.length, bundle.scope.requirements.length);
     assert.strictEqual(obligations.screens.length, bundle.scope.screens.length);
-    assert.ok(obligations.screens.every((screen) => screen.previewContent.records.length >= 3));
+    assert.ok(obligations.screens.every((screen) => screen.scenarioFacts.records.length >= 3));
     assert.ok(obligations.screens.some((screen) => (
-      screen.previewContent.records.some((record) => bundle.descriptor.fixtureValues.includes(record.title))
+      screen.scenarioFacts.records.some((record) => bundle.descriptor.fixtureValues.includes(record.title))
     )));
+    assert.deepStrictEqual(obligations.records, scenario.records);
   }
 });
 
-test('sample-data obligations preserve actions, states, operations, and realistic preview values', () => {
+test('sample-data obligations preserve actions, states, operations, and canonical scenario values', () => {
   const { obligations } = obligationsFor('itAssetTracking');
   const inventory = obligations.screens.find((screen) => screen.screenId === 'inventory');
   const asset = obligations.screens.find((screen) => screen.screenId === 'asset');
@@ -53,27 +56,29 @@ test('sample-data obligations preserve actions, states, operations, and realisti
   assert.ok(Object.hasOwn(inventory.states, 'noResults'));
   assert.ok(Object.hasOwn(asset.states, 'permission'));
   assert.ok(asset.dataOperations.some((entry) => entry.operation.kind === 'update'));
-  assert.ok(inventory.previewContent.records.some((record) => record.title === 'Laptop LT-2048 - assigned to Morgan Lee'));
+  assert.ok(inventory.scenarioFacts.records.some((record) => record.title === 'Laptop LT-2048 - assigned to Morgan Lee'));
 });
 
-test('offline obligations appear only for evidence-backed offline products', () => {
-  for (const key of ['icrcReceiving', 'gymMaintenance']) {
-    const { obligations } = obligationsFor(key);
-    assert.ok(obligations.screens.every((screen) => Object.hasOwn(screen.states, 'offline')), key);
-  }
-  for (const key of ['flightCommerce', 'itAssetTracking']) {
+test('sample obligations never invent package-owned offline screen states', () => {
+  for (const key of Object.keys(ACCEPTANCE_SCENARIOS)) {
     const { obligations } = obligationsFor(key);
     assert.ok(obligations.screens.every((screen) => !Object.hasOwn(screen.states, 'offline')), key);
   }
 });
 
-test('tampered compiled input is rejected before obligations are produced', () => {
-  const { bundle, compiled } = obligationsFor('gymMaintenance');
+test('tampered compiled or scenario input is rejected before obligations are produced', () => {
+  const { bundle, compiled, scenario } = obligationsFor('gymMaintenance');
   const tampered = structuredClone(compiled);
   tampered.screens[0].pack.previewContent.headline = 'Tampered after compilation';
   assert.throws(
-    () => compileSampleDataObligations({ ...bundle, compiled: tampered }),
+    () => compileSampleDataObligations({ ...bundle, compiled: tampered, scenario }),
     /compiledRevision does not match/,
+  );
+  const staleScenario = structuredClone(scenario);
+  staleScenario.records[0].fields.title = 'Tampered scenario';
+  assert.throws(
+    () => compileSampleDataObligations({ ...bundle, compiled, scenario: staleScenario }),
+    /scenarioRevision does not match content/,
   );
 });
 
@@ -81,6 +86,12 @@ test('CLI writes and checks the canonical sample-data obligation artifact', () =
   const projectRoot = makeProjectDir('sample-obligations');
   try {
     writeContracts(projectRoot, acceptanceBundle('icrcReceiving'));
+    const bundle = acceptanceBundle('icrcReceiving');
+    const { scenario } = scenarioFactsForBundle(bundle);
+    fs.writeFileSync(
+      path.join(projectRoot, '.tmp', 'scenario-facts.json'),
+      `${JSON.stringify(scenario, null, 2)}\n`,
+    );
     const created = runCli('compile-sample-data-obligations.js', ['--project-root', projectRoot]);
     const output = path.join(projectRoot, DEFAULT_OUTPUT);
     assert.strictEqual(created.code, 0);

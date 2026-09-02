@@ -40,6 +40,26 @@ const setupDataModelSkill = fs.readFileSync(
   path.join(pluginRoot, 'skills', 'setup-datamodel', 'SKILL.md'),
   'utf8',
 );
+const setupOfflineProfileSkill = fs.readFileSync(
+  path.join(pluginRoot, 'skills', 'setup-offline-profile', 'SKILL.md'),
+  'utf8',
+);
+const templatePackage = JSON.parse(fs.readFileSync(
+  path.join(pluginRoot, 'template', 'package.json'),
+  'utf8',
+));
+const templateAppConfig = fs.readFileSync(
+  path.join(pluginRoot, 'template', 'app.config.js'),
+  'utf8',
+);
+const templateLayout = fs.readFileSync(
+  path.join(pluginRoot, 'template', 'app', '_layout.tsx'),
+  'utf8',
+);
+const templateReadme = fs.readFileSync(
+  path.join(pluginRoot, 'template', 'README.md'),
+  'utf8',
+);
 
 test('template preparation is delegated to the deterministic script', () => {
   const start = skill.indexOf('### Step 5 — Prepare existing template');
@@ -53,6 +73,21 @@ test('template preparation is delegated to the deterministic script', () => {
   assert.doesNotMatch(step, /\ncp\s+.*shared\/samples/);
   assert.doesNotMatch(step, /baseUrl\s*=/);
   assert.doesNotMatch(step, /Write `app\/_layout\.tsx`/);
+});
+
+test('template host package owns conditional offline runtime integration', () => {
+  assert.equal(
+    templatePackage.dependencies['@microsoft/power-apps-native-offline'],
+    '^0.1.32',
+  );
+  assert.ok(templatePackage.dependencies['@microsoft/power-apps-native-host']);
+  assert.match(templateAppConfig, /'@microsoft\/power-apps-native-offline'/);
+  assert.match(templateAppConfig, /owns connection, queue, sync,[\s\S]*retry, and conflict/);
+  assert.match(templateLayout, /offlineProfile=\{offlineProfile\}/);
+  assert.match(templateLayout, /installed offline package own runtime status/);
+  assert.match(templateReadme, /do not add another offline dependency/);
+  assert.match(templateReadme, /Connector-only and[\s\S]*documented by the installed package/);
+  assert.match(templateReadme, /stop rather than inventing an API/);
 });
 
 test('environment discovery is non-persisting before the rough plan gate', () => {
@@ -124,6 +159,8 @@ test('live Build Plan starts after proceed and remains separate from design prev
   const scaffold = skill.slice(scaffoldStart, scaffoldEnd);
   assert.match(scaffold, /separate from `_build_plan\.html`/);
   assert.match(scaffold, /at most three phone frames/);
+  assert.match(scaffold, /expandable `All screens` area/);
+  assert.match(scaffold, /does not claim[\s\S]*native pixel verification/);
   assert.match(scaffold, /remain state controls on those frames rather than routes/);
 });
 
@@ -150,11 +187,34 @@ test('Phase 7 branches on all persistence modes and executes only approved offli
   for (const mode of ['dataverse', 'mixed', 'connector-only', 'local-prototype']) {
     assert.match(dataWorkflow, new RegExp(`\\b${mode}\\b`));
   }
-    assert.match(dataWorkflow, /compile-persistence-contract\.js"[\s\S]{0,120}--project-root "<working_dir>" --check-artifacts/);
+  for (const adapter of [
+    'dataverse-mobile-offline-profile',
+    'mixed-owner-offline-adapters',
+    'connector-offline-adapter',
+    'local-repository',
+  ]) {
+    assert.match(dataWorkflow, new RegExp(adapter));
+  }
+  assert.match(dataWorkflow, /compile-persistence-contract\.js"[\s\S]{0,120}--project-root "<working_dir>" --check-artifacts/);
+  assert.match(dataWorkflow, /compile-offline-integration\.js"[\s\S]{0,120}--project-root "<working_dir>"/);
+  const usageCheck = dataWorkflow.indexOf('scripts/validate-data-model-usage.js', dataModel);
+  const manifestBuild = dataWorkflow.indexOf(
+    'scripts/build-dataverse-operation-manifest.js',
+    dataModel,
+  );
+  assert.ok(usageCheck > dataModel && usageCheck < manifestBuild);
+  assert.match(dataWorkflow, /usage check is required in all four modes/);
+  assert.match(dataWorkflow, /no Dataverse reconciliation[\s\S]*metadata write/);
   assert.match(dataWorkflow, /mixed[\s\S]*only for `dataverseConceptIds`/);
-  assert.match(dataWorkflow, /offline\.selected` is true and `persistence\.mode` is `dataverse` or[\s\S]*`mixed`/);
-  assert.match(dataWorkflow, /offline\.selected` is false[\s\S]*do not invoke any offline skill/);
-  assert.match(dataWorkflow, /connector\/local package adapters/);
+  assert.match(dataWorkflow, /Step 8\.85 consumes only `.tmp\/offline-integration-contract\.json`/);
+  assert.match(dataWorkflow, /artifact is absent[\s\S]*do not invoke any offline skill/);
+  assert.match(dataWorkflow, /mobileOfflineProfileRequired` is `true`[\s\S]*\/setup-offline-profile/);
+  assert.match(dataWorkflow, /mobileOfflineProfileRequired` is `false`[\s\S]*documented package adapter integration/);
+  assert.match(dataWorkflow, /connection, queued, syncing, failed, retry, and conflict[\s\S]*package/);
+  assert.doesNotMatch(
+    dataWorkflow.slice(offline, native),
+    /persistence\.offline|screen packs|Dataverse table for (?:connector|local)/,
+  );
   assert.doesNotMatch(dataWorkflow, /<dataverse_planning_mode>/);
   assert.doesNotMatch(dataWorkflow, /Asking whether to set up an offline profile|Set one up now\?|question is asked for every Dataverse-backed/);
 });
@@ -169,6 +229,10 @@ test('persistence ownership compiles before conditional Dataverse planning and j
     'node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js"',
     architecture,
   );
+  const offlineCompile = planningWorkflow.indexOf(
+    'node "${CLAUDE_SKILL_DIR}/../../scripts/compile-offline-integration.js"',
+    persistenceCompile,
+  );
   const publisherRead = planningWorkflow.indexOf('PUBLISHER_PREFIX_JSON=$(node', dataModel);
   const snapshotRead = planningWorkflow.indexOf(
     'node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js"',
@@ -182,6 +246,8 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   assert.ok(experience >= 0);
   assert.ok(experience < architecture);
   assert.ok(architecture < persistenceCompile);
+  assert.ok(persistenceCompile < offlineCompile);
+  assert.ok(offlineCompile < gateOne);
   assert.ok(persistenceCompile < gateOne);
   assert.ok(gateOne < dataModel);
   assert.ok(dataModel < publisherRead);
@@ -192,15 +258,122 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   for (const artifact of [
     '.tmp/architecture-decisions.json',
     '.tmp/persistence-contract.json',
+    '.tmp/offline-integration-contract.json',
     '.tmp/dataverse-concepts.json',
   ]) {
     assert.match(planningWorkflow, new RegExp(artifact.replaceAll('.', '\\.')));
   }
   assert.match(planningWorkflow, /compile-persistence-contract\.js --check-artifacts/);
+  assert.match(planningWorkflow, /validateOfflineInvariance/);
+  assert.match(planningWorkflow, /never declare `states\.offline`/);
+  assert.match(planningWorkflow, /explicit offline requirement[\s\S]*integration mechanism[\s\S]*not a screen/);
+  assert.doesNotMatch(
+    planningWorkflow,
+    /applicable loading, empty, error, permission, offline, and success states/,
+  );
   assert.match(planningWorkflow, /every and only those IDs/);
   assert.match(planningWorkflow, /Every read, create, update, delete, sync, upload, download[\s\S]*exact owner/);
   assert.match(buildPlanProtocol, /\.tmp\/architecture-decisions\.json/);
   assert.match(buildPlanProtocol, /\.tmp\/persistence-contract\.json/);
+  assert.match(buildPlanProtocol, /\.tmp\/offline-integration-contract\.json/);
+  assert.match(buildPlanProtocol, /offlineIntegration\.selected` from artifact existence/);
+  assert.match(buildPlanProtocol, /never from Product[\s\S]*Experience connectivity/);
+});
+
+test('planning authors and checks data-model usage after schema, Journey, and screen packs', () => {
+  const dataModel = planningWorkflow.indexOf('## Step 3.3 — Conditional physical data model');
+  const journey = planningWorkflow.indexOf('## Step 3.4 — Workflow Journey and screen build packs');
+  const packCheck = planningWorkflow.indexOf(
+    '--project-root "<working_dir>" --check',
+    planningWorkflow.indexOf('compile-screen-build-pack.js', journey),
+  );
+  const usageInput = planningWorkflow.indexOf(
+    'foreground writes `.tmp/data-model-usage-input.json`',
+    journey,
+  );
+  const usageCompile = planningWorkflow.indexOf(
+    'scripts/validate-data-model-usage.js',
+    usageInput,
+  );
+  const usageCheck = planningWorkflow.indexOf('--check', usageCompile);
+  const gateTwo = planningWorkflow.indexOf('## Step 3.6 — Gate 2');
+
+  assert.ok(dataModel >= 0 && dataModel < journey);
+  assert.ok(packCheck > journey);
+  assert.ok(usageInput > packCheck);
+  assert.ok(usageCompile > usageInput);
+  assert.ok(usageCheck > usageCompile);
+  assert.ok(gateTwo > usageCheck);
+  assert.match(planningWorkflow, /compact AI-owned mapping/);
+  assert.match(planningWorkflow, /never infers consumers[\s\S]*names/);
+  assert.match(planningWorkflow, /connector-only` and `local-prototype`[\s\S]*`tables: \[\]`/);
+  assert.match(planningWorkflow, /Every shipping[\s\S]*persistable Journey operation[\s\S]*exactly one/);
+  assert.match(planningWorkflow, /Gate 2 reviews[\s\S]*compiled data-model usage traceability/);
+  assert.match(planningWorkflow, /compiled[\s\S]{0,80}`usageRevision`/);
+  assert.match(planningWorkflow, /approvals\.dataModelUsage/);
+  assert.match(planningWorkflow, /Any Product Scope, persistence, Journey, or schema change invalidates[\s\S]*recompile/);
+  assert.match(planningWorkflow, /No mutation phase[\s\S]*no Dataverse write/);
+  assert.match(setupDataModelSkill, /calling foreground[\s\S]*data-model-usage-input\.json/);
+  assert.match(setupDataModelSkill, /standalone[\s\S]*plan-only[\s\S]*caller[\s\S]*usage mapping/);
+});
+
+test('planning compiles one canonical scenario before preview, data, and builders', () => {
+  const journey = planningWorkflow.indexOf('## Step 3.4 — Workflow Journey and screen build packs');
+  const packCheck = planningWorkflow.indexOf(
+    '--project-root "<working_dir>" --check',
+    planningWorkflow.indexOf('compile-screen-build-pack.js', journey),
+  );
+  const scenarioInput = planningWorkflow.indexOf(
+    'foreground authors\n`.tmp/scenario-facts-input.json`',
+    packCheck,
+  );
+  const scenarioCompile = planningWorkflow.indexOf(
+    'scripts/validate-fixture-scenarios.js',
+    scenarioInput,
+  );
+  const scenarioCheck = planningWorkflow.indexOf('--check', scenarioCompile);
+  const usageInput = planningWorkflow.indexOf('.tmp/data-model-usage-input.json', scenarioCheck);
+  const gateTwo = planningWorkflow.indexOf('## Step 3.6 — Gate 2', scenarioCheck);
+
+  assert.ok(packCheck > journey);
+  assert.ok(scenarioInput > packCheck);
+  assert.ok(scenarioCompile > scenarioInput);
+  assert.ok(scenarioCheck > scenarioCompile);
+  assert.ok(usageInput > scenarioCheck);
+  assert.ok(gateTwo > scenarioCheck);
+  assert.match(planningWorkflow, /one compact happy-path scenario/);
+  assert.match(planningWorkflow, /deterministic validator only resolves declared[\s\S]*never invents/);
+  assert.match(planningWorkflow, /scenarioRevision/);
+  assert.match(planningWorkflow, /approvals\.scenarioFacts/);
+  assert.match(planningWorkflow, /package[\s\S]*asset\/cache adapter[\s\S]*media keys/);
+  assert.match(buildPlanProtocol, /\.tmp\/scenario-facts\.json/);
+  assert.match(buildPlanProtocol, /record, scenario, screen-binding, media,[\s\S]*invariant counts/);
+
+  assert.match(dataWorkflow, /validate-fixture-scenarios\.js/);
+  assert.match(dataWorkflow, /compile-sample-data-obligations\.js[\s\S]*--check/);
+  assert.match(dataWorkflow, /connector\/local prototype repositories[\s\S]*without any Dataverse read or write/i);
+  assert.match(navigationWorkflow, /screen's[\s\S]*binding from `.tmp\/scenario-facts\.json`/);
+  assert.match(navigationWorkflow, /Do not hardcode an independent sample/);
+  assert.match(screenWaveWorkflow, /binding, referenced records, relationships, media assets,[\s\S]*invariants/);
+  assert.match(screenWaveWorkflow, /may not invent fixture names, statuses, dates, counts, media URLs/);
+  assert.ok(
+    (screenWaveWorkflow.match(/validate-fixture-scenarios\.js/g) || []).length >= 4,
+    'scenario facts must be checked before Wave 0, wave/cross-screen, and final gates',
+  );
+  assert.match(skill, /scenario-facts=\.tmp\/scenario-facts\.json/);
+});
+
+test('setup-offline-profile owns only the Dataverse profile in orchestrated create', () => {
+  assert.match(setupOfflineProfileSkill, /\.tmp\/persistence-contract\.json/);
+  assert.match(setupOfflineProfileSkill, /\.tmp\/offline-integration-contract\.json/);
+  assert.match(setupOfflineProfileSkill, /only authors the Dataverse Mobile Offline Profile/i);
+  assert.match(setupOfflineProfileSkill, /does not own product screens, routes, jobs, or domain tables/i);
+  assert.match(
+    setupOfflineProfileSkill,
+    /connection, queued, syncing, failed, retry, and conflict[\s\S]*package integration/i,
+  );
+  assert.match(setupOfflineProfileSkill, /standalone[\s\S]*explicitly invoke/i);
+  assert.doesNotMatch(setupOfflineProfileSkill, /Step 6\.85|universal opt-out/);
 });
 
 test('setup-datamodel allows plan-only new-app use but reserves standalone use for redesign', () => {
@@ -211,20 +384,23 @@ test('setup-datamodel allows plan-only new-app use but reserves standalone use f
   assert.match(setupDataModelSkill, /--persistence-contract/);
 });
 
-test('sample fixtures are led by validated product contracts rather than schema names', () => {
+test('sample fixtures are led by canonical scenario facts rather than schema names', () => {
   for (const artifact of [
     'product-experience-contract.json',
     'product-scope-contract.json',
     'workflow-journey-contract.json',
     'compiled-screen-build-pack.json',
+    'scenario-facts.json',
   ]) {
     assert.match(sampleDataSkill, new RegExp(artifact.replaceAll('.', '\\.')));
   }
   assert.match(sampleDataSkill, /compile-screen-build-pack\.js --check/);
+  assert.match(sampleDataSkill, /validate-fixture-scenarios\.js --check/);
   assert.match(sampleDataSkill, /compile-sample-data-obligations\.js/);
   assert.match(sampleDataSkill, /\.tmp\/sample-data-obligations\.json/);
   assert.match(sampleDataSkill, /fixture-coverage matrix/);
   assert.match(sampleDataSkill, /schema constrains/i);
+  assert.match(sampleDataSkill, /Reuse a seed value only when its ID and value equal the bound scenario fact/);
   assert.match(sampleDataSkill, /partial contract set is not a legacy project/i);
   assert.match(sampleDataSkill, /must not classify an unfamiliar product from table names/i);
 });
@@ -265,11 +441,15 @@ test('Phase 10 generates navigation only from the compiled manifest', () => {
     assert.match(step, new RegExp(`\\b${field}\\b`));
   }
   assert.match(step, /validate-navigation-layout\.js/);
+  const usageCheck = step.indexOf('validate-data-model-usage.js');
+  const firstLayoutWrite = step.indexOf('#### Step 10b.2');
+  assert.ok(usageCheck >= 0 && usageCheck < firstLayoutWrite);
   assert.doesNotMatch(step, /native-app-plan\.md|Screen Map/);
   assert.doesNotMatch(step, /Screen name contains|home, dashboard, overview|anything else[\s\S]*apps-outline/);
 
   const gate = navigationWorkflow.slice(navigationWorkflow.indexOf('#### 10.8d'));
-  assert.match(gate, /check-routes\.js[\s\S]*validate-navigation-layout\.js/);
+  assert.match(gate, /check-routes\.js[\s\S]*validate-navigation-layout\.js[\s\S]*validate-data-model-usage\.js/);
+  assert.match(gate, /data-model-usage=\.tmp\/data-model-usage\.json/);
 });
 
 test('every screen-wave route gate validates the navigation layout', () => {
@@ -287,7 +467,21 @@ test('every screen-wave route gate validates the navigation layout', () => {
     assert.ok(start >= 0 && end > start, `${label} validation section is missing`);
     assert.match(section, /check-routes\.js/);
     assert.match(section, /validate-navigation-layout\.js/);
+    assert.match(section, /validate-data-model-usage\.js/);
   }
+});
+
+test('Build Plan projects usage without becoming a second validator', () => {
+  assert.match(buildPlanProtocol, /\.tmp\/data-model-usage\.json/);
+  assert.match(buildPlanProtocol, /compact requirement, table,[\s\S]*consumer-link counts/);
+  assert.match(
+    buildPlanProtocol,
+    /never exposes the raw usage[\s\S]*never independently revalidates/,
+  );
+  assert.match(buildPlanProtocol, /Every schema edit also invalidates/);
+  assert.match(buildPlanProtocol, /Undo restores the exact prior file/);
+  assert.match(buildPlanProtocol, /reports the affected consumer IDs/);
+  assert.match(buildPlanProtocol, /typed\s+system exemption alone is not a blocker/);
 });
 
 test('final summary declares the same number of options that it renders', () => {

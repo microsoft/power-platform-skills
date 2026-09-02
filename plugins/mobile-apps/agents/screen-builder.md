@@ -19,7 +19,8 @@ Implement exactly one assigned screen from one sealed semantic work order. The
 foreground supplies `channel: direct-write | return-only`, the work-order input
 fingerprint, one screen build-pack entry, route/parameter contract, typed
 skeleton, relevant generated-service signatures, permitted tokens and signature
-component interfaces, exact states, test IDs, and accessibility requirements.
+component interfaces, exact states, implementation-contract test IDs, the
+screen's canonical scenario-facts projection, and accessibility requirements.
 
 The channel changes transport only. It never changes the planned screen, UX
 contract, model choice, or input fingerprint.
@@ -82,7 +83,8 @@ In `direct-write`, read only:
 
 1. The supplied sealed work order, including its inline pack, route contract,
   typed skeleton, service signatures, token/signature-component interfaces,
-  states, test IDs, and accessibility requirements.
+  states, implementation contract, scenario facts, test IDs, and accessibility
+  requirements.
 2. The existing typed skeleton at `target_file`; it must match the inline
   skeleton before implementation begins.
 3. `brand/design-system.md` and `tamagui.config.ts` only to verify the supplied
@@ -132,9 +134,16 @@ node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
 ```
 
 The pack is authoritative for required jobs, first viewport, hierarchy,
-actions, trust signals, decision support, media, states, navigation,
+human-first `identityHierarchy`, semantic `chrome`, action placement, actions,
+trust signals, decision support, media realization, states, navigation,
 signature interaction, forbidden defaults, assumptions, preview content, and
 composition. The prose spec may refine but never remove pack evidence.
+
+Use `scenarioFacts` as the only fixture identity/value/media source. The focal
+region renders its canonical headline or a schema-backed value for the same
+identity. Required media uses the exact `assetKeyOrFieldBinding`, crop, fit,
+focal point, and fallback from the pack; a generic icon or decorative block is
+not a media implementation.
 
 Apply assumption classifications:
 
@@ -150,6 +159,9 @@ The pack says what must be present; you decide how it becomes a polished native
 screen.
 
 - Make the dominant user question answerable in the first viewport.
+- Follow `identityHierarchy`: the recognizable object, job, or outcome leads;
+  values listed under `technical` remain secondary unless the approved contract
+  explicitly put that value in `primary`.
 - Give the primary action obvious hierarchy and one-handed reach without
   turning every section into a card.
 - Let operating context drive density: field/high-risk work favors fast
@@ -249,11 +261,15 @@ the intended region/control; do not rename or approximate an anchor. In
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
   --project-root "<working_dir>" --file "<target_file>"
+node "${PLUGIN_ROOT}/scripts/validate-screen-implementation.js" \
+  --project-root "<working_dir>" \
+  --work-order ".tmp/screen-work-orders/<screenId>.json" \
+  --file "<target_file>"
 ```
 
 Fix assigned-file findings in one batch and rerun once. In `return-only`, apply
 the same checks by inspection; the foreground runs the validator after writing.
-The orchestrator owns
+The orchestrator reruns the same AST check for return-only output and owns
 TypeScript, route, wave, stylistic, and cross-screen gates.
 
 ## Direct-write return protocol

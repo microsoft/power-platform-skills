@@ -16,9 +16,9 @@ the screen graph, Workflow Journey, build packs, deterministic validation, plan
 rendering, approvals, and recovery. This order is mandatory: requirements plus
 Product Experience and Product Scope, native-capability decisions, connector
 decisions, exactly one persistence owner per Product Scope data concept,
-compiled persistence contract, conditional Dataverse planning, then Workflow
-Journey and build packs. Do not dispatch a planning agent and do not load a
-second degraded planning algorithm.
+compiled persistence contract, conditional offline integration, conditional
+Dataverse planning, then Workflow Journey and build packs. Do not dispatch a
+planning agent and do not load a second degraded planning algorithm.
 
 The only child-agent boundary in `/create-mobile-app` is screen implementation
 at Step 11. Planning must succeed when no child-agent tool exists.
@@ -40,7 +40,7 @@ Phase 4. Time semantic work with these nested diagnostic stages:
 | Confirm and lock requirements | `requirementsPlanning` |
 | Product Experience + Product Scope | `experienceScopePlanning` |
 | Native capabilities + confirmed connectors | `capabilityConnectorPlanning` |
-| Concept ownership + persistence compilation | `persistenceContractPlanning` |
+| Concept ownership + persistence/offline integration compilation | `persistenceContractPlanning` |
 | Conditional Dataverse snapshot and plan-only output | `dataModelPlanning` |
 | Owner-bound Workflow Journey + screen packs | `journeyPackPlanning` |
 | Human plan projection | `planRendering` |
@@ -64,11 +64,16 @@ Keep the existing contracts and tools. Do not introduce a whole-plan schema.
 | Product Scope navigation projection | `.tmp/navigation-manifest.json` | `compile-navigation-manifest.js` |
 | Architecture decisions | `.tmp/architecture-decisions.json` | `compile-persistence-contract.js` |
 | Persistence contract | `.tmp/persistence-contract.json` | `compile-persistence-contract.js --check-artifacts` |
+| Offline integration (conditional) | `.tmp/offline-integration-contract.json` | `compile-offline-integration.js`; existence means explicitly selected |
 | Dataverse concept projection (conditional) | `.tmp/dataverse-concepts.json` | exact match to `persistence.dataverseConceptIds` |
 | Workflow Journey | `.tmp/workflow-journey-contract.json` | `validate-workflow-journey.js` |
 | Authored screen packs | `.tmp/screen-build-pack.json` | `compile-screen-build-pack.js` |
 | Compiled screen packs | `.tmp/compiled-screen-build-pack.json` | `compile-screen-build-pack.js --check` |
+| Scenario-facts input | `.tmp/scenario-facts-input.json` | AI-authored records, relationships, invariants, media, and screen bindings |
+| Compiled scenario facts | `.tmp/scenario-facts.json` | `validate-fixture-scenarios.js --check` |
 | Dataverse schema contract (conditional) | `.tmp/dataverse-schema-contract.json` | `build-dataverse-operation-manifest.js` and `validate-dataverse-planning-decisions.js` |
+| Data-model usage input | `.tmp/data-model-usage-input.json` | AI-authored mapping consumed by `validate-data-model-usage.js` |
+| Compiled data-model usage | `.tmp/data-model-usage.json` | `validate-data-model-usage.js --check` |
 | Human plan | `native-app-plan.md` | section hashes in `.tmp/mobile-plan-status.json` |
 
 Read each exact current schema before authoring its contract. A path or schema
@@ -95,17 +100,31 @@ contracts.
 - A semantic failure reopens only its owning section and downstream contracts
   whose embedded revision changed.
 - A changed Product Experience invalidates Product Scope, architecture
-  decisions, persistence, conditional Dataverse artifacts, Journey, and packs.
-- A changed Product Scope invalidates architecture decisions, persistence,
-  conditional Dataverse artifacts, Journey, and packs, not Product Experience.
-- A changed architecture decision invalidates the persistence contract and all
-  mode-dependent Dataverse, Journey, and pack artifacts.
-- A changed persistence contract invalidates conditional Dataverse artifacts,
+  decisions, persistence, offline integration, conditional Dataverse artifacts,
   Journey, and packs.
-- A changed Journey invalidates packs only.
+- A changed Product Scope invalidates architecture decisions, persistence,
+  offline integration, conditional Dataverse artifacts, Journey, and packs, not
+  Product Experience.
+- A changed architecture decision invalidates the persistence contract and all
+  mode-dependent offline integration, Dataverse, Journey, and pack artifacts.
+- A changed persistence contract invalidates and recompiles the conditional
+  offline integration artifact before conditional Dataverse artifacts, Journey,
+  and packs.
+- A changed offline integration revision invalidates only package/runtime
+  integration and any Mobile Offline Profile execution binding. It never
+  creates or invalidates Product Scope, navigation, Journey, domain tables, or
+  screen packs merely because offline was selected.
+- A changed Journey invalidates packs and their downstream scenario projection,
+  not Product Experience, Product Scope, or persistence ownership.
+- A changed Product Scope, persistence contract, navigation manifest, Journey,
+  or compiled pack invalidates scenario facts. Repair its AI-owned input,
+  recompile, and rerun `--check`; never restamp an old `scenarioRevision`.
 - A data-model correction invalidates Gate 2 and downstream bindings, but does
   not rewrite Product Experience, Product Scope, or architecture unless it
   adds/removes a Product Scope concept or changes that concept's owner.
+- Any Product Scope, persistence, Journey, or schema change invalidates the
+  compiled data-model usage artifact. Repair its AI-owned input, recompile it,
+  and rerun `--check`; never restamp its old revision.
 
 Block only for an unsafe capability claim, missing explicit requirement,
 invalid data relationship, a user decision/approval that is actually required,
@@ -151,9 +170,11 @@ A user-facing screen is justified only by at least one of:
 - a capture/workflow step that cannot safely fit an existing surface;
 - an independently revisited record, queue, history, or workspace.
 
-Loading, empty, error, permission, success, retry, and offline conditions are
-states, never routes. Do not create List/Detail/Create/Edit for every entity.
-Equivalent record categories share parameterized list/detail/form surfaces.
+Loading, empty, error, permission, success, and domain retry conditions are
+screen states, never routes. Offline runtime conditions are package-owned
+integration states, not screen states or routes. Do not create
+List/Detail/Create/Edit for every entity. Equivalent record categories share
+parameterized list/detail/form surfaces.
 
 Classify every user-facing screen as `durable-destination`, `nested-detail`,
 `bounded-flow-step`, or `modal-or-immersive-utility`. Above 12 user-facing
@@ -200,7 +221,7 @@ an unresolved user-visible assumption; surface those in Gate 1.
 
 Resolve architecture in the foreground before any publisher-prefix query,
 Dataverse snapshot/cache/schema work, seed/service planning, Data Model
-approval, or Offline Profile question.
+approval, or offline integration compilation.
 
 Read `template/package.json`; it is the native package allowlist. Do not claim
 an unavailable native capability. Pure-JavaScript dependencies follow
@@ -275,6 +296,8 @@ authority and validate mode-forbidden artifacts before continuing:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
   --project-root "<working_dir>" --check-artifacts
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-offline-integration.js" \
+  --project-root "<working_dir>"
 ```
 
 The command writes `.tmp/persistence-contract.json` and derives exactly one of
@@ -283,13 +306,32 @@ duplicate, unknown, incompatible, or unapproved ownership. Write
 `_native_section.md` and `_connectors_section.md` from the same architecture
 decisions; do not reconstruct them from plan prose later.
 
+Run the offline compiler immediately after every successful persistence
+compile. When offline is unselected, it removes stale output and emits no
+artifact; do not add offline screen states, components, tables, routes, jobs,
+or package setup. When offline is selected, it writes
+`.tmp/offline-integration-contract.json`. That artifact is the sole authority
+for package/runtime integration, including its mode-specific adapter and
+whether a Dataverse Mobile Offline Profile is required.
+
+Before authoring Journey or screen packs, deterministically compare the current
+Product Experience, Product Scope, and persistence ownership with the baseline
+captured before the offline decision. Invoke the exported
+`validateOfflineInvariance` from `compile-offline-integration.js` with those
+baseline and candidate values (build packs may be absent at this first check).
+Only the persistence `offline` field/revision and the conditional integration
+artifact may differ. Stop on any Product Scope, design-intent, or owner drift.
+
 ## Step 3.2 — Gate 1: experience, scope, and architecture
 
 Gate 1 reviews Product Experience, Product Scope, requirement coverage,
 navigation, approved native capabilities/connectors, every concept owner, the
 compiled persistence mode, and the one-time offline architecture decision. It
-does not review a physical Data Model because that work is conditional on the
-approved persistence contract and has not run yet.
+also shows the integration owner, adapter, runtime states, and profile
+requirement from `.tmp/offline-integration-contract.json` when that artifact
+exists; absence means no offline integration. It does not review a physical
+Data Model because that work is conditional on the approved persistence
+contract and has not run yet.
 
 Use foreground `AskUserQuestion` and plan mode. On rejection, repair only the
 owning Product Experience, Product Scope, or architecture value; rerun its
@@ -316,7 +358,9 @@ Run `compile-persistence-contract.js --project-root "<working_dir>"
 planning identity, create a snapshot/evidence/cache, invoke
 `/setup-datamodel`, or create `.tmp/dataverse-concepts.json`, `_dm_section.md`,
 `.tmp/dataverse-schema-contract.json`, `.datamodel-manifest.json`, sample data,
-generated Dataverse services, or Offline Profile artifacts.
+  generated Dataverse services, or Mobile Offline Profile artifacts. A selected
+  connector/local package integration contract remains valid and is not a
+  Dataverse artifact.
 
 Render `## Data Model` as `Not applicable` and list each concept with its
 approved connector/local/transient owner from the persistence contract. Mark
@@ -427,15 +471,20 @@ For every user-facing screen, author one pack preserving UX quality:
 - signature interaction/component usage;
 - media role, source, treatment, aspect/crop intent, and fallback when needed;
 - trust and decision-support evidence;
-- applicable loading, empty, error, permission, offline, and success states;
+- applicable loading, empty, error, permission, and success states;
 - navigation consistent with durable destinations and bounded flows;
 - data operations bound to the concept's compiled persistence owner;
 - accessibility, Dynamic Type, keyboard, touch-target, and safe-area needs;
 - forbidden defaults preventing generic dashboard/CRUD substitution.
 
-Do not add an offline state when Product Experience did not select offline.
-Do not create an operational dashboard for a discovery/commerce product unless
-the approved jobs justify it.
+Journey and build packs must never declare `states.offline`, an offline
+component, or an offline-only route/job. The package integration owns
+connection status, queued, syncing, failed, retry, and conflict UX outside the
+screen contract. Requirement coverage for an explicit offline requirement is
+an integration mechanism owned by `.tmp/offline-integration-contract.json`,
+not a screen. When the artifact is absent, no offline state, component, table,
+route, or job may be emitted. Do not create an operational dashboard for a
+discovery/commerce product unless the approved jobs justify it.
 
 Home may expose a clearly labeled action that launches an approved scanner
 workflow, but Home must never mount `BarcodeScannerView` or a live camera. The
@@ -454,6 +503,81 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --project-root "<working_dir>" --check
 ```
+
+After compilation, run `validateOfflineInvariance` again with the exact
+compiled packs included in both comparison bundles. The packs must be
+byte-equivalent under canonical JSON whether offline is selected or not, and
+the screen-pack compiler's `screen-owned-offline-state` finding is blocking.
+
+### Compile canonical scenario facts
+
+After Journey and compiled packs exist, the foreground authors
+`.tmp/scenario-facts-input.json`. The model owns realistic records,
+relationships, cross-record invariants, media choices and stable asset keys,
+and each screen binding. The deterministic validator only resolves declared
+references, enforces supported invariant operators, and binds revisions; it
+never invents copy, dates, statuses, counts, images, or domain facts.
+
+Author one compact happy-path scenario for each primary journey plus only the
+contrasting records/states required by the approved graph. Do not create an
+independent fixture set per screen. Every preview value, seed obligation, and
+builder fixture must trace to this one artifact.
+
+Compile and check the exact bindings to Product Scope, persistence, navigation,
+Workflow Journey, and compiled screen packs:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+  --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+  --project-root "<working_dir>" --check
+```
+
+When offline is selected, rerun its compiler after this check so the package
+asset/cache adapter receives the scenario's declared media keys, sources,
+fallbacks, and crop instructions:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-offline-integration.js" \
+  --project-root "<working_dir>" \
+  --scenario ".tmp/scenario-facts.json"
+```
+
+This media-delivery projection may change only the conditional offline
+integration revision. It does not change screen hierarchy, visual meaning,
+Product Scope, navigation, jobs, or domain tables.
+
+### Compile data-model usage traceability
+
+After the conditional physical-schema branch and after Journey and build packs
+are authored, the foreground writes `.tmp/data-model-usage-input.json`. This is
+a compact AI-owned mapping, not a deterministic projection: each schema table
+binds its Product Scope concept, and each field and relationship binds canonical
+requirement, job, screen, domain-operation, integration, reporting, or audit
+consumer IDs. A field with no product consumer may instead carry one supported
+typed system exemption. The deterministic validator never infers consumers
+from table, field, relationship, screen, or operation names.
+
+For `connector-only` and `local-prototype`, write exactly the same input shape
+with `tables: []` and keep the Dataverse schema absent. Every shipping
+requirement with a persistable Journey operation must still resolve through
+Journey plus `.tmp/persistence-contract.json` to exactly one connector, local,
+or transient owner as applicable. Empty schema coverage never means empty
+requirement ownership.
+
+Compile and then check the bound artifact:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
+```
+
+The first command writes `.tmp/data-model-usage.json`; the second verifies its
+Product Scope, persistence, Journey, conditional schema, and content-revision
+bindings. A failure repairs the owning mapping or upstream contract and then
+reruns both commands. Do not infer a replacement mapping from names.
 
 Normalize mechanical differences locally and rerun the failed validator. A
 semantic finding repairs only Product Scope, Journey, or the affected pack and
@@ -503,7 +627,18 @@ child may ask the user or enter/exit plan mode. Gate 2 reviews:
 - `Not applicable` ownership rendering for `connector-only` or
   `local-prototype`, without a Data Model approval;
 - screen graph/navigation, Workflow Journey, compiled packs, and every
-  operation-to-owner binding.
+  operation-to-owner binding;
+- compiled data-model usage traceability for every mode, including requirement
+  ownership when the physical Data Model is not applicable;
+- scenario consistency across records, relationships, media keys, invariants,
+  screen bindings, and the primary journey;
+- conditional offline integration ownership and adapter, with explicit offline
+  requirements covered by that mechanism rather than a screen.
+
+Immediately before presenting Gate 2, rerun
+`validate-fixture-scenarios.js --project-root "<working_dir>" --check` and
+`validate-data-model-usage.js --project-root "<working_dir>" --check`. Gate 2
+cannot approve a missing, stale, or rejected scenario or usage artifact.
 
 Immediately before Gate 2 and again after its response, check
 `.tmp/mobile-build-plan-edits.json` as specified by the Build Plan protocol. A
@@ -515,8 +650,11 @@ recompiles persistence, and invalidates all mode-dependent downstream work.
 On rejection, edit only the owning canonical values, rerun affected validators,
 recompile downstream contracts, and rerender affected plan sections. On
 acceptance, update `.tmp/mobile-plan-status.json` with exact contract revisions,
-section hashes, approval state, operation-owner binding status, and current plan
-hash. Preserve prior approved sections whose hashes did not change.
+the compiled `scenarioRevision` and `usageRevision`, section hashes,
+approval state, `approvals.scenarioFacts` and `approvals.dataModelUsage` statuses,
+operation-owner binding status, and current plan hash. Preserve prior approved
+sections whose hashes did not change. Any bound upstream change clears the
+affected approval and requires a fresh compile, check, and Gate 2 review.
 
 In `--consolidated-review`, keep Gate 1 and Gate 2 sections pending and defer
 their single response until the required experience preview is materialized.
@@ -542,10 +680,21 @@ Always recompile and check mode-forbidden artifacts first:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
   --project-root "<working_dir>" --check-artifacts
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+  --project-root "<working_dir>" --check
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-offline-integration.js" \
+  --project-root "<working_dir>" \
+  --scenario ".tmp/scenario-facts.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+  --project-root "<working_dir>" --check
 ```
 
 Require the resulting `persistenceRevision` to match the Gate 1 receipt and
-branch on `persistence.mode`:
+branch on `persistence.mode`. If the conditional offline artifact exists,
+require its `persistenceRevision` to match, its owner to be `offline-package`,
+and its adapter/profile requirement to match the compiled mode. If it is
+absent, require the approved decision to be unselected and create no offline
+execution binding:
 
 - `connector-only` / `local-prototype`: require `## Data Model` to be `Not
   applicable` with every concept owner rendered. Require no publisher prefix,
@@ -567,14 +716,24 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-dataverse-planning-decisions.js
   --snapshot "<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
 ```
 
-For every mode, verify Workflow Journey and compiled build packs bind each data
-operation to the matching `persistence.conceptOwners` entry. Do not parse
-Mermaid or plan prose as an executable fallback.
+For every mode, require the checked data-model usage artifact to bind Workflow
+Journey operations and persistable requirements to matching
+`persistence.conceptOwners` entries. Do not parse Mermaid or plan prose as an
+executable fallback, and never permit `states.offline` in Journey or build-pack
+data. No mutation phase, and specifically no Dataverse write, may begin from a
+missing, invalid, or stale usage artifact.
 
 Record these always-present checkpoint artifacts in
 `.tmp/mobile-pipeline-state.json`: Product Experience, Product Scope,
 navigation manifest, architecture decisions, persistence contract, Workflow
-Journey, authored and compiled screen packs, human plan, and approval receipt.
+Journey, authored and compiled screen packs, compiled scenario facts, compiled
+data-model usage, human plan, and approval receipt. Record exact
+`scenarioRevision` and `usageRevision` values and their Gate 2 bindings.
+When `.tmp/offline-integration-contract.json` exists, record its path,
+`integrationRevision`, persistence binding, owner, adapter, runtime states, and
+`mobileOfflineProfileRequired`. When it is absent, record deterministic
+`offlineIntegration: { selected: false, artifact: null }` checkpoint state and
+do not create a placeholder artifact.
 For `dataverse` / `mixed`, also record Dataverse concepts, foreground snapshot,
 architect evidence, and schema contract. For `connector-only` /
 `local-prototype`, record the checked not-applicable data-model status instead

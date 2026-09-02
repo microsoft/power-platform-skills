@@ -63,6 +63,9 @@ module.exports = ({ config }) => customizeExpoConfig({
     // (Podfile.properties.json / gradle.properties) — the offline native module
     // requires the legacy architecture. Self-deactivates (complete no-op) when no
     // valid offline-profile.json exists. Activated by offline-profile.json, NOT power.config.json.
+    // Together with the host provider, this package owns connection, queue, sync,
+    // retry, and conflict runtime behavior; app screens must not implement a
+    // parallel offline lifecycle.
     '@microsoft/power-apps-native-offline',
     '@react-native-community/datetimepicker'],
   android: {

@@ -2,6 +2,16 @@
 
 const { escapeHtml, statusLabel } = require('./mobile-build-plan-html');
 
+function renderUsageTraceability(summary, id = 'usage-traceability') {
+  const artifactState = !summary.present
+    ? 'Pending'
+    : summary.validLooking && summary.bound
+      ? 'Ready'
+      : 'Needs refresh';
+  const titleId = `${id}-title`;
+  return `<section class="work-panel usage-traceability" aria-labelledby="${escapeHtml(titleId)}"><h3 id="${escapeHtml(titleId)}">Usage traceability</h3><div class="validation-board"><div class="validation-row"><span>Compiled artifact</span><strong>${escapeHtml(artifactState)}</strong></div><div class="validation-row"><span>Contract bindings</span><strong>${summary.bound ? 'Present' : 'Pending'}</strong></div><div class="validation-row"><span>Requirement ownership</span><strong>${escapeHtml(summary.ownedRequirementCount)} owned · ${escapeHtml(summary.persistableRequirementCount)} persistable · ${escapeHtml(summary.totalRequirementCount)} total</strong></div><div class="validation-row"><span>Schema members</span><strong>${escapeHtml(summary.tableCount)} tables · ${escapeHtml(summary.fieldCount)} fields · ${escapeHtml(summary.relationshipCount)} relationships</strong></div><div class="validation-row"><span>Consumer links</span><strong>${escapeHtml(summary.consumerLinkCount)}</strong></div></div></section>`;
+}
+
 function renderErDiagram(tables) {
   if (tables.length === 0) {
     return '<div class="empty"><strong>No entities to map</strong><span>The diagram will appear after the data model is authored.</span></div>';
@@ -93,13 +103,18 @@ function renderTableCards(model, editDisabled) {
 
 function renderDataModel(model, options) {
   const { canEdit, editDisabled } = options;
+  const usageTraceability = renderUsageTraceability(
+    model.dataModelUsage,
+    'data-model-usage-traceability',
+  );
   if (!model.dataModelApplicable) {
-    return `<section class="panel" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden><div class="section-head"><span><h2>Data model</h2><p>Not applicable</p></span></div><div class="notice"><strong>Not applicable</strong> — ${escapeHtml(model.dataModelNotApplicableReason)}. No Dataverse schema, service, seed, approval, or mutation is planned.</div></section>`;
+    return `<section class="panel" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden><div class="section-head"><span><h2>Data model</h2><p>Not applicable</p></span></div><div class="notice"><strong>Not applicable</strong> — ${escapeHtml(model.dataModelNotApplicableReason)}. No Dataverse schema, service, seed, approval, or mutation is planned.</div>${usageTraceability}</section>`;
   }
   const tableCards = renderTableCards(model, editDisabled);
-  return `<section class="panel" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden><div class="section-head"><span><h2>Data model</h2><p>${model.tables.length} planned ${model.tables.length === 1 ? 'table' : 'tables'} · Publisher ${escapeHtml(model.publisherPrefix || 'pending')}</p></span><span class="section-actions">${model.undo.available && canEdit ? `<button class="secondary" type="button" id="undo-edit">Undo ${escapeHtml(model.undo.target)}</button>` : ''}<button class="primary" type="button" data-add-table${editDisabled}>+ Add table</button></span></div>${!canEdit ? `<div class="notice">${model.dataModelEditable ? 'Open the live Build Plan URL to edit the model.' : 'Dataverse execution has started. Continue schema changes through /edit-app.'}</div>` : ''}<div class="view-switch" aria-label="Data model view"><button type="button" class="active" data-data-view="tables">Tables</button><button type="button" data-data-view="diagram">ER diagram</button></div><div class="data-view" id="data-view-tables"><div class="table-list">${tableCards}</div></div><div class="data-view" id="data-view-diagram" hidden>${renderErDiagram(model.tables)}</div></section>`;
+  return `<section class="panel" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden><div class="section-head"><span><h2>Data model</h2><p>${model.tables.length} planned ${model.tables.length === 1 ? 'table' : 'tables'} · Publisher ${escapeHtml(model.publisherPrefix || 'pending')}</p></span><span class="section-actions">${model.undo.available && canEdit ? `<button class="secondary" type="button" id="undo-edit">Undo ${escapeHtml(model.undo.target)}</button>` : ''}<button class="primary" type="button" data-add-table${editDisabled}>+ Add table</button></span></div>${!canEdit ? `<div class="notice">${model.dataModelEditable ? 'Open the live Build Plan URL to edit the model.' : 'Dataverse execution has started. Continue schema changes through /edit-app.'}</div>` : ''}${usageTraceability}<div class="view-switch" aria-label="Data model view"><button type="button" class="active" data-data-view="tables">Tables</button><button type="button" data-data-view="diagram">ER diagram</button></div><div class="data-view" id="data-view-tables"><div class="table-list">${tableCards}</div></div><div class="data-view" id="data-view-diagram" hidden>${renderErDiagram(model.tables)}</div></section>`;
 }
 
 module.exports = {
   renderDataModel,
+  renderUsageTraceability,
 };

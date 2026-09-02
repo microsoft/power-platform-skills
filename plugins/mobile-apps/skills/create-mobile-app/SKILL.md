@@ -31,8 +31,15 @@ and routes mutations to dedicated `/add-*` skills.
   parallel.
 - Product Experience, Product Scope, architecture decisions, the persistence
   contract, Workflow Journey, a conditional approved Dataverse contract, and
-  the compiled screen build pack are execution authorities. Markdown is the
-  human-readable plan, not a substitute for missing sidecars.
+  the compiled screen build pack are execution authorities. Compiled
+  `.tmp/data-model-usage.json` is the all-mode requirement and schema usage
+  authority; rerun its `--check` before mutation, navigation, screen builders,
+  and final validation. Markdown is the human-readable plan, not a substitute
+  for missing sidecars.
+- `.tmp/scenario-facts.json` is the all-mode concrete fixture authority. It is
+  revision-bound to scope, persistence, navigation, Journey, and compiled packs;
+  check it before preview/design, data materialization, navigation, screen
+  builders, and final validation.
 - `.tmp/architecture-decisions.json` assigns one owner per Product Scope data
   concept. `compile-persistence-contract.js --check-artifacts` writes
   `.tmp/persistence-contract.json`; only `dataverse` and `mixed` may continue

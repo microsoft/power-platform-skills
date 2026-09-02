@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  ARTIFACTS,
   deriveBuildPlanModel,
   renderBuildPlanHtml,
   revisionOf,
@@ -75,6 +76,41 @@ test('Build Plan composes progress and canonical planning artifacts', () => {
         alternateKeys: [],
       }],
     });
+    writeJson(projectRoot, '.tmp/data-model-usage.json', {
+      schemaVersion: 1,
+      contractType: 'data-model-usage',
+      scopeRevision: 'a'.repeat(64),
+      persistenceRevision: 'b'.repeat(64),
+      journeyRevision: 'c'.repeat(64),
+      dataModelRevision: 'd'.repeat(64),
+      usageRevision: 'e'.repeat(64),
+      requirements: [
+        { requirementId: 'record-inspection', persistable: true, owner: 'dataverse' },
+        { requirementId: 'view-help', persistable: false, owner: null },
+      ],
+      tables: [{
+        tableLogicalName: 'ct_inspection',
+        consumers: [{ kind: 'requirement', id: 'record-inspection' }],
+        fields: [
+          {
+            logicalName: 'ct_name',
+            consumers: [],
+            exemption: { kind: 'primary-name', reason: 'raw-secret-exemption' },
+          },
+          {
+            logicalName: 'ct_result',
+            consumers: [
+              { kind: 'requirement', id: 'record-inspection' },
+              { kind: 'screen', id: 'inspection', reason: 'raw-secret-consumer' },
+            ],
+          },
+        ],
+        relationships: [{
+          schemaName: 'ct_Inspection_Asset',
+          consumers: [{ kind: 'job', id: 'inspect-equipment' }],
+        }],
+      }],
+    });
     writeJson(projectRoot, '.tmp/dataverse-operation-manifest.json', {
       binding: {
         environmentUrl: 'https://contoso.crm.dynamics.com',
@@ -106,8 +142,23 @@ test('Build Plan composes progress and canonical planning artifacts', () => {
     assert.strictEqual(model.tables[0].columns[0].logicalName, 'ct_name');
     assert.strictEqual(model.screens[0].screenId, 'assignments');
     assert.strictEqual(model.dataverse.operationCount, 1);
+    assert.deepStrictEqual(model.dataModelUsage, {
+      present: true,
+      bound: true,
+      validLooking: true,
+      totalRequirementCount: 2,
+      persistableRequirementCount: 1,
+      ownedRequirementCount: 1,
+      tableCount: 1,
+      fieldCount: 2,
+      relationshipCount: 1,
+      consumerLinkCount: 3,
+    });
     assert.strictEqual(model.experience.promptEvidence, undefined);
-    assert.doesNotMatch(JSON.stringify(model), /contoso\.crm|11111111-2222|Internal detail/);
+    assert.doesNotMatch(
+      JSON.stringify(model),
+      /contoso\.crm|11111111-2222|Internal detail|raw-secret/,
+    );
     assert.doesNotMatch(JSON.stringify(model), /44444444-5555/);
     assert.match(model.journey.journeys[0].name, /\[identifier\]/);
     assert.match(model.journey.journeys[0].steps[0].label, /\[environment\]/);
@@ -120,6 +171,9 @@ test('Build Plan composes progress and canonical planning artifacts', () => {
     assert.match(html, /Preparing one table in \[identifier\]/);
     assert.match(html, /ct_inspection/);
     assert.match(html, /ct_name/);
+    assert.match(html, /Usage traceability/);
+    assert.match(html, /1 owned · 1 persistable · 2 total/);
+    assert.match(html, /1 tables · 2 fields · 1 relationships/);
     assert.match(html, /Assignments/);
     assert.match(html, /role="tab"/);
     assert.match(html, /id="tab-plan"[^>]+tabindex="0"/);
@@ -218,6 +272,114 @@ test('connector-owned persistence makes the Dataverse data model not applicable'
     assert.match(html, /approved connectors/);
     assert.match(html, /booking-api/);
     assert.doesNotMatch(html, /<button[^>]+data-add-table/);
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
+test('offline integration is displayed only from its canonical artifact', () => {
+  const projectRoot = makeProjectDir('mobile-build-plan-offline-integration');
+  try {
+    writeJson(projectRoot, '.tmp/product-experience-contract.json', {
+      productName: 'Field North',
+      operatingContext: { connectivity: 'offline-first' },
+    });
+
+    assert.equal(
+      ARTIFACTS.offlineIntegration,
+      '.tmp/offline-integration-contract.json',
+    );
+    let model = deriveBuildPlanModel(projectRoot);
+    assert.deepStrictEqual(model.offlineIntegration, {
+      selected: false,
+      owner: null,
+      adapter: null,
+      runtimeStates: [],
+      mediaBindingCount: 0,
+      profileRequired: false,
+    });
+    assert.doesNotMatch(
+      renderBuildPlanHtml(model, { live: true }),
+      /<h3>Offline integration<\/h3>/,
+    );
+
+    writeJson(projectRoot, '.tmp/offline-integration-contract.json', {
+      schemaVersion: 1,
+      contractType: 'offline-integration-contract',
+      selected: false,
+      owner: 'offline-package',
+      adapter: 'dataverse-mobile-offline-profile',
+      runtimeStates: ['connection-status', 'queued', 'syncing', 'failed', 'retry', 'conflict'],
+      mediaBindings: [{
+        screenId: 'home',
+        assetKey: 'hero-photo',
+        source: { kind: 'cdn', value: 'https://media.example.test/private.jpg' },
+        fallback: 'Private fallback copy',
+      }],
+      mobileOfflineProfileRequired: true,
+      environmentUrl: 'https://contoso.crm.dynamics.com',
+    });
+
+    model = deriveBuildPlanModel(projectRoot);
+    assert.deepStrictEqual(model.offlineIntegration, {
+      selected: true,
+      owner: 'offline-package',
+      adapter: 'dataverse-mobile-offline-profile',
+      runtimeStates: ['connection-status', 'queued', 'syncing', 'failed', 'retry', 'conflict'],
+      mediaBindingCount: 1,
+      profileRequired: true,
+    });
+    assert.deepStrictEqual(model.makerSummary.offlineIntegration, model.offlineIntegration);
+    assert.doesNotMatch(JSON.stringify(model), /contoso\.crm|private\.jpg|Private fallback copy/);
+    const html = renderBuildPlanHtml(model, { live: true });
+    assert.match(html, /<h3>Offline integration<\/h3>/);
+    assert.match(html, /Owner:<\/strong> offline package/);
+    assert.match(html, /dataverse mobile offline profile/);
+    assert.match(html, /connection status/);
+    assert.match(html, /1 media binding delegated to the package cache/);
+    assert.match(html, /Mobile Offline Profile required/);
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
+test('scenario facts project only revision bindings and counts', () => {
+  const projectRoot = makeProjectDir('mobile-build-plan-scenario-facts');
+  try {
+    assert.equal(ARTIFACTS.scenarioFacts, '.tmp/scenario-facts.json');
+    writeJson(projectRoot, '.tmp/scenario-facts.json', {
+      schemaVersion: 1,
+      contractType: 'scenario-facts',
+      scopeRevision: 'a'.repeat(64),
+      journeyRevision: 'b'.repeat(64),
+      screenPackRevision: 'c'.repeat(64),
+      persistenceRevision: 'd'.repeat(64),
+      navigationRevision: 'e'.repeat(64),
+      scenarioRevision: 'f'.repeat(64),
+      records: [{ id: 'secret-record', fields: { name: 'Do not project me' } }],
+      scenarios: [{ id: 'happy-path', recordIds: ['secret-record'] }],
+      screenBindings: [{ screenId: 'home', mediaAssetKeys: ['private-photo'] }],
+      mediaAssets: [{ key: 'private-photo', source: { kind: 'cdn', value: 'https://media.example.test/private.jpg' } }],
+      invariants: [{ operator: 'field-lte-field' }],
+    });
+
+    const model = deriveBuildPlanModel(projectRoot);
+    assert.deepStrictEqual(model.scenarioFacts, {
+      present: true,
+      bound: true,
+      validLooking: true,
+      revision: 'f'.repeat(64),
+      recordCount: 1,
+      scenarioCount: 1,
+      screenBindingCount: 1,
+      mediaCount: 1,
+      invariantCount: 1,
+    });
+    assert.doesNotMatch(JSON.stringify(model.scenarioFacts), /Do not project me|private\.jpg|secret-record/);
+    const html = renderBuildPlanHtml(model, { live: true });
+    assert.match(html, /Scenario artifact/);
+    assert.match(html, /1 records · 1 scenarios · 1 screens/);
+    assert.doesNotMatch(html, /Do not project me|private\.jpg|secret-record/);
   } finally {
     cleanup(projectRoot);
   }
@@ -636,6 +798,7 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
       workflow: 'create-mobile-app',
       approvals: {
         dataModel: { status: 'approved', approvedAt: '2026-09-01T09:00:00.000Z' },
+        dataModelUsage: { status: 'approved', approvedAt: '2026-09-01T09:00:00.000Z' },
         nativeCapabilities: { status: 'approved', approvedAt: '2026-09-01T09:00:00.000Z' },
         connectors: { status: 'approved', approvedAt: '2026-09-01T09:00:00.000Z' },
         screenPlan: { status: 'approved', approvedAt: '2026-09-01T09:00:00.000Z' },
@@ -647,6 +810,17 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
       completedStep: '6.75',
     });
     writeJson(projectRoot, '.tmp/dataverse-operation-manifest.json', { stale: true });
+    writeJson(projectRoot, '.tmp/data-model-usage.json', {
+      schemaVersion: 1,
+      contractType: 'data-model-usage',
+      usageRevision: 'a'.repeat(64),
+      requirements: [],
+      tables: [],
+    });
+    writeJson(projectRoot, '.tmp/scenario-facts.json', { scenarioRevision: 'b'.repeat(64) });
+    writeJson(projectRoot, '.tmp/offline-integration-contract.json', {
+      integrationRevision: 'c'.repeat(64),
+    });
 
     const result = applyDataModelEdit(projectRoot, {
       type: 'add-column',
@@ -677,6 +851,7 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
       'utf8',
     ));
     assert.strictEqual(receipt.approvals.dataModel.status, 'pending');
+    assert.strictEqual(receipt.approvals.dataModelUsage.status, 'pending');
     assert.strictEqual(receipt.approvals.screenPlan.status, 'pending');
     assert.strictEqual(receipt.approvedContract, undefined);
     assert.match(receipt.integritySha256, /^[a-f0-9]{64}$/);
@@ -684,6 +859,15 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
     assert.strictEqual(
       fs.existsSync(path.join(projectRoot, '.tmp/dataverse-operation-manifest.json')),
       false,
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(projectRoot, '.tmp/data-model-usage.json')),
+      false,
+    );
+    assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/scenario-facts.json')), true);
+    assert.strictEqual(
+      fs.existsSync(path.join(projectRoot, '.tmp/offline-integration-contract.json')),
+      true,
     );
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '_build_plan.html')), true);
   } finally {
@@ -801,6 +985,10 @@ test('adding a table updates and validates its explicit Product Scope mapping', 
     writeJson(projectRoot, '.tmp/dataverse-schema-contract.json', contract);
     writeJson(projectRoot, '.tmp/product-experience-contract.json', bundle.experience);
     writeJson(projectRoot, '.tmp/product-scope-contract.json', bundle.scope);
+    writeJson(projectRoot, '.tmp/scenario-facts.json', { scenarioRevision: 'b'.repeat(64) });
+    writeJson(projectRoot, '.tmp/offline-integration-contract.json', {
+      integrationRevision: 'c'.repeat(64),
+    });
     const jobId = bundle.scope.coreJobs[0].id;
 
     const result = applyDataModelEdit(projectRoot, {
@@ -844,6 +1032,11 @@ test('adding a table updates and validates its explicit Product Scope mapping', 
     assert.ok(scope.dataEntities.some((entity) => (
       entity.name === 'Safety observation' && entity.realization === 'new-table'
     )));
+    assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/scenario-facts.json')), false);
+    assert.strictEqual(
+      fs.existsSync(path.join(projectRoot, '.tmp/offline-integration-contract.json')),
+      false,
+    );
   } finally {
     cleanup(projectRoot);
   }
@@ -1040,6 +1233,128 @@ test('removal that breaks relationships or screen data operations is rejected at
   }
 });
 
+test('usage consumers block exact table, column, and relationship removals', () => {
+  const scenarios = [
+    {
+      label: 'table',
+      contract: minimalContract(),
+      command: { type: 'remove-table', tableLogicalName: 'ct_site' },
+      usage: { tableLogicalName: 'ct_site', consumers: [{ kind: 'requirement', id: 'keep-site' }], fields: [], relationships: [] },
+      consumerId: 'keep-site',
+    },
+    {
+      label: 'column',
+      contract: (() => {
+        const value = minimalContract();
+        value.tables[0].columns.push({
+          logicalName: 'ct_note',
+          schemaName: 'ct_note',
+          displayName: 'Note',
+          type: 'string',
+          plannedDecision: 'create',
+          requiredLevel: 'None',
+        });
+        return value;
+      })(),
+      command: { type: 'remove-column', tableLogicalName: 'ct_asset', columnLogicalName: 'ct_note' },
+      usage: { tableLogicalName: 'ct_asset', consumers: [], fields: [{ logicalName: 'ct_note', consumers: [{ kind: 'screen', id: 'asset-detail' }] }], relationships: [] },
+      consumerId: 'asset-detail',
+    },
+    {
+      label: 'relationship',
+      contract: contractWithRelationship(),
+      command: { type: 'remove-relationship', tableLogicalName: 'ct_asset', relationshipSchemaName: 'ct_Site_Asset' },
+      usage: { tableLogicalName: 'ct_asset', consumers: [], fields: [], relationships: [{ schemaName: 'ct_Site_Asset', consumers: [{ kind: 'domain-operation', id: 'asset-flow:load-site' }] }] },
+      consumerId: 'asset-flow:load-site',
+    },
+  ];
+  for (const scenario of scenarios) {
+    const projectRoot = makeProjectDir(`mobile-build-plan-usage-${scenario.label}`);
+    try {
+      writeJson(projectRoot, '.tmp/dataverse-schema-contract.json', scenario.contract);
+      writeJson(projectRoot, '.tmp/data-model-usage.json', {
+        schemaVersion: 1,
+        contractType: 'data-model-usage',
+        requirements: [],
+        tables: [scenario.usage],
+      });
+      const impact = analyzeDataModelRemoval(projectRoot, {
+        ...scenario.command,
+        expectedRevision: revisionOf(scenario.contract),
+      });
+      assert.strictEqual(impact.allowed, false);
+      assert.ok(impact.blockers.some(
+        (item) => item.code === 'usage-consumer-dependency',
+      ));
+      assert.ok(impact.affectedItems.some(
+        (item) => item.kind === 'usage-consumer' && item.id === scenario.consumerId,
+      ));
+    } finally {
+      cleanup(projectRoot);
+    }
+  }
+});
+
+test('system exemptions do not replace existing removal rules or become usage blockers', () => {
+  const projectRoot = makeProjectDir('mobile-build-plan-usage-exemption');
+  try {
+    const contract = minimalContract();
+    contract.tables[0].columns.push({
+      logicalName: 'ct_note',
+      schemaName: 'ct_note',
+      displayName: 'Note',
+      type: 'string',
+      plannedDecision: 'create',
+      requiredLevel: 'None',
+    });
+    writeJson(projectRoot, '.tmp/dataverse-schema-contract.json', contract);
+    writeJson(projectRoot, '.tmp/data-model-usage.json', {
+      schemaVersion: 1,
+      contractType: 'data-model-usage',
+      requirements: [],
+      tables: [{
+        tableLogicalName: 'ct_asset',
+        consumers: [],
+        fields: [
+          {
+            logicalName: 'ct_name',
+            consumers: [],
+            exemption: { kind: 'primary-name', reason: 'Dataverse requires a primary name.' },
+          },
+          {
+            logicalName: 'ct_note',
+            consumers: [],
+            exemption: { kind: 'platform-required', reason: 'Reserved for platform metadata.' },
+          },
+        ],
+        relationships: [],
+      }],
+    });
+    const noteImpact = analyzeDataModelRemoval(projectRoot, {
+      type: 'remove-column',
+      expectedRevision: revisionOf(contract),
+      tableLogicalName: 'ct_asset',
+      columnLogicalName: 'ct_note',
+    });
+    assert.strictEqual(noteImpact.allowed, true, JSON.stringify(noteImpact.blockers));
+    const primaryImpact = analyzeDataModelRemoval(projectRoot, {
+      type: 'remove-column',
+      expectedRevision: revisionOf(contract),
+      tableLogicalName: 'ct_asset',
+      columnLogicalName: 'ct_name',
+    });
+    assert.strictEqual(primaryImpact.allowed, false);
+    assert.ok(primaryImpact.blockers.some(
+      (item) => item.code === 'primary-name-dependency',
+    ));
+    assert.equal(primaryImpact.blockers.some(
+      (item) => item.code === 'usage-consumer-dependency',
+    ), false);
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
 test('Undo restores the exact prior unexecuted revision and approval checkpoints', () => {
   const projectRoot = makeProjectDir('mobile-build-plan-undo');
   try {
@@ -1056,6 +1371,7 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
       approvals: {
         requirements: { status: 'approved' },
         dataModel: { status: 'approved' },
+        dataModelUsage: { status: 'approved' },
         nativeCapabilities: { status: 'approved' },
         connectors: { status: 'approved' },
         screenPlan: { status: 'approved' },
@@ -1066,10 +1382,18 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
     };
     const pipeline = { schemaVersion: 2, completedStep: '6.75' };
     const manifest = { schemaVersion: 1, summary: { metadataOperationCount: 3 } };
+    const usage = {
+      schemaVersion: 1,
+      contractType: 'data-model-usage',
+      usageRevision: 'a'.repeat(64),
+      requirements: [],
+      tables: [],
+    };
     writeJson(projectRoot, '.tmp/dataverse-schema-contract.json', contract);
     writeJson(projectRoot, '.tmp/mobile-plan-status.json', approval);
     writeJson(projectRoot, '.tmp/pipeline-state.json', pipeline);
     writeJson(projectRoot, '.tmp/dataverse-operation-manifest.json', manifest);
+    writeJson(projectRoot, '.tmp/data-model-usage.json', usage);
     const command = {
       type: 'remove-column',
       expectedRevision: revisionOf(contract),
@@ -1092,6 +1416,7 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
     assert.strictEqual(invalidated.approvals.requirements.status, 'approved');
     assert.strictEqual(invalidated.approvals.dataModel.status, 'pending');
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/pipeline-state.json')), false);
+    assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/data-model-usage.json')), false);
 
     const undone = undoLastDataModelEdit(projectRoot, {
       expectedRevision: removed.revision,
@@ -1114,6 +1439,10 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
       path.join(projectRoot, '.tmp/dataverse-operation-manifest.json'),
       'utf8',
     )), manifest);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(
+      path.join(projectRoot, '.tmp/data-model-usage.json'),
+      'utf8',
+    )), usage);
     assert.strictEqual(deriveBuildPlanModel(projectRoot).undo.available, false);
   } finally {
     cleanup(projectRoot);

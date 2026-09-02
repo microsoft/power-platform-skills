@@ -11,10 +11,10 @@ const {
 
 const ACCEPTANCE_SCENARIOS = {
   flightCommerce: {
-    brief: 'Build an authenticated in-flight passenger shop where travelers can search the cabin catalog, select products, purchase with a saved card, manage their booking, review orders, and open their profile. The catalog and booking connector are online during the flight; do not promise offline ordering.',
+    brief: 'Build an authenticated in-flight passenger shop where travelers can browse travel accessories, beauty, and watches, add products to their bag, purchase with a saved card, manage their booking, review orders, and open their profile. The catalog and booking connector are online during the flight; do not promise offline ordering.',
     productName: 'Cabin Cart',
     primaryGoal: 'Find and buy an item during the flight without losing booking context',
-    vocabulary: ['cabin catalog', 'seat', 'booking', 'order', 'delivery on board'],
+    vocabulary: ['travel accessories', 'beauty', 'watches', 'seat', 'booking', 'delivery on board'],
     complexity: 'standard',
     dimensions: {
       primaryUser: { role: 'Airline passenger', proficiency: 'occasional', situation: 'Seated in the cabin with one hand available and limited time before landing' },
@@ -30,7 +30,7 @@ const ACCEPTANCE_SCENARIOS = {
       accessibilityPriorities: ['large-touch-targets', 'one-handed-reach', 'high-contrast'],
     },
     contextEvidence: 'The catalog and booking connector are online during the flight',
-    fixtureValues: ['Cloud Runner - seat delivery', 'Terra Carryall - two left', 'Order CAB-20481'],
+    fixtureValues: ['Terra Carryall - travel accessory', 'Aurora beauty set - two left', 'Meridian watch - seat delivery'],
     coreJobs: [
       {
         id: 'buy-in-flight',
@@ -56,18 +56,18 @@ const ACCEPTANCE_SCENARIOS = {
       { id: 'manage-profile', statement: 'As a passenger I want to manage my account and sign out', actor: 'Airline passenger', outcome: 'Account details are accessible without displacing shopping tabs', screenId: 'profile' },
     ],
     requirements: [
-      { id: 'search-catalog', jobId: 'buy-in-flight', statement: 'Search products available for delivery to this seat', evidence: 'search the cabin catalog', screenId: 'shop', target: 'Search catalog', operation: { kind: 'external-call', entity: 'Cabin catalog', classification: 'schema-backed' } },
-      { id: 'select-product', jobId: 'buy-in-flight', statement: 'Select a product after reviewing price and availability', evidence: 'select products', screenId: 'product', target: 'Add to cart', operation: { kind: 'local-state', entity: 'Cart', classification: 'safe-presentation' } },
+      { id: 'search-catalog', jobId: 'buy-in-flight', statement: 'Browse travel accessories, beauty, and watches available for this seat', evidence: 'browse travel accessories, beauty, and watches', screenId: 'shop', target: 'Browse catalog', operation: { kind: 'external-call', entity: 'Cabin catalog', classification: 'schema-backed' } },
+      { id: 'select-product', jobId: 'buy-in-flight', statement: 'Add a product to the bag after reviewing price and availability', evidence: 'add products to their bag', screenId: 'product', target: 'Add to bag', operation: { kind: 'local-state', entity: 'Cart', classification: 'safe-presentation' } },
       { id: 'purchase-order', jobId: 'buy-in-flight', statement: 'Purchase the selected products with the saved payment method', evidence: 'purchase with a saved card', screenId: 'checkout', target: 'Place order', operation: { kind: 'external-call', entity: 'Order', classification: 'schema-backed' } },
       { id: 'manage-booking', jobId: 'manage-flight', statement: 'Manage the booking and seat associated with fulfillment', evidence: 'manage their booking', screenId: 'trip', target: 'Update booking', operation: { kind: 'external-call', entity: 'Booking', classification: 'schema-backed' } },
       { id: 'review-order', jobId: 'review-orders', statement: 'Review current and completed cabin orders', evidence: 'review orders', screenId: 'orders', target: 'Open order' },
       { id: 'open-profile', jobId: 'manage-profile', statement: 'Open account details and the sign-out action', evidence: 'open their profile', screenId: 'profile', target: 'Manage account' },
     ],
     screens: [
-      { id: 'shop', title: 'Shop', pattern: 'discovery', classification: 'durable-destination', jobIds: ['buy-in-flight'], focal: 'Cabin-ready products with seat delivery availability', signature: 'Seat-aware merchandise rail', primaryAction: 'Search catalog', parameterizedBy: 'category', interactionSignature: 'catalog-browse' },
+      { id: 'shop', title: 'Shop', pattern: 'discovery', classification: 'durable-destination', jobIds: ['buy-in-flight'], focal: 'Travel accessories, beauty, and watches with seat delivery availability', signature: 'Seat-aware merchandise rail', primaryAction: 'Browse catalog', parameterizedBy: 'category', interactionSignature: 'catalog-browse' },
       { id: 'trip', title: 'My trip', pattern: 'overview', classification: 'durable-destination', jobIds: ['manage-flight'], focal: 'Flight, seat, and delivery cutoff in one view', signature: 'Booking context band', primaryAction: 'Update booking' },
       { id: 'orders', title: 'Orders', pattern: 'list', classification: 'durable-destination', jobIds: ['review-orders'], focal: 'Open cabin orders before completed purchases', signature: 'Delivery-window order list', primaryAction: 'Open order', parameterizedBy: 'orderStatus', interactionSignature: 'order-browse' },
-      { id: 'product', title: 'Product', pattern: 'detail', classification: 'nested-detail', parentScreenId: 'shop', jobIds: ['buy-in-flight'], focal: 'Product imagery, cabin stock, price, and seat delivery', signature: 'Cabin stock buy bar', primaryAction: 'Add to cart', parameterizedBy: 'productId', interactionSignature: 'catalog-detail' },
+      { id: 'product', title: 'Product', pattern: 'detail', classification: 'nested-detail', parentScreenId: 'shop', jobIds: ['buy-in-flight'], focal: 'Product imagery, cabin stock, price, and seat delivery', signature: 'Cabin stock buy bar', primaryAction: 'Add to bag', parameterizedBy: 'productId', interactionSignature: 'catalog-detail' },
       { id: 'checkout', title: 'Checkout', pattern: 'workflow-step', classification: 'bounded-flow-step', jobIds: ['buy-in-flight'], focal: 'Saved card, seat, fulfillment window, and final total', signature: 'Seat-bound commit step', primaryAction: 'Place order' },
       { id: 'confirmation', title: 'Confirmed', pattern: 'confirmation', classification: 'bounded-flow-step', jobIds: ['buy-in-flight'], focal: 'Order CAB-20481 and its delivery-to-seat window', signature: 'Cabin delivery receipt', primaryAction: 'View order' },
       { id: 'profile', title: 'Profile', pattern: 'settings', classification: 'nested-detail', parentScreenId: 'shop', jobIds: ['manage-profile'], focal: 'Passenger account, preferences, and sign out', signature: 'Compact account sheet', primaryAction: 'Manage account' },
@@ -80,12 +80,13 @@ const ACCEPTANCE_SCENARIOS = {
       { name: 'Booking', role: 'primary', realization: 'connector-source', screenIds: ['trip'] },
       { name: 'Cabin catalog', role: 'primary', realization: 'connector-source', screenIds: ['shop', 'product'] },
       { name: 'Order', role: 'primary', realization: 'connector-source', screenIds: ['orders', 'checkout', 'confirmation'] },
+      { name: 'Cart', role: 'supporting', realization: 'transient-ui-state', screenIds: ['product', 'checkout'] },
     ],
     newTableBudget: { target: 0, max: 0 },
   },
 
   icrcReceiving: {
-    brief: 'Build an authenticated field receiving app for ICRC warehouse staff who often lose signal. They need to scan or enter a shipment, receive line items, inspect damaged packages, resolve discrepancies, attach photo evidence, and hand off custody. Work must resume after interruption and retry synchronization.',
+    brief: 'Build an authenticated field receiving app for ICRC warehouse staff who often lose signal. They need to scan or enter a shipment, receive line items, inspect damaged packages, resolve discrepancies, attach photo evidence with GPS, and hand off custody. Work must resume after interruption and retry synchronization.',
     productName: 'Relief Receive',
     primaryGoal: 'Receive relief shipments accurately and preserve evidence through handoff',
     vocabulary: ['shipment', 'pallet', 'waybill', 'discrepancy', 'custody'],
@@ -124,6 +125,7 @@ const ACCEPTANCE_SCENARIOS = {
       { id: 'inspect-packages', jobId: 'receive-shipment', statement: 'Inspect packages and record quantity and condition', evidence: 'inspect damaged packages', screenId: 'inspection', target: 'Record inspection', operation: { kind: 'create', entity: 'Inspection', classification: 'schema-backed' } },
       { id: 'resolve-discrepancy', jobId: 'receive-shipment', statement: 'Resolve a quantity or condition discrepancy with a reason', evidence: 'resolve discrepancies', screenId: 'discrepancy', target: 'Resolve discrepancy', operation: { kind: 'update', entity: 'Discrepancy', classification: 'schema-backed' } },
       { id: 'attach-evidence', jobId: 'receive-shipment', statement: 'Attach photo evidence to the discrepancy record', evidence: 'attach photo evidence', screenId: 'evidence', target: 'Save evidence', operation: { kind: 'create', entity: 'Evidence', classification: 'schema-backed' } },
+      { id: 'capture-location', jobId: 'receive-shipment', statement: 'Capture GPS location with the receiving evidence', evidence: 'GPS', screenId: 'evidence', surfaceKind: 'section', target: 'Capture location', operation: { kind: 'update', entity: 'Evidence', classification: 'schema-backed' } },
       { id: 'handoff-custody', jobId: 'receive-shipment', statement: 'Hand off received custody to the next accountable person', evidence: 'hand off custody', screenId: 'handoff', target: 'Confirm handoff', operation: { kind: 'create', entity: 'Custody event', classification: 'schema-backed' } },
       { id: 'retry-sync', jobId: 'recover-sync', statement: 'Retry synchronization without losing received quantities or evidence', evidence: 'retry synchronization', screenId: 'receiving', mechanism: 'state', target: 'retry' },
     ],
@@ -213,7 +215,7 @@ const ACCEPTANCE_SCENARIOS = {
   },
 
   itAssetTracking: {
-    brief: 'Build authenticated company IT asset tracking for asset stewards. They need to find assets across laptops, phones, and docks; assign them; transfer ownership or location; audit condition; record repairs; retire devices; and manage their account. Show permission-denied and no-results states inside the relevant surfaces.',
+    brief: 'Build authenticated company IT inventory for asset stewards. They need to scan and print barcodes; find laptops, phones, and docks; assign them; transfer ownership or location; review warranty; perform monthly inspections; record repairs and status; retire devices; and manage their account. Show permission-denied and no-results states inside the relevant surfaces.',
     productName: 'Asset Steward',
     primaryGoal: 'Understand company asset status and complete the next accountable action',
     vocabulary: ['asset', 'custodian', 'location', 'audit', 'repair', 'retirement'],
@@ -260,10 +262,12 @@ const ACCEPTANCE_SCENARIOS = {
       { id: 'handle-search-states', statement: 'As an asset steward I need access and no-result feedback in context', actor: 'IT asset steward', outcome: 'Search and access failures stay on their owning surfaces', screenId: 'inventory', surfaceKind: 'section' },
     ],
     requirements: [
-      { id: 'find-assets', jobId: 'steward-inventory', statement: 'Find assets across laptops, phones, and docks', evidence: 'find assets across laptops, phones, and docks', screenId: 'inventory', target: 'Find asset', operation: { kind: 'read', entity: 'Asset', classification: 'schema-backed' } },
+      { id: 'find-assets', jobId: 'steward-inventory', statement: 'Find assets across laptops, phones, and docks', evidence: 'find laptops, phones, and docks', screenId: 'inventory', target: 'Find asset', operation: { kind: 'read', entity: 'Asset', classification: 'schema-backed' } },
+      { id: 'scan-barcode', jobId: 'steward-inventory', statement: 'Scan an asset barcode to open the matching inventory record', evidence: 'scan and print barcodes', screenId: 'inventory', target: 'Scan barcode', operation: { kind: 'read', entity: 'Asset', classification: 'schema-backed' } },
+      { id: 'print-barcode', jobId: 'steward-inventory', statement: 'Print a replacement barcode for the current asset', evidence: 'scan and print barcodes', screenId: 'asset', surfaceKind: 'section', target: 'Print barcode', operation: { kind: 'local-state', entity: 'Barcode label', classification: 'safe-presentation' } },
       { id: 'assign-asset', jobId: 'steward-inventory', statement: 'Assign an asset to an accountable custodian', evidence: 'assign them', screenId: 'asset', target: 'Assign asset', operation: { kind: 'update', entity: 'Asset', classification: 'schema-backed' } },
       { id: 'transfer-asset', jobId: 'steward-inventory', statement: 'Transfer asset ownership or location with an audit note', evidence: 'transfer ownership or location', screenId: 'transfer', target: 'Confirm transfer', operation: { kind: 'update', entity: 'Asset', classification: 'schema-backed' } },
-      { id: 'audit-condition', jobId: 'service-assets', statement: 'Audit an asset condition and warranty status', evidence: 'audit condition', screenId: 'audit', target: 'Save audit', operation: { kind: 'create', entity: 'Asset audit', classification: 'schema-backed' } },
+      { id: 'audit-condition', jobId: 'service-assets', statement: 'Perform the monthly asset inspection and review condition and warranty status', evidence: 'monthly inspections', screenId: 'audit', target: 'Save monthly inspection', operation: { kind: 'create', entity: 'Asset audit', classification: 'schema-backed' } },
       { id: 'record-repair', jobId: 'service-assets', statement: 'Record repair work and its current disposition', evidence: 'record repairs', screenId: 'repair', target: 'Save repair', operation: { kind: 'create', entity: 'Repair', classification: 'schema-backed' } },
       { id: 'retire-device', jobId: 'steward-inventory', statement: 'Retire a device with disposition and data-wipe evidence', evidence: 'retire devices', screenId: 'retire', target: 'Retire asset', operation: { kind: 'update', entity: 'Asset', classification: 'schema-backed' } },
       { id: 'manage-account', jobId: 'manage-account', statement: 'Manage the asset-steward account and sign out', evidence: 'manage their account', screenId: 'account', target: 'Manage account' },
@@ -290,16 +294,23 @@ const ACCEPTANCE_SCENARIOS = {
       { name: 'Device category', role: 'reference', realization: 'choice-column', screenIds: [] },
       { name: 'Asset audit', role: 'primary', realization: 'new-table', screenIds: ['audit'], jobIds: ['service-assets'] },
       { name: 'Repair', role: 'primary', realization: 'new-table', screenIds: ['repair'], jobIds: ['service-assets'] },
+      { name: 'Barcode label', role: 'supporting', realization: 'transient-ui-state', screenIds: ['asset'] },
     ],
     newTableBudget: { target: 2, max: 4 },
   },
 };
 
-function statesFor(screen, offlineSelected) {
+function statesFor(screen) {
   return {
-    ...defaultStates(screen.title, { offline: offlineSelected }),
+    ...defaultStates(screen.title),
     ...(screen.stateExtras || {}),
   };
+}
+
+function routeForScreen(screen) {
+  return screen.parentScreenId
+    ? `/${screen.parentScreenId}/${screen.id}`
+    : `/${screen.id}`;
 }
 
 function acceptanceBundle(key) {
@@ -316,9 +327,6 @@ function acceptanceBundle(key) {
       primaryGoal: evidence(descriptor.primaryGoal),
     },
   });
-  const offlineSelected = ['intermittent', 'offline-first'].includes(
-    experience.operatingContext.connectivity,
-  );
   const requirementById = new Map(descriptor.requirements.map((item) => [item.id, item]));
   const coreJobIds = new Set(descriptor.coreJobs.map((job) => job.id));
 
@@ -361,7 +369,7 @@ function acceptanceBundle(key) {
   }));
   const screens = descriptor.screens.map((screen) => ({
     id: screen.id,
-    route: `/${screen.id}`,
+    route: routeForScreen(screen),
     title: screen.title,
     purpose: `${screen.title} lets the user answer: ${screen.focal}`,
     userFacing: true,
@@ -421,7 +429,7 @@ function acceptanceBundle(key) {
             dataOperation: requirement.operation || { kind: 'read', entity: descriptor.entities[0].name, classification: 'schema-backed' },
             entryCondition: index === 0 ? 'The user starts this job' : 'The previous required step succeeded',
             exitCondition: `${requirement.target} succeeds`,
-            states: statesFor(screen, offlineSelected),
+            states: statesFor(screen),
           };
         }),
         successOutcome: job.successOutcome,
@@ -443,7 +451,7 @@ function acceptanceBundle(key) {
       const primaryAction = screen.primaryAction || actionLabels[0] || 'Continue';
       const mediaRequired = experience.mediaStrategy.necessity === 'essential'
         && screen.jobIds.some((jobId) => coreJobIds.has(jobId));
-      const mediaRole = screen.mediaRole || (mediaRequired ? 'essential' : 'none');
+      const mediaRole = screen.mediaRole || (mediaRequired ? 'product' : 'none');
       const previewRecords = descriptor.fixtureValues.map((value, index) => ({
         title: value,
         subtitle: `${screen.title}: ${index === 0 ? screen.focal : 'Related context for the current job'}`,
@@ -452,11 +460,25 @@ function acceptanceBundle(key) {
       }));
       return {
         screenId: screen.id,
-        route: `/${screen.id}`,
+        route: routeForScreen(screen),
         purpose: `${screen.title} supports ${screen.jobIds.join(', ')} without creating an entity-driven route family.`,
         userQuestion: `What does the user need to know or do on ${screen.title}?`,
         firstViewport: { regionOrder: ['context', 'focal-content', 'primary-action'], focalContent: screen.focal, primaryAction },
         hierarchy: { dominant: screen.focal, supporting: [screen.signature] },
+        identityHierarchy: {
+          primary: screen.focal,
+          secondary: [screen.signature],
+          technical: screen.technicalIdentity || [],
+        },
+        chrome: {
+          role: screen.classification === 'durable-destination' ? 'root'
+            : screen.classification === 'modal-or-immersive-utility' ? 'immersive'
+              : 'back',
+          navigationTitle: screen.title,
+        },
+        primaryActionPlacement: screen.classification === 'durable-destination'
+          ? 'inline'
+          : 'sticky-bottom',
         primaryActions: [{ label: primaryAction, outcome: `${primaryAction} advances the approved job` }],
         secondaryActions: actionLabels
           .filter((label) => label !== primaryAction)
@@ -465,9 +487,19 @@ function acceptanceBundle(key) {
         decisionSupport: [{ label: screen.signature, classification: 'safe-presentation' }],
         media: mediaRole === 'none'
           ? { role: 'none' }
-          : { role: mediaRole, treatment: 'Stable focal media with identity visible', source: experience.mediaStrategy.capture, fallback: experience.mediaStrategy.fallback },
+          : {
+            role: mediaRole,
+            assetKeyOrFieldBinding: `asset:${screen.id}-media`,
+            aspectRatio: 1.5,
+            fit: 'cover',
+            focalPoint: 'center',
+            firstViewport: true,
+            treatment: 'Stable focal media with identity visible',
+            source: experience.mediaStrategy.capture,
+            fallback: experience.mediaStrategy.fallback,
+          },
         context: { vocabulary: descriptor.vocabulary, contextualData: [{ label: descriptor.fixtureValues[0], classification: 'safe-presentation' }] },
-        states: statesFor(screen, offlineSelected),
+        states: statesFor(screen),
         navigation: { incoming: [], outgoing: [] },
         signatureInteraction: { name: screen.signature, description: `${screen.signature} makes ${screen.title} specific to ${descriptor.productName}.` },
         forbiddenDefaults: ['Entity-driven list, detail, and form triplet with no job boundary'],

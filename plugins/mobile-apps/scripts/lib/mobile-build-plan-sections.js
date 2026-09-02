@@ -1,5 +1,6 @@
 'use strict';
 
+const { renderUsageTraceability } = require('./mobile-build-plan-data-model');
 const { escapeHtml, statusLabel } = require('./mobile-build-plan-html');
 
 function formatDuration(milliseconds) {
@@ -134,7 +135,11 @@ function renderProgressSection(model) {
 function renderArchitectureSection(model) {
   const owners = model.makerSummary.dataOwnership || [];
   const entityRows = owners.map((entity) => `<li><span><strong>${escapeHtml(entity.name)}</strong><small>${escapeHtml(entity.note || entity.role)}</small></span><b>${escapeHtml(statusLabel(entity.owner || entity.realization))}</b></li>`).join('') || '<li class="muted-row">Persistence ownership is pending.</li>';
-  return `<section class="panel" id="panel-architecture" role="tabpanel" aria-labelledby="tab-architecture" hidden><div class="section-head"><span><h2>Capabilities & data</h2><p>Persistence ownership, native behavior, and connector decisions.</p></span></div><div class="architecture-grid"><section class="work-panel"><h3>Persistence ownership</h3><ul class="entity-list">${entityRows}</ul></section><aside><section class="work-panel"><h3>Native capabilities</h3>${renderProjection(model.planSections['Native Capabilities'], 'No native capabilities planned yet')}</section><section class="work-panel" style="margin-top:16px"><h3>Connectors</h3>${renderProjection(model.planSections.Connectors, 'No connectors planned yet')}</section></aside></div></section>`;
+  const offline = model.offlineIntegration;
+  const offlineSection = offline?.selected
+    ? `<section class="work-panel" style="margin-top:16px"><h3>Offline integration</h3><p><strong>${escapeHtml(statusLabel(offline.adapter || 'Pending adapter'))}</strong></p><p class="summary-note"><strong>Owner:</strong> ${escapeHtml(statusLabel(offline.owner || 'Pending'))}</p><ul class="plain-list">${offline.runtimeStates.map((state) => `<li>${escapeHtml(statusLabel(state))}</li>`).join('')}</ul><p class="summary-note">${escapeHtml(offline.mediaBindingCount)} media binding${offline.mediaBindingCount === 1 ? '' : 's'} delegated to the package cache</p><p class="summary-note">${offline.profileRequired ? 'Mobile Offline Profile required' : 'No Mobile Offline Profile required'}</p></section>`
+    : '';
+  return `<section class="panel" id="panel-architecture" role="tabpanel" aria-labelledby="tab-architecture" hidden><div class="section-head"><span><h2>Capabilities & data</h2><p>Persistence ownership, native behavior, connector decisions, and selected package integrations.</p></span></div><div class="architecture-grid"><div><section class="work-panel"><h3>Persistence ownership</h3><ul class="entity-list">${entityRows}</ul></section><div style="margin-top:16px">${renderUsageTraceability(model.dataModelUsage, 'capabilities-usage-traceability')}</div></div><aside><section class="work-panel"><h3>Native capabilities</h3>${renderProjection(model.planSections['Native Capabilities'], 'No native capabilities planned yet')}</section><section class="work-panel" style="margin-top:16px"><h3>Connectors</h3>${renderProjection(model.planSections.Connectors, 'No connectors planned yet')}</section>${offlineSection}</aside></div></section>`;
 }
 
 function renderValidationSection(model) {
@@ -145,6 +150,15 @@ function renderValidationSection(model) {
   const validationRows = [
     ['Pipeline checkpoint', model.pipeline?.completedStep ? `Step ${model.pipeline.completedStep}` : 'Pending'],
     ['Tracked artifacts', model.pipeline?.trackedArtifacts?.length || 0],
+    ['Usage artifact', model.dataModelUsage.present && model.dataModelUsage.validLooking ? 'Present' : 'Pending'],
+    ['Usage bindings', model.dataModelUsage.bound ? 'Present' : 'Pending'],
+    ['Requirements owned', `${model.dataModelUsage.ownedRequirementCount} / ${model.dataModelUsage.persistableRequirementCount} persistable / ${model.dataModelUsage.totalRequirementCount} total`],
+    ['Usage schema members', `${model.dataModelUsage.tableCount} tables · ${model.dataModelUsage.fieldCount} fields · ${model.dataModelUsage.relationshipCount} relationships`],
+    ['Usage consumer links', model.dataModelUsage.consumerLinkCount],
+    ['Scenario artifact', model.scenarioFacts.present && model.scenarioFacts.validLooking ? 'Present' : 'Pending'],
+    ['Scenario bindings', model.scenarioFacts.bound ? 'Present' : 'Pending'],
+    ['Scenario facts', `${model.scenarioFacts.recordCount} records · ${model.scenarioFacts.scenarioCount} scenarios · ${model.scenarioFacts.screenBindingCount} screens`],
+    ['Scenario media & invariants', `${model.scenarioFacts.mediaCount} media · ${model.scenarioFacts.invariantCount} invariants`],
     ['Dataverse manifest', model.dataverse.manifestReady ? 'Ready' : 'Pending'],
     ['Metadata operations', model.dataverse.operationCount],
     ['Completed operations', model.dataverse.completedOperationCount],

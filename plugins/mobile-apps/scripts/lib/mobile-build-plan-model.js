@@ -45,9 +45,12 @@ const ARTIFACTS = {
   scope: '.tmp/product-scope-contract.json',
   architecture: '.tmp/architecture-decisions.json',
   persistence: '.tmp/persistence-contract.json',
+  offlineIntegration: '.tmp/offline-integration-contract.json',
   journey: '.tmp/workflow-journey-contract.json',
   screens: '.tmp/compiled-screen-build-pack.json',
+  scenarioFacts: '.tmp/scenario-facts.json',
   dataModel: '.tmp/dataverse-schema-contract.json',
+  dataModelUsage: '.tmp/data-model-usage.json',
   dataverseManifest: '.tmp/dataverse-operation-manifest.json',
   dataverseJournal: '.tmp/dataverse-metadata-execution-journal.json',
 };
@@ -347,7 +350,114 @@ function scopeHealth(scope, experience) {
   return redactBrowserValue(validateScopeContract(scope, experience));
 }
 
-function makerSummary(experience, scope, journey, screens, health, approvals, persistence) {
+function offlineIntegrationSummary(integration, selected) {
+  const source = integration && typeof integration === 'object' && !Array.isArray(integration)
+    ? integration
+    : {};
+  return {
+    selected,
+    owner: selected && typeof source.owner === 'string'
+      ? redactBrowserText(source.owner)
+      : null,
+    adapter: selected && typeof source.adapter === 'string'
+      ? redactBrowserText(source.adapter)
+      : null,
+    runtimeStates: selected && Array.isArray(source.runtimeStates)
+      ? source.runtimeStates
+        .filter((state) => typeof state === 'string')
+        .map(redactBrowserText)
+      : [],
+    mediaBindingCount: selected && Array.isArray(source.mediaBindings)
+      ? source.mediaBindings.length
+      : 0,
+    profileRequired: selected && source.mobileOfflineProfileRequired === true,
+  };
+}
+
+function dataModelUsageSummary(usage) {
+  const present = Boolean(usage && typeof usage === 'object' && !Array.isArray(usage));
+  const requirements = present && Array.isArray(usage.requirements) ? usage.requirements : [];
+  const tables = present && Array.isArray(usage.tables) ? usage.tables : [];
+  const fields = tables.flatMap((table) => (Array.isArray(table.fields) ? table.fields : []));
+  const relationships = tables.flatMap(
+    (table) => (Array.isArray(table.relationships) ? table.relationships : []),
+  );
+  const revisionLike = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+  const bound = present
+    && revisionLike(usage.scopeRevision)
+    && revisionLike(usage.persistenceRevision)
+    && revisionLike(usage.journeyRevision)
+    && (usage.dataModelRevision === null || revisionLike(usage.dataModelRevision));
+  const validLooking = present
+    && usage.schemaVersion === 1
+    && usage.contractType === 'data-model-usage'
+    && revisionLike(usage.usageRevision)
+    && Array.isArray(usage.requirements)
+    && Array.isArray(usage.tables);
+  return {
+    present,
+    bound,
+    validLooking,
+    totalRequirementCount: requirements.length,
+    persistableRequirementCount: requirements.filter((item) => item.persistable === true).length,
+    ownedRequirementCount: requirements.filter(
+      (item) => typeof item.owner === 'string' && item.owner.length > 0,
+    ).length,
+    tableCount: tables.length,
+    fieldCount: fields.length,
+    relationshipCount: relationships.length,
+    consumerLinkCount: [...fields, ...relationships].reduce(
+      (total, item) => total + (Array.isArray(item.consumers) ? item.consumers.length : 0),
+      0,
+    ),
+  };
+}
+
+function scenarioFactsSummary(scenario) {
+  const present = Boolean(scenario && typeof scenario === 'object' && !Array.isArray(scenario));
+  const revisionLike = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+  const requiredBindings = [
+    'scopeRevision',
+    'journeyRevision',
+    'screenPackRevision',
+    'persistenceRevision',
+    'navigationRevision',
+  ];
+  return {
+    present,
+    bound: present && requiredBindings.every((field) => revisionLike(scenario[field])),
+    validLooking: present
+      && scenario.schemaVersion === 1
+      && scenario.contractType === 'scenario-facts'
+      && revisionLike(scenario.scenarioRevision)
+      && Array.isArray(scenario.records)
+      && Array.isArray(scenario.scenarios)
+      && Array.isArray(scenario.screenBindings)
+      && Array.isArray(scenario.mediaAssets)
+      && Array.isArray(scenario.invariants),
+    revision: present && revisionLike(scenario.scenarioRevision)
+      ? scenario.scenarioRevision
+      : null,
+    recordCount: present && Array.isArray(scenario.records) ? scenario.records.length : 0,
+    scenarioCount: present && Array.isArray(scenario.scenarios) ? scenario.scenarios.length : 0,
+    screenBindingCount: present && Array.isArray(scenario.screenBindings)
+      ? scenario.screenBindings.length
+      : 0,
+    mediaCount: present && Array.isArray(scenario.mediaAssets) ? scenario.mediaAssets.length : 0,
+    invariantCount: present && Array.isArray(scenario.invariants) ? scenario.invariants.length : 0,
+  };
+}
+
+function makerSummary(
+  experience,
+  scope,
+  journey,
+  screens,
+  health,
+  approvals,
+  persistence,
+  offlineIntegration,
+) {
   const screenById = new Map(screens.map((screen) => [screen.screenId, screen]));
   const primaryUser = experience?.primaryUser || {};
   const approvalSource = approvals?.approvals || {};
@@ -376,6 +486,7 @@ function makerSummary(experience, scope, journey, screens, health, approvals, pe
     userFacingScreenCount: health?.summary?.userFacingScreenCount
       ?? screens.filter((screen) => screen.userFacing !== false).length,
     persistenceMode: persistence?.mode || null,
+    offlineIntegration,
     dataOwnership: persistence?.conceptOwners?.length
       ? persistence.conceptOwners.map((entry) => ({
         name: entry.conceptName,
@@ -436,6 +547,10 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
     artifacts.screens,
     artifacts.progress?.screenStatuses,
   ));
+  const offlineIntegration = offlineIntegrationSummary(
+    artifacts.offlineIntegration,
+    fs.existsSync(resolveInsideProject(projectRoot, ARTIFACTS.offlineIntegration)),
+  );
   const scopeEntities = new Map((artifacts.scope?.dataEntities || []).map(
     (entity) => [entity.name, entity],
   ));
@@ -475,6 +590,9 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
     experience: browserExperience(artifacts.experience),
     scope,
     persistence: redactBrowserValue(artifacts.persistence),
+    offlineIntegration,
+    dataModelUsage: dataModelUsageSummary(artifacts.dataModelUsage),
+    scenarioFacts: scenarioFactsSummary(artifacts.scenarioFacts),
     journey: redactBrowserValue(artifacts.journey),
     screens,
     tables,
@@ -487,6 +605,7 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
       health,
       artifacts.approvals,
       artifacts.persistence,
+      offlineIntegration,
     ),
     dataModelRevision,
     dataModelEditable: dataModelValid && !hasExecutionStarted(projectRoot),

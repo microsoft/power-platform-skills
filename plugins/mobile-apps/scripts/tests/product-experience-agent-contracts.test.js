@@ -17,6 +17,9 @@ const removedPlanningAgents = [
 
 function markdownFiles(root) {
   return fs.readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory() && (entry.name.startsWith('.') || entry.name === 'node_modules')) {
+      return [];
+    }
     const target = path.join(root, entry.name);
     if (entry.isDirectory()) return markdownFiles(target);
     return entry.name.endsWith('.md') ? [target] : [];
@@ -39,6 +42,9 @@ test('screen builder defers model selection to the host', () => {
   assert.match(source, /Write only `target_file`/);
   assert.match(source, /sealed `tokenInterfaces`/);
   assert.match(source, /Every string in sealed `testIds` must appear literally/);
+  assert.match(source, /canonical scenario-facts projection/);
+  assert.match(source, /human-first `identityHierarchy`/);
+  assert.match(source, /validate-screen-implementation\.js/);
   assert.doesNotMatch(source, /\bAskUserQuestion\b|\bEnterPlanMode\b|\bExitPlanMode\b|nested `Task`/);
 });
 
@@ -98,6 +104,19 @@ test('create planning is one foreground path over the existing contracts', () =>
   assert.doesNotMatch(phase, /mobile-app:(?:native-app-planner|data-model-architect|screen-planner)/);
 });
 
+test('screen work orders carry implementation contracts and bounded scenario facts', () => {
+  const source = fs.readFileSync(
+    path.join(skillRoot, 'create-mobile-app', 'references', 'phase-11-screens.md'),
+    'utf8',
+  );
+  assert.match(source, /deterministic `implementationContract` unchanged/);
+  assert.match(source, /one `scenarioFacts` projection/);
+  assert.match(source, /Object\.values\(implementationContract\.testIds\)/);
+  assert.match(source, /validate-screen-implementation\.js/);
+  assert.match(source, /Do not include the whole Markdown plan/);
+  assert.match(source, /complete scenario artifact/);
+});
+
 test('edit-app keeps planning foreground and uses the sealed screen-builder channels', () => {
   const source = fs.readFileSync(path.join(skillRoot, 'edit-app', 'SKILL.md'), 'utf8');
   assert.match(source, /Planning is always foreground/);
@@ -119,14 +138,21 @@ test('edit-app keeps planning foreground and uses the sealed screen-builder chan
 
 test('automatic design mode preserves experience quality without another pause', () => {
   const design = fs.readFileSync(path.join(skillRoot, 'design-system', 'SKILL.md'), 'utf8');
+  const automatic = fs.readFileSync(
+    path.join(skillRoot, 'design-system', 'references', 'auto-experience.md'),
+    'utf8',
+  );
   const scaffold = fs.readFileSync(
     path.join(skillRoot, 'create-mobile-app', 'references', 'phase-4-scaffold.md'),
     'utf8',
   );
   assert.match(design, /`--auto-experience`/);
-  assert.match(design, /skip this sub-step without prompting/);
-  assert.match(design, /brand\/signature-components\.ts/);
-  assert.match(design, /at least three\s+representative screens/);
+  assert.match(design, /references\/auto-experience\.md/);
+  assert.match(automatic, /without another design\s+question/);
+  assert.match(automatic, /brand\/signature-components\.ts/);
+  assert.match(automatic, /one to three frames/);
+  assert.match(automatic, /expandable `All screens`/);
+  assert.match(automatic, /does not claim React Native or native\s+pixels were rendered/);
   assert.match(scaffold, /pass `--auto-experience`/);
   assert.doesNotMatch(design, /^allowed-tools:.*\bTask\b/m);
 });
