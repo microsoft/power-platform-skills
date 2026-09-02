@@ -1,6 +1,6 @@
 ---
 name: setup-datamodel
-description: Use when the user wants to design or redesign the Dataverse schema and connector plan for an existing mobile app, or has an ER diagram (image, Mermaid, or text) to apply. Skip when the user is creating a brand-new app — /create-mobile-app handles the data model inline.
+description: Use for standalone redesign of an existing mobile app's Dataverse schema and connector plan, or to apply an ER diagram (image, Mermaid, or text). During brand-new app creation, /create-mobile-app invokes this skill through its plan-only API after persistence ownership is resolved.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Skill
 model: opus
@@ -10,17 +10,21 @@ model: opus
 
 # Set Up Data Model + Connectors
 
-Combined orchestrator for standalone data source planning. Designs the Dataverse schema, plans connectors, gets approval on both, then delegates execution to `/add-dataverse` and `/add-connector`.
+Combined orchestrator for standalone existing-app data source redesign. It
+designs the Dataverse schema, plans connectors, gets approval on both, then
+delegates execution to `/add-dataverse` and `/add-connector`.
 
 `--plan-only` is the foreground planning API used by `/create-mobile-app` and
 `/edit-app`. It writes `_dm_section.md` and, when Dataverse is required,
 `.tmp/dataverse-schema-contract.json`; validates both against supplied snapshot
 evidence; and returns without approval or mutation. The calling foreground skill
-owns the combined plan approval.
+owns the combined plan approval. `/create-mobile-app` supplies
+`--persistence-contract`; plan-only must model only its
+`persistence.dataverseConceptIds` and reject connector/local/transient concepts.
 
 | Use this skill when | Use `/add-dataverse` directly when |
 |---|---|
-| Standalone schema + connector design (project may or may not exist yet) | The plan already exists and you just need to apply tables + generate services |
+| Standalone schema + connector redesign for an existing app | The plan already exists and you just need to apply tables + generate services |
 | You have an existing ER diagram (image / Mermaid / text) to import | `/create-mobile-app` is invoking this as a sub-step with `--skip-planning` |
 | Re-planning the schema or connectors mid-project | You only need to add a single table or a single connector |
 

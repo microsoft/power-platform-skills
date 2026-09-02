@@ -151,53 +151,17 @@ Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENA
 
 If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenant>` in the foreground. If `npx power-apps init` later uses the wrong account, follow shared-instructions standalone CLI auth handling and retry once.
 
-### Step 1.7 — Detect publisher prefix
+### Step 1.7 — Defer Dataverse discovery
 
-Detect the publisher prefix for the env's Default solution so the planner uses the correct prefix rather than assuming `cr_`.
+Do not query the publisher prefix or read Dataverse metadata during setup. The
+requirements do not yet establish which system owns each Product Scope data
+concept, so a target environment alone cannot justify Dataverse work.
 
-**Deferred execution:** do not run the query at this point. Step 2b.4 first
-classifies the run as `required` or `connector-only`; only `required` runs
-execute the block below. Connector-only runs set
-`$DETECTED_PUBLISHER_PREFIX = ""` and make no Dataverse prefix query.
-
-```bash
-PUBLISHER_PREFIX_STARTED_MS=$(node -e 'process.stdout.write(String(Date.now()))')
-PUBLISHER_PREFIX_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" \
-  "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID")
-PUBLISHER_PREFIX_DURATION_MS=$(node -e \
-  'process.stdout.write(String(Math.max(0, Date.now() - Number(process.argv[1]))))' \
-  "$PUBLISHER_PREFIX_STARTED_MS")
-echo "$PUBLISHER_PREFIX_JSON"
-```
-
-Keep `PUBLISHER_PREFIX_DURATION_MS` in memory only. Step 2c is still the last
-zero-side-effect exit; persist this measurement only after `proceed` creates the
-Step 3 `.tmp` directory.
-
-Output is one line of JSON, e.g.:
-
-```json
-{"prefix": "cr8142a", "source": "detected"}
-{"prefix": null, "reason": "no token (run `az login --tenant <env-tenant>`)"}
-```
-
-The script queries the Default solution's publisher via:
-`/api/data/v9.2/solutions?$select=uniquename&$expand=publisherid($select=customizationprefix)&$filter=uniquename eq 'Default'`
-
-A second solution name can be passed as a second argument if the env uses a different solution (defaults to `'Default'`).
-
-**Token tenant note:** the script's `getAuthToken` discovers the env's tenant ID from the Dataverse HTTPS auth challenge and passes `--tenant <env-tenant>` to `az`, so detection works even when the active az identity is on a DIFFERENT tenant. If the user has not run `az login --tenant <env-tenant>` at any point, detection may return null.
-
-**Stash the result for Step 3 (planner spawn):**
-
-| Output | Stash as | Behavior at Step 3 |
-|---|---|---|
-| `{"prefix": "cr8142a", ...}` | `$DETECTED_PUBLISHER_PREFIX = "cr8142a"` | Pass to planner prompt as a fact: *"Publisher prefix (detected from env): `cr8142a_`"* |
-| `{"prefix": null, ...}` | `$DETECTED_PUBLISHER_PREFIX = ""` (empty) | Pass to planner as: *"Publisher prefix: NOT DETECTED — use placeholder `cr_` and warn the user that Dataverse will normalize the actual prefix at create time."* |
-
-Do NOT block on null detection — the user can still proceed; the Power Apps CLI normalizes prefixes when `npx power-apps add-data-source` runs. The detection step is purely to make the plan output accurate.
-
-If the script exits non-zero (rare — should always exit 0 with `prefix: null`), treat it as the null case and continue.
+Leave `$DETECTED_PUBLISHER_PREFIX` unset. Phase 3 may run
+`detect-publisher-prefix.js` only after `.tmp/persistence-contract.json` has
+resolved to `dataverse` or `mixed`. Publisher discovery, Dataverse snapshots,
+inventory caches, schema planning, seed/service planning, Data Model approval,
+and Mobile Offline Profile work are all forbidden before that point.
 
 ### Step 2 — Gather requirements
 
@@ -319,38 +283,29 @@ Do not ask for confirmation here — the user agreed to this when their prompt s
 
 **Auto-proceed after `yes` (or after auto-plan transparency log).** Fall through directly to Step 2c (plan preview). Do NOT add a separate "Proceed to planning?" prompt — the brief confirmation IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
 
-Classify Dataverse planning before Step 2c and stash
-`<dataverse_planning_mode>`:
+Extract and stash only side-effect-free planning hints from the confirmed
+brief:
 
-- `connector-only` only when every record source and write target is an
-  explicit non-Dataverse connector/system of record, and the app needs no
-  app-owned persistent rows, Dataverse offline data, retained File/Image
-  artifact, existing Dataverse table, or Dataverse-backed native capability.
-- `required` for every other case, including ambiguity. Do not infer
-  connector-only merely because the brief names a connector.
+- `<tentative_connector_candidates>`: connector API/display names plus the
+  requirement evidence that suggested each candidate;
+- `<tentative_native_capability_candidates>`: capability names plus their
+  requirement evidence and likely retained output;
+- `<exact_target_hints>`: names or facts that may later require exact target
+  metadata, such as an existing/standard/managed table, reuse or extension,
+  proposed-name collision, relationship target, computed column, or target
+  customizability.
 
-Also stash `<exact_target_facts_required> = yes` when planning depends on any
-existing/standard/managed table, reuse or extension decision, proposed-name
-collision decision, relationship target, computed column, or target
-customizability fact. Otherwise set it to `no`. This flag controls only safe
-planning degradation; it never relaxes `/add-dataverse` reconciliation.
+These are candidates, not approvals or persistence owners. A confirmed
+connector is not automatically the system of record for any concept. Phase 3
+resolves capabilities, connectors, and exactly one owner for every Product
+Scope data concept, asking an architecture question only when the unresolved
+choice would change the resulting architecture.
 
-Now execute the deferred Step 1.7 publisher-prefix detection only when
-`<dataverse_planning_mode> = required`. For `connector-only`, set
-`$DETECTED_PUBLISHER_PREFIX = ""`, print
-`↷ Publisher-prefix discovery skipped — connector-only planning.`, and do not
-call `detect-publisher-prefix.js`.
-
-**Safe snapshot overlap.** After the brief is locked and Dataverse planning is
-classified `required`, the foreground snapshot inputs are stable. While the
-user reviews Step 2c, the orchestrator may start the read-only snapshot in the
-background with its output under the host temporary directory, not
-`<working_dir>`, and with no inventory-cache or telemetry output. Keep the
-temporary path/process handle in memory only. On `abort` or `edit`, stop the
-process and delete that exact temporary file. On `proceed`, Step 3 may adopt it
-only after normal environment/identity validation succeeds; otherwise discard
-it and run the standard foreground command. This overlap must never create a
-project file before `proceed`.
+Perform no Dataverse reads in Step 2. Do not invoke publisher-prefix detection,
+snapshot or evidence generation, inventory caching, schema planning, seed or
+service planning, Data Model approval, or Offline Profile discovery. Do not set
+a persistence mode here; only `compile-persistence-contract.js` may derive it
+after Product Scope and architecture decisions exist.
 
 **Design decisions are deferred to Step 6.75** — `/design-system` (ships with this plugin) handles brand inputs, the style picker, and visual companion preference in one flow after the project is scaffolded. Do NOT ask design questions here.
 
@@ -369,7 +324,7 @@ preset.
 
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no project writes, publisher-prefix query, Dataverse snapshot/cache/schema read, `npx power-apps init`, or planning-agent work. After Step 3 starts, every abort gets more expensive because canonical planning artifacts begin to materialize.
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -377,8 +332,8 @@ preset.
 
 | Output | Input proxy | Computation | Confidence |
 |---|---|---|---|
-| Tables | Independently persistent records implied by core jobs | Count only concepts likely to have their own lifecycle/ownership/history, then show `max(1, count - 1)` to `count + 1` | low — scope compiler may use columns, Choices, local state, or reuse |
-| Connectors | Step 2b inferred connector list | `len(inferred)` (already exact) | high |
+| Potential Dataverse tables | Independently persistent records implied by core jobs | Show `0` as a valid lower outcome; for a nonzero proxy, count concepts likely to have their own lifecycle/ownership/history and show `max(1, count - 1)` to `count + 1` | low — the physical data model is conditional on compiled persistence ownership and may use connectors, local state, columns, Choices, or reuse |
+| Connectors | Step 2b tentative connector candidates | `len(candidates)` | medium — confirmation and ownership happen in Phase 3 |
 | Screens | Independent journeys and roles | Focused journey `4-7`; 2-3 connected journeys `7-12`; complex workflow `12-16`; multi-role `16-20` | medium — critical steps may share one surface |
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
@@ -391,21 +346,21 @@ Print the block once, exactly in this format (substitute computed values; ranges
 ─── Plan preview (rough) ─────────────────────────────────
 Based on your confirmed brief, before foreground planning runs:
 
-Scope (proxy estimates — actual numbers come from architects):
-  New tables   ~<low>-<high>      ← independently persistent records only; reuse/columns/Choices may reduce this
-  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 2)
+Scope (proxy estimates — actual numbers come from foreground contracts):
+  Dataverse tables ~<low>-<high>  ← conditional; connector/local ownership may make the physical model not applicable
+  Connectors    <N> tentative     ← <comma-separated names>  (confirm during architecture planning)
   Screens     ~<low>-<high>       ← from journey/role complexity, not entity CRUD multiplication
   Approval reviews <1 consolidated | 4 gated> ← same sections and contracts; `--gated` keeps the legacy flow
 
 Time (rough — excludes your approval latency at gates):
-  Planning      ~<low>-<high> min ← foreground contract/data-model planning; approvals add latency
+  Planning      ~<low>-<high> min ← foreground scope/architecture planning plus conditional physical-data planning
   Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
   Screen build  ~<low>-<high> min ← strongest-model canary, then supporting waves; default cap 4, maximum 6
 
 Model tier: foreground planning/design use the current foreground model. Screen canary, signature, capture, media-heavy, and high-risk screens use the strongest available child model; routine supporting screens may use a cheaper available child model.
 
 ⚠ These are proxies, not measurements:
-  • Nouns do not automatically become tables; every new table needs a lifecycle boundary
+  • Nouns do not automatically become tables; persistence ownership is resolved before any physical data model
   • Features do not automatically become 2-3 screens; jobs may share sections, sheets, or workflow steps
   • Time excludes your approval latency at the 4 gates
   • If you request style alternatives, the design step adds one choice
@@ -450,14 +405,15 @@ token-bearing URL into persisted project documentation.
 
 **Set expectations before handing off to the planner:**
 > "Brief locked in. The flow has 4 approval prompts:
->  • Gate 1 — Product Experience, adaptive scope, and verified data model
->  • Gate 2 — architecture, native capabilities, and connectors
+>  • Gate 1 — Product Experience, Product Scope, architecture, and persistence ownership
+>  • Gate 2 — conditional Data Model plus owner-bound Workflow Journey and build packs
 >  • Gate 3 — materialized design + interactive primary-journey preview
 >  • Gate 4 — final implementation summary and confirmation
 >
-> For Dataverse-required apps, factual foreground milestones will show
+> For `dataverse` and `mixed` apps, factual foreground milestones will show
 > environment, inventory, candidate, detail, and timing counts within 30
-> seconds. Connector-only apps skip those metadata milestones. While the
+> seconds only after persistence mode is compiled. `connector-only` and
+> `local-prototype` apps skip those metadata milestones. While the
 > architect runs, new milestone IDs from
 > `.tmp/data-model-planning-status.json` are rendered without inventing
 > percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last

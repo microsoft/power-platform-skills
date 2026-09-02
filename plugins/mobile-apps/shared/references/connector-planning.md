@@ -23,6 +23,10 @@ If a requirement is vague (e.g., "external data", "third-party API") but no keyw
 
 **Important:** Dataverse is NOT listed here. If the requirements need custom business data / tables, that is handled by `/add-dataverse` and captured in the `## Data Model` section, not the `## Connectors` section.
 
+Connector inference and confirmation are side-effect-free architecture inputs.
+Do not query a publisher prefix, Dataverse snapshot/cache/schema, or create a
+data source while planning this list.
+
 ---
 
 ## Step 2 — Present to User for Confirmation
@@ -49,6 +53,24 @@ If no connectors were inferred from requirements, still ask:
 
 Give the user a multi-select of the full connector list (none pre-selected).
 
+Confirmation means the app may integrate with that connector; it does not make
+the connector the persistence owner of every related concept. After Product
+Scope exists, `.tmp/architecture-decisions.json` assigns exactly one owner to
+each `dataEntities` concept. `compile-persistence-contract.js` is the sole
+authority that derives system-of-record ownership and mode.
+
+Mode rules:
+
+- `connector-only`: every durable concept is owned by an approved
+	`connector:<api-name>`; no Dataverse planning, schema, services, seed, or
+	Mobile Offline Profile artifact may be created.
+- `local-prototype`: durable concepts are local (with optional transient UI
+	state); no Dataverse or connector-owned persistence is implied and no
+	Dataverse artifact may be created.
+- `mixed`: only `persistence.dataverseConceptIds` may enter Dataverse planning;
+	connector/local concepts remain with their declared owners and must never be
+	duplicated as convenience tables.
+
 ---
 
 ## Step 3 — Build the Connector Plan Section
@@ -64,13 +86,16 @@ For each confirmed connector, record:
 | SharePoint Online | `sharepointonline` | Read project milestones list | `/add-connector` |
 ```
 
-If no connectors: write "None — this app uses only Dataverse and/or device-native capabilities."
+If no connectors: write "None — this app uses only its approved Dataverse,
+local, transient, and/or device-native architecture."
 
 ---
 
 ## Step 4 — Pass to foreground screen planning
 
-When authoring Workflow Journey and screen build packs, include the confirmed connector list in the planning context:
+When authoring Workflow Journey and screen build packs, include both the
+confirmed connector list and the compiled concept owners in the planning
+context:
 
 ```
 Connectors confirmed:
@@ -80,9 +105,13 @@ Connectors confirmed:
 Per-screen specs must reference the correct generated service for each data access:
 - Dataverse tables → use Cr123_<Table>Service from src/generated/services/
 - Connectors → use <ConnectorName>Service from src/generated/services/
+- Local concepts → use the approved local/package adapter
+- Transient concepts → use view-model state only
 ```
 
-This ensures every screen work order names the exact service the screen builder will import.
+Every read/write/sync/upload/download operation must name its `conceptId` and
+the exact compiled owner. A confirmed connector with no owned concept may still
+perform an integration action; it is not a system of record by implication.
 
 ---
 

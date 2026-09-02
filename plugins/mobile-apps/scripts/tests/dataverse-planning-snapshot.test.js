@@ -1072,8 +1072,14 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(setup, /full snapshot\s+only through deterministic validators/);
   assert.match(setup, /validate-dataverse-planning-decisions\.js/);
   assert.match(setup, /Missing full metadata for\s+Reuse\/Extend\/Adapt is `NEEDS_CONTEXT`/s);
-  assert.match(planning, /`connector-only`: skip Dataverse metadata reads/);
-  assert.match(planning, /`required`:[\s\S]+one\s+normalized snapshot/);
+  assert.match(
+    planning,
+    /### `connector-only` or `local-prototype`[\s\S]+Do not query a publisher prefix[\s\S]+create a snapshot/,
+  );
+  assert.match(
+    planning,
+    /### `dataverse` or `mixed`[\s\S]+Only now detect the publisher prefix[\s\S]+create the bounded Dataverse snapshot/,
+  );
   assert.match(planning, /render-dataverse-architect-evidence\.js/);
   assert.match(planning, /--concepts-file "\$CONCEPTS_PATH"/);
   assert.match(planning, /--progressive-detail/);
@@ -1082,9 +1088,12 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(planning, /--inventory-cache "\$INVENTORY_CACHE_PATH"/);
   assert.match(planning, /--telemetry-output "\$PLANNING_TELEMETRY_PATH"/);
   assert.match(planning, /--planning-timings-output "\$PLANNING_TIMINGS_PATH"/);
-  assert.match(planning, /Required exact-name metadata failures block Dataverse planning/);
-  assert.match(planning, /Reuse the one bounded exact-name expansion/);
-  assert.match(planning, /never rerun broad discovery/);
+  assert.match(
+    planning,
+    /Require\s+snapshot-bound validation before Reuse, Extend, or Adapt/,
+  );
+  assert.match(planning, /reuse one\s+bounded, monotonic exact-name expansion/i);
+  assert.match(planning, /never\s+rerun broad discovery/i);
   assert.match(planning, /\/setup-datamodel` in the foreground/);
   assert.match(planning, /validate-dataverse-planning-decisions\.js/);
   assert.match(planning, /planning-eta\.js/);

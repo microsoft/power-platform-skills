@@ -218,6 +218,8 @@ Run:
 ```bash
 npx tsc --noEmit
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+  --project-root "<working_dir>"
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <canary-files>
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <canary-files>
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
@@ -281,9 +283,10 @@ For every returned screen:
   that screen in foreground.
 - malformed/channel failure: retry once, then foreground for that screen.
 
-After each wave, run TypeScript, route contracts, and changed-screen quality
-validators. Capture complete findings once, group them by root cause, and repair
-affected screens in parallel. Do not advance with a failed gate.
+After each wave, run TypeScript, `check-routes.js`,
+`validate-navigation-layout.js --project-root <working_dir>`, and changed-screen
+quality validators. Capture complete findings once, group them by root cause,
+and repair affected screens in parallel. Do not advance with a failed gate.
 
 After the wave gate passes, record every screen in that wave as `validated` by
 repeating `--screen-id <id>` with `--screen-status validated`. Product Scope
@@ -299,6 +302,8 @@ node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <scre
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <screen-files>
 npx tsc --noEmit
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+  --project-root "<working_dir>"
 ```
 
 Reject oversized empty cards, repeated identical shells, placeholder icons where
@@ -333,6 +338,8 @@ cd <working_dir>
 npm run generate-schemas
 npx tsc --noEmit
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+  --project-root "<working_dir>"
 npx expo start
 ```
 

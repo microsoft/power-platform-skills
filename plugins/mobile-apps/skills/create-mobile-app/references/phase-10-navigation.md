@@ -7,201 +7,98 @@ the navigation TypeScript gate are valid.
 
 ### Step 10b — Wire navigation layout
 
-Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
+Read `<working_dir>/.tmp/navigation-manifest.json` as the only navigation
+execution input. It must be the current Phase 3 projection of Product Scope;
+if it is missing or stale, return to Phase 3 and rerun
+`compile-navigation-manifest.js`. Do not reconstruct navigation from human plan
+prose, route files, folder names, or screen-name heuristics.
 
-- **Stack** — skip. `app/(app)/_layout.tsx` already renders `<Stack>`. Nothing to do.
-- **Tabs** or **Tabs + Stack** — write outer `<Tabs>` in `app/(app)/_layout.tsx` AND a per-folder inner `<Stack>` in each `app/(app)/<folder>/_layout.tsx`.
-- **Drawer** — write outer `<Drawer>` in `app/(app)/_layout.tsx` AND a per-folder inner `<Stack>` in each `app/(app)/<folder>/_layout.tsx`.
+Product Scope remains the planning authority. The manifest is its canonical,
+deterministic execution projection and must not be hand-edited to make a layout
+pass.
 
-> **⚠️ The phantom-tab fix lives here.** expo-router auto-registers every top-level `.tsx` file under `app/(app)/` as a tab/drawer entry. Step 10b prevents phantom entries by walking the **File** column in the Screen Map (not the Screen names): each unique top-level entry under `app/(app)/` — file OR folder — becomes ONE tab/drawer entry. Folders contain detail/modal screens *inside* their own stack, so they never leak as siblings.
+#### Step 10b.1 — Resolve registrations from the manifest
 
-#### Step 10b.1 — Compute the layout structure from the Screen Map
+Use the manifest fields without adding or inferring destinations:
 
-Read the Screen Map's **File** column. For every row whose File starts with `app/(app)/`, classify each path into one of three groups:
+| Manifest field | Layout rule |
+|---|---|
+| `pattern` | Select exactly one outer `Tabs`, `Drawer`, or `Stack` navigator for `tabs-plus-stacks`, `drawer`, or `stack-only`. |
+| `visibleTabs` | For `tabs-plus-stacks`, emit exactly these visible outer entries in array order. |
+| `durableDestinations` | For `drawer`, emit exactly these visible drawer entries in array order. For tabs or stack, use them only as declared durable roots. |
+| `screens` | Treat this object as the complete set of planned Expo routes and shell behavior. Do not discover additional entries from the filesystem. |
+| `iconName` | Use the destination's value directly for `tabBarIcon` or `drawerIcon`. Never derive an icon from an ID, label, route, or screen name. |
+| `parentTabId` | Place the screen in that visible tab's nested stack. A non-null value must resolve to one `visibleTabs[].destinationId`. |
+| `tabVisible` | Keep or hide the parent tab bar on that route exactly as declared. It does not decide whether the route is an outer tab. |
+| `headerMode` | Use root-header behavior for `root` and child-header behavior for `back`. |
+| `backBehavior` | Emit no back affordance for `none`, normal stack pop for `stack-pop`, and the declared stack-only return action for `return-home`. |
+| `targetPath` | Derive the Expo route file, outer entry name, and nested `Stack.Screen` name from this canonical route only. |
 
-| Path shape | Classification | Example |
-|---|---|---|
-| `app/(app)/<name>.tsx` (no subfolder) | **Top-level flat file** — one outer entry, no inner layout | `app/(app)/home.tsx` |
-| `app/(app)/<folder>/index.tsx` | **Folder root** — one outer entry, needs inner `_layout.tsx` | `app/(app)/inspections/index.tsx` |
-| `app/(app)/<folder>/<child>.tsx` (any other file inside a folder) | **Folder child** — pushed into the folder's stack, NOT an outer entry | `app/(app)/inspections/[id].tsx` |
-
-Build two lists from the classification:
-
-1. **Outer entries** = unique `<name>` from the top-level flat files + unique `<folder>` from the folder roots. These get one `<Tabs.Screen>` or `<Drawer.Screen>` each in the outer layout.
-2. **Inner stacks** = one entry per unique `<folder>`. For each folder, list its children (root + non-root files), with each child's `Presentation` value from the Screen Map.
-
-**Sanity check before writing anything:** if any folder has children but no `index.tsx` row in the Screen Map, STOP and report: `BLOCKED: folder app/(app)/<folder>/ has children (<list>) but no index.tsx row in the Screen Map. Foreground screen planning must emit an index.tsx row for every folder.` This catches a planning mistake that would render the folder unreachable from the outer tab.
-
-Normalize every Screen Map file to its Expo route (strip `.tsx`, collapse trailing `/index`, preserve dynamic segments). If two files normalize to the same route, STOP before writing layouts. In particular, reject `<parent>/[id].tsx` together with `<parent>/[id]/<child>.tsx`; move the detail contract to `<parent>/[id]/index.tsx`.
-
-```text
-BLOCKED: duplicate Expo route <route> from <file-a> and <file-b>. Use [id]/index.tsx when a dynamic detail route owns child screens.
-```
+For each destination or screen, strip the leading slash from `targetPath` and
+split it into route segments. The first segment is the outer entry name. The
+remaining segments form the nested stack registration; use `index` for the
+root screen of a folder. Preserve dynamic segments such as `[id]` literally.
+If a required `targetPath` is null, two screen IDs claim the same path, or a
+`parentTabId` points to a different top-level segment than its parent
+destination, stop with `BLOCKED` and repair Product Scope through Phase 3.
 
 #### Step 10b.2 — Write per-folder inner `_layout.tsx` files (if any folders exist)
 
-For each entry in the Inner stacks list, create the folder if missing.
+Create folders and nested `_layout.tsx` files only from relationships expressed
+by `screens[*].targetPath` and `parentTabId`. Never scan `app/(app)` to decide
+which stacks exist.
 
-For **Tabs / Tabs + Stack**, write
-`app/(app)/<folder>/_layout.tsx` with:
+- Register every folder root as `index` and every descendant by its literal
+  path relative to that folder, without `.tsx`.
+- Under tabs, a screen with `parentTabId` belongs to that tab's inner `Stack`.
+  Apply `tabVisible` on the active route instead of promoting or removing the
+  screen from `visibleTabs`.
+- Under a drawer, each durable destination's folder stack owns its root menu
+  affordance; screens with `headerMode: back` and `backBehavior: stack-pop`
+  receive the normal Stack back affordance.
+- Under stack-only navigation, preserve manifest screen order and register
+  nested stacks from `targetPath`; a root with `backBehavior: return-home`
+  implements the manifest's declared return-home mechanism.
+- `headerMode: root` with `backBehavior: none` must not render a back control.
+  Do not override `headerMode: back` with a second custom root header.
 
-```tsx
-import { Stack } from 'expo-router';
-
-export default function <FolderName>Layout() {
-  return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
-      {/* one <Stack.Screen> per non-index child, with presentation from Screen Map */}
-      <Stack.Screen name="<child-without-tsx>" options={{ presentation: '<Presentation>' }} />
-    </Stack>
-  );
-}
-```
-
-For **Drawer**, the outer Drawer header is hidden for folder-backed entries, so
-the inner Stack owns the root menu button and child back buttons. Write:
-
-```tsx
-import { DrawerToggleButton } from '@react-navigation/drawer';
-import { Stack } from 'expo-router';
-
-export default function <FolderName>Layout() {
-  return (
-    <Stack screenOptions={{ headerShown: true }}>
-      <Stack.Screen
-        name="index"
-        options={{ headerLeft: () => <DrawerToggleButton /> }}
-      />
-      {/* one <Stack.Screen> per non-index child, with presentation from Screen Map */}
-      <Stack.Screen name="<child-without-tsx>" options={{ presentation: '<Presentation>' }} />
-    </Stack>
-  );
-}
-```
-
-Rules:
-- Tabs layouts use `headerShown: false` at the Stack level; each screen sets its
-  own header inline via `<Stack.Screen options={{...}}>` at the top of its
-  component.
-- Drawer folder layouts use `headerShown: true`, put `DrawerToggleButton` on
-  the `index` route only, and let child routes receive the Stack's normal back
-  button. Screen-level options may style or hide child headers when the
-  approved navigation mood requires it, but must not remove the folder root's
-  drawer toggle.
-- `<Stack.Screen name="index" />` is required — without it, the folder root won't render.
-- `presentation: 'modal'` and `presentation: 'formSheet'` come from the Screen Map's Presentation column. Skip the `options` prop entirely for `default` presentation.
-- `name` for `[id].tsx` is literally `[id]` (with brackets). When `[id]` owns child routes, create `<folder>/[id]/_layout.tsx` with `<Stack.Screen name="index" />` and child entries; do not register both `[id].tsx` and a `[id]/` folder.
-- Folder name in the function name is PascalCase (e.g. `InspectionsLayout`).
-
-**Why this must run BEFORE Step 11:** screen-builders write their files in parallel, multiple builders may target the same folder, and any of them creating `_layout.tsx` would race. The orchestrator owns these files.
+The foreground orchestrator owns every `_layout.tsx` file. Write them before
+Step 11 so parallel screen builders never race on shared navigation files.
 
 #### Step 10b.3 — Write outer `app/(app)/_layout.tsx`
 
-Now rewrite only the `return` statement in `app/(app)/_layout.tsx`. Keep every line above the `return` untouched (auth guard, all imports).
+Preserve the existing auth guard and unrelated code in the outer layout. Add
+only the navigator, icon, and theme imports required by `pattern`.
 
-**How to build the `<Tabs>` block (Tabs / Tabs + Stack pattern):**
+- For `tabs-plus-stacks`, render `Tabs.Screen` entries from `visibleTabs` only,
+  in manifest order. Use each destination's `label`, `targetPath`, and
+  `iconName` directly.
+- For `drawer`, render `Drawer.Screen` entries from `durableDestinations` only,
+  in manifest order. Use each destination's `label`, `targetPath`, and
+  `iconName` directly. Folder-backed roots delegate their menu/back headers to
+  the inner Stack.
+- For `stack-only`, render an outer `Stack` and registrations derived from
+  `screens[*].targetPath`, `headerMode`, and `backBehavior`. Do not add tab or
+  drawer imports.
 
-For each entry in the Outer entries list, emit one `<Tabs.Screen>`. The `name` is the file/folder name without `.tsx`:
+Expo Router auto-registers top-level routes. Any manifest screen whose
+`targetPath` creates a top-level entry that is not a visible entry for the
+selected pattern must be nested under its declared parent or explicitly
+registered with `href: null`. It must never surface as a phantom tab or drawer
+destination.
 
-For each tab, infer a Ionicons icon name from the screen name:
+The layout validator also checks that every manifest `targetPath` has a route
+file, so run it after Step 10.8b has materialized the typed skeletons. Step
+10.8d runs this exact command after `check-routes.js`:
 
-| Screen name contains | Icon |
-|---|---|
-| home, dashboard, overview | `home-outline` |
-| inspect, audit, checklist, task | `clipboard-outline` |
-| profile, account, me, user | `person-outline` |
-| settings, config, preferences | `settings-outline` |
-| report, analytics, chart, stats | `bar-chart-outline` |
-| map, location, sites, field | `map-outline` |
-| message, chat, inbox, notify | `chatbubble-outline` |
-| anything else | `apps-outline` |
-
-**The Edit to apply:**
-
-Add `import { Tabs } from 'expo-router';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
-
-```tsx
-return (
-  <Stack
-    screenOptions={{
-      headerShown: false,
-    }}
-  />
-);
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+  --project-root "<working_dir>"
 ```
 
-with:
-
-```tsx
-return (
-  <Tabs
-    screenOptions={{
-      headerShown: false,
-      tabBarActiveTintColor: theme.accentBase,
-      tabBarInactiveTintColor: theme.text2,
-    }}
-  >
-    <Tabs.Screen
-      name="<screen-file-name>"
-      options={{
-        title: '<Screen Title>',
-        tabBarIcon: ({ color }) => <Ionicons name="<icon>" size={22} color={color} />,
-      }}
-    />
-    {/* one Tabs.Screen per top-level tab */}
-  </Tabs>
-);
-```
-
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Tabs.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
-
-**How to build the `<Drawer>` block (Drawer pattern only):**
-
-Same Outer-entries computation as Tabs — one entry per top-level flat file or folder root from Step 10b.1. Detail, modal, and nested routes are inside their folder's inner stack, not drawer items.
-
-Use the same icon mapping table as Tabs (above).
-
-**The Edit to apply:**
-
-Add `import { Drawer } from 'expo-router/drawer';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace the existing `<Stack>` return with:
-
-```tsx
-return (
-  <Drawer
-    screenOptions={{
-      headerShown: true,
-      drawerType: 'front',
-      drawerActiveTintColor: theme.accentBase,
-      drawerInactiveTintColor: theme.text2,
-      drawerStyle: { width: 280 },
-    }}
-  >
-    <Drawer.Screen
-      name="<screen-file-name>"
-      options={{
-        title: '<Screen Title>',
-        // Include headerShown: false when this entry is a folder root.
-        drawerIcon: ({ color }) => <Ionicons name="<icon>" size={22} color={color} />,
-      }}
-    />
-    {/* one Drawer.Screen per top-level destination */}
-  </Drawer>
-);
-```
-
-**Key differences from Tabs:**
-- Import is `from 'expo-router/drawer'` (not `from 'expo-router'`)
-- Keep outer `headerShown: true` for flat-file destinations so the Drawer
-  supplies the hamburger button.
-- Add `headerShown: false` to every folder-backed `<Drawer.Screen>`. Its inner
-  Stack supplies `DrawerToggleButton` on the folder root and normal back
-  buttons on children. This prevents nested duplicate headers without making
-  the Drawer unreachable.
-- `drawerType: 'front'` — standard mobile pattern (drawer slides over content)
-- Icon prop is `drawerIcon` (not `tabBarIcon`)
-
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
+A nonzero exit is `BLOCKED`: do not launch Step 11. Repair only the manifest-
+backed layouts or route skeletons reported by the validator, rerun it, and
+never fall back to prose, filesystem, or icon inference.
 
 ### Step 10.7 — Snapshot generated services into the plan
 
@@ -494,6 +391,9 @@ After Step 10b layouts, Step 10.7 service snapshot, and Step 10.8 shared code/sk
 
 ```bash
 npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+  --project-root "<working_dir>"
 ```
 
 If this fails, do not launch Step 11. Capture the full error list once, batch-fix layout names, route paths, skeleton imports, shared component exports, generated service imports, or hook signatures, then rerun the gate. Screen-builders should start only from a clean shell with typed skeletons that compile with `return null`.

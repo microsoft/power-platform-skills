@@ -206,6 +206,21 @@ test('compiled output carries the journey steps that each screen hosts', () => {
   assert.deepStrictEqual(defect.journeySteps[0].satisfies, ['capture-defect']);
 });
 
+test('compiled output carries canonical screen classification and navigation shell', () => {
+  const bundle = bundleFor('inspection');
+  const compiled = compile(bundle).compiled;
+  for (const entry of compiled.screens) {
+    const scoped = bundle.scope.screens.find((screen) => screen.id === entry.screenId);
+    assert.strictEqual(entry.classification, scoped.classification);
+    assert.strictEqual(entry.parentScreenId, scoped.parentScreenId || null);
+    assert.strictEqual(entry.navigationShell.pattern, bundle.scope.navigation.pattern);
+    assert.strictEqual(entry.navigationShell.headerMode,
+      scoped.classification === 'durable-destination' ? 'root' : 'back');
+    assert.strictEqual(entry.navigationShell.safeAreaBottomRole,
+      entry.navigationShell.tabVisible ? 'tab-bar' : 'screen');
+  }
+});
+
 test('a user-facing screen with no build pack is rejected', () => {
   const bundle = bundleFor('learning');
   const buildPack = clone(bundle.buildPack);

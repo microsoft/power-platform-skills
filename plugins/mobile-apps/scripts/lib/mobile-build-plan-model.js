@@ -22,8 +22,8 @@ const MAX_EVENTS = 200;
 const PHASES = [
   ['requirements', 'Requirements'],
   ['experience', 'Experience and scope'],
-  ['data-model', 'Data model'],
   ['architecture', 'Capabilities and data'],
+  ['data-model', 'Data model'],
   ['design', 'Design system'],
   ['scaffold', 'App scaffold'],
   ['dataverse', 'Dataverse'],
@@ -43,6 +43,8 @@ const ARTIFACTS = {
   approvals: '.tmp/mobile-plan-status.json',
   experience: '.tmp/product-experience-contract.json',
   scope: '.tmp/product-scope-contract.json',
+  architecture: '.tmp/architecture-decisions.json',
+  persistence: '.tmp/persistence-contract.json',
   journey: '.tmp/workflow-journey-contract.json',
   screens: '.tmp/compiled-screen-build-pack.json',
   dataModel: '.tmp/dataverse-schema-contract.json',
@@ -345,7 +347,7 @@ function scopeHealth(scope, experience) {
   return redactBrowserValue(validateScopeContract(scope, experience));
 }
 
-function makerSummary(experience, scope, journey, screens, health, approvals) {
+function makerSummary(experience, scope, journey, screens, health, approvals, persistence) {
   const screenById = new Map(screens.map((screen) => [screen.screenId, screen]));
   const primaryUser = experience?.primaryUser || {};
   const approvalSource = approvals?.approvals || {};
@@ -373,12 +375,22 @@ function makerSummary(experience, scope, journey, screens, health, approvals) {
       : null,
     userFacingScreenCount: health?.summary?.userFacingScreenCount
       ?? screens.filter((screen) => screen.userFacing !== false).length,
-    dataOwnership: (scope?.dataEntities || []).map((entity) => ({
-      name: entity.name,
-      role: entity.role,
-      realization: entity.realization,
-      note: entity.note || null,
-    })),
+    persistenceMode: persistence?.mode || null,
+    dataOwnership: persistence?.conceptOwners?.length
+      ? persistence.conceptOwners.map((entry) => ({
+        name: entry.conceptName,
+        role: entry.role,
+        realization: entry.realization,
+        owner: entry.owner,
+        note: entry.reason,
+      }))
+      : (scope?.dataEntities || []).map((entity) => ({
+        name: entity.name,
+        role: entity.role,
+        realization: entity.realization,
+        owner: null,
+        note: entity.note || null,
+      })),
     nativeCapabilities: architectureSummary.nativeCapabilities || [],
     nativeCapabilitiesStatus: approvalSource.nativeCapabilities?.status
       || approvalSource.nativeCapabilities
@@ -462,6 +474,7 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
     publisherPrefix: dataModel.publisherPrefix || null,
     experience: browserExperience(artifacts.experience),
     scope,
+    persistence: redactBrowserValue(artifacts.persistence),
     journey: redactBrowserValue(artifacts.journey),
     screens,
     tables,
@@ -473,9 +486,18 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
       screens,
       health,
       artifacts.approvals,
+      artifacts.persistence,
     ),
     dataModelRevision,
     dataModelEditable: dataModelValid && !hasExecutionStarted(projectRoot),
+    dataModelApplicable: !artifacts.persistence
+      || ['dataverse', 'mixed'].includes(artifacts.persistence.mode),
+    dataModelNotApplicableReason: artifacts.persistence
+      && !['dataverse', 'mixed'].includes(artifacts.persistence.mode)
+      ? `Data is owned by ${artifacts.persistence.mode === 'connector-only'
+        ? 'approved connectors'
+        : 'the local prototype repositories'}`
+      : null,
     undo: editJournal?.undo?.revision === dataModelRevision
       ? { available: true, target: redactBrowserText(editJournal.undo.target) }
       : { available: false, target: null },

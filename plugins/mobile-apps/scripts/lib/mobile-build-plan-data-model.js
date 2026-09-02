@@ -93,6 +93,9 @@ function renderTableCards(model, editDisabled) {
 
 function renderDataModel(model, options) {
   const { canEdit, editDisabled } = options;
+  if (!model.dataModelApplicable) {
+    return `<section class="panel" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden><div class="section-head"><span><h2>Data model</h2><p>Not applicable</p></span></div><div class="notice"><strong>Not applicable</strong> — ${escapeHtml(model.dataModelNotApplicableReason)}. No Dataverse schema, service, seed, approval, or mutation is planned.</div></section>`;
+  }
   const tableCards = renderTableCards(model, editDisabled);
   return `<section class="panel" id="panel-data" role="tabpanel" aria-labelledby="tab-data" hidden><div class="section-head"><span><h2>Data model</h2><p>${model.tables.length} planned ${model.tables.length === 1 ? 'table' : 'tables'} · Publisher ${escapeHtml(model.publisherPrefix || 'pending')}</p></span><span class="section-actions">${model.undo.available && canEdit ? `<button class="secondary" type="button" id="undo-edit">Undo ${escapeHtml(model.undo.target)}</button>` : ''}<button class="primary" type="button" data-add-table${editDisabled}>+ Add table</button></span></div>${!canEdit ? `<div class="notice">${model.dataModelEditable ? 'Open the live Build Plan URL to edit the model.' : 'Dataverse execution has started. Continue schema changes through /edit-app.'}</div>` : ''}<div class="view-switch" aria-label="Data model view"><button type="button" class="active" data-data-view="tables">Tables</button><button type="button" data-data-view="diagram">ER diagram</button></div><div class="data-view" id="data-view-tables"><div class="table-list">${tableCards}</div></div><div class="data-view" id="data-view-diagram" hidden>${renderErDiagram(model.tables)}</div></section>`;
 }

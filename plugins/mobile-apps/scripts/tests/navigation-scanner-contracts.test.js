@@ -4,7 +4,6 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { composeCreateMobileAppWorkflow } = require('./workflow-test-helpers');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (relativePath) => fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
@@ -28,17 +27,20 @@ test('Home launches scanner workflows without embedding the live viewfinder', ()
 test('Expo drawer navigation is dependency-backed and selected without a five-tab ambiguity', () => {
   const packageJson = JSON.parse(read('template/package.json'));
   const planning = read('skills/create-mobile-app/references/phase-3-planning.md');
-  const orchestrator = composeCreateMobileAppWorkflow(pluginRoot);
+  const navigation = read('skills/create-mobile-app/references/phase-10-navigation.md');
   const sample = read('shared/samples/_layout-drawer.tsx');
 
   assert.strictEqual(packageJson.dependencies['@react-navigation/drawer'], '7.13.9');
   assert.match(planning, /`tabs-plus-stacks` for 3-5 durable destinations/);
   assert.match(planning, /`drawer` only for more than five durable destinations or a real hierarchy/);
   assert.match(planning, /at most five visible tabs/);
-  assert.match(orchestrator, /import \{ Drawer \} from 'expo-router\/drawer'/);
-  assert.match(orchestrator, /headerShown: true/);
-  assert.match(orchestrator, /import \{ DrawerToggleButton \} from '@react-navigation\/drawer'/);
-  assert.match(orchestrator, /Add `headerShown: false` to every folder-backed/);
+  assert.match(navigation, /navigation-manifest\.json` as the only navigation/);
+  assert.match(
+    navigation,
+    /For `drawer`, render `Drawer\.Screen` entries from `durableDestinations` only/,
+  );
+  assert.match(navigation, /Use each destination's[\s\S]*`iconName` directly/);
+  assert.match(navigation, /Folder-backed roots delegate their menu\/back headers to[\s\S]*inner Stack/);
   assert.match(sample, /template-pinned @react-navigation\/drawer/);
   assert.match(sample, /drawerActiveTintColor: theme\.accentBase/);
   assert.match(sample, /headerShown: false/);

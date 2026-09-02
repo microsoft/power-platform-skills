@@ -18,6 +18,7 @@ const {
   canonicalJson,
 } = require('./product-experience-contracts');
 const { userFacingScreens } = require('./product-scope-rules');
+const { buildNavigationManifest } = require('../compile-navigation-manifest');
 
 const UNSUPPORTED = new Set(UNSUPPORTED_PRODUCTION_CLASSIFICATIONS);
 const PRODUCTION_DATA_OPERATIONS = new Set(['read', 'create', 'update', 'delete', 'external-call']);
@@ -461,6 +462,7 @@ function validateBuildPackSemantics(buildPackContract, { experience, scope, jour
  * there are no timestamps, no environment values, and no iteration over unordered sets.
  */
 function compileBuildPacks(buildPackContract, { experience, scope, journey }) {
+  const navigationManifest = buildNavigationManifest(scope);
   const journeyOrder = [];
   for (const entry of journey?.journeys || []) {
     for (const step of [...(entry.steps || [])].sort((left, right) => left.order - right.order)) {
@@ -498,12 +500,23 @@ function compileBuildPacks(buildPackContract, { experience, scope, journey }) {
     .map((pack) => {
       const scopeScreen = (scope?.screens || []).find((candidate) => candidate.id === pack.screenId) || null;
       const route = scopeScreen?.route || pack.route;
+      const navigation = navigationManifest.screens[pack.screenId];
       return {
         screenId: pack.screenId,
         ...(route ? { route } : {}),
         title: scopeScreen?.title,
         pattern: scopeScreen?.pattern,
+        classification: scopeScreen?.classification,
+        parentScreenId: scopeScreen?.parentScreenId || null,
         jobIds: scopeScreen?.jobIds || [],
+        navigationShell: {
+          pattern: navigationManifest.pattern,
+          parentTabId: navigation.parentTabId,
+          tabVisible: navigation.tabVisible,
+          headerMode: navigation.headerMode,
+          backBehavior: navigation.backBehavior,
+          safeAreaBottomRole: navigation.tabVisible ? 'tab-bar' : 'screen',
+        },
         journeySteps: (stepsByScreen.get(pack.screenId) || [])
           .sort((left, right) => compareCodePoints(left.journeyId, right.journeyId) || left.order - right.order),
         compositionSignature: compositionSignature(pack),

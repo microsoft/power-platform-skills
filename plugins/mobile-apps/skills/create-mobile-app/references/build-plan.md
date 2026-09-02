@@ -36,6 +36,26 @@ If a host cannot keep a local server running, use `progress` at the same
 milestones. Every call refreshes a tokenless standalone `_build_plan.html`.
 Continue the build; live transport is presentation, not an execution gate.
 
+## Canonical planning inputs
+
+The Build Plan renders canonical artifacts; it never decides persistence from
+plan prose or the presence/absence of a Dataverse manifest. Its always-present
+planning inputs are:
+
+- `.tmp/product-experience-contract.json`
+- `.tmp/product-scope-contract.json`
+- `.tmp/navigation-manifest.json`
+- `.tmp/architecture-decisions.json`
+- `.tmp/persistence-contract.json`
+- `.tmp/workflow-journey-contract.json`
+- `.tmp/compiled-screen-build-pack.json`
+
+`.tmp/dataverse-concepts.json`, the foreground snapshot/evidence, and
+`.tmp/dataverse-schema-contract.json` exist only when the persistence mode is
+`dataverse` or `mixed`. For `connector-only` or `local-prototype`, render Data
+Model as `Not applicable` with the approved concept owners and do not infer
+missing work.
+
 ## Milestones
 
 Update immediately before and after the owning work. `detail` is one short,
@@ -47,12 +67,12 @@ content.
 |---|---|---|---|
 | Requirements confirmed at Step 2c | `requirements` | `active` | `complete` |
 | Product Experience and Product Scope | `experience` | `active` | `complete` |
-| Dataverse plan-only contract | `data-model` | `active` | `complete` |
-| Capabilities, persistence, and connectors | `architecture` | `active` | `complete` |
+| Capabilities, connectors, concept owners, and compiled persistence | `architecture` | `active` | `complete` |
+| Conditional Dataverse plan-only contract | `data-model` | `active` | `complete`, or `complete` with an owner-backed not-applicable detail |
 | Gate 1 or Gate 2 response | owning phase | `waiting` | `complete` or `active` for repair |
 | Template preparation and initialization | `scaffold` | `active` | `complete` after scaffold TypeScript gate |
 | Design materialization and Gates 3–4 | `design` | `active` or `waiting` | `complete` after Gate 4 |
-| Dataverse reconciliation, writes, and services | `dataverse` | `active` | `complete`, or `complete` with a connector-only detail |
+| Dataverse reconciliation, writes, and services | `dataverse` | `active` | `complete`, or `complete` with a connector/local not-applicable detail |
 | Layouts, shared code, and skeletons | `navigation` | `active` | `complete` after the navigation TypeScript gate |
 | Canary and each screen wave | `screens` | `active` with wave/channel/count and `--screen-id <id> --screen-status building` per dispatched screen | `built` after the file passes its local check; `validated` for each screen after its wave gate; phase `complete` after all screen files pass |
 | Canary, wave, and final validators | `validation` | `active` | `complete` after the final gate |
@@ -88,18 +108,22 @@ for a table, column, or relationship. The local bridge:
    lifecycle mappings;
 4. runs the existing schema and Product Scope validators;
 5. atomically commits or restores all canonical artifacts;
-6. invalidates Gate 1 and every downstream approval and resume checkpoint.
+6. records whether the edit is schema-only or changes Product Scope/ownership,
+   then invalidates the owning approval and downstream resume checkpoints.
 
 Before entering any approval, before Step 3.7, and before every mutation phase,
 read `.tmp/mobile-build-plan-edits.json` when present and compare its last
-`revision` with the currently validated data-model revision. If it changed
-since the prior check:
+`revision` with the currently validated Data Model and persistence revisions.
+If it changed since the prior check:
 
 - stop the current handoff;
 - read the canonical JSON files directly, never the HTML;
-- rerun data-model and Product Scope validation;
+- rerun Data Model, Product Scope, and persistence validation as applicable;
 - rerender affected human-plan sections;
-- reopen Gate 1, then the downstream gates invalidated by the receipt;
+- reopen Gate 2 for a schema-only change within Dataverse-owned concepts;
+- reopen Gate 1, recompile persistence, and invalidate every mode-dependent
+  downstream artifact when the edit adds/removes a Product Scope concept or
+  changes its owner;
 - update the Build Plan phase from `waiting` to `active` during repair.
 
 A `409` means the browser submitted a stale revision and must reload. After

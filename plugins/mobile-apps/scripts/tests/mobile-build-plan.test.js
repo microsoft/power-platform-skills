@@ -184,6 +184,45 @@ test('Build Plan bundles templates deterministically into one standalone documen
   }
 });
 
+test('connector-owned persistence makes the Dataverse data model not applicable', () => {
+  const projectRoot = makeProjectDir('mobile-build-plan-connector-persistence');
+  try {
+    writeJson(projectRoot, '.tmp/product-scope-contract.json', {
+      dataEntities: [{
+        name: 'Booking',
+        role: 'primary',
+        realization: 'connector-source',
+        screenIds: ['trip'],
+      }],
+    });
+    writeJson(projectRoot, '.tmp/persistence-contract.json', {
+      schemaVersion: 1,
+      contractType: 'persistence-contract',
+      mode: 'connector-only',
+      conceptOwners: [{
+        conceptId: 'booking',
+        conceptName: 'Booking',
+        role: 'primary',
+        realization: 'connector-source',
+        owner: 'connector:booking-api',
+        reason: 'The approved booking connector is the system of record.',
+      }],
+    });
+
+    const model = deriveBuildPlanModel(projectRoot);
+    assert.equal(model.dataModelApplicable, false);
+    assert.equal(model.makerSummary.persistenceMode, 'connector-only');
+    assert.equal(model.makerSummary.dataOwnership[0].owner, 'connector:booking-api');
+    const html = renderBuildPlanHtml(model, { live: true });
+    assert.match(html, /Not applicable/);
+    assert.match(html, /approved connectors/);
+    assert.match(html, /booking-api/);
+    assert.doesNotMatch(html, /<button[^>]+data-add-table/);
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
 test('Product Scope screens appear before a compiled screen pack exists', () => {
   const projectRoot = makeProjectDir('mobile-build-plan-scope-screens');
   try {

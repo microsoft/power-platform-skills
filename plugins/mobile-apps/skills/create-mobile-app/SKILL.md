@@ -19,7 +19,9 @@ and routes mutations to dedicated `/add-*` skills.
 - Work only in a fresh, installed `expo-app-standalone` template unless a
   valid `memory-bank.md` resume is explicitly approved.
 - Step 2c remains the last zero-side-effect exit. Do not write app identity,
-  planning artifacts, or project files before `proceed`.
+  planning artifacts, or project files before `proceed`. Do not query a
+  publisher prefix or run Dataverse snapshot/cache/schema work before the
+  persistence contract resolves ownership.
 - Use the selected Power Platform environment consistently. Resolve it without
   persistence before approval and persist only after the user proceeds.
 - Gates never become optional. TypeScript, route, contract, changed-file, and
@@ -27,9 +29,18 @@ and routes mutations to dedicated `/add-*` skills.
 - Dataverse and connector mutations remain sequential because they share
   generated state. Independent native files and screen files may be written in
   parallel.
-- Product Experience, Product Scope, Workflow Journey, the approved Dataverse
-  contract, and the compiled screen build pack are execution authorities.
-  Markdown is the human-readable plan, not a substitute for missing sidecars.
+- Product Experience, Product Scope, architecture decisions, the persistence
+  contract, Workflow Journey, a conditional approved Dataverse contract, and
+  the compiled screen build pack are execution authorities. Markdown is the
+  human-readable plan, not a substitute for missing sidecars.
+- `.tmp/architecture-decisions.json` assigns one owner per Product Scope data
+  concept. `compile-persistence-contract.js --check-artifacts` writes
+  `.tmp/persistence-contract.json`; only `dataverse` and `mixed` may continue
+  into publisher discovery, Dataverse planning, schema/services, seeding, or a
+  Mobile Offline Profile.
+- `.tmp/navigation-manifest.json` is the canonical deterministic Product Scope
+  projection, not a new planning authority. Phase 10 validates its layouts with
+  `validate-navigation-layout.js` before screen builders launch.
 - Every agent return uses the literal first-line protocol from `AGENTS.md`:
   `DONE`, `DONE_WITH_CONCERNS:`, `NEEDS_CONTEXT:`, or `BLOCKED:`.
 - Generated files remain owned by the Power Apps CLI/schema generators. Never
@@ -44,7 +55,8 @@ incremental compiler state from `template/tsconfig.json` at
 Required gates:
 
 1. Scaffold: after template preparation, initialization, and dependency checks.
-2. Dataverse/services: after data sources and schema generation.
+2. Dataverse/services: after data sources and schema generation when
+  persistence mode is `dataverse` or `mixed`; not applicable otherwise.
 3. Navigation/skeleton: before screen builders launch.
 4. Screen wave: after each wave and before the next.
 5. Final: before Metro starts.
@@ -61,7 +73,7 @@ pipeline state and artifact revisions before skipping any phase.
 | Phase | Steps | Read at phase entry |
 |---|---|---|
 | Setup and requirements | 0–2d | [`references/phase-0-setup.md`](${CLAUDE_SKILL_DIR}/references/phase-0-setup.md) |
-| Planning and Gates 1–2 | 3–3.9 | [`references/phase-3-planning.md`](${CLAUDE_SKILL_DIR}/references/phase-3-planning.md) |
+| Experience, architecture, conditional Data Model, and Gates 1–2 | 3–3.9 | [`references/phase-3-planning.md`](${CLAUDE_SKILL_DIR}/references/phase-3-planning.md) |
 | Scaffold, design, Gates 3–4 | 4–6.75 | [`references/phase-4-scaffold.md`](${CLAUDE_SKILL_DIR}/references/phase-4-scaffold.md) |
 | Auth, data, offline, native, connectors | 7–10 | [`references/phase-7-data.md`](${CLAUDE_SKILL_DIR}/references/phase-7-data.md) |
 | Navigation, services, shared code, skeletons | 10b–10.8 | [`references/phase-10-navigation.md`](${CLAUDE_SKILL_DIR}/references/phase-10-navigation.md) |
@@ -84,7 +96,8 @@ design workflow continues to own the separate `_plan_preview.html`.
   A/B protocol.
 - `--full-discovery`, `--no-discovery`, and `--no-design` retain their existing
   meanings.
-- `--refresh` invalidates the planning inventory cache before snapshot work.
+- `--refresh` invalidates the planning inventory cache only after persistence
+  mode resolves to `dataverse` or `mixed` and before conditional snapshot work.
 - `--builder-concurrency <1-6>` overrides the default screen-builder wave cap of 4.
   `MOBILE_APP_BUILDER_CONCURRENCY` is the non-interactive equivalent.
 - `--dataverse-cache-ttl-minutes <positive-number>` overrides the default
@@ -95,7 +108,7 @@ design workflow continues to own the separate `_plan_preview.html`.
 At each phase boundary:
 
 1. Run the phase's required validators.
-2. Update `.tmp/pipeline-state.json` with the completed step and current
+2. Update `.tmp/mobile-pipeline-state.json` with the completed step and current
    artifact revisions using `scripts/mobile-pipeline-state.js`.
 3. Append user-visible concerns/blocks to `memory-bank.md`.
 4. Read the next phase file only after the current phase is complete.

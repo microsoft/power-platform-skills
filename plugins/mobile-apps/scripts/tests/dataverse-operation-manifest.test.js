@@ -1545,20 +1545,24 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   const createSkill = composeCreateMobileAppWorkflow(
     path.resolve(__dirname, '../..'),
   );
+  const dataPhase = fs.readFileSync(path.join(
+    __dirname,
+    '../../skills/create-mobile-app/references/phase-7-data.md',
+  ), 'utf8');
   assert.match(
-    createSkill,
-    /foreground planning snapshot[\s\S]*never authorizes a write/,
+    dataPhase,
+    /foreground planning snapshot[\s\S]*never\s+authorizes a write/i,
   );
   assert.match(createSkill, /--reconcile-exact/);
   assert.match(
-    createSkill,
-    /one fresh bounded reconciliation[\s\S]*ordinary typed columns[\s\S]*relationships[\s\S]*alternate keys/,
+    dataPhase,
+    /one\s+fresh bounded reconciliation[\s\S]*ordinary typed columns[\s\S]*relationships[\s\S]*alternate keys/,
   );
   assert.match(createSkill, /--bind-plan "\$SCHEMA_CONTRACT"/);
   assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
   assert.match(
     createSkill,
-    /No mutation begins until the current[\s\S]*approval receipt binds all four required states and artifact hashes/,
+    /No mutation begins until the current[\s\S]*approval receipt binds the applicable review states and artifact hashes/,
   );
   const planning = fs.readFileSync(path.join(
     __dirname,
@@ -1570,7 +1574,7 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   );
   assert.match(
     planning,
-    /No mutation begins until the current[\s\S]*approval receipt binds all four required states and artifact hashes/,
+    /No mutation begins until the current[\s\S]*approval receipt binds the applicable review states and artifact hashes/,
   );
   assert.match(skill, /This skill cannot create or restamp it/);
 });

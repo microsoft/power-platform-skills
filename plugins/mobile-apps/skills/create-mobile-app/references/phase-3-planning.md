@@ -1,18 +1,24 @@
 # Foreground Planning and Approval Contracts
 
 Follow the retained
-[`Live Build Plan protocol`](./build-plan.md). Mark `experience`, `data-model`,
-and `architecture` active/complete around their owning work below. Mark the
-owning phase `waiting` during Gates 1–2 and return it to `active` for a repair.
+[`Live Build Plan protocol`](./build-plan.md). Mark `experience`, then
+`architecture`, then conditional `data-model` active/complete around their
+owning work below. Mark the owning phase `waiting` during Gates 1–2 and return
+it to `active` for a repair. A not-applicable data model is a completed
+milestone, not missing work.
 
 ### Step 3 — Plan in the foreground
 
 Planning uses one path on every host. The foreground skill owns requirement
-resolution, all questions, Product Experience and Product Scope, data-model
-planning, capability and connector decisions, the screen graph, Workflow
-Journey, build packs, deterministic validation, plan rendering, approvals, and
-recovery. Do not dispatch a planning agent and do not load a second degraded
-planning algorithm.
+resolution, all questions, Product Experience and Product Scope, capability and
+connector decisions, persistence ownership, conditional data-model planning,
+the screen graph, Workflow Journey, build packs, deterministic validation, plan
+rendering, approvals, and recovery. This order is mandatory: requirements plus
+Product Experience and Product Scope, native-capability decisions, connector
+decisions, exactly one persistence owner per Product Scope data concept,
+compiled persistence contract, conditional Dataverse planning, then Workflow
+Journey and build packs. Do not dispatch a planning agent and do not load a
+second degraded planning algorithm.
 
 The only child-agent boundary in `/create-mobile-app` is screen implementation
 at Step 11. Planning must succeed when no child-agent tool exists.
@@ -33,9 +39,10 @@ Phase 4. Time semantic work with these nested diagnostic stages:
 |---|---|
 | Confirm and lock requirements | `requirementsPlanning` |
 | Product Experience + Product Scope | `experienceScopePlanning` |
-| Data-model decisions and plan-only output | `dataModelPlanning` |
-| Native capabilities + connectors | `capabilityConnectorPlanning` |
-| Workflow Journey + screen packs | `journeyPackPlanning` |
+| Native capabilities + confirmed connectors | `capabilityConnectorPlanning` |
+| Concept ownership + persistence compilation | `persistenceContractPlanning` |
+| Conditional Dataverse snapshot and plan-only output | `dataModelPlanning` |
+| Owner-bound Workflow Journey + screen packs | `journeyPackPlanning` |
 | Human plan projection | `planRendering` |
 | Targeted semantic correction | `planRepair` |
 
@@ -54,10 +61,14 @@ Keep the existing contracts and tools. Do not introduce a whole-plan schema.
 |---|---|---|
 | Product Experience | `.tmp/product-experience-contract.json` | `validate-product-experience.js` |
 | Product Scope | `.tmp/product-scope-contract.json` | `validate-product-scope.js` |
+| Product Scope navigation projection | `.tmp/navigation-manifest.json` | `compile-navigation-manifest.js` |
+| Architecture decisions | `.tmp/architecture-decisions.json` | `compile-persistence-contract.js` |
+| Persistence contract | `.tmp/persistence-contract.json` | `compile-persistence-contract.js --check-artifacts` |
+| Dataverse concept projection (conditional) | `.tmp/dataverse-concepts.json` | exact match to `persistence.dataverseConceptIds` |
 | Workflow Journey | `.tmp/workflow-journey-contract.json` | `validate-workflow-journey.js` |
 | Authored screen packs | `.tmp/screen-build-pack.json` | `compile-screen-build-pack.js` |
 | Compiled screen packs | `.tmp/compiled-screen-build-pack.json` | `compile-screen-build-pack.js --check` |
-| Dataverse schema contract | `.tmp/dataverse-schema-contract.json` | `build-dataverse-operation-manifest.js` and `validate-dataverse-planning-decisions.js` |
+| Dataverse schema contract (conditional) | `.tmp/dataverse-schema-contract.json` | `build-dataverse-operation-manifest.js` and `validate-dataverse-planning-decisions.js` |
 | Human plan | `native-app-plan.md` | section hashes in `.tmp/mobile-plan-status.json` |
 
 Read each exact current schema before authoring its contract. A path or schema
@@ -83,70 +94,24 @@ contracts.
   section. Never regenerate the complete plan for it.
 - A semantic failure reopens only its owning section and downstream contracts
   whose embedded revision changed.
-- A changed Product Experience invalidates Product Scope, Journey, and packs.
-- A changed Product Scope invalidates Journey and packs, not Product Experience.
+- A changed Product Experience invalidates Product Scope, architecture
+  decisions, persistence, conditional Dataverse artifacts, Journey, and packs.
+- A changed Product Scope invalidates architecture decisions, persistence,
+  conditional Dataverse artifacts, Journey, and packs, not Product Experience.
+- A changed architecture decision invalidates the persistence contract and all
+  mode-dependent Dataverse, Journey, and pack artifacts.
+- A changed persistence contract invalidates conditional Dataverse artifacts,
+  Journey, and packs.
 - A changed Journey invalidates packs only.
-- A data-model correction does not rewrite Product Experience or Product Scope.
+- A data-model correction invalidates Gate 2 and downstream bindings, but does
+  not rewrite Product Experience, Product Scope, or architecture unless it
+  adds/removes a Product Scope concept or changes that concept's owner.
 
 Block only for an unsafe capability claim, missing explicit requirement,
 invalid data relationship, a user decision/approval that is actually required,
 or output that cannot validate or compile.
 
-### Step 3.0 — Foreground Dataverse planning snapshot and evidence
-
-Planning is read-only. Branch on `<dataverse_planning_mode>`:
-
-- `connector-only`: skip Dataverse metadata reads and set the snapshot/evidence
-  paths to not supplied.
-- `required`: resolve the selected environment in the foreground and create one
-  normalized snapshot. No planning child may rediscover the environment.
-
-Build `.tmp/dataverse-concepts.json` from the confirmed brief. Mark only
-persistent records with independent lifecycle as `kind: entity` and
-`discoverTable: true`. Classify actors as roles, fields as attributes, workflow
-verbs as actions, enum values as statuses, and operating limits as constraints.
-Do not turn every noun into a table candidate.
-
-Use the existing bounded snapshot path:
-
-```bash
-SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
-CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
-ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
-PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
-INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
-
-PLANNING_ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache)
-ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
-ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
-
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
-  --env-url "$ACTIVE_ENV_URL" \
-  --tenant-id "$ACTIVE_TENANT_ID" \
-  --output "$SNAPSHOT_PATH" \
-  --concepts-file "$CONCEPTS_PATH" \
-  --tables "<EXPLICIT_TABLES>" \
-  --proposed-tables "<PROPOSED_TABLES>" \
-  --progressive-detail \
-  --combined-base-read \
-  --read-concurrency 1 \
-  --inventory-cache "$INVENTORY_CACHE_PATH" \
-  --inventory-cache-ttl-ms "<TTL, default 1800000>" \
-  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"
-
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
-  --snapshot "$SNAPSHOT_PATH" \
-  --output "$ARCHITECT_EVIDENCE_PATH"
-```
-
-Required exact-name metadata failures block Dataverse planning. Advisory
-candidate failures remain visible evidence but cannot authorize Reuse, Extend,
-or Adapt. Proposed names are collision checks, not required existing tables.
-Reuse the one bounded exact-name expansion when a selected target lacks full
-detail; never rerun broad discovery.
-
-## Step 3.1 — Product Experience and Product Scope
+## Step 3.0 — Product Experience and Product Scope
 
 Read `shared/references/product-experience-compiler.md` and the exact Product
 Experience and Product Scope schemas. The foreground authors both contracts.
@@ -218,12 +183,201 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-product-experience.js" \
   --project-root "<working_dir>"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-product-scope.js" \
   --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-navigation-manifest.js" \
+  --project-root "<working_dir>"
 ```
+
+`.tmp/navigation-manifest.json` is the canonical deterministic navigation
+projection of validated Product Scope. Product Scope remains the planning
+authority: never hand-author the manifest or use it to make scope decisions.
+Recompile it after every Product Scope repair. Do not compile screen build
+packs until the manifest exists and its `scopeRevision` matches Product Scope.
 
 Repair only the rejected contract. Do not proceed with warnings that represent
 an unresolved user-visible assumption; surface those in Gate 1.
 
-## Step 3.2 — Data model plan-only
+## Step 3.1 — Architecture decisions and persistence contract
+
+Resolve architecture in the foreground before any publisher-prefix query,
+Dataverse snapshot/cache/schema work, seed/service planning, Data Model
+approval, or Offline Profile question.
+
+Read `template/package.json`; it is the native package allowlist. Do not claim
+an unavailable native capability. Pure-JavaScript dependencies follow
+`shared/references/javascript-dependency-planning.md` and remain separate from
+native capabilities. Build the native-capability matrix with requirement/job,
+owning screen/action, package/wrapper, retained output, persistence consequence,
+permissions, platform behavior, fallback state, and availability evidence.
+
+Follow `shared/references/connector-planning.md`. Confirm connector candidates
+from the requirements, but do not treat confirmation as system-of-record
+ownership. Ask a foreground architecture question only when an unresolved
+capability, connector, owner, or offline choice would change the architecture;
+batch related unresolved choices into one question. Do not create a separate
+gate for each decision.
+
+Assign exactly one compatible owner to every `Product Scope.dataEntities`
+concept:
+
+- `dataverse` for Dataverse-owned durable data;
+- `connector:<api-name>` for a concept owned by that approved connector;
+- `local` for local configuration/prototype data;
+- `transient` for non-persistent UI/view-model state.
+
+Record a plain-language reason for every owner. A confirmed connector may be an
+integration without owning any concept. Never duplicate a connector-owned
+concept as a Dataverse table. Select offline only from an explicit requirement
+or one foreground confirmation of an evidence-backed architecture choice. With
+no such selection, use `{"selected": false, "source": "not-selected"}` and do
+not ask about offline later.
+
+Write compact `.tmp/architecture-decisions.json` in the compiler's exact input
+shape. Arrays contain approved decisions only; keep `approved: true` because the
+compiler rejects connector ownership that is not backed by an approved
+connector:
+
+```json
+{
+  "schemaVersion": 1,
+  "nativeCapabilities": [
+    {
+      "id": "camera",
+      "displayName": "Camera",
+      "persistenceConsequence": "Produces retained photo evidence",
+      "approved": true
+    }
+  ],
+  "connectors": [
+    {
+      "apiName": "sharepointonline",
+      "displayName": "SharePoint Online",
+      "approved": true
+    }
+  ],
+  "conceptOwners": [
+    {
+      "conceptId": "inspection",
+      "owner": "dataverse",
+      "reason": "Inspections are app-owned records with an independent lifecycle."
+    }
+  ],
+  "offline": {
+    "selected": false,
+    "source": "not-selected"
+  }
+}
+```
+
+For selected offline, `source` must be `explicit-request` or
+`foreground-confirmation`, with a short `reason`. Compile the sole persistence
+authority and validate mode-forbidden artifacts before continuing:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
+  --project-root "<working_dir>" --check-artifacts
+```
+
+The command writes `.tmp/persistence-contract.json` and derives exactly one of
+`dataverse`, `mixed`, `connector-only`, or `local-prototype`. Stop on missing,
+duplicate, unknown, incompatible, or unapproved ownership. Write
+`_native_section.md` and `_connectors_section.md` from the same architecture
+decisions; do not reconstruct them from plan prose later.
+
+## Step 3.2 — Gate 1: experience, scope, and architecture
+
+Gate 1 reviews Product Experience, Product Scope, requirement coverage,
+navigation, approved native capabilities/connectors, every concept owner, the
+compiled persistence mode, and the one-time offline architecture decision. It
+does not review a physical Data Model because that work is conditional on the
+approved persistence contract and has not run yet.
+
+Use foreground `AskUserQuestion` and plan mode. On rejection, repair only the
+owning Product Experience, Product Scope, or architecture value; rerun its
+validators; recompile navigation and persistence; and invalidate only changed
+downstream artifacts. On acceptance, record exact experience, scope,
+navigation, architecture, and persistence revisions in
+`.tmp/mobile-plan-status.json`. Project approved names into
+`architectureSummary.nativeCapabilities[]` and
+`architectureSummary.connectors[]` directly from architecture decisions.
+
+In `--consolidated-review`, preserve the same sequencing and resolved
+persistence mode but defer this approval response to the consolidated review.
+Do not use consolidated review to start Dataverse reads before persistence has
+compiled.
+
+## Step 3.3 — Conditional physical data model
+
+Read `.tmp/persistence-contract.json` and branch only on `persistence.mode`.
+
+### `connector-only` or `local-prototype`
+
+Run `compile-persistence-contract.js --project-root "<working_dir>"
+--check-artifacts` again. Do not query a publisher prefix, resolve Dataverse
+planning identity, create a snapshot/evidence/cache, invoke
+`/setup-datamodel`, or create `.tmp/dataverse-concepts.json`, `_dm_section.md`,
+`.tmp/dataverse-schema-contract.json`, `.datamodel-manifest.json`, sample data,
+generated Dataverse services, or Offline Profile artifacts.
+
+Render `## Data Model` as `Not applicable` and list each concept with its
+approved connector/local/transient owner from the persistence contract. Mark
+the Build Plan `data-model` milestone complete with that owner summary. There
+is no Data Model approval in these modes.
+
+### `dataverse` or `mixed`
+
+Only now detect the publisher prefix, resolve the selected environment for
+planning, and create the bounded Dataverse snapshot:
+
+```bash
+PUBLISHER_PREFIX_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" \
+  "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID")
+DETECTED_PUBLISHER_PREFIX=$(node -e \
+  "const j=JSON.parse(process.argv[1]); process.stdout.write(j.prefix || '')" \
+  "$PUBLISHER_PREFIX_JSON")
+
+PERSISTENCE_CONTRACT="<working_dir>/.tmp/persistence-contract.json"
+CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
+SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
+ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
+PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
+INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
+
+PLANNING_ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" \
+  "$ACTIVE_ENV_ID" --no-cache)
+ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
+ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --output "$SNAPSHOT_PATH" \
+  --concepts-file "$CONCEPTS_PATH" \
+  --tables "<EXPLICIT_TABLES_FROM_DATAVERSE_CONCEPTS>" \
+  --proposed-tables "<PROPOSED_TABLES_FROM_DATAVERSE_CONCEPTS>" \
+  --progressive-detail \
+  --combined-base-read \
+  --read-concurrency 1 \
+  --inventory-cache "$INVENTORY_CACHE_PATH" \
+  --inventory-cache-ttl-ms "<TTL, default 1800000>" \
+  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
+  --planning-timings-output "$PLANNING_TIMINGS_PATH"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
+  --snapshot "$SNAPSHOT_PATH" \
+  --output "$ARCHITECT_EVIDENCE_PATH"
+```
+
+If a selected Reuse, Extend, or Adapt target lacks full detail, reuse one
+bounded, monotonic exact-name expansion for only the missing target names.
+Never rerun broad discovery, and never repeat a name already attempted.
+
+Before snapshot invocation, deterministically build
+`.tmp/dataverse-concepts.json` by projecting Product Scope through
+`persistence.dataverseConceptIds`. It must contain every and only those IDs.
+Connector, local, and transient concepts must never appear, including as
+convenience mirror tables. Classify actors as roles, fields as attributes,
+workflow verbs as actions, enum values as statuses, and operating limits as
+constraints rather than table candidates.
 
 Read and execute `/setup-datamodel` in the foreground with:
 
@@ -232,49 +386,39 @@ Read and execute `/setup-datamodel` in the foreground with:
 --working-dir <working_dir>
 --requirements <confirmed requirement artifact>
 --product-scope <working_dir>/.tmp/product-scope-contract.json
---snapshot <SNAPSHOT_PATH or NOT SUPPLIED>
---evidence <ARCHITECT_EVIDENCE_PATH or NOT SUPPLIED>
+--persistence-contract <working_dir>/.tmp/persistence-contract.json
+--snapshot <working_dir>/.tmp/dataverse-foreground-planning-snapshot.json
+--evidence <working_dir>/.tmp/dataverse-architect-evidence.json
 --publisher-prefix <DETECTED_PUBLISHER_PREFIX>
 ```
 
-The skill writes `_dm_section.md` and, in Dataverse-required mode,
-`.tmp/dataverse-schema-contract.json`. It does not ask for approval or mutate
-Dataverse in plan-only mode. Require exact snapshot-bound validation before a
-Reuse, Extend, or Adapt decision can reach Gate 1.
-
-## Step 3.3 — Capabilities and connectors
-
-The foreground reads `template/package.json`; it is the native package
-allowlist. Do not claim an unavailable native capability. Pure-JavaScript
-dependencies follow `shared/references/javascript-dependency-planning.md` and
-remain separate from native capabilities.
-
-Build a native-capability matrix with requirement/job, owning screen/action,
-package/wrapper, retained output, persistence consequence, permissions,
-platform behavior, fallback state, and availability evidence. Scanning,
-barcode printing, inspections, repairs, warranty, photography, GPS, signatures,
-and every other explicit job must map to a screen action/domain operation or be
-visibly deferred.
-
-Assign exactly one persistence owner to every record/evidence concept:
-Dataverse, a confirmed connector, local configuration, or transient UI state.
-Then follow `shared/references/connector-planning.md` in the foreground. In
-normal create flow, infer candidates from confirmed requirements and include
-unresolved choices in Gate 2 rather than opening another pre-gate prompt.
-
-Write `_native_section.md` and `_connectors_section.md` from these canonical
-values. Screen/build-pack generation consumes the confirmed lists directly.
+Plan-only writes `_dm_section.md` and
+`.tmp/dataverse-schema-contract.json` without approval or mutation. Require
+snapshot-bound validation before Reuse, Extend, or Adapt. In `mixed` mode,
+reject the plan if any connector, local, or transient concept appears in the
+schema contract. A null publisher detection may use a visible placeholder, but
+it never broadens the persistence projection.
 
 ## Step 3.4 — Workflow Journey and screen build packs
 
-Read the exact Workflow Journey and screen-build-pack schemas. Build the screen
-graph from Product Scope screens and the navigation contract; do not infer
-routes from the data model.
+Read the exact Workflow Journey, screen-build-pack, and persistence contracts.
+Build the screen graph from Product Scope screens and its compiled
+`.tmp/navigation-manifest.json` projection; do not infer routes from the data
+model.
 
 For each core job, author ordered journey steps whose `satisfies` IDs cover the
 job's locked `criticalSteps`. A step may reuse an existing screen as a section,
 sheet, modal, flow step, or contextual action. Preserve route parameters,
 navigation intent, domain operations, success, recovery, and resumability.
+
+Every read, create, update, delete, sync, upload, download, or retained-artifact
+operation must name its Product Scope `conceptId` and the exact owner from
+`.tmp/persistence-contract.json`. Bind Dataverse concepts only to their
+Dataverse service, connector concepts only to that connector's generated
+service, local concepts only to the approved package/local adapter, and
+transient concepts only to view-model state. Reject missing or contradictory
+bindings. `mixed` never routes a connector/local concept through a mirrored
+Dataverse table.
 
 For every user-facing screen, author one pack preserving UX quality:
 
@@ -285,6 +429,7 @@ For every user-facing screen, author one pack preserving UX quality:
 - trust and decision-support evidence;
 - applicable loading, empty, error, permission, offline, and success states;
 - navigation consistent with durable destinations and bounded flows;
+- data operations bound to the concept's compiled persistence owner;
 - accessibility, Dynamic Type, keyboard, touch-target, and safe-area needs;
 - forbidden defaults preventing generic dashboard/CRUD substitution.
 
@@ -328,10 +473,11 @@ Use exactly these top-level headings:
 ## App Requirements
 ## Product Experience
 ## Product Scope
-## Data Model
 ## Native Capabilities
-## Design
 ## Connectors
+## Persistence
+## Data Model
+## Design
 ## Screens
 ## Approval Status
 ## Plan Provenance
@@ -339,40 +485,42 @@ Use exactly these top-level headings:
 
 `## App Requirements` contains the confirmed brief without expansion. `##
 Product Scope` contains jobs, deferred functionality, review ceilings, and
-requirement coverage. `## Screens` contains navigation, classification, Screen
-Map, journey, and per-screen pack summaries. Discovery diagnostics belong in
-`memory-bank.md`, not the plan.
+requirement coverage. `## Persistence` projects mode, offline selection, and
+the owner/reason for every concept from the persistence contract. `## Data
+Model` is `Not applicable` with those owners in `connector-only` and
+`local-prototype`; otherwise it projects only Dataverse-owned concepts. `##
+Screens` contains navigation, classification, Screen Map, journey, and
+per-screen pack summaries. Discovery diagnostics belong in `memory-bank.md`,
+not the plan.
 
-## Step 3.6 — Foreground approvals
+## Step 3.6 — Gate 2: conditional Data Model and execution contracts
 
-All questions and approvals use foreground `AskUserQuestion` and plan mode.
-No child may ask the user or enter/exit plan mode.
+All questions and approvals use foreground `AskUserQuestion` and plan mode. No
+child may ask the user or enter/exit plan mode. Gate 2 reviews:
 
-Immediately before each approval and again after each response, check
-`.tmp/mobile-build-plan-edits.json` as specified by the Build Plan protocol.
-A newer data-model revision cancels the pending handoff, reruns only affected
-validators/rendering, and reopens Gate 1 before any downstream approval.
+- the snapshot-validated Data Model for `dataverse` or `mixed`, limited to
+  `persistence.dataverseConceptIds`;
+- `Not applicable` ownership rendering for `connector-only` or
+  `local-prototype`, without a Data Model approval;
+- screen graph/navigation, Workflow Journey, compiled packs, and every
+  operation-to-owner binding.
 
-Gate 1 reviews Product Experience, Product Scope, requirement coverage, and the
-data model. Gate 2 reviews capabilities, persistence ownership, connectors,
-screen graph/navigation, Workflow Journey, and pack compilation. In
-`--consolidated-review`, keep these sections pending and defer the single user
-approval until the required experience preview is materialized.
+Immediately before Gate 2 and again after its response, check
+`.tmp/mobile-build-plan-edits.json` as specified by the Build Plan protocol. A
+schema-only edit within already Dataverse-owned concepts cancels the handoff,
+reruns affected Data Model/Journey/pack validation, and reopens Gate 2. An edit
+that adds/removes a Product Scope concept or changes ownership reopens Gate 1,
+recompiles persistence, and invalidates all mode-dependent downstream work.
 
 On rejection, edit only the owning canonical values, rerun affected validators,
 recompile downstream contracts, and rerender affected plan sections. On
 acceptance, update `.tmp/mobile-plan-status.json` with exact contract revisions,
-section hashes, approval state, and current plan hash. Preserve prior approved
-sections whose hashes did not change.
+section hashes, approval state, operation-owner binding status, and current plan
+hash. Preserve prior approved sections whose hashes did not change.
 
-When Gate 2 is accepted, also project the confirmed names into the receipt as
-`architectureSummary.nativeCapabilities[]` and
-`architectureSummary.connectors[]`. Copy these arrays from the same in-memory
-decisions used to render `_native_section.md` and `_connectors_section.md`; do
-not reconstruct them by parsing Markdown. This summary is browser presentation
-data bound by the receipt's existing section hashes, not a new planning or
-execution authority. Use empty arrays for an approved `none` decision, and
-omit `architectureSummary` while either list is unresolved.
+In `--consolidated-review`, keep Gate 1 and Gate 2 sections pending and defer
+their single response until the required experience preview is materialized.
+The artifacts, mode branch, and validation order remain identical.
 
 Time each rejection/repair loop as `planRepair`, with `--retry` on subsequent
 attempts. The approval wait ends as soon as the user responds; repair time is
@@ -380,18 +528,35 @@ never recorded as approval latency.
 
 Gate 3 remains the required design/experience preview approval. Gate 4 remains
 the final implementation confirmation. No mutation begins until the current
-approval receipt binds all four required states and artifact hashes.
+approval receipt binds the applicable review states and artifact hashes.
 
-## Step 3.7 — Prefix and Dataverse execution gate
+## Step 3.7 — Persistence and conditional Dataverse execution gate
 
-Recheck `.tmp/mobile-build-plan-edits.json` before normalizing or binding the
-schema contract. Never restamp an approval receipt invalidated by a browser
-edit; return through Gate 1 and every invalidated downstream gate.
+Recheck `.tmp/mobile-build-plan-edits.json` before binding the Phase 3
+checkpoint. Never restamp an approval receipt invalidated by a browser edit;
+return through Gate 2 for a schema-only change or Gate 1 when scope/ownership
+changed.
 
-In Dataverse-required mode, verify the approved structured contract and plan use
-the detected publisher prefix. Correct mechanical prefix drift in both outputs,
-normalize the contract, and validate it again. Do not proceed from a missing or
-malformed schema contract and do not parse Mermaid as an executable fallback.
+Always recompile and check mode-forbidden artifacts first:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
+  --project-root "<working_dir>" --check-artifacts
+```
+
+Require the resulting `persistenceRevision` to match the Gate 1 receipt and
+branch on `persistence.mode`:
+
+- `connector-only` / `local-prototype`: require `## Data Model` to be `Not
+  applicable` with every concept owner rendered. Require no publisher prefix,
+  Dataverse concepts/snapshot/evidence/cache/schema, `_dm_section.md`,
+  `.datamodel-manifest.json`, generated Dataverse service, seed, or Offline
+  Profile artifact. Do not run schema normalization or snapshot validation.
+- `dataverse` / `mixed`: require `.tmp/dataverse-concepts.json` IDs to equal
+  `persistence.dataverseConceptIds` exactly. Verify the approved schema contract
+  uses the detected publisher prefix and realizes only those concepts. In
+  `mixed`, any connector/local/transient concept represented as a Dataverse
+  table is blocking. Normalize and validate against the Phase 3 snapshot:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
@@ -399,12 +564,24 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --output "<working_dir>/.tmp/dataverse-schema-contract.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-dataverse-planning-decisions.js" \
   --contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
-  --snapshot "$SNAPSHOT_PATH"
+  --snapshot "<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
 ```
 
-Record the validated Phase 3 contract artifacts in
-`.tmp/mobile-pipeline-state.json`. Step 6.75 may update design and approval
-artifacts, but it must not regenerate Product Experience, Product Scope, data
+For every mode, verify Workflow Journey and compiled build packs bind each data
+operation to the matching `persistence.conceptOwners` entry. Do not parse
+Mermaid or plan prose as an executable fallback.
+
+Record these always-present checkpoint artifacts in
+`.tmp/mobile-pipeline-state.json`: Product Experience, Product Scope,
+navigation manifest, architecture decisions, persistence contract, Workflow
+Journey, authored and compiled screen packs, human plan, and approval receipt.
+For `dataverse` / `mixed`, also record Dataverse concepts, foreground snapshot,
+architect evidence, and schema contract. For `connector-only` /
+`local-prototype`, record the checked not-applicable data-model status instead
+of Dataverse artifact paths.
+
+Step 6.75 may update design and approval artifacts, but it must not regenerate
+Product Experience, Product Scope, architecture decisions, persistence, data
 model, Journey, or screen packs merely to restamp bookkeeping.
 
 Finally record measured planning history:

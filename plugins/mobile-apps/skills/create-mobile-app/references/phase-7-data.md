@@ -2,9 +2,10 @@
 
 Follow the retained
 [`Live Build Plan protocol`](./build-plan.md). Keep `dataverse` current around
-Step 8, including a completed connector-only milestone when applicable. Use
-`architecture` warnings for capability/connector concerns without rewriting
-the approved scope.
+Step 8, including a completed not-applicable milestone for `connector-only` and
+`local-prototype`. Derive every branch from `.tmp/persistence-contract.json`,
+never an inferred or legacy planning variable. Use `architecture` warnings for
+capability/connector concerns without rewriting the approved scope.
 
 ### Step 7 — Auth config
 
@@ -121,27 +122,53 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 
 Before any reconciliation, manifest generation, or Dataverse write, check
 `.tmp/mobile-build-plan-edits.json` and the approval receipt as required by the
-Build Plan protocol. A newer edit blocks Step 8 and returns through Gate 1;
-the mutation phase cannot create or refresh its own approval.
+Build Plan protocol. A newer schema-only edit blocks Step 8 and returns through
+Gate 2. A scope or ownership edit returns through Gate 1. The mutation phase
+cannot create or refresh its own approval.
 
-If `<dataverse_planning_mode> = connector-only`, verify the approved
-`## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`
-exists, print `↷ Step 8 skipped — connector-only app has no Dataverse data model.`,
-skip Step 8.5 and Step 8.85, print
-`↷ Step 8.85 skipped — connector-only planning explicitly approved zero Dataverse tables.`,
-and continue to Step 9. A non-empty Dataverse plan in this mode is a planning
-mismatch and must be corrected before continuing.
+Recompile the persistence authority and reject forbidden mode artifacts before
+branching:
+
+```bash
+PERSISTENCE_CONTRACT="<working_dir>/.tmp/persistence-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
+  --project-root "<working_dir>" --check-artifacts
+PERSISTENCE_MODE=$(node -e \
+  "process.stdout.write(require(process.argv[1]).mode)" \
+  "$PERSISTENCE_CONTRACT")
+```
+
+Branch on all four modes:
+
+| `persistence.mode` | Step 8 / 8.5 / 8.85 behavior |
+|---|---|
+| `dataverse` | Run Dataverse reconciliation/writes/services and seed only `dataverseConceptIds`; create a Mobile Offline Profile only when `offline.selected` is true. |
+| `mixed` | Same Dataverse steps, but only for `dataverseConceptIds`; connector/local concepts remain with their declared adapters and are never mirrored as tables. |
+| `connector-only` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Print `↷ Steps 8, 8.5, and 8.85 not applicable — persistence is owned by approved connectors.` Continue to Step 9. |
+| `local-prototype` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Print `↷ Steps 8, 8.5, and 8.85 not applicable — persistence is local/prototype state.` Continue to Step 9. |
+
+For `connector-only` and `local-prototype`, require the approved `## Data
+Model` to say `Not applicable` and render every concept owner. The successful
+`--check-artifacts` call is the execution gate; a Dataverse artifact is a
+planning mismatch, not something Step 8 may delete or overwrite.
 
 **Print before starting:**
 > "→ [Step 8/13] Preparing the approved Dataverse operation manifest, then invoking /add-dataverse for sequential metadata writes and service generation. Dataverse write time varies by environment; local manifest preparation is deterministic, not a wall-clock promise."
 
 **Environment pre-check (before invoking /add-dataverse):** Verify that `.resolved-environment.json` / `power.config.json` match the environment captured in Step 1. If they differ, warn the user immediately — creating tables in the wrong environment is the #1 silent breakage in this step. `/add-dataverse` Step 3a does its own check, but catching it here saves a failed attempt.
 
-For the fast-v2 `required` path, keep the foreground planning snapshot as
-planning evidence only. It never authorizes a write. Without changing any
-approval gate, Step 8 must perform one fresh bounded reconciliation for every
-exact table in the approved structured schema; each existing table reloads
-ordinary typed columns, lookups, M:N/1:N relationships, and alternate keys.
+For `dataverse` and `mixed`, read `dataverseConceptIds` from the persistence
+contract and require `.tmp/dataverse-concepts.json` and the approved schema
+contract to represent every and only those concepts. In `mixed`, any
+connector/local/transient concept represented by a schema table or Dataverse
+service is `BLOCKED`; return to planning rather than creating a duplicate
+system of record.
+
+Keep the foreground planning snapshot as planning evidence only. It never
+authorizes a write. Without changing any approval gate, Step 8 must perform one
+fresh bounded reconciliation for every exact table in the approved structured
+schema; each existing table reloads ordinary typed columns, lookups, M:N/1:N
+relationships, and alternate keys.
 Create/adapt table reruns also reload and compare creation-significant table
 behavior: ownership, activities, notes, offline availability, change tracking,
 labels/schema identity, and primary-name identity.
@@ -267,12 +294,15 @@ npx tsc --noEmit
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
 
-### Step 8.5 — Seed sample data (auto)
+### Step 8.5 — Seed Dataverse sample data (conditional)
 
 **Print before starting:**
 > "→ [Step 8.5/13] Checking existing record counts and seeding sample data into tables with fewer than 5 records."
 
-Invoke `/add-sample-data` after Step 8. This step is **not optional** — every fresh-scaffolded app must have data to render on first launch:
+Invoke `/add-sample-data` after Step 8 only for `dataverse` or `mixed`. Within
+those modes this step is not optional: the Dataverse-owned concepts should have
+data to render on first launch. Connector-owned and local concepts keep their
+own source/adapters and are never seeded through Dataverse.
 
 ```
 Invoke skill: /add-sample-data
@@ -281,63 +311,50 @@ Arguments:
   --working-dir <working_dir>
 ```
 
-`/add-sample-data` reads `.datamodel-manifest.json`, queries the current record count for each table, skips any table that already has ≥5 records, and seeds the rest with contextually appropriate rows in dependency-tier order. Inserted GUIDs are tracked in `memory-bank.md` for idempotent re-runs.
+`/add-sample-data` reads `.datamodel-manifest.json`, queries the current record
+count for each table, skips any table that already has ≥5 records, and seeds the
+rest with contextually appropriate rows in dependency-tier order. Before
+invocation, require every manifest table to trace to a
+`persistence.dataverseConceptIds` entry. In `mixed`, a table for any
+connector/local/transient concept is blocking. Inserted GUIDs are tracked in
+`memory-bank.md` for idempotent re-runs.
 
-If `.datamodel-manifest.json` is missing or malformed, STOP. A
-Dataverse-required run cannot seed data or design an offline profile without
-the manifest produced by the completed Step 8 mutation.
+If `.datamodel-manifest.json` is missing or malformed, STOP. A `dataverse` or
+`mixed` run cannot seed Dataverse data or create a Mobile Offline Profile
+without the manifest produced by the completed Step 8 mutation.
 
 If the seeding step fails for a non-manifest reason (network drop, permission
 error, etc.), surface the failure but continue to Step 8.85 — the app is still
 usable, just empty on first launch. The user can re-run `/add-sample-data`
 later to retry.
 
-### Step 8.85 — Offline profile (Dataverse-backed apps)
+### Step 8.85 — Apply the approved offline architecture decision
 
-**Print before starting:**
-> "→ [Step 8.85/13] Asking whether to set up an offline profile…"
+Read `persistence.offline`; do not ask another offline question here. Offline
+selection remains an architecture decision made only by explicit request or
+foreground confirmation in Step 3.1.
 
-Mobile Offline Profiles let users continue working when their device is
-disconnected; Dataverse syncs queued changes when connectivity returns. This
-question is asked for every Dataverse-backed create run unless a prior run
-recorded a final answer. Do not infer the answer from prompt keywords.
+- If `offline.selected` is false, do not invoke any offline skill and do not
+  create `offline-profile.json` or another offline artifact. Print
+  `↷ Step 8.85 skipped — offline was not selected in architecture decisions; no offline artifacts created.`
+- If `offline.selected` is true and `persistence.mode` is `dataverse` or
+  `mixed`, parse `.datamodel-manifest.json` and require at least one table tied
+  to `persistence.dataverseConceptIds`. Missing, malformed, empty, or
+  out-of-projection manifests are `BLOCKED`. Invoke `/setup-offline-profile`
+  directly from the project root without another approval question; it
+  consumes the already-approved decision and materialized Dataverse manifest.
+- If `offline.selected` is true and `persistence.mode` is `connector-only` or
+  `local-prototype`, Mobile Offline Profile is not applicable. Print
+  `↷ Step 8.85 not applicable — offline behavior belongs to approved connector/local package adapters.`
+  Keep adapter/cache/sync requirements in architecture and the owner-bound
+  screen packs for Steps 9a/10/11. Never offer or create a Dataverse Mobile
+  Offline Profile for those concepts.
 
-**Required materialization gate:** before asking, parse
-`.datamodel-manifest.json` and require at least one Dataverse table. Missing,
-malformed, or empty manifests are `BLOCKED: offline setup requires the
-materialized Dataverse manifest from Step 8`. Do not classify a missing
-manifest as connector-only; connector-only is an approved planning mode and
-was handled explicitly at the start of Step 8.
-
-The only Dataverse-mode skip condition is an existing `memory-bank.md`
-`## Offline profile` status of `done` or `not-applicable`. Print:
-`↷ Step 8.85 skipped — offline profile already <done|not-applicable> from a prior run.`
-
-Otherwise ask one neutral `AskUserQuestion`:
-
-> **Question header**: `Offline support`
->
-> **Question body**: "Mobile Offline Profiles let users continue working when
-> their device is disconnected — Dataverse syncs queued changes when
-> connectivity returns. Set one up now?"
->
-> **Options** (default = `Yes`):
-> - `Yes — create profile now (recommended)` — invoke
->   `/setup-offline-profile`, then continue to Step 9
-> - `Skip — I'll add it later via /setup-offline-profile` — continue to Step 9
->   without recording a final answer
-> - `Skip — this app doesn't need offline support` — record
->   `status: not-applicable`, then continue to Step 9
-
-If the user picks Yes, invoke `/setup-offline-profile` from the project root.
-It consumes the materialized `.datamodel-manifest.json`, updates
-`memory-bank.md`, and writes `offline-profile.json`. Handle its return through
-the canonical status switch: `DONE` continues, `DONE_WITH_CONCERNS:` is
-surfaced and recorded, and `BLOCKED:` stops.
-
-New custom tables were configured for offline availability and change
-tracking by `/add-dataverse`, so the setup skill can validate rather than
-guess table readiness.
+Handle `/setup-offline-profile` through the canonical status switch: `DONE`
+continues, `DONE_WITH_CONCERNS:` is surfaced and recorded, and `BLOCKED:`
+stops. New custom Dataverse tables were configured for offline availability
+and change tracking by `/add-dataverse`, so the setup skill validates rather
+than guesses table readiness.
 
 ### Step 9 — Apply native capabilities
 
