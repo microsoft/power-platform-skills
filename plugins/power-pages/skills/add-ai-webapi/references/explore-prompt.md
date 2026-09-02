@@ -131,9 +131,9 @@ table in scope.
 >
 > **Fields-list breadth (advisory).** For every Data Summarization target whose Layer 1/2 status
 > is `ready`, also report whether the existing `Webapi/<table>/fields` includes any of:
-> (a) the primary key column (`<prefix>_<table>id`) when the code does not select it; (b) lookup
-> attributes missing their LogicalName, SchemaName, or `_<LogicalName>_value` read form;
-> (c) attributes the AI surface won't read. Mark these targets `fields-broader-than-ai-mode` so Phase 3 can surface
+> (a) the primary key column (`<prefix>_<table>id`); (b) lookup write forms (e.g.
+> `cr4fc_categoryid` without the matching `_cr4fc_categoryid_value` read form); (c) columns the
+> AI surface won't read. Mark these targets `fields-broader-than-ai-mode` so Phase 3 can surface
 > the gap to the user — they can choose to narrow now or accept the broader posture.
 >
 > **Layer 3 status.** For every Data Summarization target, report whether `Summarization/Data/Enable`

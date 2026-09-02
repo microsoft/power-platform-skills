@@ -46,9 +46,8 @@ path as a regular Web API `GET` before it hands content to the summariser. All o
 must be in place on the target table (and every `$expand` target) or the endpoint returns 403:
 
 1. `Webapi/<table>/enabled = true` site setting
-2. `Webapi/<table>/fields` covering every column named in `$select` / `$expand` according to
-   `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`: exact LogicalName and SchemaName pairs,
-   plus `_<LogicalName>_value` for lookups
+2. `Webapi/<table>/fields` listing every column named in `$select` / `$expand` (exact Dataverse
+   LogicalName, all lowercase)
 3. A table permission granting the caller's web role `read: true` on the table
 4. Parent-scope permissions for expanded related tables, with `appendTo: true` on the parent so
    the navigation property traversal is allowed
@@ -67,9 +66,11 @@ for AI-only targets, those architects were prompted to adopt an AI-only read pos
 
 - **Table permissions**: `read: true` only. No `create`, `write`, or `delete` flags — the AI
   endpoint never triggers any of those code paths.
-- **Fields list**: cover exactly the attributes named in `$select` and `$expand` from the code.
-  Add each attribute's LogicalName and SchemaName. For lookups, also add
-  `_<LogicalName>_value`. Omit the primary key when the code does not select it.
+- **Fields list**: exactly the columns named in `$select` and `$expand` from the code. No
+  primary key column (the record id is in the URL path, not selected as a column — this is why
+  MS's shipped case preset ships `Webapi/incident/fields = description,title` with no
+  `incidentid`). No lookup write form (`cr4fc_categoryid`) unless the same table also has
+  non-AI mutation code elsewhere on the site.
 
 When you inspect the prerequisites in Step 4, cross-check that this posture is in place. If you
 find broader CRUD flags or a primary-key column in a fields list for an AI-only target, flag it
@@ -320,8 +321,9 @@ broader than a read-only posture requires:
 - `Webapi/<table>/fields` values that include a primary key column (`<prefix>_<table>id`) — the
   AI endpoint doesn't need it since the record id is in the URL path. Harmless but broader than
   the shipped MS preset.
-- `Webapi/<table>/fields` lookup values missing any required entry: LogicalName, SchemaName, or
-  `_<LogicalName>_value`.
+- `Webapi/<table>/fields` values that include lookup write forms (`cr4fc_categoryid`) without a
+  corresponding read form (`_cr4fc_categoryid_value`) for a table that only gets read from — the
+  write form isn't used by the AI endpoint.
 
 Output these as plan-level notes so the user can tighten the posture later.
 

@@ -506,7 +506,7 @@ Only create these methods if the target table actually has File or Image columns
 | Using `Accept: application/json` for download | Empty or error response | Use `Accept: */*` for blob downloads |
 | Using file MIME type as upload `Content-Type` (e.g. `image/png`) | `400 "Stream was not readable"` — OData routes to JSON deserializer instead of binary handler | Always use `Content-Type: application/octet-stream` for uploads |
 | Missing `Content-Type: application/octet-stream` on download | `404` — OData pipeline can't route to binary file handler | Add `Content-Type: application/octet-stream` to download headers |
-| File/Image column omitted from `Webapi/<table>/fields` | `403 Forbidden` on `/$value` download | Add the column's exact LogicalName and SchemaName per `webapi-field-allowlist.md` |
+| File/Image column omitted from `Webapi/<table>/fields` | `403 Forbidden` on `/$value` download | Add the File/Image column's exact Dataverse LogicalName to the explicit fields list |
 
 ---
 
@@ -768,7 +768,7 @@ Use this approach when:
 
 ### Site Settings for Related Entity Columns
 
-When expanding related entities, apply `webapi-field-allowlist.md`. The parent table's lookup contributes its LogicalName, SchemaName, and `_<LogicalName>_value`. The related table must also have its own `Webapi/<related_table>/enabled` and `Webapi/<related_table>/fields` settings for the attributes selected in `$expand`.
+When expanding related entities, the `Webapi/<table>/fields` site setting on the **parent** table must include the lookup's OData property (for example, `_cr4fc_categoryid_value`). The **related** table must also have its own `Webapi/<related_table>/enabled` and `Webapi/<related_table>/fields` settings configured with the columns selected in `$expand`.
 
 ### Table Permissions for Related Entities
 
