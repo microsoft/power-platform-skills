@@ -8,6 +8,7 @@
       "files": [],
       "expectations": [
         "Discovery phase asks for site name, framework, purpose, audience, and project location via AskUserQuestion",
+        "Because no content language was explicit, runs suggest-content-locale.js and offers its Dataverse base-language result as Suggested, silently falling back to en-US when unavailable",
         "Site naming values are derived: __SITE_NAME__ = 'Contoso Solutions Portal', __SITE_SLUG__ = 'contoso-solutions-portal'",
         "React template is copied from the assets/react/ directory and all __PLACEHOLDER__ tokens are replaced",
         "gitignore file is renamed to .gitignore in the project root",
