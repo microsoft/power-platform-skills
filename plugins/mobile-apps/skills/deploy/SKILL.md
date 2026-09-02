@@ -22,7 +22,7 @@ This skill uses the standard 4-step deployment flow for this plugin: check memor
 
 ## Workflow
 
-1. Check memory bank → 2. Build → 2.4 Native package → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
+1. Check memory bank → 1.5 App ID preflight → 2. Build → 2.4 Native package → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
 
 ---
 
@@ -35,6 +35,31 @@ Read `memory-bank.md` from the project root if present. Capture:
 - Current version
 
 If absent, continue — the project may have been created without the plugin. Re-derive env from `power.config.json` if needed.
+
+### Step 1.5 — App ID preflight (first-deploy gate)
+
+Read `power.config.json` **before building anything**:
+
+```bash
+node -e "const c=require('./power.config.json');console.log(c.appId||'MISSING')"
+```
+
+- **Prints a GUID** → normal path. Continue to Step 2.
+- **Prints `MISSING`** (null, absent, or empty) → this is a **first deploy**. Say so plainly *before* doing any work:
+
+  > "⚠️ First deploy detected — `power.config.json` has no `appId` yet. The app ID is minted by the first push, but it is compiled **into** the native bundle at build time. So two full build+push cycles are required. I'll run both; the second is not optional."
+
+  Then run Steps 2 → 2.4 → 3 **twice**. In cycle 2, `npm run build` *and* `npm run package:android` / `package:ios` must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in.
+
+**Why two cycles are unavoidable.** `power-apps push` mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build (`PushApp.js`: `throw new Error('Build path ${buildPath} does not exist')`). So the ID cannot be minted before the first build, and the first build cannot contain the ID.
+
+**Why this is so easy to miss.** The runtime guard is:
+
+```js
+Platform.OS !== 'web' && !isDevPlayer && !hasConfiguredValue(powerConfig.appId)
+```
+
+Web is **exempt**, and so is Dev Player. The Code App, `npm run dev`, and the browser preview all look perfectly healthy. The failure appears only in the **wrapped native app**, as a full-screen red *"App ID is missing — Push the mobile app to the Power Platform environment, rebuild it, and try again."* That is after a base-package wrap, a signed build, and a device install — the most expensive possible place to discover a one-line config gap.
 
 ### Step 2 — Build
 
@@ -55,6 +80,27 @@ npx expo export --platform web
 ```
 
 (That's what the upstream template's `build` script runs.)
+
+**Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: `config.server.enhanceMiddleware` / `withPowerNativeMetroLogging` in `metro.config.js` holding an open handle — a web *export* should not need a dev server. **Not yet root-caused.**
+
+**Do not wait on the process.** Run it detached and poll for the artifact:
+
+```bash
+npx expo export --platform web > /tmp/expo-web-export.log 2>&1 &
+EXPORT_PID=$!
+for _ in $(seq 1 90); do
+  grep -q "Exported: dist" /tmp/expo-web-export.log 2>/dev/null && break
+  sleep 2
+done
+if ! grep -q "Exported: dist" /tmp/expo-web-export.log 2>/dev/null; then
+  echo "web export did not complete in 180s"; tail -30 /tmp/expo-web-export.log; exit 1
+fi
+test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
+kill "$EXPORT_PID" 2>/dev/null || true
+echo "✓ web export complete (process terminated manually — known hang)"
+```
+
+Treat a completed `dist/` as success even though the process had to be killed. `npm run package:android` / `package:ios` are **not** affected — both exit 0 cleanly and stage into `dist/` via a temp dir, so they do not clear the web build.
 
 If the build fails:
 
@@ -174,6 +220,17 @@ npx power-apps push --non-interactive
 ```
 
 Capture the app URL from the output if printed.
+
+**First-deploy loop-back.** If Step 1.5 reported `MISSING`, re-read the config now:
+
+```bash
+node -e "const c=require('./power.config.json');console.log(c.appId||'STILL MISSING')"
+```
+
+- **GUID** → the app was registered. **Go back to Step 2 and run Build → 2.4 → Deploy one more time.** The artifacts now sitting in `dist/` (and already uploaded to the blob) still have an empty app ID compiled in; without the second cycle the wrapped app fails on-device.
+- **`STILL MISSING`** → push did not register the app. STOP and report. Do not proceed to wrap.
+
+On the second pass this check is a no-op, and Step 4 runs as normal.
 
 If deploy fails, report the error and STOP — do not retry silently. Common fixes:
 
