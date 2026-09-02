@@ -54,6 +54,8 @@ Starts a complete code site either from a curated SPA template or from a fresh f
 
 - Start from a curated SPA template or scaffold from scratch
 - Choose from React, Vue, Angular, or Astro
+- Suggests the selected Dataverse environment's base language for site content,
+  with a silent `en-US` fallback when the environment cannot be queried
 - Direction-neutral layouts work with LTR and RTL writing systems from the start
 - Script-aware fonts, locale-aware formatting, and mixed-direction content safety
 - Real images from Unsplash (no placeholders)
