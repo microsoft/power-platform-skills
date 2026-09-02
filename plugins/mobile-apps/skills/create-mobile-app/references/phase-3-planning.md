@@ -365,6 +365,15 @@ acceptance, update `.tmp/mobile-plan-status.json` with exact contract revisions,
 section hashes, approval state, and current plan hash. Preserve prior approved
 sections whose hashes did not change.
 
+When Gate 2 is accepted, also project the confirmed names into the receipt as
+`architectureSummary.nativeCapabilities[]` and
+`architectureSummary.connectors[]`. Copy these arrays from the same in-memory
+decisions used to render `_native_section.md` and `_connectors_section.md`; do
+not reconstruct them by parsing Markdown. This summary is browser presentation
+data bound by the receipt's existing section hashes, not a new planning or
+execution authority. Use empty arrays for an approved `none` decision, and
+omit `architectureSummary` while either list is unresolved.
+
 Time each rejection/repair loop as `planRepair`, with `--retry` on subsequent
 attempts. The approval wait ends as soon as the user responds; repair time is
 never recorded as approval latency.

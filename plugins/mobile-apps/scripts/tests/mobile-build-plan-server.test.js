@@ -11,6 +11,7 @@ const { revisionOf } = require('../lib/mobile-build-plan');
 const {
   MAX_BODY_BYTES,
   SERVER_ARTIFACT,
+  artifactSignature,
   startBuildPlanServer,
 } = require('../lib/mobile-build-plan-server');
 const { cleanup, runCli } = require('./helpers/contract-cli');
@@ -49,6 +50,17 @@ function writeJson(projectRoot, relativePath, value) {
   const file = path.join(projectRoot, relativePath);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function bootstrap(instance) {
+  const response = await fetch(instance.launchUrl);
+  const setCookie = response.headers.get('set-cookie') || '';
+  return {
+    body: await response.text(),
+    cookie: setCookie.split(';')[0],
+    response,
+    setCookie,
+  };
 }
 
 function contract() {
@@ -94,9 +106,16 @@ test('loopback server authenticates reads and enforces same-origin edits', async
     assert.strictEqual(denied.status, 403);
     assert.strictEqual(denied.headers.get('x-frame-options'), 'DENY');
 
-    const page = await fetch(instance.launchUrl);
-    assert.strictEqual(page.status, 200);
-    assert.match(await page.text(), new RegExp(TOKEN));
+    const page = await bootstrap(instance);
+    assert.strictEqual(page.response.status, 200);
+    assert.match(page.setCookie, /HttpOnly/i);
+    assert.match(page.setCookie, /SameSite=Strict/i);
+    assert.match(page.setCookie, /Path=\//i);
+    assert.doesNotMatch(page.body, new RegExp(TOKEN));
+    assert.match(page.body, /history\.replaceState/);
+    assert.match(page.body, /location\.pathname\+location\.hash/);
+    const replayedBootstrap = await fetch(instance.launchUrl);
+    assert.strictEqual(replayedBootstrap.status, 403);
     const snapshot = fs.readFileSync(path.join(projectRoot, '_build_plan.html'), 'utf8');
     assert.doesNotMatch(snapshot, new RegExp(TOKEN));
     assert.strictEqual(
@@ -106,12 +125,14 @@ test('loopback server authenticates reads and enforces same-origin edits', async
 
     const wrongHost = await rawRequest(
       instance.origin,
-      `/api/model?token=${TOKEN}`,
-      { headers: { host: 'attacker.example' } },
+      '/api/model',
+      { headers: { cookie: page.cookie, host: 'attacker.example' } },
     );
     assert.strictEqual(wrongHost.status, 403);
 
-    const modelResponse = await fetch(`${instance.origin}/api/model?token=${TOKEN}`);
+    const modelResponse = await fetch(`${instance.origin}/api/model`, {
+      headers: { cookie: page.cookie },
+    });
     const initial = await modelResponse.json();
     assert.strictEqual(initial.ok, true);
     assert.strictEqual(initial.model.dataModelRevision, revisionOf(schema));
@@ -133,7 +154,7 @@ test('loopback server authenticates reads and enforces same-origin edits', async
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-build-plan-token': TOKEN,
+        cookie: page.cookie,
         origin: 'http://example.test',
       },
       body: JSON.stringify(command),
@@ -144,24 +165,85 @@ test('loopback server authenticates reads and enforces same-origin edits', async
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-build-plan-token': TOKEN,
+        cookie: page.cookie,
         origin: instance.origin,
       },
       body: JSON.stringify(command),
     });
     assert.strictEqual(edited.status, 200);
-    assert.strictEqual((await edited.json()).requiresReapproval, true);
+    const editedResult = await edited.json();
+    assert.strictEqual(editedResult.requiresReapproval, true);
     const saved = JSON.parse(fs.readFileSync(
       path.join(projectRoot, '.tmp/dataverse-schema-contract.json'),
       'utf8',
     ));
     assert.ok(saved.tables[0].columns.some((column) => column.logicalName === 'ct_dueat'));
 
+    const removal = {
+      type: 'remove-column',
+      expectedRevision: editedResult.revision,
+      tableLogicalName: 'ct_workitem',
+      columnLogicalName: 'ct_dueat',
+    };
+    const impactResponse = await fetch(`${instance.origin}/api/data-model/impact`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: page.cookie,
+        origin: instance.origin,
+      },
+      body: JSON.stringify(removal),
+    });
+    assert.strictEqual(impactResponse.status, 200);
+    const impact = await impactResponse.json();
+    assert.strictEqual(impact.allowed, true);
+    assert.strictEqual(impact.prepared, undefined);
+    assert.match(impact.impactRevision, /^[a-f0-9]{64}$/);
+
+    const removedResponse = await fetch(`${instance.origin}/api/data-model`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: page.cookie,
+        origin: instance.origin,
+      },
+      body: JSON.stringify({
+        ...removal,
+        expectedImpactRevision: impact.impactRevision,
+      }),
+    });
+    assert.strictEqual(removedResponse.status, 200);
+    const removedResult = await removedResponse.json();
+    const afterRemoval = JSON.parse(fs.readFileSync(
+      path.join(projectRoot, '.tmp/dataverse-schema-contract.json'),
+      'utf8',
+    ));
+    assert.strictEqual(
+      afterRemoval.tables[0].columns.some((column) => column.logicalName === 'ct_dueat'),
+      false,
+    );
+
+    const undoResponse = await fetch(`${instance.origin}/api/data-model/undo`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        cookie: page.cookie,
+        origin: instance.origin,
+      },
+      body: JSON.stringify({ expectedRevision: removedResult.revision }),
+    });
+    assert.strictEqual(undoResponse.status, 200);
+    const afterUndo = JSON.parse(fs.readFileSync(
+      path.join(projectRoot, '.tmp/dataverse-schema-contract.json'),
+      'utf8',
+    ));
+    assert.ok(afterUndo.tables[0].columns.some((column) => column.logicalName === 'ct_dueat'));
+
     const stale = await fetch(`${instance.origin}/api/data-model`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-build-plan-token': TOKEN,
+        cookie: page.cookie,
         origin: instance.origin,
       },
       body: JSON.stringify(command),
@@ -175,9 +257,9 @@ test('loopback server authenticates reads and enforces same-origin edits', async
       headers: {
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(oversizedBody),
+        cookie: page.cookie,
         host: `${instance.host}:${instance.port}`,
         origin: instance.origin,
-        'x-build-plan-token': TOKEN,
       },
       body: oversizedBody,
     });
@@ -198,8 +280,12 @@ test('server opens an SSE stream and leaves a standalone snapshot on close', asy
     pollIntervalMs: 25,
   });
 
+  const page = await bootstrap(instance);
+  assert.strictEqual(page.response.status, 200);
+
   const controller = new AbortController();
-  const response = await fetch(`${instance.origin}/events?token=${TOKEN}`, {
+  const response = await fetch(`${instance.origin}/events`, {
+    headers: { cookie: page.cookie },
     signal: controller.signal,
   });
   assert.strictEqual(response.status, 200);
@@ -216,6 +302,24 @@ test('server opens an SSE stream and leaves a standalone snapshot on close', asy
   assert.doesNotMatch(html, new RegExp(TOKEN));
 });
 
+test('artifact refresh signatures use content rather than size and mtime', () => {
+  const projectRoot = makeProjectDir('mobile-build-plan-fingerprint');
+  try {
+    const file = path.join(projectRoot, 'native-app-plan.md');
+    fs.writeFileSync(file, 'AAAA');
+    const original = fs.statSync(file);
+    const first = artifactSignature(projectRoot);
+    fs.writeFileSync(file, 'BBBB');
+    fs.utimesSync(file, original.atime, original.mtime);
+    const changed = artifactSignature(projectRoot);
+    assert.notStrictEqual(changed, first);
+    fs.utimesSync(file, new Date(), new Date());
+    assert.strictEqual(artifactSignature(projectRoot), changed);
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
 test('CLI renders and updates progress without starting a server', () => {
   const projectRoot = makeProjectDir('mobile-build-plan-cli');
   try {
@@ -225,6 +329,8 @@ test('CLI renders and updates progress without starting a server', () => {
       '--phase', 'requirements',
       '--status', 'complete',
       '--detail', 'Brief confirmed',
+      '--screen-id', 'home',
+      '--screen-status', 'building',
     ]);
     assert.strictEqual(progress.code, 0, progress.stderr);
     assert.strictEqual(progress.json.ok, true);
@@ -233,6 +339,11 @@ test('CLI renders and updates progress without starting a server', () => {
     const render = runCli('mobile-build-plan.js', ['render', '--project-root', projectRoot]);
     assert.strictEqual(render.code, 0, render.stderr);
     assert.match(render.json.revision, /^[a-f0-9]{64}$/);
+    const savedProgress = JSON.parse(fs.readFileSync(
+      path.join(projectRoot, '.tmp/mobile-build-progress.json'),
+      'utf8',
+    ));
+    assert.strictEqual(savedProgress.screenStatuses.home, 'building');
   } finally {
     cleanup(projectRoot);
   }

@@ -14,9 +14,14 @@ const {
   resolveInsideProject,
   writeBuildPlan,
 } = require('./mobile-build-plan');
-const { applyDataModelEdit } = require('./mobile-build-plan-edits');
+const {
+  analyzeDataModelRemoval,
+  applyDataModelEdit,
+  undoLastDataModelEdit,
+} = require('./mobile-build-plan-edits');
 
 const HOST = '127.0.0.1';
+const SESSION_COOKIE = 'mobile_build_plan_session';
 const SERVER_ARTIFACT = '.tmp/mobile-build-plan-server.json';
 const MAX_BODY_BYTES = 128 * 1024;
 const DEFAULT_POLL_INTERVAL_MS = 750;
@@ -45,10 +50,17 @@ function safeTokenEqual(expected, supplied) {
     && crypto.timingSafeEqual(expectedBytes, suppliedBytes);
 }
 
-function send(response, statusCode, body, contentType = 'application/json; charset=utf-8') {
+function send(
+  response,
+  statusCode,
+  body,
+  contentType = 'application/json; charset=utf-8',
+  extraHeaders = {},
+) {
   response.writeHead(statusCode, {
     ...SECURITY_HEADERS,
     'Content-Type': contentType,
+    ...extraHeaders,
   });
   response.end(body);
 }
@@ -62,8 +74,21 @@ function artifactSignature(projectRoot) {
     const file = resolveInsideProject(projectRoot, relativePath);
     if (!fs.existsSync(file)) return `${relativePath}:missing`;
     const stat = fs.lstatSync(file);
-    return `${relativePath}:${stat.isSymbolicLink() ? 'link' : stat.size}:${stat.mtimeMs}`;
+    if (stat.isSymbolicLink()) {
+      return `${relativePath}:link:${crypto.createHash('sha256').update(fs.readlinkSync(file)).digest('hex')}`;
+    }
+    if (!stat.isFile()) return `${relativePath}:non-file`;
+    return `${relativePath}:file:${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}`;
   }).join('|');
+}
+
+function cookieValue(request, name) {
+  for (const pair of String(request.headers.cookie || '').split(';')) {
+    const separator = pair.indexOf('=');
+    if (separator < 0 || pair.slice(0, separator).trim() !== name) continue;
+    return pair.slice(separator + 1).trim();
+  }
+  return '';
 }
 
 function atomicWriteServerArtifact(projectRoot, value) {
@@ -124,6 +149,7 @@ function statusForError(error) {
 async function startBuildPlanServer(options) {
   const projectRoot = path.resolve(options.projectRoot);
   const token = options.token || crypto.randomBytes(32).toString('hex');
+  const sessionToken = crypto.randomBytes(32).toString('hex');
   const requestedPort = Number(options.port || 0);
   const pollIntervalMs = Number(options.pollIntervalMs || DEFAULT_POLL_INTERVAL_MS);
   if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
@@ -143,10 +169,10 @@ async function startBuildPlanServer(options) {
   let pollTimer;
   let keepAliveTimer;
   let closed = false;
+  let bootstrapAvailable = true;
 
-  function authorized(url, request) {
-    return safeTokenEqual(token, url.searchParams.get('token'))
-      || safeTokenEqual(token, request.headers['x-build-plan-token']);
+  function sessionAuthorized(request) {
+    return safeTokenEqual(sessionToken, cookieValue(request, SESSION_COOKIE));
   }
 
   function validHost(request) {
@@ -166,18 +192,33 @@ async function startBuildPlanServer(options) {
       sendJson(response, 400, { ok: false, error: 'Malformed request URL' });
       return;
     }
-    if (!validHost(request) || !authorized(url, request)) {
+    if (!validHost(request)) {
       sendJson(response, 403, { ok: false, error: 'Build Plan authorization failed' });
       return;
     }
+
+    const bootstrapRequested = request.method === 'GET'
+      && url.pathname === '/'
+      && safeTokenEqual(token, url.searchParams.get('token'));
+    const bootstrap = !sessionAuthorized(request)
+      && bootstrapAvailable
+      && bootstrapRequested;
+    if (!sessionAuthorized(request) && !bootstrap) {
+      sendJson(response, 403, { ok: false, error: 'Build Plan authorization failed' });
+      return;
+    }
+    if (bootstrap) bootstrapAvailable = false;
 
     if (request.method === 'GET' && url.pathname === '/') {
       const model = deriveBuildPlanModel(projectRoot);
       send(
         response,
         200,
-        renderBuildPlanHtml(model, { token }),
+        renderBuildPlanHtml(model, { live: true }),
         'text/html; charset=utf-8',
+        bootstrap ? {
+          'Set-Cookie': `${SESSION_COOKIE}=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`,
+        } : {},
       );
       return;
     }
@@ -198,7 +239,11 @@ async function startBuildPlanServer(options) {
       request.on('close', () => clients.delete(response));
       return;
     }
-    if (request.method === 'POST' && url.pathname === '/api/data-model') {
+    if (request.method === 'POST' && [
+      '/api/data-model',
+      '/api/data-model/impact',
+      '/api/data-model/undo',
+    ].includes(url.pathname)) {
       if (request.headers.origin !== origin) {
         sendJson(response, 403, { ok: false, error: 'Build Plan origin check failed' });
         return;
@@ -209,6 +254,19 @@ async function startBuildPlanServer(options) {
       }
       try {
         const command = await readJsonBody(request);
+        if (url.pathname === '/api/data-model/impact') {
+          const { prepared, ...impact } = analyzeDataModelRemoval(projectRoot, command);
+          sendJson(response, 200, impact);
+          return;
+        }
+        if (url.pathname === '/api/data-model/undo') {
+          const result = undoLastDataModelEdit(projectRoot, command);
+          lastSignature = artifactSignature(projectRoot);
+          const model = deriveBuildPlanModel(projectRoot);
+          broadcast('refresh', { revision: model.revision, reason: 'data-model-undo' });
+          sendJson(response, 200, { ...result, modelRevision: model.revision });
+          return;
+        }
         const result = applyDataModelEdit(projectRoot, command);
         lastSignature = artifactSignature(projectRoot);
         const model = deriveBuildPlanModel(projectRoot);
@@ -303,7 +361,9 @@ module.exports = {
   HOST,
   MAX_BODY_BYTES,
   SECURITY_HEADERS,
+  SESSION_COOKIE,
   SERVER_ARTIFACT,
+  artifactSignature,
   safeTokenEqual,
   startBuildPlanServer,
 };

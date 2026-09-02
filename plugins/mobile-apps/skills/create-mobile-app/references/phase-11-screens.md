@@ -60,6 +60,16 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
 Repeat `--work-order` for every assigned screen in deterministic screen-ID
 order.
 
+Immediately before dispatching each screen on any channel, record its explicit
+Build Plan state:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" progress \
+  --project-root "<working_dir>" \
+  --phase screens --status active --detail "Building <screenId>" \
+  --screen-id "<screenId>" --screen-status building
+```
+
 ## Step 11.1 — Wave 0 canary
 
 Build Home plus one or two critical key-flow screens before any broad fan-out.
@@ -177,6 +187,11 @@ Record channel failure or success in `.tmp/screen-builder-state.json`. Never
 turn one screen's failure into a host-wide failure and never discard completed
 siblings.
 
+After a direct-write, return-only, or foreground screen result is written and
+passes its per-file validation, record it as `built` with the same command
+shape. Do not mark it `validated` yet; that state belongs to the wave quality
+gate.
+
 Time screen execution by channel. Children in a wave run concurrently, so do
 not open overlapping timers on one stage. Measure wall time around each actual
 dispatch batch and append it after the batch completes:
@@ -269,6 +284,11 @@ For every returned screen:
 After each wave, run TypeScript, route contracts, and changed-screen quality
 validators. Capture complete findings once, group them by root cause, and repair
 affected screens in parallel. Do not advance with a failed gate.
+
+After the wave gate passes, record every screen in that wave as `validated` by
+repeating `--screen-id <id>` with `--screen-status validated`. Product Scope
+remains the screen-list and navigation authority; these updates carry status
+only and may never add or reorder a screen.
 
 ## Step 11.4 — Cross-screen quality sweep
 

@@ -1,0 +1,438 @@
+if(location.search)history.replaceState(null,'',location.pathname+location.hash);
+const BUILD_PLAN_LIVE=__BUILD_PLAN_LIVE__;
+const BUILD_PLAN_MODEL=JSON.parse(document.getElementById('build-plan-model').textContent);
+const editor=document.getElementById('edit-dialog');
+const editorForm=document.getElementById('editor-form');
+const editorError=document.getElementById('editor-error');
+const removalDialog=document.getElementById('removal-dialog');
+let editorMode='';
+let editorTarget={
+}
+;
+let refreshPending=false;
+let pendingRemoval=null;
+function field(name){
+return editorForm.elements.namedItem(name)}
+function storageGet(key){
+try{
+return sessionStorage.getItem(key)||''}
+catch{
+return''}
+}
+function storageSet(key,value){
+try{
+if(value)sessionStorage.setItem(key,value);
+else sessionStorage.removeItem(key)}
+catch{
+}
+}
+function announce(message){
+document.getElementById('live-announcer').textContent=message}
+function rememberUiState(message){
+const selected=document.querySelector('.tabs [aria-selected="true"]');
+if(selected)storageSet('build-plan-active-tab',selected.id.slice(4));
+const active=document.activeElement;
+if(active&&active.id)storageSet('build-plan-focus-id',active.id);
+if(message)storageSet('build-plan-announcement',message)}
+function reloadPlan(message){
+rememberUiState(message);
+location.reload()}
+function setEditorView(view){
+for(const button of document.querySelectorAll('[data-editor-view]'))button.classList.toggle('active',button.dataset.editorView===view);
+for(const item of document.querySelectorAll('[data-advanced-field]'))item.hidden=view!=='advanced'}
+for(const button of document.querySelectorAll('[data-editor-view]'))button.addEventListener('click',()=>setEditorView(button.dataset.editorView));
+setEditorView('simple');
+const tabs=[...document.querySelectorAll('.tabs [role=tab]')];
+function activateTab(id,focus=false){
+for(const item of tabs){
+const selected=item.id==='tab-'+id;
+item.setAttribute('aria-selected',String(selected));
+item.tabIndex=selected?0:-1;
+document.getElementById(item.getAttribute('aria-controls')).hidden=!selected;
+if(selected&&focus)item.focus()}
+storageSet('build-plan-active-tab',id);
+history.replaceState(null,'',location.pathname+'#'+id)}
+for(const tab of tabs){
+tab.addEventListener('click',()=>activateTab(tab.id.slice(4)));
+tab.addEventListener('keydown',event=>{
+let index=tabs.indexOf(tab);if(event.key==='ArrowRight')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft')index=(index-1+tabs.length)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();activateTab(tabs[index].id.slice(4),true)}
+)}
+const requestedTab=location.hash.slice(1)||storageGet('build-plan-active-tab')||'plan';
+activateTab(document.getElementById('tab-'+requestedTab)?requestedTab:'plan');
+const focusId=storageGet('build-plan-focus-id');
+storageSet('build-plan-focus-id','');
+if(focusId&&document.getElementById(focusId))document.getElementById(focusId).focus();
+const restoredAnnouncement=storageGet('build-plan-announcement');
+storageSet('build-plan-announcement','');
+if(restoredAnnouncement)announce(restoredAnnouncement);
+for(const button of document.querySelectorAll('[data-data-view]'))button.addEventListener('click',()=>{
+for(const candidate of document.querySelectorAll('[data-data-view]'))candidate.classList.toggle('active',candidate===button);document.getElementById('data-view-tables').hidden=button.dataset.dataView!=='tables';document.getElementById('data-view-diagram').hidden=button.dataset.dataView!=='diagram';if(button.dataset.dataView==='diagram')resetEr()}
+);
+function setSection(name,active){
+const section=document.querySelector('[data-editor-section="'+name+'"]');
+section.hidden=!active;
+for(const control of section.querySelectorAll('input,select,textarea,button'))control.disabled=!active}
+function setGroup(group,active){
+group.hidden=!active;
+for(const control of group.querySelectorAll('input,select,textarea,button'))control.disabled=!active}
+function setValue(name,value){
+const control=field(name);
+if(control)control.value=value==null?'':value}
+function tableByName(name){
+return BUILD_PLAN_MODEL.tables.find(item=>item.logicalName===name)}
+function addOption(option){
+const row=document.getElementById('option-row-template').content.firstElementChild.cloneNode(true);
+row.querySelector('[data-option-label]').value=option&&option.label||'';
+row.querySelector('[data-option-value]').value=option&&option.value!=null?option.value:'';
+row.querySelector('[data-remove-option]').addEventListener('click',()=>row.remove());
+document.getElementById('option-rows').appendChild(row)}
+function configureColumn(){
+const type=field('column-type').value;
+const length=['string','memo'].includes(type);
+const numeric=['integer','bigint','decimal','double','money'].includes(type);
+for(const item of document.querySelectorAll('[data-column-constraint="length"]'))item.hidden=!length;
+for(const item of document.querySelectorAll('[data-column-constraint="minimum"],[data-column-constraint="maximum"]'))item.hidden=!numeric;
+for(const item of document.querySelectorAll('[data-column-constraint="precision"]'))item.hidden=!['decimal','double','money'].includes(type);
+setGroup(document.getElementById('choice-fields'),['boolean','choice','multiselectchoice'].includes(type))}
+function configureRelationship(){
+const manyToOne=field('relationship-kind').value==='many-to-one';
+setGroup(document.getElementById('many-to-one-fields'),manyToOne);
+setGroup(document.getElementById('many-to-many-fields'),!manyToOne)}
+function openEditor(mode,target){
+editorMode=mode;
+editorTarget=target||{
+}
+;
+editorForm.reset();
+editorError.textContent='';
+setEditorView('simple');
+document.getElementById('option-rows').replaceChildren();
+setSection('table',mode==='add-table'||mode==='update-table');
+setSection('column',mode==='add-column'||mode==='update-column');
+setSection('relationship',mode==='add-relationship'||mode==='update-relationship');
+const editing=mode.startsWith('update-');
+document.getElementById('editor-title').textContent=(editing?'Edit ':'Add ')+(mode.includes('table')?'table':mode.includes('column')?'column':'relationship');
+document.getElementById('editor-subtitle').textContent=target&&target.table||'';
+  if(mode==='add-table'||mode==='update-table'){
+const table=mode==='update-table'?tableByName(target.table):null;
+setValue('table-display',table&&table.displayName);
+setValue('table-logical',table&&table.logicalName||((BUILD_PLAN_MODEL.publisherPrefix||'new')+'_'));
+field('table-logical').readOnly=Boolean(table);
+setValue('table-collection',table&&table.displayCollectionName);
+setValue('table-decision',table&&table.decision||'create');
+setValue('table-tier',table&&table.dependencyTier||0);
+setValue('table-service',table?(table.serviceRequired?'yes':'no'):'');
+setValue('table-ownership',table&&table.ownershipType||'');
+setValue('primary-logical',(BUILD_PLAN_MODEL.publisherPrefix||'new')+'_name');
+setValue('primary-display','Name');
+setGroup(document.getElementById('table-create-fields'),!table);
+setGroup(document.getElementById('scope-fields'),!table&&Boolean(BUILD_PLAN_MODEL.scope&&BUILD_PLAN_MODEL.scope.contractType))}
+  if(mode==='add-column'||mode==='update-column'){
+const table=tableByName(target.table);
+const column=mode==='update-column'?table.columns.find(item=>item.logicalName===target.column):null;
+setValue('column-display',column&&column.displayName);
+setValue('column-logical',column&&column.logicalName||((BUILD_PLAN_MODEL.publisherPrefix||'new')+'_'));
+field('column-logical').readOnly=Boolean(column);
+setValue('column-type',column&&String(column.type).toLowerCase()||'string');
+setValue('column-decision',column&&column.plannedDecision||'create');
+setValue('column-required',column&&column.requiredLevel||'None');
+setValue('column-length',column&&(column.maxLength||column.maxSizeInKB)||200);
+setValue('column-min',column&&column.minValue);
+setValue('column-max',column&&column.maxValue);
+setValue('column-precision',column&&column.precision||2);
+for(const option of column&&column.options||[])addOption(option);
+configureColumn()}
+  if(mode==='add-relationship'||mode==='update-relationship'){
+const table=tableByName(target.table);
+const relationship=mode==='update-relationship'?table.relationships.find(item=>item.schemaName===target.relationship):null;
+setValue('relationship-kind',relationship&&relationship.kind||'many-to-one');
+setValue('relationship-schema',relationship&&relationship.schemaName||'');
+setValue('relationship-decision',relationship&&relationship.plannedDecision||'create');
+setValue('relationship-parent',relationship&&relationship.parentTable||'');
+setValue('relationship-child',relationship&&relationship.childTable||target.table||'');
+setValue('relationship-lookup',relationship&&relationship.lookup&&relationship.lookup.logicalName||((BUILD_PLAN_MODEL.publisherPrefix||'new')+'_'));
+setValue('relationship-lookup-display',relationship&&relationship.lookup&&relationship.lookup.displayName||'');
+setValue('relationship-required',relationship&&relationship.lookup&&relationship.lookup.requiredLevel||'None');
+setValue('relationship-entity1',relationship&&relationship.entity1||target.table||'');
+setValue('relationship-entity2',relationship&&relationship.entity2||'');
+setValue('relationship-intersect',relationship&&relationship.intersectTable||((BUILD_PLAN_MODEL.publisherPrefix||'new')+'_'));
+configureRelationship()}
+  editor.showModal();
+const first=editor.querySelector('.editor-section:not([hidden]) input:not([disabled]),.editor-section:not([hidden]) select:not([disabled])');
+if(first)first.focus()}
+document.addEventListener('click',event=>{
+const button=event.target.closest('[data-add-table],[data-edit-table],[data-add-column],[data-edit-column],[data-add-relationship],[data-edit-relationship]');if(!button||button.disabled)return;if(button.hasAttribute('data-add-table'))openEditor('add-table',{
+}
+);else if(button.dataset.editTable)openEditor('update-table',{
+table:button.dataset.editTable}
+);else if(button.dataset.addColumn)openEditor('add-column',{
+table:button.dataset.addColumn}
+);else if(button.dataset.editColumn)openEditor('update-column',{
+table:button.dataset.table,column:button.dataset.editColumn}
+);else if(button.dataset.addRelationship)openEditor('add-relationship',{
+table:button.dataset.addRelationship}
+);else openEditor('update-relationship',{
+table:button.dataset.table,relationship:button.dataset.editRelationship}
+)}
+);
+function removalCommand(button){
+const base={
+expectedRevision:BUILD_PLAN_MODEL.dataModelRevision}
+;
+if(button.dataset.removeTable)return {
+...base,type:'remove-table',tableLogicalName:button.dataset.removeTable}
+;
+if(button.dataset.removeColumn)return {
+...base,type:'remove-column',tableLogicalName:button.dataset.table,columnLogicalName:button.dataset.removeColumn}
+;
+return {
+...base,type:'remove-relationship',tableLogicalName:button.dataset.table,relationshipSchemaName:button.dataset.removeRelationship}
+}
+async function postJson(path,payload){
+const response=await fetch(path,{
+method:'POST',headers:{
+'content-type':'application/json'}
+,body:JSON.stringify(payload)}
+);
+const result=await response.json();
+if(!response.ok){
+const error=new Error(result.error||'The Build Plan change was rejected.');
+error.status=response.status;
+error.currentRevision=result.currentRevision;
+throw error}
+return result}
+async function previewRemoval(button){
+pendingRemoval=null;
+document.getElementById('removal-target').textContent='Checking dependencies…';
+document.getElementById('removal-affected').replaceChildren();
+document.getElementById('removal-blockers').replaceChildren();
+document.getElementById('removal-confirm').disabled=true;
+removalDialog.showModal();
+announce('Checking removal impact');
+try{
+const command=removalCommand(button);
+const impact=await postJson('/api/data-model/impact',command);
+pendingRemoval={
+...command,expectedImpactRevision:impact.impactRevision}
+;
+document.getElementById('removal-target').textContent=impact.target;
+for(const item of impact.affectedItems){
+const row=document.createElement('li');
+row.textContent=item.label+' · '+item.kind;
+document.getElementById('removal-affected').appendChild(row)}
+for(const item of impact.blockers){
+const row=document.createElement('li');
+row.textContent=item.message;
+document.getElementById('removal-blockers').appendChild(row)}
+document.getElementById('removal-blockers-section').hidden=impact.allowed;
+document.getElementById('removal-confirm').disabled=!impact.allowed;
+announce(impact.allowed?'Removal impact ready for review':'Removal blocked by canonical dependencies')}
+catch(error){
+document.getElementById('removal-target').textContent=error.message;
+document.getElementById('removal-blockers-section').hidden=false;
+const row=document.createElement('li');
+row.textContent=error.message;
+document.getElementById('removal-blockers').appendChild(row);
+announce('Removal impact check failed')}
+}
+document.addEventListener('click',event=>{
+const button=event.target.closest('[data-remove-table],[data-remove-column],[data-remove-relationship]');if(button&&!button.disabled)previewRemoval(button)}
+);
+function closeRemoval(){
+pendingRemoval=null;
+removalDialog.close()}
+document.getElementById('removal-close').addEventListener('click',closeRemoval);
+document.getElementById('removal-cancel').addEventListener('click',closeRemoval);
+document.getElementById('removal-confirm').addEventListener('click',async()=>{
+if(!pendingRemoval)return;const button=document.getElementById('removal-confirm');button.disabled=true;announce('Removing reviewed item');try{
+await postJson('/api/data-model',pendingRemoval);reloadPlan('Item removed; Data Model review reopened')}
+catch(error){
+document.getElementById('removal-blockers-section').hidden=false;const row=document.createElement('li');row.textContent=error.message;document.getElementById('removal-blockers').replaceChildren(row);button.disabled=false;announce(error.status===409?'Removal conflict; reload the latest plan':'Removal failed')}
+}
+);
+const undoButton=document.getElementById('undo-edit');
+if(undoButton)undoButton.addEventListener('click',async()=>{
+undoButton.disabled=true;announce('Undoing latest edit');try{
+await postJson('/api/data-model/undo',{
+expectedRevision:BUILD_PLAN_MODEL.dataModelRevision}
+);reloadPlan('Latest unexecuted edit undone')}
+catch(error){
+undoButton.disabled=false;document.getElementById('connection-state').textContent=error.message;announce('Undo failed')}
+}
+);
+document.getElementById('add-option').addEventListener('click',()=>addOption());
+field('column-type').addEventListener('change',configureColumn);
+field('relationship-kind').addEventListener('change',configureRelationship);
+function closeEditor(){
+editor.close();
+if(refreshPending)reloadPlan('Build Plan refreshed')}
+document.getElementById('editor-close').addEventListener('click',closeEditor);
+document.getElementById('editor-cancel').addEventListener('click',closeEditor);
+document.getElementById('reload-latest').addEventListener('click',()=>reloadPlan('Latest plan loaded'));
+function numberValue(name,fallback){
+const value=field(name).value;
+return value===''?fallback:Number(value)}
+function columnPayload(){
+const type=field('column-type').value;
+const column={
+logicalName:field('column-logical').value,displayName:field('column-display').value,type:type,plannedDecision:field('column-decision').value,requiredLevel:field('column-required').value}
+;
+if(type==='string'){
+column.maxLength=numberValue('column-length',200);
+column.formatName='Text'}
+else if(type==='memo'){
+column.maxLength=numberValue('column-length',10000);
+column.format='TextArea'}
+else if(type==='integer'){
+column.minValue=numberValue('column-min',-2147483648);
+column.maxValue=numberValue('column-max',2147483647);
+column.format='None'}
+else if(type==='bigint'){
+column.minValue=numberValue('column-min',-9007199254740991);
+column.maxValue=numberValue('column-max',9007199254740991)}
+else if(['decimal','double'].includes(type)){
+column.minValue=numberValue('column-min',-100000000000);
+column.maxValue=numberValue('column-max',100000000000);
+column.precision=numberValue('column-precision',2)}
+else if(type==='money'){
+column.minValue=numberValue('column-min',-922337203685477);
+column.maxValue=numberValue('column-max',922337203685477);
+column.precision=numberValue('column-precision',2);
+column.precisionSource=2}
+else if(type==='datetime'){
+column.format='DateAndTime';
+column.dateTimeBehavior='UserLocal'}
+else if(type==='file'){
+column.maxSizeInKB=numberValue('column-length',32768)}
+else if(type==='image'){
+column.maxHeight=1440;
+column.maxWidth=1440}
+if(['boolean','choice','multiselectchoice'].includes(type)){
+column.options=[...document.querySelectorAll('.option-row')].map(row=>({
+label:row.querySelector('[data-option-label]').value.trim(),value:Number(row.querySelector('[data-option-value]').value)}
+)).filter(option=>option.label&&Number.isInteger(option.value));
+if(type==='boolean'&&column.options.length===0)column.options=[{
+label:'No',value:0}
+,{
+label:'Yes',value:1}
+];
+if(column.options.length===0)throw new Error('Add at least one labeled choice option.')}
+return column}
+function relationshipPayload(){
+const kind=field('relationship-kind').value;
+const relationship={
+kind:kind,schemaName:field('relationship-schema').value,plannedDecision:field('relationship-decision').value}
+;
+if(kind==='many-to-one'){
+relationship.parentTable=field('relationship-parent').value;
+relationship.childTable=field('relationship-child').value;
+relationship.lookup={
+logicalName:field('relationship-lookup').value,displayName:field('relationship-lookup-display').value,requiredLevel:field('relationship-required').value}
+}
+else{
+relationship.entity1=field('relationship-entity1').value;
+relationship.entity2=field('relationship-entity2').value;
+relationship.intersectTable=field('relationship-intersect').value}
+return relationship}
+function editCommand(){
+const base={
+expectedRevision:BUILD_PLAN_MODEL.dataModelRevision}
+;
+if(editorMode==='add-table'){
+const jobs=[...document.querySelectorAll('[name="scope-job"]:checked')].map(item=>item.value);
+const serviceChoice=field('table-service').value;
+if(!serviceChoice)throw new Error('Choose whether app screens need a data service.');
+if(!field('table-ownership').value)throw new Error('Choose who owns these records.');
+const command={
+...base,type:editorMode,logicalName:field('table-logical').value,table:{
+displayName:field('table-display').value,displayCollectionName:field('table-collection').value,plannedDecision:field('table-decision').value,dependencyTier:Number(field('table-tier').value),serviceRequired:serviceChoice==='yes',ownershipType:field('table-ownership').value}
+,primaryColumn:{
+logicalName:field('primary-logical').value,displayName:field('primary-display').value,type:'string',plannedDecision:'create',requiredLevel:'ApplicationRequired',primaryName:true,maxLength:200,formatName:'Text'}
+}
+;
+if(BUILD_PLAN_MODEL.scope&&BUILD_PLAN_MODEL.scope.contractType){
+if(jobs.length===0)throw new Error('Select at least one owning Product Scope job.');
+command.scope={
+role:field('scope-role').value,screenIds:[],jobIds:jobs,lifecycleJustification:{
+reasons:[field('scope-lifecycle').value],statement:field('scope-statement').value}
+}
+}
+return command}
+if(editorMode==='update-table')return {
+...base,type:editorMode,tableLogicalName:editorTarget.table,table:{
+displayName:field('table-display').value,displayCollectionName:field('table-collection').value,plannedDecision:field('table-decision').value,dependencyTier:Number(field('table-tier').value),serviceRequired:field('table-service').value==='yes',ownershipType:field('table-ownership').value}
+}
+;
+if(editorMode==='add-column')return {
+...base,type:editorMode,tableLogicalName:editorTarget.table,column:columnPayload()}
+;
+if(editorMode==='update-column')return {
+...base,type:editorMode,tableLogicalName:editorTarget.table,columnLogicalName:editorTarget.column,column:columnPayload()}
+;
+if(editorMode==='add-relationship')return {
+...base,type:editorMode,relationship:relationshipPayload()}
+;
+return {
+...base,type:editorMode,tableLogicalName:editorTarget.table,relationshipSchemaName:editorTarget.relationship,relationship:relationshipPayload()}
+}
+editorForm.addEventListener('submit',async event=>{
+event.preventDefault();editorError.textContent='';document.getElementById('reload-latest').hidden=true;const save=document.getElementById('editor-save');save.disabled=true;announce('Saving data model change');try{
+await postJson('/api/data-model',editCommand());reloadPlan('Data model change saved; review reopened')}
+catch(error){
+editorError.textContent=error.message;if(error.status===409)document.getElementById('reload-latest').hidden=false;save.disabled=false;announce(error.status===409?'Save conflict; form values preserved':'Save failed')}
+}
+);
+if(BUILD_PLAN_LIVE){
+const stream=new EventSource('/events');
+stream.addEventListener('ready',()=>{
+document.getElementById('connection-state').textContent='Live build';announce('Build Plan connected')}
+);
+stream.addEventListener('refresh',()=>{
+if(editor.open){
+refreshPending=true;document.getElementById('pending-refresh').hidden=false;announce('Build updated; form values preserved until you reload')}
+else reloadPlan('Build Plan refreshed')}
+);
+stream.addEventListener('warning',()=>{
+document.getElementById('connection-state').textContent='Refresh warning';document.getElementById('connection-state').classList.add('waiting');announce('Build Plan refresh warning')}
+);
+stream.onerror=()=>{
+document.getElementById('connection-state').textContent='Reconnecting';
+document.getElementById('connection-state').classList.add('waiting');
+announce('Build Plan reconnecting')}
+}
+else{
+document.getElementById('connection-state').textContent='Saved snapshot';
+document.getElementById('connection-state').classList.add('snapshot')}
+let erScale=1,erX=0,erY=0,erDragging=false,erStartX=0,erStartY=0;
+const erCanvas=document.getElementById('er-canvas');
+const erStage=document.getElementById('er-stage');
+function applyEr(){
+if(!erStage)return;
+erStage.style.transform='translate('+erX+'px,'+erY+'px) scale('+erScale+')';
+document.getElementById('er-zoom-level').textContent=Math.round(erScale*100)+'%'}
+function zoomEr(delta){
+erScale=Math.min(2.5,Math.max(.35,erScale+delta));
+applyEr()}
+function resetEr(){
+erScale=1;
+erX=0;
+erY=0;
+applyEr()}
+if(erCanvas&&erStage){
+document.getElementById('er-zoom-in').addEventListener('click',()=>zoomEr(.15));
+document.getElementById('er-zoom-out').addEventListener('click',()=>zoomEr(-.15));
+document.getElementById('er-reset').addEventListener('click',resetEr);
+erCanvas.addEventListener('wheel',event=>{
+if(!event.ctrlKey&&!event.metaKey)return;event.preventDefault();zoomEr(event.deltaY>0?-.1:.1)}
+,{
+passive:false}
+);
+erCanvas.addEventListener('pointerdown',event=>{
+if(event.target.closest('.er-controls'))return;erDragging=true;erStartX=event.clientX-erX;erStartY=event.clientY-erY;erCanvas.classList.add('panning');erCanvas.setPointerCapture(event.pointerId)}
+);
+erCanvas.addEventListener('pointermove',event=>{
+if(!erDragging)return;erX=event.clientX-erStartX;erY=event.clientY-erStartY;applyEr()}
+);
+erCanvas.addEventListener('pointerup',()=>{
+erDragging=false;erCanvas.classList.remove('panning')}
+)}

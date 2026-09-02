@@ -16,7 +16,7 @@ function usage() {
   return [
     'Usage:',
     '  node mobile-build-plan.js render --project-root <dir> [--output <html>]',
-    '  node mobile-build-plan.js progress --project-root <dir> --phase <id> --status <status> [--detail <text>] [--overall-status <status>]',
+    '  node mobile-build-plan.js progress --project-root <dir> --phase <id> --status <status> [--detail <text>] [--overall-status <status>] [--screen-id <id> --screen-status <status>]',
     '  node mobile-build-plan.js model --project-root <dir>',
     '  node mobile-build-plan.js serve --project-root <dir> [--port <number>]',
   ].join('\n');
@@ -35,6 +35,10 @@ function parseArgs(argv) {
     else if (token === '--status') args.status = argv[++index];
     else if (token === '--detail') args.detail = argv[++index];
     else if (token === '--overall-status') args.overallStatus = argv[++index];
+    else if (token === '--screen-id') {
+      args.screenIds ||= [];
+      args.screenIds.push(argv[++index]);
+    } else if (token === '--screen-status') args.screenStatus = argv[++index];
     else if (token === '--port') args.port = argv[++index];
     else throw new Error(`Unknown argument: ${token}`);
   }
@@ -73,6 +77,8 @@ async function main(argv = process.argv.slice(2)) {
         status: args.status,
         detail: args.detail,
         overallStatus: args.overallStatus,
+        screenIds: args.screenIds,
+        screenStatus: args.screenStatus,
       });
       const result = writeBuildPlan(projectRoot);
       process.stdout.write(`${JSON.stringify({

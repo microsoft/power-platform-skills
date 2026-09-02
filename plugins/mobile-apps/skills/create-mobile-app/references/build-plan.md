@@ -54,7 +54,7 @@ content.
 | Design materialization and Gates 3–4 | `design` | `active` or `waiting` | `complete` after Gate 4 |
 | Dataverse reconciliation, writes, and services | `dataverse` | `active` | `complete`, or `complete` with a connector-only detail |
 | Layouts, shared code, and skeletons | `navigation` | `active` | `complete` after the navigation TypeScript gate |
-| Canary and each screen wave | `screens` | `active` with wave/channel/count | `complete` after all screen files pass |
+| Canary and each screen wave | `screens` | `active` with wave/channel/count and `--screen-id <id> --screen-status building` per dispatched screen | `built` after the file passes its local check; `validated` for each screen after its wave gate; phase `complete` after all screen files pass |
 | Canary, wave, and final validators | `validation` | `active` | `complete` after the final gate |
 
 Use the same command shape for every transition:
@@ -65,6 +65,11 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" progress \
   --phase <phase> --status <pending|active|waiting|complete|warning|failed> \
   --detail "<short non-sensitive fact>"
 ```
+
+For per-screen transitions, append one or more `--screen-id <id>` arguments and
+one `--screen-status <planned|packed|building|built|validated>`. The renderer
+overlays these statuses onto Product Scope by ID and ignores status entries for
+screens not present in the canonical graph.
 
 On a recoverable concern, use `warning`; on a hard stop, use `failed` before
 reporting `BLOCKED`. A later retry returns that same phase to `active`. Update

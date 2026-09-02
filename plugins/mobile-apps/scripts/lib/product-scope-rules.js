@@ -63,10 +63,12 @@ function validateIdentity(contract, errors) {
   }
 }
 
-function validateCoverage(contract, errors, warnings) {
+function validateCoverage(contract, errors, warnings, summary) {
   const screens = indexById(contract.screens || []);
   const shippingJobs = [...(contract.coreJobs || []), ...(contract.supportingJobs || [])];
   const shippingJobIds = new Set(shippingJobs.map((job) => job.id));
+  const coveredCoreJobIds = new Set();
+  const coveredSupportingJobIds = new Set();
 
   for (const job of shippingJobs) {
     const isCore = (contract.coreJobs || []).includes(job);
@@ -94,7 +96,10 @@ function validateCoverage(contract, errors, warnings) {
         'job-surface-mismatch',
         `job "${job.id}" claims screen "${screen.id}" as a whole-screen surface, but that screen does not list the job`,
       ));
+      continue;
     }
+    ((contract.coreJobs || []).includes(job) ? coveredCoreJobIds : coveredSupportingJobIds)
+      .add(job.id);
   }
 
   for (const screen of contract.screens || []) {
@@ -130,6 +135,8 @@ function validateCoverage(contract, errors, warnings) {
       ));
     }
   }
+  summary.coveredCoreJobCount = coveredCoreJobIds.size;
+  summary.coveredSupportingJobCount = coveredSupportingJobIds.size;
 }
 
 function validateRequirementCoverage(contract, errors, summary) {
@@ -154,6 +161,7 @@ function validateRequirementCoverage(contract, errors, summary) {
     ...(contract.supportingJobs || []).map((job) => job.id),
   ]);
   const deferredJobIds = new Set((contract.deferredJobs || []).map((job) => job.id));
+  const coveredShippingRequirementIds = new Set();
 
   for (const id of duplicates(requirements.map((requirement) => requirement.id))) {
     errors.push(finding('duplicate-requirement-id', `requirement id "${id}" is declared more than once`));
@@ -189,6 +197,8 @@ function validateRequirementCoverage(contract, errors, summary) {
         'requirement-coverage-screen-missing',
         `requirement "${row.requirementId}" maps to "${row.screenId}", which is not a user-facing product screen`,
       ));
+    } else if (requirement.disposition === 'shipping') {
+      coveredShippingRequirementIds.add(requirement.id);
     }
   }
 
@@ -240,6 +250,7 @@ function validateRequirementCoverage(contract, errors, summary) {
   summary.shippingRequirementCount = requirements.filter((item) => item.disposition === 'shipping').length;
   summary.deferredRequirementCount = requirements.filter((item) => item.disposition === 'deferred').length;
   summary.requirementCoverageCount = coverage.length;
+  summary.coveredShippingRequirementCount = coveredShippingRequirementIds.size;
 }
 
 function validateScreenBudget(contract, errors, warnings, summary) {
@@ -260,6 +271,7 @@ function validateScreenBudget(contract, errors, warnings, summary) {
   }
 
   const declared = contract.screenBudget || {};
+  summary.declaredScreenReviewCeiling = declared.max ?? null;
   if (declared.target > declared.max) {
     errors.push(finding('invalid-screen-budget', 'screenBudget.target exceeds screenBudget.max'));
   }
@@ -300,6 +312,7 @@ function validateScreenBudget(contract, errors, warnings, summary) {
 }
 
 function validateNavigation(contract, errors, warnings, summary) {
+  const initialErrorCount = errors.length;
   const navigation = contract.navigation;
   const screens = indexById(contract.screens || []);
   const facing = userFacingScreens(contract);
@@ -395,6 +408,7 @@ function validateNavigation(contract, errors, warnings, summary) {
       errors.push(finding('hidden-tabs-without-reason', `screen "${screen.id}" hides tabs without tabVisibilityReason`));
     }
   }
+  summary.navigationValid = errors.length === initialErrorCount;
 }
 
 function validateTableBudget(contract, errors, warnings, summary) {
@@ -405,6 +419,7 @@ function validateTableBudget(contract, errors, warnings, summary) {
   summary.tableBand = band;
 
   const declared = contract.newTableBudget || {};
+  summary.declaredTableReviewCeiling = declared.max ?? null;
   if (declared.target > declared.max) {
     errors.push(finding('invalid-table-budget', 'newTableBudget.target exceeds newTableBudget.max'));
   }
@@ -617,7 +632,7 @@ function validateScopeSemantics(contract) {
   const summary = {};
 
   validateIdentity(contract, errors);
-  validateCoverage(contract, errors, warnings);
+  validateCoverage(contract, errors, warnings, summary);
   validateRequirementCoverage(contract, errors, summary);
   validateScreenBudget(contract, errors, warnings, summary);
   validateNavigation(contract, errors, warnings, summary);
@@ -627,6 +642,18 @@ function validateScopeSemantics(contract) {
   summary.coreJobCount = (contract.coreJobs || []).length;
   summary.supportingJobCount = (contract.supportingJobs || []).length;
   summary.deferredJobCount = (contract.deferredJobs || []).length;
+  const scopeIntegrityCodes = new Set([
+    'duplicate-screen-id',
+    'duplicate-entity',
+    'duplicate-new-table',
+    'screen-without-known-job',
+    'new-table-without-job',
+    'new-table-entity-mismatch',
+    'entity-screen-not-declared',
+  ]);
+  summary.orphanOrDuplicateFindingCount = errors.filter(
+    (item) => scopeIntegrityCodes.has(item.code),
+  ).length;
 
   return { errors, warnings, summary };
 }
