@@ -49,7 +49,7 @@ node -e "const c=require('./power.config.json');console.log(c.appId||'MISSING')"
 
   > "⚠️ First deploy detected — `power.config.json` has no `appId` yet. The app ID is minted by the first push, but it is compiled **into** the native bundle at build time. So two full build+push cycles are required. I'll run both; the second is not optional."
 
-  Then run Steps 2 → 2.4 → 3 **twice**. In cycle 2, `npm run build` *and* `npm run package:android` / `package:ios` must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in.
+  Then run Steps 2 → 2.4 → 2.5 → 3 **twice**. In cycle 2, `npm run build` *and* `npm run package:android` / `package:ios` must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in. Step 2.5 (offline profile gate) may be skipped on cycle 2 **only if** no schema or profile file changed between the two cycles; if in doubt, re-run it — it is a local, no-network check.
 
 **Why two cycles are unavoidable.** `power-apps push` mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build (`PushApp.js`: `throw new Error('Build path ${buildPath} does not exist')`). So the ID cannot be minted before the first build, and the first build cannot contain the ID.
 
@@ -79,7 +79,7 @@ If `package.json` has no `build` script, fall back to:
 npx expo export --platform web
 ```
 
-(That's what the upstream template's `build` script runs.)
+(The current template does not define a `build` script, so this fallback is the normal path for freshly scaffolded apps. Both forms produce the same `dist/` web output.)
 
 **Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: `config.server.enhanceMiddleware` / `withPowerNativeMetroLogging` in `metro.config.js` holding an open handle — a web *export* should not need a dev server. **Not yet root-caused.**
 
@@ -122,7 +122,24 @@ node -v
 ```
 If it prints below **v20.19.4**, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the `package:*` commands on older Node.
 
-The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript. Produce both platforms:
+The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript.
+
+**Script preflight (required).** `package:android` / `package:ios` were added to the template after the initial release, so apps scaffolded earlier will not have them and `npm run package:android` fails with a bare `Missing script: "package:android"`. Check before invoking:
+
+```bash
+node -e '
+const s = require("./package.json").scripts || {};
+const missing = ["package:android","package:ios"].filter(k => !s[k]);
+if (missing.length) { console.log("MISSING:" + missing.join(",")); process.exit(1); }
+console.log("OK");
+'
+```
+
+If it prints `MISSING:…`, STOP and tell the user exactly what to add — do not silently skip native packaging, and do not guess at the command:
+
+> "⚠️ This app was scaffolded before native packaging was added to the template, so `package:android` / `package:ios` are missing from `package.json`. Add both scripts (copy them from the current plugin template at `plugins/mobile-apps/template/package.json`) and re-run. Without them the deploy produces a web-only build, and the wrapped native app will have no Hermes bundle to load."
+
+Once the preflight passes, produce both platforms:
 
 ```bash
 npm run package:android
@@ -142,7 +159,7 @@ These sit alongside `index.html` under the same container SAS, so the wrap pipel
 # Hermes magic bytes on both bundles (expect c61fbc03)
 for f in dist/index.android.bundle.hbc dist/main.jsbundle.hbc; do
   test -f "$f" || { echo "MISSING $f"; exit 1; }
-  node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(b.subarray(0,4).toString("hex")==="c61fbc03"?0:1)' "$f" || { echo "$f is not Hermes bytecode"; exit 1; }
+  node -e 'const fs=require("fs"),b=Buffer.alloc(4),fd=fs.openSync(process.argv[1],"r");fs.readSync(fd,b,0,4,0);fs.closeSync(fd);process.exit(b.toString("hex")==="c61fbc03"?0:1)' "$f" || { echo "$f is not Hermes bytecode"; exit 1; }
 done
 # both asset manifests present
 test -f dist/powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
@@ -227,7 +244,7 @@ Capture the app URL from the output if printed.
 node -e "const c=require('./power.config.json');console.log(c.appId||'STILL MISSING')"
 ```
 
-- **GUID** → the app was registered. **Go back to Step 2 and run Build → 2.4 → Deploy one more time.** The artifacts now sitting in `dist/` (and already uploaded to the blob) still have an empty app ID compiled in; without the second cycle the wrapped app fails on-device.
+- **GUID** → the app was registered. **Go back to Step 2 and run Build → 2.4 → 2.5 → Deploy one more time.** The artifacts now sitting in `dist/` (and already uploaded to the blob) still have an empty app ID compiled in; without the second cycle the wrapped app fails on-device. Step 2.5 may be skipped on this second pass **only if** nothing under `.datamodel-manifest.json` / `offline-profile.json` changed since cycle 1.
 - **`STILL MISSING`** → push did not register the app. STOP and report. Do not proceed to wrap.
 
 On the second pass this check is a no-op, and Step 4 runs as normal.
