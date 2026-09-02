@@ -174,6 +174,10 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /Agent verification/);
   assert.match(html, /Maker review/);
   assert.match(html, /Deploy now to Power Pages/);
+  assert.ok(
+    html.indexOf('data-label="footer.aiWarning"') < html.indexOf('<script id="typographyData"'),
+    'localized footer must exist before the script applies data-label text'
+  );
   assert.match(html, /<img class="logo" src="\.\/power-pages-icon\.png" alt="Power Pages" \/>/);
 
   const iconPath = path.join(tempDir, 'power-pages-icon.png');
