@@ -21,6 +21,7 @@
         "A component plan table is presented showing pages, shared components, design elements, and routes",
         "Color palette is determined with 6 CSS variables (--color-primary, --color-secondary, --color-bg, --color-surface, --color-text, --color-text-muted)",
         "Implementation plan is rendered in the selected content language with a complete PLAN_LABELS dictionary, correct lang/dir metadata, RTL-safe layout, unchanged technical values, and user approval is requested",
+        "Implementation plan separates REVIEW_DATA.agentChecks from REVIEW_DATA.makerReview, includes create-stage bidirectional-readiness criteria, and makes clear that the agent executes technical checks while the maker reviews linguistic, cultural, brand, and visual quality",
         "Design foundations are applied first: distinctive Google Fonts (not Inter/Roboto/Arial), CSS variables for colors, motion/animation utilities, and background treatments",
         "The scaffold loading screen is completely replaced — no trace of Power Pages branded animation remains",
         "Real Unsplash images are sourced via WebSearch and used in hero sections, feature cards, and content areas",
