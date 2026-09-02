@@ -474,7 +474,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
-| `create-site:1.content-language` | not-a-gate | — | 1 | *"Which language should the site content use?"* — validates the single SPA content locale; Dataverse and Power Pages system messages remain English | — |
+| `create-site:1.content-language` | not-a-gate | — | 1 | *"Which language should the site content use?"* — offers the Dataverse organization base language as Suggested when available, then validates the single SPA content locale; Dataverse and Power Pages system messages remain English | — |
 | `create-site:5.7.localization` | not-a-gate | — | 5.7 | *"Would you like to add more languages now?"* — selects whether to enter the child localization workflow after implementation; the child workflow preserves the detected document locale as its source/default | — |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |

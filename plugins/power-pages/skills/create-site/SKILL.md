@@ -107,11 +107,29 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    <!-- not-a-gate: the locale is validated before it can affect scaffolding -->
 
-   When the content language was not explicit, use `AskUserQuestion`:
+   When the content language was not explicit, get a best-effort suggestion:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/suggest-content-locale.js"
+   ```
+
+   The script returns the selected Dataverse environment's base language as a
+   canonical BCP-47 locale when PAC and Azure CLI authentication are available.
+   It silently returns `en-US` with `"source": "fallback"` when the environment,
+   authentication, API response, or LCID mapping is unavailable. Do not retry,
+   display an error, or block site creation when the lookup falls back.
+
+   Use `AskUserQuestion`:
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Which language should the site content use?<br><br>Pages, navigation, buttons, forms, and accessibility text will use this language. Dataverse and Power Pages system messages will remain in English. | Site content language | English (`en-US`) (Recommended) |
+   | Which language should the site content use?<br><br>Pages, navigation, buttons, forms, and accessibility text will use this language. Dataverse and Power Pages system messages will remain in English. | Site content language | `<language> (<locale>) (Suggested)`, English (`en-US`) |
+
+   Replace `<language>` and `<locale>` with the script result. If that result is
+   `en-US`, show only `English (United States) (en-US) (Suggested)` rather than
+   adding a duplicate English option. Label the environment-derived choice
+   **Suggested**, not **Recommended**: an environment's base language is useful
+   context but may not match the intended language of a public site.
 
    The question UI's free-text option lets the maker enter another language or
    locale, such as `Spanish (es-ES)`, `Japanese (ja-JP)`, or `Arabic (ar-SA)`.
