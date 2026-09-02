@@ -20,7 +20,7 @@
         "Design references are read from ${PLUGIN_ROOT}/references/design-aesthetics.md and ${PLUGIN_ROOT}/references/page-blueprints.md, and an experience brief (audience and job, primary and secondary action, principal doubt, proof strategy, design thesis, hero concept, signature moment) is written before tokens are chosen",
         "A component plan table is presented showing pages, shared components, design elements, and routes",
         "Color tokens cover every role in design-aesthetics.md section 3 (background, surfaces, text, muted text, borders, primary and on-primary, accent, focus, success, warning, danger), with each text and background pair checked against WCAG AA contrast",
-        "The implementation plan is rendered to docs/create-site-plan.html with render-createsite-plan.js, including its Design direction section, and user approval is requested",
+        "The implementation plan is rendered to docs/create-site-plan.html in the selected content language with a complete PLAN_LABELS dictionary, correct lang/dir metadata, RTL-safe layout, unchanged technical values, its Design direction section, and user approval is requested",
         "Design foundations are applied first: distinctive Google Fonts (not Inter/Roboto/Arial), CSS variables for colors, motion/animation utilities, and background treatments",
         "The scaffold loading screen is completely replaced — no trace of Power Pages branded animation remains",
         "Visuals follow design-aesthetics.md section 6: the site's own UI composed as a product moment or bespoke inline SVG first; any photography is task-specific Unsplash imagery found via WebSearch, sharing one art direction - never placeholder services",
