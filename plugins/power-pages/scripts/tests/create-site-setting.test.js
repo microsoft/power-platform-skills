@@ -78,7 +78,8 @@ test('create-site-setting rejects wildcard Web API fields', (t) => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /requires an explicit comma-separated column list/);
-  assert.match(result.stderr, /LogicalNames for ordinary columns and _<LogicalName>_value for lookups/);
+  assert.match(result.stderr, /_<LogicalName>_value for lookup reads/);
+  assert.match(result.stderr, /Navigation Property before @odata.bind for lookup writes/);
 });
 
 test('create-site-setting rejects wildcard Web API fields when the setting name has whitespace', (t) => {

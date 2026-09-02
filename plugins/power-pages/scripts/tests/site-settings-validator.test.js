@@ -100,7 +100,8 @@ test('validateSiteSettings rejects wildcard Web API fields', (t) => {
 
   const result = validateSiteSettings(projectRoot);
   assert.ok(findingMessages(result.findings).some(message =>
-    message.includes('LogicalNames for ordinary columns and _<LogicalName>_value for lookups')
+    message.includes('_<LogicalName>_value for lookup reads')
+      && message.includes('Navigation Properties for lookup writes')
   ));
 });
 

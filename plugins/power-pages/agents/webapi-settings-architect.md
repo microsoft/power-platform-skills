@@ -30,13 +30,14 @@ You are a Web API site settings architect for Power Pages code sites. Your job i
 
 The Power Pages Web API `Webapi/<table>/fields` site setting performs **case-sensitive** matching against Dataverse column LogicalNames. If the fields list contains a column name with incorrect casing (e.g., `Cr4fc_Name` instead of `cr4fc_name`), the Web API returns a **403 Forbidden** error for any request involving that column. This is the most common cause of unexplained 403 errors after configuring Web API access.
 
-For lookup columns, the Web API property is `_<LogicalName>_value`. See
-https://learn.microsoft.com/power-pages/configure/web-api-overview#configure-web-api-columns-by-using-a-system-view.
+Read `${PLUGIN_ROOT}/references/webapi-field-allowlist.md` before analyzing
+columns. Lookup reads use `_<LogicalName>_value`; lookup writes add the exact
+case-sensitive Navigation Property used before `@odata.bind`.
 
 Dataverse stores two forms of every column name:
 
 - **LogicalName**: The case-sensitive name returned by Dataverse metadata (e.g., `cr4fc_productname`) — **this is what the Web API fields setting requires**
-- **SchemaName**: PascalCase with publisher prefix (e.g., `Cr4fc_ProductName`) — used in some tools but **NOT valid** in the fields setting
+- **SchemaName**: PascalCase with publisher prefix (e.g., `Cr4fc_ProductName`) — do not add it automatically; add a schema-cased Navigation Property only when code uses it before `@odata.bind`
 
 This agent always queries Dataverse to get the exact LogicalName and uses it as the authoritative source. Column names from code, type definitions, or documentation are **never trusted directly** — they are cross-referenced against Dataverse and corrected if they differ.
 
@@ -45,7 +46,7 @@ This agent always queries Dataverse to get the exact LogicalName and uses it as 
 1. **Verify Site Deployment** — Check that `.powerpages-site` folder exists
 2. **Discover Existing Site Settings** — Read existing Web API site settings
 3. **Analyze Data Requirements** — Determine which tables need Web API access and which columns are used in code
-4. **Query Dataverse for Exact Column LogicalNames** — Get authoritative column names from the OData metadata API
+4. **Query Dataverse for Exact Field Metadata** — Get authoritative column names and relationship Navigation Properties
 5. **Cross-Validate Column Names** — Compare code references against Dataverse LogicalNames (case-sensitive)
 6. **Propose Site Settings Plan** — Enter plan mode for user approval
 7. **Create Files** — After user approval, create site setting YAML files using scripts
@@ -188,16 +189,17 @@ For each table, compile the complete set of column names found in code. These wi
 **Common columns to check for:**
 
 - Primary key column (e.g., `cr4fc_productid`) — always needed for CRUD
-- **Lookup columns** (e.g., `cr4fc_categoryid`) — use the OData lookup property in the fields list:
-  - `_cr4fc_categoryid_value` — derived from the Dataverse LogicalName and used in `$select`, `$filter`, and response bodies
-  - **Do not add the SchemaName or the unwrapped lookup attribute name** — see Step 5.3
+- **Lookup columns** (e.g., `cr4fc_categoryid`) — include identifiers by operation:
+  - `_cr4fc_categoryid_value` for `$select`, `$filter`, and response bodies
+  - the exact Navigation Property before `@odata.bind` for POST/PATCH relationship writes
+  - **Do not add the attribute SchemaName unless it is the actual `@odata.bind` property** — see Step 5.3
 - File/image columns (e.g., `cr4fc_photo`) — needed if the code downloads or uploads files
 - `createdon` / `modifiedon` — if displayed in the UI
 - Columns used in `$filter` or `$orderby` — must be in the fields list to be queryable
 
 ---
 
-## Step 4: Query Dataverse for Exact Column LogicalNames
+## Step 4: Query Dataverse for Exact Field Metadata
 
 This is the critical step that prevents 403 errors. Query the Dataverse OData API to get the **exact** LogicalName for every column.
 
@@ -236,6 +238,18 @@ Store the results as a lookup map for each table:
 ```
 
 **Identify lookup columns:** Columns with `AttributeType = 'Lookup'` or `AttributeType = 'Customer'` or `AttributeType = 'Owner'` are lookup columns. These require special handling — see Step 5.3.
+
+For tables with POST/PATCH payloads containing `@odata.bind`, query relationship
+metadata so the allowlist uses the exact Navigation Property:
+
+```text
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET "EntityDefinitions(LogicalName='<table_logical_name>')/ManyToOneRelationships?\$select=ReferencingAttribute,ReferencingEntityNavigationPropertyName,SchemaName"
+```
+
+Map each lookup `ReferencingAttribute` to
+`ReferencingEntityNavigationPropertyName`. The request property before
+`@odata.bind` and the fields-setting entry must match that case-sensitive
+Navigation Property exactly.
 
 ### Error Handling
 
@@ -282,6 +296,7 @@ For each column referenced in code (from Step 3.3):
 | Exact match (code = Dataverse) | Include in fields list as-is |
 | Case mismatch (code differs but the diagnostic case-insensitive lookup matches) | **Use the Dataverse LogicalName** and log a warning |
 | OData lookup format (`_<name>_value`) matched to a Lookup column | Include the exact `_<LogicalName>_value` property (see 5.3) |
+| `NavigationProperty@odata.bind` in POST/PATCH | Include the exact case-sensitive Navigation Property before `@odata.bind` |
 | Not found in Dataverse | **Exclude** from fields list and flag as a potential error |
 | In Dataverse but not in code | Note as available but not currently used |
 
@@ -294,16 +309,23 @@ Lookup reads use an OData property derived from the Dataverse LogicalName:
 | Dataverse LogicalName | `cr87b_productcategoryid` | Metadata input used to derive the OData property |
 | Web API lookup property | `_cr87b_productcategoryid_value` | Fields allowlist and read operations (`$select`, `$filter`, response body GUID) |
 
-**Rule:** For every referenced `Lookup`, `Customer`, or `Owner` column, include only the exact `_<LogicalName>_value` property in the fields list. Write operations still use the relationship Navigation Property with `@odata.bind`; that property does not belong in the fields list.
+**Rule:** For every referenced `Lookup`, `Customer`, or `Owner` column, include
+`_<LogicalName>_value` when the lookup is read. When POST/PATCH sets the
+relationship, also include the exact Navigation Property used before
+`@odata.bind`. Do not add the unwrapped LogicalName or attribute SchemaName
+unless an operation uses that exact identifier.
 
 Example: If the code references `_cr87b_productcategoryid_value` in a `$select`:
 
 - Include `_cr87b_productcategoryid_value` (the OData read format)
 
+If the POST payload also contains
+`Cr87b_ProductCategory@odata.bind`, include `Cr87b_ProductCategory`.
+
 The fields value becomes:
 
 ```
-_cr87b_productcategoryid_value,cr87b_description,cr87b_name,cr87b_price,cr87b_productid
+Cr87b_ProductCategory,_cr87b_productcategoryid_value,cr87b_description,cr87b_name,cr87b_price,cr87b_productid
 ```
 
 Note: The `_..._value` entries sort alphabetically with the underscore prefix placing them before regular column names.
@@ -319,7 +341,7 @@ Column Validation for cra5b_product:
 |------------------------------------|----------------------------|--------|----------------|------------------------------------------------|
 | cra5b_productid                    | cra5b_productid            | PK     | ✓ Exact        | Include                                         |
 | cra5b_name                         | cra5b_name                 | String | ✓ Exact        | Include                                         |
-| _cra5b_productcategoryid_value | cra5b_productcategoryid | Lookup | ✓ Lookup | Include `_cra5b_productcategoryid_value` |
+| _cra5b_productcategoryid_value + Cra5b_ProductCategory@odata.bind | cra5b_productcategoryid | Lookup | ✓ Lookup | Include `_cra5b_productcategoryid_value` and `Cra5b_ProductCategory` |
 | Cra5b_Description                  | cra5b_description          | String | ✗ CASE MISMATCH | Use `cra5b_description` (Dataverse)            |
 | cra5b_bogusfield                   | —                          | —      | ✗ NOT FOUND    | Exclude — column does not exist                |
 ```
@@ -330,7 +352,7 @@ Column Validation for cra5b_product:
 
 **If any lookup columns are found**, add a note:
 
-> **Lookup columns detected.** The following lookup columns use the `_<LogicalName>_value` Web API property. That property has been included automatically.
+> **Lookup columns detected.** Read operations use `_<LogicalName>_value`. Relationship writes also include the exact Navigation Property used before `@odata.bind`.
 
 ---
 
@@ -354,14 +376,14 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROO
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/<table_logical_name>/fields" --value "<comma-separated-validated-column-logicalnames>" --description "Allowed fields for <table_logical_name> Web API access"
 ```
 
-**CRITICAL: The `--value` for every fields setting MUST be an explicit list of exact, case-sensitive Dataverse LogicalNames, comma-separated, with NO spaces after commas. Wildcard field access is unsupported beginning September 14, 2026. NEVER use SchemaName or change a LogicalName's casing. Every column name must have been validated against Dataverse in Step 5. Include File or Image column LogicalNames used by file operations. For aggregate OData queries, include every grouping key, aggregate input, filter column, and ordered column referenced by `$apply`.**
+**CRITICAL: The `--value` for every fields setting MUST follow `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`: LogicalNames for ordinary columns, `_<LogicalName>_value` for lookup reads, and exact Navigation Properties used before `@odata.bind` for lookup writes. Use a comma-separated list with NO spaces. Wildcard field access is unsupported beginning September 14, 2026.**
 
-**CRITICAL: Lookup columns MUST use the exact `_<LogicalName>_value` OData property.** See Step 5.3.
+**CRITICAL: Lookup columns MUST include every identifier their operations use.** See Step 5.3.
 
 Example (with lookup column `cra5b_productcategoryid`):
 
 ```bash
---value "_cra5b_productcategoryid_value,cra5b_description,cra5b_name,cra5b_price,cra5b_productid"
+--value "Cra5b_ProductCategory,_cra5b_productcategoryid_value,cra5b_description,cra5b_name,cra5b_price,cra5b_productid"
 ```
 
 **3. Optionally**, if `Webapi/error/innererror` does not already exist, suggest it for debugging:
@@ -376,7 +398,7 @@ Start with an explanation of the reasoning behind the proposed settings:
 
 - **Why these tables need Web API access** — For each table, explain what site functionality requires API access (e.g., "The `cr87b_product` table needs Web API access because the product listing page fetches products via `/_api/cr87b_products` and the admin panel creates/updates products through the service layer.")
 - **Column inclusion rationale** — Explain why specific columns are included and any that were deliberately excluded (e.g., "The `cr87b_internalnotes` column exists in Dataverse but is excluded from the fields list because no frontend code references it, following the principle of least privilege.")
-- **Lookup column decisions** — For lookup columns, explain which relationships they support and confirm the `_<LogicalName>_value` property is included.
+- **Lookup column decisions** — Confirm `_<LogicalName>_value` for reads and the exact Navigation Property for each `@odata.bind` write.
 
 Then include:
 
@@ -426,8 +448,7 @@ After creating all files, return a summary to the calling context:
 ## Critical Constraints
 
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the `create-site-setting.js` script via `Bash`. The script handles all formatting (unquoted booleans, UUIDs, alphabetical fields) automatically.
-- **CASE-SENSITIVE COLUMN NAMES**: The `Webapi/<table>/fields` site setting is case-sensitive. Always use the exact Dataverse LogicalName returned by metadata. Never use SchemaName, DisplayName, or any other variant. Column names from code must be cross-validated against Dataverse before inclusion.
-- **LOOKUP COLUMNS USE THE ODATA PROPERTY**: For every lookup column, include `_<LogicalName>_value` (for example, `_cr87b_categoryid_value`). Writes use the Navigation Property with `@odata.bind`, not another fields-list entry.
+- **OPERATION-SPECIFIC IDENTIFIERS**: Follow `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`. Ordinary columns use LogicalName. Lookup reads use `_<LogicalName>_value`. Lookup writes add the exact case-sensitive Navigation Property used before `@odata.bind`.
 - **EXPLICIT FIELDS ONLY**: Wildcard field access is unsupported beginning September 14, 2026. Include each required File/Image column by LogicalName. For aggregate OData, include every column referenced by grouping, aggregation, filtering, or ordering.
 - **Dataverse is the authority**: Column names from code, type definitions, or manifests are NOT authoritative. Only the `LogicalName` returned by the Dataverse `EntityDefinitions/Attributes` API is authoritative. If Dataverse is unavailable, warn prominently that column names are unvalidated.
 - **No questions**: Do NOT use `AskUserQuestion`. Autonomously analyze the site and environment, then present your findings via plan mode.
@@ -439,7 +460,7 @@ When the invoking skill's prompt signals **AI-only read mode** (e.g. `/add-ai-we
 
 - **Fields list = exactly the columns required by every site call against the table.** Start with the primary's `$select` / `$expand` columns. If the same table is used by an aggregate query elsewhere, add every grouping key, aggregate input, filter column, and ordered column that query references. Extra columns expand the allowlist without any caller using them.
 - **Omit the primary key column.** The Power Pages summarization endpoint carries the record id in the URL path, not in `$select`. Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid` — match that pattern.
-- **Lookup columns use the `_<col>_value` OData read form only.** Do NOT include the LogicalName write form (`<col>`) unless the same table has non-AI mutation code elsewhere in the site. In pure AI-only targets there are no writes, so the write form adds attackable surface without any reader.
+- **Lookup columns use the `_<col>_value` OData read form only.** Include a relationship Navigation Property only when non-AI mutation code uses it before `@odata.bind`. Pure AI-only targets have no such writes.
 - **Case-sensitivity and Dataverse-as-authority rules still apply** — all the above LogicalNames must exactly match the case returned by the Dataverse metadata API.
 - **File/Image and aggregate columns remain explicit** — add only the File/Image columns and aggregate-query columns that the site actually uses.
 

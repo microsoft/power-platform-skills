@@ -104,7 +104,7 @@ Inspect `$ARGUMENTS`. If the text begins with the sentinel `[AI-READ-ONLY]`, the
 - Skip the Phase 3 interactive table confirmation and use the provided `tables` list verbatim (user has already confirmed in the caller).
 - The Phase 4.1 `webapi-integration` prompt restricts operations to **read-only** (list + get by id).
 - The Phase 6 Path B agent prompts apply the hardened AI-only posture documented in each agent's "AI-only read mode" section.
-- The Phase 6 Path A script invocations use `--read` only for table permissions and omit primary keys / lookup write forms from `Webapi/<table>/fields`.
+- The Phase 6 Path A script invocations use `--read` only for table permissions and omit primary keys / relationship Navigation Properties from `Webapi/<table>/fields`.
 - No `AskUserQuestion` prompts are issued for Phase 3 or Phase 6.2 — the caller owns those decisions.
 - **Defer all git commits to the caller.** Skip Phase 4.4 (`git add -A && git commit`) and Phase 6.5 (permissions/settings commit) entirely. The caller is batching changes into one or two commits at orchestrator-defined milestones; an unprompted commit here turns one logical change into three. Print the file lists you would have committed so the caller can reproduce them.
 - **Suppress the end-of-skill deploy prompt.** Skip Phase 6.1 (deploy-now ask when `.powerpages-site` is missing — the caller has already gated on this), Phase 7.3 (final deploy ask), and Phase 7.4 (post-deploy notes). The caller owns the single end-of-orchestration deploy decision; nesting deploy prompts inside the delegation gives the user 2–3 redundant asks per run. Return the integration summary (Phase 7.2) without trailing deploy/notes.
@@ -461,7 +461,7 @@ Use the `Task` tool to invoke the `webapi-settings-architect` agent at `${PLUGIN
 >
 > - `Webapi/<table>/fields` must contain **exactly** the columns required by every site call against the table. Start with the primary's `$select` / `$expand`; if the table is also used by an aggregate query, add its grouping keys, aggregate inputs, filter columns, and ordered columns.
 > - Do **not** include the primary key column. The summarization endpoint carries the record id in the URL path; Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid`.
-> - For lookup columns, include **only** the `_<col>_value` OData read form. Do NOT add the write form `<col>` unless the same table has non-AI mutation code elsewhere.
+> - For lookup columns, include **only** the `_<col>_value` OData read form. Add a relationship Navigation Property only when non-AI code uses it before `@odata.bind`.
 > - Still query Dataverse for exact LogicalNames (case-sensitive) — case mismatches produce 403."
 
 The agent will:
@@ -535,17 +535,17 @@ node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROO
 node "${PLUGIN_ROOT}/scripts/create-site-setting.js" --projectRoot "<PROJECT_ROOT>" --name "Webapi/error/innererror" --value "true" --description "Enable detailed error messages for debugging" --type "boolean"
 ```
 
-**Important**: The `--value` for every fields setting MUST be an explicit comma-separated list of exact, case-sensitive Dataverse LogicalNames copied from metadata. Wildcard field access is unsupported beginning September 14, 2026. Using incorrect casing or omitting a required column causes 403 Forbidden errors.
+**Important**: The `--value` for every fields setting MUST follow `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`. Use exact LogicalNames for ordinary columns, `_<LogicalName>_value` for lookup reads, and the exact Navigation Property used before `@odata.bind` for lookup writes. Wildcard field access is unsupported beginning September 14, 2026.
 
 **Aggregate queries**: Include every grouping key, aggregate input, filter column, and ordered column referenced by `$apply` in the explicit fields list.
 
-**Lookup columns**: For every lookup column, include the OData property `_<LogicalName>_value` (for example, `_cr87b_categoryid_value`) in the fields value. Write operations use the relationship Navigation Property with `@odata.bind`; do not add the SchemaName or unwrapped lookup attribute name to the fields list.
+**Lookup columns**: Include `_<LogicalName>_value` for reads. If POST/PATCH sets the relationship with `NavigationProperty@odata.bind`, also include that exact case-sensitive Navigation Property in the fields value.
 
 **AI-only read mode (Phase 1.6 flag set)**: the fields-value rules tighten:
 
 - Include the exact columns required by every site call against the table. Start with the primary's `$select` / `$expand`; if the table is also used by an aggregate query, add its grouping keys, aggregate inputs, filter columns, and ordered columns.
 - Do NOT include the primary key. The summarization endpoint carries the record id in the URL path; Microsoft's shipped case preset ships `Webapi/incident/fields = description,title` with no `incidentid`.
-- For lookup columns, include only the `_<col>_value` read form. Omit the LogicalName write form — no write operations run against these tables in AI mode.
+- For lookup columns, include only the `_<col>_value` read form. Omit relationship Navigation Properties because AI mode has no `@odata.bind` writes.
 - Keep File/Image and aggregate-query columns explicit, adding only the columns the site actually uses.
 
 ### 6.5 Git Commit

@@ -51,7 +51,7 @@ For each table-returning GET:
 - include root `$select` columns;
 - include columns used by `$filter` and `$orderby`;
 - include lookup properties as `_<LogicalName>_value` when the lookup is read,
-  filtered, expanded, or written through `@odata.bind`;
+  filtered, or expanded;
 - assign nested `$select`, filter, and order columns to the expanded table;
 - include FetchXML attributes, conditions, ordering, grouping, and aggregate
   inputs on their owning entity or link-entity;
@@ -77,8 +77,9 @@ annotations, and filter literals are not Dataverse columns.
 For POST, PATCH, and PUT:
 
 - include every payload property mapped to a Dataverse attribute;
-- resolve `navigation@odata.bind` to the underlying lookup attribute, then add
-  its `_<LogicalName>_value` property to the fields setting;
+- include the exact case-sensitive Navigation Property before `@odata.bind`;
+- resolve that property through relationship metadata rather than guessing from
+  the attribute SchemaName;
 - trace variables passed to `JSON.stringify`, HTTP clients, and custom
   wrappers;
 - inspect conditional properties and every object spread source;
@@ -110,8 +111,9 @@ conventions, or likely primary keys.
 
 For each logical table and configuration scope, compute the sorted union of
 proven field identifiers across all reads and writes. Use exact Dataverse
-LogicalNames for ordinary columns and `_<LogicalName>_value` for lookups. Every
-proposed identifier needs:
+LogicalNames for ordinary columns, `_<LogicalName>_value` for lookup reads, and
+the exact Navigation Property before `@odata.bind` for relationship writes.
+Every proposed identifier needs:
 
 - a relative source path and line, or a user-confirmed contract;
 - the operation requiring it;

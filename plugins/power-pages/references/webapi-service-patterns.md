@@ -128,7 +128,7 @@ Lookups in Dataverse expose **two distinct properties**. Understanding the diffe
 
 **On retrieval (GET):**
 - **GUID property** — Automatically named `_{logicalname}_value`. Contains the raw lookup ID. Use for filtering, logic, and foreign-key references. Include in `$select`.
-- **Navigation property** — Named after the relationship (e.g., `cr4fc_Category`). Use with `$expand` to fetch related record details. **Case-sensitive** — must match the schema name exactly (typically PascalCase).
+- **Navigation property** — Named by relationship metadata (e.g., `cr4fc_Category`). Use with `$expand` to fetch related record details. It is case-sensitive and can use schema-style casing; read `ReferencingEntityNavigationPropertyName` instead of deriving it from an attribute name.
 
 ```typescript
 // $select includes the GUID property for the raw ID
@@ -142,6 +142,7 @@ Lookups in Dataverse expose **two distinct properties**. Understanding the diffe
 **On create/update (POST/PATCH):**
 - You **cannot** set a lookup by sending a GUID to the `_value` property. You **must** use `@odata.bind` on the **Navigation Property**.
 - Syntax: `"NavigationProperty@odata.bind": "/entity_set_name(GUID)"`
+- Add that exact case-sensitive Navigation Property to `Webapi/<table>/fields`.
 
 ```typescript
 // CORRECT — uses Navigation Property name (case-sensitive)
@@ -151,7 +152,7 @@ body['cr4fc_Category@odata.bind'] = `/cr4fc_categories(${categoryId})`;
 body['_cr4fc_categoryid_value'] = categoryId; // ❌ Does NOT work
 ```
 
-**Common error:** If you get an "Undeclared Property" error on POST/PATCH, you are likely using the case-sensitive LogicalName instead of the **Navigation Property name** (case-sensitive, matches the schema name).
+**Common error:** If you get an "Undeclared Property" error on POST/PATCH, verify that the payload and `Webapi/<table>/fields` both use the exact relationship Navigation Property. It may use schema-style casing and is not necessarily the lookup attribute LogicalName or SchemaName.
 
 **To clear a lookup**, set the `@odata.bind` annotation to `null`:
 
@@ -768,7 +769,7 @@ Use this approach when:
 
 ### Site Settings for Related Entity Columns
 
-When expanding related entities, the `Webapi/<table>/fields` site setting on the **parent** table must include the lookup's OData property (for example, `_cr4fc_categoryid_value`). The **related** table must also have its own `Webapi/<related_table>/enabled` and `Webapi/<related_table>/fields` settings configured with the columns selected in `$expand`.
+When expanding related entities, the `Webapi/<table>/fields` site setting on the **parent** table must include the lookup's OData property (for example, `_cr4fc_categoryid_value`). If POST/PATCH also sets that relationship, include the exact Navigation Property used before `@odata.bind`. The **related** table must also have its own `Webapi/<related_table>/enabled` and `Webapi/<related_table>/fields` settings configured with the columns selected in `$expand`.
 
 ### Table Permissions for Related Entities
 

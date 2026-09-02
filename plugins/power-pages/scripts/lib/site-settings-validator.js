@@ -82,8 +82,8 @@ function validateSiteSettings(projectRoot) {
       && String(setting.value).split(',').some(column => column.trim() === '*');
     if (isWebApiFieldsSetting && hasWildcardField) {
       // Power Pages stops supporting wildcard Web API field access on September 14, 2026.
-      // Lookup reads expose _<LogicalName>_value rather than the underlying attribute name.
-      addFinding(findings, 'error', `Web API fields setting "${setting.name}" uses unsupported wildcard field access. Replace it with Dataverse LogicalNames for ordinary columns and _<LogicalName>_value for lookups.`, {
+      // Relationship writes use the exact Navigation Property before @odata.bind.
+      addFinding(findings, 'error', `Web API fields setting "${setting.name}" uses unsupported wildcard field access. Use LogicalNames for ordinary columns, _<LogicalName>_value for lookup reads, and exact Navigation Properties for lookup writes.`, {
         filePath: setting.filePath,
         fileName,
         settingName: setting.name,
