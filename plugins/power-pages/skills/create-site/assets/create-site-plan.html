@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="__SITE_LOCALE__" dir="__SITE_DIRECTION__">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
@@ -17,11 +17,11 @@
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
 body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
-.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
+.topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;inset-block-start:0;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
-.topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.topbar-sub{font-size:11px;color:var(--text-dim);margin-block-start:1px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
 .topbar-sep{opacity:0.5;}
 .topbar-right{display:flex;gap:6px;flex-wrap:wrap;}
 .pill{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:600;letter-spacing:0.2px;border:1px solid transparent;}
@@ -29,11 +29,11 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .pill-mood{background:var(--purple-bg);color:var(--purple);border-color:var(--purple-border);}
 .pill-framework{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
 .layout{display:flex;min-height:calc(100vh - 65px);}
-.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+.sidebar{width:240px;background:var(--surface);border-inline-end:1px solid var(--border);padding:20px 0;flex-shrink:0;}
 .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
-.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-inline-start:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:start;transition:all 0.15s;}
 .nav-btn:hover{color:var(--text);background:var(--surface2);}
-.nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+.nav-btn.active{color:var(--accent);font-weight:600;border-inline-start-color:var(--accent);background:var(--accent-bg);}
 .nav-btn .nav-icon{font-size:15px;opacity:0.5;width:18px;text-align:center;}
 .nav-btn.active .nav-icon{opacity:0.9;}
 .content{flex:1;padding:32px 40px 72px;max-width:1060px;}
@@ -47,7 +47,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
 .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px;}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;text-align:center;position:relative;overflow:hidden;box-shadow:var(--shadow-4);}
-.stat-card::after{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:2px;border-radius:0 0 2px 2px;background:var(--accent);}
+.stat-card::after{content:'';position:absolute;inset-block-start:0;inset-inline-start:calc(50% - 20px);width:40px;height:2px;border-radius:0 0 2px 2px;background:var(--accent);}
 .stat-card:nth-child(2)::after{background:var(--purple);}
 .stat-card:nth-child(3)::after{background:var(--warn);}
 .stat-num{font-size:30px;font-weight:800;font-family:var(--mono);line-height:1;color:var(--text-bright);}
@@ -55,7 +55,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;transition:box-shadow 0.2s,border-color 0.2s;}
 .card:hover{box-shadow:var(--shadow-4);}
 .field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
-.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text);margin:0 4px 4px 0;}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text);margin-block:0 4px;margin-inline:0 4px;}
 .chip-accent{background:var(--accent-bg);border-color:var(--accent-border);color:var(--accent);}
 
 /* Design tab */
@@ -80,21 +80,21 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .list-item-desc{font-size:12px;color:var(--text-dim);line-height:1.55;}
 
 /* Pages tab */
-.page-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);padding:18px 22px;margin-bottom:10px;box-shadow:var(--shadow-4);}
+.page-card{background:var(--surface);border:1px solid var(--border);border-inline-start:3px solid var(--accent);border-radius:var(--radius);padding:18px 22px;margin-bottom:10px;box-shadow:var(--shadow-4);}
 .page-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:8px;}
 .page-name{font-size:15px;font-weight:700;color:var(--text-bright);}
 .page-route{font-size:12px;font-family:var(--mono);color:var(--accent);background:var(--accent-bg);padding:2px 8px;border-radius:4px;}
 .page-desc{font-size:13px;color:var(--text-dim);margin-bottom:12px;}
 .page-subsection{margin-top:10px;}
 .bullet-list{list-style:none;padding:0;margin:6px 0 0;}
-.bullet-list li{position:relative;padding-left:16px;font-size:12px;color:var(--text);margin-bottom:4px;}
-.bullet-list li::before{content:'';position:absolute;left:4px;top:8px;width:5px;height:5px;border-radius:50%;background:var(--accent);}
+.bullet-list li{position:relative;padding-inline-start:16px;font-size:12px;color:var(--text);margin-bottom:4px;}
+.bullet-list li::before{content:'';position:absolute;inset-inline-start:4px;inset-block-start:8px;width:5px;height:5px;border-radius:50%;background:var(--accent);}
 .component-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:8px;}
 .component-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap;}
 .component-name{font-size:14px;font-weight:700;color:var(--text-bright);}
 .component-purpose{font-size:12px;color:var(--text-dim);margin-bottom:8px;}
 .routes-table{width:100%;border-collapse:separate;border-spacing:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
-.routes-table th{text-align:left;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;padding:10px 16px;background:var(--surface2);border-bottom:1px solid var(--border);}
+.routes-table th{text-align:start;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;padding:10px 16px;background:var(--surface2);border-bottom:1px solid var(--border);}
 .routes-table td{font-size:13px;padding:10px 16px;border-bottom:1px solid var(--border);}
 .routes-table tr:last-child td{border-bottom:none;}
 .routes-table td.path{font-family:var(--mono);color:var(--accent);}
@@ -107,18 +107,19 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .deploy-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;}
 .deploy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow-4);position:relative;}
 .deploy-card.recommended{border-color:var(--accent-border);background:linear-gradient(135deg,var(--accent-bg),transparent);}
-.deploy-card.recommended::before{content:'Recommended';position:absolute;top:-9px;right:14px;font-size:10px;font-weight:700;color:#fff;background:var(--accent);padding:3px 10px;border-radius:999px;letter-spacing:0.5px;text-transform:uppercase;}
+.deploy-card.recommended::before{content:attr(data-recommended-label);position:absolute;inset-block-start:-9px;inset-inline-end:14px;font-size:10px;font-weight:700;color:#fff;background:var(--accent);padding:3px 10px;border-radius:999px;letter-spacing:0.5px;text-transform:uppercase;}
 .deploy-title{font-size:14px;font-weight:700;color:var(--text-bright);margin-bottom:4px;}
 .deploy-desc{font-size:12px;color:var(--text-dim);line-height:1.55;}
 
 .empty-note{font-size:12px;color:var(--text-dim);font-style:italic;padding:12px 0;}
+.page-route,.routes-table td.path,.swatch-var,.swatch-hex,.type-name{direction:ltr;unicode-bidi:isolate;}
 
 @media (max-width:900px){
   .layout{flex-direction:column;}
-  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;padding:8px;}
+  .sidebar{width:100%;border-inline-end:none;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;padding:8px;}
   .nav-group-label{width:100%;}
-  .nav-btn{width:auto;border-left:none;border-bottom:2px solid transparent;padding:10px 14px;}
-  .nav-btn.active{border-left:none;border-bottom-color:var(--accent);}
+  .nav-btn{width:auto;border-inline-start:none;border-bottom:2px solid transparent;padding:10px 14px;}
+  .nav-btn.active{border-inline-start:none;border-bottom-color:var(--accent);}
   .content{padding:20px;}
   .type-grid{grid-template-columns:1fr;}
   .stats-grid{grid-template-columns:repeat(3,1fr);}
@@ -132,10 +133,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     <div>
       <div class="topbar-title">__PLAN_TITLE__</div>
       <div class="topbar-sub">
-        <span>__SITE_NAME__</span>
+        <bdi dir="auto">__SITE_NAME__</bdi>
         <span class="topbar-sep">&middot;</span>
-        <span class="pill pill-framework">__FRAMEWORK__</span>
-        <span class="pill">__SITE_LANGUAGE__ (__SITE_LOCALE__, __SITE_DIRECTION__)</span>
+        <bdi class="pill pill-framework" dir="ltr">__FRAMEWORK__</bdi>
+        <span class="pill"><span>__SITE_LANGUAGE__</span> <bdi dir="ltr">(__SITE_LOCALE__, __SITE_DIRECTION__)</bdi></span>
       </div>
     </div>
   </div>
@@ -147,77 +148,78 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
 <div class="layout">
   <div class="sidebar">
-    <div class="nav-group-label">Plan</div>
-    <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span> Overview</button>
-    <button class="nav-btn" data-tab="design"><span class="nav-icon">&#9728;</span> Design</button>
-    <button class="nav-btn" data-tab="pages"><span class="nav-icon">&#9638;</span> Pages &amp; Components</button>
-    <button class="nav-btn" data-tab="deploy"><span class="nav-icon">&#10003;</span> Deployment &amp; Review</button>
+    <div class="nav-group-label" data-label="navigation.group"></div>
+    <button class="nav-btn active" data-tab="overview"><span class="nav-icon">&#9673;</span><span data-label="navigation.overview"></span></button>
+    <button class="nav-btn" data-tab="design"><span class="nav-icon">&#9728;</span><span data-label="navigation.design"></span></button>
+    <button class="nav-btn" data-tab="pages"><span class="nav-icon">&#9638;</span><span data-label="navigation.pages"></span></button>
+    <button class="nav-btn" data-tab="deploy"><span class="nav-icon">&#10003;</span><span data-label="navigation.deployment"></span></button>
   </div>
 
   <div class="content">
     <!-- Overview Tab -->
     <div class="section active" id="tab-overview">
-      <h2>Overview</h2>
-      <p class="section-desc">Implementation plan for <code>__SITE_NAME__</code></p>
+      <h2 data-label="overview.title"></h2>
+      <p class="section-desc" id="overviewDescription"></p>
 
       <div class="summary-box" id="summaryBox"></div>
       <script id="summaryData" type="application/json">__SUMMARY_DATA__</script>
+      <script id="siteNameData" type="application/json">__SITE_NAME_DATA__</script>
 
       <div class="stats-grid">
-        <div class="stat-card"><div class="stat-num" id="statPages">0</div><div class="stat-label">Pages</div></div>
-        <div class="stat-card"><div class="stat-num" id="statComponents">0</div><div class="stat-label">Shared Components</div></div>
-        <div class="stat-card"><div class="stat-num" id="statRoutes">0</div><div class="stat-label">Routes</div></div>
+        <div class="stat-card"><div class="stat-num" id="statPages">0</div><div class="stat-label" data-label="overview.stats.pages"></div></div>
+        <div class="stat-card"><div class="stat-num" id="statComponents">0</div><div class="stat-label" data-label="overview.stats.components"></div></div>
+        <div class="stat-card"><div class="stat-num" id="statRoutes">0</div><div class="stat-label" data-label="overview.stats.routes"></div></div>
       </div>
 
-      <h3>What happens next</h3>
+      <h3 data-label="overview.nextSteps.title"></h3>
       <div class="list-card" id="nextStepsList"></div>
     </div>
 
     <!-- Design Tab -->
     <div class="section" id="tab-design">
-      <h2>Design</h2>
-      <p class="section-desc">Typography, palette, motion, and background treatments</p>
+      <h2 data-label="design.title"></h2>
+      <p class="section-desc" data-label="design.description"></p>
 
-      <h3>Typography</h3>
+      <h3 data-label="design.typography"></h3>
       <div class="type-grid" id="typographyContainer"></div>
 
-      <h3>Color palette</h3>
+      <h3 data-label="design.palette"></h3>
       <div class="palette-grid" id="paletteContainer"></div>
 
-      <h3>Motion &amp; animation</h3>
+      <h3 data-label="design.motion"></h3>
       <div class="list-card" id="motionContainer"></div>
 
-      <h3>Background treatment</h3>
+      <h3 data-label="design.backgrounds"></h3>
       <div class="list-card" id="backgroundsContainer"></div>
     </div>
 
     <!-- Pages & Components Tab -->
     <div class="section" id="tab-pages">
-      <h2>Pages &amp; Components</h2>
-      <p class="section-desc">Pages to build, their content outline, and the shared components they rely on</p>
+      <h2 data-label="pages.title"></h2>
+      <p class="section-desc" data-label="pages.description"></p>
 
-      <h3>Pages</h3>
+      <h3 data-label="pages.pages"></h3>
       <div id="pagesContainer"></div>
 
-      <h3>Shared components</h3>
+      <h3 data-label="pages.components"></h3>
       <div id="componentsContainer"></div>
 
-      <h3>Routing</h3>
+      <h3 data-label="pages.routing"></h3>
       <table class="routes-table" id="routesTable">
-        <thead><tr><th>Path</th><th>Page</th></tr></thead>
+        <thead><tr><th data-label="pages.path"></th><th data-label="pages.page"></th></tr></thead>
         <tbody id="routesBody"></tbody>
       </table>
     </div>
 
     <!-- Deployment & Review Tab -->
     <div class="section" id="tab-deploy">
-      <h2>Deployment &amp; Review</h2>
-      <p class="section-desc">Verification checklist and deployment options</p>
+      <h2 data-label="deployment.title"></h2>
+      <p class="section-desc" data-label="deployment.description"></p>
 
-      <h3>Before handoff &mdash; verify</h3>
+      <h3 data-label="deployment.verify"></h3>
       <div class="checklist" id="reviewContainer"></div>
 
-      <h3>Deployment options</h3>
+      <h3 data-label="deployment.options"></h3>
       <div class="deploy-grid" id="deploymentContainer"></div>
     </div>
   </div>
@@ -232,6 +234,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 <script id="routesData" type="application/json">__ROUTES_DATA__</script>
 <script id="reviewData" type="application/json">__REVIEW_DATA__</script>
 <script id="deploymentData" type="application/json">__DEPLOYMENT_DATA__</script>
+<script id="planLabelsData" type="application/json">__PLAN_LABELS__</script>
 
 <script>
 function readJsonData(id){
@@ -248,8 +251,30 @@ const COMPONENTS = readJsonData('componentsData');
 const ROUTES = readJsonData('routesData');
 const REVIEW = readJsonData('reviewData');
 const DEPLOYMENT = readJsonData('deploymentData');
+const LABELS = readJsonData('planLabelsData');
 
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+function label(path){
+  return path.split('.').reduce((value,key)=>value&&value[key],LABELS)||path;
+}
+function formatLabel(path,values){
+  return Object.entries(values||{}).reduce(
+    (text,[key,value])=>text.split('{'+key+'}').join(String(value)),
+    label(path)
+  );
+}
+
+document.querySelectorAll('[data-label]').forEach(node=>{
+  node.textContent=label(node.dataset.label);
+});
+const overviewDescription = document.getElementById('overviewDescription');
+const overviewParts = label('overview.description').split('{siteName}');
+overviewDescription.append(document.createTextNode(overviewParts[0]));
+const siteName = document.createElement('bdi');
+siteName.dir = 'auto';
+siteName.textContent = readJsonData('siteNameData').text;
+overviewDescription.append(siteName);
+overviewDescription.append(document.createTextNode(overviewParts.slice(1).join('{siteName}')));
 
 // --- Load chosen Google Fonts for the typography preview ---
 (function loadFonts(){
@@ -281,28 +306,28 @@ document.getElementById('statComponents').textContent = COMPONENTS.length;
 document.getElementById('statRoutes').textContent = ROUTES.length;
 
 const nextSteps = [
-  { icon:'&#9998;', label:'Apply design tokens', desc:'Fonts, palette, motion, and backgrounds written into your theme' },
-  { icon:'&#9638;', label:'Build shared components', desc:COMPONENTS.length+' reusable component'+(COMPONENTS.length===1?'':'s')+' used across pages' },
-  { icon:'&#128196;', label:'Create pages', desc:PAGES.length+' page'+(PAGES.length===1?'':'s')+' with routing and navigation' },
-  { icon:'&#10003;', label:'Verify &amp; accessibility', desc:'axe-core audit, Playwright checks, and user review' },
+  { icon:'&#9998;', label:label('overview.nextSteps.design.title'), desc:label('overview.nextSteps.design.description') },
+  { icon:'&#9638;', label:label('overview.nextSteps.components.title'), desc:formatLabel(COMPONENTS.length===1?'overview.nextSteps.components.descriptionOne':'overview.nextSteps.components.descriptionOther',{count:COMPONENTS.length}) },
+  { icon:'&#128196;', label:label('overview.nextSteps.pages.title'), desc:formatLabel(PAGES.length===1?'overview.nextSteps.pages.descriptionOne':'overview.nextSteps.pages.descriptionOther',{count:PAGES.length}) },
+  { icon:'&#10003;', label:label('overview.nextSteps.verify.title'), desc:label('overview.nextSteps.verify.description') },
 ];
 document.getElementById('nextStepsList').innerHTML = nextSteps.map(s =>
-  '<div class="list-item"><div class="list-item-icon">'+s.icon+'</div><div><div class="list-item-label">'+s.label+'</div><div class="list-item-desc">'+s.desc+'</div></div></div>'
+  '<div class="list-item"><div class="list-item-icon">'+s.icon+'</div><div><div class="list-item-label">'+esc(s.label)+'</div><div class="list-item-desc">'+esc(s.desc)+'</div></div></div>'
 ).join('');
 
 // --- Design: typography ---
 const typeContainer = document.getElementById('typographyContainer');
 const typeSlots = [
-  { slot:'primary', role:'Primary &mdash; body &amp; UI' },
-  { slot:'secondary', role:'Secondary &mdash; headings' },
+  { slot:'primary', role:label('design.primaryRole') },
+  { slot:'secondary', role:label('design.secondaryRole') },
 ];
 typeContainer.innerHTML = typeSlots.map(s => {
   const t = TYPOGRAPHY && TYPOGRAPHY[s.slot];
   if(!t) return '';
   const fam = t.name ? "'"+t.name.replace(/'/g, "\\'")+"', var(--sans)" : 'var(--sans)';
   return '<div class="type-card">'
-    + '<div class="type-role">'+s.role+'</div>'
-    + '<div class="type-sample" style="font-family:'+fam+';">'+esc(t.sample || 'Aa Bb Cc')+'</div>'
+    + '<div class="type-role">'+esc(s.role)+'</div>'
+    + '<div class="type-sample" style="font-family:'+fam+';">'+esc(t.sample || '')+'</div>'
     + '<div class="type-name">'+esc(t.name || '')+'</div>'
     + '<div class="type-reason">'+esc(t.reason || '')+'</div>'
     + '</div>';
@@ -321,7 +346,7 @@ document.getElementById('paletteContainer').innerHTML = PALETTE.map(c =>
 
 // --- Design: motion & backgrounds ---
 function renderList(arr) {
-  if(!arr || !arr.length) return '<div class="empty-note" style="padding:12px 18px;">None specified.</div>';
+  if(!arr || !arr.length) return '<div class="empty-note" style="padding:12px 18px;">'+esc(label('common.noneSpecified'))+'</div>';
   return arr.map(item =>
     '<div class="list-item"><div class="list-item-icon">&#9672;</div>'
     + '<div><div class="list-item-label">'+esc(item.label || '')+'</div>'
@@ -334,12 +359,12 @@ document.getElementById('backgroundsContainer').innerHTML = renderList(BACKGROUN
 // --- Pages ---
 document.getElementById('pagesContainer').innerHTML = PAGES.map(p => {
   const content = (p.content && p.content.length)
-    ? '<div class="page-subsection"><div class="field-label">Content</div><ul class="bullet-list">'
+    ? '<div class="page-subsection"><div class="field-label">'+esc(label('pages.content'))+'</div><ul class="bullet-list">'
       + p.content.map(c => '<li>'+esc(c)+'</li>').join('')
       + '</ul></div>'
     : '';
   const comps = (p.components && p.components.length)
-    ? '<div class="page-subsection"><div class="field-label">Components used</div>'
+    ? '<div class="page-subsection"><div class="field-label">'+esc(label('pages.componentsUsed'))+'</div>'
       + p.components.map(c => '<span class="chip">'+esc(c)+'</span>').join('')
       + '</div>'
     : '';
@@ -356,14 +381,14 @@ document.getElementById('pagesContainer').innerHTML = PAGES.map(p => {
 // --- Components ---
 const compsContainer = document.getElementById('componentsContainer');
 if (!COMPONENTS.length) {
-  compsContainer.innerHTML = '<div class="empty-note">No shared components planned yet.</div>';
+  compsContainer.innerHTML = '<div class="empty-note">'+esc(label('pages.noComponents'))+'</div>';
 } else {
   compsContainer.innerHTML = COMPONENTS.map(c =>
     '<div class="component-card">'
     + '<div class="component-head"><div class="component-name">'+esc(c.name)+'</div></div>'
     + (c.purpose ? '<div class="component-purpose">'+esc(c.purpose)+'</div>' : '')
     + (c.usedBy && c.usedBy.length
-        ? '<div><div class="field-label">Used by</div>'+c.usedBy.map(u => '<span class="chip chip-accent">'+esc(u)+'</span>').join('')+'</div>'
+        ? '<div><div class="field-label">'+esc(label('pages.usedBy'))+'</div>'+c.usedBy.map(u => '<span class="chip chip-accent">'+esc(u)+'</span>').join('')+'</div>'
         : '')
     + '</div>'
   ).join('');
@@ -386,7 +411,10 @@ document.getElementById('deploymentContainer').innerHTML = DEPLOYMENT.map(d =>
   + '<div class="deploy-desc">'+esc(d.description || '')+'</div>'
   + '</div>'
 ).join('');
+document.querySelectorAll('.deploy-card.recommended').forEach(card=>{
+  card.dataset.recommendedLabel=label('deployment.recommended');
+});
 </script>
-<footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
+<footer style="position:fixed;inset-block-end:0;inset-inline:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;" data-label="footer.aiWarning"></footer>
 </body>
 </html>

@@ -7,16 +7,85 @@ const { spawnSync } = require('node:child_process');
 
 const scriptPath = path.join(__dirname, '..', 'render-createsite-plan.js');
 
+const ENGLISH_LABELS = {
+  navigation: {
+    group: 'Plan',
+    overview: 'Overview',
+    design: 'Design',
+    pages: 'Pages & Components',
+    deployment: 'Deployment & Review',
+  },
+  overview: {
+    title: 'Overview',
+    description: 'Implementation plan for {siteName}',
+    stats: { pages: 'Pages', components: 'Shared Components', routes: 'Routes' },
+    nextSteps: {
+      title: 'What happens next',
+      design: {
+        title: 'Apply design tokens',
+        description: 'Fonts, palette, motion, and backgrounds written into your theme',
+      },
+      components: {
+        title: 'Build shared components',
+        descriptionOne: '{count} reusable component used across pages',
+        descriptionOther: '{count} reusable components used across pages',
+      },
+      pages: {
+        title: 'Create pages',
+        descriptionOne: '{count} page with routing and navigation',
+        descriptionOther: '{count} pages with routing and navigation',
+      },
+      verify: {
+        title: 'Verify & accessibility',
+        description: 'axe-core audit, Playwright checks, and user review',
+      },
+    },
+  },
+  design: {
+    title: 'Design',
+    description: 'Typography, palette, motion, and background treatments',
+    typography: 'Typography',
+    palette: 'Color palette',
+    motion: 'Motion & animation',
+    backgrounds: 'Background treatment',
+    primaryRole: 'Primary — body & UI',
+    secondaryRole: 'Secondary — headings',
+  },
+  pages: {
+    title: 'Pages & Components',
+    description: 'Pages to build, their content outline, and the shared components they rely on',
+    pages: 'Pages',
+    components: 'Shared components',
+    routing: 'Routing',
+    path: 'Path',
+    page: 'Page',
+    content: 'Content',
+    componentsUsed: 'Components used',
+    usedBy: 'Used by',
+    noComponents: 'No shared components planned yet.',
+  },
+  deployment: {
+    title: 'Deployment & Review',
+    description: 'Verification checklist and deployment options',
+    verify: 'Before handoff — verify',
+    options: 'Deployment options',
+    recommended: 'Recommended',
+  },
+  common: { noneSpecified: 'None specified.' },
+  footer: { aiWarning: 'AI-generated content may be incorrect' },
+};
+
 const SAMPLE_DATA = {
   SITE_NAME: 'Contoso Portal',
   PLAN_TITLE: 'Implementation Plan',
   FRAMEWORK: 'React',
-  SITE_LANGUAGE: 'Spanish',
-  SITE_LOCALE: 'es-ES',
+  SITE_LANGUAGE: 'English (United States)',
+  SITE_LOCALE: 'en-US',
   SITE_DIRECTION: 'ltr',
   AESTHETIC: 'Minimal & Clean',
   MOOD: 'Professional & Trustworthy',
   SUMMARY: 'An internal portal for Contoso consultants with directory, announcements, and docs.',
+  PLAN_LABELS: ENGLISH_LABELS,
   TYPOGRAPHY_DATA: {
     primary: { name: 'DM Sans', sample: 'Aa Bb Cc', reason: 'Neutral sans for body and UI' },
     secondary: { name: 'Space Grotesk', sample: 'Headings', reason: 'Geometric display for headings' },
@@ -84,7 +153,7 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /Contoso Portal/);
   assert.match(html, /Implementation Plan/);
   assert.match(html, /React/);
-  assert.match(html, /Spanish \(es-ES, ltr\)/);
+  assert.match(html, /English \(United States\)<\/span> <bdi dir="ltr">\(en-US, ltr\)<\/bdi>/);
   assert.match(html, /Minimal &amp; Clean|Minimal & Clean/);
   assert.match(html, /DM Sans/);
   assert.match(html, /#1E3A5F/);
@@ -116,6 +185,100 @@ test('render-createsite-plan renders HTML from --data-inline JSON', () => {
   const html = fs.readFileSync(outputPath, 'utf8');
   assert.match(html, /Contoso Portal/);
   assert.match(html, /Space Grotesk/);
+});
+
+test('render-createsite-plan renders localized LTR labels and locale metadata', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan-es.html');
+  const spanish = {
+    ...SAMPLE_DATA,
+    PLAN_TITLE: 'Plan de implementación',
+    SITE_LANGUAGE: 'Español (España)',
+    SITE_LOCALE: 'es-ES',
+    PLAN_LABELS: {
+      ...ENGLISH_LABELS,
+      navigation: {
+        group: 'Plan',
+        overview: 'Resumen',
+        design: 'Diseño',
+        pages: 'Páginas y componentes',
+        deployment: 'Implementación y revisión',
+      },
+      overview: {
+        ...ENGLISH_LABELS.overview,
+        title: 'Resumen',
+        description: 'Plan de implementación para {siteName}',
+      },
+      footer: { aiWarning: 'El contenido generado por IA puede ser incorrecto' },
+    },
+    SUMMARY: 'Un portal interno para consultores de Contoso.',
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(spanish)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /<html lang="es-ES" dir="ltr">/);
+  assert.match(html, /Plan de implementación/);
+  assert.match(html, /"overview":"Resumen"/);
+  assert.match(html, /Plan de implementación para \{siteName\}/);
+  assert.match(html, /Un portal interno para consultores de Contoso/);
+  assert.match(html, /React/);
+  assert.match(html, /--color-primary/);
+  assert.match(html, /"route":"\/directory"/);
+  assert.match(html, /<bdi class="pill pill-framework" dir="ltr">React<\/bdi>/);
+});
+
+test('render-createsite-plan renders RTL metadata and direction-safe layout', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan-ar.html');
+  const arabic = {
+    ...SAMPLE_DATA,
+    PLAN_TITLE: 'خطة التنفيذ',
+    SITE_LANGUAGE: 'العربية (المملكة العربية السعودية)',
+    SITE_LOCALE: 'ar-SA',
+    SITE_DIRECTION: 'rtl',
+    PLAN_LABELS: {
+      ...ENGLISH_LABELS,
+      navigation: {
+        group: 'الخطة',
+        overview: 'نظرة عامة',
+        design: 'التصميم',
+        pages: 'الصفحات والمكونات',
+        deployment: 'النشر والمراجعة',
+      },
+      overview: {
+        ...ENGLISH_LABELS.overview,
+        title: 'نظرة عامة',
+        description: 'خطة التنفيذ لـ {siteName}',
+      },
+      footer: { aiWarning: 'قد يكون المحتوى الذي تم إنشاؤه بواسطة الذكاء الاصطناعي غير صحيح' },
+    },
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(arabic)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /<html lang="ar-SA" dir="rtl">/);
+  assert.match(html, /"overview":"نظرة عامة"/);
+  assert.match(html, /border-inline-start/);
+  assert.match(html, /border-inline-end/);
+  assert.match(html, /padding-inline-start/);
+  assert.match(html, /inset-inline-end/);
+  assert.doesNotMatch(
+    html,
+    /(?:border|padding|margin)-(?:left|right)|text-align:\s*(?:left|right)|(?:^|[;{])(?:left|right):/m
+  );
+  assert.match(html, /\.page-route,[^{]+\{direction:ltr;unicode-bidi:isolate;\}/);
 });
 
 test('render-createsite-plan escapes string placeholders used in HTML text contexts', () => {
@@ -211,6 +374,17 @@ test('render-createsite-plan escapes </script> and < inside JSON data to prevent
   const malicious = {
     ...SAMPLE_DATA,
     SUMMARY: 'Summary with </script><script>window.__summaryPwned=1;</script> and <strong>markup</strong>.',
+    PLAN_LABELS: {
+      ...ENGLISH_LABELS,
+      navigation: {
+        ...ENGLISH_LABELS.navigation,
+        overview: '</script><script>window.__labelPwned=1;</script>',
+      },
+      deployment: {
+        ...ENGLISH_LABELS.deployment,
+        recommended: '" onmouseover="window.__attributePwned=1',
+      },
+    },
     PAGES_DATA: [
       {
         name: '</script><script>window.__pwned=1;</script>',
@@ -240,8 +414,94 @@ test('render-createsite-plan escapes </script> and < inside JSON data to prevent
     !html.includes('</script><script>window.__summaryPwned=1;</script>'),
     'rendered HTML leaks a literal </script> from SUMMARY'
   );
+  assert.ok(
+    !html.includes('</script><script>window.__labelPwned=1;</script>'),
+    'rendered HTML leaks a literal </script> from PLAN_LABELS'
+  );
+  assert.doesNotMatch(html, /data-recommended-label="[^"]*onmouseover=/);
   assert.match(html, /"text":"Summary with \\u003c\/script>\\u003cscript>window\.__summaryPwned=1;\\u003c\/script>/);
   assert.match(html, /\\u003c\/script>/);
+});
+
+test('render-createsite-plan rejects missing localized labels', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const incomplete = {
+    ...SAMPLE_DATA,
+    PLAN_LABELS: {
+      ...ENGLISH_LABELS,
+      footer: {},
+    },
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(incomplete)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /PLAN_LABELS is missing localized values/);
+  assert.match(result.stderr, /footer\.aiWarning/);
+  assert.equal(fs.existsSync(outputPath), false);
+});
+
+test('render-createsite-plan rejects locale and direction mismatches', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const mismatched = { ...SAMPLE_DATA, SITE_LOCALE: 'ar-SA', SITE_DIRECTION: 'ltr' };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(mismatched)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /does not match ar-SA/);
+  assert.equal(fs.existsSync(outputPath), false);
+});
+
+test('render-createsite-plan rejects non-canonical locale tags', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const nonCanonical = { ...SAMPLE_DATA, SITE_LOCALE: 'EN-us' };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(nonCanonical)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Use "en-US" instead/);
+  assert.equal(fs.existsSync(outputPath), false);
+});
+
+test('render-createsite-plan rejects translated labels that drop renderer tokens', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  const missingToken = {
+    ...SAMPLE_DATA,
+    PLAN_LABELS: {
+      ...ENGLISH_LABELS,
+      overview: {
+        ...ENGLISH_LABELS.overview,
+        description: 'Implementation plan',
+      },
+    },
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(missingToken)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /must preserve renderer tokens/);
+  assert.match(result.stderr, /overview\.description \(\{siteName\}\)/);
+  assert.equal(fs.existsSync(outputPath), false);
 });
 
 test('render-createsite-plan refuses to overwrite existing file', () => {

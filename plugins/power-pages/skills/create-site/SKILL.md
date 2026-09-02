@@ -434,14 +434,15 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | Key | Type | Content |
 |-----|------|---------|
 | `SITE_NAME` | string | Site/brand name from Phase 1, preserved as entered |
-| `PLAN_TITLE` | string | Always `"Implementation Plan"` |
+| `PLAN_TITLE` | string | Localized equivalent of `"Implementation Plan"` in `SITE_LOCALE` |
 | `FRAMEWORK` | string | `React` / `Vue` / `Angular` / `Astro` |
-| `SITE_LANGUAGE` | string | Readable content-language name from Phase 1 |
+| `SITE_LANGUAGE` | string | Readable content-language name from Phase 1, written in that language when practical |
 | `SITE_LOCALE` | string | Canonical BCP-47 content locale |
 | `SITE_DIRECTION` | string | `ltr` or `rtl` |
 | `AESTHETIC` | string | Chosen aesthetic (e.g., `Minimal & Clean`) |
 | `MOOD` | string | Chosen mood (e.g., `Professional & Trustworthy`) |
-| `SUMMARY` | string | One paragraph describing what the site is and who it serves |
+| `SUMMARY` | string | One localized paragraph describing what the site is and who it serves |
+| `PLAN_LABELS` | object | Complete localized template-label dictionary defined below |
 | `TYPOGRAPHY_DATA` | object | `{ primary: { name, sample, reason }, secondary: { name, sample, reason } }` — `name` must be a real Google Font family |
 | `PALETTE_DATA` | array | `[{ var, hex, description }]` — one entry per CSS variable (primary, secondary, bg, surface, text, text-muted) |
 | `MOTION_DATA` | array | `[{ label, description }]` — page transitions, hover states, etc. |
@@ -452,7 +453,104 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | `REVIEW_DATA` | array of strings | Verification checklist items (e.g., "All pages load without console errors") |
 | `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
-**Write the data for the user**, not for internal tooling — phrase `description` and `reason` fields in plain language.
+`PLAN_LABELS` must contain every key below. The English values describe each
+label's meaning; translate every value into `SITE_LOCALE`. Preserve `{siteName}`
+and `{count}` exactly because the renderer substitutes those tokens at runtime.
+Do not omit keys or fall back to English for individual labels.
+
+```json
+{
+  "navigation": {
+    "group": "Plan",
+    "overview": "Overview",
+    "design": "Design",
+    "pages": "Pages & Components",
+    "deployment": "Deployment & Review"
+  },
+  "overview": {
+    "title": "Overview",
+    "description": "Implementation plan for {siteName}",
+    "stats": {
+      "pages": "Pages",
+      "components": "Shared Components",
+      "routes": "Routes"
+    },
+    "nextSteps": {
+      "title": "What happens next",
+      "design": {
+        "title": "Apply design tokens",
+        "description": "Fonts, palette, motion, and backgrounds written into your theme"
+      },
+      "components": {
+        "title": "Build shared components",
+        "descriptionOne": "{count} reusable component used across pages",
+        "descriptionOther": "{count} reusable components used across pages"
+      },
+      "pages": {
+        "title": "Create pages",
+        "descriptionOne": "{count} page with routing and navigation",
+        "descriptionOther": "{count} pages with routing and navigation"
+      },
+      "verify": {
+        "title": "Verify & accessibility",
+        "description": "axe-core audit, Playwright checks, and user review"
+      }
+    }
+  },
+  "design": {
+    "title": "Design",
+    "description": "Typography, palette, motion, and background treatments",
+    "typography": "Typography",
+    "palette": "Color palette",
+    "motion": "Motion & animation",
+    "backgrounds": "Background treatment",
+    "primaryRole": "Primary — body & UI",
+    "secondaryRole": "Secondary — headings"
+  },
+  "pages": {
+    "title": "Pages & Components",
+    "description": "Pages to build, their content outline, and the shared components they rely on",
+    "pages": "Pages",
+    "components": "Shared components",
+    "routing": "Routing",
+    "path": "Path",
+    "page": "Page",
+    "content": "Content",
+    "componentsUsed": "Components used",
+    "usedBy": "Used by",
+    "noComponents": "No shared components planned yet."
+  },
+  "deployment": {
+    "title": "Deployment & Review",
+    "description": "Verification checklist and deployment options",
+    "verify": "Before handoff — verify",
+    "options": "Deployment options",
+    "recommended": "Recommended"
+  },
+  "common": {
+    "noneSpecified": "None specified."
+  },
+  "footer": {
+    "aiWarning": "AI-generated content may be incorrect"
+  }
+}
+```
+
+**Write all maker-facing plan data in the selected content language.** This
+includes `PLAN_TITLE`, `SUMMARY`, `PLAN_LABELS`, descriptive `AESTHETIC` and
+`MOOD` names, typography reasons/samples, palette descriptions, motion and
+background labels/descriptions, page display names/descriptions/content
+outlines, component display names/purposes, route page labels, review items,
+and deployment titles/descriptions.
+
+Keep technical values unchanged: framework and package names, file paths,
+routes, commands, locale tags, CSS variables, hex colors, identifiers, API
+names, and brand/product names. When a page or component `name` is also the
+planned code identifier, keep it unchanged; localize only human-readable
+display names. Use complete translated phrases rather than joining translated
+fragments in English word order. `REVIEW_DATA` remains one array in this task;
+responsibility grouping is handled separately by the bidi review-checklist
+change.
 
 ### 4.3 Render the HTML Plan
 
