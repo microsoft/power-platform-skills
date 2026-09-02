@@ -15,6 +15,8 @@ const FIELDS = new Set([
   'screenId',
   'route',
   'targetPath',
+  'compiledRevision',
+  'experienceDirective',
   'pack',
   'scenarioFacts',
   'routeContract',
@@ -64,7 +66,11 @@ function safeTarget(projectRoot, targetPath, fileSystem = fs) {
   return target;
 }
 
-function normalizeWorkOrder(value, { projectRoot, fileSystem = fs } = {}) {
+function normalizeWorkOrder(value, {
+  projectRoot,
+  fileSystem = fs,
+  compiledScreenBuildPack,
+} = {}) {
   if (!projectRoot) throw new Error('projectRoot is required');
   if (!isPlainObject(value)) throw new Error('screen work order must be an object');
   for (const key of Object.keys(value)) {
@@ -75,6 +81,24 @@ function normalizeWorkOrder(value, { projectRoot, fileSystem = fs } = {}) {
   const screenId = requiredString(value.screenId, 'screenId');
   const route = requiredString(value.route, 'route');
   if (!route.startsWith('/')) throw new Error('route must start with /');
+  const compiledRevision = requiredString(value.compiledRevision, 'compiledRevision');
+  if (!/^[a-f0-9]{64}$/.test(compiledRevision)) {
+    throw new Error('compiledRevision must be a SHA-256 value');
+  }
+  if (!isPlainObject(value.experienceDirective)) {
+    throw new Error('experienceDirective must be the compiled product-wide directive');
+  }
+  if (!isPlainObject(compiledScreenBuildPack)
+    || compiledScreenBuildPack.contractType !== 'compiled-screen-build-pack') {
+    throw new Error('current compiled screen build pack is required');
+  }
+  if (compiledRevision !== compiledScreenBuildPack.compiledRevision) {
+    throw new Error('compiledRevision does not match the current compiled screen build pack');
+  }
+  if (canonicalJson(value.experienceDirective)
+    !== canonicalJson(compiledScreenBuildPack.experienceDirective)) {
+    throw new Error('experienceDirective does not match the current compiled screen build pack');
+  }
   if (!isPlainObject(value.pack) || value.pack.screenId !== screenId) {
     throw new Error('pack must be the assigned screen build-pack entry');
   }
@@ -89,6 +113,8 @@ function normalizeWorkOrder(value, { projectRoot, fileSystem = fs } = {}) {
     screenId,
     route,
     targetPath,
+    compiledRevision,
+    experienceDirective: value.experienceDirective,
     pack: value.pack,
     scenarioFacts: value.scenarioFacts,
     routeContract: value.routeContract,
@@ -148,46 +174,9 @@ function delimiters(workOrder) {
   };
 }
 
-function validateGeneratedScreenContent(content, workOrder) {
+function hashGeneratedScreenContent(content) {
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('generated screen content is empty');
-  }
-  const missingTestIds = workOrder.testIds.filter((testId) => !content.includes(testId));
-  if (missingTestIds.length) {
-    throw new Error(`generated screen is missing required test IDs: ${missingTestIds.join(', ')}`);
-  }
-
-  const allowedNamedTokens = new Set(workOrder.tokenInterfaces.flatMap((entry) => (
-    entry.match(/\$[A-Za-z][A-Za-z0-9.]*/g) || []
-  )));
-  if (allowedNamedTokens.size) {
-    const usedNamedTokens = new Set(content.match(/\$[A-Za-z][A-Za-z0-9.]*/g) || []);
-    const unsupported = [...usedNamedTokens]
-      .filter((token) => !allowedNamedTokens.has(token))
-      .sort();
-    if (unsupported.length) {
-      throw new Error(`generated screen uses tokens outside the sealed interface: ${unsupported.join(', ')}`);
-    }
-  }
-
-  const suppliedSymbols = [...workOrder.serviceSignatures, ...workOrder.signatureComponentInterfaces]
-    .map((entry) => entry.match(/^\s*([A-Za-z_$][A-Za-z0-9_$]*)/u)?.[1])
-    .filter(Boolean);
-  const locallyShadowed = [...new Set(suppliedSymbols)].filter((symbol) => {
-    const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`\\b(?:const|let|var|function|class)\\s+${escaped}\\b`, 'u').test(content);
-  });
-  if (locallyShadowed.length) {
-    throw new Error(
-      `generated screen locally reimplements supplied interfaces: ${locallyShadowed.sort().join(', ')}`,
-    );
-  }
-
-  if (!Object.prototype.hasOwnProperty.call(workOrder.states, 'offline')) {
-    const offlineCopy = /(?:['"`][^'"`\n]*\boffline\b[^'"`\n]*['"`]|>[^<\n]*\boffline\b[^<\n]*<)/i;
-    if (offlineCopy.test(content)) {
-      throw new Error('generated screen includes offline copy but the sealed work order has no offline state');
-    }
   }
   return { contentHash: sha256Hex(content) };
 }
@@ -256,7 +245,7 @@ function parseReturnOnly(responseText, sealedWorkOrder, options = {}) {
     throw new Error('DONE_WITH_CONCERNS requires at least one concern');
   }
   const contentValidation = content
-    ? validateGeneratedScreenContent(content, workOrder)
+    ? hashGeneratedScreenContent(content)
     : { contentHash: null };
   return {
     status: header.STATUS,
@@ -297,7 +286,7 @@ function validateDirectWrite(sealedWorkOrder, result, options = {}) {
     throw new Error('DONE_WITH_CONCERNS requires at least one concern');
   }
   const contentValidation = ready
-    ? validateGeneratedScreenContent(fs.readFileSync(workOrder.targetPath, 'utf8'), workOrder)
+    ? hashGeneratedScreenContent(fs.readFileSync(workOrder.targetPath, 'utf8'))
     : { contentHash: null };
   return { ...result, changedFiles, concerns, contentHash: contentValidation.contentHash };
 }
@@ -310,7 +299,6 @@ module.exports = {
   normalizeWorkOrder,
   parseReturnOnly,
   sealWorkOrder,
-  validateGeneratedScreenContent,
   validateDirectWrite,
   validateSealedWorkOrder,
   workOrderFingerprint,

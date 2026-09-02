@@ -86,13 +86,13 @@ const ACCEPTANCE_SCENARIOS = {
   },
 
   icrcReceiving: {
-    brief: 'Build an authenticated field receiving app for ICRC warehouse staff who often lose signal. They need to scan or enter a shipment, receive line items, inspect damaged packages, resolve discrepancies, attach photo evidence with GPS, and hand off custody. Work must resume after interruption and retry synchronization.',
+    brief: 'Design an authenticated mobile-first offline field receiving app for ICRC field logisticians, warehouse officers, quality inspectors, and headquarters planners in locations with limited connectivity. They need to view expected shipments, scan barcodes or QR codes, record received and damaged quantities, capture Pass/Fail/Partial inspection results, enter batch numbers and expiry dates, resolve discrepancies, photograph damage, record GPS location, obtain recipient confirmation, and retry synchronization after interruption.',
     productName: 'Relief Receive',
     primaryGoal: 'Receive relief shipments accurately and preserve evidence through handoff',
     vocabulary: ['shipment', 'pallet', 'waybill', 'discrepancy', 'custody'],
     complexity: 'complex',
     dimensions: {
-      primaryUser: { role: 'ICRC warehouse receiver', proficiency: 'practiced', situation: 'Moves between loading bays with gloves, interruptions, and unreliable connectivity' },
+      primaryUser: { role: 'ICRC field logistician', proficiency: 'mixed', situation: 'Moves between loading bays with gloves, interruptions, and unreliable connectivity', secondaryUsers: ['Warehouse officer', 'Quality inspector', 'Headquarters planner'] },
       primaryIntent: 'capture',
       workflowShape: 'linear-sequence',
       operatingContext: { environment: 'on-the-floor', connectivity: 'offline-first', interruptionLevel: 'high', handsAvailable: 'gloved' },
@@ -106,7 +106,7 @@ const ACCEPTANCE_SCENARIOS = {
       mediaStrategy: { necessity: 'supportive', types: ['photo'], capture: 'user-captured', fallback: 'Evidence-required marker with package and discrepancy identifiers' },
       accessibilityPriorities: ['large-touch-targets', 'glove-friendly', 'high-contrast'],
     },
-    contextEvidence: 'warehouse staff who often lose signal',
+    contextEvidence: 'locations with limited connectivity',
     fixtureValues: ['Shipment ICRC-KE-1042', 'Pallet PLT-77-A', '3 cartons damaged'],
     coreJobs: [{
       id: 'receive-shipment',
@@ -121,12 +121,15 @@ const ACCEPTANCE_SCENARIOS = {
       { id: 'recover-sync', statement: 'As a receiver I want failed synchronization to preserve my work and retry', actor: 'ICRC warehouse receiver', outcome: 'Pending work remains visible and can synchronize later', screenId: 'receiving', surfaceKind: 'section' },
     ],
     requirements: [
-      { id: 'receive-items', jobId: 'receive-shipment', statement: 'Scan or manually enter a shipment and receive its line items', evidence: 'scan or enter a shipment', screenId: 'receiving', target: 'Scan or enter shipment', operation: { kind: 'update', entity: 'Shipment', classification: 'schema-backed' } },
-      { id: 'inspect-packages', jobId: 'receive-shipment', statement: 'Inspect packages and record quantity and condition', evidence: 'inspect damaged packages', screenId: 'inspection', target: 'Record inspection', operation: { kind: 'create', entity: 'Inspection', classification: 'schema-backed' } },
+      { id: 'view-expected-shipments', jobId: 'receive-shipment', statement: 'View shipments expected at the current receiving location', evidence: 'view expected shipments', screenId: 'receiving', target: 'Open expected shipment', operation: { kind: 'read', entity: 'Shipment', classification: 'schema-backed' } },
+      { id: 'receive-items', jobId: 'receive-shipment', statement: 'Scan a shipment barcode or QR code and receive its line items', evidence: 'scan barcodes or QR codes', screenId: 'receiving', target: 'Scan or enter shipment', operation: { kind: 'update', entity: 'Shipment', classification: 'schema-backed' } },
+      { id: 'record-quantities', jobId: 'receive-shipment', statement: 'Record received and damaged package quantities', evidence: 'record received and damaged quantities', screenId: 'inspection', target: 'Record quantities', operation: { kind: 'update', entity: 'Package', classification: 'schema-backed' } },
+      { id: 'inspect-packages', jobId: 'receive-shipment', statement: 'Capture Pass, Fail, or Partial inspection results', evidence: 'capture Pass/Fail/Partial inspection results', screenId: 'inspection', target: 'Record inspection', operation: { kind: 'create', entity: 'Inspection', classification: 'schema-backed' } },
+      { id: 'record-batch-expiry', jobId: 'receive-shipment', statement: 'Enter batch numbers and expiry dates for received line items', evidence: 'enter batch numbers and expiry dates', screenId: 'inspection', target: 'Save batch details', operation: { kind: 'update', entity: 'Line item', classification: 'schema-backed' } },
       { id: 'resolve-discrepancy', jobId: 'receive-shipment', statement: 'Resolve a quantity or condition discrepancy with a reason', evidence: 'resolve discrepancies', screenId: 'discrepancy', target: 'Resolve discrepancy', operation: { kind: 'update', entity: 'Discrepancy', classification: 'schema-backed' } },
-      { id: 'attach-evidence', jobId: 'receive-shipment', statement: 'Attach photo evidence to the discrepancy record', evidence: 'attach photo evidence', screenId: 'evidence', target: 'Save evidence', operation: { kind: 'create', entity: 'Evidence', classification: 'schema-backed' } },
-      { id: 'capture-location', jobId: 'receive-shipment', statement: 'Capture GPS location with the receiving evidence', evidence: 'GPS', screenId: 'evidence', surfaceKind: 'section', target: 'Capture location', operation: { kind: 'update', entity: 'Evidence', classification: 'schema-backed' } },
-      { id: 'handoff-custody', jobId: 'receive-shipment', statement: 'Hand off received custody to the next accountable person', evidence: 'hand off custody', screenId: 'handoff', target: 'Confirm handoff', operation: { kind: 'create', entity: 'Custody event', classification: 'schema-backed' } },
+      { id: 'attach-evidence', jobId: 'receive-shipment', statement: 'Photograph damage and bind it to the discrepancy', evidence: 'photograph damage', screenId: 'evidence', target: 'Save evidence', operation: { kind: 'create', entity: 'Evidence', classification: 'schema-backed' } },
+      { id: 'capture-location', jobId: 'receive-shipment', statement: 'Record GPS location with the receiving evidence', evidence: 'record GPS location', screenId: 'evidence', surfaceKind: 'section', target: 'Capture location', operation: { kind: 'update', entity: 'Evidence', classification: 'schema-backed' } },
+      { id: 'handoff-custody', jobId: 'receive-shipment', statement: 'Obtain recipient confirmation for the goods handoff', evidence: 'obtain recipient confirmation', screenId: 'handoff', target: 'Confirm handoff', operation: { kind: 'create', entity: 'Custody event', classification: 'schema-backed' } },
       { id: 'retry-sync', jobId: 'recover-sync', statement: 'Retry synchronization without losing received quantities or evidence', evidence: 'retry synchronization', screenId: 'receiving', mechanism: 'state', target: 'retry' },
     ],
     screens: [
@@ -151,10 +154,10 @@ const ACCEPTANCE_SCENARIOS = {
   },
 
   gymMaintenance: {
-    brief: 'Build an authenticated gym maintenance app for technicians working in basement facilities with intermittent Wi-Fi. They need to scan equipment, inspect it, record defects, attach photo evidence, record repairs, close maintenance work, and open Profile to sign out.',
+    brief: 'Build an authenticated gym maintenance app for a company that owns multiple gyms. Technicians working in basement facilities with intermittent Wi-Fi need to scan equipment from a QR code, inspect it, record defects and ongoing repairs, attach photo evidence, review upcoming maintenance and warranties, close maintenance work, and open Profile to sign out.',
     productName: 'Gym Floor Care',
     primaryGoal: 'Find gym equipment quickly and complete defensible maintenance work',
-    vocabulary: ['equipment', 'gym', 'inspection', 'defect', 'repair'],
+    vocabulary: ['equipment', 'gym', 'inspection', 'defect', 'repair', 'warranty'],
     complexity: 'standard',
     dimensions: {
       primaryUser: { role: 'Gym maintenance technician', proficiency: 'practiced', situation: 'Works across basement equipment floors with one hand and intermittent Wi-Fi' },
@@ -185,11 +188,12 @@ const ACCEPTANCE_SCENARIOS = {
       { id: 'manage-profile', statement: 'As a technician I want to open Profile and sign out', actor: 'Gym maintenance technician', outcome: 'Account and sign-out remain reachable from Home', screenId: 'profile' },
     ],
     requirements: [
-      { id: 'scan-equipment', jobId: 'maintain-equipment', statement: 'Scan equipment or enter its asset tag to open the work record', evidence: 'scan equipment', screenId: 'home', target: 'Scan equipment', operation: { kind: 'read', entity: 'Equipment', classification: 'schema-backed' } },
+      { id: 'scan-equipment', jobId: 'maintain-equipment', statement: 'Scan equipment from its QR code to open the work record', evidence: 'scan equipment from a QR code', screenId: 'home', target: 'Scan equipment', operation: { kind: 'read', entity: 'Equipment', classification: 'schema-backed' } },
       { id: 'inspect-equipment', jobId: 'maintain-equipment', statement: 'Inspect the equipment against its safety checklist', evidence: 'inspect it', screenId: 'inspection', target: 'Save inspection', operation: { kind: 'create', entity: 'Inspection', classification: 'schema-backed' } },
       { id: 'record-defect', jobId: 'maintain-equipment', statement: 'Record a defect with severity and affected component', evidence: 'record defects', screenId: 'defect', target: 'Save defect', operation: { kind: 'create', entity: 'Defect', classification: 'schema-backed' } },
       { id: 'attach-evidence', jobId: 'maintain-equipment', statement: 'Attach photo evidence to the current defect', evidence: 'attach photo evidence', screenId: 'defect', surfaceKind: 'section', target: 'Attach photo', operation: { kind: 'update', entity: 'Defect', classification: 'schema-backed' } },
-      { id: 'record-repair', jobId: 'maintain-equipment', statement: 'Record parts, labor, and the completed repair', evidence: 'record repairs', screenId: 'repair', target: 'Save repair', operation: { kind: 'create', entity: 'Repair', classification: 'schema-backed' } },
+      { id: 'record-repair', jobId: 'maintain-equipment', statement: 'Record parts, labor, and the ongoing repair', evidence: 'ongoing repairs', screenId: 'repair', target: 'Save repair', operation: { kind: 'create', entity: 'Repair', classification: 'schema-backed' } },
+      { id: 'review-maintenance-warranty', jobId: 'maintain-equipment', statement: 'Review upcoming maintenance and warranty coverage before returning equipment to service', evidence: 'upcoming maintenance and warranties', screenId: 'equipment', target: 'Review warranty', operation: { kind: 'external-call', entity: 'Warranty', classification: 'schema-backed' } },
       { id: 'close-work', jobId: 'maintain-equipment', statement: 'Close maintenance only after safety checks are complete', evidence: 'close maintenance work', screenId: 'closed', target: 'Close work', operation: { kind: 'update', entity: 'Equipment', classification: 'schema-backed' } },
       { id: 'open-profile', jobId: 'manage-profile', statement: 'Open Profile and sign out of the technician account', evidence: 'open Profile to sign out', screenId: 'profile', target: 'Open account' },
     ],
@@ -210,6 +214,7 @@ const ACCEPTANCE_SCENARIOS = {
       { name: 'Inspection', role: 'primary', realization: 'new-table', screenIds: ['inspection'], jobIds: ['maintain-equipment'] },
       { name: 'Defect', role: 'supporting', realization: 'new-table', screenIds: ['defect'], jobIds: ['maintain-equipment'] },
       { name: 'Repair', role: 'primary', realization: 'new-table', screenIds: ['repair'], jobIds: ['maintain-equipment'] },
+      { name: 'Warranty', role: 'supporting', realization: 'connector-source', screenIds: ['equipment'] },
     ],
     newTableBudget: { target: 3, max: 5 },
   },
@@ -297,6 +302,62 @@ const ACCEPTANCE_SCENARIOS = {
       { name: 'Barcode label', role: 'supporting', realization: 'transient-ui-state', screenIds: ['asset'] },
     ],
     newTableBudget: { target: 2, max: 4 },
+  },
+
+  connectorOnlyDispatch: {
+    brief: 'Create an authenticated mobile dispatch app that uses the existing FieldOps connector as the sole system of record and explicitly uses no Dataverse tables. Technicians review assigned visits, open customer details, mark arrival, complete visits, and manage their account.',
+    productName: 'FieldOps Dispatch',
+    primaryGoal: 'Complete assigned customer visits against the existing FieldOps system of record',
+    vocabulary: ['assigned visit', 'customer', 'arrival', 'completion', 'technician'],
+    complexity: 'focused',
+    dimensions: {
+      primaryUser: { role: 'Field service technician', proficiency: 'practiced', situation: 'Moves between customer locations with one hand available and frequent interruptions' },
+      primaryIntent: 'coordinate',
+      workflowShape: 'queue-driven',
+      operatingContext: { environment: 'field-outdoor', connectivity: 'always-online', interruptionLevel: 'high', handsAvailable: 'one-hand' },
+      sessionPattern: { frequency: 'many-per-day', duration: 'one-to-three-minutes', resumability: 'helpful-to-resume' },
+      informationDensity: 'balanced',
+      interactionTempo: 'brisk',
+      contentEmphasis: { primary: 'status-signals', secondary: ['form-entry'] },
+      decisionRisk: { level: 'moderate', drivers: ['Incorrect arrival or completion status disrupts dispatch and customer communication'] },
+      visualPersonality: { tone: 'confident', expressiveness: 'moderate', rationale: 'Technicians need assignment identity, timing, and the next field action to remain immediately legible.' },
+      mediaStrategy: { necessity: 'none', types: [], capture: 'none', fallback: 'Visit and customer identity remain fully usable without media' },
+      accessibilityPriorities: ['large-touch-targets', 'one-handed-reach', 'high-contrast'],
+    },
+    contextEvidence: 'uses the existing FieldOps connector as the sole system of record',
+    fixtureValues: ['Visit WO-1842 - 09:30 arrival', 'Contoso Clinic - access confirmed', 'Visit WO-1839 - completion pending'],
+    coreJobs: [{
+      id: 'complete-assigned-visit',
+      statement: 'As a technician I want to review and complete my assigned customer visit',
+      actor: 'Field service technician',
+      outcome: 'FieldOps has the current arrival and completion state for the visit',
+      surfaceScreenId: 'assignments',
+      successOutcome: 'The completed visit is confirmed in FieldOps and removed from the active queue',
+      failureRecovery: 'A failed connector update preserves the current server state and offers retry',
+    }],
+    supportingJobs: [
+      { id: 'manage-technician-account', statement: 'As a technician I want to manage my account', actor: 'Field service technician', outcome: 'Account and sign-out remain reachable without becoming a separate work hub', screenId: 'profile' },
+    ],
+    requirements: [
+      { id: 'review-assigned-visits', jobId: 'complete-assigned-visit', statement: 'Review assigned visits from FieldOps', evidence: 'review assigned visits', screenId: 'assignments', target: 'Open visit', operation: { kind: 'read', entity: 'Work order', classification: 'schema-backed' } },
+      { id: 'open-customer-details', jobId: 'complete-assigned-visit', statement: 'Open customer details for the selected visit', evidence: 'open customer details', screenId: 'visit', target: 'View customer', operation: { kind: 'read', entity: 'Customer', classification: 'schema-backed' } },
+      { id: 'mark-arrival', jobId: 'complete-assigned-visit', statement: 'Mark arrival in FieldOps', evidence: 'mark arrival', screenId: 'visit', target: 'Mark arrived', operation: { kind: 'external-call', entity: 'Work order', classification: 'schema-backed' } },
+      { id: 'complete-visit', jobId: 'complete-assigned-visit', statement: 'Complete the visit in FieldOps', evidence: 'complete visits', screenId: 'complete', target: 'Complete visit', operation: { kind: 'external-call', entity: 'Work order', classification: 'schema-backed' } },
+      { id: 'manage-technician-account', jobId: 'manage-technician-account', statement: 'Manage the technician account and sign out', evidence: 'manage their account', screenId: 'profile', target: 'Manage account', operation: { kind: 'read', entity: 'Technician', classification: 'schema-backed' } },
+    ],
+    screens: [
+      { id: 'assignments', title: 'My visits', pattern: 'queue', classification: 'durable-destination', jobIds: ['complete-assigned-visit'], focal: 'Assigned visits ordered by arrival time and status', signature: 'Time-bound dispatch queue', primaryAction: 'Open visit' },
+      { id: 'visit', title: 'Visit', pattern: 'detail', classification: 'nested-detail', parentScreenId: 'assignments', jobIds: ['complete-assigned-visit'], focal: 'Visit identity, customer access details, timing, and arrival state', signature: 'Arrival-first visit record', primaryAction: 'Mark arrived', secondaryActions: ['View customer'], parameterizedBy: 'workOrderId', interactionSignature: 'fieldops-visit' },
+      { id: 'complete', title: 'Complete visit', pattern: 'confirmation', classification: 'bounded-flow-step', parentScreenId: 'assignments', jobIds: ['complete-assigned-visit'], focal: 'Work performed, completion state, and connector confirmation', signature: 'FieldOps completion receipt', primaryAction: 'Complete visit' },
+      { id: 'profile', title: 'Profile', pattern: 'settings', classification: 'nested-detail', parentScreenId: 'assignments', jobIds: ['manage-technician-account'], focal: 'Technician identity, dispatch region, and sign out', signature: 'Compact technician account', primaryAction: 'Manage account' },
+    ],
+    navigation: { pattern: 'stack-only', durableDestinationIds: ['assignments'], visibleTabIds: [], authenticated: true, profileScreenId: 'profile', profileAccess: 'account-action', stackOnlyReason: 'One assignment queue owns the bounded visit workflow.', returnHomeMechanism: 'Completion or Back returns to My visits.' },
+    entities: [
+      { name: 'Work order', role: 'primary', realization: 'connector-source', screenIds: ['assignments', 'visit', 'complete'] },
+      { name: 'Customer', role: 'supporting', realization: 'connector-source', screenIds: ['visit'] },
+      { name: 'Technician', role: 'supporting', realization: 'connector-source', screenIds: ['profile'] },
+    ],
+    newTableBudget: { target: 0, max: 0 },
   },
 };
 
@@ -452,7 +513,7 @@ function acceptanceBundle(key) {
       const mediaRequired = experience.mediaStrategy.necessity === 'essential'
         && screen.jobIds.some((jobId) => coreJobIds.has(jobId));
       const mediaRole = screen.mediaRole || (mediaRequired ? 'product' : 'none');
-      const previewRecords = descriptor.fixtureValues.map((value, index) => ({
+      const previewRecords = screen.previewRecords || descriptor.fixtureValues.map((value, index) => ({
         title: value,
         subtitle: `${screen.title}: ${index === 0 ? screen.focal : 'Related context for the current job'}`,
         meta: index === 0 ? 'Current' : `Evidence ${index + 1}`,
@@ -463,7 +524,7 @@ function acceptanceBundle(key) {
         route: routeForScreen(screen),
         purpose: `${screen.title} supports ${screen.jobIds.join(', ')} without creating an entity-driven route family.`,
         userQuestion: `What does the user need to know or do on ${screen.title}?`,
-        firstViewport: { regionOrder: ['context', 'focal-content', 'primary-action'], focalContent: screen.focal, primaryAction },
+        firstViewport: { regionOrder: screen.regionOrder || ['context', 'focal-content', 'primary-action'], focalContent: screen.focal, primaryAction },
         hierarchy: { dominant: screen.focal, supporting: [screen.signature] },
         identityHierarchy: {
           primary: screen.focal,
@@ -483,8 +544,10 @@ function acceptanceBundle(key) {
         secondaryActions: actionLabels
           .filter((label) => label !== primaryAction)
           .map((label) => ({ label, outcome: `${label} completes its explicit requirement` })),
-        trustSignals: [{ label: `${descriptor.productName} source and status are visible`, classification: 'safe-presentation' }],
-        decisionSupport: [{ label: screen.signature, classification: 'safe-presentation' }],
+        trustSignals: (screen.trustSignals || [`${descriptor.productName} source and status are visible`])
+          .map((label) => ({ label, classification: 'safe-presentation' })),
+        decisionSupport: (screen.decisionSupport || [screen.signature])
+          .map((label) => ({ label, classification: 'safe-presentation' })),
         media: mediaRole === 'none'
           ? { role: 'none' }
           : {
@@ -506,16 +569,17 @@ function acceptanceBundle(key) {
         dataAssumptions: [],
         previewContent: {
           eyebrow: descriptor.productName,
-          headline: screen.focal,
-          supportingText: `${screen.title} is grounded in the approved job and realistic fixture records.`,
+          headline: screen.previewHeadline || screen.focal,
+          supportingText: screen.previewSupportingText
+            || `${screen.title} is grounded in the approved job and realistic fixture records.`,
           ...(mediaRole !== 'none' ? { heroMediaLabel: `${descriptor.fixtureValues[0]} focal image` } : {}),
-          metrics: [
+          metrics: screen.previewMetrics || [
             { label: 'Primary action', value: primaryAction },
             { label: 'Current context', value: descriptor.fixtureValues[0] },
           ],
           records: previewRecords,
-          fields: [{ label: 'Job', value: screen.jobIds[0] }],
-          summaryRows: [{ label: 'Outcome', value: screen.signature }],
+          fields: screen.previewFields || [{ label: 'Job', value: screen.jobIds[0] }],
+          summaryRows: screen.previewSummaryRows || [{ label: 'Outcome', value: screen.signature }],
         },
         composition: { kind: screen.pattern, rationale: `${screen.focal} requires the ${screen.pattern} composition and ${screen.signature}.` },
       };

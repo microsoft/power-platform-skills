@@ -36,6 +36,7 @@ const MATRIX = Object.freeze([
   { id: 'humanitarian-dataverse-offline', scenario: 'icrcReceiving', mode: 'dataverse', offline: true, storyboard: 'operational' },
   { id: 'gym-maintenance-mixed', scenario: 'gymMaintenance', mode: 'mixed', offline: false },
   { id: 'it-inventory-local', scenario: 'itAssetTracking', mode: 'local-prototype', offline: false },
+  { id: 'connector-only-dispatch', scenario: 'connectorOnlyDispatch', mode: 'connector-only', offline: false },
   { id: 'it-inventory-dataverse-online', scenario: 'itAssetTracking', mode: 'dataverse', offline: false, pair: 'it-offline' },
   { id: 'it-inventory-dataverse-offline', scenario: 'itAssetTracking', mode: 'dataverse', offline: true, pair: 'it-offline' },
 ]);
@@ -669,6 +670,7 @@ function runAcceptanceMatrix(outputDirectory) {
   }
   const commerce = runs.find((run) => run.id === 'flight-commerce-connector');
   const operational = runs.find((run) => run.id === 'humanitarian-dataverse-offline');
+  const gym = runs.find((run) => run.id === 'gym-maintenance-mixed');
   const mixed = runs.find((run) => run.mode === 'mixed');
 
   fs.mkdirSync(outputDirectory, { recursive: true });
@@ -691,6 +693,7 @@ function runAcceptanceMatrix(outputDirectory) {
     runs: Object.fromEntries(runs.map((run) => [run.id, run.timings])),
   });
   writeText(path.join(outputDirectory, 'commerce-storyboard.html'), commerce.artifacts.previewHtml);
+  writeText(path.join(outputDirectory, 'gym-storyboard.html'), gym.artifacts.previewHtml);
   writeText(path.join(outputDirectory, 'operational-storyboard.html'), operational.artifacts.previewHtml);
   return summary;
 }

@@ -7,12 +7,14 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const { compileScreenBuildPack } = require('../compile-screen-build-pack');
+
 const {
   delimiters,
   parseReturnOnly,
   sealWorkOrder,
   validateDirectWrite,
-  validateGeneratedScreenContent,
+  workOrderFingerprint,
 } = require('../lib/screen-builder-work-order');
 const {
   canSkipValidation,
@@ -27,11 +29,46 @@ const {
   restoreSnapshotPaths,
   workspaceFingerprint,
 } = require('../lib/screen-builder-runtime');
+const { bundleFor } = require('./helpers/product-experience-scenarios');
+
+const EXPERIENCE_DIRECTIVE = {
+  tone: 'quiet',
+  expressiveness: 'restrained',
+  density: 'dense',
+  tempo: 'steady',
+  emphasis: 'status-signals',
+  mediaNecessity: 'none',
+  riskLevel: 'low',
+  regionOrder: ['context', 'focal-content', 'primary-action'],
+  accessibilityPriorities: ['high-contrast'],
+  forbiddenDefaults: ['Generic dashboard'],
+};
+const COMPILED_REVISION = 'b'.repeat(64);
+
+function compiledPack(experienceDirective = EXPERIENCE_DIRECTIVE) {
+  return {
+    contractType: 'compiled-screen-build-pack',
+    compiledRevision: COMPILED_REVISION,
+    experienceDirective,
+  };
+}
+
+function contractOptions(root, experienceDirective = EXPERIENCE_DIRECTIVE) {
+  return {
+    projectRoot: root,
+    compiledScreenBuildPack: compiledPack(experienceDirective),
+  };
+}
 
 function project(context) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'screen-builder-channel-'));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'app'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, '.tmp', 'compiled-screen-build-pack.json'),
+    `${JSON.stringify(compiledPack(), null, 2)}\n`,
+  );
   return root;
 }
 
@@ -42,6 +79,8 @@ function workOrder(root, screenId = 'home') {
     screenId,
     route: `/${screenId}`,
     targetPath: path.join(root, 'app', `${screenId}.tsx`),
+    compiledRevision: COMPILED_REVISION,
+    experienceDirective: EXPERIENCE_DIRECTIVE,
     pack: { screenId, purpose: `Implement ${screenId}` },
     scenarioFacts: {
       screenId,
@@ -63,15 +102,62 @@ function workOrder(root, screenId = 'home') {
 
 test('direct-write and return-only channels consume the same sealed work order', (context) => {
   const root = project(context);
-  const first = sealWorkOrder(workOrder(root), { projectRoot: root });
-  const second = sealWorkOrder(workOrder(root), { projectRoot: root });
+  const first = sealWorkOrder(workOrder(root), contractOptions(root));
+  const second = sealWorkOrder(workOrder(root), contractOptions(root));
   assert.equal(first.sealed.inputFingerprint, second.sealed.inputFingerprint);
   assert.deepEqual(first.sealed, second.sealed);
 });
 
+test('Product Experience directive reaches the sealed return-only builder input unchanged', (context) => {
+  const root = project(context);
+  const bundle = bundleFor('commerce');
+  const result = compileScreenBuildPack(bundle.buildPack, bundle);
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  const compiled = result.compiled;
+  const screen = compiled.screens[0];
+  const order = {
+    ...workOrder(root, screen.screenId),
+    route: screen.route,
+    targetPath: path.join(root, 'app', `${screen.screenId}.tsx`),
+    compiledRevision: compiled.compiledRevision,
+    experienceDirective: compiled.experienceDirective,
+    pack: screen,
+    states: screen.pack.states,
+    testIds: Object.values(screen.implementationContract.testIds),
+  };
+  const options = { projectRoot: root, compiledScreenBuildPack: compiled };
+  const { sealed } = sealWorkOrder(order, options);
+
+  assert.deepEqual(sealed.experienceDirective, compiled.experienceDirective);
+  assert.deepEqual(Object.keys(sealed.experienceDirective).sort(), [
+    'accessibilityPriorities',
+    'density',
+    'emphasis',
+    'expressiveness',
+    'forbiddenDefaults',
+    'mediaNecessity',
+    'regionOrder',
+    'riskLevel',
+    'tempo',
+    'tone',
+  ]);
+  const changed = structuredClone(sealed);
+  delete changed.inputFingerprint;
+  changed.experienceDirective.tone = 'changed-after-compilation';
+  assert.notEqual(workOrderFingerprint(changed), sealed.inputFingerprint);
+  assert.throws(
+    () => sealWorkOrder(changed, options),
+    /experienceDirective does not match the current compiled screen build pack/,
+  );
+  assert.throws(
+    () => sealWorkOrder({ ...order, compiledRevision: 'c'.repeat(64) }, options),
+    /compiledRevision does not match the current compiled screen build pack/,
+  );
+});
+
 test('return-only parser accepts one run-scoped TSX result', (context) => {
   const root = project(context);
-  const { sealed } = sealWorkOrder(workOrder(root), { projectRoot: root });
+  const { sealed } = sealWorkOrder(workOrder(root), contractOptions(root));
   const marker = delimiters(sealed);
   const response = [
     marker.resultBegin,
@@ -83,7 +169,7 @@ test('return-only parser accepts one run-scoped TSX result', (context) => {
     marker.contentEnd,
     marker.resultEnd,
   ].join('\n');
-  const result = parseReturnOnly(response, sealed, { projectRoot: root });
+  const result = parseReturnOnly(response, sealed, contractOptions(root));
   assert.equal(result.status, 'DONE');
   assert.match(result.content, /function Home/);
   assert.equal(result.inputFingerprint, sealed.inputFingerprint);
@@ -91,20 +177,23 @@ test('return-only parser accepts one run-scoped TSX result', (context) => {
 
 test('return-only parser rejects mismatched delimiters and oversized output', (context) => {
   const root = project(context);
-  const { sealed } = sealWorkOrder(workOrder(root), { projectRoot: root });
+  const { sealed } = sealWorkOrder(workOrder(root), contractOptions(root));
   assert.throws(
-    () => parseReturnOnly('DONE', sealed, { projectRoot: root }),
+    () => parseReturnOnly('DONE', sealed, contractOptions(root)),
     /missing or mismatched run-scoped delimiters/,
   );
   assert.throws(
-    () => parseReturnOnly('x'.repeat(100), sealed, { projectRoot: root, maxOutputBytes: 50 }),
+    () => parseReturnOnly('x'.repeat(100), sealed, {
+      ...contractOptions(root),
+      maxOutputBytes: 50,
+    }),
     /maximum is 50/,
   );
 });
 
 test('direct-write validation permits exactly the assigned screen', (context) => {
   const root = project(context);
-  const { sealed } = sealWorkOrder(workOrder(root), { projectRoot: root });
+  const { sealed } = sealWorkOrder(workOrder(root), contractOptions(root));
   fs.writeFileSync(sealed.targetPath, 'export default function Home() { return "screen-home"; }\n');
   const valid = {
     status: 'DONE',
@@ -113,60 +202,46 @@ test('direct-write validation permits exactly the assigned screen', (context) =>
     changedFiles: [sealed.targetPath],
     concerns: [],
   };
-  assert.equal(validateDirectWrite(sealed, valid, { projectRoot: root }).status, 'DONE');
+  assert.equal(validateDirectWrite(sealed, valid, contractOptions(root)).status, 'DONE');
   assert.throws(() => validateDirectWrite(sealed, {
     ...valid,
     changedFiles: [sealed.targetPath, path.join(root, 'app', '_layout.tsx')],
-  }, { projectRoot: root }), /may change only/);
+  }, contractOptions(root)), /may change only/);
   assert.equal(validateDirectWrite(sealed, {
     ...valid,
     status: 'NEEDS_CONTEXT',
     changedFiles: [],
-  }, { projectRoot: root }).status, 'NEEDS_CONTEXT');
+  }, contractOptions(root)).status, 'NEEDS_CONTEXT');
   assert.throws(() => validateDirectWrite(sealed, {
     ...valid,
     status: 'BLOCKED',
-  }, { projectRoot: root }), /must not report partial direct-write changes/);
+  }, contractOptions(root)), /must not report partial direct-write changes/);
   assert.throws(() => validateDirectWrite(sealed, {
     ...valid,
     status: 'DONE_WITH_CONCERNS',
-  }, { projectRoot: root }), /requires at least one concern/);
+  }, contractOptions(root)), /requires at least one concern/);
 });
 
-test('both channels enforce sealed test IDs, named tokens, and offline state', (context) => {
+test('channels do not replace TypeScript and quality gates with regex TSX inspection', (context) => {
   const root = project(context);
   const order = workOrder(root);
   order.tokenInterfaces = ['$surface0', '$text0', '$accentBase'];
-  const { sealed } = sealWorkOrder(order, { projectRoot: root });
-  assert.doesNotThrow(() => validateGeneratedScreenContent(
-    'const screen = <View testID="screen-home" bg="$surface0" color="$text0" />;',
-    sealed,
-  ));
-  assert.throws(
-    () => validateGeneratedScreenContent(
-      'const screen = <View testID="screen-home" bg="$blue3" />;',
-      sealed,
-    ),
-    /tokens outside the sealed interface: \$blue3/,
-  );
-  assert.throws(
-    () => validateGeneratedScreenContent('const screen = <View bg="$surface0" />;', sealed),
-    /missing required test IDs: screen-home/,
-  );
-  assert.throws(
-    () => validateGeneratedScreenContent(
-      'const screen = <Text testID="screen-home">Offline snapshot</Text>;',
-      sealed,
-    ),
-    /no offline state/,
-  );
-  assert.throws(
-    () => validateGeneratedScreenContent(
-      'const RecordsService = {}; function SignatureHero() {} const screen = "screen-home";',
-      sealed,
-    ),
-    /locally reimplements supplied interfaces: RecordsService, SignatureHero/,
-  );
+  const { sealed } = sealWorkOrder(order, contractOptions(root));
+  const marker = delimiters(sealed);
+  const content = 'export default function Home() { return <View bg="$blue3">Offline snapshot</View>; }';
+  const response = [
+    marker.resultBegin,
+    'STATUS: DONE',
+    `TARGET: ${sealed.targetPath}`,
+    'CONCERNS: []',
+    marker.contentBegin,
+    content,
+    marker.contentEnd,
+    marker.resultEnd,
+  ].join('\n');
+  const result = parseReturnOnly(response, sealed, contractOptions(root));
+  assert.equal(result.content, content);
+  assert.match(result.contentHash, /^[a-f0-9]{64}$/);
 });
 
 test('direct-write audit preserves the assigned screen and restores actual out-of-scope writes', (context) => {
@@ -264,10 +339,43 @@ test('screen-builder contract CLI audits actual direct-write paths', (context) =
   assert.equal(fs.readFileSync(path.join(root, 'app', 'home.tsx'), 'utf8'), 'export default null;\n');
 });
 
+test('screen-builder seal CLI binds the current compiled experience directive', (context) => {
+  const root = project(context);
+  const cli = path.resolve(__dirname, '..', 'screen-builder-contract.js');
+  const input = path.join(root, '.tmp', 'home.unsealed.json');
+  const output = path.join(root, '.tmp', 'home.json');
+  fs.writeFileSync(input, `${JSON.stringify(workOrder(root), null, 2)}\n`);
+
+  const sealedResult = spawnSync(process.execPath, [
+    cli,
+    '--project-root', root,
+    '--seal',
+    '--input', '.tmp/home.unsealed.json',
+    '--output', '.tmp/home.json',
+  ], { encoding: 'utf8' });
+  assert.equal(sealedResult.status, 0, sealedResult.stderr);
+  const sealed = JSON.parse(fs.readFileSync(output, 'utf8'));
+  assert.deepEqual(sealed.experienceDirective, EXPERIENCE_DIRECTIVE);
+  assert.equal(sealed.compiledRevision, COMPILED_REVISION);
+
+  const drifted = workOrder(root);
+  drifted.experienceDirective = { ...drifted.experienceDirective, tone: 'warm' };
+  fs.writeFileSync(input, `${JSON.stringify(drifted, null, 2)}\n`);
+  const rejected = spawnSync(process.execPath, [
+    cli,
+    '--project-root', root,
+    '--seal',
+    '--input', '.tmp/home.unsealed.json',
+    '--output', '.tmp/home.json',
+  ], { encoding: 'utf8' });
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /experienceDirective does not match/);
+});
+
 test('channel failure falls back per screen and preserves successful siblings', (context) => {
   const root = project(context);
-  const home = sealWorkOrder(workOrder(root, 'home'), { projectRoot: root }).sealed;
-  const history = sealWorkOrder(workOrder(root, 'history'), { projectRoot: root }).sealed;
+  const home = sealWorkOrder(workOrder(root, 'home'), contractOptions(root)).sealed;
+  const history = sealWorkOrder(workOrder(root, 'history'), contractOptions(root)).sealed;
   const state = createRunState('run-1', [home, history]);
   recordScreenSuccess(state, 'home', 'direct-write', 'home-hash');
   assert.equal(recordChannelFailure(state, 'history', 'direct-write', 'tool mapping'), 'return-only');

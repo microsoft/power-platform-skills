@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { compileNavigationManifest } = require('../compile-navigation-manifest');
 const { compileScreenBuildPack } = require('../compile-screen-build-pack');
 const {
   readColors,
@@ -15,11 +16,22 @@ const { bundleFor } = require('./helpers/product-experience-scenarios');
 const { cleanup, makeProjectDir, runCli, writeContracts } = require('./helpers/contract-cli');
 const { scenarioFactsForBundle } = require('./helpers/scenario-facts-fixtures');
 
+const VECTOR_PACKAGE = { dependencies: { '@expo/vector-icons': '15.1.1' } };
+
+function navigationForBundle(bundle) {
+  return compileNavigationManifest(bundle.scope, VECTOR_PACKAGE);
+}
+
 function prepare(projectRoot, bundle) {
   writeContracts(projectRoot, bundle);
   const compiled = runCli('compile-screen-build-pack.js', ['--project-root', projectRoot]);
   assert.strictEqual(compiled.code, 0);
-  const { scenario } = scenarioFactsForBundle(bundle);
+  const navigation = navigationForBundle(bundle);
+  fs.writeFileSync(
+    path.join(projectRoot, '.tmp', 'navigation-manifest.json'),
+    `${JSON.stringify(navigation, null, 2)}\n`,
+  );
+  const { scenario } = scenarioFactsForBundle(bundle, { navigation });
   fs.writeFileSync(
     path.join(projectRoot, '.tmp', 'scenario-facts.json'),
     `${JSON.stringify(scenario, null, 2)}\n`,
@@ -52,12 +64,14 @@ function screenHtml(html, screenId) {
 }
 
 function renderBundle(bundle) {
-  const { compiled, scenario } = scenarioFactsForBundle(bundle);
+  const navigation = navigationForBundle(bundle);
+  const { compiled, scenario } = scenarioFactsForBundle(bundle, { navigation });
   return renderHtml({
     experience: bundle.experience,
     compiled,
     journey: bundle.journey,
     scenario,
+    navigation,
     colors: readColors('/path/that/does/not/exist'),
   });
 }
@@ -69,14 +83,14 @@ test('renderer creates a deterministic three-screen interactive commerce preview
 
     const first = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
     assert.strictEqual(first.code, 0);
-    assert.deepStrictEqual(first.json.screenIds, ['discover', 'cart', 'confirmation']);
+    assert.deepStrictEqual(first.json.screenIds, ['discover', 'product', 'checkout']);
 
     const outputPath = path.join(projectRoot, '_plan_preview.html');
     const html = fs.readFileSync(outputPath, 'utf8');
     assert.strictEqual((html.match(/<article class="phone/g) || []).length, 3);
     assert.match(html, /class="preview-grid" style="--screen-count:3"/);
     assert.match(html, /<strong>1\. DISCOVER<\/strong>/);
-    assert.match(html, /<strong>3\. CONFIRMATION<\/strong>/);
+    assert.match(html, /<strong>3\. CHECKOUT<\/strong>/);
     assert.strictEqual((html.match(/class="screen-label"/g) || []).length, 3);
     assert.match(html, /<details class="all-screens">/);
     assert.strictEqual((html.match(/data-graph-screen=/g) || []).length, 5);
@@ -86,6 +100,13 @@ test('renderer creates a deterministic three-screen interactive commerce preview
     assert.match(html, /data-contract-fingerprint="[a-f0-9]{64}"/);
     assert.match(html, /data-target-viewport="390x844"/);
     assert.match(html, /class="frame-provenance"/);
+    assert.match(html, /data-tone="editorial"/);
+    assert.match(html, /data-density="sparse"/);
+    assert.match(html, /data-navigation-source="manifest"/);
+    assert.match(html, /class="stack-return" data-navigation-pattern="stack-only"/);
+    assert.match(html, /data-identity-primary=/);
+    assert.match(html, /data-chrome-role=/);
+    assert.match(html, /data-signature-interaction=/);
     assert.match(html, /href="_build_plan\.html#plan"/);
     assert.match(html, /href="_build_plan\.html#data"/);
     assert.match(html, /href="_build_plan\.html#architecture"/);
@@ -101,19 +122,17 @@ test('renderer creates a deterministic three-screen interactive commerce preview
     assert.match(html, /--primary:#5b3fd1/);
     assert.match(html, /data:image\/svg\+xml;base64,/);
     assert.strictEqual((html.match(/class="hero-media"/g) || []).length, 3);
-    assert.doesNotMatch(html, /data-target="product"|data-target="checkout"/);
+    assert.match(html, /data-target="product"/);
     assert.match(html, /Cloud Runner/);
     assert.match(html, /\$196\.00/);
-    assert.match(html, /#SKY-20481/);
 
-    const cart = screenHtml(html, 'cart');
-    assert.match(cart, /comparison-media/);
-    assert.match(cart, /Cobalt running shoe cart item/);
-    assert.match(cart, /Sand canvas tote cart item/);
+    const product = screenHtml(html, 'product');
+    assert.match(product, /Sticky buy bar/);
+    assert.match(product, /data-region="primary-action"/);
 
-    const confirmation = screenHtml(html, 'confirmation');
-    assert.match(confirmation, /record-thumb/);
-    assert.match(confirmation, /Packed SkyShop order/);
+    const checkout = screenHtml(html, 'checkout');
+    assert.match(checkout, /Place order/);
+    assert.match(checkout, /data-region="primary-action"/);
     assert.doesNotMatch(html, /Sample value|Add details|>Sample<|84%/);
 
     const second = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
@@ -136,8 +155,9 @@ test('renderer creates a deterministic three-screen interactive commerce preview
 
 test('resolved scenario CDN media renders directly and retains its stable asset key', () => {
   const bundle = bundleFor('commerce');
-  const { compiled, scenario } = scenarioFactsForBundle(bundle);
-  const selectedScreen = selectPreviewScreens(compiled, bundle.journey)[0];
+  const navigation = navigationForBundle(bundle);
+  const { compiled, scenario } = scenarioFactsForBundle(bundle, { navigation });
+  const selectedScreen = selectPreviewScreens(compiled, bundle.journey, navigation)[0];
   const binding = scenario.screenBindings.find(
     (item) => item.screenId === selectedScreen.screenId && item.mediaAssetKeys.length > 0,
   );
@@ -152,6 +172,7 @@ test('resolved scenario CDN media renders directly and retains its stable asset 
     compiled,
     journey: bundle.journey,
     scenario,
+    navigation,
     colors: readColors('/path/that/does/not/exist'),
   });
   assert.match(html, /https:\/\/images\.example\.test\/catalog\/cloud-runner\.jpg/);
@@ -229,7 +250,7 @@ test('renderer rejects a stale compiled build pack', () => {
   }
 });
 
-test('large journeys select entry, representative core, and outcome', () => {
+test('large journeys select primary destination, key-flow entry, and strongest action', () => {
   const screens = Array.from({ length: 7 }, (_, index) => ({
     screenId: `screen-${index}`,
     pack: {},
@@ -246,7 +267,7 @@ test('large journeys select entry, representative core, and outcome', () => {
 
   assert.deepStrictEqual(
     selectPreviewScreens(compiled, journey).map((screen) => screen.screenId),
-    ['screen-0', 'screen-3', 'screen-6'],
+    ['screen-0', 'screen-1', 'screen-6'],
   );
 });
 
@@ -326,8 +347,8 @@ test('large-journey actions to omitted screens are visibly disabled', () => {
     colors: readColors('/path/that/does/not/exist'),
   });
 
-  const core = screenHtml(html, 'screen-3');
-  assert.doesNotMatch(core, /data-target="screen-4"/);
-  assert.match(core, /disabled aria-disabled="true"/);
-  assert.match(core, /Not shown/);
+  const flowEntry = screenHtml(html, 'screen-1');
+  assert.doesNotMatch(flowEntry, /data-target="screen-2"/);
+  assert.match(flowEntry, /disabled aria-disabled="true"/);
+  assert.match(flowEntry, /Not shown/);
 });

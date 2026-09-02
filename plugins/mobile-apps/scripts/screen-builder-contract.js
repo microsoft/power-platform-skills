@@ -93,8 +93,13 @@ function atomicWriteJson(file, value) {
 function run(args) {
   if (!args.projectRoot) throw new Error('--project-root is required');
   const root = path.resolve(args.projectRoot);
+  const needsCompiledPack = ['seal', 'parse-return', 'verify-direct'].includes(args.action);
+  const compiledPackPath = path.join(root, '.tmp', 'compiled-screen-build-pack.json');
   const options = {
     projectRoot: root,
+    ...(needsCompiledPack
+      ? { compiledScreenBuildPack: readJson(compiledPackPath) }
+      : {}),
     ...(args.maxInputBytes ? { maxInputBytes: args.maxInputBytes } : {}),
     ...(args.maxOutputBytes ? { maxOutputBytes: args.maxOutputBytes } : {}),
   };

@@ -262,15 +262,31 @@ test('connector-owned persistence makes the Dataverse data model not applicable'
         reason: 'The approved booking connector is the system of record.',
       }],
     });
+    updateProgress(projectRoot, {
+      phase: 'dataverse',
+      status: 'complete',
+      detail: 'Not applicable - application data is connector-owned',
+    }, '2026-09-01T10:00:00.000Z');
 
     const model = deriveBuildPlanModel(projectRoot);
     assert.equal(model.dataModelApplicable, false);
     assert.equal(model.makerSummary.persistenceMode, 'connector-only');
     assert.equal(model.makerSummary.dataOwnership[0].owner, 'connector:booking-api');
+    assert.deepStrictEqual(
+      model.progress.phases.find((phase) => phase.id === 'dataverse'),
+      {
+        id: 'dataverse',
+        label: 'Dataverse',
+        status: 'complete',
+        detail: 'Not applicable - application data is connector-owned',
+        updatedAt: '2026-09-01T10:00:00.000Z',
+      },
+    );
     const html = renderBuildPlanHtml(model, { live: true });
     assert.match(html, /Not applicable/);
     assert.match(html, /approved connectors/);
     assert.match(html, /booking-api/);
+    assert.match(html, /Not applicable - application data is connector-owned/);
     assert.doesNotMatch(html, /<button[^>]+data-add-table/);
   } finally {
     cleanup(projectRoot);
@@ -821,6 +837,17 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
     writeJson(projectRoot, '.tmp/offline-integration-contract.json', {
       integrationRevision: 'c'.repeat(64),
     });
+    const unrelatedScope = {
+      contractType: 'product-scope',
+      screens: [{ id: 'home', title: 'Unrelated Home contract' }],
+    };
+    const unrelatedScreens = {
+      contractType: 'compiled-screen-build-pack',
+      compiledRevision: 'd'.repeat(64),
+      screens: [{ screenId: 'home', title: 'Unrelated compiled Home' }],
+    };
+    writeJson(projectRoot, '.tmp/product-scope-contract.json', unrelatedScope);
+    writeJson(projectRoot, '.tmp/compiled-screen-build-pack.json', unrelatedScreens);
 
     const result = applyDataModelEdit(projectRoot, {
       type: 'add-column',
@@ -868,6 +895,14 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
     assert.strictEqual(
       fs.existsSync(path.join(projectRoot, '.tmp/offline-integration-contract.json')),
       true,
+    );
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp/product-scope-contract.json'))),
+      unrelatedScope,
+    );
+    assert.deepStrictEqual(
+      JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp/compiled-screen-build-pack.json'))),
+      unrelatedScreens,
     );
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '_build_plan.html')), true);
   } finally {

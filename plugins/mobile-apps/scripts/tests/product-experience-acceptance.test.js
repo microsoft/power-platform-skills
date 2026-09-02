@@ -44,7 +44,7 @@ function dataverseOfflineIntegration() {
   });
 }
 
-test('four concrete briefs pass the canonical contract pipeline without a universal screen count', () => {
+test('five concrete briefs pass the canonical contract pipeline without a universal screen count', () => {
   const counts = [];
   for (const key of SCENARIO_KEYS) {
     const {
@@ -115,6 +115,9 @@ test('flight commerce keeps checkout bounded and Profile reachable outside its t
   assert.strictEqual(bundle.scope.navigation.profileAccess, 'account-action');
   assert.ok(!bundle.scope.navigation.visibleTabIds.includes('profile'));
   assert.strictEqual(bundle.scope.screens.find((screen) => screen.id === 'checkout').classification, 'bounded-flow-step');
+  assert.ok(bundle.scope.screens.some((screen) => screen.id === 'product' && screen.parentScreenId === 'shop'));
+  assert.strictEqual(pack(bundle, 'product').primaryActions[0].label, 'Add to bag');
+  assert.doesNotMatch(JSON.stringify(bundle), /warehouse|pallet/i);
   assert.strictEqual(bundle.scope.newTables.length, 0);
   assert.ok(bundle.scope.dataEntities.filter((entity) => entity.name !== 'Cart')
     .every((entity) => entity.realization === 'connector-source'));
@@ -127,7 +130,17 @@ test('flight commerce keeps checkout bounded and Profile reachable outside its t
 
 test('ICRC receiving embeds scanning, keeps retry in-product, and delegates offline UX', () => {
   const { bundle } = validateBundle('icrcReceiving');
-  const required = ['receive-items', 'inspect-packages', 'resolve-discrepancy', 'attach-evidence', 'capture-location', 'handoff-custody'];
+  const required = [
+    'view-expected-shipments',
+    'receive-items',
+    'record-quantities',
+    'inspect-packages',
+    'record-batch-expiry',
+    'resolve-discrepancy',
+    'attach-evidence',
+    'capture-location',
+    'handoff-custody',
+  ];
   assert.ok(required.every((id) => bundle.scope.requirements.some((item) => item.id === id)));
   assert.ok(!screenIds(bundle).some((id) => /scan|barcode|role|offline|retry/.test(id)));
   assert.strictEqual(pack(bundle, 'receiving').primaryActions[0].label, 'Scan or enter shipment');
@@ -140,11 +153,16 @@ test('ICRC receiving embeds scanning, keeps retry in-product, and delegates offl
     bundle.scope.screens.find((screen) => screen.id === 'evidence').cannotMergeBecause.kind,
     'capture-or-workflow-fit',
   );
+  assert.deepStrictEqual(bundle.experience.primaryUser.secondaryUsers, [
+    'Warehouse officer',
+    'Quality inspector',
+    'Headquarters planner',
+  ]);
 });
 
 test('gym maintenance embeds scanning without inventing offline screens or states', () => {
   const { bundle } = validateBundle('gymMaintenance');
-  const required = ['scan-equipment', 'inspect-equipment', 'record-defect', 'attach-evidence', 'record-repair', 'close-work'];
+  const required = ['scan-equipment', 'inspect-equipment', 'record-defect', 'attach-evidence', 'record-repair', 'review-maintenance-warranty', 'close-work'];
   assert.ok(required.every((id) => bundle.scope.requirements.some((item) => item.id === id)));
   assert.ok(!screenIds(bundle).some((id) => /scanner|dashboard/.test(id)));
   assert.strictEqual(bundle.scope.screens.find((screen) => screen.id === 'home').title, 'My shift');
@@ -154,6 +172,9 @@ test('gym maintenance embeds scanning without inventing offline screens or state
   assert.strictEqual(bundle.scope.navigation.profileAccess, 'account-action');
   assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
   assert.equal(dataverseOfflineIntegration().adapter, 'dataverse-mobile-offline-profile');
+  assert.ok(bundle.scope.dataEntities.some((entity) => (
+    entity.name === 'Warranty' && entity.realization === 'connector-source'
+  )));
 });
 
 test('IT asset tracking parameterizes record families and keeps permission/no-results as states', () => {
@@ -172,6 +193,22 @@ test('IT asset tracking parameterizes record families and keeps permission/no-re
     bundle.scope.dataEntities.find((entity) => entity.name === 'Barcode label').realization,
     'transient-ui-state',
   );
+  assert.strictEqual(bundle.scope.coreJobs[0].surface.screenId, 'inventory');
+});
+
+test('connector-only dispatch keeps every persisted concept in the approved connector', () => {
+  const { bundle, scopeResult } = validateBundle('connectorOnlyDispatch');
+  assert.deepStrictEqual(bundle.scope.navigation.durableDestinationIds, ['assignments']);
+  assert.strictEqual(bundle.scope.navigation.profileAccess, 'account-action');
+  assert.strictEqual(bundle.scope.newTables.length, 0);
+  assert.ok(bundle.scope.dataEntities.every(
+    (entity) => entity.realization === 'connector-source',
+  ));
+  assert.ok(bundle.journey.journeys.flatMap((journey) => journey.steps).every(
+    (step) => ['read', 'external-call'].includes(step.dataOperation.kind),
+  ));
+  assert.strictEqual(scopeResult.summary.entitiesWithFullCrudTriplet, 0);
+  assert.ok(!screenIds(bundle).some((id) => /create|edit|offline|dataverse/.test(id)));
 });
 
 test('requirement coverage target drift is rejected by build-pack compilation', () => {

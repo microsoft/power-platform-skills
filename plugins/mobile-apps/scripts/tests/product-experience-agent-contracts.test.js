@@ -44,7 +44,11 @@ test('screen builder defers model selection to the host', () => {
   assert.match(source, /Every string in sealed `testIds` must appear literally/);
   assert.match(source, /canonical scenario-facts projection/);
   assert.match(source, /human-first `identityHierarchy`/);
-  assert.match(source, /validate-screen-implementation\.js/);
+  assert.match(source, /`experienceDirective` is the product-wide visual and experiential authority/);
+  assert.match(source, /Archetype shards and sample screens provide code and API idioms only/);
+  assert.match(source, /one coherent native canvas/);
+  assert.match(source, /Do not turn each[\s\S]*into an equal-weight card/);
+  assert.doesNotMatch(source, /validate-screen-implementation\.js|AST check/);
   assert.doesNotMatch(source, /\bAskUserQuestion\b|\bEnterPlanMode\b|\bExitPlanMode\b|nested `Task`/);
 });
 
@@ -100,6 +104,8 @@ test('create planning is one foreground path over the existing contracts', () =>
     assert.match(phase, new RegExp(tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(phase, /All questions and approvals use foreground/);
+  assert.match(phase, /Prefer one coherent bounded workspace/);
+  assert.match(phase, /Never split the same job merely because its facts map to different entities/);
   assert.doesNotMatch(phase, /\bTask\b/);
   assert.doesNotMatch(phase, /mobile-app:(?:native-app-planner|data-model-architect|screen-planner)/);
 });
@@ -112,7 +118,9 @@ test('screen work orders carry implementation contracts and bounded scenario fac
   assert.match(source, /deterministic `implementationContract` unchanged/);
   assert.match(source, /one `scenarioFacts` projection/);
   assert.match(source, /Object\.values\(implementationContract\.testIds\)/);
-  assert.match(source, /validate-screen-implementation\.js/);
+  assert.match(source, /root `compiledRevision` and `experienceDirective` copied unchanged/);
+  assert.match(source, /rejects a missing[\s\S]*directive drift/);
+  assert.doesNotMatch(source, /validate-screen-implementation\.js|TypeScript AST/);
   assert.match(source, /Do not include the whole Markdown plan/);
   assert.match(source, /complete scenario artifact/);
 });
@@ -155,4 +163,16 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(automatic, /does not claim React Native or native\s+pixels were rendered/);
   assert.match(scaffold, /pass `--auto-experience`/);
   assert.doesNotMatch(design, /^allowed-tools:.*\bTask\b/m);
+});
+
+test('preview-screens reuses the canonical product-experience renderer', () => {
+  const source = fs.readFileSync(path.join(skillRoot, 'preview-screens', 'SKILL.md'), 'utf8');
+  assert.match(source, /render-product-experience-preview\.js/);
+  assert.match(source, /root `experienceDirective`/);
+  assert.match(source, /\.tmp\/navigation-manifest\.json/);
+  assert.match(source, /\.tmp\/scenario-facts\.json/);
+  assert.match(source, /primary product\s+destination, key-flow entry, and strongest decision\/action screen/);
+  assert.match(source, /React Native is authoritative after implementation/);
+  assert.doesNotMatch(source, /<working_dir>\/preview\.html|Read the full TSX|Generate equivalent HTML\/CSS|programmatic TSX parsing/);
+  assert.doesNotMatch(source, /npx expo start/);
 });

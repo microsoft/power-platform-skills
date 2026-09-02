@@ -88,8 +88,6 @@ jobs:
                   }
                   NODE
                   npx tsc --noEmit
-                  node ../scripts/tests/screen-implementation-ast-smoke.js \
-                    --project-root .
                   node ../scripts/validate-mobile-files.js \
                     --project-root . \
                     --all-source

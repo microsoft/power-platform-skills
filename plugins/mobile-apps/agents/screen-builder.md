@@ -20,10 +20,23 @@ foreground supplies `channel: direct-write | return-only`, the work-order input
 fingerprint, one screen build-pack entry, route/parameter contract, typed
 skeleton, relevant generated-service signatures, permitted tokens and signature
 component interfaces, exact states, implementation-contract test IDs, the
-screen's canonical scenario-facts projection, and accessibility requirements.
+screen's canonical scenario-facts projection, the root `experienceDirective`,
+and accessibility requirements.
 
 The channel changes transport only. It never changes the planned screen, UX
 contract, model choice, or input fingerprint.
+
+## Design authority
+
+- The sealed screen pack is the screen-specific authority.
+- `experienceDirective` is the product-wide visual and experiential authority.
+- Tokens and signature-component interfaces are implementation authorities.
+- Archetype shards and sample screens provide code and API idioms only; never
+  use them as visual composition templates.
+- Preserve the planned first-viewport focal point, primary action, identity
+  hierarchy, media prominence, navigation shell, and forbidden defaults.
+- Never replace that hierarchy with a generic dashboard, repeated card list,
+  CRUD form, or universal operational shell.
 
 ## Ownership and stop conditions
 
@@ -174,6 +187,12 @@ screen.
 - Carry the app's memorable quality and brand negatives into this screen, but
   keep expressive treatments concentrated on the screens the pack marks as
   expressive.
+- Implement a co-located bounded workflow as one coherent native canvas: keep
+  the recognizable object and progress context stable, group related facts into
+  native rows/sections, and reserve one dominant commit action. Do not turn each
+  field, metric, or step into an equal-weight card.
+- Make a root queue, hub, or discovery destination visibly specific to its job;
+  do not substitute a generic KPI dashboard or universal card grid.
 - A screen that could belong unchanged to another app is not complete.
   Product-specific hierarchy, copy, evidence, and signature interaction must
   be visible.
@@ -261,16 +280,12 @@ the intended region/control; do not rename or approximate an anchor. In
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
   --project-root "<working_dir>" --file "<target_file>"
-node "${PLUGIN_ROOT}/scripts/validate-screen-implementation.js" \
-  --project-root "<working_dir>" \
-  --work-order ".tmp/screen-work-orders/<screenId>.json" \
-  --file "<target_file>"
 ```
 
 Fix assigned-file findings in one batch and rerun once. In `return-only`, apply
-the same checks by inspection; the foreground runs the validator after writing.
-The orchestrator reruns the same AST check for return-only output and owns
-TypeScript, route, wave, stylistic, and cross-screen gates.
+the same checks before returning; the foreground runs mobile-file validation
+after writing. The orchestrator owns TypeScript, route/layout, data-binding,
+wave, accessibility, safe-area, clipping, stylistic, and cross-screen gates.
 
 ## Direct-write return protocol
 

@@ -170,6 +170,15 @@ A user-facing screen is justified only by at least one of:
 - a capture/workflow step that cannot safely fit an existing surface;
 - an independently revisited record, queue, history, or workspace.
 
+Prefer one coherent bounded workspace when sequential steps share the same
+recognizable object, source context, and final commit. Measurements, status
+choices, identifiers, evidence, location, and confirmation may be sections,
+rows, sheets, or contextual actions on that workspace when they remain usable
+in one scroll. Split only for a durable return destination, a genuinely distinct
+decision context, or capture that requires an immersive/full-screen surface.
+Never split the same job merely because its facts map to different entities,
+capabilities, or user roles.
+
 Loading, empty, error, permission, success, and domain retry conditions are
 screen states, never routes. Offline runtime conditions are package-owned
 integration states, not screen states or routes. Do not create

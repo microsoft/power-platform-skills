@@ -35,6 +35,8 @@ create `.tmp/screen-work-orders/<screenId>.unsealed.json` with:
 - run ID and screen ID;
 - route and parameter contract;
 - exact target path;
+- root `compiledRevision` and `experienceDirective` copied unchanged from
+  `.tmp/compiled-screen-build-pack.json`;
 - one screen build-pack entry;
 - that entry's deterministic `implementationContract` unchanged;
 - one `scenarioFacts` projection from `.tmp/scenario-facts.json`, containing
@@ -67,6 +69,10 @@ The sealed fingerprint is channel-neutral. Both direct-write and return-only
 consume the same semantic work order. A screen whose compact work order exceeds
 the input budget is implemented in foreground; never drop pack evidence to make
 it fit.
+
+Sealing loads the current compiled screen build pack and rejects a missing
+directive, a mismatched `compiledRevision`, or any directive drift. Never
+reconstruct product-wide design intent from Markdown or an archetype shard.
 
 Initialize run-scoped per-screen channel state:
 
@@ -209,23 +215,11 @@ turn one screen's failure into a host-wide failure and never discard completed
 siblings.
 
 After a direct-write, return-only, or foreground screen result is written and
-passes its per-file validation, record it as `built` with the same command
-shape. Do not mark it `validated` yet; that state belongs to the wave quality
-gate.
-
-Every written screen must also pass the real TypeScript AST implementation
-contract before it can be recorded as built:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-implementation.js" \
-  --project-root "<working_dir>" \
-  --work-order ".tmp/screen-work-orders/<screenId>.json" \
-  --file "<target-file>"
-```
-
-This gate proves test IDs, focal identity, primary action, route parameters,
-domain-operation calls, scenario media key/fallback wiring, and sticky
-safe-area behavior from the TypeScript AST. It does not judge visual quality.
+passes its per-file mobile-file validation, record it as `built` with the same
+command shape. Do not mark it `validated` yet; that state belongs to the wave
+TypeScript, route/layout, data-binding, accessibility, safe-area, clipping, and
+cross-screen quality gates. Do not add AST or regex TSX inspection as a
+mandatory prototype gate.
 
 Time screen execution by channel. Children in a wave run concurrently, so do
 not open overlapping timers on one stage. Measure wall time around each actual

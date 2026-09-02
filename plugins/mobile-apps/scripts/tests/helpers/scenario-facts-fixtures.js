@@ -165,10 +165,10 @@ function scenarioInputForBundle(bundle, compiled) {
   };
 }
 
-function scenarioFactsForBundle(bundle) {
+function scenarioFactsForBundle(bundle, bindings = {}) {
   const buildResult = compileScreenBuildPack(bundle.buildPack, bundle);
   if (!buildResult.ok) throw new Error(JSON.stringify(buildResult.errors));
-  const source = { ...bundle, compiled: buildResult.compiled };
+  const source = { ...bundle, compiled: buildResult.compiled, ...bindings };
   const result = compileScenarioFacts(
     scenarioInputForBundle(bundle, buildResult.compiled),
     source,

@@ -10,20 +10,22 @@ const {
   MATRIX,
   STAGES,
   runAcceptanceMatrix,
+  runVariant,
 } = require('../run-live-build-plan-acceptance');
 
 function read(directory, fileName) {
   return fs.readFileSync(path.join(directory, fileName), 'utf8');
 }
 
-test('acceptance matrix covers four briefs, all persistence modes, and explicit offline pairing', (context) => {
+test('acceptance matrix covers five briefs, all persistence modes, and explicit offline pairing', (context) => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-hardening-acceptance-'));
   context.after(() => fs.rmSync(output, { recursive: true, force: true }));
 
   const summary = runAcceptanceMatrix(output);
   assert.equal(summary.allPassed, true);
-  assert.equal(summary.runCount, 6);
+  assert.equal(summary.runCount, 7);
   assert.deepEqual(summary.domains, [
+    'connectorOnlyDispatch',
     'flightCommerce',
     'gymMaintenance',
     'icrcReceiving',
@@ -88,6 +90,10 @@ test('acceptance matrix covers four briefs, all persistence modes, and explicit 
   }
   const mixed = summary.runs.find((run) => run.mode === 'mixed');
   assert.ok(mixed.dataverseTableCount > 0);
+  const connectorOnly = summary.runs.find((run) => run.id === 'connector-only-dispatch');
+  assert.equal(connectorOnly.dataverseSkipped, true);
+  assert.equal(connectorOnly.dataverseTableCount, 0);
+  assert.equal(connectorOnly.ownedConceptCount, 3);
   const offline = summary.runs.filter((run) => run.offline);
   assert.ok(offline.every((run) => run.offlineAdapter && run.offlineMediaBindingCount >= 0));
 
@@ -95,7 +101,57 @@ test('acceptance matrix covers four briefs, all persistence modes, and explicit 
   assert.equal(summary.warnings[0].code, 'non-dataverse-offline-adapters-not-host-verified');
 });
 
-test('acceptance runner emits deterministic contract examples and two three-frame storyboards', (context) => {
+test('flight, gym, and ICRC previews differ by approved structure rather than title or color', () => {
+  const runs = Object.fromEntries([
+    { id: 'flight', scenario: 'flightCommerce', mode: 'connector-only', offline: false },
+    { id: 'gym', scenario: 'gymMaintenance', mode: 'mixed', offline: false },
+    { id: 'icrc', scenario: 'icrcReceiving', mode: 'dataverse', offline: true },
+  ].map((definition) => [definition.id, runVariant(definition)]));
+
+  assert.deepEqual(runs.flight.storyboardScreenIds, ['shop', 'product', 'checkout']);
+  assert.deepEqual(runs.gym.storyboardScreenIds, ['home', 'inspection', 'defect']);
+  assert.deepEqual(runs.icrc.storyboardScreenIds, ['receiving', 'inspection', 'evidence']);
+  assert.equal(runs.flight.navigationPattern, 'tabs-plus-stacks');
+  assert.equal(runs.gym.navigationPattern, 'stack-only');
+  assert.equal(runs.icrc.navigationPattern, 'stack-only');
+
+  const directives = Object.values(runs).map(
+    (run) => JSON.stringify(run.artifacts.compiled.experienceDirective),
+  );
+  assert.equal(new Set(directives).size, 3);
+  assert.deepEqual(runs.flight.artifacts.compiled.experienceDirective, {
+    tone: 'editorial',
+    expressiveness: 'expressive',
+    density: 'balanced',
+    tempo: 'brisk',
+    emphasis: 'imagery',
+    mediaNecessity: 'essential',
+    riskLevel: 'moderate',
+    regionOrder: ['context', 'focal-content', 'primary-action'],
+    accessibilityPriorities: ['large-touch-targets', 'one-handed-reach', 'high-contrast'],
+    forbiddenDefaults: ['Undifferentiated card list with no visual hierarchy'],
+  });
+  assert.equal(runs.gym.artifacts.compiled.experienceDirective.riskLevel, 'high');
+  assert.equal(runs.icrc.artifacts.compiled.experienceDirective.density, 'dense');
+  assert.equal(runs.icrc.artifacts.compiled.experienceDirective.tempo, 'rapid');
+
+  const selectedPatterns = (run) => run.artifacts.compiled.screens
+    .filter((screen) => run.storyboardScreenIds.includes(screen.screenId))
+    .map((screen) => screen.pattern);
+  assert.deepEqual(selectedPatterns(runs.flight), ['discovery', 'detail', 'workflow-step']);
+  assert.deepEqual(selectedPatterns(runs.gym), ['overview', 'workflow-step', 'capture']);
+  assert.deepEqual(selectedPatterns(runs.icrc), ['queue', 'workflow-step', 'capture']);
+  assert.match(runs.flight.artifacts.previewHtml, /data-tone="editorial"/);
+  assert.match(runs.flight.artifacts.previewHtml, /class="phone-nav"/);
+  assert.match(runs.gym.artifacts.previewHtml, /data-emphasis="status-signals"/);
+  assert.match(runs.icrc.artifacts.previewHtml, /data-density="dense"/);
+  assert.match(runs.icrc.artifacts.previewHtml, /--preview-pad:14px/);
+  assert.match(runs.icrc.artifacts.previewHtml, /class="stack-return"/);
+  assert.notEqual(runs.flight.artifacts.previewHtml, runs.gym.artifacts.previewHtml);
+  assert.notEqual(runs.gym.artifacts.previewHtml, runs.icrc.artifacts.previewHtml);
+});
+
+test('acceptance runner emits deterministic contract examples and three three-frame storyboards', (context) => {
   const first = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-hardening-output-a-'));
   const second = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-hardening-output-b-'));
   context.after(() => {
@@ -112,6 +168,7 @@ test('acceptance runner emits deterministic contract examples and two three-fram
     'route-layout-evidence.json',
     'offline-invariance.json',
     'commerce-storyboard.html',
+    'gym-storyboard.html',
     'operational-storyboard.html',
   ]) {
     assert.equal(read(first, fileName), read(second, fileName), fileName);
@@ -130,8 +187,9 @@ test('acceptance runner emits deterministic contract examples and two three-fram
   assert.match(usage.usageRevision, /^[a-f0-9]{64}$/);
 
   const commerce = read(first, 'commerce-storyboard.html');
+  const gym = read(first, 'gym-storyboard.html');
   const operational = read(first, 'operational-storyboard.html');
-  for (const html of [commerce, operational]) {
+  for (const html of [commerce, gym, operational]) {
     assert.equal((html.match(/<article class="phone/g) || []).length, 3);
     assert.match(html, /<details class="all-screens">/);
     assert.match(html, /data-contract-fingerprint="[a-f0-9]{64}"/);

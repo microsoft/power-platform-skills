@@ -97,14 +97,16 @@ packs bind scenario facts. A non-zero command is `BLOCKED`; never hand-author a
 fallback preview.
 
 The default `_plan_preview.html` storyboard shows one to three frames:
-entry/root, signature/core action, and outcome/review when those distinct
-screens exist. The expandable `All screens` area exposes the complete graph and
-required states. Every frame uses canonical scenario facts, navigation,
-identity hierarchy, media keys, and screen contracts.
+primary product destination, key-flow entry, and strongest decision/action when
+those distinct screens exist. The expandable `All screens` area exposes the
+complete graph and required states. Every frame uses the compiled root
+`experienceDirective`, canonical scenario facts, navigation, identity hierarchy,
+chrome, media keys, signature intent, and screen contracts. `/preview-screens`
+reruns this same renderer; it does not translate TSX into another HTML design.
 
 The HTML approves experience intent. It does not claim React Native or native
-pixels were rendered. Do not start Metro, attach Dev Player, or capture native
-screenshots.
+pixels were rendered. React Native remains authoritative after implementation.
+Do not start Metro, attach Dev Player, or capture native screenshots.
 
 ## Persist and return
 
