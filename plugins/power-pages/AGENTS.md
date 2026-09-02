@@ -42,6 +42,7 @@ agents/
 scripts/
   generate-uuid.js             ← Shared UUID v4 generator (used by multiple skills)
   suggest-content-locale.js    ← Best-effort Dataverse base-language suggestion for create-site
+  render-add-localization-plan.js ← Validates and renders the source-language localization plan artifact
   audit-bidirectional-readiness.js ← Audits generated source for deterministic bidirectional blockers and review findings
   validate-site-integrity.js ← Shared post-modification/deployment localization and bidirectional integrity check
   validate-i18n-package.js      ← Validates npm localization package compatibility, stability, maintenance, mode, docs, and license
@@ -81,6 +82,8 @@ skills/
     scripts/validate-seo.js    ← Node script validating SEO assets (robots.txt, sitemap.xml, meta tags)
   add-localization/
     SKILL.md                   ← SPA localization workflow for React, Vue, Angular, and Astro
+    assets/add-localization-plan.html ← Localized, RTL-safe implementation-plan template
+    references/plan-data-contract.md ← Source-language plan schema, labels, persistence, and source-of-truth rules
     scripts/validate-localization.js ← Validates manifest, resources, selectors, lang/dir, opposite-direction readiness, and runtime coordinators
   activate-site/
     SKILL.md                   ← Site activation/provisioning skill definition
@@ -440,6 +443,7 @@ These patterns have caused repeated PR review feedback. Check for them before su
 - **Template placeholders are context-encoded** — bare string placeholders render as HTML text, while structured values render as script-safe JSON. Use `__JSON_KEY__` for every JavaScript or `application/json` value, `__ATTR_KEY__` for attributes, and reserve `__RAW_KEY__` for code-owned trusted markup.
 - **The create-site plan has a strict localization contract** — `render-createsite-plan.js` requires every maker-facing template phrase in `PLAN_LABELS` and validates that `SITE_LOCALE` matches `SITE_DIRECTION`. Keep routes, commands, CSS variables, framework/package names, locale tags, identifiers, and API names untranslated; inject localized labels through serialized JSON and DOM APIs rather than quoted HTML attributes or JavaScript string placeholders.
 - **Create-site review responsibilities must stay explicit** — `REVIEW_DATA.agentChecks` contains deterministic source, browser, bidi, formatting, font, component, console, and accessibility checks the agent must execute and report. `REVIEW_DATA.makerReview` contains linguistic, cultural, brand, and subjective visual judgments. Never present an agent-owned check as work the maker must repeat, and never claim automation approved a maker-owned judgment.
+- **The add-localization plan uses the current source locale** — Render `docs/add-localization-plan*.html` in the existing pre-change default locale, or the locale selected to represent an unlocalized site's existing UI. A resulting default-locale change does not change the plan language. The HTML persists for human reference only; implementation must use the approved configuration and final `.powerpages-localization.json`, never parse the plan artifact.
 - **Guidance must be consistent within a skill** — If one section says "always use raw fetch", a framework-specific table in the same file must not recommend a different HTTP client without qualification. Reviewers will flag contradictions.
 
 ## Secure Coding Requirements

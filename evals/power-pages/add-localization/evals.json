@@ -11,6 +11,7 @@
         "Uses runtime i18next plus react-i18next",
         "Displays the Dataverse scope notice and AI translation warning",
         "Validates en-US, fr-FR, and de-DE before implementation",
+        "Renders and opens docs/add-localization-plan.html in the en-US source language before retaining the terminal approval gate",
         "Adds selector persistence, fallback, lang, and dir behavior"
       ]
     },
@@ -228,6 +229,7 @@
       "expectations": [
         "Does not treat this as add-languages mode",
         "Asks for the new default only because change was explicit",
+        "Keeps the rendered localization plan in the existing pre-change source/default language even though the resulting default changes to fr-FR",
         "Shows affected fallback and route behavior",
         "Preserves locale resources",
         "Updates and validates the manifest default"
@@ -254,6 +256,7 @@
       "expectations": [
         "Recognizes FROM_CREATE_SITE context",
         "Runs the same localization implementation and verification path",
+        "Renders and opens the dedicated source-language localization plan artifact before terminal approval",
         "Records AddLocalization usage",
         "Does not ask to deploy from add-localization",
         "Returns control to create-site"
