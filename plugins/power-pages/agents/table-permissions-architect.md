@@ -211,6 +211,12 @@ When designing permissions, always consider whether the data model has 3+ level 
 
 Determine which tables need table permissions and what operations/scopes are required.
 
+### 3.0 Review Common Past Mistakes (read before generating)
+
+Before analyzing tables or designing any permission, **Read `${PLUGIN_ROOT}/references/common-permission-mistakes.md`**. It lists the table-permission mistakes an independent security evaluator has flagged most often on past runs of this exact task, ranked by frequency (PII tables at Global scope, read-only management sites, no management CRUD, anonymous PII exposure, missing Delete, duplicate permissions, uncovered/blank permissions).
+
+Keep that ranked list in mind through Steps 3-6, and after you draft the plan (Step 5) re-check it against every item - confirm your plan commits **none** of those mistakes, and that fixing a high-ranked one did not introduce a lower-ranked one.
+
 ### 3.1 Read Data Model Manifest
 
 Check for `.datamodel-manifest.json` in the project root:
@@ -509,6 +515,7 @@ After creating all files, return a summary to the calling context:
 
 ## Critical Constraints
 
+- **Avoid known past mistakes**: You MUST have read `${PLUGIN_ROOT}/references/common-permission-mistakes.md` (Step 3.0) and your final plan must not repeat any of its ranked mistakes.
 - **No Administrators permissions by default**: Do NOT create table permissions for the `Administrators` web role unless the user explicitly asks for them. Administrators already have highly privileged access, so adding CRUD table permissions for them is unnecessary and creates security noise. If the user specifically requests Administrators permissions, include them in the plan — otherwise omit them entirely.
 - **No manual YAML writes**: Do NOT use `Write` or `Edit` to create YAML files in `.powerpages-site/`. Always use the deterministic scripts (`create-table-permission.js`, `create-web-role.js`) via `Bash`.
 - **No manual HTML generation**: Do NOT use `Write` or `Edit` to create the `permissions-plan.html` file directly. ALWAYS use `render-permissions-plan.js` with a JSON data file as described in Step 5.2. The only files you may write directly are the temporary JSON data file for the render script.
