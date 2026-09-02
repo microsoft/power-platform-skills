@@ -8,7 +8,8 @@ The orchestrator owns compilation of the finished workspace and the final summar
 - Section 1 — Compile: diagnostic tiers, parse-error coordinates, version conflicts,
   reading diagnostics, liveness, the convergence budget, repair ownership, and verifying
   before summarizing
-- Section 2 — Summary: the CREATE, EDIT, and unresolved-diagnostics report formats
+- Section 2 — Functional conformance: post-compile transition and scenario gate
+- Section 3 — Summary: the CREATE, EDIT, and unresolved report formats
 
 ## 0. Compile Gates
 
@@ -39,6 +40,7 @@ the navigation to satisfy an intermediate compile breaks the finished app.
 ## 1. Compile
 
 Call `compile_canvas`.
+
 
 If compilation fails, fix diagnostics in this order:
 
@@ -77,11 +79,12 @@ mis-indented `Children:` entry, or a duplicate property key, read the rest of th
 fix every other occurrence of the same pattern in the same pass. Otherwise each one costs a
 full compile cycle and burns the convergence budget on a single defect.
 
-### Version conflicts masquerade as unknown properties
+### Creation-keyword conflicts masquerade as unknown properties
 
-Tier 2 sits above `Unknown property` for a reason. When any `Control:` value carries an
-`@version` suffix, the whole app binds to one template version, and every property that
-exists only in the *other* version is then reported as
+Tier 2 sits above `Unknown property` for a reason. When instances of a control type use
+creation keywords that disagree with the current `describe_control` response, the app may
+bind to a different template version and report every property that exists only in the
+other version as
 `Unknown property 'P' for control type 'T'` — where `T` is the internal control name, not
 the name you wrote. The properties are fine; the version pin is not.
 
@@ -93,8 +96,9 @@ Symptoms of this exact failure:
   YAML says `ModernText`.
 - One or two version diagnostics buried in the same compile output.
 
-The fix is always the same: strip every `@version` suffix from every `Control:` value in
-every file, then re-compile once. Do not edit a single property until you have done that.
+The fix is always the same: re-run `describe_control`, copy its complete creation-keyword
+block to every instance of that type, then re-compile once. Do not edit a single property
+until you have done that, and do not independently add or strip an `@version` suffix.
 
 ### Reading diagnostics
 
@@ -176,7 +180,43 @@ Edits to non-compiled artifacts do not invalidate the result: `[working director
 `[working directory]/canvas-app-shared.md` and `[working directory]/*.screen-plan.md` are planning documents, and
 updating one after the final compile is fine.
 
-## 2. Summary
+## 2. Functional Conformance
+
+A clean compile proves syntax and formula binding, not that named actions change the
+state users observe. After the final clean compile, read the plan index and generated
+files and evaluate every `## Functional Test Matrix` row.
+
+For each scenario, record one result:
+
+- `PASS` only when the Given state establishes eligibility, the When interaction reaches
+  the named event, the event reads or writes the named source and stable ID, the Then
+  postcondition follows from the formula, and the evidence surface observes that same
+  source/post-state.
+- `FAIL` when any link is missing, contradictory, stale, bound to another source or field,
+  dependent on an unstated runtime assumption, or supported only by navigation,
+  notification, input text, or static copy.
+
+For mutations, also compare the handler, write set, proof set, receipt bindings, and
+downstream observer one-for-one. For filters, verify the concrete selector value is
+pointer-committed into the target `Items` predicate, preserves both matching seeded
+records, excludes the non-match, shows the active criterion, and clears deterministically.
+
+Calculate:
+
+`Functional readiness = PASS scenarios / total scenarios * 100`
+
+The internal ship gate is **100%**, not 80%. The external goal above 80 is a measurement
+target, not permission to omit one fifth of the approved behavior. If any scenario fails,
+repair the owning `.pa.yaml` file with a targeted edit, compile again, and rerun all
+scenarios affected by that source, field, or observer. Do not add static confirmation copy
+to make a failed transition appear complete.
+
+This is a deterministic static conformance gate because the prompt environment has no
+runtime interaction tool. Report it as functional readiness, not as proof of runtime
+execution. A fresh browser evaluation remains the authority for the external functional
+grade.
+
+## 3. Summary
 
 For CREATE:
 
@@ -188,6 +228,7 @@ For CREATE:
 | [Screen] | [file].pa.yaml | Created |
 
 **Compiled clean** after [N] pass(es).
+**Functional readiness:** [passed]/[total] scenarios passed static conformance.
 ```
 
 For EDIT:
@@ -200,6 +241,7 @@ For EDIT:
 | [Create / Modify] | [Screen] | [file].pa.yaml | Done |
 
 **Compiled clean** after [N] pass(es).
+**Functional readiness:** [passed]/[total] scenarios passed static conformance.
 ```
 
 If diagnostics remain after the convergence budget is exhausted, report them explicitly
@@ -219,4 +261,17 @@ instead of claiming completion:
 | [message] | [count] | [file] |
 
 [One line on what was tried and what is likely blocking.]
+```
+
+If compilation is clean but functional scenarios remain unresolved, report them instead
+of claiming completion:
+
+```markdown
+**App compiled with unresolved functional defects.**
+
+**Functional readiness:** [passed]/[total] scenarios passed static conformance.
+
+| Scenario | Failed link | Owner file |
+|----------|-------------|------------|
+| [scenario] | [eligibility / event / source-ID / postcondition / observer-evidence] | [file] |
 ```

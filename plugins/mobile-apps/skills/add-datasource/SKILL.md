@@ -6,7 +6,7 @@ allowed-tools: Read, Grep, Glob, AskUserQuestion, Skill
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Add Data Source
 
@@ -16,7 +16,7 @@ Router skill that understands the user's goal and connects them to the right dat
 
 ### Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 ### Understand the Goal
 

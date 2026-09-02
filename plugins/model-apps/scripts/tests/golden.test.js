@@ -7,6 +7,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { planFor, PHASES, appDef } = require('../lib/sdk-build.js');
 const { assertGolden } = require('./helpers/golden.js');
+// Every app the PLUGIN creates carries an icon: `ensureAppIcon` (sdk-build.js) resolves the author's
+// `spec.app.icon` or generates an SVG web resource, and `appDef` passes its id as
+// `iconWebResourceId`. These tests drive the SDK directly, so they must supply one too or they are
+// exercising a path production never takes.
+//
+// The SDK now REQUIRES it: `appmodule.webresourceid` is a required attribute, and when no explicit id
+// is given it auto-resolves an IMAGE web resource (PNG/JPG/GIF/ICO/SVG) and throws
+// `APP_ICON_UNRESOLVED` if the environment has none. Previously it fell back to ANY unmanaged web
+// resource — which on an org whose images are all managed returned a JAVASCRIPT file, and the platform
+// rejected the create with an opaque "dependent component WebResource does not exist". Failing fast
+// with a clear message is the better behaviour; these tests just have to stop relying on the old
+// silent fallback. A synthetic id is right here — the mock transport never dereferences it.
+const APP_ICON_ID = '11111111-2222-3333-4444-555555555555';
 
 const sample = (n) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', `app-spec.${n}.json`), 'utf8'));
 
@@ -72,7 +85,7 @@ test('sitemap-XML golden: area + subarea icons', async () => {
   };
   const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
-  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_goldenapp', description: '', siteMap: def.siteMap, components: def.components });
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_goldenapp', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await sdk.pushArtifact('app', art.id);
   fs.rmSync(ws, { recursive: true, force: true });
   assertGolden('sitemap.icons.xml', xml + '\n');
