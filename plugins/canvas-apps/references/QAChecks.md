@@ -69,10 +69,16 @@ are not part of the identifier.
 - Check 39 — `QACHK-VISUAL-CONTRACT` — screen styling diverges from the shared visual system
 - Check 40 — `QACHK-EXCESS-WHITESPACE` — layout sizing creates unintended empty regions
 - Check 41 — `QACHK-CORE-VISUALIZATION` — core visualization is blank, static, or incomplete
+- Check 42 — `QACHK-PRIMARY-ACTION-REACHABILITY` — required action is clipped, covered,
+  undersized, or unavailable from the initial task path
+- Check 43 — `QACHK-LIFECYCLE-IDENTITY` — edit, delete, or review targets an unstable or
+  incorrect record identity
+- Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` — filters, ordering, alerts, metrics, or
+  reports read a different source from mutations
 
 Agents that write `.pa.yaml` files MUST run these checks against their own
-output before returning, and fix every issue inline. Report the outcome of
-**every** check by number in the result summary, as described below.
+output before returning, and fix every issue inline. Report complete coverage plus only
+repairs and non-applicable checks, as described below.
 
 ---
 
@@ -80,32 +86,32 @@ output before returning, and fix every issue inline. Report the outcome of
 
 1. Read the `.pa.yaml` file you just wrote
 2. Apply the checks in order. Checks 1-5 come first because each one invalidates the
-   whole file or the whole compile, and the flood of misleading diagnostics that follows
-   hides every other problem
-3. For every issue found: apply the fix directly using `Edit`
-4. Record an outcome for **every** check, by number — not a total
+whole file or the whole compile, and the flood of misleading diagnostics that follows
+hides every other problem
+3. For every issue found: apply the fix directly using `apply_patch`
+4. Record complete coverage, every repair, and every non-applicable check
 5. Do NOT re-run `compile_canvas` here — the orchestrator does that
 
 All checks are safe: they tighten existing YAML, never delete semantic content.
 
 ### Reporting
 
-A count of fixes is not evidence that a check ran. Report one line per check, using
-exactly these outcomes:
+A long row of self-asserted `PASS` values is not evidence that a check ran. Use this
+compact, machine-scannable form:
 
 ```text
-QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(30) ·
-    8 PASS · 9 PASS · 10 PASS · 11 PASS · 12 PASS · 13 PASS · 14 PASS · 15 PASS ·
-    16 PASS · 17 PASS · 18 FIXED(4) · 19 PASS · 20 PASS · 21 PASS · 22 FIXED(3) ·
-    23 FIXED(4) · 24 PASS · 25 N/A · 26 N/A · 27 PASS · 28 N/A · 29 PASS ·
-    30 N/A · 31 PASS · 32 PASS · 33 PASS · 34 PASS · 35 PASS · 36 PASS ·
-    37 N/A · 38 PASS · 39 PASS · 40 PASS · 41 PASS
+QA coverage: 1-44 COMPLETE
+QA repairs: QACHK-MISSING-FORMULA-PREFIX FIXED(7) · QACHK-CONTAINER-MIN-SIZE FIXED(2)
+QA N/A: QACHK-GRID-CONTRACT · QACHK-TIMER-LIFECYCLE · QACHK-MANUAL-BOUNDS
 ```
 
-- `PASS` — you inspected every control the check applies to and found nothing.
-- `FIXED(n)` — you found and repaired `n` occurrences.
-- `N/A` — the construct the check targets does not appear on this screen (no gallery, no
-  `ModernCard`). Use this honestly; it is not a synonym for "did not check".
+- `COMPLETE` means the persisted file was inspected against every check.
+- `FIXED(n)` names each check that caused a repair and its occurrence count.
+- `N/A` names each check whose construct does not appear on the screen. It is not a
+  synonym for "did not check".
+- Do not emit the legacy numbered `QA: 1 PASS` checklist.
+- `1-44 COMPLETE` is invalid if the loaded guide does not define checks 42, 43, and 44.
+Report `Status: Provenance Blocked` instead of fabricating outcomes for missing checks.
 
 `QACHK-CROSS-AXIS-ALIGNMENT`, `QACHK-ACCESSIBLE-LABEL-MISSING` and
 `QACHK-LOW-CONTRAST-TEXT` apply frequently, but their outcomes still depend on the file:
@@ -130,6 +136,12 @@ QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(
   spacing, or visibility.
 - `QACHK-CORE-VISUALIZATION` is `N/A` only when the screen brief names no hierarchy,
   chart, comparison, board, timeline, map, or other core visualization.
+- `QACHK-PRIMARY-ACTION-REACHABILITY` applies to every screen owning a Required Actions
+  entry point.
+- `QACHK-LIFECYCLE-IDENTITY` is `N/A` only when the screen owns no edit, delete/remove,
+  cancel, approve, reject, or other selected-record mutation.
+- `QACHK-SHARED-SOURCE-DERIVATION` is `N/A` only when the screen owns no mutation,
+  search, filter, ordering, alert, KPI, dashboard, visualization, or report binding.
 
 `PASS` is valid when every applicable control was inspected and no defect was found.
 Never infer that a check was skipped solely from the number of controls on the screen.
@@ -159,6 +171,9 @@ and missing, added, or altered companion keywords.
 every instance of that type. Do not independently add or strip an `@version` suffix.
 
 **Exception:** None. `describe_control` is authoritative.
+
+Run this check against composed whole-screen text before its first save as well as against
+the persisted file. A rejected first write leaves no target file for normal self-QA.
 
 Run this check against composed whole-screen text before its first save as well as against
 the persisted file. A rejected first write leaves no target file for normal self-QA.
@@ -240,12 +255,12 @@ An enum literal has two parts and each fails differently. Check both.
 fails with `Name isn't recognized`. The same property name maps to different enum types on
 different controls:
 
-| Control | Property | Correct enum name |
-|---------|----------|-------------------|
-| `ModernDropdown` / `ModernTextInput` / `ModernNumberInput` | `Appearance` | `Appearance` |
-| `ModernButton` | `Appearance` | `ButtonAppearance` |
-| `Badge` | `Appearance` / `Shape` / `ThemeColor` | `BadgeCanvas.Appearance` / `BadgeCanvas.Shape` / `BadgeCanvas.ThemeColor` |
-| `Progress` | `Shape` / `Thickness` / `ProgressColor` | `Progress.Shape` / `Progress.Thickness` / `Progress.ProgressColor` |
+| Control                                                    | Property                                | Correct enum name                                                         |
+| ---------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------- |
+| `ModernDropdown` / `ModernTextInput` / `ModernNumberInput` | `Appearance`                            | `Appearance`                                                              |
+| `ModernButton`                                             | `Appearance`                            | `ButtonAppearance`                                                        |
+| `Badge`                                                    | `Appearance` / `Shape` / `ThemeColor`   | `BadgeCanvas.Appearance` / `BadgeCanvas.Shape` / `BadgeCanvas.ThemeColor` |
+| `Progress`                                                 | `Shape` / `Thickness` / `ProgressColor` | `Progress.Shape` / `Progress.Thickness` / `Progress.ProgressColor`        |
 
 **Detect:** For every property you set to an enum value, find that property in the control
 definition in your screen brief and compare your qualifier against its `Enum name:` line.
@@ -405,7 +420,7 @@ dimension (e.g., a 28px circular avatar inside a 44px horizontal row), use
 natural size and is centered.
 
 ⚠️ This check is per-control and there is no compile diagnostic behind it. A screen where
-`AlignInContainer` appears on *none* of its controls has not had this check run — say so
+`AlignInContainer` appears on _none_ of its controls has not had this check run — say so
 in your report rather than claiming a clean pass.
 
 ---
@@ -499,6 +514,7 @@ inexplicable gaps or clipping.
 
 **Detect:** For every `GroupContainer` whose parent has `LayoutDirection`
 (AutoLayout child), check:
+
 - Is the parent's `LayoutDirection` **Vertical**? This check applies to the parent's main
   axis only. In a horizontal parent, `FillPortions` governs width, so apply the same test
   to `Width` instead of `Height`.
@@ -595,6 +611,7 @@ padding and gaps.
 The container renders one size at design time and another at runtime.
 
 **Detect:** For every control, check whether it has both:
+
 - `FillPortions` with a value greater than 0, AND
 - An explicit `Height` (any non-formula numeric or a formula that doesn't
   reference Parent)
@@ -612,6 +629,7 @@ confuses the layout engine. The container renders one size at design time and
 another at runtime.
 
 **Detect:** For every control, check whether it has both:
+
 - `FillPortions` with a value greater than 0, AND
 - An explicit `Width` (any non-formula numeric or a formula that doesn't
   reference Parent)
@@ -828,7 +846,7 @@ Color: =RGBA(239, 246, 250, 1)
 
 ## Check 22 — `QACHK-VARIANT-SURFACE-CONTRAST` (light foreground on a variant-supplied surface)
 
-**Problem:** `QACHK-LOW-CONTRAST-TEXT` catches text that *omits* a colour. This is the
+**Problem:** `QACHK-LOW-CONTRAST-TEXT` catches text that _omits_ a colour. This is the
 opposite failure: the colour is set, and it is set against a surface the control derives
 from a **Fluent enum** rather than from `Fill`. The agent picks a near-white foreground
 for a dark theme, the variant supplies a near-white surface, and the control renders
@@ -837,12 +855,12 @@ an empty pill.
 
 These are the enum values that produce a **light** surface:
 
-| Property | Light-surface members |
-|----------|----------------------|
+| Property                       | Light-surface members                                               |
+| ------------------------------ | ------------------------------------------------------------------- |
 | `Appearance` on `ModernButton` | `ButtonAppearance.Secondary`, `.Outline`, `.Subtle`, `.Transparent` |
-| `Appearance` on inputs | `Appearance.Outline`, `.FilledLighter` |
-| `Appearance` on `Badge` | `'BadgeCanvas.Appearance'.Tint`, `.Ghost`, `.Outline` |
-| `ThemeColor` on `Badge` | `'BadgeCanvas.ThemeColor'.Informative`, `.Warning` |
+| `Appearance` on inputs         | `Appearance.Outline`, `.FilledLighter`                              |
+| `Appearance` on `Badge`        | `'BadgeCanvas.Appearance'.Tint`, `.Ghost`, `.Outline`               |
+| `ThemeColor` on `Badge`        | `'BadgeCanvas.ThemeColor'.Informative`, `.Warning`                  |
 
 **Detect:** For every control that sets `Color` or `FontColor` to a light value (any
 channel triple averaging above ~180), check whether its surface comes from one of the enum
@@ -879,12 +897,13 @@ never one from your palette and the other from an enum default.
 
 ---
 
+
 ## Check 23 — `QACHK-CARD-PLACEHOLDER` (`ModernCard` slot left unset)
 
 **Problem:** `ModernCard` does not render unset slots as empty. It substitutes placeholder
 content: a large stock photograph for `Image`, and the literal strings `Title`, `Subtitle`
 and `Description` for the text slots. The photo takes most of the card's height, so the
-value you *did* set is pushed out of view or clipped mid-glyph. Every card on the screen
+value you _did_ set is pushed out of view or clipped mid-glyph. Every card on the screen
 looks identical and none of them shows its data. `compile_canvas` reports nothing.
 
 **Detect:** For every `Control: ModernCard`, list the slots supported by the control
@@ -896,13 +915,13 @@ that the card's layout displays but the YAML leaves unset.
 
 ```yaml
 - KpiOpenCard:
-    Control: ModernCard
-    Properties:
-      Image: =Blank()
-      HeaderImage: =Blank()
-      Title: =CountRows(colOpenTasks) & ""
-      Subtitle: ="Open tasks"
-      Description: ="Across all projects"
+      Control: ModernCard
+      Properties:
+          Image: =Blank()
+          HeaderImage: =Blank()
+          Title: =CountRows(colOpenTasks) & ""
+          Subtitle: ="Open tasks"
+          Description: ="Across all projects"
 ```
 
 If the control definition includes `ImageAccessibleLabel` or
@@ -916,6 +935,7 @@ visible, use at least `Height: =180`; anything below 180 is a failure, not a com
 variant. Do not force all
 three text slots into a short fixed height.
 
+
 **Exception:** None. If you chose `ModernCard`, you own all of its slots.
 
 ---
@@ -924,7 +944,7 @@ three text slots into a short fixed height.
 
 **Problem:** `TemplateSize` fixes the row height; the template's content does not
 negotiate with it. A row sized for density — `TemplateSize: =If(Self.Width < 640, 320, 132)`
-— clips whatever does not fit at the *desktop* branch, so the app looks correct on a phone
+— clips whatever does not fit at the _desktop_ branch, so the app looks correct on a phone
 and loses its card titles on a laptop. It is easy to miss because the narrow branch, which
 is the one usually eyeballed, is fine.
 
@@ -1019,22 +1039,22 @@ properties:
 
 ```yaml
 Screens:
-  Screen1:
-    Children:
-      - AppRoot:
-          Control: GroupContainer
-          Variant: AutoLayout
-          Properties:
-            Width: =Parent.Width
-            Height: =Parent.Height
-            LayoutMinWidth: =0
-            LayoutMinHeight: =0
-            LayoutDirection: =LayoutDirection.Vertical
-          Children:
-            - AppHeader:
-                # ...
-            - AppContent:
-                # ...
+    Screen1:
+        Children:
+            - AppRoot:
+                  Control: GroupContainer
+                  Variant: AutoLayout
+                  Properties:
+                      Width: =Parent.Width
+                      Height: =Parent.Height
+                      LayoutMinWidth: =0
+                      LayoutMinHeight: =0
+                      LayoutDirection: =LayoutDirection.Vertical
+                  Children:
+                      - AppHeader:
+                        # ...
+                      - AppContent:
+                            # ...
 ```
 
 After moving the controls, re-run `QACHK-FILLPORTIONS-DEFAULT`, `QACHK-SCROLL-TRAP`,
@@ -1074,9 +1094,9 @@ new item, toggle `Reset` and restart explicitly:
 ```yaml
 # Screen OnVisible
 OnVisible: |-
-  =Set(varTimerRunning, false);
-  Set(varTimerReset, !varTimerReset);
-  Set(varTimerRunning, true)
+    =Set(varTimerRunning, false);
+    Set(varTimerReset, !varTimerReset);
+    Set(varTimerRunning, true)
 
 # Timer
 AutoStart: =true
@@ -1111,11 +1131,11 @@ or row-action buttons.
 
 ```yaml
 - EventGallery:
-    Control: Gallery
-    Variant: Vertical
-    Properties:
-      Selectable: =false
-      DisplayMode: =DisplayMode.Edit
+      Control: Gallery
+      Variant: Vertical
+      Properties:
+          Selectable: =false
+          DisplayMode: =DisplayMode.Edit
 ```
 
 Set `DisplayMode` only on the individual action when it genuinely needs to be disabled.
@@ -1182,10 +1202,10 @@ An `AccessibleLabel` is not the visible value binding.
 
 ```yaml
 - StatusBadge:
-    Control: Badge
-    Properties:
-      Content: =ThisItem.Status
-      AccessibleLabel: ="Assignment status " & ThisItem.Status
+      Control: Badge
+      Properties:
+          Content: =ThisItem.Status
+          AccessibleLabel: ="Assignment status " & ThisItem.Status
 ```
 
 **Exception:** A purely decorative semantic control explicitly intended to have no
@@ -1502,3 +1522,59 @@ by the brief. Remove placeholder surfaces and overlays that obscure the result.
 **Exception:** None when the screen brief names a core visualization. If the discovered
 controls cannot implement the requested interaction exactly, render the strongest truthful
 approximation and report it as blocked or approximate; never ship a blank region.
+
+---
+
+## Check 42 — `QACHK-PRIMARY-ACTION-REACHABILITY` (required action cannot be used)
+
+**Problem:** A required action can exist in YAML but remain unusable because it is below a
+clipped form, inside a zero-height container, covered by an overlay, permanently disabled,
+or too small to target reliably.
+
+**Detect:** Trace every Required Actions entry point from the screen's initial state.
+Confirm its ancestor chain is visible, its enabled precondition is satisfiable, its target
+is at least 44px by 44px, and its bounds do not intersect another visible control at
+desktop, tablet, or phone widths. An action below the initial viewport needs an obvious
+working scroll or menu affordance that passes the same checks.
+
+**Fix:** Move the action into the initial task path, repair the containing layout, enlarge
+its target, or expose it through an immediately visible menu.
+
+**Exception:** A destructive confirmation action may begin hidden when a reachable
+delete/remove entry point makes it visible.
+
+---
+
+## Check 43 — `QACHK-LIFECYCLE-IDENTITY` (selected-record mutation targets the wrong row)
+
+**Problem:** Edit, delete, approve, reject, and status actions can appear wired while
+targeting display text, gallery position, a stale copied record, or the first row.
+
+**Detect:** For every selected-record mutation, trace the selected stable ID or record
+object through edit prepopulation, the mutation target, preservation of unchanged fields,
+and the immediate result observer. Review/status actions must write the same status field
+that filters, badges, dashboards, and reports render.
+
+**Fix:** Store the selected stable ID or record, mutate that identity, and bind post-action
+evidence to the same source and identity.
+
+**Exception:** Create has no prior identity, but must assign a unique stable ID used by
+later lifecycle actions.
+
+---
+
+## Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` (derived UI reads stale or unrelated data)
+
+**Problem:** CRUD can update one collection while filters, ordering, alerts, KPIs,
+dashboards, and reports read seed data, copied counters, or a screen-local collection.
+
+**Detect:** Identify the authoritative mutable source. Confirm every mutation writes it
+and every search, filter, ordering, alert, KPI, visualization, and report derives from it
+using the same field semantics.
+
+**Fix:** Remove duplicate or copied state and bind dependent surfaces to the authoritative
+source or a named formula derived from it. Refresh any intentional cache on every
+successful mutation path.
+
+**Exception:** An immutable version snapshot may use a separate source when the plan
+explicitly defines snapshot identity and comparison semantics.
