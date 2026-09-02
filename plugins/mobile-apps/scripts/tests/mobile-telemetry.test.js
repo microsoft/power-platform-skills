@@ -9,6 +9,7 @@ const { spawnSync } = require('node:child_process');
 
 const {
   createTelemetryContext,
+  emitAppInsightsSelection,
   emitSkillStarted,
 } = require('../lib/mobile-telemetry');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
@@ -204,6 +205,26 @@ test('started event is allowlisted and carries no user, tenant, prompt, or path 
   assert.deepEqual(event.data.eventInfo, { invocationSource: 'pretool', appInstanceId: null });
   for (const forbidden of ['orgId', 'tenantId', 'pacCliVersion', 'aadObjectId', 'prompt', 'cwd', 'path']) {
     assert.equal(Object.prototype.hasOwnProperty.call(event.data, forbidden), false);
+  }
+});
+
+test('Application Insights prompt selections emit only the approved choice', (t) => {
+  const context = contextFor(provisioned);
+  for (const selection of ['enabled', 'disabled']) {
+    let captured;
+    const event = emitAppInsightsSelection(context, selection, {
+      emit: (value) => { captured = value; },
+      readAiAgent: () => ({}),
+      correlationId: 'correlation-1',
+      cwd: tempProject(t),
+    });
+    assert.equal(captured, event);
+    assert.equal(event.data.eventName, 'app_insights_selection');
+    assert.equal(event.data.skillName, 'create-mobile-app');
+    assert.deepEqual(event.data.eventInfo, {
+      appInstanceId: null,
+      appInsightsSelection: selection,
+    });
   }
 });
 

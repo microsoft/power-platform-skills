@@ -1291,6 +1291,17 @@ Choices:
 
 This is an explicit opt-in. Do not infer consent from the app description, and do not enable customer telemetry without this answer.
 
+After the creator answers, emit the choice through Mobile Apps usage telemetry:
+
+```bash
+node "${PLUGIN_ROOT}/hooks/run-telemetry.js" \
+  app-insights-selection \
+  "<enabled-or-disabled>" \
+  "<working_dir>"
+```
+
+Use `enabled` for `Use an Application Insights resource` and `disabled` for `Leave customer telemetry disabled`. This event follows the existing Mobile Apps telemetry controls and contains no Application Insights resource details or connection string.
+
 #### Configure branch
 
 First discover Application Insights resources visible to the current Azure CLI identity:

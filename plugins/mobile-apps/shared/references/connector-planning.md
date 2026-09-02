@@ -29,7 +29,7 @@ If a requirement is vague (e.g., "external data", "third-party API") but no keyw
 - Do not propose a custom connector.
 - Do not raise a connector-constraint approval question.
 - Exclude the telemetry request from `## Connectors`.
-- Record, at most, this note after the connector table: `Application Insights telemetry is configured separately by /create-mobile-app Step 6.8 through PowerAppsProvider; it is not a Power Platform data connector.`
+- Record, at most, this note after the connector table: `Application Insights telemetry is configured separately by /create-mobile-app Step 6.8 or /edit-app through PowerAppsProvider; it is not a Power Platform data connector.`
 
 This exception applies only to host/runtime observability. Business features that read monitoring data or query another system still require an appropriate connector.
 
