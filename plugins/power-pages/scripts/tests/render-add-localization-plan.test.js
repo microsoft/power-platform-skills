@@ -69,6 +69,13 @@ const ENGLISH_LABELS = {
     location: 'Location',
     rule: 'Rule',
     remediation: 'Planned remediation',
+    componentScope: 'Component review scope',
+    component: 'Component',
+    classification: 'Classification',
+    reason: 'Reason',
+    states: 'Applicable states',
+    viewports: 'Applicable viewports',
+    checks: 'Planned checks',
     physicalExceptions: 'Physical exceptions',
     scriptFonts: 'Script font changes',
     unavailableLocales: 'Locales pending remediation',
@@ -113,6 +120,16 @@ const ENGLISH_LABELS = {
     userApproved: 'User approved',
   },
   severity: { error: 'Error', review: 'Review' },
+  classification: {
+    directionNeutral: 'Direction-neutral',
+    directionAware: 'Direction-aware',
+    directionFixed: 'Direction-fixed',
+    unknownThirdParty: 'Unknown or third-party',
+  },
+  viewport: {
+    desktop: 'Desktop',
+    narrow: 'Narrow or mobile',
+  },
   operation: {
     create: 'Create localization',
     addLanguages: 'Add languages',
@@ -206,6 +223,24 @@ const SAMPLE_DATA = {
         remediation: 'Use semantic next and previous movement and browser-test both directions.',
       },
     ],
+    componentScope: [
+      {
+        component: 'Shared navigation',
+        classification: 'direction-aware',
+        reason: 'Navigation placement, order, and directional icons follow reading direction.',
+        states: ['Default', 'Mobile menu open'],
+        viewports: ['desktop', 'narrow'],
+        checks: ['Verify reading order, focus order, placement, and icons in both directions.'],
+      },
+      {
+        component: 'Search input',
+        classification: 'direction-aware',
+        reason: 'The free-form value and localized field UI can use different directions.',
+        states: ['Empty', 'Focused', 'Populated'],
+        viewports: ['desktop', 'narrow'],
+        checks: ['Verify label, placeholder, hint, value, and results alignment.'],
+      },
+    ],
     physicalExceptions: [],
     scriptFonts: ['Existing font supports Latin source and target content.'],
     unavailableLocales: [],
@@ -264,6 +299,10 @@ test('renders the localization plan in the source locale', () => {
   assert.match(html, /fr-FR/);
   assert.match(html, /src\/i18n\/index\.ts/);
   assert.match(html, /directional-geometry-review/);
+  assert.match(html, /Component review scope/);
+  assert.match(html, /Direction-aware/);
+  assert.match(html, /Mobile menu open/);
+  assert.match(html, /Search input/);
   assert.match(html, /AI translations may contain errors/);
   assert.ok(
     html.indexOf('data-label="footer.aiWarning"') < html.indexOf('<script id="siteNameData"'),
@@ -570,6 +609,27 @@ test('rejects contradictory source roles, duplicate locales, and incomplete find
   assert.equal(findingResult.status, 1);
   assert.match(findingResult.stderr, /line must be a positive integer/);
   assert.match(findingResult.stderr, /remediation must be a non-empty string/);
+
+  const scopeOutput = path.join(tempDir, 'component-scope.html');
+  const incompleteScope = {
+    ...SAMPLE_DATA,
+    READINESS_DATA: {
+      ...SAMPLE_DATA.READINESS_DATA,
+      componentScope: [
+        {
+          component: 'Contact form',
+          classification: 'direction-aware',
+          reason: 'Form controls depend on the active direction.',
+          states: [],
+          viewports: ['desktop'],
+          checks: ['Verify both directions.'],
+        },
+      ],
+    },
+  };
+  const scopeResult = run(incompleteScope, scopeOutput);
+  assert.equal(scopeResult.status, 1);
+  assert.match(scopeResult.stderr, /componentScope\[0\]\.states/);
 });
 
 test('rejects plans for temporarily unavailable localization modes', () => {

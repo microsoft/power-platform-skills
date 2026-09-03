@@ -60,7 +60,9 @@ Starts a complete code site either from a curated SPA template or from a fresh f
   correct `lang`/`dir` metadata and an RTL-safe layout
 - Separates deterministic agent verification from linguistic, cultural, brand,
   and visual checks that require maker review
-- Direction-neutral layouts work with LTR and RTL writing systems from the start
+- Every visible or interactive component is classified for bidirectional
+  behavior, with applicable states and desktop/narrow viewports planned
+  separately; direction-neutral layouts work with LTR and RTL from the start
 - Script-aware fonts, locale-aware formatting, and mixed-direction content safety
 - Real images from Unsplash (no placeholders)
 - Live browser preview during development
@@ -423,8 +425,9 @@ temporarily unavailable.
   completion
 - Resolves direction from each locale's writing script, including languages
   written in multiple scripts
-- Audits the first opposite-direction locale and remediates blocking layout,
-  component, asset, mixed-content, and font issues
+- Audits the first opposite-direction locale, classifies the existing
+  components and their applicable states/viewports, and plans targeted
+  remediation without redesigning unrelated branding or behavior
 - Adds an accessible language selector with fallback and safe runtime LTR/RTL
   switching; runtime React, Vue, and Angular sites use a locale coordinator
 - Keeps an unsafe new locale unavailable for later remediation, or records
