@@ -299,12 +299,12 @@
       "files": [],
       "expectations": [
         "Plans the booking widget as unknown-third-party with its open state, desktop and narrow coverage, portal or iframe target, and exact rendered checks",
-        "Keeps Arabic unavailable in the provisional manifest until static and rendered verification and maker disposition are complete",
+        "Begins from fail-closed Arabic availability, records an exclusive verification transaction, and tests Arabic through the real selector while completion and deployment remain blocked",
         "Does not treat the user's advance willingness as approval and asks again only after showing the rendered evidence and exact impact",
         "Does not offer approval if the widget is unreadable, clipped, unreachable, incorrectly directed, or otherwise has an error-severity finding",
         "If the remaining issue is review-severity usable degradation, offers Fix before enabling, Enable with documented limitations, Save but keep locale unavailable, and Request revisions",
         "On enablement, records only the accepted review finding with maker-approved disposition, impact, report or screenshot evidence, and ISO approval timestamp",
-        "Removes Arabic from unavailableLocales only after approval, updates all managed availability boundaries, and reruns the validator, build, and affected activation cases",
+        "Keeps the verification transaction active through maker disposition, then finalizes Arabic as approved-with-limitations and available only after recording the approved evidence",
         "Reports the final readiness and limitation consistently in the manifest and final summary"
       ]
     },
@@ -314,7 +314,7 @@
       "expected_output": "The workflow tests Arabic independently, preserves Hebrew as ready and available because regression evidence shows it is unaffected, and keeps only Arabic pending and unavailable.",
       "files": [],
       "expectations": [
-        "Starts the newly added Arabic locale as pending-remediation without changing the previously ready Hebrew locale",
+        "Starts Arabic fail-closed, then temporarily exposes only Arabic under an exclusive verification transaction without changing the previously ready Hebrew locale",
         "Runs the full Arabic resource, activation, lang and dir, font, formatting, wrapping, component-state, viewport, console, and accessibility checks",
         "Regression-tests Hebrew on any shared direction-sensitive surfaces changed while adding Arabic",
         "Records the calendar font failure with locale scope and affectedLocales containing only ar-SA",
@@ -322,7 +322,7 @@
         "Sets only ar-SA to pending-remediation and makes unavailableLocales exactly [ar-SA]",
         "Derives the overall bidirectional readiness status as pending-remediation while retaining per-locale readiness",
         "Applies the Arabic exclusion to selectors, automatic detection, alternate-language metadata, and production output",
-        "Uses a development-only audit activation adapter to exercise Arabic through the real locale coordinator without exposing it through normal production activation",
+        "Exercises Arabic through the real selector and public locale coordinator, then restores Arabic to unavailable after the failure",
         "Does not require all RTL locales to be unavailable merely because Arabic failed",
         "Runs English to Arabic to English and Arabic to English to Arabic runtime round trips; pseudo locales are not used for application switching",
         "Final summary clearly reports Hebrew as available and Arabic as unavailable"

@@ -98,16 +98,6 @@ test('create-site validator allows an exact blocker isolated behind an unavailab
     import { isLocaleAvailable } from './localeAvailability';
     i18next.init({ fallbackLng: 'en-US' });
     export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);
-    async function activateLocaleForAudit(locale) {
-      await i18next.changeLanguage(locale);
-      document.documentElement.lang = locale;
-      document.documentElement.dir = locale === 'ar-SA' ? 'rtl' : 'ltr';
-    }
-    if (import.meta.env.DEV) {
-      window.__powerPagesLocalizationAudit = {
-        activate: (locale) => activateLocaleForAudit(locale),
-      };
-    }
   `);
   writeProjectFile(projectRoot, 'src/i18n/localeAvailability.ts', `
     const unavailableLocales = new Set(['ar-SA']);
