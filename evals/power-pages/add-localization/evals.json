@@ -275,11 +275,15 @@
         "Plans separate applicable states and desktop or narrow viewports for the form, drawer, autocomplete, and scheduling widget",
         "Treats form labels, placeholders, hints, helper text, errors, prefixes, suffixes, values, and open panels as one compound direction surface",
         "Requires rendered checks for the portal-mounted autocomplete and third-party scheduling widget",
+        "Builds an ephemeral rendered-verification specification and executes every applicable state and viewport in English LTR and Hebrew RTL",
+        "Requires both LTR to RTL to LTR and RTL to LTR to RTL runtime sequences without reload, route loss, form-state loss, or focus loss",
+        "Records computed-direction, overflow, clipping, overlap, focus-order, portal, and third-party evidence with screenshots for failures or review findings",
         "Runs the expanded static audit before approval and parses its structured findings even when deterministic errors produce a nonzero exit",
         "Requires an adjacent bidi-fixed reason for intentional machine-oriented LTR values and does not permit that exception for localized labels, placeholders, hints, or errors",
         "Describes remediation as a targeted bidirectional adaptation that preserves branding, routes, features, and visual character",
         "Does not create a separate persistent component-inventory JSON file",
         "Keeps Hebrew unavailable when an externally owned or existing component has a blocking unremediated defect",
+        "Records unresolved rendered blockers separately from static scanner findings and does not offer locale enablement while they remain",
         "Requires the approved review scope to be reconciled with components and states discovered during implementation"
       ]
     }

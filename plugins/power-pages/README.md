@@ -94,6 +94,12 @@ Runtime-tests a deployed, activated site using a real browser (via the bundled P
 - Console and network error capture
 - Screenshots on failure
 
+Create-site and add-localization also run a component-scoped rendered
+bidirectional audit against their development preview. It verifies computed
+direction, overflow, clipping, focus order, portals/overlays, applicable
+states and viewports, and runtime locale round trips. The run report is
+validation evidence rather than a second component manifest.
+
 ### Data modeling
 
 #### `/setup-datamodel`
