@@ -64,6 +64,25 @@ const ENGLISH_LABELS = {
     usedBy: 'Used by',
     noComponents: 'No shared components planned yet.',
   },
+  bidirectional: {
+    title: 'Bidirectional review scope',
+    description: 'Planned component, state, and viewport coverage',
+    classification: 'Classification',
+    reason: 'Reason',
+    states: 'Applicable states',
+    viewports: 'Applicable viewports',
+    checks: 'Planned checks',
+    classifications: {
+      directionNeutral: 'Direction-neutral',
+      directionAware: 'Direction-aware',
+      directionFixed: 'Direction-fixed',
+      unknownThirdParty: 'Unknown or third-party',
+    },
+    viewport: {
+      desktop: 'Desktop',
+      narrow: 'Narrow or mobile',
+    },
+  },
   deployment: {
     title: 'Deployment & Review',
     description: 'Verification checklist and deployment options',
@@ -129,6 +148,24 @@ const SAMPLE_DATA = {
     { path: '/', page: 'Home' },
     { path: '/directory', page: 'Directory' },
   ],
+  BIDIRECTIONAL_REVIEW_DATA: [
+    {
+      component: 'Navbar',
+      classification: 'direction-aware',
+      reason: 'Navigation order, placement, and directional icons follow reading direction.',
+      states: ['Default', 'Mobile menu open'],
+      viewports: ['desktop', 'narrow'],
+      checks: ['Verify reading order, focus order, placement, and icons in both directions.'],
+    },
+    {
+      component: 'Consultant search input',
+      classification: 'direction-aware',
+      reason: 'The free-form value and localized field UI can use different text directions.',
+      states: ['Empty', 'Focused', 'Populated'],
+      viewports: ['desktop', 'narrow'],
+      checks: ['Verify the label, placeholder, hint, value, and results alignment.'],
+    },
+  ],
   REVIEW_DATA: {
     agentChecks: [
       'All pages load without console errors',
@@ -169,6 +206,10 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /#1E3A5F/);
   assert.match(html, /Directory/);
   assert.match(html, /Navbar/);
+  assert.match(html, /Bidirectional review scope/);
+  assert.match(html, /Direction-aware/);
+  assert.match(html, /Consultant search input/);
+  assert.match(html, /Mobile menu open/);
   assert.match(html, /"agentChecks":\["All pages load without console errors"/);
   assert.match(html, /"makerReview":\["Language and terminology are appropriate"/);
   assert.match(html, /Agent verification/);
@@ -203,6 +244,33 @@ test('render-createsite-plan renders HTML from --data-inline JSON', () => {
   const html = fs.readFileSync(outputPath, 'utf8');
   assert.match(html, /Contoso Portal/);
   assert.match(html, /Space Grotesk/);
+});
+
+test('render-createsite-plan rejects incomplete bidirectional review scope', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'invalid-bidi-plan.html');
+  const invalid = {
+    ...SAMPLE_DATA,
+    BIDIRECTIONAL_REVIEW_DATA: [
+      {
+        component: 'Contact form',
+        classification: 'direction-aware',
+        reason: 'Form controls depend on the active direction.',
+        states: [],
+        viewports: ['desktop'],
+        checks: ['Verify both directions.'],
+      },
+    ],
+  };
+
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, '--output', outputPath, '--data-inline', JSON.stringify(invalid)],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /BIDIRECTIONAL_REVIEW_DATA\[0\]\.states/);
 });
 
 test('render-createsite-plan renders localized LTR labels and locale metadata', () => {

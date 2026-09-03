@@ -218,6 +218,16 @@ generic directory entry when exact files are known.
       "remediation": "Localized proposed remediation"
     }
   ],
+  "componentScope": [
+    {
+      "component": "Localized component or surface name",
+      "classification": "direction-aware",
+      "reason": "Localized classification reason",
+      "states": ["Localized applicable state"],
+      "viewports": ["desktop", "narrow"],
+      "checks": ["Localized planned verification"]
+    }
+  ],
   "physicalExceptions": ["Localized description with unchanged CSS details"],
   "scriptFonts": ["Localized script/font change"],
   "unavailableLocales": ["ar-SA"]
@@ -226,9 +236,30 @@ generic directory entry when exact files are known.
 
 Finding severity is `error` or `review`. Preserve the audit's exact `file`,
 positive `line`, and `rule`, and provide the proposed `remediation`. An empty
-array is valid for any readiness collection. The source locale must be
-`existing` and `available`, locale tags must be unique, and
-`unavailableLocales` must exactly match locales marked `pending-remediation`.
+array is valid for findings, physical exceptions, script fonts, and unavailable
+locales.
+
+`componentScope` must be non-empty and cover every visible or interactive
+component in the existing implementation, including page-local controls.
+Classifications are `direction-neutral`, `direction-aware`,
+`direction-fixed`, or `unknown-third-party`. `reason`, `states`, and `checks`
+are localized. `states` contains every applicable rendered or interactive
+state, not a mechanical list of states the component does not support.
+`viewports` contains one or both stable values `desktop` and `narrow`.
+
+Treat anything involving inline placement, text direction, horizontal
+movement, sequence, directional meaning, mixed-script content, or rendering
+outside the normal component subtree as a potential bidirectional surface.
+Direction-aware entries require planned LTR and RTL checks. Direction-fixed
+entries require a semantic reason and surrounding-UI checks.
+Unknown/third-party entries require rendered checks for their supported open
+states, including portals, teleports, overlay containers, Shadow DOM, or
+iframes. This plan data is human-reference scope, not a new project manifest;
+reconcile it against the implementation during Phase 5.
+
+The source locale must be `existing` and `available`, locale tags must be
+unique, and `unavailableLocales` must exactly match locales marked
+`pending-remediation`.
 
 ## Verification and limitations
 
@@ -321,6 +352,13 @@ unchanged and preserve `{siteName}` exactly.
     "location": "Location",
     "rule": "Rule",
     "remediation": "Planned remediation",
+    "componentScope": "Component review scope",
+    "component": "Component",
+    "classification": "Classification",
+    "reason": "Reason",
+    "states": "Applicable states",
+    "viewports": "Applicable viewports",
+    "checks": "Planned checks",
     "physicalExceptions": "Physical exceptions",
     "scriptFonts": "Script font changes",
     "unavailableLocales": "Locales pending remediation",
@@ -367,6 +405,16 @@ unchanged and preserve `{siteName}` exactly.
   "severity": {
     "error": "Error",
     "review": "Review"
+  },
+  "classification": {
+    "directionNeutral": "Direction-neutral",
+    "directionAware": "Direction-aware",
+    "directionFixed": "Direction-fixed",
+    "unknownThirdParty": "Unknown or third-party"
+  },
+  "viewport": {
+    "desktop": "Desktop",
+    "narrow": "Narrow or mobile"
   },
   "operation": {
     "create": "Create localization",
