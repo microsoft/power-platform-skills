@@ -260,6 +260,10 @@ reconcile it against the implementation during Phase 5.
 The source locale must be `existing` and `available`, locale tags must be
 unique, and `unavailableLocales` must exactly match locales marked
 `pending-remediation`.
+When the plan contains an error-severity bidirectional finding, every
+configured locale whose direction is opposite to the default locale must be
+`pending-remediation`. Plan approval authorizes the proposed remediation; it
+does not authorize enabling a locale while that blocker remains.
 
 ## Verification and limitations
 
@@ -283,8 +287,10 @@ checks are allowed:
 `representative-routes`, `bidirectional-content`, `localized-formatting`,
 `script-fonts`, `directional-components`, and `accessibility`.
 
-`LIMITATIONS_DATA` is an array of localized known limitations and approved
-translation replacements. Use an empty array when none are known.
+`LIMITATIONS_DATA` is an array of localized known or anticipated limitations
+and approved translation replacements. A pre-implementation plan may describe
+a possible usable limitation, but final maker approval is obtained only after
+rendered evidence exists in Phase 7. Use an empty array when none are known.
 
 ## Required localized labels
 

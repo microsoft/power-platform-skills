@@ -632,6 +632,45 @@ test('rejects contradictory source roles, duplicate locales, and incomplete find
   assert.match(scopeResult.stderr, /componentScope\[0\]\.states/);
 });
 
+test('keeps opposite-direction locales unavailable while blocking findings remain', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'localization-plan-'));
+  const outputPath = path.join(tempDir, 'unsafe-locale.html');
+  const unsafePlan = {
+    ...SAMPLE_DATA,
+    LOCALES_DATA: [
+      SAMPLE_DATA.LOCALES_DATA[0],
+      {
+        language: 'Arabic',
+        locale: 'ar-SA',
+        direction: 'rtl',
+        roles: ['added'],
+        availability: 'available',
+      },
+    ],
+    READINESS_DATA: {
+      ...SAMPLE_DATA.READINESS_DATA,
+      transition: 'ltr-only → mixed',
+      findings: [{
+        severity: 'error',
+        file: 'src/styles.css',
+        line: 42,
+        rule: 'directional-physical-css',
+        message: 'Physical alignment blocks RTL.',
+        remediation: 'Replace the physical property with its logical equivalent.',
+      }],
+      unavailableLocales: [],
+    },
+  };
+
+  const result = run(unsafePlan, outputPath);
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /Blocking bidirectional findings require every opposite-direction locale/
+  );
+});
+
 test('rejects plans for temporarily unavailable localization modes', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'localization-plan-'));
   const angularOutput = path.join(tempDir, 'angular-static.html');

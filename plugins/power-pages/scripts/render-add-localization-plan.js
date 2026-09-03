@@ -563,6 +563,24 @@ function validatePlanData(data) {
           'READINESS_DATA.unavailableLocales must match locales marked pending-remediation.'
         );
       }
+      const hasBlockingFinding = Array.isArray(readiness.findings) &&
+        readiness.findings.some((finding) => finding?.severity === 'error');
+      const defaultLocale = data.LOCALES_DATA.find(
+        (entry) => entry.roles?.includes('default')
+      );
+      if (hasBlockingFinding && defaultLocale) {
+        const unsafeOppositeLocales = data.LOCALES_DATA.filter(
+          (entry) =>
+            entry.direction !== defaultLocale.direction &&
+            entry.availability !== 'pending-remediation'
+        );
+        if (unsafeOppositeLocales.length > 0) {
+          errors.push(
+            'Blocking bidirectional findings require every opposite-direction ' +
+            'locale to remain pending-remediation.'
+          );
+        }
+      }
     }
   }
 
