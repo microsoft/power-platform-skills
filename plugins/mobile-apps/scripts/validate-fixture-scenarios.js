@@ -60,7 +60,7 @@ function sourceBindings(source) {
   };
 }
 
-function resolveValue(reference, records, errors, pointer) {
+function resolveValue(reference, records, errors, pointer, allowedRecordIds = null) {
   if (!reference || typeof reference !== 'object' || Array.isArray(reference)) {
     errors.push(finding('preview-value-reference-invalid', 'preview value must reference a record field', pointer));
     return null;
@@ -68,6 +68,14 @@ function resolveValue(reference, records, errors, pointer) {
   const record = records.get(reference.recordId);
   if (!record) {
     errors.push(finding('preview-record-missing', `preview references missing record ${reference.recordId}`, pointer));
+    return null;
+  }
+  if (allowedRecordIds && !allowedRecordIds.has(reference.recordId)) {
+    errors.push(finding(
+      'preview-record-not-bound',
+      `preview record ${reference.recordId} is not included in the screen binding`,
+      pointer,
+    ));
     return null;
   }
   if (!Object.prototype.hasOwnProperty.call(record.fields || {}, reference.field)) {
@@ -120,13 +128,21 @@ function validateInvariant(invariant, records, errors, pointer) {
 
 function compilePreview(binding, records, mediaAssets, errors, pointer) {
   const preview = binding.preview || {};
+  const boundRecordIds = new Set(binding.recordIds || []);
   const compiled = {
-    headline: resolveValue(preview.headline, records, errors, `${pointer}.headline`),
+    headline: resolveValue(
+      preview.headline,
+      records,
+      errors,
+      `${pointer}.headline`,
+      boundRecordIds,
+    ),
     supportingText: resolveValue(
       preview.supportingText,
       records,
       errors,
       `${pointer}.supportingText`,
+      boundRecordIds,
     ),
     records: [],
     fields: [],
@@ -137,6 +153,14 @@ function compilePreview(binding, records, mediaAssets, errors, pointer) {
     const record = records.get(item.recordId);
     if (!record) {
       errors.push(finding('preview-record-missing', `preview references missing record ${item.recordId}`, `${pointer}.records[${index}]`));
+      continue;
+    }
+    if (!boundRecordIds.has(item.recordId)) {
+      errors.push(finding(
+        'preview-record-not-bound',
+        `preview record ${item.recordId} is not included in the screen binding`,
+        `${pointer}.records[${index}]`,
+      ));
       continue;
     }
     const field = (name) => {
@@ -166,7 +190,13 @@ function compilePreview(binding, records, mediaAssets, errors, pointer) {
   for (const key of ['fields', 'metrics', 'summaryRows']) {
     compiled[key] = (preview[key] || []).map((item, index) => ({
       label: String(item.label || ''),
-      value: String(resolveValue(item.value, records, errors, `${pointer}.${key}[${index}].value`) ?? ''),
+      value: String(resolveValue(
+        item.value,
+        records,
+        errors,
+        `${pointer}.${key}[${index}].value`,
+        boundRecordIds,
+      ) ?? ''),
     }));
   }
   return compiled;
@@ -235,9 +265,16 @@ function compileScenarioFacts(input, source) {
     if (!scenarios.has(binding.scenarioId)) {
       errors.push(finding('screen-binding-scenario-missing', `binding references missing scenario ${binding.scenarioId}`, pointer));
     }
+    const scenarioRecordIds = new Set(scenarios.get(binding.scenarioId)?.recordIds || []);
     for (const recordId of binding.recordIds || []) {
       if (!records.has(recordId)) {
         errors.push(finding('screen-binding-record-missing', `binding references missing record ${recordId}`, pointer));
+      } else if (!scenarioRecordIds.has(recordId)) {
+        errors.push(finding(
+          'screen-binding-record-outside-scenario',
+          `screen ${binding.screenId} binds record ${recordId} outside scenario ${binding.scenarioId}`,
+          pointer,
+        ));
       }
     }
     const assets = [];

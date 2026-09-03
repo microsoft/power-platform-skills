@@ -172,6 +172,28 @@ test('navigation compilation rejects a missing native icon package', () => {
   );
 });
 
+test('navigation compilation rejects duplicate canonical route paths', () => {
+  const source = scope({
+    screens: [
+      screen('home'),
+      screen('work'),
+      screen('settings'),
+      screen('first-review', 'nested-detail', {
+        route: '/work/review',
+        parentScreenId: 'work',
+      }),
+      screen('second-review', 'nested-detail', {
+        route: '/work/review/',
+        parentScreenId: 'work',
+      }),
+    ],
+  });
+  assert.throws(
+    () => compileNavigationManifest(source, VECTOR_PACKAGE),
+    /first-review and second-review claim the same route \/work\/review/,
+  );
+});
+
 function write(projectRoot, relativePath, content = 'export default function Screen() { return null; }\n') {
   const file = path.join(projectRoot, relativePath);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -241,6 +263,27 @@ test('generated Expo tabs and nested routes match the manifest', (context) => {
   assert.deepEqual(result.errors, []);
   assert.equal(result.summary.visibleDestinationCount, 3);
   assert.equal(result.summary.routeCount, 5);
+});
+
+test('layout validation rejects duplicate planned routes in a hand-edited manifest', (context) => {
+  const source = scope({
+    screens: [
+      screen('home'),
+      screen('work'),
+      screen('settings'),
+      screen('equipment-detail', 'nested-detail', {
+        route: '/work/equipment/[equipmentId]',
+        parentScreenId: 'work',
+      }),
+    ],
+  });
+  const manifest = compileNavigationManifest(source, VECTOR_PACKAGE);
+  manifest.screens.settings.targetPath = '/work';
+  const projectRoot = tabsProject(manifest);
+  context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+
+  const result = validateNavigationLayout(projectRoot, manifest);
+  assert.ok(result.errors.some((item) => item.code === 'duplicate-planned-route'));
 });
 
 test('layout validation rejects missing tabs, wrong icons, and phantom entries', (context) => {

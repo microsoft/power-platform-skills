@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { compileNavigationManifest } = require('../compile-navigation-manifest');
+const { buildFinalPreviewContract } = require('../validate-product-experience-preview');
 const { bundleFor } = require('./helpers/product-experience-scenarios');
 const { cleanup, makeProjectDir, runCli, writeContracts } = require('./helpers/contract-cli');
 const { scenarioFactsForBundle } = require('./helpers/scenario-facts-fixtures');
@@ -225,6 +226,14 @@ test('validator rejects drift, hidden evidence, placeholders, and structural sub
         html: valid.replace('</head>', '<link rel="stylesheet" href="https://example.test/theme.css"></head>'),
         code: 'preview-external-stylesheet-forbidden',
       },
+      {
+        name: 'stylesheet-hidden storyboard',
+        html: valid.replace(
+          '</head>',
+          '<style>#preview-storyboard { display: none !important; }</style></head>',
+        ),
+        code: 'preview-required-content-css-hidden',
+      },
     ];
     for (const candidate of cases) {
       fs.writeFileSync(previewPath, candidate.html);
@@ -262,4 +271,45 @@ test('validator reports missing and incomplete generated token contracts', () =>
   } finally {
     cleanup(projectRoot);
   }
+});
+
+test('final preview contract excludes explicitly deferred requirements', () => {
+  const contract = buildFinalPreviewContract({
+    experience: {},
+    scope: {
+      requirements: [
+        {
+          id: 'current-work',
+          statement: 'Complete the current work',
+          disposition: 'shipping',
+          jobId: 'current-job',
+        },
+        {
+          id: 'future-export',
+          statement: 'Export all historical records in a future release',
+          disposition: 'deferred',
+          jobId: 'future-export-job',
+        },
+      ],
+    },
+    journey: { journeys: [] },
+    compiled: { compiledRevision: 'a'.repeat(64), experienceDirective: {}, screens: [] },
+    scenario: { scenarioRevision: 'b'.repeat(64), screenBindings: [], mediaAssets: [] },
+    navigation: {
+      manifestRevision: 'c'.repeat(64),
+      pattern: 'stack-only',
+      visibleTabs: [],
+      durableDestinations: [],
+      returnHomeMechanism: 'Return home',
+    },
+    tokenContract: {
+      revision: 'd'.repeat(64),
+      colors: {},
+      typography: { family: 'Test', size: 22, weight: 700, lineHeight: 1.2, tracking: 0 },
+    },
+    signatureComponentsRevision: 'e'.repeat(64),
+  });
+  assert.deepStrictEqual(contract.requirements.map((item) => item.requirementId), [
+    'current-work',
+  ]);
 });

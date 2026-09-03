@@ -149,8 +149,17 @@ function validateNavigationLayout(projectRoot, manifest) {
   }
 
   const plannedRoutes = new Set();
+  const screenByPlannedRoute = new Map();
   for (const [screenId, screen] of Object.entries(manifest.screens || {})) {
     if (!screen.targetPath) continue;
+    if (screenByPlannedRoute.has(screen.targetPath)) {
+      errors.push(finding(
+        'duplicate-planned-route',
+        `${screenByPlannedRoute.get(screen.targetPath)} and ${screenId} both claim Expo route ${screen.targetPath}`,
+      ));
+    } else {
+      screenByPlannedRoute.set(screen.targetPath, screenId);
+    }
     plannedRoutes.add(screen.targetPath);
     if (!fileByRoute.has(screen.targetPath)) {
       errors.push(finding(

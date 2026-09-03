@@ -39,6 +39,3 @@ Apply these rules whenever an `az`, `npm`, `npx`, or `expo` command exits non-ze
 ### Native run or web run failures
 
 Native build errors (Gradle, Xcode, Metro) require human eyes. Surface the full stderr and STOP — do NOT attempt to auto-fix native build issues.
-
----
-

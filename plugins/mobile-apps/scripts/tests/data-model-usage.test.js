@@ -383,6 +383,18 @@ test('stale field and relationship usage entries are rejected', () => {
   assert.ok(result.errors.some((item) => item.code === 'unknown-relationship-usage'));
 });
 
+test('duplicate field and relationship usage entries are rejected', () => {
+  const source = contracts();
+  source.input.tables[0].fields.push(structuredClone(source.input.tables[0].fields[1]));
+  source.input.tables[0].relationships.push(
+    structuredClone(source.input.tables[0].relationships[0]),
+  );
+  const result = compileDataModelUsage(source.input, source);
+  assert.ok(result.errors.some((item) => item.code === 'duplicate-field-usage'));
+  assert.ok(result.errors.some((item) => item.code === 'duplicate-relationship-usage'));
+  assert.equal(result.compiled, null);
+});
+
 test('stale table usage entries are rejected', () => {
   const source = contracts();
   source.input.tables.push({

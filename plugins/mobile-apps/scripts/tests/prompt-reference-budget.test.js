@@ -122,6 +122,7 @@ test('detail skeleton scalarizes and normalizes dynamic route parameters', () =>
   const navigation = read('skills/create-mobile-app/references/phase-10-navigation.md');
   assert.match(navigation, /id\?: string \| string\[\]/);
   assert.match(navigation, /Array\.isArray\(params\.id\) \? params\.id\[0\] : params\.id/);
+  assert.match(navigation, /import \{ formatDate, choiceLabel, normalizeDataverseGuid \} from '@\/utils';/);
   assert.match(navigation, /const id = normalizeDataverseGuid\(rawId\)/);
   assert.match(navigation, /if \(!result\.success\) \{[\s\S]*?return;[\s\S]*?result\.data/);
 });

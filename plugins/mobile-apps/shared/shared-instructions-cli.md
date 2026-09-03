@@ -54,6 +54,3 @@ When writing inline `bash`/`zsh` snippets in a skill (loops, response-status che
 This bites the hardest in retry helpers like `post_col() { local status=$(curl …) }` — fails on macOS (default shell is zsh) but works on a Linux CI box (default bash). Always pick a non-reserved name even when prototyping.
 
 If you can use a dedicated bundled script (e.g. `scripts/dataverse-request.js`), prefer it — it sidesteps shell-variable footguns entirely.
-
----
-

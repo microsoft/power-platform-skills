@@ -17,14 +17,25 @@ function pathEntryExists(candidate) {
   }
 }
 
-function projectPath(projectRoot, candidate, label = 'path') {
-  const root = path.resolve(projectRoot);
+function projectPath(projectRoot, candidate, label = 'path', { allowRoot = false } = {}) {
+  const requestedRoot = path.resolve(projectRoot);
+  const root = fs.existsSync(requestedRoot) ? fs.realpathSync(requestedRoot) : requestedRoot;
   const resolved = path.resolve(root, candidate);
   const relative = path.relative(root, resolved);
-  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if ((!relative && !allowRoot)
+    || relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)) {
     throw new Error(`${label} must be inside project root: ${candidate}`);
   }
-  return { resolved, relative: relative.replace(/\\/g, '/') };
+  let current = root;
+  for (const segment of path.relative(root, path.dirname(resolved)).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (pathEntryExists(current) && fs.lstatSync(current).isSymbolicLink()) {
+      throw new Error(`${label} traverses a symbolic link: ${candidate}`);
+    }
+  }
+  return { resolved, relative: (relative || '.').replace(/\\/g, '/') };
 }
 
 function createRunState(runId, workOrders) {
@@ -79,14 +90,26 @@ function pendingScreens(state) {
     .sort((left, right) => left.screenId.localeCompare(right.screenId));
 }
 
-function fileEntries(root, candidate, entries) {
-  const { resolved } = projectPath(root, candidate, 'validation path');
+function isExcluded(relativePath, excludedPaths) {
+  return excludedPaths.some((excluded) => (
+    relativePath === excluded || relativePath.startsWith(`${excluded}/`)
+  ));
+}
+
+function fileEntries(root, candidate, entries, excludedPaths = []) {
+  const { resolved, relative } = projectPath(
+    root,
+    candidate,
+    'validation path',
+    { allowRoot: true },
+  );
+  if (relative !== '.' && isExcluded(relative, excludedPaths)) return;
   if (!pathEntryExists(resolved)) return;
   const stat = fs.lstatSync(resolved);
   if (stat.isSymbolicLink()) throw new Error(`validation path traverses a symbolic link: ${candidate}`);
   if (stat.isDirectory()) {
     for (const child of fs.readdirSync(resolved).sort()) {
-      fileEntries(root, path.join(resolved, child), entries);
+      fileEntries(root, path.join(resolved, child), entries, excludedPaths);
     }
     return;
   }
@@ -96,9 +119,11 @@ function fileEntries(root, candidate, entries) {
   });
 }
 
-function collectSnapshotEntries(root, candidates) {
+function collectSnapshotEntries(root, candidates, excludedPaths = []) {
   const entries = [];
-  for (const candidate of [...new Set(candidates)].sort()) fileEntries(root, candidate, entries);
+  for (const candidate of [...new Set(candidates)].sort()) {
+    fileEntries(root, candidate, entries, excludedPaths);
+  }
   return entries.sort((left, right) => left.path.localeCompare(right.path));
 }
 
@@ -108,17 +133,27 @@ function snapshotRevision(snapshot) {
   return sha256Hex(canonicalJson(value));
 }
 
-function captureDirectWriteSnapshot(projectRoot, candidates, backupDirectory) {
-  const root = path.resolve(projectRoot);
+function captureDirectWriteSnapshot(
+  projectRoot,
+  candidates,
+  backupDirectory,
+  excludedPaths = [],
+) {
+  const requestedRoot = path.resolve(projectRoot);
+  const root = fs.existsSync(requestedRoot) ? fs.realpathSync(requestedRoot) : requestedRoot;
   const backup = projectPath(root, backupDirectory, 'backup directory');
   if (pathEntryExists(backup.resolved)) {
     throw new Error(`backup directory already exists: ${backup.relative}`);
   }
   const normalizedCandidates = [...new Set(candidates.map((candidate) => (
-    projectPath(root, candidate, 'snapshot path').relative
+    projectPath(root, candidate, 'snapshot path', { allowRoot: true }).relative
   )))].sort();
   if (!normalizedCandidates.length) throw new Error('at least one snapshot path is required');
-  const entries = collectSnapshotEntries(root, normalizedCandidates);
+  const normalizedExclusions = [...new Set([
+    backup.relative,
+    ...excludedPaths.map((candidate) => projectPath(root, candidate, 'excluded path').relative),
+  ])].sort();
+  const entries = collectSnapshotEntries(root, normalizedCandidates, normalizedExclusions);
   fs.mkdirSync(backup.resolved, { recursive: true });
   for (const entry of entries) {
     const source = projectPath(root, entry.path, 'snapshot entry').resolved;
@@ -129,6 +164,7 @@ function captureDirectWriteSnapshot(projectRoot, candidates, backupDirectory) {
   const snapshot = {
     schemaVersion: 1,
     candidates: normalizedCandidates,
+    excludedPaths: normalizedExclusions,
     backupDirectory: backup.relative,
     entries,
   };
@@ -138,13 +174,15 @@ function captureDirectWriteSnapshot(projectRoot, candidates, backupDirectory) {
 
 function validateSnapshot(projectRoot, snapshot) {
   if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.candidates)
+    || !Array.isArray(snapshot.excludedPaths)
     || !Array.isArray(snapshot.entries) || typeof snapshot.backupDirectory !== 'string') {
     throw new Error('direct-write snapshot is invalid');
   }
   if (snapshot.snapshotRevision !== snapshotRevision(snapshot)) {
     throw new Error('direct-write snapshot revision does not match its contents');
   }
-  const root = path.resolve(projectRoot);
+  const requestedRoot = path.resolve(projectRoot);
+  const root = fs.existsSync(requestedRoot) ? fs.realpathSync(requestedRoot) : requestedRoot;
   const backup = projectPath(root, snapshot.backupDirectory, 'backup directory');
   const seen = new Set();
   for (const entry of snapshot.entries) {
@@ -165,10 +203,16 @@ function validateSnapshot(projectRoot, snapshot) {
   return { root, backup, seen };
 }
 
-function currentEntriesForDiff(root, candidates) {
+function currentEntriesForDiff(root, candidates, excludedPaths) {
   const entries = [];
   function visit(candidate) {
-    const { resolved, relative } = projectPath(root, candidate, 'snapshot path');
+    const { resolved, relative } = projectPath(
+      root,
+      candidate,
+      'snapshot path',
+      { allowRoot: true },
+    );
+    if (relative !== '.' && isExcluded(relative, excludedPaths)) return;
     if (!pathEntryExists(resolved)) return;
     const stat = fs.lstatSync(resolved);
     if (stat.isSymbolicLink()) {
@@ -180,7 +224,9 @@ function currentEntriesForDiff(root, candidates) {
       return;
     }
     if (stat.isDirectory()) {
-      for (const child of fs.readdirSync(resolved).sort()) visit(path.join(relative, child));
+      for (const child of fs.readdirSync(resolved).sort()) {
+        visit(relative === '.' ? child : path.join(relative, child));
+      }
       return;
     }
     entries.push({ path: relative, type: 'file', sha256: sha256Hex(fs.readFileSync(resolved)) });
@@ -192,7 +238,11 @@ function currentEntriesForDiff(root, candidates) {
 function diffDirectWriteSnapshot(projectRoot, snapshot) {
   validateSnapshot(projectRoot, snapshot);
   const before = new Map(snapshot.entries.map((entry) => [entry.path, { ...entry, type: 'file' }]));
-  const after = new Map(currentEntriesForDiff(projectRoot, snapshot.candidates).map((entry) => [entry.path, entry]));
+  const after = new Map(currentEntriesForDiff(
+    projectRoot,
+    snapshot.candidates,
+    snapshot.excludedPaths,
+  ).map((entry) => [entry.path, entry]));
   return [...new Set([...before.keys(), ...after.keys()])].sort().flatMap((file) => {
     const prior = before.get(file);
     const current = after.get(file);
@@ -265,7 +315,8 @@ function restoreSnapshotPaths(projectRoot, snapshot, pathsToRestore) {
 }
 
 function workspaceFingerprint(projectRoot, candidates) {
-  const root = path.resolve(projectRoot);
+  const requestedRoot = path.resolve(projectRoot);
+  const root = fs.existsSync(requestedRoot) ? fs.realpathSync(requestedRoot) : requestedRoot;
   const entries = [];
   for (const candidate of [...candidates].sort()) fileEntries(root, candidate, entries);
   return sha256Hex(canonicalJson(entries.sort((left, right) => left.path.localeCompare(right.path))));
@@ -297,6 +348,7 @@ module.exports = {
   createRunState,
   diffDirectWriteSnapshot,
   pendingScreens,
+  projectPath,
   recordChannelFailure,
   recordScreenSuccess,
   recordValidation,

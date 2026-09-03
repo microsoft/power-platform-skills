@@ -87,10 +87,18 @@ function editableContractContent(contract) {
 }
 
 function resolveInsideProject(projectRoot, relativePath) {
-  const root = path.resolve(projectRoot);
+  const requestedRoot = path.resolve(projectRoot);
+  const root = fs.existsSync(requestedRoot) ? fs.realpathSync(requestedRoot) : requestedRoot;
   const resolved = path.resolve(root, relativePath);
   if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
     throw new Error(`Path escapes project root: ${relativePath}`);
+  }
+  let current = root;
+  for (const segment of path.relative(root, path.dirname(resolved)).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) {
+      throw new Error(`Path traverses a symbolic link: ${relativePath}`);
+    }
   }
   return resolved;
 }

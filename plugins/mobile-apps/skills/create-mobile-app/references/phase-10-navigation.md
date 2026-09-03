@@ -293,7 +293,7 @@ import { YStack, XStack, Text, Button } from 'tamagui';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LoadingState, ErrorState, BottomActionBar, InfoRow } from '@/components';
-import { formatDate, choiceLabel } from '@/utils';
+import { formatDate, choiceLabel, normalizeDataverseGuid } from '@/utils';
 import { <Service> } from '@/generated/services/<Service>';
 import type { <Entity> } from '@/generated/models/<Entity>Model';
 

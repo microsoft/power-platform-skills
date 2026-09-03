@@ -87,6 +87,19 @@ test('template path aliases do not depend on deprecated baseUrl', () => {
   }
 });
 
+test('template ignores local planning, preview, and server artifacts', () => {
+  const gitignore = read('template/.gitignore');
+  for (const artifact of [
+    '.tmp/',
+    '_build_plan.html',
+    '_plan_preview.html',
+    '_plan_preview.structural.html',
+    '_design_vibe.html',
+  ]) {
+    assert.match(gitignore, new RegExp(`^${artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
+  }
+});
+
 test('template pins the Power Apps CLI version used by npx commands', () => {
   const packageJson = JSON.parse(read('template/package.json'));
   assert.equal(packageJson.dependencies['@microsoft/power-apps'], '1.2.7');

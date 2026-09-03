@@ -14,6 +14,7 @@ const {
   captureDirectWriteSnapshot,
   createRunState,
   pendingScreens,
+  projectPath,
   recordChannelFailure,
   recordScreenSuccess,
   recordValidation,
@@ -23,7 +24,14 @@ const {
 } = require('./lib/screen-builder-runtime');
 
 function parseArgs(argv) {
-  const args = { workOrders: [], paths: [], validators: [], allowedPaths: [], restorePaths: [] };
+  const args = {
+    workOrders: [],
+    paths: [],
+    excludedPaths: [],
+    validators: [],
+    allowedPaths: [],
+    restorePaths: [],
+  };
   for (let index = 2; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === '--project-root') args.projectRoot = argv[++index];
@@ -44,6 +52,7 @@ function parseArgs(argv) {
     else if (token === '--output-hash') args.outputHash = argv[++index];
     else if (token === '--fingerprint') args.fingerprint = argv[++index];
     else if (token === '--path') args.paths.push(argv[++index]);
+    else if (token === '--exclude-path') args.excludedPaths.push(argv[++index]);
     else if (token === '--validator') args.validators.push(argv[++index]);
     else if (token === '--max-input-bytes') args.maxInputBytes = Number(argv[++index]);
     else if (token === '--max-output-bytes') args.maxOutputBytes = Number(argv[++index]);
@@ -67,12 +76,7 @@ function parseArgs(argv) {
 
 function projectFile(root, value, label) {
   if (!value) throw new Error(`${label} is required`);
-  const resolved = path.resolve(root, value);
-  const relative = path.relative(root, resolved);
-  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error(`${label} must stay inside project root`);
-  }
-  return resolved;
+  return projectPath(root, value, label).resolved;
 }
 
 function readJson(file) {
@@ -95,10 +99,14 @@ function run(args) {
   const root = path.resolve(args.projectRoot);
   const needsCompiledPack = ['seal', 'parse-return', 'verify-direct'].includes(args.action);
   const compiledPackPath = path.join(root, '.tmp', 'compiled-screen-build-pack.json');
+  const scenarioFactsPath = path.join(root, '.tmp', 'scenario-facts.json');
   const options = {
     projectRoot: root,
     ...(needsCompiledPack
-      ? { compiledScreenBuildPack: readJson(compiledPackPath) }
+      ? {
+        compiledScreenBuildPack: readJson(compiledPackPath),
+        compiledScenarioFacts: readJson(scenarioFactsPath),
+      }
       : {}),
     ...(args.maxInputBytes ? { maxInputBytes: args.maxInputBytes } : {}),
     ...(args.maxOutputBytes ? { maxOutputBytes: args.maxOutputBytes } : {}),
@@ -125,7 +133,12 @@ function run(args) {
     );
   }
   if (args.action === 'capture-direct-snapshot') {
-    const snapshot = captureDirectWriteSnapshot(root, args.paths, args.backupDirectory);
+    const snapshot = captureDirectWriteSnapshot(
+      root,
+      args.paths,
+      args.backupDirectory,
+      [...args.excludedPaths, args.snapshot],
+    );
     atomicWriteJson(projectFile(root, args.snapshot, '--snapshot'), snapshot);
     return {
       snapshotRevision: snapshot.snapshotRevision,

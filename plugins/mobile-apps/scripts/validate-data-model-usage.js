@@ -368,6 +368,30 @@ function compileDataModelUsage(input, source) {
       ));
     }
 
+    const fieldUsageNames = new Set();
+    for (const [fieldIndex, field] of (entry.fields || []).entries()) {
+      const name = String(field.logicalName || '').toLowerCase();
+      if (fieldUsageNames.has(name)) {
+        errors.push(finding(
+          'duplicate-field-usage',
+          `duplicate usage entry for ${table.logicalName}.${field.logicalName || '(missing)'}`,
+          `${pointer}.fields[${fieldIndex}]`,
+        ));
+      }
+      fieldUsageNames.add(name);
+    }
+    const relationshipUsageNames = new Set();
+    for (const [relationshipIndex, relationship] of (entry.relationships || []).entries()) {
+      const name = String(relationship.schemaName || '').toLowerCase();
+      if (relationshipUsageNames.has(name)) {
+        errors.push(finding(
+          'duplicate-relationship-usage',
+          `duplicate usage entry for ${table.logicalName}.${relationship.schemaName || '(missing)'}`,
+          `${pointer}.relationships[${relationshipIndex}]`,
+        ));
+      }
+      relationshipUsageNames.add(name);
+    }
     const fieldInput = new Map((entry.fields || []).map(
       (item, fieldIndex) => [String(item.logicalName || '').toLowerCase(), { item, fieldIndex }],
     ));

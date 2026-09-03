@@ -46,6 +46,58 @@ const PROHIBITED_VISIBLE_TEXT = [
   ['structural-preview-copy', /\b(?:neutral structural preview|sample preview)\b/i],
 ];
 
+function cssTargetCompound(selector) {
+  return selector.trim().split(/\s+|>|\+|~/).filter(Boolean).at(-1) || '';
+}
+
+function compoundMatchesNode(compound, node) {
+  const withoutPseudos = compound.replace(/:{1,2}[a-z-]+(?:\([^)]*\))?/gi, '');
+  const tag = withoutPseudos.match(/^[a-z][a-z0-9-]*/i)?.[0]?.toLowerCase();
+  if (tag && node.tag !== tag) return false;
+  const id = withoutPseudos.match(/#([a-z0-9_-]+)/i)?.[1];
+  if (id && node.attrs.id !== id) return false;
+  const classes = [...withoutPseudos.matchAll(/\.([a-z0-9_-]+)/gi)].map((match) => match[1]);
+  const nodeClasses = new Set(String(node.attrs.class || '').split(/\s+/).filter(Boolean));
+  if (classes.some((className) => !nodeClasses.has(className))) return false;
+  const attributes = [...withoutPseudos.matchAll(/\[([a-z0-9:_-]+)(?:\s*=\s*["']?([^\]"']+)["']?)?\]/gi)];
+  for (const [, name, value] of attributes) {
+    if (!Object.prototype.hasOwnProperty.call(node.attrs, name.toLowerCase())) return false;
+    if (value !== undefined && node.attrs[name.toLowerCase()] !== value.trim()) return false;
+  }
+  return tag !== undefined || id !== undefined || classes.length > 0 || attributes.length > 0
+    || withoutPseudos === '*';
+}
+
+function stylesheetHidingFindings(elements, protectedNodes) {
+  const findings = [];
+  const protectedWithAncestors = new Set();
+  for (const node of protectedNodes.filter(Boolean)) {
+    let current = node;
+    while (current && current.tag !== '#document') {
+      protectedWithAncestors.add(current);
+      current = current.parent;
+    }
+  }
+  const rule = /([^{}]+)\{([^{}]*)\}/g;
+  for (const style of elements.filter((element) => element.tag === 'style')) {
+    const source = style.text.replace(/\/\*[\s\S]*?\*\//g, '');
+    let match;
+    while ((match = rule.exec(source)) !== null) {
+      if (!/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|content-visibility\s*:\s*hidden)\s*(?:!important)?\s*(?:;|$)/i.test(match[2])) {
+        continue;
+      }
+      for (const selector of match[1].split(',')) {
+        if (/\[(?:hidden|aria-hidden)/i.test(selector)) continue;
+        const target = cssTargetCompound(selector);
+        if ([...protectedWithAncestors].some((node) => compoundMatchesNode(target, node))) {
+          findings.push(selector.trim());
+        }
+      }
+    }
+  }
+  return [...new Set(findings)];
+}
+
 function tokenCss(contract) {
   const colors = Object.entries(contract.colors)
     .map(([name, value]) => `  --color-${name}: ${value};`);
@@ -146,11 +198,13 @@ function buildFinalPreviewContract({
       storyboard: 'preview-storyboard',
       allScreens: 'preview-all-screens',
     },
-    requirements: (scope.requirements || []).map((requirement) => ({
+    requirements: (scope.requirements || [])
+      .filter((requirement) => requirement.disposition === 'shipping')
+      .map((requirement) => ({
       requirementId: requirement.id,
       statement: requirement.statement,
-      screenId: requirement.screenId || null,
       jobId: requirement.jobId || null,
+      disposition: 'shipping',
     })),
     screens: selected.map((screen) => {
       const facts = projectScreenFacts(scenario, screen.screenId);
@@ -371,6 +425,28 @@ function validateHtml(html, expected) {
   ))) {
     errors.push(finding('preview-external-stylesheet-forbidden', 'final preview must not load external stylesheets'));
   }
+  const protectedNodes = [
+    navigation,
+    storyboard,
+    allScreens,
+    ...screenNodes,
+    ...[
+      'data-signature-intent',
+      'data-primary-action',
+      'data-media-asset-key',
+      'data-scenario-evidence-id',
+      'data-navigation-destination',
+      'data-all-screen-id',
+      'data-requirement-id',
+    ].flatMap((attribute) => elementsWith(parsed.elements, attribute)),
+  ];
+  const hiddenSelectors = stylesheetHidingFindings(parsed.elements, protectedNodes);
+  if (hiddenSelectors.length > 0) {
+    errors.push(finding(
+      'preview-required-content-css-hidden',
+      `stylesheet hides required preview content with selector(s): ${hiddenSelectors.join(', ')}`,
+    ));
+  }
   return { errors, parsed };
 }
 
@@ -480,6 +556,7 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
   buildFinalPreviewContract,
+  stylesheetHidingFindings,
   scenarioEvidence,
   tokenCss,
   validateHtml,

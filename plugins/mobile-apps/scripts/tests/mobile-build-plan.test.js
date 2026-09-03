@@ -33,6 +33,22 @@ function writeJson(projectRoot, relativePath, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+test('Build Plan refuses to write through a symlinked artifact directory', () => {
+  const projectRoot = makeProjectDir('mobile-build-plan-symlink');
+  const outside = makeProjectDir('mobile-build-plan-outside');
+  try {
+    fs.symlinkSync(outside, path.join(projectRoot, '.tmp'), 'dir');
+    assert.throws(
+      () => updateProgress(projectRoot, { phase: 'requirements', status: 'active' }),
+      /Path traverses a symbolic link/,
+    );
+    assert.equal(fs.existsSync(path.join(outside, 'mobile-build-progress.json')), false);
+  } finally {
+    cleanup(projectRoot);
+    cleanup(outside);
+  }
+});
+
 test('Build Plan composes progress and canonical planning artifacts', () => {
   const projectRoot = makeProjectDir('mobile-build-plan');
   try {

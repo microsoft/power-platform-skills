@@ -8,6 +8,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { compileScreenBuildPack } = require('../compile-screen-build-pack');
+const { canonicalJson, sha256Hex } = require('../lib/product-experience-contracts');
+const { projectScreenFacts } = require('../validate-fixture-scenarios');
 
 const {
   delimiters,
@@ -45,18 +47,53 @@ const EXPERIENCE_DIRECTIVE = {
 };
 const COMPILED_REVISION = 'b'.repeat(64);
 
-function compiledPack(experienceDirective = EXPERIENCE_DIRECTIVE) {
+function canonicalPackEntry(screenId) {
+  return { screenId, pack: { screenId, purpose: `Implement ${screenId}` } };
+}
+
+function compiledPack(
+  experienceDirective = EXPERIENCE_DIRECTIVE,
+  screenIds = ['home', 'history'],
+) {
   return {
     contractType: 'compiled-screen-build-pack',
     compiledRevision: COMPILED_REVISION,
     experienceDirective,
+    screens: screenIds.map(canonicalPackEntry),
   };
 }
 
-function contractOptions(root, experienceDirective = EXPERIENCE_DIRECTIVE) {
+function scenarioContract(screenIds = ['home', 'history'], screenPackRevision = COMPILED_REVISION) {
+  const scenario = {
+    schemaVersion: 1,
+    contractType: 'scenario-facts',
+    screenPackRevision,
+    records: [],
+    relationships: [],
+    scenarios: [],
+    mediaAssets: [],
+    screenBindings: screenIds.map((screenId) => ({
+      screenId,
+      scenarioId: `${screenId}-scenario`,
+      recordIds: [],
+      mediaAssetKeys: [],
+      preview: { headline: `${screenId} fixture` },
+    })),
+    invariants: [],
+  };
+  scenario.scenarioRevision = sha256Hex(canonicalJson(scenario));
+  return scenario;
+}
+
+function contractOptions(
+  root,
+  experienceDirective = EXPERIENCE_DIRECTIVE,
+  screenIds = ['home', 'history'],
+) {
   return {
     projectRoot: root,
-    compiledScreenBuildPack: compiledPack(experienceDirective),
+    compiledScreenBuildPack: compiledPack(experienceDirective, screenIds),
+    compiledScenarioFacts: scenarioContract(screenIds),
   };
 }
 
@@ -68,6 +105,10 @@ function project(context) {
   fs.writeFileSync(
     path.join(root, '.tmp', 'compiled-screen-build-pack.json'),
     `${JSON.stringify(compiledPack(), null, 2)}\n`,
+  );
+  fs.writeFileSync(
+    path.join(root, '.tmp', 'scenario-facts.json'),
+    `${JSON.stringify(scenarioContract(), null, 2)}\n`,
   );
   return root;
 }
@@ -81,14 +122,8 @@ function workOrder(root, screenId = 'home') {
     targetPath: path.join(root, 'app', `${screenId}.tsx`),
     compiledRevision: COMPILED_REVISION,
     experienceDirective: EXPERIENCE_DIRECTIVE,
-    pack: { screenId, purpose: `Implement ${screenId}` },
-    scenarioFacts: {
-      screenId,
-      scenarioRevision: 'a'.repeat(64),
-      headline: `${screenId} fixture`,
-      recordIds: [],
-      media: [],
-    },
+    pack: canonicalPackEntry(screenId),
+    scenarioFacts: projectScreenFacts(scenarioContract(), screenId),
     routeContract: { route: `/${screenId}`, params: [] },
     typedSkeleton: `export default function ${screenId}() { return null; }`,
     serviceSignatures: ['RecordsService.getAll(options)'],
@@ -115,6 +150,7 @@ test('Product Experience directive reaches the sealed return-only builder input 
   assert.equal(result.ok, true, JSON.stringify(result.errors));
   const compiled = result.compiled;
   const screen = compiled.screens[0];
+  const scenario = scenarioContract([screen.screenId], compiled.compiledRevision);
   const order = {
     ...workOrder(root, screen.screenId),
     route: screen.route,
@@ -122,10 +158,15 @@ test('Product Experience directive reaches the sealed return-only builder input 
     compiledRevision: compiled.compiledRevision,
     experienceDirective: compiled.experienceDirective,
     pack: screen,
+    scenarioFacts: projectScreenFacts(scenario, screen.screenId),
     states: screen.pack.states,
     testIds: Object.values(screen.implementationContract.testIds),
   };
-  const options = { projectRoot: root, compiledScreenBuildPack: compiled };
+  const options = {
+    projectRoot: root,
+    compiledScreenBuildPack: compiled,
+    compiledScenarioFacts: scenario,
+  };
   const { sealed } = sealWorkOrder(order, options);
 
   assert.deepEqual(sealed.experienceDirective, compiled.experienceDirective);
@@ -152,6 +193,20 @@ test('Product Experience directive reaches the sealed return-only builder input 
   assert.throws(
     () => sealWorkOrder({ ...order, compiledRevision: 'c'.repeat(64) }, options),
     /compiledRevision does not match the current compiled screen build pack/,
+  );
+  assert.throws(
+    () => sealWorkOrder({
+      ...order,
+      pack: { ...order.pack, title: 'Tampered title' },
+    }, options),
+    /pack must be the assigned screen build-pack entry/,
+  );
+  assert.throws(
+    () => sealWorkOrder({
+      ...order,
+      scenarioFacts: { ...order.scenarioFacts, headline: 'Stale fixture' },
+    }, options),
+    /scenarioFacts must be the assigned canonical screen projection/,
   );
 });
 
@@ -293,6 +348,46 @@ test('direct-write audit rejects a no-op target and tampered backup metadata', (
   assert.throws(
     () => restoreSnapshotPaths(root, snapshot, ['outside.tsx']),
     /was not protected by the snapshot/,
+  );
+});
+
+test('whole-project direct-write audit catches omitted root and offline files', (context) => {
+  const root = project(context);
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'app', 'home.tsx'), 'export default null;\n');
+  fs.writeFileSync(path.join(root, 'offline-profile.json'), '{"profile":"before"}\n');
+  const snapshot = captureDirectWriteSnapshot(
+    root,
+    ['.'],
+    '.tmp/screen-builder-backups/wave',
+    ['.tmp/screen-builder-snapshots/wave.json'],
+  );
+
+  fs.writeFileSync(path.join(root, 'app', 'home.tsx'), 'export default function Home() {}\n');
+  fs.writeFileSync(path.join(root, 'offline-profile.json'), '{"profile":"after"}\n');
+  fs.writeFileSync(path.join(root, 'README.md'), 'unexpected\n');
+  const audit = restoreOutOfScopeChanges(root, snapshot, ['app/home.tsx']);
+
+  assert.equal(audit.ok, false);
+  assert.deepEqual(audit.outOfScopeFiles, ['README.md', 'offline-profile.json']);
+  assert.equal(fs.existsSync(path.join(root, 'README.md')), false);
+  assert.equal(
+    fs.readFileSync(path.join(root, 'offline-profile.json'), 'utf8'),
+    '{"profile":"before"}\n',
+  );
+});
+
+test('snapshot and Build Plan paths reject symlinked parent directories', (context) => {
+  const root = project(context);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'screen-builder-outside-'));
+  context.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.rmSync(path.join(root, '.tmp'), { recursive: true, force: true });
+  fs.symlinkSync(outside, path.join(root, '.tmp'), 'dir');
+
+  assert.throws(
+    () => captureDirectWriteSnapshot(root, ['app'], '.tmp/backups/wave'),
+    /traverses a symbolic link/,
   );
 });
 

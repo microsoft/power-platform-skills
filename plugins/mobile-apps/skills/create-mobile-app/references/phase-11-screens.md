@@ -137,10 +137,16 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
   --capture-direct-snapshot \
   --snapshot ".tmp/screen-builder-snapshots/<runId>-<wave>.json" \
   --backup-dir ".tmp/screen-builder-backups/<runId>-<wave>" \
-  --path app --path src --path brand \
-  --path package.json --path tamagui.config.ts --path app.config.js \
-  --path native-app-plan.md --path memory-bank.md \
-  --path power.config.json --path auth.config.json
+  --path . \
+  --exclude-path node_modules --exclude-path .git --exclude-path .expo \
+  --exclude-path dist --exclude-path dist-web --exclude-path web-build \
+  --exclude-path .tamagui --exclude-path .tmp/tsc.tsbuildinfo \
+  --exclude-path .tmp/screen-builder-backups \
+  --exclude-path .tmp/screen-builder-snapshots
+The child has no shell tool. It may read only its work-order allowlist and edit
+exactly its pre-created target screen. The whole generated project is protected
+except dependency/build caches, Git internals, and the run's own backup/snapshot
+control files.
 ```
 
 The child may read only its work-order allowlist and edit exactly its pre-created

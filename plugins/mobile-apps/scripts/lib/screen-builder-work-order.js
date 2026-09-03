@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { canonicalJson, sha256Hex } = require('./product-experience-contracts');
+const { projectScreenFacts } = require('../validate-fixture-scenarios');
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_MAX_INPUT_BYTES = 48 * 1024;
@@ -70,6 +71,7 @@ function normalizeWorkOrder(value, {
   projectRoot,
   fileSystem = fs,
   compiledScreenBuildPack,
+  compiledScenarioFacts,
 } = {}) {
   if (!projectRoot) throw new Error('projectRoot is required');
   if (!isPlainObject(value)) throw new Error('screen work order must be an object');
@@ -99,10 +101,27 @@ function normalizeWorkOrder(value, {
     !== canonicalJson(compiledScreenBuildPack.experienceDirective)) {
     throw new Error('experienceDirective does not match the current compiled screen build pack');
   }
-  if (!isPlainObject(value.pack) || value.pack.screenId !== screenId) {
+  const compiledScreen = (compiledScreenBuildPack.screens || []).find(
+    (screen) => screen.screenId === screenId,
+  );
+  if (!compiledScreen || !isPlainObject(value.pack)
+    || canonicalJson(value.pack) !== canonicalJson(compiledScreen)) {
     throw new Error('pack must be the assigned screen build-pack entry');
   }
-  if (!isPlainObject(value.scenarioFacts) || value.scenarioFacts.screenId !== screenId) {
+  if (!isPlainObject(compiledScenarioFacts)
+    || compiledScenarioFacts.contractType !== 'scenario-facts'
+    || compiledScenarioFacts.screenPackRevision !== compiledScreenBuildPack.compiledRevision) {
+    throw new Error('current scenario-facts contract is required for the compiled screen build pack');
+  }
+  const scenarioContent = structuredClone(compiledScenarioFacts);
+  const scenarioRevision = scenarioContent.scenarioRevision;
+  delete scenarioContent.scenarioRevision;
+  if (scenarioRevision !== sha256Hex(canonicalJson(scenarioContent))) {
+    throw new Error('current scenario-facts revision does not match its content');
+  }
+  const expectedScenarioFacts = projectScreenFacts(compiledScenarioFacts, screenId);
+  if (!expectedScenarioFacts || !isPlainObject(value.scenarioFacts)
+    || canonicalJson(value.scenarioFacts) !== canonicalJson(expectedScenarioFacts)) {
     throw new Error('scenarioFacts must be the assigned canonical screen projection');
   }
   if (!isPlainObject(value.routeContract)) throw new Error('routeContract must be an object');

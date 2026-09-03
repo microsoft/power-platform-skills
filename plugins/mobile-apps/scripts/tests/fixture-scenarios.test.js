@@ -218,6 +218,22 @@ test('relationships, field references, screens, and scenarios reject missing IDs
   assert.ok(result.errors.some((item) => item.code === 'screen-binding-screen-missing'));
 });
 
+test('screen bindings may use only records owned by their selected scenario', () => {
+  const fixture = source();
+  fixture.input.scenarios[0].recordIds = ['equipment-tm-014'];
+  const result = compileScenarioFacts(fixture.input, fixture);
+  assert.ok(result.errors.some(
+    (item) => item.code === 'screen-binding-record-outside-scenario',
+  ));
+});
+
+test('preview values may reference only records declared by their screen binding', () => {
+  const fixture = source();
+  fixture.input.screenBindings[1].recordIds = ['equipment-tm-014'];
+  const result = compileScenarioFacts(fixture.input, fixture);
+  assert.ok(result.errors.some((item) => item.code === 'preview-record-not-bound'));
+});
+
 test('cross-screen identity stays consistent because bindings share record IDs', () => {
   const fixture = source();
   const compiled = compileScenarioFacts(fixture.input, fixture).compiled;

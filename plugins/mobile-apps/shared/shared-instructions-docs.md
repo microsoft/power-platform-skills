@@ -39,6 +39,3 @@ Note on `az`: on Windows where it is installed as a `.cmd` shim and not on the b
 **📋 [connector-reference.md](./connector-reference.md)**
 
 All non-Dataverse connectors require a connection ID or connection reference before `npx power-apps add-data-source`. Read this before any `/add-*` connector skill. Always run `/list-connections` first to create a supported connection, reuse a caller-provided connection ID, or resolve a solution connection reference.
-
----
-

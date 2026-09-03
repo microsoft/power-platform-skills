@@ -56,6 +56,12 @@ function assertUniqueIds(items, label) {
   }
 }
 
+function normalizedRoutePath(value) {
+  const route = String(value || '').trim();
+  if (!route) return null;
+  return route === '/' ? route : route.replace(/\/+$/, '');
+}
+
 function typedHideReason(screen) {
   if (!screen.hideTabs) return null;
   if (!screen.tabVisibilityReason) {
@@ -96,6 +102,17 @@ function buildNavigationManifest(scope, options = {}) {
 
   const screenIds = screens.map((screen) => screen.id);
   assertUniqueIds(screenIds, 'screens');
+  const screenByRoute = new Map();
+  for (const screen of screens) {
+    const route = normalizedRoutePath(screen.route);
+    if (!route) continue;
+    if (screenByRoute.has(route)) {
+      throw new Error(
+        `screens ${screenByRoute.get(route)} and ${screen.id} claim the same route ${route}`,
+      );
+    }
+    screenByRoute.set(route, screen.id);
+  }
   const screenById = new Map(screens.map((screen) => [screen.id, screen]));
   const durableIds = navigation.durableDestinationIds || [];
   const visibleTabIds = navigation.visibleTabIds || [];
@@ -154,7 +171,7 @@ function buildNavigationManifest(scope, options = {}) {
       backBehavior: isRoot
         ? navigation.pattern === 'stack-only' ? 'return-home' : 'none'
         : 'stack-pop',
-      targetPath: screen.route || null,
+      targetPath: normalizedRoutePath(screen.route),
       hideTabsReason,
     };
   }

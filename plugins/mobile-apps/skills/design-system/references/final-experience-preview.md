@@ -82,7 +82,7 @@ outside it remain model-authored:
    `data-navigation-target-path="<targetPath>"`, and its exact label.
 13. Render every `allScreenId` inside the All screens landmark with
     `data-all-screen-id="<screenId>"`.
-14. Render every approved requirement exactly once, either in its selected
+14. Render every approved shipping requirement exactly once, either in its selected
    storyboard frame or in the compact All screens review surface, with
    `data-requirement-id="<requirementId>"` and its exact statement.
 
@@ -90,6 +90,10 @@ Do not expose contract JSON as visible copy. Do not use Lorem Ipsum, generic
 sample values, TODO/TBD text, explanatory prototype copy, or labels from the
 neutral structural renderer. Do not load external scripts. Canonical HTTPS
 media assets are allowed; every asset still needs its declared fallback.
+Use the HTML `hidden` or `aria-hidden` state for inactive optional panels. Do not
+apply stylesheet `display: none`, `visibility: hidden`, or
+`content-visibility: hidden` rules to required landmarks, screens, signatures,
+actions, media, scenario evidence, navigation, requirements, or their ancestors.
 
 ## Validate and repair
 
