@@ -131,6 +131,24 @@ Treat a form field as a compound surface rather than checking only its input:
 - Preserve label and description associations, reading order, and keyboard
   reachability in both directions.
 
+An intentional fixed direction requires an adjacent, item-scoped directive:
+
+```css
+/* bidi-fixed: Email addresses preserve LTR character order; verify=ltr,rtl */
+direction: ltr;
+```
+
+```html
+<!-- bidi-fixed: Source-code text preserves authored character order; verify=ltr,rtl -->
+<code dir="ltr">npm run build</code>
+```
+
+The directive applies to one immediately following fixed-direction declaration
+or element. It requires a specific semantic reason and does not exempt the
+surrounding component from LTR and RTL verification. Do not use it for
+localized labels, placeholders, hints, helper text, errors, or other ordinary
+UI prose.
+
 Reference: https://www.w3.org/International/questions/qa-html-dir
 
 ## Typography and content flexibility

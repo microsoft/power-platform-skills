@@ -764,8 +764,10 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
   icons, and open menus follow the active UI direction and use logical
   alignment. Use `dir="auto"` for free-form multilingual values. Keep only
   classified machine-oriented values such as email addresses, URLs, code,
-  paths, GUIDs, and identifiers LTR; their surrounding field UI remains
-  direction-aware.
+  paths, GUIDs, and identifiers LTR; add the adjacent
+  `/* bidi-fixed: <specific reason>; verify=ltr,rtl */` or equivalent HTML
+  directive required by the shared standard. Their surrounding field UI
+  remains direction-aware.
 - Wrap independently inserted unknown-direction content (names, comments,
   titles, search queries) with `<bdi>` or `dir="auto"`. Keep URLs, email,
   code, file paths, GUIDs, and other machine values explicitly isolated,
@@ -844,12 +846,16 @@ Run the deterministic readiness audit after all pages and components exist:
 node "${PLUGIN_ROOT}/scripts/audit-bidirectional-readiness.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-Fix every `error` finding. Review every physical-geometry finding in the live
-site. For an intentionally physical product requirement, keep the declaration,
-add the validated adjacent `bidi-physical` directive, and verify that component
-in both LTR and RTL. Use pseudo-opposite-direction content to check wrapping,
-navigation, forms, mixed names/identifiers, icons, calendars, and narrow/mobile
-layout even when no second real locale exists yet.
+The command prints structured JSON and exits nonzero when deterministic errors
+exist; parse the JSON even on that expected failure path. Fix every `error`
+finding. Review every geometry, scrolling, visual-order, and content-expansion
+finding in the live site. For an intentionally physical product requirement,
+keep the declaration, add the validated adjacent `bidi-physical` directive,
+and verify that component in both LTR and RTL. For intentionally fixed
+machine-oriented text, add the adjacent `bidi-fixed` directive and verify the
+surrounding UI in both directions. Use pseudo-opposite-direction content to
+check wrapping, navigation, forms, mixed names/identifiers, icons, calendars,
+and narrow/mobile layout even when no second real locale exists yet.
 
 Reconcile `BIDIRECTIONAL_REVIEW_DATA` against the completed source and rendered
 routes. Add every implemented visible or interactive component that was not

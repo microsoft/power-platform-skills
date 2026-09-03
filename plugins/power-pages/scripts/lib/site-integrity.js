@@ -73,6 +73,12 @@ function validateSiteIntegrity(projectRoot) {
 }
 
 function partitionDeferredFindings(findings, recordedFindings) {
+  const deferrableRules = new Set([
+    'directional-physical-css',
+    'directional-physical-utility',
+    'directional-physical-shorthand',
+    'fixed-direction',
+  ]);
   const remainingRecords = [...recordedFindings];
   const blocking = [];
   const deferred = [];
@@ -80,13 +86,20 @@ function partitionDeferredFindings(findings, recordedFindings) {
     // Only a concrete layout blocker may be carried as pending work. Match the
     // complete scanner identity and consume it once, so changing or adding a
     // declaration on the same line is still a new blocking defect.
-    const recordIndex = finding.rule === 'directional-physical-css'
+    const recordIndex = deferrableRules.has(finding.rule)
       ? remainingRecords.findIndex((recorded) =>
         recorded &&
         recorded.rule === finding.rule &&
         recorded.file === finding.file &&
         recorded.line === finding.line &&
-        recorded.message === finding.message
+        recorded.message === finding.message &&
+        (
+          recorded.fingerprint === finding.fingerprint ||
+          (
+            finding.rule === 'directional-physical-css' &&
+            !recorded.fingerprint
+          )
+        )
       )
       : -1;
     if (recordIndex === -1) {

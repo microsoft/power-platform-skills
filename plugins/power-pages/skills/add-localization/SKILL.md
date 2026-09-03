@@ -304,7 +304,9 @@ When this operation first changes an LTR-only or RTL-only site to `mixed`, run:
 node "${PLUGIN_ROOT}/scripts/audit-bidirectional-readiness.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-Add every finding to the Phase 3 plan. Include logical-CSS remediation,
+The command prints structured JSON and exits nonzero when deterministic errors
+exist; parse the JSON even on that expected failure path. Add every finding to
+the Phase 3 plan. Include logical-CSS remediation,
 validated physical exceptions, mixed/user content, localized formatting,
 script font coverage, directional assets, calendars/date-pickers, gestures,
 drawers, breadcrumbs, tables, charts, carousels, overlays, SVG/canvas, and
@@ -503,8 +505,9 @@ Localized form labels, placeholders, hints, helper text, validation messages,
 prefixes, suffixes, icons, and open menus follow the active UI direction and
 use logical alignment. Free-form multilingual values use `dir="auto"`.
 Machine-oriented email addresses, URLs, code, paths, GUIDs, and identifiers may
-remain LTR only when classified as direction-fixed; their surrounding field UI
-remains direction-aware.
+remain LTR only when classified as direction-fixed and accompanied by the
+adjacent `bidi-fixed: <specific reason>; verify=ltr,rtl` directive required by
+the shared standard; their surrounding field UI remains direction-aware.
 
 For unknown or third-party components, prefer the package's public locale and
 direction API. If none exists, use a documented wrapper or supported theme
@@ -532,8 +535,9 @@ by every selector, locale switch/detection path, alternate-language metadata
 generator, and static locale output configuration. The manifest alone does not
 disable a locale. While readiness is `pending-remediation`, every configured
 locale whose direction is opposite to the default locale remains unavailable.
-Record each pending scanner finding with its exact `file`, `line`, `rule`, and `message`
-so lifecycle validation can defer known work without allowing new regressions.
+Record each pending scanner finding with its exact `file`, `line`, `rule`, `message`,
+and `fingerprint` so lifecycle validation can defer the same known source item
+without allowing a replacement or newly introduced regression.
 
 ---
 

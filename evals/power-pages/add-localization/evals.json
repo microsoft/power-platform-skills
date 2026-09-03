@@ -180,7 +180,7 @@
         "Sets documentElement.dir to rtl for both",
         "Restores ltr for non-RTL locales",
         "Browser-tests at least one RTL locale",
-        "Flags directional icons and fixed left/right styling for review"
+        "Flags directional icons, fixed direction, physical utility classes, asymmetric shorthands, and raw horizontal scrolling assumptions for remediation or review"
       ]
     },
     {
@@ -275,6 +275,8 @@
         "Plans separate applicable states and desktop or narrow viewports for the form, drawer, autocomplete, and scheduling widget",
         "Treats form labels, placeholders, hints, helper text, errors, prefixes, suffixes, values, and open panels as one compound direction surface",
         "Requires rendered checks for the portal-mounted autocomplete and third-party scheduling widget",
+        "Runs the expanded static audit before approval and parses its structured findings even when deterministic errors produce a nonzero exit",
+        "Requires an adjacent bidi-fixed reason for intentional machine-oriented LTR values and does not permit that exception for localized labels, placeholders, hints, or errors",
         "Describes remediation as a targeted bidirectional adaptation that preserves branding, routes, features, and visual character",
         "Does not create a separate persistent component-inventory JSON file",
         "Keeps Hebrew unavailable when an externally owned or existing component has a blocking unremediated defect",

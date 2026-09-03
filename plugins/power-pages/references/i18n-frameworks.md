@@ -250,8 +250,10 @@ when the configured set contains both LTR and RTL:
 - `pending-remediation` — hard compatibility work remains; affected locales
   belong in `unavailableLocales` and managed availability logic.
 
-Each pending finding must preserve the exact scanner result with `file`, `line`, `rule`, and
-`message`.
+Each pending finding must preserve the exact scanner result with `file`, `line`,
+`rule`, `message`, and `fingerprint`. The fingerprint binds the record to the
+source context and occurrence that produced it, so replacing an item at the
+same line does not inherit the old deferral.
 Only those recorded physical-layout blockers are deferred by lifecycle validation; newly
 introduced findings, invisible bidi controls, and invalid exception directives still block.
 
