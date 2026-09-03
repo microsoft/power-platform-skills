@@ -171,6 +171,7 @@ test('defers known bidi blockers while opposite-direction locales remain unavail
     bidirectionalReadiness: {
       status: 'pending-remediation',
       findings: [{
+        severity: 'error',
         file: 'src/theme.css',
         line: 1,
         rule: 'directional-physical-css',
@@ -249,6 +250,7 @@ test('pending remediation still blocks newly introduced bidi defects', (t) => {
     bidirectionalReadiness: {
       status: 'pending-remediation',
       findings: [{
+        severity: 'error',
         file: 'src/theme.css',
         line: 1,
         rule: 'directional-physical-css',
@@ -322,6 +324,7 @@ test('one recorded finding cannot defer a second same-line declaration', (t) => 
     bidirectionalReadiness: {
       status: 'pending-remediation',
       findings: [{
+        severity: 'error',
         file: 'src/theme.css',
         line: 1,
         rule: 'directional-physical-css',

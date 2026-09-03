@@ -1007,9 +1007,23 @@ round-trip preservation when applicable. A visible opaque external surface is
 blocking unless it is replaced or intentionally unavailable for the affected
 locale.
 
-> **GATE: Do NOT proceed to Phase 7 while the rendered report contains errors
-> or an undisposed review finding.** A screenshot documents what rendered; it
-> does not override a deterministic failure.
+> **GATE: Do NOT proceed to Phase 7 while the create-site report contains an
+> error affecting an available locale or the available site experience, or an
+> untriaged review finding.** Every review item must have evidence and a
+> proposed resolution, judgment-based pass, or usable-limitation disposition
+> for maker review. An add-localization blocker may continue only when its
+> affected locale is verifiably unavailable at every activation boundary; keep
+> that child report as pending evidence and audit the remaining available
+> experience with a real locale plus pseudo-opposite direction. A screenshot
+> documents what rendered; it does not override a deterministic failure.
+
+For each review finding, record whether it was resolved, accepted as a
+judgment-based pass, or proposed as a usable limitation. A usable limitation
+must name the affected component/page, user impact, and report or screenshot
+evidence. Never offer an error finding for maker override. If the
+add-localization child returned `pending-remediation`, verify that every
+affected locale remains excluded from selectors, detection, metadata, and
+production output before continuing with the available site experience.
 
 ### 6.3 Fix Accessibility Violations
 
@@ -1067,7 +1081,7 @@ not asked to reproduce the automated audit.
 
 <!-- gate: create-site:7.review | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 4 of the action list below.
+> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 5 of the action list below.
 >
 > **Trigger:** Phase 7 has verified all pages render via Playwright.
 > **Why we ask:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
@@ -1111,9 +1125,32 @@ not asked to reproduce the automated audit.
    cannot approve these judgment-based criteria.
 
 3. Share the dev server URL with the user and list all available routes
-4. Ask the user to review using `AskUserQuestion`:
+4. Classify bidirectional readiness as:
+   - **Ready** when no unresolved static or rendered findings remain.
+   - **Ready with proposed limitations** only when all remaining findings are
+     review-severity, the site remains functional/readable/accessible, and
+     each finding has exact impact plus evidence.
+   - **Blocked** when a deterministic error affects an available locale or the
+     available site experience. Return to Phases 5–6; do not ask the maker to
+     accept the defect.
+   - **Ready for available locales; localization pending** when every remaining
+     error belongs only to an add-localization locale that is excluded from all
+     activation boundaries. Show the unavailable locale and blocker, and do
+     not offer that locale for approval or enablement.
+5. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
-5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
+
+   For **Ready**, offer **Accept changes** and **Request revisions**. For
+   proposed usable limitations, offer **Fix before handoff**, **Accept with
+   documented limitations**, and **Request revisions**. Acceptance applies
+   only to review-severity limitations; record the approval timestamp, impact,
+   and evidence path in the final summary. If localization is configured,
+   finalize the same disposition in `.powerpages-localization.json`, update
+   every selector, detection, metadata, and static-output availability
+   boundary, then rerun the localization validator, project build, and affected
+   real-locale activation cases before proceeding.
+6. If the user requests changes, apply them and repeat the applicable static,
+   rendered, accessibility, and browser checks before returning to this gate.
 
 **Output**: User-approved site ready for deployment
 
@@ -1153,6 +1190,11 @@ not asked to reproduce the automated audit.
    - Components created (X pages, Y components, Z design elements)
    - Key files and their purposes
    - Total file count and git commit count
+   - Final bidirectional readiness status, static/rendered finding totals, and
+     rendered evidence path
+   - Every maker-approved limitation with exact impact and evidence
+   - When localization is configured, available and unavailable locales from
+     the final manifest; never describe an unavailable locale as enabled
 6. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
    - `/add-localization` — Add or extend SPA languages (suggest only when

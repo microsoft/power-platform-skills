@@ -224,6 +224,22 @@ function validateLocalization(projectRoot) {
   const shapeErrors = validateLocalizationManifestShape(manifest);
   if (shapeErrors.length) return shapeErrors;
   const errors = [];
+  for (const finding of [
+    ...(manifest.bidirectionalReadiness?.findings || []),
+    ...(manifest.bidirectionalReadiness?.renderedFindings || []),
+  ]) {
+    const evidence = finding?.disposition?.evidence;
+    if (!evidence) continue;
+    const evidencePath = path.resolve(projectRoot, evidence);
+    const evidenceRoot = path.resolve(projectRoot, 'docs', 'bidirectional-evidence');
+    if (!evidencePath.startsWith(`${evidenceRoot}${path.sep}`) ||
+        !fs.existsSync(evidencePath) ||
+        !fs.statSync(evidencePath).isFile()) {
+      errors.push(
+        `Maker-approved bidirectional limitation evidence does not exist: ${evidence}`
+      );
+    }
+  }
 
   if (manifest.schemaVersion !== 1) errors.push('Manifest schemaVersion must be 1.');
   const frameworkDetection = detectFramework(projectRoot);

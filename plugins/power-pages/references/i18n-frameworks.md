@@ -242,12 +242,14 @@ configuration must apply that predicate; recording the array in the manifest
 does not disable a locale by itself. During `pending-remediation`, all
 configured locales opposite to the default locale's direction must remain
 unavailable.
-`bidirectionalReadiness` is optional for same-direction locale sets and required
-when the configured set contains both LTR and RTL:
+`bidirectionalReadiness` is required for every schema-version-1 localization
+manifest. Same-direction locale sets still require pseudo-opposite validation,
+so omitting readiness metadata would expose a new locale before that check:
 
 - `ready` — no unresolved compatibility findings.
 - `approved-with-limitations` — the experience remains functional, readable,
-  accurate, and accessible; the maker explicitly accepted documented limits.
+  accurate, and accessible; the maker explicitly accepted every documented
+  limit.
 - `pending-remediation` — hard compatibility work remains; affected locales
   belong in `unavailableLocales` and managed availability logic.
 
@@ -259,6 +261,24 @@ Keep rendered browser blockers in `renderedFindings` with their `caseId`,
 `rule`, `severity`, `message`, and `selector`. Rendered findings are validation
 evidence and readiness state; they are not used to suppress later source
 scanner findings.
+
+`ready` must not retain static or rendered findings. For
+`approved-with-limitations`, retain only review-severity findings and add this
+disposition to each one:
+
+```json
+"disposition": {
+  "status": "maker-approved",
+  "impact": "Exact usable degradation and affected component or page",
+  "evidence": "docs/bidirectional-evidence/<run-id>/<screenshot-or-report>",
+  "approvedAt": "2026-09-03T12:00:00.000Z"
+}
+```
+
+The evidence path must identify the report or screenshot the maker reviewed.
+An error finding can never receive this disposition. If the maker saves work
+without accepting a review finding, keep the result `pending-remediation` and
+the affected locale unavailable.
 Only those recorded physical-layout blockers are deferred by lifecycle validation; newly
 introduced findings, invisible bidi controls, and invalid exception directives still block.
 

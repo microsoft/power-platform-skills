@@ -288,7 +288,7 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
         renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
       },
     }).join('\n'),
-    /Ready bidirectional readiness cannot contain unresolved renderedFindings/
+    /Ready bidirectional readiness cannot contain unresolved findings/
   );
   assert.match(
     validateLocalizationManifestShape({
@@ -299,7 +299,7 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
         renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
       },
     }).join('\n'),
-    /cannot contain rendered errors/
+    /must be a review finding for approved-with-limitations/
   );
   assert.match(
     validateLocalizationManifestShape({
@@ -311,6 +311,145 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
       },
     }).join('\n'),
     /renderedFindings\[0\]\.caseId/
+  );
+});
+
+test('requires explicit maker disposition for approved bidirectional limitations', () => {
+  const base = {
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'i18next',
+    packageVersion: '25.0.0',
+    defaultLocale: 'en-US',
+    locales: ['en-US', 'ar-SA'],
+    translationMethod: 'agent',
+    lastOperation: 'add-languages',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    generatedFiles: [],
+    managedFiles: [],
+    resourcePaths: {},
+    adoptedExistingConfiguration: false,
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    unavailableLocales: [],
+  };
+  const limitation = {
+    caseId: 'calendar--open--desktop--ar',
+    rule: 'rendered-semantic-review',
+    severity: 'review',
+    message: 'The vendor calendar uses a culturally neutral next-page icon.',
+    selector: '.calendar',
+  };
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      bidirectionalReadiness: {
+        status: 'approved-with-limitations',
+        findings: [],
+        renderedFindings: [limitation],
+      },
+    }).join('\n'),
+    /disposition must record the maker-approved limitation/
+  );
+
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    bidirectionalReadiness: {
+      status: 'approved-with-limitations',
+      findings: [],
+      renderedFindings: [{
+        ...limitation,
+        disposition: {
+          status: 'maker-approved',
+          impact: 'Calendar navigation remains usable; only the icon treatment differs.',
+          evidence: 'docs/bidirectional-evidence/run-1/calendar.png',
+          approvedAt: '2026-01-01T00:00:00.000Z',
+        },
+      }],
+    },
+  }), []);
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      bidirectionalReadiness: {
+        status: 'approved-with-limitations',
+        findings: [],
+        renderedFindings: [{
+          ...limitation,
+          disposition: {
+            status: 'maker-approved',
+            impact: 'Calendar navigation remains usable.',
+            evidence: 'docs/bidirectional-evidence/run-1/calendar.png',
+            approvedAt: '2026-02-30T00:00:00.000Z',
+          },
+        }],
+      },
+    }).join('\n'),
+    /approvedAt must be an ISO date-time/
+  );
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      unavailableLocales: ['ar-SA'],
+      bidirectionalReadiness: {
+        status: 'pending-remediation',
+        findings: [{
+          file: 'src/app.tsx',
+          line: 1,
+          rule: 'fixed-direction',
+          message: 'Fixed direction must be remediated.',
+          fingerprint: 'abc123',
+        }],
+        renderedFindings: [],
+      },
+    }).join('\n'),
+    /findings\[0\]\.severity must be/
+  );
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      bidirectionalReadiness: {
+        status: 'ready',
+        findings: [{
+          severity: 'review',
+          file: 'src/styles.css',
+          line: 1,
+          rule: 'horizontal-scroll-review',
+          message: 'Review horizontal scrolling.',
+        }],
+        renderedFindings: [],
+      },
+    }).join('\n'),
+    /Ready bidirectional readiness cannot contain unresolved findings/
+  );
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      unavailableLocales: ['ar-SA'],
+      bidirectionalReadiness: {
+        status: 'pending-remediation',
+        findings: [],
+        renderedFindings: [{
+          ...limitation,
+          severity: 'error',
+          disposition: {
+            status: 'maker-approved',
+            impact: 'Attempted override.',
+            evidence: 'docs/bidirectional-evidence/run-1/report.json',
+            approvedAt: '2026-01-01T00:00:00.000Z',
+          },
+        }],
+      },
+    }).join('\n'),
+    /error findings cannot have maker-approved dispositions/
   );
 });
 

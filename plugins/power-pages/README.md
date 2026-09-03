@@ -98,7 +98,10 @@ Create-site and add-localization also run a component-scoped rendered
 bidirectional audit against their development preview. It verifies computed
 direction, overflow, clipping, focus order, portals/overlays, applicable
 states and viewports, and runtime locale round trips. The run report is
-validation evidence rather than a second component manifest.
+validation evidence rather than a second component manifest. Deterministic
+errors keep affected locales unavailable. Only usable review-severity
+limitations can be enabled after the maker sees the exact impact and evidence;
+that approval is recorded in the localization manifest.
 
 ### Data modeling
 

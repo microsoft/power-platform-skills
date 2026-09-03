@@ -191,6 +191,46 @@ function readJson(filePath) {
   }
 }
 
+function validateFindingDisposition(finding, prefix, errors, required) {
+  const disposition = finding?.disposition;
+  if (!required && disposition === undefined) return;
+  if (!disposition || typeof disposition !== 'object' || Array.isArray(disposition)) {
+    errors.push(`${prefix}.disposition must record the maker-approved limitation.`);
+    return;
+  }
+  if (disposition.status !== 'maker-approved') {
+    errors.push(`${prefix}.disposition.status must be "maker-approved".`);
+  }
+  for (const field of ['impact', 'evidence', 'approvedAt']) {
+    if (typeof disposition[field] !== 'string' || !disposition[field].trim()) {
+      errors.push(`${prefix}.disposition.${field} must be a non-empty string.`);
+    }
+  }
+  if (typeof disposition.evidence === 'string' &&
+      (!disposition.evidence.startsWith('docs/bidirectional-evidence/') ||
+       disposition.evidence.includes('..') ||
+       path.isAbsolute(disposition.evidence))) {
+    errors.push(
+      `${prefix}.disposition.evidence must be a repository-relative ` +
+      'docs/bidirectional-evidence/ path.'
+    );
+  }
+  if (typeof disposition.approvedAt === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(
+        disposition.approvedAt
+      )) {
+    const normalized = disposition.approvedAt.includes('.')
+      ? disposition.approvedAt
+      : disposition.approvedAt.replace(/Z$/, '.000Z');
+    if (!Number.isFinite(Date.parse(disposition.approvedAt)) ||
+        new Date(disposition.approvedAt).toISOString() !== normalized) {
+      errors.push(`${prefix}.disposition.approvedAt must be an ISO date-time.`);
+    }
+  } else if (typeof disposition.approvedAt === 'string') {
+    errors.push(`${prefix}.disposition.approvedAt must be an ISO date-time.`);
+  }
+}
+
 function validateLocalizationManifestShape(manifest) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return ['Localization manifest must be a JSON object.'];
@@ -321,6 +361,42 @@ function validateLocalizationManifestShape(manifest) {
       }
       if (readiness.findings !== undefined && !Array.isArray(readiness.findings)) {
         errors.push('Manifest bidirectionalReadiness.findings must be an array.');
+      } else if (Array.isArray(readiness.findings)) {
+        readiness.findings.forEach((finding, index) => {
+          const prefix = `Manifest bidirectionalReadiness.findings[${index}]`;
+          if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
+            errors.push(`${prefix} must be an object.`);
+            return;
+          }
+          for (const field of ['file', 'rule', 'message']) {
+            if (typeof finding[field] !== 'string' || !finding[field].trim()) {
+              errors.push(`${prefix}.${field} must be a non-empty string.`);
+            }
+          }
+          if (!Number.isInteger(finding.line) || finding.line < 1) {
+            errors.push(`${prefix}.line must be a positive integer.`);
+          }
+          const isLegacyPhysicalCss =
+            readiness.status === 'pending-remediation' &&
+            finding.rule === 'directional-physical-css';
+          if (!['error', 'review'].includes(finding.severity) &&
+              !(isLegacyPhysicalCss && finding.severity === undefined)) {
+            errors.push(`${prefix}.severity must be "error" or "review".`);
+          }
+          if ((typeof finding.fingerprint !== 'string' ||
+               !finding.fingerprint.trim()) &&
+              !isLegacyPhysicalCss) {
+            errors.push(`${prefix}.fingerprint must be a non-empty string.`);
+          }
+          if (finding?.disposition !== undefined) {
+            validateFindingDisposition(
+              finding,
+              prefix,
+              errors,
+              false
+            );
+          }
+        });
       }
       const renderedFindings = readiness.renderedFindings;
       if (renderedFindings !== undefined && !Array.isArray(renderedFindings)) {
@@ -340,25 +416,68 @@ function validateLocalizationManifestShape(manifest) {
           if (!['error', 'review'].includes(finding.severity)) {
             errors.push(`${prefix}.severity must be "error" or "review".`);
           }
+          validateFindingDisposition(finding, prefix, errors, false);
         }
-        const renderedErrors = renderedFindings.some(
-          (finding) => finding?.severity === 'error'
+      }
+      const staticFindings = Array.isArray(readiness.findings)
+        ? readiness.findings
+        : [];
+      const validRenderedFindings = Array.isArray(renderedFindings)
+        ? renderedFindings
+        : [];
+      const allFindings = [...staticFindings, ...validRenderedFindings];
+      const hasErrors = allFindings.some(
+        (finding, index) =>
+          finding?.severity === 'error' ||
+          (index < staticFindings.length &&
+            readiness.status === 'pending-remediation' &&
+            finding?.rule === 'directional-physical-css' &&
+            finding?.severity === undefined)
+      );
+      for (const [index, finding] of allFindings.entries()) {
+        if (finding?.severity === 'error' && finding.disposition !== undefined) {
+          const prefix = index < staticFindings.length
+            ? `Manifest bidirectionalReadiness.findings[${index}]`
+            : 'Manifest bidirectionalReadiness.renderedFindings[' +
+              `${index - staticFindings.length}]`;
+          errors.push(`${prefix} error findings cannot have maker-approved dispositions.`);
+        }
+      }
+      if (readiness.status === 'ready' && allFindings.length > 0) {
+        errors.push(
+          'Ready bidirectional readiness cannot contain unresolved findings.'
         );
-        if (readiness.status === 'ready' && renderedFindings.length > 0) {
+      }
+      if (readiness.status === 'approved-with-limitations') {
+        if (allFindings.length === 0) {
           errors.push(
-            'Ready bidirectional readiness cannot contain unresolved renderedFindings.'
+            'Approved-with-limitations bidirectional readiness requires at least one limitation.'
           );
         }
-        if (readiness.status === 'approved-with-limitations' && renderedErrors) {
-          errors.push(
-            'Approved-with-limitations bidirectional readiness cannot contain rendered errors.'
-          );
+        for (const [index, finding] of allFindings.entries()) {
+          const prefix = index < staticFindings.length
+            ? `Manifest bidirectionalReadiness.findings[${index}]`
+            : 'Manifest bidirectionalReadiness.renderedFindings[' +
+              `${index - staticFindings.length}]`;
+          if (finding?.severity !== 'review') {
+            errors.push(
+              `${prefix} must be a review finding for approved-with-limitations readiness.`
+            );
+          }
+          validateFindingDisposition(finding, prefix, errors, true);
         }
-        if (renderedErrors && readiness.status !== 'pending-remediation') {
-          errors.push(
-            'Rendered bidirectional errors require status "pending-remediation".'
-          );
-        }
+      }
+      if (hasErrors && readiness.status !== 'pending-remediation') {
+        errors.push(
+          'Bidirectional errors require status "pending-remediation".'
+        );
+      }
+      if (['ready', 'approved-with-limitations'].includes(readiness.status) &&
+          Array.isArray(manifest.unavailableLocales) &&
+          manifest.unavailableLocales.length > 0) {
+        errors.push(
+          `${readiness.status} bidirectional readiness cannot retain unavailable locales.`
+        );
       }
       if (readiness.status === 'pending-remediation' &&
           (!Array.isArray(manifest.unavailableLocales) ||
@@ -368,6 +487,10 @@ function validateLocalizationManifestShape(manifest) {
         );
       }
     }
+  } else if (manifest.schemaVersion === 1) {
+    errors.push(
+      'Schema version 1 manifests require bidirectionalReadiness metadata.'
+    );
   }
   return errors;
 }

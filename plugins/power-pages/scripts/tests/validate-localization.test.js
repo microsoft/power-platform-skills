@@ -74,6 +74,12 @@ function createLocalizedReactProject(t, overrides = {}) {
     },
     generatedFiles: ['src/components/LanguageSelector.tsx'],
     managedFiles: ['src/i18n/index.ts'],
+    unavailableLocales: [],
+    bidirectionalReadiness: {
+      status: 'ready',
+      findings: [],
+      renderedFindings: [],
+    },
     adoptedExistingConfiguration: false,
     lastOperation: 'create',
     updatedAt: '2026-07-30T00:00:00.000Z',
@@ -366,11 +372,58 @@ test('blocks a mixed-direction coordinator with a fixed document direction', (t)
 test('enforces unavailable locales for same-direction locale sets', (t) => {
   const projectRoot = createLocalizedReactProject(t, {
     unavailableLocales: ['fr-FR'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      findings: [],
+      renderedFindings: [],
+    },
   });
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /requires one managed locale availability module/i);
+});
+
+test('requires readiness metadata for same-direction localization', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    bidirectionalReadiness: undefined,
+  });
+
+  const result = runValidator(projectRoot);
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /require bidirectionalReadiness metadata/i);
+});
+
+test('requires maker-approved limitation evidence to exist in the project', (t) => {
+  const evidence = 'docs/bidirectional-evidence/run-1/calendar.png';
+  const projectRoot = createLocalizedReactProject(t, {
+    bidirectionalReadiness: {
+      status: 'approved-with-limitations',
+      findings: [],
+      renderedFindings: [{
+        caseId: 'calendar--open--desktop--fr',
+        rule: 'rendered-semantic-review',
+        severity: 'review',
+        message: 'The vendor-owned calendar arrow remains unchanged.',
+        selector: '.calendar',
+        disposition: {
+          status: 'maker-approved',
+          impact: 'Calendar navigation remains understandable and usable.',
+          evidence,
+          approvedAt: '2026-09-03T12:00:00.000Z',
+        },
+      }],
+    },
+  });
+
+  let result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /limitation evidence does not exist/i);
+
+  writeProjectFile(projectRoot, evidence, 'screenshot evidence');
+  result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('allows a mixed-direction locale to remain unavailable pending remediation', (t) => {
@@ -385,7 +438,14 @@ test('allows a mixed-direction locale to remain unavailable pending remediation'
     managedFiles: ['src/i18n/index.ts', availabilityPath],
     bidirectionalReadiness: {
       status: 'pending-remediation',
-      findings: [{ rule: 'directional-physical-css' }],
+      findings: [{
+        severity: 'error',
+        file: 'src/theme.css',
+        line: 1,
+        rule: 'directional-physical-css',
+        message: 'Use a logical CSS property.',
+      }],
+      renderedFindings: [],
     },
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
@@ -428,7 +488,14 @@ test('does not let pending remediation hide an available opposite-direction loca
     managedFiles: ['src/i18n/index.ts', availabilityPath],
     bidirectionalReadiness: {
       status: 'pending-remediation',
-      findings: [{ rule: 'directional-physical-css' }],
+      findings: [{
+        severity: 'error',
+        file: 'src/theme.css',
+        line: 1,
+        rule: 'directional-physical-css',
+        message: 'Use a logical CSS property.',
+      }],
+      renderedFindings: [],
     },
   });
   const resource = JSON.stringify({
@@ -477,7 +544,14 @@ test('requires pending locale availability to be applied at activation boundarie
     managedFiles: ['src/i18n/index.ts', availabilityPath],
     bidirectionalReadiness: {
       status: 'pending-remediation',
-      findings: [{ rule: 'directional-physical-css' }],
+      findings: [{
+        severity: 'error',
+        file: 'src/theme.css',
+        line: 1,
+        rule: 'directional-physical-css',
+        message: 'Use a logical CSS property.',
+      }],
+      renderedFindings: [],
     },
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
@@ -503,6 +577,7 @@ test('requires readiness metadata for mixed-direction localization', (t) => {
       'en-US': 'src/i18n/locales/en-US.json',
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
+    bidirectionalReadiness: undefined,
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
     greeting: 'مرحبا {{name}}',
@@ -511,7 +586,7 @@ test('requires readiness metadata for mixed-direction localization', (t) => {
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /requires manifest bidirectionalReadiness metadata/i);
+  assert.match(result.stderr, /require bidirectionalReadiness metadata/i);
 });
 
 test('approves an explicitly unverified custom package with initialization evidence', (t) => {

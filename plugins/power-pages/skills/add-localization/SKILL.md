@@ -516,8 +516,13 @@ or overlays. Do not edit `node_modules`. If an externally owned surface cannot
 be adapted or verified and the impact is blocking, keep the affected locale
 unavailable.
 
-Write `.powerpages-localization.json` using reference schema version 1
-after the approved implementation is complete. Record `packageVerification`
+Write `.powerpages-localization.json` using reference schema version 1 before
+Phase 6 validation. At this point it is a provisional safety state, not a
+readiness claim: set `bidirectionalReadiness.status` to
+`pending-remediation`, record the current static findings, leave
+`renderedFindings` empty, and keep every newly added or otherwise affected
+locale unavailable until verification and disposition finish. Existing
+unaffected locales remain available. Record `packageVerification`
 from the package-validator result. For an unverified alternative, record
 `status: unverified`, `source: user-approved`, and the official evidence URL
 when one was supplied. Record `initializationEvidence` when deterministic
@@ -525,7 +530,9 @@ framework patterns do not recognize the selected package. Set `lastOperation` to
 `add-languages`, `repair`, or `reconfigure`, and set `translationMethod` to
 `agent` or `blank`.
 
-For mixed-direction sets, also record `bidirectionalReadiness`. Keep a locale
+Record `bidirectionalReadiness` for every new or changed localization setup,
+including same-direction sets whose pseudo-opposite audit can still find a
+future compatibility defect. Keep a locale
 in `unavailableLocales` when technical blockers remain. It must be excluded
 from selectors, browser auto-detection, alternate-language metadata, and
 production static output. Its resources may remain available in development
@@ -611,13 +618,23 @@ node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
 Parse stdout even when the expected blocking exit code is `1`. Exit code `2`
 means the runner or specification failed. Delete the temporary specification
 after the report is written. Fix every rendered error and rerun affected
-cases. Give every review finding explicit evidence and disposition.
+cases. Give every review finding explicit evidence and a proposed disposition
+for the Phase 7 maker decision.
 
-Record unresolved rendered errors in
-`bidirectionalReadiness.renderedFindings`, set readiness to
-`pending-remediation`, and keep every opposite-direction locale unavailable.
-A known usable limitation may be recorded as `approved-with-limitations` only
-after maker approval. A visible opaque third-party surface, unreadable or
+Re-run the static audit after remediation and reconcile its exact current
+findings with the rendered report. Update the provisional manifest before
+Phase 7:
+
+- With any static or rendered error, retain the unresolved findings, keep
+  `pending-remediation`, and keep every affected locale unavailable.
+- With review findings but no errors, retain `pending-remediation` and keep
+  affected locales unavailable until the maker disposes every review item.
+- With no unresolved findings, set `ready`, clear both finding arrays, remove
+  the affected locales from `unavailableLocales`, and update every managed
+  availability boundary.
+
+A known usable limitation may become `approved-with-limitations` only after
+maker approval in Phase 7. A visible opaque third-party surface, unreadable or
 clipped text, incorrect direction, unreachable control, broken focus order,
 or state-losing locale switch cannot be approved as ready.
 
@@ -672,8 +689,27 @@ Use `AskUserQuestion`:
 Explicit acceptance applies only to usable degradation. It cannot override a
 build/runtime failure, incorrect direction, unreadable content, unreachable
 critical control, or serious accessibility failure. Apply requested revisions,
-then repeat Phase 6 and this gate. If the maker saves a pending locale, do not
-offer deployment in Phase 8.
+then repeat Phase 6 and this gate.
+
+After the maker's choice, finalize `.powerpages-localization.json`:
+
+- **Accept changes:** keep `ready` with empty finding arrays.
+- **Enable with documented limitations:** retain only the accepted
+  review-severity findings, set `approved-with-limitations`, remove the
+  affected locales from `unavailableLocales`, and add a `disposition` to every
+  retained finding with `status: maker-approved`, the exact component/page
+  impact, the report or screenshot evidence path, and an ISO `approvedAt`
+  timestamp. Accepted review checks that are not limitations are removed from
+  the unresolved finding arrays.
+- **Save but keep locale unavailable:** keep `pending-remediation`, retain the
+  undisposed findings, and keep the affected locales unavailable.
+
+Never add a maker-approved disposition to an error finding. After changing
+status or availability, rerun the independent validator, project build, and
+the locale activation cases affected by that change. Do not complete the
+workflow until the final manifest, selector/detection boundaries, and actual
+rendered availability agree. If the maker saves a pending locale, do not offer
+deployment in Phase 8.
 
 ---
 
@@ -682,6 +718,12 @@ offer deployment in Phase 8.
 > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Record usage with skill name `AddLocalization`.
+
+Present a final localization summary before returning or offering deployment.
+Include the final readiness status, available and unavailable locales, static
+and rendered finding totals, the rendered report path, every maker-approved
+limitation with its impact/evidence, and the manifest path. Do not describe a
+locale as enabled when it remains in `unavailableLocales`.
 
 If `$ARGUMENTS` contains `[FROM_CREATE_SITE]`, return control to create-site
 without asking about deployment.
