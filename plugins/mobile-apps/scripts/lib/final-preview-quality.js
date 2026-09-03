@@ -10,6 +10,7 @@ const { finding } = require('./product-experience-contracts');
 const MAX_FRAME_EVIDENCE_COUNT = 8;
 const MAX_FRAME_EVIDENCE_TEXT = 640;
 const MAX_FRAME_VISIBLE_TEXT = 1800;
+const COMPONENT_PRESENTATION_PROPERTIES = ['display', 'padding', 'gap', 'background', 'border'];
 const CONTRACT_COPY = /\b(?:durable-destination|nested-detail|bounded-flow-step|modal-or-immersive-utility|pack revision|requirement id|scenario evidence)\b/i;
 const INVENTED_OFFLINE_UI = /\b(?:offline|pending sync|syncing|retry synchronization|connection lost|queued changes)\b/i;
 
@@ -97,6 +98,22 @@ function declaresAny(declarations, properties) {
   ));
 }
 
+function componentHasPresentation(rules, elements, component) {
+  const ownedNodes = descendants(elements, component, (node) => {
+    if (hasAttribute(node, 'data-product-component')) return false;
+    let current = node.parent;
+    while (current && current !== component) {
+      if (hasAttribute(current, 'data-product-component')) return false;
+      current = current.parent;
+    }
+    return true;
+  });
+  return [component, ...ownedNodes].some((node) => declaresAny(
+    declarationsForNode(rules, node),
+    COMPONENT_PRESENTATION_PROPERTIES,
+  ));
+}
+
 function structureFingerprint(frame, elements) {
   const nodes = descendants(elements, frame, (node) => (
     hasAttribute(node, 'data-product-component')
@@ -167,10 +184,8 @@ function validatePageStructure(parsed, expected, errors) {
     errors.push(finding('preview-mobile-frame-style-missing',
       'mobile frames need bounded dimensions, overflow, spacing, surface, and edge treatment'));
   }
-  if (componentNodes.length === 0 || componentNodes.some((node) => !declaresAny(
-    declarationsForNode(rules, node),
-    ['display', 'padding', 'gap', 'background', 'border'],
-  ))) {
+  if (componentNodes.length === 0
+    || componentNodes.some((node) => !componentHasPresentation(rules, parsed.elements, node))) {
     errors.push(finding('preview-product-components-unstyled',
       'style product component regions rather than exposing raw contract text'));
   }

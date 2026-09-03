@@ -62,9 +62,9 @@ function finalHtml(contract) {
   const focalMarkup = (screen, index) => {
     const content = escapeHtml(screen.firstViewport.focalContent);
     const attrs = `data-product-component="screen-focal-${index}" data-focal-point="${screen.screenId}"`;
-    if (index === 1) return `<ol ${attrs}><li><strong>${content}</strong></li></ol>`;
-    if (index === 2) return `<figure ${attrs}><figcaption>${content}</figcaption></figure>`;
-    return `<section ${attrs}><strong>${content}</strong></section>`;
+    if (index === 1) return `<ol ${attrs}><li class="component-content"><strong>${content}</strong></li></ol>`;
+    if (index === 2) return `<figure ${attrs}><figcaption class="component-content">${content}</figcaption></figure>`;
+    return `<section ${attrs}><strong class="component-content">${content}</strong></section>`;
   };
   const frames = contract.screens.map((screen, index) => `
     <article id="preview-screen-${screen.screenId}" data-preview-screen-id="${screen.screenId}" data-pack-revision="${screen.packRevision}">
@@ -73,9 +73,9 @@ function finalHtml(contract) {
           <header data-viewport-region="context"><span>Current journey</span><h2>${escapeHtml(screen.title)}</h2></header>
           <div data-viewport-region="focal-content">
             ${focalMarkup(screen, index)}
-            <aside data-product-component="screen-signature-${index}" data-signature-component="${screen.screenId}">${escapeHtml(screen.signatureIntent.name)}</aside>
+                <aside data-product-component="screen-signature-${index}" data-signature-component="${screen.screenId}"><span class="component-content">${escapeHtml(screen.signatureIntent.name)}</span></aside>
             <div data-product-component="decision-evidence-${index}">${screen.scenarioEvidence.slice(0, 4).map((evidence) => (
-    `<span data-scenario-evidence-id="${evidence.id}">${escapeHtml(evidence.value)}</span>`
+              `<span class="component-content" data-scenario-evidence-id="${evidence.id}">${escapeHtml(evidence.value)}</span>`
   )).join('')}</div>
             ${screen.media.map((asset) => (
     `<figure data-media-asset-key="${asset.key}">${escapeHtml(asset.fallback)}</figure>`
@@ -115,7 +115,8 @@ function finalHtml(contract) {
     [data-first-viewport]{height:740px;display:flex;flex-direction:column;gap:1rem}
     [data-viewport-region="focal-content"]{display:grid;gap:.75rem;min-height:0;overflow:auto;flex:1}
     [data-viewport-region="primary-action"]{margin-top:auto}
-    [data-product-component]{display:grid;gap:.4rem;padding:.75rem;border:1px solid var(--color-border);background:var(--color-bg)}
+    [data-product-component]{position:relative;color:var(--color-text)}
+    .component-content{display:grid;gap:.4rem;padding:.75rem;border:1px solid var(--color-border);background:var(--color-bg)}
     [data-primary-action]{width:100%;min-height:48px;background:var(--color-primary);color:var(--color-surface);border:0}
     [data-screen-index]{display:flex;gap:.5rem;padding:.75rem;border:1px solid var(--color-border);background:var(--color-bg)}
     #preview-all-screens{padding:1rem}.review-screen,.requirement-index{padding:1rem;border-top:1px solid var(--color-border)}
@@ -297,6 +298,11 @@ test('validator rejects drift, hidden evidence, placeholders, and structural sub
         name: 'unstyled navigation',
         html: valid.replace('#preview-navigation{', '#stale-navigation{'),
         code: 'preview-navigation-unstyled',
+      },
+      {
+        name: 'unstyled product component subtree',
+        html: valid.replace('.component-content{', '.stale-component-content{'),
+        code: 'preview-product-components-unstyled',
       },
       {
         name: 'missing first-viewport action region',
