@@ -44,6 +44,7 @@ Use schema version 1:
 {
   "version": 1,
   "runtimeSwitching": true,
+  "defaultLocaleId": "en",
   "viewports": [
     { "name": "desktop", "width": 1280, "height": 720 },
     { "name": "narrow", "width": 390, "height": 844 }
@@ -64,8 +65,11 @@ Use schema version 1:
       "id": "ar",
       "locale": "ar-SA",
       "direction": "rtl",
+      "unavailableSelectors": [
+        "[data-locale='ar-SA']"
+      ],
       "activate": [
-        { "type": "click", "selector": "[data-locale='ar-SA']" }
+        { "type": "audit-activate", "locale": "ar-SA" }
       ],
       "expect": [
         { "selector": "h1", "text": "اتصل بنا" }
@@ -158,9 +162,20 @@ Use schema version 1:
 }
 ```
 
-When `runtimeSwitching` is `true`, both `ltr,rtl,ltr` and `rtl,ltr,rtl`
-sequences are mandatory. Static localization modes set it to `false` and use
-locale-specific navigation actions.
+When `runtimeSwitching` is `true`, `defaultLocaleId` identifies the real
+default locale. For every real non-default locale, provide both default ->
+locale -> default and locale -> default -> locale sequences. This verifies
+each locale independently without requiring every possible locale pair.
+Pseudo locales do not participate in runtime transition pairs. Static
+localization modes set `runtimeSwitching` to `false` and use locale-specific
+navigation actions. Runtime switching requires
+`.powerpages-localization.json`; the CLI requires the real run-spec locales and
+default locale to exactly match the manifest so an existing configured locale
+cannot be silently omitted. The expected direction for every real locale is
+derived from its writing script rather than trusted from the run specification.
+Every locale in a runtime transition, including the default, needs a reusable
+application activation action because each round trip must be able to restore
+it. `use-current` is therefore rejected for real runtime locales.
 
 Each `preserve` entry may be a selector for an input, select, or textarea; the
 runner automatically compares its value or checked state. For non-form
@@ -180,6 +195,40 @@ selector or route behavior. A real locale must not use `set-document`: it must
 activate through the application and provide at least one `expect` assertion
 for localized text or a localized attribute. This prevents changing only
 `html[lang]`/`html[dir]` from being mistaken for working localization.
+
+An unavailable real locale cannot be exposed through a production selector or
+switching path just to make the audit pass. Give it an `audit-activate` action
+that calls a development-only application adapter, and list every selector
+that would normally expose that locale in `unavailableSelectors`:
+
+```json
+{
+  "unavailableSelectors": ["[data-locale='ar-SA']"],
+  "activate": [
+    {
+      "type": "audit-activate",
+      "locale": "ar-SA"
+    }
+  ]
+}
+```
+
+Before audit activation in every component and transition case, the runner
+requires each listed selector to be absent from the normal application UI.
+This is negative browser evidence that a pending locale is not selectable.
+Source validation separately proves that automatic detection,
+alternate-language metadata, and production static output also apply the
+availability boundary.
+
+The development build must expose
+`window.__powerPagesLocalizationAudit.activate(locale)`. Gate that adapter with
+the framework's development-mode mechanism and have it call the same locale
+coordinator and resource-loading path as the application through a dedicated
+`activateLocaleForAudit(locale)` operation. That operation may bypass the
+availability predicate only for the audit while retaining the normal
+language, direction, resource, and persistence updates. Normal selectors,
+detection, metadata, and production output must continue to reject the locale.
+Never ship an unconditional production activation bypass.
 
 For a single-language site, add a pseudo-opposite locale using:
 
@@ -206,7 +255,9 @@ Use pseudo-RTL for an LTR site and pseudo-LTR for an RTL site.
 Supported actions are:
 
 - `click`, `fill`, `focus`, `hover`, `press`, `select`, `check`, `uncheck`
-- `use-current` for the already-active real default locale
+- `audit-activate` for development-only application activation of a locale that
+  remains unavailable to normal users
+- `use-current` only when no runtime round trip needs to reactivate the locale
 - `navigate` with a root-relative or absolute locale-specific URL
 - `wait` with `ms` from 0 through 10000
 - `set-document` with `locale` and `direction`
@@ -278,8 +329,10 @@ override a deterministic failure.
 
 ## Disposition
 
-- Any rendered `error` keeps the affected opposite-direction locale
-  unavailable and readiness at `pending-remediation`.
+- Any rendered `error` keeps every locale in the finding's `affectedLocales`
+  unavailable and sets those locale readiness entries to
+  `pending-remediation`. Other locales remain available unless regression
+  evidence shows they are also affected.
 - A `review` finding must receive explicit evidence and disposition. A usable,
   noncritical limitation may become `approved-with-limitations`.
 - A direction-aware, direction-fixed, or unknown/third-party case without

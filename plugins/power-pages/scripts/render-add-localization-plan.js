@@ -106,6 +106,8 @@ const requiredLabelPaths = [
   'readiness.noFindings',
   'readiness.location',
   'readiness.rule',
+  'readiness.scope',
+  'readiness.affectedLocales',
   'readiness.remediation',
   'readiness.componentScope',
   'readiness.component',
@@ -169,6 +171,7 @@ const CHANGE_STATUSES = new Set(['new', 'preserved', 'changed']);
 const FILE_ACTIONS = new Set(['create', 'update', 'preserve', 'replace', 'skip']);
 const LOCALE_ROLES = new Set(['source', 'default', 'existing', 'added']);
 const AVAILABILITY = new Set(['available', 'pending-remediation']);
+const FINDING_SCOPES = new Set(['locale', 'direction', 'shared', 'global']);
 const OPERATIONS = new Set(['create', 'add-languages', 'repair', 'reconfigure']);
 const INVOCATIONS = new Set(['direct', 'create-site']);
 const PACKAGE_SELECTIONS = new Set(['recommended', 'alternative', 'preserved']);
@@ -471,6 +474,9 @@ function validatePlanData(data) {
     if (defaultEntry && config?.defaultLocale?.value !== defaultEntry.locale) {
       errors.push('CONFIGURATION_DATA.defaultLocale.value must match the default locale role.');
     }
+    if (defaultEntry && defaultEntry.availability !== 'available') {
+      errors.push('The default locale must remain available.');
+    }
   }
 
   if (!Array.isArray(data.FILES_DATA) || !data.FILES_DATA.length) {
@@ -514,6 +520,47 @@ function validatePlanData(data) {
           errors.push(`${prefix}.line must be a positive integer.`);
         }
         validateString(finding?.remediation, `${prefix}.remediation`, errors);
+        if (!FINDING_SCOPES.has(finding?.scope)) {
+          errors.push(`${prefix}.scope must be locale, direction, shared, or global.`);
+        }
+        const configuredLocales = Array.isArray(data.LOCALES_DATA)
+          ? data.LOCALES_DATA.map((entry) => entry.locale)
+          : [];
+        if (!Array.isArray(finding?.affectedLocales) ||
+            finding.affectedLocales.length === 0 ||
+            finding.affectedLocales.some(
+              (locale) => !configuredLocales.includes(locale)
+            ) ||
+            new Set(finding.affectedLocales).size !== finding.affectedLocales.length) {
+          errors.push(
+            `${prefix}.affectedLocales must contain unique configured locale tags.`
+          );
+        } else if (finding.scope === 'locale' &&
+                   finding.affectedLocales.length !== 1) {
+          errors.push(`${prefix} locale findings must affect exactly one locale.`);
+        } else if (finding.scope === 'global') {
+          const expected = [...configuredLocales].sort();
+          const actual = [...finding.affectedLocales].sort();
+          if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+            errors.push(`${prefix} global findings must affect every configured locale.`);
+          }
+        } else if (finding.scope === 'direction') {
+          if (!['ltr', 'rtl'].includes(finding.direction)) {
+            errors.push(`${prefix}.direction must be ltr or rtl for direction scope.`);
+          } else {
+            const expected = data.LOCALES_DATA
+              .filter((entry) => entry.direction === finding.direction)
+              .map((entry) => entry.locale)
+              .sort();
+            const actual = [...finding.affectedLocales].sort();
+            if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+              errors.push(
+                `${prefix} direction findings must affect every configured ` +
+                `${finding.direction} locale.`
+              );
+            }
+          }
+        }
       });
     }
     if (Array.isArray(readiness.componentScope)) {
@@ -563,22 +610,19 @@ function validatePlanData(data) {
           'READINESS_DATA.unavailableLocales must match locales marked pending-remediation.'
         );
       }
-      const hasBlockingFinding = Array.isArray(readiness.findings) &&
-        readiness.findings.some((finding) => finding?.severity === 'error');
-      const defaultLocale = data.LOCALES_DATA.find(
-        (entry) => entry.roles?.includes('default')
-      );
-      if (hasBlockingFinding && defaultLocale) {
-        const unsafeOppositeLocales = data.LOCALES_DATA.filter(
-          (entry) =>
-            entry.direction !== defaultLocale.direction &&
-            entry.availability !== 'pending-remediation'
+      if (Array.isArray(readiness.findings)) {
+        const localeAvailability = new Map(
+          data.LOCALES_DATA.map((entry) => [entry.locale, entry.availability])
         );
-        if (unsafeOppositeLocales.length > 0) {
-          errors.push(
-            'Blocking bidirectional findings require every opposite-direction ' +
-            'locale to remain pending-remediation.'
-          );
+        for (const finding of readiness.findings) {
+          for (const locale of finding?.affectedLocales || []) {
+            if (localeAvailability.get(locale) !== 'pending-remediation') {
+              errors.push(
+                `Readiness finding "${finding.rule || 'unknown'}" requires affected ` +
+                `locale ${locale} to remain pending-remediation.`
+              );
+            }
+          }
         }
       }
     }

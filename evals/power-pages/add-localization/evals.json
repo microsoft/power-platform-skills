@@ -179,7 +179,8 @@
         "Canonicalizes ar and he",
         "Sets documentElement.dir to rtl for both",
         "Restores ltr for non-RTL locales",
-        "Browser-tests at least one RTL locale",
+        "Browser-tests Arabic and Hebrew independently, including real activation, localized content, script fonts, formatting, wrapping, component states, viewports, console errors, and accessibility",
+        "Runs default-to-locale and locale-to-default round trips for each real non-default locale without requiring every possible locale pair",
         "Flags directional icons, fixed direction, physical utility classes, asymmetric shorthands, and raw horizontal scrolling assumptions for remediation or review"
       ]
     },
@@ -276,7 +277,7 @@
         "Treats form labels, placeholders, hints, helper text, errors, prefixes, suffixes, values, and open panels as one compound direction surface",
         "Requires rendered checks for the portal-mounted autocomplete and third-party scheduling widget",
         "Builds an ephemeral rendered-verification specification and executes every applicable state and viewport in English LTR and Hebrew RTL",
-        "Requires both LTR to RTL to LTR and RTL to LTR to RTL runtime sequences without reload, route loss, form-state loss, or focus loss",
+        "Requires English to Hebrew to English and Hebrew to English to Hebrew runtime sequences without reload, route loss, form-state loss, or focus loss",
         "Records computed-direction, overflow, clipping, overlap, focus-order, portal, and third-party evidence with screenshots for failures or review findings",
         "Runs the expanded static audit before approval and parses its structured findings even when deterministic errors produce a nonzero exit",
         "Requires an adjacent bidi-fixed reason for intentional machine-oriented LTR values and does not permit that exception for localized labels, placeholders, hints, or errors",
@@ -305,6 +306,26 @@
         "On enablement, records only the accepted review finding with maker-approved disposition, impact, report or screenshot evidence, and ISO approval timestamp",
         "Removes Arabic from unavailableLocales only after approval, updates all managed availability boundaries, and reruns the validator, build, and affected activation cases",
         "Reports the final readiness and limitation consistently in the manifest and final summary"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Our English React portal already has Hebrew enabled and verified. Add Arabic now. Arabic has a serious language-specific font failure in its calendar, but Hebrew still passes regression testing. Save the Arabic work so we can fix it later without disabling Hebrew.",
+      "expected_output": "The workflow tests Arabic independently, preserves Hebrew as ready and available because regression evidence shows it is unaffected, and keeps only Arabic pending and unavailable.",
+      "files": [],
+      "expectations": [
+        "Starts the newly added Arabic locale as pending-remediation without changing the previously ready Hebrew locale",
+        "Runs the full Arabic resource, activation, lang and dir, font, formatting, wrapping, component-state, viewport, console, and accessibility checks",
+        "Regression-tests Hebrew on any shared direction-sensitive surfaces changed while adding Arabic",
+        "Records the calendar font failure with locale scope and affectedLocales containing only ar-SA",
+        "Keeps he-IL ready and available because current evidence does not identify it as affected",
+        "Sets only ar-SA to pending-remediation and makes unavailableLocales exactly [ar-SA]",
+        "Derives the overall bidirectional readiness status as pending-remediation while retaining per-locale readiness",
+        "Applies the Arabic exclusion to selectors, automatic detection, alternate-language metadata, and production output",
+        "Uses a development-only audit activation adapter to exercise Arabic through the real locale coordinator without exposing it through normal production activation",
+        "Does not require all RTL locales to be unavailable merely because Arabic failed",
+        "Runs English to Arabic to English and Arabic to English to Arabic runtime round trips; pseudo locales are not used for application switching",
+        "Final summary clearly reports Hebrew as available and Arabic as unavailable"
       ]
     }
   ]

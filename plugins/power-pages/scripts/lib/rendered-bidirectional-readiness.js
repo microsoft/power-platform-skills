@@ -2,6 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  resolveLocale,
+} = require('./localization-config');
 
 const CLASSIFICATIONS = new Set([
   'direction-neutral',
@@ -19,6 +22,7 @@ const PRESERVATION_KINDS = new Set([
   'value',
 ]);
 const ACTION_TYPES = new Set([
+  'audit-activate',
   'check',
   'click',
   'fill',
@@ -34,7 +38,7 @@ const ACTION_TYPES = new Set([
   'wait',
 ]);
 
-function validateRunSpec(spec) {
+function validateRunSpec(spec, localizationContext = null) {
   const errors = [];
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
     return ['The rendered bidirectional run specification must be an object.'];
@@ -47,6 +51,11 @@ function validateRunSpec(spec) {
   const viewports = Array.isArray(spec.viewports) ? spec.viewports : [];
   const locales = Array.isArray(spec.locales) ? spec.locales : [];
   const components = Array.isArray(spec.components) ? spec.components : [];
+  const unavailableLocales = new Set(
+    Array.isArray(localizationContext?.unavailableLocales)
+      ? localizationContext.unavailableLocales
+      : []
+  );
   if (viewports.length === 0) errors.push('viewports must contain at least one viewport.');
   if (locales.length < 2) errors.push('locales must contain LTR and RTL verification locales.');
   if (components.length === 0) errors.push('components must contain the reconciled review scope.');
@@ -73,6 +82,16 @@ function validateRunSpec(spec) {
     if (localeIds.has(locale?.id)) errors.push(`${prefix}.id must be unique.`);
     localeIds.add(locale?.id);
     if (!isNonEmpty(locale?.locale)) errors.push(`${prefix}.locale is required.`);
+    if (!locale?.pseudo && isNonEmpty(locale?.locale)) {
+      const resolved = resolveLocale(locale.locale);
+      if (!resolved.valid || !resolved.locale) {
+        errors.push(`${prefix}.locale must be a valid BCP-47 locale tag.`);
+      } else if (resolved.direction !== locale.direction) {
+        errors.push(
+          `${prefix}.direction must be ${resolved.direction} for ${resolved.locale}.`
+        );
+      }
+    }
     if (!DIRECTIONS.has(locale?.direction)) {
       errors.push(`${prefix}.direction must be ltr or rtl.`);
     } else {
@@ -96,6 +115,37 @@ function validateRunSpec(spec) {
       }
       if (!Array.isArray(locale?.expect) || locale.expect.length === 0) {
         errors.push(`${prefix} real locales require localized content expectations.`);
+      }
+      const auditActivations = activation.filter(
+        (action) => action.type === 'audit-activate'
+      );
+      if (auditActivations.some((action) => action.locale !== locale.locale)) {
+        errors.push(`${prefix} audit-activate must target its own locale.`);
+      }
+      if (unavailableLocales.has(locale.locale) &&
+          !auditActivations.some((action) => action.locale === locale.locale)) {
+        errors.push(
+          `${prefix} unavailable locales require development-only audit-activate.`
+        );
+      }
+      if (unavailableLocales.has(locale.locale) &&
+          activation.some((action) => !['audit-activate', 'wait'].includes(action.type))) {
+        errors.push(
+          `${prefix} unavailable locales cannot use normal application activation actions.`
+        );
+      }
+      if (!unavailableLocales.has(locale.locale) && auditActivations.length > 0) {
+        errors.push(
+          `${prefix} audit-activate is only valid for an unavailable locale.`
+        );
+      }
+      if (unavailableLocales.has(locale.locale)) {
+        validateStringArray(
+          locale.unavailableSelectors,
+          `${prefix}.unavailableSelectors`,
+          errors,
+          1
+        );
       }
     }
     if (locale?.expect !== undefined && !Array.isArray(locale.expect)) {
@@ -216,24 +266,19 @@ function validateRunSpec(spec) {
     }
   }
 
-  const transitionDirections = [];
+  const transitionSequences = [];
   for (const [index, transition] of (spec.transitions || []).entries()) {
     const prefix = `transitions[${index}]`;
     if (!isNonEmpty(transition?.name)) errors.push(`${prefix}.name is required.`);
     if (!Array.isArray(transition?.sequence) || transition.sequence.length < 2) {
       errors.push(`${prefix}.sequence must contain at least two locale IDs.`);
     } else {
-      const sequenceDirections = [];
       for (const localeId of transition.sequence) {
         if (!localeIds.has(localeId)) {
           errors.push(`${prefix}.sequence references unknown locale "${localeId}".`);
-        } else {
-          sequenceDirections.push(
-            locales.find((locale) => locale.id === localeId).direction
-          );
         }
       }
-      transitionDirections.push(sequenceDirections.join(','));
+      transitionSequences.push(transition.sequence.join(','));
     }
     if (!isNonEmpty(transition?.route) || !transition.route.startsWith('/')) {
       errors.push(`${prefix}.route must start with "/".`);
@@ -301,17 +346,72 @@ function validateRunSpec(spec) {
     return isNonEmpty(value) ||
       (Array.isArray(value) && value.length > 0 && value.every(isNonEmpty));
   }
+  if (localizationContext) {
+    const expectedLocales = [...localizationContext.locales].sort();
+    const actualLocales = locales
+      .filter((locale) => !locale.pseudo)
+      .map((locale) => locale.locale)
+      .sort();
+    if (JSON.stringify(expectedLocales) !== JSON.stringify(actualLocales)) {
+      errors.push(
+        'Real locales must exactly match the configured localization manifest locales.'
+      );
+    }
+    if (localizationContext.mode === 'runtime' && spec.runtimeSwitching !== true) {
+      errors.push('Runtime localization manifests require runtimeSwitching: true.');
+    }
+    if (localizationContext.mode === 'static' && spec.runtimeSwitching === true) {
+      errors.push('Static localization manifests require runtimeSwitching: false.');
+    }
+  }
   if (spec.runtimeSwitching === true) {
     if (locales.some((locale) =>
       asArray(locale.activate).some((action) => action.type === 'navigate')
     )) {
       errors.push('runtimeSwitching locale activation cannot use navigate.');
     }
-    if (!transitionDirections.includes('ltr,rtl,ltr')) {
-      errors.push('runtimeSwitching requires an LTR -> RTL -> LTR transition.');
+    if (locales.some((locale) =>
+      !locale.pseudo &&
+      asArray(locale.activate).some((action) => action.type === 'use-current')
+    )) {
+      errors.push(
+        'runtimeSwitching real locales require a reusable activation path; ' +
+        'use-current cannot restore a locale during round trips.'
+      );
     }
-    if (!transitionDirections.includes('rtl,ltr,rtl')) {
-      errors.push('runtimeSwitching requires an RTL -> LTR -> RTL transition.');
+    const defaultLocale = locales.find(
+      (locale) => locale.id === spec.defaultLocaleId
+    );
+    if (!isNonEmpty(spec.defaultLocaleId) || !defaultLocale) {
+      errors.push('runtimeSwitching requires a valid defaultLocaleId.');
+    } else if (defaultLocale.pseudo) {
+      errors.push('runtimeSwitching defaultLocaleId must identify a real locale.');
+    } else {
+      if (localizationContext &&
+          defaultLocale.locale !== localizationContext.defaultLocale) {
+        errors.push(
+          'runtimeSwitching defaultLocaleId must match the localization ' +
+          'manifest defaultLocale.'
+        );
+      }
+      for (const locale of locales.filter(
+        (candidate) => !candidate.pseudo && candidate.id !== spec.defaultLocaleId
+      )) {
+        const outward = `${spec.defaultLocaleId},${locale.id},${spec.defaultLocaleId}`;
+        const returnTrip = `${locale.id},${spec.defaultLocaleId},${locale.id}`;
+        if (!transitionSequences.includes(outward)) {
+          errors.push(
+            `runtimeSwitching requires ${spec.defaultLocaleId} -> ${locale.id} -> ` +
+            `${spec.defaultLocaleId}.`
+          );
+        }
+        if (!transitionSequences.includes(returnTrip)) {
+          errors.push(
+            `runtimeSwitching requires ${locale.id} -> ${spec.defaultLocaleId} -> ` +
+            `${locale.id}.`
+          );
+        }
+      }
     }
   }
   return errors;
@@ -330,6 +430,7 @@ function validateActions(actions, prefix, errors) {
       continue;
     }
     if (action.type !== 'wait' && action.type !== 'set-document' &&
+        action.type !== 'audit-activate' &&
         action.type !== 'navigate' &&
         action.type !== 'use-current' &&
         !isNonEmpty(action.selector)) {
@@ -342,6 +443,9 @@ function validateActions(actions, prefix, errors) {
     if (action.type === 'set-document' &&
         (!isNonEmpty(action.locale) || !DIRECTIONS.has(action.direction))) {
       errors.push(`${actionPrefix} requires locale and direction.`);
+    }
+    if (action.type === 'audit-activate' && !isNonEmpty(action.locale)) {
+      errors.push(`${actionPrefix}.locale must be a non-empty string.`);
     }
     if (action.type === 'navigate' &&
         (!isNonEmpty(action.url) ||
@@ -386,7 +490,7 @@ function buildVerificationCases(spec) {
 }
 
 async function runRenderedBidirectionalAudit(options) {
-  const errors = validateRunSpec(options.spec);
+  const errors = validateRunSpec(options.spec, options.localizationContext);
   if (errors.length > 0) {
     const error = new Error(`Invalid rendered bidirectional run specification:\n- ${errors.join('\n- ')}`);
     error.code = 'INVALID_SPEC';
@@ -452,6 +556,12 @@ async function runVerificationCase(browser, baseUrl, verificationCase, evidenceD
       waitUntil: 'networkidle',
       timeout: 20000,
     });
+    await verifyUnavailableSelectors(
+      page,
+      locale,
+      verificationCase.id,
+      findings
+    );
     await executeActions(page, locale.activate || [], baseUrl);
     await executeActions(page, state.setup || [], baseUrl);
     if (locale.pseudo) await applyPseudoContent(page, locale.direction);
@@ -548,6 +658,18 @@ async function executeActions(page, actions, baseUrl) {
       continue;
     }
     if (action.type === 'use-current') continue;
+    if (action.type === 'audit-activate') {
+      await page.evaluate(async (locale) => {
+        const audit = window.__powerPagesLocalizationAudit;
+        if (!audit || typeof audit.activate !== 'function') {
+          throw new Error(
+            'Development-only localization audit activation is not available.'
+          );
+        }
+        await audit.activate(locale);
+      }, action.locale);
+      continue;
+    }
     if (action.type === 'set-document') {
       await page.evaluate(({ locale, direction }) => {
         document.documentElement.lang = locale;
@@ -919,6 +1041,7 @@ async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir
       waitUntil: 'networkidle',
       timeout: 20000,
     });
+    await verifyUnavailableSelectors(page, sequence[0], id, findings);
     await executeActions(page, sequence[0].activate || [], baseUrl);
     await executeActions(page, transition.setup || [], baseUrl);
     const baseline = await captureTransitionState(page, transition);
@@ -936,6 +1059,7 @@ async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir
     await assertDocumentLocale(page, sequence[0], findings, id);
     await assertLocaleEvidence(page, sequence[0], findings, id);
     for (const locale of sequence.slice(1)) {
+      await verifyUnavailableSelectors(page, locale, id, findings);
       await executeActions(page, locale.activate || [], baseUrl);
       await page.waitForTimeout(100);
       const current = await captureTransitionState(page, transition);
@@ -1012,6 +1136,26 @@ async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir
     screenshot,
     findings,
   };
+}
+
+async function verifyUnavailableSelectors(page, locale, caseId, findings) {
+  for (const selector of locale.unavailableSelectors || []) {
+    const locator = page.locator(selector);
+    const count = await locator.count();
+    let visible = false;
+    for (let index = 0; index < count && !visible; index += 1) {
+      visible = await locator.nth(index).isVisible();
+    }
+    if (visible) {
+      findings.push(makeFinding(
+        caseId,
+        'unavailable-locale-exposed',
+        'error',
+        `Unavailable locale ${locale.locale} is exposed by a normal activation selector.`,
+        selector
+      ));
+    }
+  }
 }
 
 async function captureTransitionState(page, transition) {

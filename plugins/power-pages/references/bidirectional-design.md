@@ -249,8 +249,9 @@ Unavailable locale resources may remain on disk, but one managed
 excludes those locales. Selectors, browser detection and switching,
 alternate-language metadata, and production static output must all apply it.
 The manifest is a record of that state, not the mechanism that enforces it.
-While hard bidirectional blockers remain, every configured locale opposite to
-the default locale's direction stays unavailable.
+Every finding identifies its affected locales. Keep only those locales
+unavailable; preserve a previously verified locale unless current regression
+evidence shows that a shared or direction-wide defect affects it too.
 
 Do not describe a technically broken or inaccessible locale as successfully
 enabled.
@@ -268,8 +269,10 @@ enabled.
 - Test every applicable state of direction-aware, direction-fixed, and
   unknown/third-party components. For direction-neutral components, confirm
   that ordinary inheritance remains sufficient.
-- For runtime modes, test LTR -> RTL -> LTR and RTL -> LTR -> RTL without
-  reload, stale requests, route loss, form-state loss, or focus loss.
+- For runtime modes, test default -> locale -> default and locale -> default
+  -> locale for every real non-default locale, without reload, stale requests,
+  route loss, form-state loss, or focus loss. Pseudo locales do not participate
+  in application-switch transitions.
 - Verify calendars, gestures, overlays, charts, mixed-direction fixtures,
   script fonts, localized formatting, console output, and accessibility.
 - Use expanded pseudo-LTR and pseudo-RTL content during site creation so future

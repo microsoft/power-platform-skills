@@ -415,13 +415,15 @@ temporarily unavailable.
   completion
 - Resolves direction from each locale's writing script, including languages
   written in multiple scripts
-- Audits the first opposite-direction locale, classifies the existing
-  components and their applicable states/viewports, and plans targeted
-  remediation without redesigning unrelated branding or behavior
+- Audits every added locale independently, classifies the existing components
+  and their applicable states/viewports, and regression-tests shared
+  direction-sensitive changes without redesigning unrelated branding or
+  behavior
 - Adds an accessible language selector with fallback and safe runtime LTR/RTL
   switching; runtime React, Vue, and Angular sites use a locale coordinator
-- Keeps an unsafe new locale unavailable for later remediation, or records
-  explicit approval for usable non-blocking limitations
+- Keeps only proven affected locales unavailable for later remediation while
+  preserving previously verified locales, or records explicit approval for
+  usable non-blocking limitations
 - Revalidates localization resources, bidirectional source rules, and text-expansion risks after
   later UI-modifying skills and again before deployment
 - Localizes only the SPA UI; it does not enable Dataverse environment languages
