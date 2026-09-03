@@ -42,6 +42,8 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   Mermaid for diagrams.
 - **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
+- **Application Insights is outside the plan gates.** Treat requests to enable telemetry for the generated app as host/runtime configuration owned by `/create-mobile-app` Step 6.8 or the `/edit-app` Application Insights fast path. Do not model Application Insights in the data model, native-capability matrix, connector list, or as a telemetry-specific screen. In particular, never propose the deprecated Azure Application Insights connector or a custom connector for telemetry ingestion. When the user explicitly names customer events, preserve them as `Customer telemetry` annotations on the corresponding normal business-screen specs; this records behavior without turning telemetry into a planning gate or data source.
+
 - **Dataverse planning forwarding is verbatim.** Pass the planning mode to every
   default-mode `data-model-architect` dispatch and revision. In `required`,
   pass both planning-snapshot/evidence absolute paths unchanged. In `connector-only`,
@@ -297,6 +299,8 @@ Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/referen
 3. **Record** — build the `## Connectors` section (table or "None" line).
 
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
+
+Application Insights telemetry is also NOT a connector. Exclude it from Gate 3 and allow planning to proceed with the actual business connectors. The orchestrator configures the C1-owned Application Insights resource through `/create-mobile-app` Step 6.8 or `/edit-app`.
 
 Store the confirmed connector list — you will pass it to `screen-planner` in Step 4.
 

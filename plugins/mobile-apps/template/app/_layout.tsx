@@ -2,6 +2,7 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { PowerAppsProvider } from '@microsoft/power-apps-native-host';
 
+import appConfig from '../app.json';
 import authConfig from '../auth.config.json';
 import tamaguiConfig from '../tamagui.config';
 // @ts-ignore - power.config.json is auto-generated at build time
@@ -28,6 +29,7 @@ try {
 export default function RootLayout() {
   return (
     <PowerAppsProvider
+      appConfig={appConfig}
       msalConfig={authConfig.msal}
       powerConfig={powerConfig}
       schemaMap={schemaMap}

@@ -1,6 +1,6 @@
 ---
 name: edit-app
-description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
+description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update Application Insights configuration, the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus
@@ -30,6 +30,9 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 - "Generate an evidence PDF and retain it on the inspection record"
 - "Add a View PDF action for an HTTPS report URL"
 - "Reorder screens — move profile out of tabs, into a modal from the home header"
+- "Enable Application Insights for this app"
+- "Change the Application Insights resource used by this app"
+- "Disable Application Insights for this app"
 
 ## When NOT to use
 
@@ -40,7 +43,7 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 
 ## Workflow
 
-0. Locate app + health/drift probe → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply app mutations → 6. Rebuild affected screens → 7. Verify + quality sweep → 8. Preview + memory-bank update + optional debug handoff
+0. Locate app + health/drift probe → 0.5 Application Insights fast path when applicable → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply app mutations → 6. Rebuild affected screens → 7. Verify + quality sweep → 8. Preview + memory-bank update + optional debug handoff
 
 ---
 
@@ -60,6 +63,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 | Native capability | Native allowlist gate, wrapper existence gate, final `tsc` |
 | Pure-JavaScript dependency | Approved exact-version dependency table, package-content gate, package validation, final `tsc` |
 | Design/component/density | Design-system gate, affected-screen style sweep, final `tsc`, preview |
+| Application Insights configuration only | Valid `app.json`, provider `appConfig` wiring, final `tsc` only if `app/_layout.tsx` changed |
 
 **When a gate fails:** capture full output once, classify by root cause, repair in a batch, rerun the same gate once. Do not make line-by-line fixes with `tsc` after every tiny edit. Continue only when the gate is clean or record a `BLOCKED:` / `DONE_WITH_CONCERNS:` entry in `memory-bank.md`.
 
@@ -104,6 +108,84 @@ Run these existing-app health checks before any mutation:
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
 
 If the app already fails `npx tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
+
+### Step 0.5 — Application Insights configuration fast path
+
+Use this fast path when the request is only to enable Application Insights, change its resource, or disable it. Application Insights is host/runtime configuration, not a connector or plan section, so do not run the planner, data-model, native, design, screen, or preview flows.
+
+If the request also adds or changes customer-defined events in app screens, configure Application Insights here first, then continue through the normal edit workflow for those source changes.
+
+Read `/create-mobile-app` Step 6.8 before continuing and reuse its Azure discovery, connection-string validation, privacy, and support-boundary rules. Do not duplicate or weaken those rules here.
+
+Determine the requested action:
+
+- `enable` — Application Insights is disabled and the user wants to configure it.
+- `change-resource` — Application Insights is enabled and the user wants a different destination.
+- `disable` — the user wants customer Application Insights turned off.
+- If the request says only "update Application Insights", ask one `AskUserQuestion` with these three choices.
+
+Inspect:
+
+- `<working_dir>/app.json`
+- `<working_dir>/app/_layout.tsx`
+- `<working_dir>/memory-bank.md`, when present
+
+If `app.json` is missing, malformed, or does not contain an `expo` object, STOP without mutation. If uncommitted work overlaps `app.json` or `app/_layout.tsx`, follow Step 0's overlap approval rule.
+
+Show one focused mutation preview:
+
+```text
+─── Application Insights edit ──────────────────────
+Action        <enable|change resource|disable>
+Configuration app.json → expo.extra.appInsightsConfig
+Provider      app/_layout.tsx → PowerAppsProvider appConfig
+Plan/screens  unchanged
+Sensitive data connection string will not be printed or stored in memory-bank.md
+```
+
+Ask: `Apply this Application Insights configuration change?` Continue only after approval.
+
+For `enable` and `change-resource`:
+
+1. Execute the resource discovery and configure branch from `/create-mobile-app` Step 6.8. Do not ask the create-flow Yes/No question again; this edit request and approval are the explicit opt-in.
+2. Let the user select a visible Application Insights resource or provide an administrator-supplied connection string exactly as Step 6.8 specifies.
+3. Preserve the existing non-empty `appInsightsConfig.appId`; otherwise use `expo.slug`, then `package.json` `name` as the fallback.
+4. Preserve the existing `environment` and `includeUserId` values when present. Default to `environment: "development"` and `includeUserId: false`; never turn on user identity collection implicitly.
+5. Set `enabled: true` and replace only the connection string.
+
+For `disable`:
+
+1. Preserve the existing `appId` and `environment` values when present.
+2. Set `enabled: false`, clear `connectionString`, and keep `includeUserId: false` unless an existing explicitly approved value must be preserved.
+3. Do not require Azure CLI sign-in or resource discovery.
+
+Create the `expo.extra.appInsightsConfig` object when it is missing. For every action, preserve all unrelated `app.json` fields. Never print the connection string, pass it to another agent, write it to `native-app-plan.md` or `memory-bank.md`, or include it in a summary.
+
+Verify that `app/_layout.tsx` imports the root `app.json` and passes the complete object to `PowerAppsProvider`:
+
+```tsx
+import appConfig from '../app.json';
+
+<PowerAppsProvider appConfig={appConfig}>
+```
+
+If either part is missing, patch only the import and `appConfig` prop; preserve all other provider props and layout behavior. Run `npx tsc --noEmit` when the layout changed.
+
+Parse `app.json` with Node after the mutation and assert:
+
+- `enable` / `change-resource`: `enabled === true` and `connectionString` is non-empty.
+- `disable`: `enabled === false` and `connectionString === ""`.
+
+For `enable` and `change-resource`, update only these non-sensitive memory-bank facts:
+
+```markdown
+- Customer telemetry: <enabled|disabled>
+- Customer telemetry app ID: <appId>
+- Customer telemetry resource ID: <selected-resource-id or admin-provided>
+- Customer telemetry destination: one C1-owned workspace-based Application Insights resource
+```
+
+For `disable`, persist only `Customer telemetry: disabled` and the app ID, and remove stale resource ID/destination lines. Never store the connection string. Print the action completed and stop; do not continue to Step 1.
 
 ### Step 1 — Discover intent + inspect existing app
 

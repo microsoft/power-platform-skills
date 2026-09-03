@@ -96,34 +96,64 @@ function withStableDispatchCwd(callback) {
   }
 }
 
-async function run(mode) {
-  let payload;
-  try {
-    payload = JSON.parse(await readStdin());
-  } catch {
-    return;
-  }
-
-  const skillName = invocationFor(mode, payload);
-  if (!skillName) return;
-
-  const invocationCwd = resolveInvocationCwd(payload);
-  withStableDispatchCwd(() => {
-    const context = telemetry.createTelemetryContext(payload);
-    if (context) {
+// Builds a hook-driven handler: reads a JSON payload from stdin, resolves the
+// tracked skill for `mode`, and emits `skill_started`.
+function skillStart(mode) {
+  return {
+    stdin: true,
+    handle({ payload }) {
+      const skillName = invocationFor(mode, payload);
+      if (!skillName) return;
+      const context = telemetry.createTelemetryContext(payload);
+      if (!context) return;
       telemetry.emitSkillStarted(
         context,
         { skillName, source: mode },
-        { cwd: invocationCwd },
+        { cwd: resolveInvocationCwd(payload) },
       );
+    },
+  };
+}
+
+// Registry of telemetry modes. Add a new command-driven event by adding one
+// entry with `stdin: false` and a `handle`; add a new hook mode with
+// `skillStart('<mode>')`. Shared plumbing (stdin read, cwd stabilization,
+// fail-open) stays centralized in `run`, so handlers only source input and emit.
+const HANDLERS = {
+  prompt: skillStart('prompt'),
+  pretool: skillStart('pretool'),
+  'app-insights-selection': {
+    stdin: false,
+    handle({ args: [selection, invocationCwd] }) {
+      const context = telemetry.createTelemetryContext({});
+      if (!context) return;
+      telemetry.emitAppInsightsSelection(context, selection, { cwd: invocationCwd });
+    },
+  },
+};
+
+async function run(mode, args = []) {
+  const handler = HANDLERS[mode];
+  if (!handler) return;
+
+  let payload;
+  if (handler.stdin) {
+    try {
+      payload = JSON.parse(await readStdin());
+    } catch {
+      return;
     }
-  });
+  }
+
+  withStableDispatchCwd(() => handler.handle({ args, payload }));
 }
 
-function start(mode) {
-  run(mode).catch(() => {}).finally(() => process.exit(0));
+function start(mode, args = []) {
+  run(mode, args).catch(() => {}).finally(() => process.exit(0));
 }
 
-if (require.main === module) start(process.argv[2]);
+if (require.main === module) {
+  start(process.argv[2], process.argv.slice(3));
+}
 
 module.exports = { start, withStableDispatchCwd };
