@@ -50037,6 +50037,7 @@ function applyFlowEdits(definition, operations) {
 }
 
 // packages/core/dist/connection-refs.js
+init_logger();
 function extractConnectorKeysFromDefinition(definition) {
   const keys = /* @__PURE__ */ new Set();
   function scanActions(actions) {
@@ -50071,7 +50072,7 @@ function extractConnectorKeysFromDefinition(definition) {
   }
   return keys;
 }
-async function enrichRefsWithLogicalNames(client, envId, refs, log) {
+async function enrichRefsWithLogicalNames(client, envId, refs, log = (message) => logger.warn(message)) {
   const needsEnrichment = Object.values(refs).some((r) => !r.connectionReferenceLogicalName);
   if (!needsEnrichment)
     return refs;
@@ -66031,9 +66032,12 @@ async function buildUpdateProperties(ctx, envId, flow, input) {
   let refsFromFlow = false;
   let effectiveRefs = input.connectionRefs;
   if (input.definition && !effectiveRefs) {
-    const current = await ctx.getClient().getFlow(envId, flow);
-    effectiveRefs = current.properties?.connectionReferences;
-    refsFromFlow = !!effectiveRefs;
+    try {
+      const current = await ctx.getClient().getFlow(envId, flow);
+      effectiveRefs = current.properties?.connectionReferences;
+      refsFromFlow = !!effectiveRefs;
+    } catch {
+    }
   }
   let enrichedRefs = effectiveRefs;
   if (enrichedRefs && !refsFromFlow) {
