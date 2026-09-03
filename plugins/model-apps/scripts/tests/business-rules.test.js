@@ -64,26 +64,31 @@ test('a rule must name a known entity and its own columns', () => {
     .some((e) => /not a column on new_ticket/.test(e)));
 });
 
-test('operators and actions are constrained to the slice the SDK can compile', () => {
-  // Outside the slice the SDK throws mid-push; the point of validating here is to name the field.
-  assert.ok(errorsFor([{ ...RULE, conditions: [{ field: 'new_status', operator: 'BeginsWith', value: 'x' }] }])
+test('operators and actions are constrained to the slice the SDK supports', () => {
+  // Outside the slice the SDK does something WORSE than throwing: an unknown operator resolves to
+  // Equals, so the point of validating here is to stop a wrong rule rather than to name a field.
+  assert.ok(errorsFor([{ ...RULE, conditions: [{ field: 'new_status', operator: 'NotARealOperator', value: 'x' }] }])
     .some((e) => /condition operator must be one of/.test(e)));
+  // `ShowErrorMessage` is modelled by the SDK but deliberately not exposed yet — it needs mapping in
+  // businessRuleDef that cannot be live-verified on an environment without the bound member.
   assert.ok(errorsFor([{ ...RULE, actions: [{ type: 'ShowErrorMessage', field: 'new_notes', message: 'x' }] }])
     .some((e) => /action type must be one of/.test(e)));
-  for (const operator of ['Equals', 'DoesNotEqual']) {
+  for (const operator of ['Equals', 'DoesNotEqual', 'BeginsWith', 'IsGreaterThan']) {
     assert.deepStrictEqual(errorsFor([{ ...RULE, conditions: [{ field: 'new_status', operator, value: '1' }] }]), []);
   }
 });
 
-test('presence operators are rejected — they compile to XAML the platform 500s on', () => {
-  // LIVE-MEASURED: `ContainsData` / `DoesNotContainData` answer "Error generating UiData" (HTTP 500)
-  // on every column type and in both directions, while Equals/DoesNotEqual succeed in the same run.
-  // The error must name the platform failure, not pretend the operator is unrecognised — an author
-  // reaching for ContainsData has written something reasonable that we simply cannot deploy.
+test('presence operators are ACCEPTED now that the compiler emits a null parameter list', () => {
+  // These were blocked while the compiler emitted an EMPTY parameter array for a valueless operator
+  // (`[New Object() { }]`) where every server-authored rule writes `<x:Null x:Key="Parameters" />`.
+  // An empty Object[] is not null, and the UiData generator answered HTTP 500 on it (#481).
+  //
+  // Fixed upstream and re-verified LIVE on a real org with the vendored bundle: all four operators
+  // push successfully in one run, where previously the two presence operators failed 500 while
+  // `Equals` succeeded alongside them.
   for (const operator of ['ContainsData', 'DoesNotContainData']) {
     const errs = errorsFor([{ ...RULE, conditions: [{ field: 'new_notes', operator }] }]);
-    assert.ok(errs.some((e) => /is not usable/.test(e) && /Error generating UiData/.test(e) && /issues\/481/.test(e)),
-      `${operator} must be rejected with the platform reason: ${JSON.stringify(errs)}`);
+    assert.deepStrictEqual(errs, [], `${operator} must now validate: ${JSON.stringify(errs)}`);
   }
 });
 
@@ -154,7 +159,7 @@ test('a presence operator still MAPS correctly (the mapper is fine; the platform
 
 // --- 3. real bundle ---------------------------------------------------------------------------
 
-test('REAL BUNDLE: the mapped rule compiles to XAML naming the authored columns', async () => {
+test('REAL BUNDLE: the mapped rule reaches the wire as WfomJson naming the authored columns', async () => {
   const { createMakerSdk } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-spec-'));
   dirs.push(dir);
@@ -165,8 +170,6 @@ test('REAL BUNDLE: the mapped rule compiles to XAML naming the authored columns'
       get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
       post: async (url, body) => {
         calls.push({ url, body });
-        // Force the classic path so the compiled XAML is observable on the wire.
-        if (/WithWfomJson/i.test(url)) return { status: 400, headers: {}, body: { error: { code: '0x80040216' } } };
         return { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} };
       },
       patch: async () => ({ status: 204, headers: {}, body: {} }),
@@ -182,30 +185,143 @@ test('REAL BUNDLE: the mapped rule compiles to XAML naming the authored columns'
   const pushed = await sdk.pushArtifact('businessRule', art.id);
   assert.strictEqual(pushed.saved, true);
 
-  const classic = calls.find((c) => /\/workflows$/.test(String(c.url)));
-  assert.ok(classic, 'the classic row is written; urls: ' + JSON.stringify(calls.map((c) => c.url)));
-  assert.strictEqual(classic.body.primaryentity, 'new_ticket');
-  assert.strictEqual(classic.body.category, 2);
+  const bound = calls.find((c) => /CreateProcessWithWfomJson/i.test(String(c.url)));
+  assert.ok(bound, 'the bound member is the ONLY write path; urls: ' + JSON.stringify(calls.map((c) => c.url)));
+  // There is no longer a classic `workflows` row to fall back to — the SDK deleted that compiler.
+  assert.strictEqual(calls.some((c) => /\/workflows$/.test(String(c.url))), false,
+    'no classic XAML row is written any more');
+  assert.deepStrictEqual(Object.keys(bound.body).sort(), ['Entity', 'WfomJson']);
+
   // The assertion that matters: a well-formed but EMPTY rule would satisfy everything above.
-  assert.match(classic.body.xaml, /new_status/, 'the condition column reaches the compiled XAML');
-  assert.match(classic.body.xaml, /new_notes/, 'the action column reaches the compiled XAML');
+  const wfom = String(bound.body.WfomJson);
+  assert.match(wfom, /new_status/, 'the condition column reaches the workflow object model');
+  assert.match(wfom, /new_notes/, 'the action column reaches the workflow object model');
+  assert.match(wfom, /new_ticket/, 'the rule is bound to the authored table');
+});
+
+test('REAL BUNDLE: a valueless operator emits an EMPTY operand list and the IsNull/NotNull opcode', async () => {
+  // A presence operator has nothing to compare against, so the SDK must emit NO right-hand operand
+  // and the dedicated opcode — not `Equals` against an empty string, which is a different question
+  // and would silently answer false for a populated column.
+  //
+  // Measured opcodes (WorkflowConditionOperator in the bundle): NotNull "1", IsNull "0".
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-null-'));
+  dirs.push(dir);
+
+  for (const [operator, expectedOpcode] of [['ContainsData', '1'], ['DoesNotContainData', '0']]) {
+    const calls = [];
+    const sdk = createMakerSdk({
+      workspacePath: fs.mkdtempSync(path.join(dir, 'w')), instanceUrl: 'https://contoso.crm.dynamics.com',
+      httpClient: {
+        get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
+        post: async (url, body) => {
+          calls.push({ url, body });
+          return { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} };
+        },
+        patch: async () => ({ status: 204, headers: {}, body: {} }),
+        put: async () => ({ status: 204, headers: {}, body: {} }),
+        delete: async () => ({ status: 204, headers: {}, body: {} }),
+      },
+    });
+    sdk.initWorkspace();
+
+    const def = businessRuleDef({
+      name: 'Presence Rule', entity: 'new_ticket',
+      conditions: [{ field: 'new_notes', operator }],
+      actions: [{ type: 'SetVisibility', field: 'new_owner', visible: false }],
+    });
+    const art = sdk.createArtifact('businessRule', def);
+    await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+    await sdk.pushArtifact('businessRule', art.id);
+
+    const bound = calls.find((c) => /CreateProcessWithWfomJson/i.test(String(c.url)));
+    assert.ok(bound, `${operator}: the bound member must be called`);
+    const wfom = JSON.parse(bound.body.WfomJson);
+    const expr = wfom.steps.list[0].steps.list[0].conditionExpression;
+    assert.strictEqual(expr.conditionOperatoroperator, expectedOpcode,
+      `${operator} must emit opcode ${expectedOpcode}, got ${expr.conditionOperatoroperator}`);
+    assert.deepStrictEqual(expr.right, [], `${operator} must carry NO right-hand operand`);
+    assert.strictEqual(expr.left.attributeName, 'new_notes');
+  }
 });
 
 // --- peer-review findings: verified and fixed ---------------------------------------------------
 
-test('dataType mirrors the compiler literal-type map exactly (no DateTime)', () => {
-  // The bundle's literal table is the authority. `DateTime` used to be accepted here and does NOT
-  // exist there, so such a spec validated and then threw from INSIDE the push — the worst place,
-  // because the bound member may already have committed a workflow row (#482), leaving an orphan
-  // behind a "failed" build.
-  const bundle = require('node:fs').readFileSync(BUNDLE, 'utf8');
-  const i = bundle.indexOf('Picklist:{propertyType:"OptionSetValue"');
-  assert.ok(i > 0, 'the literal-type map must be present in the vendored bundle');
-  const seg = bundle.slice(i, i + 1200);
-  const sdkTypes = [...seg.matchAll(/(\w+):\{propertyType/g)].map((m) => m[1]);
-  assert.ok(!sdkTypes.includes('DateTime'), 'guard assumes the compiler has no DateTime literal');
+test('REAL BUNDLE: dataType does NOT reach the wire — the SDK types every literal as String', async () => {
+  // `dataType` used to be pinned against the XAML compiler's literal-type map. This uptake DELETED
+  // that compiler, and the JSON path that replaced it does not consult the type at all: measured
+  // across all 13 tokens the spec accepts (plus a made-up one), on BOTH the condition path and the
+  // SetFieldValue action path, the SDK emits WorkflowAttributeType String ("14") every time.
+  //
+  //   `let r = valueType==='Lookup' ? ... : valueType==='Clear' ? (valueWorkflowType ?? String)
+  //                                      : WorkflowAttributeType.String`
+  //
+  // So the field is currently DECORATIVE. It is still accepted and still validated — narrowly, so a
+  // typo is caught and so the surface stays forward-compatible if the SDK starts honouring it — but
+  // nothing downstream may claim it changes the deployed rule. This test exists to make that claim
+  // impossible to make by accident: if the SDK begins emitting a real type, this fails and whoever
+  // sees it must re-read the surface rather than discover the change in production.
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-dt-'));
+  dirs.push(dir);
+
+  const STRING_TOKEN = '14'; // WorkflowAttributeType.String, read from the bundle's own enum.
   const { BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
-  assert.deepStrictEqual([...BUSINESS_RULE_DATA_TYPES].sort(), [...sdkTypes].sort());
+  // Every token the spec accepts, plus one that is not a type at all — if the SDK ever starts
+  // consulting the field, a made-up value is the case most likely to behave differently.
+  const TOKENS = [...BUSINESS_RULE_DATA_TYPES, 'NotAWorkflowType'];
+
+  const push = async (def) => {
+    const calls = [];
+    const sdk = createMakerSdk({
+      workspacePath: fs.mkdtempSync(path.join(dir, 'w')), instanceUrl: 'https://contoso.crm.dynamics.com',
+      httpClient: {
+        get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
+        post: async (url, body) => {
+          calls.push({ url, body });
+          return { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} };
+        },
+        patch: async () => ({ status: 204, headers: {}, body: {} }),
+        put: async () => ({ status: 204, headers: {}, body: {} }),
+        delete: async () => ({ status: 204, headers: {}, body: {} }),
+      },
+    });
+    sdk.initWorkspace();
+    const art = sdk.createArtifact('businessRule', def);
+    await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+    await sdk.pushArtifact('businessRule', art.id);
+    return JSON.parse(calls.find((c) => /CreateProcessWithWfomJson/i.test(String(c.url))).body.WfomJson);
+  };
+
+  for (const dataType of TOKENS) {
+    // 1. the CONDITION path
+    const condWfom = await push(businessRuleDef({
+      ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1', dataType }],
+    }));
+    const expr = condWfom.steps.list[0].steps.list[0].conditionExpression;
+    assert.strictEqual(expr.type, STRING_TOKEN, `condition dataType '${dataType}' unexpectedly reached the wire as ${expr.type}`);
+    assert.strictEqual(expr.right[0].type, STRING_TOKEN, `condition dataType '${dataType}' unexpectedly typed the literal as ${expr.right[0].type}`);
+
+    // 2. the SetFieldValue ACTION path, which reads a DIFFERENT field on a different code path — the
+    //    SDK does pass `valueWorkflowType` into the action serializer, so this is the one that could
+    //    plausibly differ, and asserting only the condition path would not have shown it.
+    const actWfom = await push(businessRuleDef({
+      ...RULE,
+      conditions: [{ field: 'new_notes', operator: 'ContainsData' }],
+      actions: [{ type: 'SetFieldValue', field: 'new_owner', value: 'x', dataType }],
+    }));
+    const types = [...JSON.stringify(actWfom.steps.list[0].steps.list[0].steps.list[0]).matchAll(/"type":"(\d+)"/g)].map((m) => m[1]);
+    assert.ok(types.length > 0, `action dataType '${dataType}': no type token found on the wire`);
+    assert.deepStrictEqual([...new Set(types)], [STRING_TOKEN],
+      `action dataType '${dataType}' unexpectedly reached the wire as ${JSON.stringify([...new Set(types)])}`);
+  }
+
+  // The spec-level list stays a CLOSED set even though the SDK ignores it, so a typo is still a
+  // spec-gate error rather than a silently-accepted no-op.
+  assert.ok(Array.isArray(BUSINESS_RULE_DATA_TYPES) && BUSINESS_RULE_DATA_TYPES.length > 0);
+  assert.ok(!BUSINESS_RULE_DATA_TYPES.includes('DateTime'),
+    'DateTime stays out: it was never exercised, and the SDK ignoring the field today is not a reason to promise a type we have not tested');
 });
 
 test('a DateTime dataType is rejected at the spec gate, not mid-build', () => {
@@ -374,13 +490,13 @@ test('businessRuleFilter selects the definition only', () => {
   assert.match(f, /name eq 'O''Brien rule'/, "a quote in the name must be OData-escaped, not left to break the filter");
 });
 
-test('every business-rule query in build, verify and teardown filters on type', () => {
-  // A guard on the SOURCE, because the three call sites are in different modules and it is the
-  // omission — not a wrong value — that caused the defect. Any new query that forgets the shared
-  // helper fails here.
+test('every business-rule query constrains workflow type intentionally', () => {
+  // A guard on the SOURCE, because the call sites are in different modules and it is the omission
+  // — not a wrong value — that caused the defect. Build/verify must select definitions only; teardown
+  // is the deliberate exception after #493, because it owns the activated copy before table deletion.
   const fs = require('node:fs');
   const path = require('node:path');
-  for (const file of ['sdk-build.js', 'verify-spec.js', 'sdk-teardown.js']) {
+  for (const file of ['sdk-build.js', 'verify-spec.js']) {
     const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', file), 'utf8');
     const raw = src.match(/category eq 2(?! and type eq 1)/g) || [];
     // The only permitted mention of `category eq 2` without `type eq 1` is inside businessRuleFilter
@@ -388,6 +504,8 @@ test('every business-rule query in build, verify and teardown filters on type', 
     // matching nothing.
     assert.deepStrictEqual(raw, [], `${file} has a business-rule query that does not constrain type: ${raw.join(' | ')}`);
   }
+  const teardown = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'sdk-teardown.js'), 'utf8');
+  assert.match(teardown, /type eq 1 or type eq 2/, 'teardown must include the activated-copy row it is responsible for deleting');
 });
 
 test('a rule with an activated copy present is NOT reported as duplicated', async () => {
@@ -411,4 +529,368 @@ test('a rule with an activated copy present is NOT reported as duplicated', asyn
   const r = await verifySpec(spec, read);
   const c = r.checks.find((x) => x.kind === 'business-rule');
   assert.strictEqual(c.present, true, `an active rule with its activated copy must PASS; detail: ${c.detail}`);
+});
+
+// --- #488 follow-ups -----------------------------------------------------------------------------
+
+test('a multi-condition rule is now ACCEPTED — the single-clause limit was the deleted compiler', () => {
+  // This gate existed because `businessRuleXaml.ts` threw
+  // "this increment supports a single clause (got N); multi-clause AND/OR is a follow-up", and
+  // `bodyXml` only ever read clauses[0]. That compiler has been deleted upstream: the JSON path
+  // folds N clauses with LogicalAnd, MEASURED through the real bundle (see the wire test below).
+  //
+  // Kept as a test rather than deleted, because re-introducing the gate would silently reject specs
+  // that now deploy correctly.
+  const errs = errorsFor([{
+    ...RULE,
+    conditions: [
+      { field: 'new_status', operator: 'Equals', value: 'Closed', dataType: 'Picklist' },
+      { field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' },
+    ],
+  }]);
+  assert.deepStrictEqual(errs, [], `a two-clause rule must validate, got ${JSON.stringify(errs)}`);
+});
+
+test('one condition still validates', () => {
+  assert.deepStrictEqual(errorsFor([RULE]), []);
+});
+
+test('an object-valued businessRules is a validation error, not a TypeError', () => {
+  // spec-shape normalises collections so a malformed spec fails at the gate with a message naming
+  // the field. `businessRules`/`conditions`/`actions` were missing from that map, so an object where
+  // an array belongs reached a raw `for...of` and threw.
+  const { validateAppSpec: validate } = require('../lib/app-spec.js');
+  const spec = specWith([]);
+  spec.businessRules = { name: 'not an array' };
+  const res = validate(spec); // must not throw
+  assert.ok(Array.isArray(res.errors));
+  assert.ok(res.errors.length > 0, 'a malformed businessRules must be reported');
+});
+
+test('object-valued conditions/actions are reported, not thrown', () => {
+  const { validateAppSpec: validate } = require('../lib/app-spec.js');
+  for (const field of ['conditions', 'actions']) {
+    const spec = specWith([{ ...RULE, [field]: { bad: true } }]);
+    const res = validate(spec); // must not throw
+    assert.ok(Array.isArray(res.errors) && res.errors.length > 0, `${field} must be reported`);
+  }
+});
+
+// --- an environment that cannot host business rules at all --------------------------------------
+//
+// The vendored SDK writes rules ONLY through the bound `CreateProcessWithWfomJson` member; the
+// client-side XAML fallback it used to compile was deleted upstream because it covered 4 of the 7
+// action types and one clause, so it silently narrowed a rule into something that did not say what
+// the author wrote.
+//
+// The consequence is environment-visible. MEASURED live on a real environment: `$metadata` does not
+// declare the member and every POST to it answers 404, and the SDK's own message reports 18 of 20
+// environments in the same state. So this is the COMMON case, not an edge case.
+//
+// The build degrades the way `app.newLook` already does for its tenant-gated setting: skip, say so
+// once and specifically, and let the rest of the app build. Halting would abandon a run that has
+// already created everything else.
+function provisionThatCannotAuthorRules(rows = []) {
+  const calls = [];
+  const err = Object.assign(new Error(
+    "This environment does not expose 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson', so business rules cannot be authored here."),
+  { code: 'BUSINESS_RULE_API_UNAVAILABLE' });
+  return {
+    calls,
+    provision: {
+      queryRecords: async (entity, opts) => {
+        if (entity === 'workflow') { calls.push(['queryRecords', entity, opts]); return rows; }
+        return entity === 'solution' ? [] : [{ publisherid: 'pub-1' }];
+      },
+      updateRecord: async (e, id, patch) => { calls.push(['updateRecord', e, id, patch]); },
+      deleteRecord: async (e, id) => { calls.push(['deleteRecord', e, id]); },
+      createArtifact: () => ({ id: 'br-new' }),
+      updateElement: async () => undefined,
+      pushArtifact: async () => { calls.push(['pushArtifact']); throw err; },
+      addSolutionComponent: async () => { calls.push(['addSolutionComponent']); },
+    },
+  };
+}
+
+test('an environment without the bound member SKIPS the rule instead of halting the build', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionThatCannotAuthorRules();
+  const warnings = [];
+  const events = [];
+
+  // The whole point: this resolves. Before the fix it rejected with a BuildHalt, and every phase
+  // after business-rules never ran.
+  const res = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true,
+    phases: ['business-rules'], warn: (m) => warnings.push(m), emit: (e) => events.push(e),
+  });
+  assert.strictEqual(res.ok, true, 'the build must complete');
+
+  // Nothing was written in the rule's place.
+  assert.strictEqual(calls.some((c) => c[0] === 'addSolutionComponent'), false,
+    'a rule that was never created must not be added to the solution');
+
+  // The operator is told exactly what happened and what to do, ONCE.
+  assert.strictEqual(warnings.length, 1, `expected exactly one warning, got ${JSON.stringify(warnings)}`);
+  assert.match(warnings[0], /business rules were NOT created/);
+  assert.match(warnings[0], /CreateProcessWithWfomJson/, 'name the member so it can be searched for');
+  assert.match(warnings[0], /Everything else in the app was built normally/);
+
+  // The skip is visible in the event stream, and labelled for what it IS — not "(exists)".
+  const skip = events.find((e) => e.phase === 'business-rules' && e.status === 'skip');
+  assert.ok(skip, `expected a skip event; got ${JSON.stringify(events.map((e) => [e.phase, e.status, e.label]))}`);
+  assert.match(skip.label, /unsupported in this environment/);
+  assert.doesNotMatch(skip.label, /exists/, 'labelling this "(exists)" states the opposite of the truth');
+
+  // And it is recorded on the result, so --verify and the summary can report it rather than
+  // implying the rules are there. Keyed off the spec so a rename of the fixture cannot make this
+  // assertion vacuous.
+  const only = ruleOnlySpec().businessRules[0];
+  assert.deepStrictEqual(res.skipped.businessRules, [`${only.entity.toLowerCase()}|${only.name}`]);
+  assert.strictEqual(Object.keys(res.created.businessRules).length, 0);
+});
+
+test('the unsupported-environment warning is emitted ONCE, not once per rule', async () => {
+  // On such an environment EVERY rule skips, so a per-rule paragraph would bury the rest of the
+  // build output under copies of the same text.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionThatCannotAuthorRules();
+  const warnings = [];
+  const spec = ruleOnlySpec();
+  spec.businessRules = [
+    { ...RULE, name: 'Rule A' },
+    { ...RULE, name: 'Rule B' },
+    { ...RULE, name: 'Rule C' },
+  ];
+  const res = await runBuild(spec, {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m),
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(warnings.length, 1, `expected one warning for three rules, got ${warnings.length}`);
+  assert.strictEqual(res.skipped.businessRules.length, 3, 'but every skipped rule is still recorded');
+});
+
+test('any OTHER business-rule failure still HALTS — the skip is not a blanket catch', async () => {
+  // The dangerous over-correction: swallowing every push failure would turn a real breakage (403,
+  // 429, a malformed rule) into a silently ruleless app that reports success.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  for (const code of ['CONNECTION_ERROR', 'VALIDATION_ERROR', undefined]) {
+    const { provision } = provisionThatCannotAuthorRules();
+    provision.pushArtifact = async () => { throw Object.assign(new Error('boom'), code ? { code } : {}); };
+    await assert.rejects(
+      () => runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {} }),
+      `code ${String(code)} must still halt the build`);
+  }
+});
+
+// --- the operator table, and why it must mirror the SDK exactly ---------------------------------
+
+test('REAL BUNDLE: every spec operator EXISTS in the SDK table, and none silently becomes Equals', () => {
+  // The sharp edge. The serializer resolves an operator with
+  //   `Uf[operator] ?? WorkflowConditionOperator.Equal`
+  // so an operator the SDK does not know is not rejected — it becomes EQUALS. A spec written with
+  // `GreaterThan` (which is NOT the table's spelling; it is `IsGreaterThan`) would deploy, activate,
+  // and quietly test equality instead.
+  //
+  // Pinned against the bundle's own table so a re-vendor that renames or drops an operator fails
+  // here rather than in production.
+  const bundle = fs.readFileSync(BUNDLE, 'utf8');
+  const m = bundle.match(/\b[A-Za-z_$][\w$]*=\{Equals:[^}]*\}/);
+  assert.ok(m, 'the operator table must be present in the vendored bundle');
+  const sdkOperators = [...m[0].matchAll(/(\w+):z\.WorkflowConditionOperator\./g)].map((x) => x[1]);
+  assert.ok(sdkOperators.length >= 16, `expected the full table, got ${sdkOperators.length}: ${sdkOperators}`);
+
+  const { BUSINESS_RULE_OPERATORS } = require('../lib/app-spec.js');
+  const notInSdk = BUSINESS_RULE_OPERATORS.filter((o) => !sdkOperators.includes(o));
+  assert.deepStrictEqual(notInSdk, [],
+    `these spec operators are NOT in the SDK table, so they would silently deploy as Equals: ${notInSdk}`);
+
+  // And the reverse, so an operator the SDK gains is noticed rather than quietly unavailable.
+  const notInSpec = sdkOperators.filter((o) => !BUSINESS_RULE_OPERATORS.includes(o));
+  assert.deepStrictEqual(notInSpec, [],
+    `the SDK supports these operators the spec does not expose: ${notInSpec}`);
+});
+
+test('a near-miss operator spelling is rejected AND corrected', () => {
+  // `GreaterThan` is the natural thing to write and is the exact input that would deploy as Equals.
+  const errs = errorsFor([{ ...RULE, conditions: [{ field: 'new_status', operator: 'GreaterThan', value: '1' }] }]);
+  assert.ok(errs.some((e) => /GreaterThan/.test(e)), `expected rejection: ${JSON.stringify(errs)}`);
+  assert.ok(errs.some((e) => /did you mean 'IsGreaterThan'/.test(e)),
+    `the message must name the legal spelling; got ${JSON.stringify(errs)}`);
+});
+
+test('the newly-unlocked operators all validate', () => {
+  // These were blocked only because the deleted XAML compiler could not express them.
+  for (const operator of ['IsGreaterThan', 'IsLessThanEqualTo', 'Contains', 'BeginsWith', 'DoesNotEndWith', 'On']) {
+    const errs = errorsFor([{ ...RULE, conditions: [{ field: 'new_status', operator, value: '1' }] }]);
+    assert.deepStrictEqual(errs, [], `${operator} must validate: ${JSON.stringify(errs)}`);
+  }
+});
+
+// --- multi-clause AND ---------------------------------------------------------------------------
+
+test('a multi-condition rule now validates', () => {
+  // Previously rejected with "only ONE condition is supported", which was never a platform limit —
+  // the deleted XAML compiler read `clauses[0]` and ignored the rest.
+  const errs = errorsFor([{
+    ...RULE,
+    conditions: [
+      { field: 'new_status', operator: 'Equals', value: '1' },
+      { field: 'new_owner', operator: 'ContainsData' },
+    ],
+  }]);
+  assert.deepStrictEqual(errs, [], JSON.stringify(errs));
+});
+
+test('REAL BUNDLE: BOTH conditions of a multi-clause rule reach the wire, joined by LogicalAnd', async () => {
+  // The failure that matters is silent: a serializer that kept only the first clause would deploy a
+  // rule that fires under half the intended circumstances, and every structural check would pass.
+  //
+  // WorkflowConditionOperator.LogicalAnd is "2" in the bundle's own enum.
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-multi-'));
+  dirs.push(dir);
+  const calls = [];
+  const sdk = createMakerSdk({
+    workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: {
+      get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
+      post: async (url, body) => { calls.push({ url, body }); return { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} }; },
+      patch: async () => ({ status: 204, headers: {}, body: {} }),
+      put: async () => ({ status: 204, headers: {}, body: {} }),
+      delete: async () => ({ status: 204, headers: {}, body: {} }),
+    },
+  });
+  sdk.initWorkspace();
+
+  const def = businessRuleDef({
+    ...RULE,
+    conditions: [
+      { field: 'new_status', operator: 'Equals', value: '1' },
+      { field: 'new_owner', operator: 'ContainsData' },
+    ],
+  });
+  assert.strictEqual(def.rootCondition.clauses.length, 2, 'the mapper must carry both clauses');
+
+  const art = sdk.createArtifact('businessRule', def);
+  await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+  await sdk.pushArtifact('businessRule', art.id);
+
+  const bound = calls.find((c) => /CreateProcessWithWfomJson/i.test(String(c.url)));
+  const expr = JSON.parse(bound.body.WfomJson).steps.list[0].steps.list[0].conditionExpression;
+  assert.strictEqual(expr.conditionOperatoroperator, '2', 'two clauses must be folded with LogicalAnd');
+
+  // Both operands, and both authored columns, must survive the fold.
+  const flat = JSON.stringify(expr);
+  assert.match(flat, /new_status/, 'the FIRST condition column must reach the wire');
+  assert.match(flat, /new_owner/, 'the SECOND condition column must reach the wire — dropping it is the silent failure');
+});
+
+// --- verify must not punish an environment that cannot host business rules -----------------------
+//
+// Found in review, and the point is not tidiness. `verify.ok` gates THREE things: the process exit
+// code, whether `.last-applied.json` is written, and whether the `--changed-only` snapshot is
+// persisted. A spec with implemented pages makes verify MANDATORY. So on the 18-of-20 environments
+// that cannot host business rules, a permanently-false `ok` would permanently withhold the
+// changed-only baseline and force a full build on every subsequent run, forever — while the build
+// itself reported success. Those gates are built for TRANSIENT failures; this one never clears.
+
+test('verify SKIPS a rule the build reported as unsupported on this environment', async () => {
+  const r = await verifySpec(ruleSpec(), baseReader([]), {
+    environmentSkipped: { businessRules: ['new_ticket|Lock when closed'] },
+  });
+  // Asserted on the business-rule outcome specifically rather than on `r.ok`: this fixture's reader
+  // also reports an unrelated missing subarea, so `ok` would be false either way and an `ok` check
+  // would pass for the wrong reason.
+  assert.strictEqual(ruleCheck(r), undefined,
+    'the rule must not be counted as a check at all — passing it would claim it exists');
+  assert.strictEqual(r.missing.some((m) => m.kind === 'business-rule'), false,
+    'and it must not count toward `missing`, which is what drives verify.ok');
+  assert.deepStrictEqual(r.environmentSkipped, ['business-rule:new_ticket.Lock when closed'],
+    'it is REPORTED, so a green verify never silently means "everything the spec asked for is deployed"');
+});
+
+test('verify still FAILS a missing rule when the build did NOT skip it', async () => {
+  // The dangerous over-correction: treating every absent rule as environment-gated would turn a real
+  // deployment failure into a pass.
+  const r = await verifySpec(ruleSpec(), baseReader([]), { environmentSkipped: { businessRules: [] } });
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+  assert.strictEqual(r.environmentSkipped, undefined, 'absent when nothing was skipped, so existing callers are unaffected');
+});
+
+test('verify run STANDALONE (no build result) checks every rule', async () => {
+  // `verify-model-app.js` has no build result to consult. Absent one, "not deployed" is the honest
+  // verdict — the alternative would be a verify that quietly stops checking business rules.
+  const r = await verifySpec(ruleSpec(), baseReader([]));
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+});
+
+test('the skip key matches the shape the BUILD records', async () => {
+  // The two sides must agree on `entity|name` or the wiring is silently inert: verify would keep
+  // failing and nobody would notice the option is being ignored.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionThatCannotAuthorRules();
+  const built = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
+  });
+  const r = await verifySpec(ruleSpec(), baseReader([]), { environmentSkipped: built.skipped });
+  assert.strictEqual(ruleCheck(r), undefined,
+    `the build recorded ${JSON.stringify(built.skipped.businessRules)}, which verify must recognise`);
+});
+
+test('a PHASE-LIMITED verify does not demand a rule whose phase never ran', async () => {
+  // The `--changed-only` FAST path applies `phases: ['pages']`. The business-rules loop is gated on
+  // `has('business-rules')`, so it never executes and `skipped.businessRules` comes back EMPTY —
+  // which made the skip list useless on exactly the runs that need it most.
+  //
+  // The consequence was not "verify is noisy". A fast apply is only chosen when every change is a
+  // page, which requires implemented .tsx pages, which makes verify MANDATORY. So on a gated
+  // environment every fast apply failed verify, refused to re-bless the snapshot, and exited
+  // non-zero — an alternating full / failing-fast cycle forever, with the log line blaming PAGES for
+  // a business-rule gate. The page upload itself had succeeded.
+  const r = await verifySpec(ruleSpec(), baseReader([]), { phases: ['pages'] });
+  assert.strictEqual(ruleCheck(r), undefined, 'a phase that did not run must not be demanded');
+  assert.strictEqual(r.missing.some((m) => m.kind === 'business-rule'), false);
+  assert.deepStrictEqual(r.phaseSkipped, ['business-rule:new_ticket.Lock when closed'],
+    'still reported, so it is visible rather than silently dropped');
+});
+
+test('the two skip REASONS are reported separately — they warrant opposite messages', async () => {
+  // Merging them was wrong in a way the live run could not surface, because it happened to read
+  // correctly on a gated environment. On a HEALTHY one, every `--changed-only` fast apply runs
+  // `phases: ['pages']`, so every business rule would be reported as "not applicable on this
+  // environment" — telling an operator whose environment works perfectly well that it does not.
+  // Wrong 100% of the time on the normal fast-apply path.
+  const gated = await verifySpec(ruleSpec(), baseReader([]), {
+    environmentSkipped: { businessRules: ['new_ticket|Lock when closed'] },
+  });
+  assert.deepStrictEqual(gated.environmentSkipped, ['business-rule:new_ticket.Lock when closed']);
+  assert.strictEqual(gated.phaseSkipped, undefined, 'a gated environment is NOT a phase that did not run');
+
+  const phased = await verifySpec(ruleSpec(), baseReader([]), { phases: ['pages'] });
+  assert.deepStrictEqual(phased.phaseSkipped, ['business-rule:new_ticket.Lock when closed']);
+  assert.strictEqual(phased.environmentSkipped, undefined, 'a skipped phase says NOTHING about the environment');
+});
+
+test('a FULL-phase verify still demands the rule', async () => {
+  // The over-correction to avoid: treating every phase list as permission to stop checking. A full
+  // build lists every phase, so nothing is relaxed there.
+  const { PHASES } = require('../lib/stages.js');
+  const r = await verifySpec(ruleSpec(), baseReader([]), { phases: PHASES });
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+});
+
+test('verify with NO phases supplied checks everything — standalone must not be relaxed', async () => {
+  const r = await verifySpec(ruleSpec(), baseReader([]));
+  assert.strictEqual(ruleCheck(r).present, false);
+});
+
+test('a phase list that INCLUDES business-rules still demands the rule', async () => {
+  // The gate is "did this phase run", not "was a phase list supplied".
+  const r = await verifySpec(ruleSpec(), baseReader([]), { phases: ['business-rules'] });
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
 });

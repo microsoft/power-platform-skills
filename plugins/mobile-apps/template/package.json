@@ -10,15 +10,15 @@
     "type-check": "tsc --noEmit",
     "build:android": "wrap android",
     "build:ios": "wrap ios",
-    "bundle:android": "js-bundle android",
-    "bundle:ios": "js-bundle ios",
+    "bundle:android": "build-codegen-package android",
+    "bundle:ios": "build-codegen-package ios",
     "bundle:web": "js-bundle web"
   },
   "dependencies": {
     "@expo/metro-runtime": "55.0.11",
     "@expo/vector-icons": "15.1.1",
-    "@microsoft/power-apps": "1.2.7",
-    "@microsoft/power-apps-native-host": "^0.3.0",
+    "@microsoft/power-apps": "1.2.13",
+    "@microsoft/power-apps-native-host": "^0.3.3",
     "@microsoft/power-apps-native-offline": "^0.1.32",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-community/datetimepicker": "8.6.0",
@@ -30,7 +30,7 @@
     "@tamagui/toast": "2.4.5",
     "@tanstack/react-query": "5.62.0",
     "burnt": "0.12.2",
-    "expo": "55.0.26",
+    "expo": "55.0.29",
     "expo-application": "55.0.15",
     "expo-asset": "55.0.17",
     "expo-audio": "55.0.14",
@@ -46,6 +46,7 @@
     "expo-document-picker": "55.0.13",
     "expo-file-system": "55.0.19",
     "expo-font": "55.0.7",
+    "expo-haptics": "55.0.16",
     "expo-image": "55.0.10",
     "expo-image-manipulator": "55.0.16",
     "expo-image-picker": "55.0.20",
@@ -56,7 +57,6 @@
     "expo-local-authentication": "55.0.13",
     "expo-location": "55.1.9",
     "expo-mail-composer": "55.0.13",
-    "expo-modules-core": "55.0.25",
     "expo-print": "55.0.14",
     "expo-router": "55.0.14",
     "expo-screen-orientation": "55.0.14",
@@ -83,15 +83,16 @@
   },
   "devDependencies": {
     "@babel/core": "7.29.6",
+    "@microsoft/power-apps-cli": "0.15.3",
     "@tamagui/babel-plugin": "2.4.5",
     "@types/react": "19.2.14",
     "babel-preset-expo": "55.0.18",
+    "react-refresh": "0.14.2",
     "typescript": "5.9.3"
   },
   "overrides": {
     "esbuild": "0.28.1",
     "uuid": ">=11.1.1 <12",
-    "shell-quote": ">=1.8.4 <2",
-    "postcss": ">=8.5.10 <9"
+    "metro": "0.83.8"
   }
 }

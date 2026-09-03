@@ -598,7 +598,7 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
 | `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
-| Tamagui integration reference | `brand/tokens.ts` | Imported into `tamagui.config.ts` by `/create-mobile-app` Step 9b |
+| Tamagui integration reference | `brand/tokens.ts` | Applied through native-host theme helpers by `/create-mobile-app` Step 9b |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
 | `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
 | `/deploy` | `brand/` shipped in bundle | No special handling |
