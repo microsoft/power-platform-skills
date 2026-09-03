@@ -22,6 +22,19 @@ The project must have `playwright` or `playwright-core` available. Create-site
 already installs Playwright for the axe audit. For add-localization, reuse an
 existing install or add `playwright` as a development dependency when absent.
 
+For newly added pending locales, begin the verification transaction while they
+are fail-closed, then expose only those targets through the normal application
+availability path. Run the transaction-aware localization validator and start
+a loopback-only development server:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
+  --begin --projectRoot "<PROJECT_ROOT>" --locales "ar-SA"
+
+node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" \
+  --projectRoot "<PROJECT_ROOT>" --verification
+```
+
 ```bash
 node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
   --url "<DEV_SERVER_URL>" \
@@ -65,11 +78,13 @@ Use schema version 1:
       "id": "ar",
       "locale": "ar-SA",
       "direction": "rtl",
-      "unavailableSelectors": [
-        "[data-locale='ar-SA']"
-      ],
       "activate": [
-        { "type": "audit-activate", "locale": "ar-SA" }
+        {
+          "type": "activate-locale",
+          "method": "click",
+          "locale": "ar-SA",
+          "selector": "[data-locale='ar-SA']"
+        }
       ],
       "expect": [
         { "selector": "h1", "text": "اتصل بنا" }
@@ -196,39 +211,78 @@ activate through the application and provide at least one `expect` assertion
 for localized text or a localized attribute. This prevents changing only
 `html[lang]`/`html[dir]` from being mistaken for working localization.
 
-An unavailable real locale cannot be exposed through a production selector or
-switching path just to make the audit pass. Give it an `audit-activate` action
-that calls a development-only application adapter, and list every selector
-that would normally expose that locale in `unavailableSelectors`:
+Every transaction target is temporarily available through the normal
+application path and must use its real selector or locale-navigation action:
 
 ```json
 {
-  "unavailableSelectors": ["[data-locale='ar-SA']"],
   "activate": [
     {
-      "type": "audit-activate",
-      "locale": "ar-SA"
+      "type": "activate-locale",
+      "method": "click",
+      "locale": "ar-SA",
+      "selector": "[data-locale='ar-SA']"
     }
   ]
 }
 ```
 
-Before audit activation in every component and transition case, the runner
-requires each listed selector to be absent from the normal application UI.
-This is negative browser evidence that a pending locale is not selectable.
-Source validation separately proves that automatic detection,
-alternate-language metadata, and production static output also apply the
-availability boundary.
+`activate-locale` binds the expected locale to one normal application control.
+Use `method: "click"` for a button or menu item. For a `<select>`, use
+`method: "select"` and provide its locale option as `value`. Transaction-target
+activation may contain only this action and optional waits, preventing an
+unrelated click or direct DOM mutation from being accepted as locale evidence.
+The runner verifies that the action itself produces the expected
+`document.documentElement.lang`.
 
-The development build must expose
-`window.__powerPagesLocalizationAudit.activate(locale)`. Gate that adapter with
-the framework's development-mode mechanism and have it call the same locale
-coordinator and resource-loading path as the application through a dedicated
-`activateLocaleForAudit(locale)` operation. That operation may bypass the
-availability predicate only for the audit while retaining the normal
-language, direction, resource, and persistence updates. Normal selectors,
-detection, metadata, and production output must continue to reject the locale.
-Never ship an unconditional production activation bypass.
+Real locale entries must exactly match the currently available manifest
+locales. A pre-existing pending locale that is not a target remains excluded
+from activation. List every such locale and its normal selector surfaces in
+the top-level `unavailableLocaleChecks` array:
+
+```json
+{
+  "unavailableLocaleChecks": [
+    {
+      "locale": "fa-IR",
+      "selectors": ["[data-locale='fa-IR']"]
+    }
+  ]
+}
+```
+
+Before every component and transition case, the runner checks every matching
+element for visibility. This supplies negative browser evidence that
+pre-existing unavailable locales remain hidden while another locale is being
+verified. For a `<select>` language control, target the locale's `<option>`
+such as `option[value='fa-IR']`; the runner treats an enabled option in a
+visible enabled parent `<select>` as exposed even though browsers do not render
+the option as an independently visible box.
+
+The project-root `.powerpages-localization-verification.json` transaction is
+the safety boundary. It records target locales and their prior fail-closed
+availability, permits only those pending targets to be temporarily omitted
+from `unavailableLocales`, and blocks completion or deployment. While the
+browser run is active, `.powerpages-localization-verification.json.audit`
+holds an exclusive lease for that transaction. Finalization remains blocked
+until the run records its result and releases the lease. If the process is
+interrupted, `--fail` records `remediation-required` and clears the abandoned
+lease; do not delete either file to bypass recovery.
+
+The audit URL must use `localhost`, `127.0.0.1`, or `[::1]`, and every
+navigation, control action, wait, and redirect must remain on that exact
+origin. A browser, setup, or rendered error changes the transaction to
+`remediation-required`; restore its targets to pending unavailable state
+before another attempt.
+
+After the maker decision, reconcile the manifest and managed availability
+module, then run `manage-localization-verification.js --finalize`. Successful
+targets are `ready` or `approved-with-limitations` and remain available.
+Failed or deferred targets are `pending-remediation` and unavailable.
+Finalization validates the normal schema-version-1 invariant before removing
+the transaction. Before retrying after either a failed run or maker-requested
+revision, mark the old transaction failed, restore its targets to pending
+unavailable state, finalize it, and begin a new transaction.
 
 For a single-language site, add a pseudo-opposite locale using:
 
@@ -254,9 +308,9 @@ Use pseudo-RTL for an LTR site and pseudo-LTR for an RTL site.
 
 Supported actions are:
 
+- `activate-locale` for the normal click/select control that activates a
+  transaction target and proves the resulting document locale
 - `click`, `fill`, `focus`, `hover`, `press`, `select`, `check`, `uncheck`
-- `audit-activate` for development-only application activation of a locale that
-  remains unavailable to normal users
 - `use-current` only when no runtime round trip needs to reactivate the locale
 - `navigate` with a root-relative or absolute locale-specific URL
 - `wait` with `ms` from 0 through 10000

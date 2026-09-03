@@ -22,7 +22,7 @@ const PRESERVATION_KINDS = new Set([
   'value',
 ]);
 const ACTION_TYPES = new Set([
-  'audit-activate',
+  'activate-locale',
   'check',
   'click',
   'fill',
@@ -51,9 +51,17 @@ function validateRunSpec(spec, localizationContext = null) {
   const viewports = Array.isArray(spec.viewports) ? spec.viewports : [];
   const locales = Array.isArray(spec.locales) ? spec.locales : [];
   const components = Array.isArray(spec.components) ? spec.components : [];
+  const unavailableLocaleChecks = Array.isArray(spec.unavailableLocaleChecks)
+    ? spec.unavailableLocaleChecks
+    : [];
   const unavailableLocales = new Set(
     Array.isArray(localizationContext?.unavailableLocales)
       ? localizationContext.unavailableLocales
+      : []
+  );
+  const verificationLocales = new Set(
+    Array.isArray(localizationContext?.verificationLocales)
+      ? localizationContext.verificationLocales
       : []
   );
   if (viewports.length === 0) errors.push('viewports must contain at least one viewport.');
@@ -116,35 +124,31 @@ function validateRunSpec(spec, localizationContext = null) {
       if (!Array.isArray(locale?.expect) || locale.expect.length === 0) {
         errors.push(`${prefix} real locales require localized content expectations.`);
       }
-      const auditActivations = activation.filter(
-        (action) => action.type === 'audit-activate'
-      );
-      if (auditActivations.some((action) => action.locale !== locale.locale)) {
-        errors.push(`${prefix} audit-activate must target its own locale.`);
+      if (verificationLocales.has(locale.locale)) {
+        const localeActivations = activation.filter(
+          (action) => action.type === 'activate-locale'
+        );
+        if (localeActivations.length !== 1 ||
+            localeActivations[0].locale !== locale.locale) {
+          errors.push(
+            `${prefix} verification targets require exactly one ` +
+            `activate-locale action for ${locale.locale}.`
+          );
+        }
+        if (activation.some(
+          (action) => !['activate-locale', 'wait'].includes(action.type)
+        )) {
+          errors.push(
+            `${prefix} verification target activation may contain only ` +
+            'activate-locale and wait actions.'
+          );
+        }
       }
       if (unavailableLocales.has(locale.locale) &&
-          !auditActivations.some((action) => action.locale === locale.locale)) {
+          localizationContext) {
         errors.push(
-          `${prefix} unavailable locales require development-only audit-activate.`
-        );
-      }
-      if (unavailableLocales.has(locale.locale) &&
-          activation.some((action) => !['audit-activate', 'wait'].includes(action.type))) {
-        errors.push(
-          `${prefix} unavailable locales cannot use normal application activation actions.`
-        );
-      }
-      if (!unavailableLocales.has(locale.locale) && auditActivations.length > 0) {
-        errors.push(
-          `${prefix} audit-activate is only valid for an unavailable locale.`
-        );
-      }
-      if (unavailableLocales.has(locale.locale)) {
-        validateStringArray(
-          locale.unavailableSelectors,
-          `${prefix}.unavailableSelectors`,
-          errors,
-          1
+          `${prefix} unavailable locales cannot be included as rendered ` +
+          'verification locales.'
         );
       }
     }
@@ -166,6 +170,23 @@ function validateRunSpec(spec, localizationContext = null) {
   }
   if (!directions.has('ltr') || !directions.has('rtl')) {
     errors.push('locales must include at least one LTR and one RTL verification locale.');
+  }
+
+  if (spec.unavailableLocaleChecks !== undefined &&
+      !Array.isArray(spec.unavailableLocaleChecks)) {
+    errors.push('unavailableLocaleChecks must be an array when provided.');
+  }
+  const checkedUnavailableLocales = new Set();
+  for (const [index, check] of unavailableLocaleChecks.entries()) {
+    const prefix = `unavailableLocaleChecks[${index}]`;
+    if (!isNonEmpty(check?.locale)) {
+      errors.push(`${prefix}.locale is required.`);
+    } else if (checkedUnavailableLocales.has(check.locale)) {
+      errors.push(`${prefix}.locale must be unique.`);
+    } else {
+      checkedUnavailableLocales.add(check.locale);
+    }
+    validateStringArray(check?.selectors, `${prefix}.selectors`, errors, 1);
   }
 
   const componentIds = new Set();
@@ -347,14 +368,25 @@ function validateRunSpec(spec, localizationContext = null) {
       (Array.isArray(value) && value.length > 0 && value.every(isNonEmpty));
   }
   if (localizationContext) {
-    const expectedLocales = [...localizationContext.locales].sort();
+    const expectedLocales = localizationContext.locales
+      .filter((locale) => !unavailableLocales.has(locale))
+      .sort();
     const actualLocales = locales
       .filter((locale) => !locale.pseudo)
       .map((locale) => locale.locale)
       .sort();
     if (JSON.stringify(expectedLocales) !== JSON.stringify(actualLocales)) {
       errors.push(
-        'Real locales must exactly match the configured localization manifest locales.'
+        'Real locales must exactly match the currently available localization ' +
+        'manifest locales.'
+      );
+    }
+    const expectedUnavailableChecks = [...unavailableLocales].sort();
+    const actualUnavailableChecks = [...checkedUnavailableLocales].sort();
+    if (JSON.stringify(expectedUnavailableChecks) !==
+        JSON.stringify(actualUnavailableChecks)) {
+      errors.push(
+        'unavailableLocaleChecks must exactly match manifest unavailableLocales.'
       );
     }
     if (localizationContext.mode === 'runtime' && spec.runtimeSwitching !== true) {
@@ -430,11 +462,23 @@ function validateActions(actions, prefix, errors) {
       continue;
     }
     if (action.type !== 'wait' && action.type !== 'set-document' &&
-        action.type !== 'audit-activate' &&
         action.type !== 'navigate' &&
         action.type !== 'use-current' &&
         !isNonEmpty(action.selector)) {
       errors.push(`${actionPrefix}.selector is required.`);
+    }
+    if (action.type === 'activate-locale') {
+      if (!isNonEmpty(action.locale)) {
+        errors.push(`${actionPrefix}.locale must be a non-empty string.`);
+      }
+      if (!['click', 'select'].includes(action.method)) {
+        errors.push(`${actionPrefix}.method must be click or select.`);
+      }
+      if (action.method === 'select' && !isStringOrStringArray(action.value)) {
+        errors.push(
+          `${actionPrefix}.value must be a string or string array for select.`
+        );
+      }
     }
     if (action.type === 'wait' &&
         (!Number.isInteger(action.ms) || action.ms < 0 || action.ms > 10000)) {
@@ -443,9 +487,6 @@ function validateActions(actions, prefix, errors) {
     if (action.type === 'set-document' &&
         (!isNonEmpty(action.locale) || !DIRECTIONS.has(action.direction))) {
       errors.push(`${actionPrefix} requires locale and direction.`);
-    }
-    if (action.type === 'audit-activate' && !isNonEmpty(action.locale)) {
-      errors.push(`${actionPrefix}.locale must be a non-empty string.`);
     }
     if (action.type === 'navigate' &&
         (!isNonEmpty(action.url) ||
@@ -481,6 +522,7 @@ function buildVerificationCases(spec) {
             state,
             viewport: viewportMap.get(viewportName),
             locale,
+            spec,
           });
         }
       }
@@ -497,6 +539,11 @@ async function runRenderedBidirectionalAudit(options) {
     throw error;
   }
   const baseUrl = options.url.replace(/\/$/, '');
+  const requiredOrigin =
+    Array.isArray(options.localizationContext?.verificationLocales) &&
+    options.localizationContext.verificationLocales.length > 0
+      ? new URL(baseUrl).origin
+      : null;
   const browser = await options.chromium.launch({
     ...(options.browserLaunchOptions || {}),
     headless: true,
@@ -510,7 +557,8 @@ async function runRenderedBidirectionalAudit(options) {
         browser,
         baseUrl,
         verificationCase,
-        options.evidenceDir
+        options.evidenceDir,
+        requiredOrigin
       );
       results.push(result);
       findings.push(...result.findings);
@@ -521,7 +569,8 @@ async function runRenderedBidirectionalAudit(options) {
         baseUrl,
         transition,
         options.spec,
-        options.evidenceDir
+        options.evidenceDir,
+        requiredOrigin
       );
       results.push(result);
       findings.push(...result.findings);
@@ -539,7 +588,13 @@ async function runRenderedBidirectionalAudit(options) {
   };
 }
 
-async function runVerificationCase(browser, baseUrl, verificationCase, evidenceDir) {
+async function runVerificationCase(
+  browser,
+  baseUrl,
+  verificationCase,
+  evidenceDir,
+  requiredOrigin
+) {
   const { component, state, viewport, locale } = verificationCase;
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
@@ -556,16 +611,30 @@ async function runVerificationCase(browser, baseUrl, verificationCase, evidenceD
       waitUntil: 'networkidle',
       timeout: 20000,
     });
-    await verifyUnavailableSelectors(
+    await assertPageOrigin(page, requiredOrigin);
+    await verifyUnavailableLocaleChecks(
       page,
-      locale,
+      verificationCase.spec.unavailableLocaleChecks || [],
       verificationCase.id,
       findings
     );
-    await executeActions(page, locale.activate || [], baseUrl);
-    await executeActions(page, state.setup || [], baseUrl);
+    await executeActions(page, locale.activate || [], baseUrl, requiredOrigin);
+    await verifyUnavailableLocaleChecks(
+      page,
+      verificationCase.spec.unavailableLocaleChecks || [],
+      verificationCase.id,
+      findings
+    );
+    await executeActions(page, state.setup || [], baseUrl, requiredOrigin);
+    await verifyUnavailableLocaleChecks(
+      page,
+      verificationCase.spec.unavailableLocaleChecks || [],
+      verificationCase.id,
+      findings
+    );
     if (locale.pseudo) await applyPseudoContent(page, locale.direction);
     await page.waitForTimeout(100);
+    await assertPageOrigin(page, requiredOrigin);
     await assertDocumentLocale(page, locale, findings, verificationCase.id);
     await assertLocaleEvidence(page, locale, findings, verificationCase.id);
 
@@ -611,6 +680,7 @@ async function runVerificationCase(browser, baseUrl, verificationCase, evidenceD
         component.selector
       ));
     }
+    await assertPageOrigin(page, requiredOrigin);
     for (const message of consoleErrors) {
       findings.push(makeFinding(
         verificationCase.id,
@@ -651,23 +721,32 @@ async function runVerificationCase(browser, baseUrl, verificationCase, evidenceD
   };
 }
 
-async function executeActions(page, actions, baseUrl) {
+async function executeActions(page, actions, baseUrl, requiredOrigin = null) {
   for (const action of actions) {
     if (action.type === 'wait') {
       await page.waitForTimeout(action.ms);
+      await assertPageOrigin(page, requiredOrigin);
       continue;
     }
     if (action.type === 'use-current') continue;
-    if (action.type === 'audit-activate') {
-      await page.evaluate(async (locale) => {
-        const audit = window.__powerPagesLocalizationAudit;
-        if (!audit || typeof audit.activate !== 'function') {
-          throw new Error(
-            'Development-only localization audit activation is not available.'
-          );
-        }
-        await audit.activate(locale);
-      }, action.locale);
+    if (action.type === 'activate-locale') {
+      const locator = page.locator(action.selector).first();
+      if (action.method === 'select') {
+        await locator.selectOption(action.value);
+      } else {
+        await locator.click();
+      }
+      await assertPageOrigin(page, requiredOrigin);
+      const activeDocument = await page.evaluate(() => ({
+        lang: document.documentElement.lang,
+      }));
+      if (activeDocument?.lang !== action.locale) {
+        throw new Error(
+          `Locale control ${action.selector} activated ` +
+          `"${activeDocument?.lang || ''}" ` +
+          `instead of "${action.locale}".`
+        );
+      }
       continue;
     }
     if (action.type === 'set-document') {
@@ -682,6 +761,7 @@ async function executeActions(page, actions, baseUrl) {
         ? action.url
         : `${baseUrl}${action.url}`;
       await page.goto(target, { waitUntil: 'networkidle', timeout: 20000 });
+      await assertPageOrigin(page, requiredOrigin);
       continue;
     }
     const locator = page.locator(action.selector).first();
@@ -698,6 +778,7 @@ async function executeActions(page, actions, baseUrl) {
         element.setAttribute(attribute.name, attribute.value);
       }, { name: action.name, value: action.value });
     }
+    await assertPageOrigin(page, requiredOrigin);
   }
 }
 
@@ -727,6 +808,26 @@ async function assertLocaleEvidence(page, locale, findings, caseId) {
         expectation.selector
       ));
     }
+  }
+}
+
+async function assertPageOrigin(page, requiredOrigin) {
+  if (!requiredOrigin) return;
+  if (typeof page.url !== 'function') {
+    throw new Error('The browser page does not expose its current URL.');
+  }
+  const currentUrl = page.url();
+  let currentOrigin;
+  try {
+    currentOrigin = new URL(currentUrl).origin;
+  } catch {
+    throw new Error(`The browser reported an invalid current URL: ${currentUrl}`);
+  }
+  if (currentOrigin !== requiredOrigin) {
+    throw new Error(
+      `Locale verification left the required loopback origin ` +
+      `${requiredOrigin}: ${currentUrl}`
+    );
   }
 }
 
@@ -1019,7 +1120,14 @@ async function applyPseudoContent(page, direction) {
   }, direction);
 }
 
-async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir) {
+async function runTransitionCase(
+  browser,
+  baseUrl,
+  transition,
+  spec,
+  evidenceDir,
+  requiredOrigin
+) {
   const sequence = transition.sequence.map((localeId) =>
     spec.locales.find((locale) => locale.id === localeId)
   );
@@ -1041,10 +1149,40 @@ async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir
       waitUntil: 'networkidle',
       timeout: 20000,
     });
-    await verifyUnavailableSelectors(page, sequence[0], id, findings);
-    await executeActions(page, sequence[0].activate || [], baseUrl);
-    await executeActions(page, transition.setup || [], baseUrl);
+    await assertPageOrigin(page, requiredOrigin);
+    await verifyUnavailableLocaleChecks(
+      page,
+      spec.unavailableLocaleChecks || [],
+      id,
+      findings
+    );
+    await executeActions(
+      page,
+      sequence[0].activate || [],
+      baseUrl,
+      requiredOrigin
+    );
+    await verifyUnavailableLocaleChecks(
+      page,
+      spec.unavailableLocaleChecks || [],
+      id,
+      findings
+    );
+    await executeActions(
+      page,
+      transition.setup || [],
+      baseUrl,
+      requiredOrigin
+    );
+    await verifyUnavailableLocaleChecks(
+      page,
+      spec.unavailableLocaleChecks || [],
+      id,
+      findings
+    );
+    await assertPageOrigin(page, requiredOrigin);
     const baseline = await captureTransitionState(page, transition);
+    await assertPageOrigin(page, requiredOrigin);
     addMissingTransitionTargets(baseline, id, findings);
     addUnsupportedTransitionTargets(baseline, id, findings);
     if (transition.preserveFocus && !baseline.focused) {
@@ -1059,9 +1197,26 @@ async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir
     await assertDocumentLocale(page, sequence[0], findings, id);
     await assertLocaleEvidence(page, sequence[0], findings, id);
     for (const locale of sequence.slice(1)) {
-      await verifyUnavailableSelectors(page, locale, id, findings);
-      await executeActions(page, locale.activate || [], baseUrl);
+      await verifyUnavailableLocaleChecks(
+        page,
+        spec.unavailableLocaleChecks || [],
+        id,
+        findings
+      );
+      await executeActions(
+        page,
+        locale.activate || [],
+        baseUrl,
+        requiredOrigin
+      );
+      await verifyUnavailableLocaleChecks(
+        page,
+        spec.unavailableLocaleChecks || [],
+        id,
+        findings
+      );
       await page.waitForTimeout(100);
+      await assertPageOrigin(page, requiredOrigin);
       const current = await captureTransitionState(page, transition);
       addMissingTransitionTargets(current, id, findings);
       addUnsupportedTransitionTargets(current, id, findings);
@@ -1111,6 +1266,7 @@ async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir
         ));
       }
     }
+    await assertPageOrigin(page, requiredOrigin);
   } catch (error) {
     findings.push(makeFinding(id, 'locale-switch-failure', 'error', error.message, 'html'));
   }
@@ -1138,22 +1294,54 @@ async function runTransitionCase(browser, baseUrl, transition, spec, evidenceDir
   };
 }
 
-async function verifyUnavailableSelectors(page, locale, caseId, findings) {
-  for (const selector of locale.unavailableSelectors || []) {
-    const locator = page.locator(selector);
-    const count = await locator.count();
-    let visible = false;
-    for (let index = 0; index < count && !visible; index += 1) {
-      visible = await locator.nth(index).isVisible();
-    }
-    if (visible) {
-      findings.push(makeFinding(
-        caseId,
-        'unavailable-locale-exposed',
-        'error',
-        `Unavailable locale ${locale.locale} is exposed by a normal activation selector.`,
-        selector
-      ));
+async function verifyUnavailableLocaleChecks(page, checks, caseId, findings) {
+  for (const check of checks) {
+    for (const selector of check.selectors) {
+      const locator = page.locator(selector);
+      const count = await locator.count();
+      let exposed = false;
+      for (let index = 0; index < count && !exposed; index += 1) {
+        const candidate = locator.nth(index);
+        const elementType = await candidate.evaluate(
+          (element) => element.tagName.toLowerCase()
+        );
+        if (elementType === 'option') {
+          exposed = await candidate.evaluate((option) => {
+            const select = option.closest('select');
+            const optionGroup = option.closest('optgroup');
+            if (!select || option.disabled || optionGroup?.disabled ||
+                select.disabled) {
+              return false;
+            }
+            if (typeof select.checkVisibility === 'function') {
+              return select.checkVisibility({
+                checkOpacity: true,
+                checkVisibilityCSS: true,
+              });
+            }
+            const style = getComputedStyle(select);
+            const rect = select.getBoundingClientRect();
+            return !select.hidden &&
+              select.getAttribute('aria-hidden') !== 'true' &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              Number(style.opacity) !== 0 &&
+              rect.width > 0 &&
+              rect.height > 0;
+          });
+        } else {
+          exposed = await candidate.isVisible();
+        }
+      }
+      if (exposed) {
+        findings.push(makeFinding(
+          caseId,
+          'unavailable-locale-exposed',
+          'error',
+          `Unavailable locale ${check.locale} is exposed by a normal activation selector.`,
+          selector
+        ));
+      }
     }
   }
 }
