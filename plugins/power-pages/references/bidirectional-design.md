@@ -81,6 +81,58 @@ References:
 - https://www.w3.org/International/articles/inline-bidi-markup/
 - https://www.unicode.org/reports/tr9/
 
+## Component classification and review scope
+
+Classify every visible or interactive component, including page-local controls
+that are not implemented as shared source components. The classification is a
+review-planning tool, not a persisted source of truth:
+
+| Classification | Meaning | Required evidence |
+|---|---|---|
+| `direction-neutral` | No inline-direction behavior; ordinary document inheritance is sufficient | Confirm inheritance in every applicable viewport |
+| `direction-aware` | Placement, sequence, geometry, icons, interaction, or text depends on direction | Verify every applicable state in LTR and RTL |
+| `direction-fixed` | A specific value or domain intentionally remains physical or LTR | Document the semantic reason and verify the surrounding UI in LTR and RTL |
+| `unknown-third-party` | Behavior is owned by a package, iframe, web component, or external surface | Exercise the rendered integration, including overlays and open states |
+
+Treat anything involving inline placement, text direction, horizontal
+movement, sequence, directional meaning, mixed-script content, or rendering
+outside the normal component subtree as a potential bidirectional surface.
+This rule is deliberately broader than a fixed component list so custom and
+future components receive the same review.
+
+Plan applicable states and viewports separately. A form can have empty,
+populated, focused, invalid, disabled, autofilled, and autocomplete-open
+states, while a static logo may have only its default state. Do not create a
+mechanical Cartesian product of irrelevant states and viewports; include every
+combination in which the component's rendered or interactive behavior can
+change.
+
+The create-site plan records the expected scope, then reconciles it against the
+actual implementation after pages and components exist. Add-localization
+builds its scope from the existing implementation before plan approval. Keep
+this scope in workflow context and the human-readable plan; do not create a
+second project manifest for it.
+
+## Forms and associated UI
+
+Treat a form field as a compound surface rather than checking only its input:
+
+- Localized labels, placeholders, hints, helper text, validation messages,
+  prefixes, suffixes, and field icons inherit the active UI locale and use
+  logical alignment such as `text-align: start`.
+- Use `dir="auto"` for free-form multilingual values. The surrounding
+  localized field UI still follows the active document direction.
+- Keep email addresses, URLs, code, file paths, GUIDs, and identifiers LTR only
+  when their machine-oriented semantics require it. The label, hint, error,
+  placement, and focus behavior remain direction-aware.
+- Include select menus, autocomplete/listbox panels, validation summaries,
+  autofill, native control affordances, and disabled/read-only states when the
+  field supports them.
+- Preserve label and description associations, reading order, and keyboard
+  reachability in both directions.
+
+Reference: https://www.w3.org/International/questions/qa-html-dir
+
 ## Typography and content flexibility
 
 - Select fonts for the scripts used by configured locales, including shaping,
@@ -104,7 +156,8 @@ References:
 
 ## Components, icons, and assets
 
-Give every direction-sensitive component an explicit contract:
+Give every direction-aware, direction-fixed, and unknown/third-party component
+an explicit contract:
 
 - Navigation, drawers, tabs, pagination, breadcrumbs, forms, calendars,
   date-pickers, carousels, timelines, charts, drag/drop, and gestures must be
@@ -120,6 +173,16 @@ Give every direction-sensitive component an explicit contract:
 - Native controls and scrollbars should inherit direction; custom horizontal
   scrolling must use semantic start/end operations rather than raw assumptions
   about `scrollLeft`.
+
+Components rendered outside their apparent parent require separate review.
+React portals, Vue teleports, Angular overlay containers, body-mounted dialogs,
+tooltips, menus, autocomplete panels, Shadow DOM, and iframes may not inherit a
+component-level `dir`, locale, font, or theme. Configure the package's public
+direction API when available. Otherwise use a documented wrapper or supported
+theme override and verify the rendered open state. Do not edit `node_modules`.
+If a cross-origin or externally owned surface cannot be verified or adapted,
+replace it, restrict it for the affected locale, or keep that locale
+unavailable when the defect is blocking.
 
 Reference: https://learn.microsoft.com/en-us/globalization/fonts-layout/mirroring
 
@@ -143,6 +206,15 @@ When a locale set first changes from LTR-only or RTL-only to mixed direction,
 run the bidirectional-readiness audit before implementation approval. Include
 safe remediation, intentional physical exceptions, typography, assets,
 mixed-content boundaries, and complex component behavior in the plan.
+
+For an existing site, remediation is a targeted bidirectional adaptation, not
+permission for an unrelated visual redesign. Preserve branding, routes,
+features, and visual character while replacing direction-specific assumptions.
+The required scope depends on the implementation: a logical-CSS site may need
+only small changes, while absolute layouts, geometry-heavy widgets, or
+third-party controls without direction support may require a substantial
+component refactor. Show that scope before approval rather than adding the
+locale and allowing the site to break.
 
 Use a tiered disposition:
 
@@ -168,8 +240,13 @@ enabled.
 ## Verification
 
 - Audit every generated or modified site, not only the first RTL locale.
+- Classify every implemented visible or interactive component and reconcile
+  the review scope against the final source and rendered application.
 - Test every representative route in LTR and RTL at desktop and narrow/mobile
   viewports.
+- Test every applicable state of direction-aware, direction-fixed, and
+  unknown/third-party components. For direction-neutral components, confirm
+  that ordinary inheritance remains sufficient.
 - For runtime modes, test LTR -> RTL -> LTR and RTL -> LTR -> RTL without
   reload, stale requests, route loss, form-state loss, or focus loss.
 - Verify calendars, gestures, overlays, charts, mixed-direction fixtures,

@@ -107,6 +107,13 @@ const requiredLabelPaths = [
   'readiness.location',
   'readiness.rule',
   'readiness.remediation',
+  'readiness.componentScope',
+  'readiness.component',
+  'readiness.classification',
+  'readiness.reason',
+  'readiness.states',
+  'readiness.viewports',
+  'readiness.checks',
   'readiness.physicalExceptions',
   'readiness.scriptFonts',
   'readiness.unavailableLocales',
@@ -143,6 +150,12 @@ const requiredLabelPaths = [
   'evidenceSource.userApproved',
   'severity.error',
   'severity.review',
+  'classification.directionNeutral',
+  'classification.directionAware',
+  'classification.directionFixed',
+  'classification.unknownThirdParty',
+  'viewport.desktop',
+  'viewport.narrow',
   'operation.create',
   'operation.addLanguages',
   'operation.repair',
@@ -166,6 +179,13 @@ const EVIDENCE_SOURCES = new Set([
   'user-approved',
 ]);
 const TRANSLATION_METHODS = new Set(['agent', 'blank']);
+const BIDIRECTIONAL_CLASSIFICATIONS = new Set([
+  'direction-neutral',
+  'direction-aware',
+  'direction-fixed',
+  'unknown-third-party',
+]);
+const BIDIRECTIONAL_VIEWPORTS = new Set(['desktop', 'narrow']);
 const REQUIRED_VALIDATION_IDS = [
   'independent-validator',
   'project-build',
@@ -470,7 +490,13 @@ function validatePlanData(data) {
     errors.push('READINESS_DATA must be an object.');
   } else {
     validateString(readiness.transition, 'READINESS_DATA.transition', errors);
-    for (const key of ['findings', 'physicalExceptions', 'scriptFonts', 'unavailableLocales']) {
+    for (const key of [
+      'findings',
+      'componentScope',
+      'physicalExceptions',
+      'scriptFonts',
+      'unavailableLocales',
+    ]) {
       if (!Array.isArray(readiness[key])) {
         errors.push(`READINESS_DATA.${key} must be an array.`);
       }
@@ -488,6 +514,36 @@ function validatePlanData(data) {
           errors.push(`${prefix}.line must be a positive integer.`);
         }
         validateString(finding?.remediation, `${prefix}.remediation`, errors);
+      });
+    }
+    if (Array.isArray(readiness.componentScope)) {
+      if (!readiness.componentScope.length) {
+        errors.push(
+          'READINESS_DATA.componentScope must contain every visible or interactive component.'
+        );
+      }
+      readiness.componentScope.forEach((entry, index) => {
+        const prefix = `READINESS_DATA.componentScope[${index}]`;
+        for (const key of ['component', 'reason']) {
+          validateString(entry?.[key], `${prefix}.${key}`, errors);
+        }
+        if (!BIDIRECTIONAL_CLASSIFICATIONS.has(entry?.classification)) {
+          errors.push(
+            `${prefix}.classification must be direction-neutral, direction-aware, ` +
+            'direction-fixed, or unknown-third-party.'
+          );
+        }
+        for (const key of ['states', 'checks']) {
+          if (!Array.isArray(entry?.[key]) || !entry[key].length ||
+              entry[key].some((value) => typeof value !== 'string' || !value.trim())) {
+            errors.push(`${prefix}.${key} must be a non-empty array of localized strings.`);
+          }
+        }
+        if (!Array.isArray(entry?.viewports) || !entry.viewports.length ||
+            entry.viewports.some((value) => !BIDIRECTIONAL_VIEWPORTS.has(value)) ||
+            new Set(entry.viewports).size !== entry.viewports.length) {
+          errors.push(`${prefix}.viewports must contain unique desktop and/or narrow values.`);
+        }
       });
     }
     for (const key of ['physicalExceptions', 'scriptFonts', 'unavailableLocales']) {
