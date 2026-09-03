@@ -175,19 +175,17 @@ diagnostic history, and a fresh agent would have to rediscover all of it.
   screen or component-definition order requires correction. Preserve valid names and
   repair only the affected order entries.
 
-### Verify before you summarize
+### Establish a clean candidate
 
-Immediately before the summary:
+Before functional conformance:
 
-1. Confirm `[working directory]/canvas-app-acceptance.md` has one evidence row for every Action Contract
-   and no failed row.
+1. Confirm every delegated builder and self-QA follow-up has returned. Do not begin
+   completion checks while a worker can still write to the workspace.
 2. Call `compile_canvas`, even when an earlier compile was clean.
-3. Stop modifying `.pa.yaml` files after that call.
-4. If the compile fails or another repair is necessary, repair and repeat this gate.
+3. If the compile fails or another repair is necessary, repair and repeat this gate.
 
-Edits to non-compiled artifacts do not invalidate the result: `[working directory]/canvas-app-plan.md`,
-`[working directory]/canvas-app-shared.md`, `[working directory]/canvas-app-acceptance.md`, and
-`[working directory]/*.screen-plan.md` are planning or evidence documents.
+This compile establishes a clean candidate. It is not the final generation-proof compile
+because functional conformance still writes the acceptance artifact.
 
 ## 2. Functional Conformance
 
@@ -293,6 +291,24 @@ grade.
 Never report an unqualified percentage such as `100% functional` or `18/18 (100%)`.
 Always include `static conformance` in the same sentence and immediately state the runtime
 evaluation status.
+
+### Final generation-proof gate
+
+Immediately before the summary:
+
+1. Confirm `[working directory]/canvas-app-acceptance.md` has one evidence row for every Action Contract,
+   no failed row, and has passed its required validation.
+2. Confirm no delegated agent remains running or queued and every app, planning, and
+   acceptance-artifact write is complete.
+3. Call `compile_canvas`, even when the clean-candidate compile succeeded.
+4. After it succeeds, do not call `edit`, `create`, `apply_patch`, or `sync_canvas`.
+   Return the summary without another workspace mutation.
+5. If any later write or repair occurs, repeat this gate. A compile predating the last
+   successful write is not final proof.
+
+The final successful `compile_canvas` must be the final authoring operation. This ordering
+also lets external generation proof distinguish a completed app from an app changed after
+validation.
 
 ## 3. Summary
 

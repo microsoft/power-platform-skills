@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.5
+version: 3.0.6
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,17 +22,23 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.5`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.6`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
-3. Reuse the current directory when it already contains `App.pa.yaml`.
+3. Reuse the current directory when it already contains `App.pa.yaml` and every existing
+   file in that directory is a `.pa.yaml` file.
 4. Otherwise, reuse the single immediate child directory containing `App.pa.yaml`, when
-   exactly one exists.
+   exactly one exists and every existing file in it is a `.pa.yaml` file.
 5. Otherwise, derive a short kebab-case folder name from the app name or requirements,
-   create it with `Bash`, and resolve its absolute path.
+   create a new empty directory with `Bash`, and resolve its absolute path. If that name
+   already exists and contains non-YAML files, choose a fresh suffixed name rather than
+   synchronizing into it.
 6. Call `sync_canvas` with that absolute working directory before reading or editing app
-   files. Do not proceed if sync fails.
+   files. The directory must be dedicated to this app and contain no non-`.pa.yaml` files
+   when synchronization starts; never pass the repository root or `${PLUGIN_ROOT}`. Do not
+   call `sync_canvas` against the working directory again after planning or acceptance
+   documents have been created there. Do not proceed if the initial sync fails.
 
 Always use absolute paths for app files.
 
@@ -160,6 +166,9 @@ unrecognized. Confirm it matches a remaining dispatch row and leave it in place.
 
 After all builders finish:
 
+- Confirm every dispatched builder and every targeted self-QA follow-up has returned before
+  final validation begins. Do not leave a worker running or queued that can write after the
+  final compile.
 - Check each builder's `Functional:` section before accepting its QA report. It must
   contain exactly one `PASS` trace per Required Action in that screen's brief, and each
   trace must name the precondition, control event, source/stable-ID operation,
@@ -244,8 +253,10 @@ discards prior fixes and does not converge.
   `[working directory]/_EditorState.pa.yaml` after all builders finish. If it says `None`, leave the
   file unchanged.
 - Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
-- After the final successful compile, do not mutate app YAML. Any later repair invalidates
-  that result and requires another final compile.
+- Complete every app, planning, and acceptance-artifact write before the final compile.
+  The final successful `compile_canvas` must occur after the last `edit`, `create`, or
+  `apply_patch` and must be the final authoring operation before the summary. If any later
+  write or repair occurs, run `compile_canvas` again.
 
 ## Shared Invariants
 
