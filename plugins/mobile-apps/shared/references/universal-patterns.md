@@ -281,7 +281,11 @@ Used for: finance, enterprise, health — any app with auth sessions.
 
 ## 8. Offline Sync Queue UI
 
-Used for: field apps, any app that works without connectivity.
+Legacy/custom-edit reference only. Never select this pattern during `/create-mobile-app`,
+including when the prompt mentions offline or the app is used in the field.
+Mobile Offline Profile opt-in happens after Dataverse
+materialization and does not create generated UI. Use this pattern only for a
+later, explicit product requirement backed by a real app-owned sync queue API.
 
 ```tsx
 // Sync status bar — sticky at top of list screens
