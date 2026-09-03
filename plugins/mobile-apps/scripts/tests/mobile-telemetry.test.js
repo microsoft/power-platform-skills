@@ -224,6 +224,7 @@ test('Application Insights prompt selections emit only the approved choice', (t)
     assert.deepEqual(event.data.eventInfo, {
       appInstanceId: null,
       appInsightsSelection: selection,
+      invocationSource: 'prompt',
     });
   }
 });

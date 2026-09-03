@@ -166,7 +166,7 @@ Persist in `memory-bank.md` (never the connection string):
 - Customer telemetry: enabled
 - Customer telemetry app ID: <appId>
 - Customer telemetry resource ID: <selected-resource-id or admin-provided>
-- Customer telemetry destination: one C1-owned workspace-based Application Insights resource
+- Customer telemetry destination: one customer-owned workspace-based Application Insights resource
 ```
 
 ## Step 5b — disable

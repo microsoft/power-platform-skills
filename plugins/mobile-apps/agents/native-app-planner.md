@@ -300,7 +300,7 @@ Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/referen
 
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
 
-Application Insights telemetry is also NOT a connector. Exclude it from Gate 3 and allow planning to proceed with the actual business connectors. The C1-owned Application Insights resource is configured separately through the `/setup-app-insights` skill (standalone or via `/edit-app`).
+Application Insights telemetry is also NOT a connector. Exclude it from Gate 3 and allow planning to proceed with the actual business connectors. The customer-owned Application Insights resource is configured separately through the `/setup-app-insights` skill (standalone or via `/edit-app`).
 
 Store the confirmed connector list — you will pass it to `screen-planner` in Step 4.
 

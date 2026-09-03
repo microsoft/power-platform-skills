@@ -150,6 +150,7 @@ test('runner emits the Application Insights selection event', (t) => {
   assert.deepEqual(dimensions.eventInfo, {
     appInstanceId: null,
     appInsightsSelection: 'enabled',
+    invocationSource: 'prompt',
   });
 });
 
