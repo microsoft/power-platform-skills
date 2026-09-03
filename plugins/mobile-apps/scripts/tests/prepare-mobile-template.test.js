@@ -115,8 +115,8 @@ test('preparation is idempotent and preserves generated and existing helper file
   assert.match(layout, /offlineProfile=\{offlineProfile\}/);
   assert.match(layout, /tamaguiConfig=\{tamaguiConfig\}/);
   assert.match(layout, /defaultTheme=/);
-  assert.match(layout, /theme=\{lightTheme\}/);
-  assert.match(layout, /darkTheme=\{darkTheme\}/);
+  assert.doesNotMatch(layout, /theme=\{lightTheme\}/);
+  assert.doesNotMatch(layout, /darkTheme=\{darkTheme\}/);
   assert.doesNotMatch(layout, /<SafeAreaView[\s\S]*<Slot\s*\/>/);
   assert.match(layout, /@ts-ignore - power\.config\.json/);
   assert.match(layout, /@ts-ignore - connectorSchemas/);
@@ -253,7 +253,7 @@ export default function RootLayout() {
   );
   assert.strictEqual((result.match(/from ['"]\.\.\/tamagui\.config['"]/g) || []).length, 1);
   assert.match(result, /import ReactNative,\s*\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*'react-native'/s);
-  assert.match(result, /import\s*\{[^}]*\blightTheme\b[^}]*\bdarkTheme\b[^}]*\}\s*from\s*'@microsoft\/power-apps-native-host'/s);
+  assert.doesNotMatch(result, /\blightTheme\b|\bdarkTheme\b/);
   assert.match(result, /<SafeAreaProvider>[\s\S]*<PowerAppsProvider/);
 });
 
@@ -347,8 +347,8 @@ export default function RootLayout() {
   assert.ok(first.includes(jsxValue));
   assert.ok(first.includes(callbackValue));
   assert.match(first, /\n\s+tamaguiConfig=\{tamaguiConfig\}\n/);
-  assert.match(first, /\n\s+theme=\{lightTheme\}\n/);
-  assert.match(first, /\n\s+darkTheme=\{darkTheme\}\n/);
+  assert.doesNotMatch(first, /\n\s+theme=\{lightTheme\}\n/);
+  assert.doesNotMatch(first, /\n\s+darkTheme=\{darkTheme\}\n/);
   prepareRootLayout(projectRoot);
   assert.strictEqual(
     fs.readFileSync(path.join(projectRoot, 'app', '_layout.tsx'), 'utf8'),
@@ -362,7 +362,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 export default function RootLayout() {
   return (
     <SafeAreaProvider>
-      <PowerAppsProvider tamaguiConfig={tamaguiConfig} defaultTheme="light" theme={lightTheme} darkTheme={darkTheme}>
+      <PowerAppsProvider tamaguiConfig={tamaguiConfig} defaultTheme="light">
         <SafeAreaView><Slot /></SafeAreaView>
       </PowerAppsProvider>
     </SafeAreaProvider>

@@ -66,7 +66,7 @@ Use this framework to recommend the right backend integration approach for a Pow
 
 **Field-list drift caveat (when both items exist for the same table):** if `/integrate-webapi`
 has already configured `Webapi/<table>/fields` for full CRUD (including primary key and
-lookup write forms), the follow-up `/add-ai-webapi` run detects Layer 1/2 as `ready` and
+relationship Navigation Properties used by `@odata.bind`), the follow-up `/add-ai-webapi` run detects Layer 1/2 as `ready` and
 skips its delegation — leaving the broader CRUD allowlist in place. The AI surface still
 works, but the fields list is broader than AI-only mode would produce. The
 `ai-webapi-settings-architect` agent flags this as an advisory in its plan; the user can

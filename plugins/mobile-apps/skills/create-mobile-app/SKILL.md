@@ -68,6 +68,8 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 
 ### Step 0 — Resume check + fresh-template gate
 
+**Telemetry checkpoint: `template_gate`**
+
 If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing directory), check whether `<working_dir>/memory-bank.md` exists.
 
 - **Bank present** → read it. Identify the highest-numbered completed step. Inform the user:
@@ -96,6 +98,8 @@ node "${PLUGIN_ROOT}/scripts/lib/app-identity.js" "<working_dir>"
 `app-identity.js` mints `app.json` `expo.extra.telemetry.appInstanceId` — a random per-project ID that lets usage telemetry tell this app apart from other apps built in the same session, and recognize it again in later sessions. It is idempotent, so a resume or re-run keeps the original ID. It contains no app name, path, or environment data. Commit it: it is the app's identity, not a per-machine cache.
 
 ### Step 1 — Prerequisites
+
+**Telemetry checkpoint: `prerequisites`**
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
 
@@ -431,6 +435,8 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
 
 ### Step 3 — Plan (planner agent + 4 approval gates)
+
+**Telemetry checkpoint: `planning`**
 
 First, create the working and planning-artifact directories:
 
@@ -875,6 +881,8 @@ If the resolved environment doesn't match what the planner used in Step 3, ask t
 
 ### Step 5 — Prepare existing template
 
+**Telemetry checkpoint: `scaffold`**
+
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
 
 **Print before starting:**
@@ -986,9 +994,16 @@ approved sample helper only when its destination does not exist. Existing
 helpers are byte-for-byte preserved, so reruns cannot overwrite user or
 builder changes.
 
-**Fix 8 — Thread the project's `tamaguiConfig` into the host provider** (required so screens render under brand tokens, not upstream defaults)
+**Fix 8 — Thread the project's `tamaguiConfig` and active theme into the host provider**
 
-The template ships `PowerAppsProvider` (composed-tree API, v0.2.0+). Fix 8 adds `tamaguiConfig`, `defaultTheme`, `theme`, and `darkTheme` props so screens render under brand tokens. Do NOT add an outer `<TamaguiProvider>` — `PowerAppsProvider` composes it internally and duplicating triggers "useTheme must be used within a TamaguiProvider" warnings on hot reload.
+The template ships `PowerAppsProvider` with host-owned light and dark theme
+defaults. Fix 8 ensures the project `tamaguiConfig` and color-scheme-driven
+`defaultTheme` are present. It preserves explicit `theme` and `darkTheme`
+overrides when an app already has them, but does not add redundant overrides
+to a fresh template. Step 9b adds explicit themes only when applying generated
+brand tokens. Do NOT add an outer `<TamaguiProvider>` — `PowerAppsProvider`
+composes it internally and duplicating triggers "useTheme must be used within
+a TamaguiProvider" warnings on hot reload.
 
 The preparation script edits the existing root layout structurally. It adds
 missing imports and provider props, then wraps `PowerAppsProvider` with
@@ -1292,6 +1307,8 @@ Print:
 Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.json` only.
 
 ### Step 8 — Apply data model
+
+**Telemetry checkpoint: `data_model`**
 
 If `<dataverse_planning_mode> = connector-only`, verify the approved
 `## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`
@@ -2013,6 +2030,8 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 ### Step 11 — Build screens (parallel)
 
+**Telemetry checkpoint: `screens`**
+
 **Build mode is NEVER a user-facing question.** Do not ask "Build mode? parallel/inline" or any variant. The orchestrator decides automatically per the preflight below.
 
 **Quality rule — screen count/time is NOT a fallback trigger.** If `Task` can spawn `mobile-app:screen-builder`, always use screen-builder waves, even for 10+ screens. Do NOT write "given the scale/time, I'll write screens inline" or any equivalent shortcut. Screen-builder agents carry the quality checklist, domain-pattern rules, resolved-import discipline, safe-area/contrast/a11y checks, and per-screen return protocol. Inline mode exists only for host/tooling failure, not for convenience.
@@ -2179,6 +2198,8 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 ---
 
 ### Step 12 — Start dev server (background)
+
+**Telemetry checkpoint: `app_ready`**
 
 **Print before starting:**
 > "→ [Step 12/13] Launching Metro dev server in the background so you can scan the QR."

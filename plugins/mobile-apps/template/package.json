@@ -10,15 +10,15 @@
     "type-check": "tsc --noEmit",
     "build:android": "wrap android",
     "build:ios": "wrap ios",
-    "bundle:android": "js-bundle android",
-    "bundle:ios": "js-bundle ios",
+    "bundle:android": "build-codegen-package android",
+    "bundle:ios": "build-codegen-package ios",
     "bundle:web": "js-bundle web"
   },
   "dependencies": {
     "@expo/metro-runtime": "55.0.11",
     "@expo/vector-icons": "15.1.1",
     "@microsoft/power-apps": "1.2.13",
-    "@microsoft/power-apps-native-host": "^0.3.1",
+    "@microsoft/power-apps-native-host": "^0.3.3",
     "@microsoft/power-apps-native-offline": "^0.1.32",
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-community/datetimepicker": "8.6.0",

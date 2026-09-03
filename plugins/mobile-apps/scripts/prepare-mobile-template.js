@@ -342,8 +342,6 @@ function ensureProviderProps(source) {
   const requiredProps = [
     ['tamaguiConfig', 'tamaguiConfig={tamaguiConfig}'],
     ['defaultTheme', "defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}"],
-    ['theme', 'theme={lightTheme}'],
-    ['darkTheme', 'darkTheme={darkTheme}'],
   ];
   const additions = requiredProps
     .filter(([name]) => !providerAttributes.has(name))
@@ -395,8 +393,6 @@ function verifyRootLayout(source) {
     ['SafeAreaProvider import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\bSafeAreaProvider\b[^}]*\}\s*from\s*['"]react-native-safe-area-context['"]/],
     ['useColorScheme import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*['"]react-native['"]/],
     ['colorScheme binding', /\b(?:const|let)\s+colorScheme\s*=\s*useColorScheme\s*\(\s*\)/],
-    ['host light theme', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\blightTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
-    ['host dark theme', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\bdarkTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
     ['Tamagui config import', /tamaguiConfig\s+from\s*['"]\.\.\/tamagui\.config['"]/],
   ];
 
@@ -413,8 +409,6 @@ function verifyRootLayout(source) {
     const providerChecks = [
       ['Tamagui config provider prop', attributes.get('tamaguiConfig') === '{tamaguiConfig}'],
       ['default theme provider prop', attributes.has('defaultTheme')],
-      ['light theme provider prop', attributes.has('theme')],
-      ['dark theme provider prop', attributes.has('darkTheme')],
     ];
     missing.push(...providerChecks.filter(([, valid]) => !valid).map(([label]) => label));
   }
@@ -440,11 +434,7 @@ function prepareRootLayout(projectRoot) {
 
   source = ensureNamedImports(source, 'react-native', ['useColorScheme']);
   source = ensureNamedImports(source, 'react-native-safe-area-context', ['SafeAreaProvider']);
-  source = ensureNamedImports(source, '@microsoft/power-apps-native-host', [
-    'PowerAppsProvider',
-    'lightTheme',
-    'darkTheme',
-  ]);
+  source = ensureNamedImports(source, '@microsoft/power-apps-native-host', ['PowerAppsProvider']);
   source = ensureDefaultImport(source, '../tamagui.config', 'tamaguiConfig');
   source = ensureColorSchemeHook(source);
   source = ensureProviderProps(source);

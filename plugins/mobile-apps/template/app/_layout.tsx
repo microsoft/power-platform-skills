@@ -2,11 +2,7 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import {
-  PowerAppsProvider,
-  darkTheme,
-  lightTheme,
-} from '@microsoft/power-apps-native-host';
+import { PowerAppsProvider } from '@microsoft/power-apps-native-host';
 
 import appConfig from '../app.json';
 import authConfig from '../auth.config.json';
@@ -45,8 +41,6 @@ export default function RootLayout() {
         tamaguiConfig={tamaguiConfig}
         offlineProfile={offlineProfile}
         defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
-        theme={lightTheme}
-        darkTheme={darkTheme}
       >
         <StatusBar style="auto" />
         <Slot />
