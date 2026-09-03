@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const {
+  partitionDeferredFindings,
   validateSiteIntegrity,
 } = require('../lib/site-integrity');
 const {
@@ -53,6 +54,66 @@ test('CLI reports malformed project-root usage without validating another path',
   assert.equal(result.stdout, '');
   assert.match(result.stderr, /"--projectRoot" requires a value/);
   assert.match(result.stderr, /Usage: validate-site-integrity/);
+});
+
+test('defers exact recorded static bidi blockers but not unsafe or changed findings', () => {
+  const recorded = [
+    {
+      file: 'src/Form.tsx',
+      line: 10,
+      rule: 'fixed-direction',
+      message: 'fixed direction',
+      fingerprint: 'fixed-fingerprint',
+    },
+    {
+      file: 'src/Card.tsx',
+      line: 20,
+      rule: 'directional-physical-utility',
+      message: 'physical utility',
+      fingerprint: 'utility-fingerprint',
+    },
+  ];
+  const result = partitionDeferredFindings([
+    ...recorded,
+    {
+      file: 'src/theme.css',
+      line: 30,
+      rule: 'unicode-bidi-override',
+      message: 'unsafe override',
+    },
+    {
+      file: 'src/Card.tsx',
+      line: 20,
+      rule: 'directional-physical-utility',
+      message: 'changed physical utility',
+      fingerprint: 'changed-fingerprint',
+    },
+  ], recorded);
+
+  assert.deepEqual(result.deferred, recorded);
+  assert.deepEqual(
+    result.blocking.map((finding) => finding.rule),
+    ['unicode-bidi-override', 'directional-physical-utility']
+  );
+});
+
+test('does not defer a replacement defect with the same legacy message identity', () => {
+  const recorded = [{
+    file: 'src/Code.tsx',
+    line: 10,
+    rule: 'fixed-direction',
+    message: 'Fixed markup direction: dir="ltr"',
+    fingerprint: 'original-element',
+  }];
+  const replacement = [{
+    ...recorded[0],
+    fingerprint: 'replacement-element',
+  }];
+
+  const result = partitionDeferredFindings(replacement, recorded);
+  assert.deepEqual(result.deferred, []);
+  assert.deepEqual(result.blocking, replacement);
+  assert.deepEqual(result.blocking, replacement);
 });
 
 test('skips declarative Power Pages projects', (t) => {
