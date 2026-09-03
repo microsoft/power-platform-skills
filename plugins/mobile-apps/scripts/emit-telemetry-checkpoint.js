@@ -14,6 +14,7 @@ function parseCheckpointPayload(payload) {
   if (parts.length < 3 || parts.length > 4) return null;
 
   const [skillName, checkpointName, state, additionalInfo] = parts;
+  if (parts.length === 4 && !additionalInfo) return null;
   if (
     !CHECKPOINT_SKILLS.has(skillName) ||
     checkpointName.length > 64 ||

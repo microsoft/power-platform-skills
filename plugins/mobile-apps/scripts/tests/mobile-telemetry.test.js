@@ -229,6 +229,7 @@ test('checkpoint payload accepts only tracked skills and static snake_case field
     'unknown-skill|planning|started',
     'create-mobile-app|Planning|started',
     'create-mobile-app|planning|finished',
+    'create-mobile-app|planning|started|',
     'create-mobile-app|planning|failed|C:\\secret\\file.txt',
     `create-mobile-app|${'a'.repeat(65)}|started`,
     'create-mobile-app|planning|started|safe|extra',
