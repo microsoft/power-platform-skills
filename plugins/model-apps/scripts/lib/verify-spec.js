@@ -23,6 +23,31 @@ const { isVisualizationUnsupported } = require('./entity-provision.js');
 async function verifySpec(spec, read, opts = {}) {
   const checks = [];
   const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
+  // Artifacts the BUILD reported as impossible on this environment, keyed `entity|name`. Supplied by
+  // the caller because verify is also runnable standalone, where no build result exists — in that
+  // case the set is empty and every declared rule is checked, which is the right default: absent a
+  // build's own report, "not deployed" is the honest verdict.
+  const environmentSkippedRules = new Set(
+    ((opts.environmentSkipped && opts.environmentSkipped.businessRules) || []).map((k) => String(k)));
+  // The phases the invocation actually ran, when it ran a SUBSET. A `--changed-only` fast apply runs
+  // `phases: ['pages']`, so the business-rules loop never executes and `skipped.businessRules` comes
+  // back empty — which made the skip list above useless on exactly the runs that need it most, and
+  // reported every rule as missing on an environment that can never host one.
+  //
+  // Scoped to business rules on purpose. Business rules are the only artifact class that can be
+  // PERMANENTLY absent through no fault of the run; everything else is absent because something
+  // failed or has not been built yet, which is precisely what verify exists to report. Generalising
+  // this would turn "verify is spec-complete regardless of --phases" into "verify checks whatever
+  // this run happened to touch", and the failure mode of getting THAT wrong is a verify that
+  // silently checks nothing.
+  const ranPhases = Array.isArray(opts.phases) ? new Set(opts.phases) : null;
+  const businessRulesPhaseRan = !ranPhases || ranPhases.has('business-rules');
+  // Two DIFFERENT reasons a check was not performed, kept apart because they warrant opposite
+  // messages. Reporting a phase that simply did not run as "this environment cannot host it" tells
+  // an operator on a perfectly healthy environment that their environment is broken — and on the
+  // normal `--changed-only` fast-apply path that would be wrong every single time.
+  const environmentSkipped = [];
+  const phaseSkipped = [];
 
   // Entities + their declared columns.
   for (const e of spec.entities || []) {
@@ -153,6 +178,36 @@ async function verifySpec(spec, read, opts = {}) {
   for (const rule of spec.businessRules || []) {
     const entityLogical = String(rule.entity).toLowerCase();
     const name = `${entityLogical}.${rule.name}`;
+    // A rule the BUILD skipped because this environment cannot host business rules at all is not a
+    // verification failure — it is a capability gap the operator was already told about, by name,
+    // during the build. Checking it anyway would report `not deployed` forever on the 18-of-20
+    // environments that lack the bound member.
+    //
+    // That is not merely noisy. `verify.ok` gates the process EXIT CODE, whether
+    // `.last-applied.json` is written, and whether the `--changed-only` snapshot is persisted — and
+    // page-bearing specs make verify MANDATORY. So a permanently-false `ok` would permanently
+    // withhold the changed-only baseline, forcing a full build on every subsequent run forever.
+    // Those three gates are built for TRANSIENT failures that a later run clears; this one never
+    // clears.
+    //
+    // Reported as its own outcome rather than passed: nothing here claims the rule exists.
+    if (environmentSkippedRules.has(`${entityLogical}|${rule.name}`)) {
+      environmentSkipped.push(`business-rule:${name}`);
+      continue;
+    }
+    // A phase-limited run (a `--changed-only` fast apply is `phases: ['pages']`) never executed the
+    // business-rules phase, so it has no skip list to offer and demanding the rule here would fail
+    // a run that never touched it. On a gated environment that turned every fast apply into a
+    // non-zero exit plus an invalidated snapshot, alternating full/failing-fast forever, and the log
+    // line blamed PAGES for a business-rule gate.
+    //
+    // Reported SEPARATELY from the environment gate: on a healthy environment the rules are deployed
+    // and fine, and telling that operator their environment cannot host business rules would be
+    // wrong on every fast apply they ever run.
+    if (!businessRulesPhaseRan) {
+      phaseSkipped.push(`business-rule:${name}`);
+      continue;
+    }
     let rows;
     try {
       // `top: 50`, not 1 — the whole point is to SEE duplicates. Scoped to DEFINITION rows only
@@ -169,7 +224,20 @@ async function verifySpec(spec, read, opts = {}) {
       continue;
     }
     const list = rows || [];
-    if (!list.length) { add('business-rule', name, false, 'not deployed'); continue; }
+    if (!list.length) {
+      // Name the most likely cause instead of the bare fact. The SDK writes rules ONLY through the
+      // bound `CreateProcessWithWfomJson` member and no longer compiles a workflow-XAML fallback, so
+      // an environment that does not declare that member cannot host business rules at all — and
+      // that is the COMMON case. The build already skips them with a warning, so
+      // without this hint the operator reads "not deployed" as a build failure and goes looking for
+      // one that is not there.
+      //
+      // It stays a FAIL, not a pass or a skip: the app genuinely does not have the rule the spec
+      // asks for, and verify's job is to report the deployed truth.
+      add('business-rule', name, false,
+        'not deployed — if the build reported "business rules were NOT created", this environment does not expose the CreateProcessWithWfomJson member and cannot host them');
+      continue;
+    }
     if (list.length > 1) {
       add('business-rule', name, false, `${list.length} rules share this name on ${entityLogical} — duplicates fire the same logic more than once (see issue #482)`);
       continue;
@@ -402,7 +470,9 @@ async function verifySpec(spec, read, opts = {}) {
     for (const [feature, requested] of Object.entries(requestedFeatures)) {
       const setting = AI_APP_SETTING[feature];
       if (!setting) continue; // unknown key — validation already reports it
-      const want = featureWantValue(requested);
+      // Feature-aware: `true` means '2' for the form-fill family and '1' elsewhere. Comparing
+      // against the wrong spelling reports a correctly-applied feature as missing.
+      const want = featureWantValue(requested, feature);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
       //     A small retry on the ABSENT case only: an override row can lag briefly behind the write
@@ -466,7 +536,15 @@ async function verifySpec(spec, read, opts = {}) {
 
   const missing2 = checks.filter((c) => !c.present);
   // Keep unableToRun absent (undefined) on the normal path so existing callers and tests are unaffected.
-  return { ok: missing2.length === 0 && !unableToRun, checks, missing: missing2, unableToRun: unableToRun || undefined };
+  // `environmentSkipped` / `phaseSkipped` are likewise omitted when empty, for the same reason.
+  return {
+    ok: missing2.length === 0 && !unableToRun,
+    checks,
+    missing: missing2,
+    unableToRun: unableToRun || undefined,
+    ...(environmentSkipped.length ? { environmentSkipped } : {}),
+    ...(phaseSkipped.length ? { phaseSkipped } : {}),
+  };
 }
 
 function escapeRe(s) {

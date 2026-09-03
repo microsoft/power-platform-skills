@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Add Native Capability
 
@@ -23,7 +23,7 @@ Generate a one-file typed wrapper under `src/native/` for a native device capabi
 
 Some capabilities have a dedicated implementation helper that does more than a plain wrapper (camera writes scanner/upload helpers; PDF report/viewer helpers enforce local-vs-HTTPS boundaries; pen has native-control-specific validation). Users should still call `/add-native <capability>` for native controls. When a dedicated implementation exists, **run it internally and do not ask the user to run that helper directly**.
 
-**Lookup convention:** after normalizing the capability, first check the internal-helper map below. For `camera`, `image-picker`, `barcode-scanner`, and `qr-scanner`, read and execute `${CLAUDE_SKILL_DIR}/add-camera/SKILL.md` inside this `/add-native` invocation. For `pdf-report`, read and execute `${CLAUDE_SKILL_DIR}/add-pdf-report/SKILL.md`. For `pdf-viewer`, read and execute `${CLAUDE_SKILL_DIR}/add-pdf-viewer/SKILL.md`. For `pen-input`, read and execute `${CLAUDE_SKILL_DIR}/add-pen-input/SKILL.md`. For `geolocation`, read and execute `${CLAUDE_SKILL_DIR}/add-geolocation/SKILL.md`. If no helper exists, fall through to this skill's inline wrapper flow.
+**Lookup convention:** after normalizing the capability, first check the internal-helper map below. For `camera`, `image-picker`, `barcode-scanner`, and `qr-scanner`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-camera/SKILL.md` inside this `/add-native` invocation. For `pdf-report`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-pdf-report/SKILL.md`. For `pdf-viewer`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-pdf-viewer/SKILL.md`. For `pen-input`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-pen-input/SKILL.md`. For `geolocation`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-geolocation/SKILL.md`. If no helper exists, fall through to this skill's inline wrapper flow.
 
 Current dedicated implementations:
 
@@ -200,11 +200,11 @@ For normalized `camera`, `image-picker`, `barcode-scanner`, `qr-scanner`, `pdf-r
 
 ```bash
 case "<capability>" in
-  camera|image-picker|barcode-scanner|qr-scanner) test -f "${CLAUDE_SKILL_DIR}/add-camera/SKILL.md" && echo "INTERNAL_HELPER:add-camera" ;;
-  pdf-report) test -f "${CLAUDE_SKILL_DIR}/add-pdf-report/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-report" ;;
-  pdf-viewer) test -f "${CLAUDE_SKILL_DIR}/add-pdf-viewer/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-viewer" ;;
-  pen-input) test -f "${CLAUDE_SKILL_DIR}/add-pen-input/SKILL.md" && echo "INTERNAL_HELPER:add-pen-input" ;;
-  geolocation) test -f "${CLAUDE_SKILL_DIR}/add-geolocation/SKILL.md" && echo "INTERNAL_HELPER:add-geolocation" ;;
+  camera|image-picker|barcode-scanner|qr-scanner) test -f "${PLUGIN_ROOT}/skills/add-native/add-camera/SKILL.md" && echo "INTERNAL_HELPER:add-camera" ;;
+  pdf-report) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-report/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-report" ;;
+  pdf-viewer) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-viewer/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-viewer" ;;
+  pen-input) test -f "${PLUGIN_ROOT}/skills/add-native/add-pen-input/SKILL.md" && echo "INTERNAL_HELPER:add-pen-input" ;;
+  geolocation) test -f "${PLUGIN_ROOT}/skills/add-native/add-geolocation/SKILL.md" && echo "INTERNAL_HELPER:add-geolocation" ;;
   *) echo "INLINE" ;;
 esac
 ```
@@ -322,4 +322,4 @@ Sample usage:
 
 - This skill never modifies `package.json`, `app.config.js`, `src/playerConfig.ts`, `src/generated/`, or any screen file.
 - For capabilities not in the supported table (`expo-notifications`, Bluetooth, NFC, BLE, AR — until the template adds them), tell the user the template doesn't ship them yet — file a request at the upstream template repo. Do NOT attempt to install or configure anything yourself.
-- Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.
+- Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.

@@ -770,6 +770,170 @@ test('forms without names are skipped (cannot be resolved)', () => {
   assert.strictEqual(formSteps[0].label, 'form "MyForm" (new_x)');
 });
 
+function businessRuleTeardownSdk(rows, { refuseActivatedCopyOnce = false, refuseActivatedCopyAlways = false, staleGoneIds = [] } = {}) {
+  const live = new Map(rows.map((r) => [String(r.workflowid), { ...r }]));
+  const calls = [];
+  const staleGone = new Set(staleGoneIds.map(String));
+  const refused = new Set();
+  return {
+    calls,
+    async resolveArtifact(kind) {
+      calls.push({ method: 'resolveArtifact', kind });
+      return [];
+    },
+    async queryRecords(entitySet, opts = {}) {
+      calls.push({ method: 'queryRecords', entitySet, filter: String(opts.filter || '') });
+      if (entitySet !== 'workflow') return [];
+      const filter = String(opts.filter || '');
+      const wantsType1 = /type eq 1/.test(filter);
+      const wantsType2 = /type eq 2/.test(filter);
+      return [...live.values()].filter((r) => {
+        if (!/category eq 2/.test(filter) || !filter.includes(`name eq '${r.name}'`) || !filter.includes(`primaryentity eq '${r.primaryentity}'`)) return false;
+        if (wantsType1 && wantsType2) return r.type === 1 || r.type === 2;
+        if (wantsType1) return r.type === 1;
+        if (wantsType2) return r.type === 2;
+        return true;
+      });
+    },
+    async updateRecord(entitySet, id, data) {
+      calls.push({ method: 'updateRecord', entitySet, id, data });
+      const row = live.get(String(id));
+      // The real SDK routes updateRecord through `ensureSuccess`, so a PATCH against a row that no
+      // longer exists THROWS 404. Silently no-op'ing here let a fallback that deactivated an
+      // already-DELETED definition look like working defence-in-depth when it could never fire.
+      if (!row) {
+        const err = new Error(`workflow ${id} not found`);
+        err.statusCode = 404;
+        throw err;
+      }
+      Object.assign(row, data);
+    },
+    async deleteRecord(entitySet, id) {
+      calls.push({ method: 'deleteRecord', entitySet, id });
+      const row = live.get(String(id));
+      if (staleGone.has(String(id)) && !row) {
+        const err = new Error('workflow not found');
+        err.statusCode = 404;
+        throw err;
+      }
+      if ((refuseActivatedCopyAlways || refuseActivatedCopyOnce) && row && row.type === 2 && (refuseActivatedCopyAlways || !refused.has(String(id)))) {
+        refused.add(String(id));
+        const err = new Error('The requested action is not supported for activated business rules.');
+        err.statusCode = 405;
+        throw err;
+      }
+      if (!row) {
+        const err = new Error('workflow not found');
+        err.statusCode = 404;
+        throw err;
+      }
+      live.delete(String(id));
+    },
+    async deleteTable(logical) {
+      calls.push({ method: 'deleteTable', logical });
+      const err = new Error('Could not find an entity with the specified logical name');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+}
+
+test('active business-rule teardown deletes the DEFINITION first, then the activated copy, then the table', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 1 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ]);
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    businessRules: [{ entity: 'new_ticket', name: 'Gate' }],
+  };
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.deepStrictEqual(res.deleted.businessRules, ['def-1', 'active-1'], 'both workflow rows are counted as this step\'s responsibility');
+  const writes = sdk.calls.filter((c) => c.method === 'deleteRecord' || c.method === 'deleteTable');
+  // Live-measured order. The definition holds a cascade-restrict reference to the activated copy via
+  // `workflow_active_workflow`, so the copy CANNOT be deleted first:
+  //   405 "Cascade Delete failed due to cascade restrict relation. Restricting entity Workflow has
+  //        Id: <type-1> and is collected by Relationship with name: workflow_active_workflow."
+  // Deleting the definition releases it, and the now-orphaned copy deletes cleanly — but ONLY while
+  // its table still exists. After the table drop it is undeletable forever (400 0x80041102), which
+  // is why both rows must precede the tables phase.
+  assert.deepStrictEqual(writes.map((c) => c.method === 'deleteRecord' ? `${c.entitySet}:${c.id}` : `table:${c.logical}`), [
+    'workflow:def-1',
+    'workflow:active-1',
+    'table:new_ticket',
+  ]);
+});
+
+test('draft-only business-rule teardown keeps the existing definition-only behavior', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Draft Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 0 },
+  ]);
+  const items = await KIND_HANDLERS.businessRules.resolve(sdk, { entity: 'new_ticket', name: 'Draft Gate' });
+  assert.deepStrictEqual(items.map((i) => i.id), ['def-1']);
+  await deleteStep(sdk, KIND_HANDLERS.businessRules, items);
+  assert.deepStrictEqual(
+    sdk.calls.filter((c) => c.method === 'updateRecord' || c.method === 'deleteRecord').map((c) => `${c.method}:${c.id}`),
+    ['deleteRecord:def-1'],
+    'a never-activated Draft rule is still just deleted directly'
+  );
+});
+
+test('business-rule teardown makes ONE attempt at the activated copy — no retry that cannot succeed', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 1 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ], { refuseActivatedCopyAlways: true });
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    businessRules: [{ entity: 'new_ticket', name: 'Gate' }],
+  };
+  await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  const writes = sdk.calls.filter((c) => c.method === 'deleteRecord' || c.method === 'updateRecord').map((c) => (
+    c.method === 'updateRecord' ? `update:${c.id}` : `delete:${c.id}`
+  ));
+  // Definition first (deactivate -> delete), then exactly ONE attempt at the copy. An earlier
+  // version deactivated `parentDefinitionId` and re-issued the same delete, which reads like
+  // defence in depth but cannot work: the definition row is already gone by then, so the deactivate
+  // 404s and the retry is byte-identical to the call that just failed. It only looked correct
+  // because the mock silently no-op'd updateRecord on a missing row.
+  assert.deepStrictEqual(writes, ['update:def-1', 'delete:def-1', 'delete:active-1'],
+    `expected exactly one copy-delete attempt and no post-delete retry; got: ${writes.join(' | ')}`);
+  assert.strictEqual(writes.filter((w) => w === 'delete:active-1').length, 1, 'the copy delete was retried');
+});
+
+test('business-rule teardown is idempotent when a resolved activated copy is already gone', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 0 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ]);
+  const items = await KIND_HANDLERS.businessRules.resolve(sdk, { entity: 'new_ticket', name: 'Gate' });
+  // Simulate a re-run race: the row existed at resolve time but another teardown already removed it.
+  sdk.calls.length = 0;
+  await sdk.deleteRecord('workflow', 'active-1');
+  sdk.calls.length = 0;
+  const r = await deleteStep(sdk, KIND_HANDLERS.businessRules, items);
+  assert.deepStrictEqual(r.deletedIds, ['def-1', 'active-1'], 'already-gone rows count as removed rather than failing the run');
+  assert.deepStrictEqual(r.skippedIds, []);
+});
+
+test('business-rule teardown reports a failure when the activated copy still cannot be removed', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 1 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ], { refuseActivatedCopyAlways: true });
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    businessRules: [{ entity: 'new_ticket', name: 'Gate' }],
+  };
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, false, 'an undeleted activated copy makes teardown report a failed step');
+  assert.ok(res.errors.some((e) => /business rule "Gate"/.test(e.step) && /not supported/.test(e.message)), 'the failure names the business-rule step and platform reason');
+});
+
 // --- helpers ----------------------------------------------------------------------------
 
 test('odataStr doubles single quotes (OData literal escaping)', () => {
@@ -889,7 +1053,7 @@ test('teardown still deletes a real (non-restricted) solution — regression', a
 
 // --- Security persona roles (Group N P1) ---------------------------------------------------
 
-test('planTeardown inserts persona role steps right after the app, before the data model', () => {
+test('planTeardown orders persona roles AFTER forms and before the data model', () => {
   const spec = Object.assign(fullSpec(), { personas: [
     { persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
     { persona: 'Lead', jobs: [{ name: 'm', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] },
@@ -898,11 +1062,21 @@ test('planTeardown inserts persona role steps right after the app, before the da
   assert.strictEqual(kinds[0], 'app');
   // Generative pages are torn down immediately after the app (the SDK no longer cascades them).
   assert.strictEqual(kinds[1], 'genpage');
-  assert.strictEqual(kinds[2], 'role');
-  assert.strictEqual(kinds[3], 'role');
-  // Roles are torn down before any relationship/table delete (a role holding a table's privileges
-  // could otherwise block that table's delete).
+
+  // Roles come AFTER forms. `forms[].securityRoles` writes the role id into the form's formxml as a
+  // `<DisplayConditions>` entry, and the platform treats that as a real dependency.
+  // MEASURED live: deleting the role first answered
+  //   HTTP 400 ... The Role(<id>) component cannot be deleted because it is referenced by 1 other
+  //   components
+  // and the identical delete returned 204 with zero reported dependencies once the forms were gone.
+  assert.ok(kinds.indexOf('role') > kinds.lastIndexOf('form'),
+    `roles must be deleted after every form; order was ${JSON.stringify(kinds)}`);
+
+  // And still BEFORE any relationship/table delete — the original reason they were early. A role
+  // holding a table's privileges can block that table's delete, so this constraint has to survive
+  // the move rather than be traded away for the one above.
   assert.ok(kinds.lastIndexOf('role') < kinds.indexOf('relationship'), 'roles before relationships/tables');
+  assert.strictEqual(kinds.filter((k) => k === 'role').length, 2, 'both personas are still planned');
 });
 
 test('role handler resolves ONLY SDK-authored (marker) unmanaged roles — never a foreign same-name role', async () => {
@@ -1231,4 +1405,138 @@ test('command teardown proceeds with the bar when the row listing fails', async 
   };
   const items = await KIND_HANDLERS.commands.resolve(sdk, { entity: 'new_ticket', ownsTable: true });
   assert.deepStrictEqual(items.map((i) => i.id), ['bar-1']);
+});
+
+test('a column visualization on a RETAINED table is cleared at teardown', () => {
+  // A visualization is a controlconfiguration row bound to the attribute, so it goes with the table
+  // when the table is deleted. A table flagged `existing: true` is deliberately KEPT, and its
+  // columns would otherwise keep a renderer this spec applied — residue on somebody else's table.
+  const spec = fullSpec();
+  spec.entities.push({
+    schemaName: 'account', displayName: 'Account', pluralName: 'Accounts', existing: true,
+    primaryAttribute: { schemaName: 'name', displayName: 'Name' },
+    columns: [{ schemaName: 'new_score', displayName: 'Score', type: 'Integer', visualization: 'StarRating' }],
+  });
+  const steps = planTeardown(spec, {});
+  const viz = steps.filter((s) => s.kind === 'columnVisualization');
+  assert.strictEqual(viz.length, 1, `expected one clear step, got ${JSON.stringify(viz.map((v) => v.label))}`);
+  assert.strictEqual(viz[0].target.entityLogical, 'account');
+  assert.strictEqual(viz[0].target.columnLogical, 'new_score');
+  // Before the tables phase: a table we DO own takes its configurations with it, so ordering the
+  // clear after the delete would just 404.
+  const tableIdx = steps.findIndex((s) => s.kind === 'table');
+  assert.ok(steps.indexOf(viz[0]) < tableIdx, 'the clear must precede the tables phase');
+});
+
+test('a clear candidate is planned for every declared visualization, ownership decided at resolve', () => {
+  // Planning cannot know whether a table survives: `existing: true` is one reason, but a SYSTEM table
+  // is retained by live detection the plan has no access to, and such a spec need not carry the flag.
+  // So a candidate is planned for each declared visualization and the resolver establishes ownership
+  // — it reads the current value and skips unless it still matches what this spec authored.
+  const spec = fullSpec();
+  spec.entities[0].columns = [{ schemaName: 'new_score', displayName: 'Score', type: 'Integer', visualization: 'StarRating' }];
+  const steps = planTeardown(spec, {}).filter((s) => s.kind === 'columnVisualization');
+  assert.strictEqual(steps.length, 1);
+  assert.strictEqual(steps[0].target.authored, 'StarRating', 'the authored value is what makes the clear safe');
+});
+
+test('teardown does NOT clear a visualization somebody else changed', async () => {
+  // The configuration row is shared by every app showing the column, and the build PATCHes an
+  // existing row rather than creating a private one. Blindly writing 'None' would erase a renderer
+  // another maker set after this spec built.
+  const calls = [];
+  const sdk = {
+    getColumnVisualization: async () => 'HeatMap',            // someone changed it
+    setColumnVisualization: async (...a) => { calls.push(a); },
+  };
+  const res = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.deepStrictEqual(res.items, [], 'nothing to delete when the value is not ours');
+  assert.match(res.skipReason, /someone else changed it/);
+  assert.strictEqual(calls.length, 0, 'and nothing is written');
+});
+
+test('teardown clears a visualization that still matches what this spec authored', async () => {
+  const sdk = { getColumnVisualization: async () => 'StarRating', setColumnVisualization: async () => {} };
+  const items = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.strictEqual(items.length, 1);
+});
+
+test('teardown skips quietly where the visualization preview is not provisioned', async () => {
+  const err = new Error("Resource not found for the segment 'controlconfigurations'.");
+  err.statusCode = 404;
+  const sdk = { getColumnVisualization: async () => { throw err; } };
+  const res = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.deepStrictEqual(res.items, []);
+  assert.match(res.skipReason, /not provisioned/);
+});
+
+test('an unreadable current value is left alone rather than cleared', async () => {
+  // Fail closed: if ownership cannot be established, doing nothing is the safe outcome.
+  const err = new Error('403 forbidden');
+  err.statusCode = 403;
+  const sdk = { getColumnVisualization: async () => { throw err; } };
+  const res = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.deepStrictEqual(res.items, []);
+  assert.match(res.skipReason, /could not read/);
+});
+
+test('clearing a visualization writes None through the SDK', async () => {
+  const calls = [];
+  const sdk = { setColumnVisualization: async (e, c, v) => { calls.push([e, c, v]); } };
+  await KIND_HANDLERS.columnVisualization.del(sdk, { entityLogical: 'account', columnLogical: 'new_score' });
+  assert.deepStrictEqual(calls, [['account', 'new_score', 'None']]);
+});
+
+// --- the teardown business-rule filter is built explicitly, not string-patched ------------------
+//
+// PR review: this filter used to be `businessRuleFilter(...).replace('type eq 1', '(type eq 1 or
+// type eq 2)')`, which coupled teardown to the exact spelling of a function in another module. Any
+// reordering or whitespace change there would silently stop the widening — the type-2 activated copy
+// would survive the table delete, and #493's residue would return with every test still green.
+//
+// LIVE-VERIFIED that the widening matters: teardown of a genuinely activated rule reports
+// "2 deleted" — the definition AND the platform's activated copy.
+
+test('teardown resolves BOTH the definition and the activated copy (type 1 and type 2)', async () => {
+  const queries = [];
+  const sdk = {
+    queryRecords: async (set, opts) => { queries.push({ set, opts }); return []; },
+    updateRecord: async () => {},
+    deleteRecord: async () => {},
+  };
+  await KIND_HANDLERS.businessRules.resolve(sdk, { name: "Lock O'Brien", entity: 'New_Ticket' });
+
+  assert.strictEqual(queries.length, 1);
+  const f = queries[0].opts.filter;
+  assert.match(f, /\(type eq 1 or type eq 2\)/, 'both row types must be in scope for teardown');
+  assert.match(f, /category eq 2/, 'business rules only — never a classic workflow');
+  assert.match(f, /primaryentity eq 'new_ticket'/, 'the entity is lower-cased, and the rule is table-scoped');
+  // An apostrophe must be OData-escaped by doubling, or the filter is malformed AND injectable.
+  assert.match(f, /name eq 'Lock O''Brien'/, "a quote in the name must be escaped, not passed through");
+});
+
+test('the teardown filter does NOT depend on businessRuleFilter\'s spelling', async () => {
+  // The specific brittleness that was reported. `businessRuleFilter` is the BUILD's definition-only
+  // query; teardown must not derive from its text. Asserted on the source so a re-introduction of the
+  // `.replace(...)` coupling fails here rather than silently in production.
+  //
+  // COMMENTS ARE STRIPPED FIRST. The fix's own comment quotes the old pattern verbatim to explain
+  // what changed, and a naive source scan matched that prose — a test that fails on its own
+  // documentation is worse than no test.
+  const raw = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-teardown.js'), 'utf8');
+  const code = raw
+    .split(/\r?\n/)
+    // No `$` anchor: this file is CRLF, and in JS `.` does not match `\r`, so `.*$` never reached the
+    // end of a line that still carried one — the strip silently did nothing and this test failed on
+    // its own documentation.
+    .map((l) => l.replace(/^\s*\/\/.*/, ''))
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');           // block comments
+  assert.doesNotMatch(code, /businessRuleFilter\([^)]*\)\s*\.replace\(/,
+    'teardown must not string-patch businessRuleFilter output');
+  // And it must not import the symbol at all, so the coupling cannot creep back in another form.
+  const importLine = code.split('\n').find((l) => l.includes("require('./sdk-build.js')")) || '';
+  assert.ok(importLine, 'the sdk-build import line must still be findable for this check to mean anything');
+  assert.strictEqual(importLine.includes('businessRuleFilter'), false,
+    `teardown must not import businessRuleFilter; got: ${importLine.trim().slice(0, 160)}`);
 });

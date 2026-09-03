@@ -379,27 +379,52 @@ const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
 // there was anything to clear.
 const COLUMN_VISUALIZATIONS = ['None', 'RadialDial', 'LineChart', 'HeatMap', 'StarRating'];
 
-// Business rules. These MIRROR the vendored SDK's supported slice — but NARROWER, and the gap is
-// deliberate: the SDK advertises four operators and only two of them survive contact with the
-// platform.
+// Whole Number display Format (AB#6648522). MIRRORS the vendored SDK's `integerFormat` union
+// (types/schema.ts) exactly, same reasoning as COLUMN_VISUALIZATIONS above — widening one without
+// the other produces a mid-build InvalidArgumentError instead of a spec-gate rejection.
 //
-// LIVE-MEASURED 2026-08-27. `ContainsData` and `DoesNotContainData` compile to XAML the platform
-// cannot process: every attempt answers
-//   HTTP 500 ... Error generating UiData for workflow: <name>
-// Isolated across six probes on a real org — it fails on a Text column and on a Memo column, with
-// the action on the same field or a different one, and in both directions (`DoesNotContainData`
-// too). `Equals` and `DoesNotEqual` succeed in the same probes, so it is the presence operators
-// specifically, not the rule shape. Offering an operator that reliably 500s is worse than not
-// offering it, so they are rejected at the spec gate with a message pointing at the tracking issue.
-// Re-widen here (and in the schema doc) once the compiler is fixed upstream.
-const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual'];
-// Recognised by the SDK but not usable: kept separate so validation can explain WHY rather than
-// just listing them as unknown.
-const BUSINESS_RULE_BLOCKED_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
-// Operators that take NO value: they test presence, so a `value` would be meaningless. Retained
-// because the mapper still handles them correctly — only the platform side is broken.
+// 'None' is the platform default (plain integer). It is accepted here, same as visualization's
+// 'None', so a spec can explicitly clear a Format set by an earlier build or a maker in the portal.
+// Unlike visualization, this is Integer-type-only — the SDK throws InvalidArgumentError for any
+// other numeric type (BigInt/Decimal/Double/Money), so validated below alongside the enum check.
+const INTEGER_FORMATS = ['None', 'Duration', 'TimeZone', 'Language', 'Locale'];
+
+// Business rules. These MIRROR the vendored SDK's supported slice.
+//
+// The list is the SDK's operator TABLE, not a subset of it, and that table is the authority for a
+// sharp reason: the serializer resolves an operator with
+// `Uf[operator] ?? WorkflowConditionOperator.Equal`, so an operator it does not know becomes
+// **Equals**. `IsGreaterThan` is in the table; `GreaterThan` is not — writing the latter silently
+// deploys an equality test. That is a wrong rule behind a green build, which is exactly what this
+// gate exists to prevent, so `business-rules.test.js` pins this list against the bundle's own table.
+//
+// The list was four entries long for a long time. That was never a platform limit: the SDK used to
+// fall back to a client-side workflow-XAML compiler that could only express those four, and the
+// restriction outlived it. The compiler has been deleted upstream, so the JSON path's full table is
+// available.
+const BUSINESS_RULE_OPERATORS = [
+  'Equals', 'DoesNotEqual',
+  'IsGreaterThan', 'IsGreaterThanEqualTo', 'IsLessThan', 'IsLessThanEqualTo',
+  'Contains', 'DoesNotContain',
+  'BeginsWith', 'DoesNotBeginWith', 'EndsWith', 'DoesNotEndWith',
+  'On', 'NotOn',
+  'ContainsData', 'DoesNotContainData',
+];
+// Nothing is blocked at present. Kept (empty) so a future platform-side breakage can be re-declared
+// here with an explanation, rather than being folded into "unknown operator".
+const BUSINESS_RULE_BLOCKED_OPERATORS = new Set();
+// Operators that take NO value: they test presence, so a `value` would be meaningless. Measured —
+// the serializer emits an EMPTY right-hand operand list for exactly these two.
 const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
 // action type -> the field carrying its payload. `null` = no payload (none currently).
+//
+// The SDK models seven action types (adding `SetDefaultValue`, `ShowErrorMessage` and
+// `Recommendation`), and all seven were measured serializing correctly through the real bundle.
+// They are deliberately NOT exposed yet: each needs new mapping in `businessRuleDef`, and business
+// rules cannot be exercised end to end on an environment that does not declare
+// `CreateProcessWithWfomJson` — which is the environment this was developed against. Shipping
+// mapping code that has never round-tripped against the platform is how a rule deploys and quietly
+// does the wrong thing. Expose them from an environment where they can be live-verified.
 const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };
 const BUSINESS_RULE_ACTION_TYPES = Object.keys(BUSINESS_RULE_ACTIONS);
 // Boolean-payload actions, so a string "false" (truthy in JS) is rejected rather than silently
@@ -409,12 +434,18 @@ const BUSINESS_RULE_BOOLEAN_ACTIONS = new Set(['SetVisibility', 'LockUnlock', 'S
 // in the App Spec because `valueType` in the SDK means something else (Value vs Field vs Lookup),
 // and only `Value` is supported — so exposing that name would invite a distinction authors cannot use.
 //
-// This list MIRRORS the compiler's literal-type map exactly (the `Q5`/type table in the vendored
-// bundle). It previously included `DateTime`, which the compiler does NOT have: such a spec passed
-// validation and then threw a ValidationError from inside the push — the worst place for it, because
-// the bound member may already have committed a workflow row (#482), leaving an orphan behind a
-// "failed" build. `column-visualization`-style drift protection is in business-rules.test.js, which
-// pins this list against the bundle's own map.
+// This list has NO counterpart in the bundle any more, and nothing pins it. It used to mirror the
+// XAML compiler's literal-type map, which this SDK uptake deleted along with the compiler.
+//
+// MEASURED against the replacement JSON path: `dataType` is IGNORED. Across all ten tokens below —
+// and a made-up one — on both the condition path and the SetFieldValue action path, the serializer
+// emits WorkflowAttributeType String ("14") every time:
+//   let r = valueType==='Lookup' ? … : valueType==='Clear' ? (valueWorkflowType ?? String)
+//                                    : WorkflowAttributeType.String
+// So this is a curated closed set kept for two reasons only: it catches a typo at the spec gate, and
+// it keeps the surface forward-compatible if the SDK starts honouring the field. Do NOT add a token
+// on the assumption a test will validate it against the SDK — no such test can exist while there is
+// nothing to validate against. `business-rules.test.js` instead pins the measured no-op.
 const BUSINESS_RULE_DATA_TYPES = ['String', 'Memo', 'Picklist', 'State', 'Status', 'Boolean', 'Integer', 'Double', 'Decimal', 'Money'];
 // Only entity scope is supported. A form-scoped rule needs `processtriggerscope 1` plus a form id,
 // which cannot be resolved before the forms phase has run.
@@ -488,6 +519,282 @@ function quickCreateEnabledFor(spec, entity) {
   );
 }
 
+// A maker-facing `description`, supported on every artifact whose SDK create surface accepts one
+// (table, column, view, chart, form, dashboard, business rule, app, web resource).
+//
+// Deliberately a soft contract: descriptions are OPTIONAL, because making them mandatory would fail
+// every spec authored before they existed. What is validated is only that a supplied value is usable
+// — a number or an object here means the author meant something else, and silently stringifying it
+// would write "[object Object]" into Dataverse.
+//
+// 2000 is the Dataverse ceiling for a description Label; the platform truncates past it rather than
+// erroring, so catching it here is the only place the author finds out.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/entity-attribute-metadata
+const DESCRIPTION_MAX = 2000;
+function validateDescription(value, label, errors, opts = {}) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string') {
+    errors.push(`${label}: description must be a string`);
+    return;
+  }
+  // `app.description` predates this contract and countless existing specs (and every spec emitted by
+  // `download-model-app`) carry it as `""`. Rejecting that would fail specs that are otherwise fine,
+  // so emptiness is tolerated exactly where it is already established — never for a NEW surface,
+  // where an empty string is the one value that could blank a maker's text on rebuild.
+  if (!value.trim()) {
+    if (opts.allowEmpty) return;
+    errors.push(`${label}: description must not be blank — omit the field instead of setting an empty string`);
+    return;
+  }
+  if (value.length > DESCRIPTION_MAX) {
+    errors.push(`${label}: description is ${value.length} characters (max ${DESCRIPTION_MAX})`);
+  }
+}
+
+// Per-control form-field options: `readOnly`, `hidden`, `after`.
+//
+// Reachable two ways — inline on an EXPLICIT layout's `sections[].fields[]` entry, or via the
+// form-level `fieldOptions` map (the only route under an AUTO layout, which has no field list).
+//
+// Only the ENABLED state is written by the build (`isReadOnly: true` / `visible: false`); `false` is
+// a no-op rather than an un-set, so it is rejected here instead of being accepted and quietly
+// ignored — an author who writes `readOnly: false` expecting it to clear an existing lock would
+// otherwise get a green build and no change.
+// `forms[].securityRoles` — who a form is offered to. AB#6648526.
+//
+// Direction matters and is easy to get backwards: a form with NO assignment is offered to EVERY
+// role, so declaring this RESTRICTS the form. That makes every failure mode here access-relevant —
+// a typo'd persona or an empty list narrows a form to nobody — so each is a hard error rather than
+// a warning, and the build additionally halts on an unresolvable persona.
+//
+// `everyone` and `roleIds` are mutually exclusive in the PLATFORM's model (`<Everyone />` replaces
+// the `<Role>` list rather than adding to it), not merely in this validator; the SDK rejects the
+// combination with INVALID_ARGUMENT, so catching it here just names the form.
+function validateFormSecurityRoles(f, spec, errors) {
+  const sr = f.securityRoles;
+  if (sr === undefined) return;
+  const label = `form '${f.name || f.entity}'`;
+  if (!sr || typeof sr !== 'object' || Array.isArray(sr)) {
+    errors.push(`${label}: securityRoles must be an object like { "personas": ["Dispatcher"] } or { "everyone": true }`);
+    return;
+  }
+  const known = new Set(['personas', 'everyone', 'fallbackForm', 'order']);
+  for (const k of Object.keys(sr)) {
+    if (!known.has(k)) errors.push(`${label}: securityRoles has unknown key '${k}' — expected ${[...known].join(', ')}`);
+  }
+
+  const hasEveryone = sr.everyone !== undefined;
+  if (hasEveryone && typeof sr.everyone !== 'boolean') {
+    errors.push(`${label}: securityRoles.everyone must be a boolean`);
+  }
+  // `everyone: false` is not "restrict to nobody" — it is an author reaching for a switch that does
+  // not exist.
+  if (sr.everyone === false) {
+    errors.push(`${label}: securityRoles.everyone: false does nothing — use "everyone": true to make the form available to every role again, or list personas to restrict it`);
+  }
+
+  if (sr.personas !== undefined) {
+    if (!Array.isArray(sr.personas) || sr.personas.some((p) => typeof p !== 'string' || !p.trim())) {
+      errors.push(`${label}: securityRoles.personas must be an array of persona names`);
+    } else if (!sr.personas.length) {
+      errors.push(`${label}: securityRoles.personas is empty — that would offer the form to NO role. List at least one persona, or use "everyone": true.`);
+    } else {
+      // Resolved against `personas[]` at author time so a typo is a spec error naming the form,
+      // rather than a build halt two minutes into a run.
+      const declared = new Set((spec.personas || []).map((p) => String(canonicalPersonaName(p) || '').toLowerCase()));
+      for (const p of sr.personas) {
+        if (!declared.has(String(p).trim().toLowerCase())) {
+          errors.push(`${label}: securityRoles names persona '${p}', which is not declared in personas[]`);
+        }
+      }
+      const dupes = sr.personas.map((p) => String(p).trim().toLowerCase()).filter((p, i, a) => a.indexOf(p) !== i);
+      if (dupes.length) errors.push(`${label}: securityRoles lists persona '${dupes[0]}' more than once`);
+    }
+  }
+
+  if (sr.everyone === true && sr.personas !== undefined) {
+    errors.push(`${label}: securityRoles cannot set both 'everyone' and 'personas' — the platform models <Everyone /> as a replacement for the role list, not an addition to it`);
+  }
+  if (!hasEveryone && sr.personas === undefined) {
+    errors.push(`${label}: securityRoles must say who the form is for — set 'personas' or 'everyone': true`);
+  }
+
+  if (sr.fallbackForm !== undefined && typeof sr.fallbackForm !== 'boolean') {
+    errors.push(`${label}: securityRoles.fallbackForm must be a boolean`);
+  }
+  if (sr.order !== undefined && (!Number.isInteger(sr.order) || sr.order < 0)) {
+    errors.push(`${label}: securityRoles.order must be a non-negative integer (got ${JSON.stringify(sr.order)})`);
+  }
+
+  // The build addresses this form by (entity, formType, name) — `created.forms` is keyed by entity
+  // and holds only the Main form, so a later phase cannot reach a sibling any other way. Duplicate
+  // (entity, formType, name) is otherwise LEGAL here: only QuickView forms are checked for a unique
+  // (entity, name), because Main and Card may both be called "Information" harmlessly.
+  //
+  // Harmless, that is, until one of them declares securityRoles: the map would keep whichever was
+  // built last, and the restriction would land on the wrong form while every structural check passed
+  // and the build reported success. Reject the ambiguity instead of picking a winner.
+  const twin = (spec.forms || []).filter((o) => o
+    && String(o.entity || '').toLowerCase() === String(f.entity || '').toLowerCase()
+    && (o.formType || 'Main') === (f.formType || 'Main')
+    && String(o.name || '') === String(f.name || ''));
+  if (twin.length > 1) {
+    errors.push(`${label}: securityRoles needs a form this spec can identify unambiguously, but ${twin.length} forms share (entity ${f.entity}, type ${f.formType || 'Main'}, name '${f.name || ''}') — rename one, or move the assignment to the form you meant`);
+  }
+}
+
+function validateFormFieldOptions(f, entityByLower, errors, warnings) {
+  const label = `form '${f.name || f.entity}'`;
+  const entity = entityByLower.get(String(f.entity || '').toLowerCase());
+  const columnType = (logical) => {
+    if (!entity) return undefined;
+    const c = (entity.columns || []).find((x) => x && x.schemaName && x.schemaName.toLowerCase() === logical);
+    return c && (c.type || 'Text');
+  };
+  const explicit = Array.isArray(f.tabs) || f.layout === 'explicit';
+  // Every field this form declares an option for, from either route, so the checks below run once
+  // per (field, source) pair with a source-accurate message.
+  const seen = [];
+  // Fields the EXPLICIT layout lists by position. An `after` anchor for one of these — from either
+  // route — would give the form two competing orderings.
+  const listedByLayout = new Set();
+
+  for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
+    for (const s of ((t && t.sections) || [])) {
+      if (s && s.fields !== undefined && !Array.isArray(s.fields)) {
+        // Guard the compiler, which does `(s.fields || []).map(...)`. A string is ITERABLE and every
+        // character of it IS a string, so a `fields: "new_name"` typo would pass a naive per-entry
+        // check and then throw a raw TypeError at compile time instead of producing a finding. A
+        // non-iterable value (`{}`, `3`) would throw right here. Note `spec-shape.js` does not model
+        // `fields`, so `normalizeSpecShape` does not coerce it — this check is load-bearing.
+        errors.push(`${label}: a section's fields must be an array of column logical names`);
+        continue;
+      }
+      for (const entry of ((s && s.fields) || [])) {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+          if (!entry.name || typeof entry.name !== 'string') {
+            errors.push(`${label}: a field entry object is missing a string 'name'`);
+            continue;
+          }
+          listedByLayout.add(String(entry.name).toLowerCase());
+          seen.push({ name: String(entry.name).toLowerCase(), opt: entry, where: `field '${entry.name}'`, inline: true });
+        } else if (typeof entry === 'string') {
+          listedByLayout.add(entry.toLowerCase());
+        } else {
+          errors.push(`${label}: a field entry must be a column logical name or an object { name, readOnly?, hidden?, after? }`);
+        }
+      }
+    }
+  }
+
+  if (f.fieldOptions !== undefined) {
+    if (!f.fieldOptions || typeof f.fieldOptions !== 'object' || Array.isArray(f.fieldOptions)) {
+      errors.push(`${label}: fieldOptions must be an object keyed by column logical name`);
+    } else {
+      for (const key of Object.keys(f.fieldOptions)) {
+        const v = f.fieldOptions[key];
+        if (!v || typeof v !== 'object' || Array.isArray(v)) {
+          errors.push(`${label}: fieldOptions['${key}'] must be an object { readOnly?, hidden?, after? }`);
+          continue;
+        }
+        seen.push({ name: String(key).toLowerCase(), opt: v, where: `fieldOptions['${key}']`, inline: false });
+      }
+    }
+  }
+
+  for (const { name, opt, where, inline } of seen) {
+    for (const flag of ['readOnly', 'hidden']) {
+      if (opt[flag] === undefined) continue;
+      if (typeof opt[flag] !== 'boolean') {
+        errors.push(`${label}: ${where} ${flag} must be a boolean`);
+      } else if (opt[flag] === false) {
+        errors.push(`${label}: ${where} sets ${flag}: false, which the build cannot apply — it only ever writes the ENABLED state, so a maker's existing setting is never silently cleared. Omit the flag, or clear it in the form designer.`);
+      }
+    }
+    if (opt.after !== undefined) {
+      if (typeof opt.after !== 'string' || !opt.after.trim()) {
+        errors.push(`${label}: ${where} after must be the logical name of another field on this form`);
+      } else if (String(opt.after).toLowerCase() === name) {
+        errors.push(`${label}: ${where} anchors '${name}' after itself`);
+      } else if (inline || listedByLayout.has(name)) {
+        // An explicit layout already expresses order by listing position, so honouring `after` for a
+        // listed field would give the form two competing orderings — and they would DISAGREE: the
+        // create path follows the authored list, while the reconcile applies the anchor, so the same
+        // spec would produce one order on a new form and another on the first rebuild.
+        // A form-level anchor for a field the layout does NOT list stays legal: that is the
+        // `prune: false` case, where the point is to position a control on a deployed form without
+        // re-declaring the rest of it.
+        errors.push(`${label}: ${where} cannot use 'after' for a field an explicit tabs layout already lists — the listed order positions it. Move it in the list instead, or drop it from the list if you mean to position it against fields this layout does not declare.`);
+      }
+    }
+    // A BigInt has no Unified Interface control, so a form placement renders "Error loading control".
+    // Auto layout skips them outright; an explicit layout still honours the author, but declaring
+    // per-control options for one is almost certainly a mistake worth surfacing.
+    if (columnType(name) === 'BigInt') {
+      warnings.push(`${label}: ${where} targets '${name}', a BigInt column — Big Integer has no Unified Interface form control, so it renders "Error loading control" wherever it is placed`);
+    }
+  }
+
+  // Two contradictory anchor shapes. Both are silently unstable rather than wrong-but-stable: the
+  // reconcile moves each field to its anchor on every build and they undo each other, so the form
+  // never converges and a rebuild issues writes forever. Neither can be resolved automatically —
+  // "immediately after X" cannot be true of two fields at once, and a cycle has no valid order — so
+  // they are rejected at author time instead of being papered over by the placement code.
+  const anchorOf = new Map();
+  for (const { name, opt } of seen) {
+    if (opt.after && typeof opt.after === 'string') anchorOf.set(name, String(opt.after).toLowerCase());
+  }
+  const claimants = new Map();
+  for (const [name, anchor] of anchorOf) {
+    if (!claimants.has(anchor)) claimants.set(anchor, []);
+    claimants.get(anchor).push(name);
+  }
+  for (const [anchor, names] of claimants) {
+    if (names.length > 1) {
+      errors.push(`${label}: ${names.map((n) => `'${n}'`).join(' and ')} are both anchored after '${anchor}' — only one field can sit immediately after another. Chain them instead (anchor the second one after the first).`);
+    }
+  }
+  for (const start of anchorOf.keys()) {
+    const seenInWalk = new Set([start]);
+    let cur = anchorOf.get(start);
+    while (cur !== undefined) {
+      if (seenInWalk.has(cur)) {
+        if (cur === start) errors.push(`${label}: the 'after' anchors form a cycle through '${start}' — there is no order that satisfies them all.`);
+        break;
+      }
+      seenInWalk.add(cur);
+      cur = anchorOf.get(cur);
+    }
+  }
+
+  if (f.prune !== undefined) {
+    if (typeof f.prune !== 'boolean') {
+      errors.push(`${label}: prune must be a boolean`);
+    } else if (f.prune === false && !explicit) {
+      warnings.push(`${label}: prune: false has no effect on an auto layout — an auto layout is already additive and never removes a field`);
+    }
+  }
+
+  // An explicit layout that names a BigInt column produces a broken control on a live record. It is a
+  // warning, not an error: the author asked for it by name and may be pairing it with a custom control.
+  if (explicit) {
+    for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
+      for (const s of ((t && t.sections) || [])) {
+        // Re-guard: the array check in the first loop `continue`s that loop only. Without repeating
+        // it here a non-iterable `fields` (e.g. `{}` or `3`) throws a raw TypeError out of
+        // validateAppSpec — discarding the correct finding the first loop already pushed.
+        if (!Array.isArray(s && s.fields)) continue;
+        for (const entry of s.fields) {
+          const nm = String((entry && typeof entry === 'object' ? entry.name : entry) || '').toLowerCase();
+          if (nm && columnType(nm) === 'BigInt') {
+            warnings.push(`${label}: field '${nm}' is a BigInt column — Big Integer has no Unified Interface form control, so it will render "Error loading control" on every record. Keep it off the form (it stays readable through the API).`);
+          }
+        }
+      }
+    }
+  }
+}
+
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
   const errors = [];
@@ -514,6 +821,12 @@ function validateAppSpec(spec, opts = {}) {
   }
   if (!spec.app || !spec.app.name) {
     errors.push('app.name is required');
+  }
+  validateDescription(spec.solution && spec.solution.description, 'solution', errors);
+  // allowEmpty: `app.description: ""` is the established shape (download-model-app emits it).
+  validateDescription(spec.app && spec.app.description, 'app', errors, { allowEmpty: true });
+  for (const gc of spec.globalChoices || []) {
+    validateDescription(gc && gc.description, `globalChoice '${(gc && gc.name) || '(unnamed)'}'`, errors);
   }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
@@ -546,9 +859,18 @@ function validateAppSpec(spec, opts = {}) {
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
     }
+    validateDescription(e.description, `entity ${e.schemaName}`, errors);
     for (const c of e.columns || []) {
       if (!c.schemaName) {
         errors.push(`entity ${e.schemaName}: a column is missing schemaName`);
+      }
+      validateDescription(c.description, `entity ${e.schemaName}: column ${c.schemaName}`, errors);
+      // A Customer column is created through `createCustomerColumn`, whose payload is only
+      // { Lookup, OneToManyRelationships } — the SDK has nowhere to put a description, so one
+      // authored here is silently discarded. Warn rather than error: the spec is still valid and
+      // still builds; the author just needs to know the value will not appear in Dataverse.
+      if (c.type === 'Customer' && c.description) {
+        warnings.push(`entity ${e.schemaName}: column ${c.schemaName} is a Customer column — the SDK's createCustomerColumn accepts no description, so this one will NOT be written to Dataverse`);
       }
       if (c.type && !TYPE_MAP[c.type]) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
@@ -563,6 +885,52 @@ function validateAppSpec(spec, opts = {}) {
       // valid specs, so type guidance lives in the schema doc instead.
       if (c.visualization !== undefined && !COLUMN_VISUALIZATIONS.includes(c.visualization)) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown visualization '${c.visualization}' — must be one of ${COLUMN_VISUALIZATIONS.join('|')}`);
+      }
+      // AB#6648523: Boolean default value. The SDK used to hardcode `DefaultValue: false`; the
+      // vendored bundle now honours an explicit value on create AND update (measured against
+      // cds-maker-sdk.cjs). Boolean-only for the same reason as the form-event flags below —  a
+      // truthy-but-non-boolean value (e.g. the string "false") must be rejected, not coerced — and
+      // type-gated to the exact 'Boolean' column: the SDK itself throws InvalidArgumentError for
+      // defaultValue on any other type, so this just moves that same failure to the spec gate and
+      // names the column instead of surfacing mid-build.
+      if (c.defaultValue !== undefined) {
+        if (typeof c.defaultValue !== 'boolean') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} defaultValue must be a boolean (got ${JSON.stringify(c.defaultValue)})`);
+        } else if (c.type !== 'Boolean') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} defaultValue is only valid on a Boolean column (this one is '${c.type || 'Text'}')`);
+        }
+      }
+      // AB#6648522: Whole Number display Format (e.g. render a raw integer count of minutes as a
+      // Duration picker in the maker UI). Restricted to the exact 'Integer' App Spec type, NOT the
+      // wider Integer/BigInt/Decimal/Double/Money switch case columnOptions() shares for min/max/
+      // precision — the SDK's Format option is Integer-only, so a spec targeting Decimal would
+      // otherwise pass this gate and hit the SDK's own InvalidArgumentError deep inside the
+      // data-model phase instead of here.
+      if (c.integerFormat !== undefined) {
+        if (!INTEGER_FORMATS.includes(c.integerFormat)) {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown integerFormat '${c.integerFormat}' — must be one of ${INTEGER_FORMATS.join('|')}`);
+        } else if (c.type !== 'Integer') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} integerFormat is only valid on an Integer column (this one is '${c.type || 'Text'}')`);
+        }
+      }
+      // AB#6651276: per-verb write/read permissions (e.g. isValidForUpdate:false makes a column
+      // write-once after creation — the entire point of the feature, so `false` must validate and
+      // build identically to `true`). Boolean-only, same reasoning as the form-event flags below.
+      // Type-agnostic per the SDK — every buildable column type accepts these on BOTH create and
+      // update (measured) — EXCEPT Customer, which is created through createCustomerColumn, a
+      // wholly separate SDK call whose options carry no such fields. Warned rather than rejected
+      // there, matching the Customer + description precedent above: the spec stays valid and still
+      // builds, the author just needs to know the flag will not reach Dataverse.
+      let hasValidForFlag = false;
+      for (const flag of ['isValidForCreate', 'isValidForUpdate', 'isValidForRead']) {
+        if (c[flag] === undefined) continue;
+        hasValidForFlag = true;
+        if (typeof c[flag] !== 'boolean') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} ${flag} must be a boolean (got ${JSON.stringify(c[flag])})`);
+        }
+      }
+      if (hasValidForFlag && c.type === 'Customer') {
+        warnings.push(`entity ${e.schemaName}: column ${c.schemaName} is a Customer column — the SDK's createCustomerColumn accepts no isValidForCreate/isValidForUpdate/isValidForRead, so these will NOT be written to Dataverse`);
       }
     }
   }
@@ -579,6 +947,7 @@ function validateAppSpec(spec, opts = {}) {
   const rasterWebResourceNames = new Set();   // png/jpg/gif/ico — valid for a table's raster icon
   for (const wr of spec.webResources || []) {
     if (!wr || !wr.name) { errors.push('a webResource is missing a name'); continue; }
+    validateDescription(wr.description, `webResource '${wr.name}'`, errors);
     webResourceNames.add(wr.name.toLowerCase());
     const wrType = String(wr.type || '').toLowerCase();
     if (IMAGE_WR_TYPES.has(wrType)) imageWebResourceNames.add(wr.name.toLowerCase());
@@ -614,6 +983,7 @@ function validateAppSpec(spec, opts = {}) {
     }
   }
   for (const f of spec.forms || []) {
+    validateDescription(f.description, `form '${f.name || f.entity}'`, errors);
     if (!entityNames.has(f.entity)) {
       errors.push(`form references unknown entity '${f.entity}'`);
     }
@@ -689,6 +1059,16 @@ function validateAppSpec(spec, opts = {}) {
         }
       }
     }
+    validateFormFieldOptions(f, entityByLower, errors, warnings);
+    validateFormSecurityRoles(f, spec, errors);
+    // `layout: 'explicit'` with no `tabs[]` is a spec that asks for one thing and builds another.
+    // `compileFormIntent` takes the explicit path only when `tabs` is an ARRAY, so this combination
+    // silently compiles an AUTO layout — while `prune` and the field-positioning rules read as
+    // explicit-layout behaviour to the author. Rejected rather than warned: the two layouts differ in
+    // whether a rebuild REMOVES deployed fields, so guessing wrong is destructive.
+    if (f && f.layout === 'explicit' && !Array.isArray(f.tabs)) {
+      errors.push(`form '${f.name || f.entity}': layout is 'explicit' but no tabs[] were authored — an explicit layout IS its tabs. Author tabs[], or drop layout: 'explicit' to use the auto layout.`);
+    }
   }
   // Two QuickView forms sharing (entity, name) make a quick-view reference — which resolves a QuickView by
   // (targetEntity, name) — ambiguous (the build map keeps only one, order-dependently). Reject the
@@ -702,6 +1082,7 @@ function validateAppSpec(spec, opts = {}) {
     qvIdentity.add(key);
   }
   for (const ch of spec.charts || []) {
+    validateDescription(ch && ch.description, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`, errors);
     if (!ch || !ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
       errors.push(`chart references unknown entity '${ch && ch.entity}'`);
       continue;
@@ -723,6 +1104,7 @@ function validateAppSpec(spec, opts = {}) {
     }
   }
   for (const v of spec.views || []) {
+    validateDescription(v && v.description, `view '${(v && (v.name || v.entity)) || '(unnamed)'}'`, errors);
     if (!entityNames.has(v.entity)) {
       errors.push(`view references unknown entity '${v.entity}'`);
     }
@@ -740,6 +1122,12 @@ function validateAppSpec(spec, opts = {}) {
   };
   for (const c of spec.commands || []) {
     if (!c || !c.entity || !entityNames.has(c.entity)) { errors.push(`command references unknown entity '${c && c.entity}'`); continue; }
+    // The SDK's command surface drops `description` (the artifact it returns carries only
+    // commandBars/entityLogicalName/id), so one authored here never reaches Dataverse. Warn rather
+    // than error — the spec is otherwise valid — but do not let it pass silently.
+    if (c.description) {
+      warnings.push(`command '${c.label || c.entity}': the SDK's command surface accepts no description, so this one will NOT be written to Dataverse`);
+    }
     if (!c.label) errors.push(`command on ${c.entity}: label is required`);
     if (c.location && !COMMAND_LOCATIONS.has(c.location)) errors.push(`command '${c.label}' on ${c.entity}: location must be MainTab|HomeTab|ContextualTab`);
     const type = c.type || 'Button';
@@ -761,6 +1149,7 @@ function validateAppSpec(spec, opts = {}) {
   for (const r of spec.businessRules || []) {
     const label = `business rule '${(r && r.name) || '(unnamed)'}'`;
     if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push('businessRules[] entries must be objects'); continue; }
+    validateDescription(r.description, label, errors);
     if (!r.name) errors.push(`${label}: name is required`);
     if (!r.entity || !entityNames.has(r.entity)) { errors.push(`${label}: references unknown entity '${r.entity}'`); continue; }
     if (r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
@@ -789,18 +1178,25 @@ function validateAppSpec(spec, opts = {}) {
     };
 
     if (!Array.isArray(r.conditions) || !r.conditions.length) {
-      errors.push(`${label}: conditions[] is required (a rule with no condition would apply unconditionally, which the compiler emits as an empty rule that silently never fires)`);
+      errors.push(`${label}: conditions[] is required (a rule with no condition would apply unconditionally, which the SDK serializes as an empty rule that silently never fires)`);
     }
     for (const c of r.conditions || []) {
       if (!c || typeof c !== 'object') { errors.push(`${label}: each condition must be an object`); continue; }
       checkField(c.field, 'condition');
       if (!BUSINESS_RULE_OPERATORS.includes(c.operator)) {
         // Name the platform failure rather than pretending the operator is unrecognised: an author
-        // who reaches for ContainsData has written something reasonable that we cannot deploy.
+        // who reaches for a blocked operator has written something reasonable that we cannot deploy.
         if (BUSINESS_RULE_BLOCKED_OPERATORS.has(c.operator)) {
-          errors.push(`${label}: operator '${c.operator}' is not usable — the SDK compiles it to XAML the platform rejects with "Error generating UiData" (HTTP 500), live-measured on every column type. Use ${BUSINESS_RULE_OPERATORS.join(' or ')}, or test the value directly. Tracking: https://github.com/microsoft/power-platform-skills/issues/481`);
+          errors.push(`${label}: operator '${c.operator}' is not usable — see https://github.com/microsoft/power-platform-skills/issues/481`);
         } else {
-          errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')`);
+          // The near-misses matter more than the nonsense here. `GreaterThan` is a natural thing to
+          // write and is NOT in the SDK's table, and the serializer resolves an unknown operator to
+          // Equals — so without this gate that spec would deploy an equality test. Name the closest
+          // legal spelling so the fix is obvious.
+          const near = BUSINESS_RULE_OPERATORS.find((o) => o.toLowerCase() === `is${String(c.operator).toLowerCase()}`
+            || o.toLowerCase().replace(/^is/, '') === String(c.operator).toLowerCase()
+            || o.toLowerCase() === String(c.operator).toLowerCase());
+          errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')${near ? ` — did you mean '${near}'?` : ''}`);
         }
         continue;
       }
@@ -812,9 +1208,9 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`${label}: '${c.operator}' needs a value`);
       }
       if (c.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(c.dataType)) {
-        // Name the offending value: this list mirrors the compiler's literal-type map, and the most
-        // likely mistake is a plausible-but-absent type (DateTime is the classic one), so echoing
-        // what was written is what makes the message actionable.
+        // Name the offending value: this is a curated closed set with no bundle counterpart, and the
+        // most likely mistake is a plausible-but-absent type (DateTime is the classic one), so
+        // echoing what was written is what makes the message actionable.
         errors.push(`${label}: condition dataType '${c.dataType}' is not supported — must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
       }
     }
@@ -848,6 +1244,7 @@ function validateAppSpec(spec, opts = {}) {
   const chartNamesSet = new Set((spec.charts || []).map((c) => c.name));
   for (const d of spec.dashboards || []) {
     if (!d || !d.name) { errors.push('a dashboard is missing a name'); continue; }
+    validateDescription(d.description, `dashboard '${d.name}'`, errors);
     if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
     for (const t of d.tiles) {
       if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }
@@ -1546,6 +1943,7 @@ module.exports = {
   VALIDATION_PROFILES,
   DIRECT_ENTRY_BEHAVIORS,
   COLUMN_VISUALIZATIONS,
+  INTEGER_FORMATS,
   BUSINESS_RULE_OPERATORS,
   BUSINESS_RULE_VALUELESS_OPERATORS,
   BUSINESS_RULE_ACTIONS,

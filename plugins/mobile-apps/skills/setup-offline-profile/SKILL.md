@@ -6,13 +6,13 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 **References:**
 
-- [offline-profile-schema.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-schema.md) — Dataverse entity field map
-- [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) — Web API recipes for profile / item / association POSTs
-- [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline this skill writes + the lifecycle delta check that consumes it
+- [offline-profile-schema.md](${PLUGIN_ROOT}/shared/references/offline-profile-schema.md) — Dataverse entity field map
+- [dataverse-offline-api.md](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md) — Web API recipes for profile / item / association POSTs
+- [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline this skill writes + the lifecycle delta check that consumes it
 
 # Setup Offline Profile
 
@@ -39,7 +39,7 @@ test -f power.config.json && test -f app.config.js
 MANIFEST=$(test -f .datamodel-manifest.json && echo ".datamodel-manifest.json" || \
            (test -f docs/plan-artifacts/.datamodel-manifest.json && echo "docs/plan-artifacts/.datamodel-manifest.json"))
 test -n "$MANIFEST" && echo "✓ manifest at $MANIFEST"
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture **Environment URL** for `<envUrl>` and **manifest path** for the architect spawn (Step 3) and the artifacts write (Step 9).
@@ -65,7 +65,7 @@ console.log(JSON.stringify({ platforms, hasNative }));
 STOP conditions:
 - No `power.config.json` → "Run `/create-mobile-app` first."
 - Neither `.datamodel-manifest.json` nor `docs/plan-artifacts/.datamodel-manifest.json` → "Run `/add-dataverse` first — offline profiles require a data model."
-- Environment resolution failure → standard auth recovery (`az login --tenant <env-tenant>` or provide environment URL directly; see [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)).
+- Environment resolution failure → standard auth recovery (`az login --tenant <env-tenant>` or provide environment URL directly; see [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)).
 - Web-only + user declines override → STOP. Print: `Offline profile creation skipped — no native target.`
 
 #### Step 1a — Environment consistency check
@@ -123,7 +123,7 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 > "→ Checking for existing offline profiles in the environment…"
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofiles?\$select=mobileofflineprofileid,name,description,publishedon"
 ```
 
@@ -318,7 +318,7 @@ configReview: accepted
 
 ### Step 4 — Run the internal `enable-tables-offline` workflow if needed
 
-If Gate 1 identified any table needing change, read and execute `${CLAUDE_SKILL_DIR}/../enable-tables-offline/SKILL.md` with the table list as its `$ARGUMENTS`:
+If Gate 1 identified any table needing change, read and execute `${PLUGIN_ROOT}/skills/enable-tables-offline/SKILL.md` with the table list as its `$ARGUMENTS`:
 
 ```text
 $ARGUMENTS: cr123_note,cr123_visit
@@ -338,7 +338,7 @@ If all tables were already enabled, skip this step.
 For `create-new` mode:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofiles" \
   --body '{
     "name": "<app name> Offline Profile",
@@ -374,7 +374,7 @@ gate1: approved
 For each table, in sequence:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitems" \
   --body '{
     "name": "<table display name>",
@@ -408,7 +408,7 @@ Print `✓ <table>` after each 2xx.
 Empirical 2026-05-24 + 2026-05-25 capture from maker portal **unblocked** association creation. Recipe (no `selectedrelationshipsschema` field — server fills it):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitemassociations" \
   --body '{
     "name": "<relationshipSchemaName>",
@@ -429,7 +429,7 @@ For each (PARENT-item, 1:N-relationship-to-child) pair from the architect's prop
 
 > **Skip-when-redundant rule.** If the parent profile item has `recorddistributioncriteria=1` (All records), the architect should have pruned associations on it (per Step 5 pruning rule). Defensively: if any propagate through, SKIP them at POST time. Print: `↷ Skipping <association> on All-records parent <table> — redundant, all rows download anyway`.
 
-> **Pre-publish cycle detection.** Before Step 8 publish, build the relationship graph from the just-created associations and DFS for cycles. If a cycle exists (e.g. `account → task → account`), prompt the user to remove ONE association and re-do this step for the affected pair — otherwise Step 8 will return `0x80071141`. See [shared/references/dataverse-offline-api.md §6b](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md).
+> **Pre-publish cycle detection.** Before Step 8 publish, build the relationship graph from the just-created associations and DFS for cycles. If a cycle exists (e.g. `account → task → account`), prompt the user to remove ONE association and re-do this step for the affected pair — otherwise Step 8 will return `0x80071141`. See [shared/references/dataverse-offline-api.md §6b](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md).
 
 > **Idempotency.** Re-POSTing an existing (item, relationship) pair returns `409 Conflict`; the `dataverse-request.js` `looksLikeDuplicate` rescue treats this as success. Re-runs after a partial failure are safe.
 
@@ -438,7 +438,7 @@ Skip Step 7a entirely if the architect's proposal includes zero relationships (r
 #### Step 7b — PATCH `selectedcolumns` on each item
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
   "mobileofflineprofileitems(<itemId>)" \
   --body '{
     "selectedcolumns": "<JSON string — see below>"
@@ -467,7 +467,7 @@ If syncintervalinminutes was edited at Gate 3, include it in the same PATCH.
 **Targeted PublishXml — the maker portal's pattern** (empirical 2026-05-24):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" --body '{
     "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile>'"$PROFILE_ID"'</mobileofflineprofile></mobileofflineprofiles></publish>"
   }'
@@ -475,7 +475,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
 
 Publishes ONLY this profile, not the entire org's customizations. Empirically much faster + less rate-limit-prone than `PublishAllXml` on shared envs.
 
-**On `400 / 0x80071141` "circular relationship":** the profile's association graph has a cycle (e.g. `account → task → account`). Parse the path from the error message, prompt the user to drop ONE of the offending associations, re-DELETE that association row via DELETE `/mobileofflineprofileitemassociations(<id>)`, then re-attempt publish. See [shared/references/dataverse-offline-api.md §6b](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md).
+**On `400 / 0x80071141` "circular relationship":** the profile's association graph has a cycle (e.g. `account → task → account`). Parse the path from the error message, prompt the user to drop ONE of the offending associations, re-DELETE that association row via DELETE `/mobileofflineprofileitemassociations(<id>)`, then re-attempt publish. See [shared/references/dataverse-offline-api.md §6b](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md).
 
 **On `400 / 0x80071140` "no relationships are specified" for a Related-only table:** a profile item has `recorddistributioncriteria=0` but no associations point at it. Parse the table name from the error message and prompt the user with two choices:
 1. `/add-table-to-offline-profile --table <name> --add-associations` — re-runs the architect for relationship discovery, POSTs missing associations.
@@ -486,7 +486,7 @@ For fresh `/setup-offline-profile` runs this error should never fire because Ste
 **Fallback — `PublishAllXml`:** if the targeted publish fails with anything other than the circular-relationship error, try the broad publish. This was the v0.1 default and works correctly but rate-limits aggressively on shared envs:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishAllXml" --body '{}'
 ```
 
@@ -498,7 +498,7 @@ Protocol after the POST call returns:
 2. If status `0` AND error contains `Request timed out` OR `429 rate-limited` → DO NOT treat as failure. Run the verification GET below:
 
    ```bash
-   node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
      "mobileofflineprofiles(<profileId>)?\$select=componentstate,publishedon" 2>&1
    ```
 
@@ -563,7 +563,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
 - `relationships[]` lives on the **PARENT** table entry (the table on the 1-side of the 1:N relationship). Pure-child tables (e.g. `cr123_orderline`) have empty `relationships: []`.
 - Each `relationships[]` entry has `schemaName` (the relationship's `SchemaName` from EntityDefinitions metadata), `relationshipId` (the relationship's `MetadataId` GUID — **this is the canonical comparison key**, stable across server-side relationshipname formatting), `targetEntity` (child entity logical name), and `associationId` (the created `mobileofflineprofileitemassociationid`).
 - `recordDistributionCriteria=1` (All records) parents always have `relationships: []` — associations would be redundant (see architect Step 5 pruning rule).
-- `schemaColumns[]` is the **schema-reconciliation baseline** — the full set of the table's schema column logical names (from `.datamodel-manifest.json`) that existed when this item was created. It is NOT the same as `selectedColumns` (which is a curated subset the runtime syncs): `schemaColumns` records everything the schema had at reconciliation time, including columns deliberately left out of `selectedColumns`. `scripts/offline-profile-delta.js` compares later manifest columns against this baseline to detect *genuinely new* schema columns (`manifest.columns − schemaColumns`) without false-flagging deliberate exclusions. Populate it from the manifest entry for each table; if the manifest lists no columns for a reused table, write `[]`. See [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md).
+- `schemaColumns[]` is the **schema-reconciliation baseline** — the full set of the table's schema column logical names (from `.datamodel-manifest.json`) that existed when this item was created. It is NOT the same as `selectedColumns` (which is a curated subset the runtime syncs): `schemaColumns` records everything the schema had at reconciliation time, including columns deliberately left out of `selectedColumns`. `scripts/offline-profile-delta.js` compares later manifest columns against this baseline to detect *genuinely new* schema columns (`manifest.columns − schemaColumns`) without false-flagging deliberate exclusions. Populate it from the manifest entry for each table; if the manifest lists no columns for a reused table, write `[]`. See [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md).
 - JSON doesn't support comments — the `/* BEGIN/END OFFLINE-CONFIG-WORKAROUND */` keys above are illustrative bracketing for the SKILL author. **Do NOT write those literal keys to `offline-profile.json`.** When the skill actually patches the file, emit only the real fields (`useDda`, `entitiesIncluded`, `instanceUrl`) inside `appConfig` and keep them contiguous.
 
 Example node script (writes the file in one shot — no read-modify-write against `power.config.json`):
@@ -634,7 +634,7 @@ associationsCount: <M>
 > "→ Verifying the on-server profile matches offline-profile.json…"
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/verify-offline-profile.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl>
 ```
 
 Read the JSON output:

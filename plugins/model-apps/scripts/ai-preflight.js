@@ -9,7 +9,7 @@
 
 const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { AI_APP_SETTING, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
+const { AI_APP_SETTING, AI_SETTING_CODEC, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -17,15 +17,22 @@ const path = require('node:path');
 // Human-readable label + admin-action hint for each feature key returned by getAiReadiness.
 const FEATURE_META = {
   formFill: {
-    // Deliberately NOT "Form fill". `FormFillBarUXEnabled` governs only the form fill assist
-    // TOOLBAR — one capability of AI form fill assistance. The SDK's own type docs name three
-    // siblings this flag does not touch: `FormFillFileUploadEnabled` (file upload),
-    // `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form
-    // predictions). Labelling it "Form fill" overclaims in both directions — it reports a feature
-    // as unavailable when a user may well have smart paste working, and it implies enabling it
-    // turns the whole family on.
+    // `FormFillBarUXEnabled` is the assist TOOLBAR only. The SDK now models the whole AI form-fill
+    // family, so each capability is reported separately rather than one label implying all four.
     label: 'Form fill assist toolbar',
-    action: (f) => `Enable "Form fill assist toolbar" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features. Note this is the toolbar only — smart paste (FormPredictSmartPasteEnabled), file upload (FormFillFileUploadEnabled) and edit-form predictions (FormPredictEnabled) are separate settings this does not enable.`,
+    action: (f) => `Enable "Form fill assist toolbar" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+  },
+  formFillSuggestions: {
+    label: 'Form fill predictions (edit forms)',
+    action: (f) => `Enable "AI form fill predictions" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+  },
+  formFillSmartPaste: {
+    label: 'Form fill smart paste',
+    action: (f) => `Enable "Smart paste" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+  },
+  formFillFiles: {
+    label: 'Form fill from files',
+    action: (f) => `Enable "Form fill from files" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
   },
   nlSearch: {
     label: 'Natural language search',
@@ -71,12 +78,22 @@ function runPreflight(readiness, effective = {}) {
     // Only a POSITIVE reading counts. `eff.error` (could not look, or the setting is not
     // provisioned here) must never be read as "in effect" — that would suppress a real admin action.
     const inEffect = eff.on === true;
+    // "Platform default" is a SPECIFIC state, not a synonym for "we could not decide". Only a
+    // codec-governed feature sitting at its default value ('0') defers to flighting; an
+    // unrecognised value like '3' or 'yes' is simply indeterminate, and calling that "the platform
+    // decides" would invent a fact. Both suppress the ✓/✗ claim, but only one earns the explanation.
+    const codec = AI_SETTING_CODEC[key];
+    const effectiveDefault = eff.on === undefined && !eff.error && codec
+      && eff.value !== undefined && String(eff.value).trim() === '0';
+    const effectiveIndeterminate = eff.on === undefined && !eff.error && eff.value !== undefined && !effectiveDefault;
     features.push({
       feature: key,
       enabled: f.enabled,
       setting: f.setting,
       ...(eff.value !== undefined ? { effectiveValue: eff.value, effectiveScope: eff.scope } : {}),
       ...(inEffect ? { inEffect: true } : {}),
+      ...(effectiveDefault ? { effectiveDefault: true } : {}),
+      ...(effectiveIndeterminate ? { effectiveIndeterminate: true } : {}),
     });
     if (!f.enabled && !inEffect) {
       adminActions.push(meta.action(f));
@@ -131,7 +148,7 @@ async function main() {
       if (!setting) continue; // `summaries` is not a per-app on/off setting
       if (appLookup.error) { effective[key] = { error: `app scope unknown: ${appLookup.error}` }; continue; }
       const res = await effectiveSettingValue(read, appModuleId, setting);
-      effective[key] = res.error ? { error: res.error } : { value: res.value, scope: res.scope, on: settingIsOn(res.value) };
+      effective[key] = res.error ? { error: res.error } : { value: res.value, scope: res.scope, on: settingIsOn(res.value, key) };
     }
     if (appLookup.error) {
       process.stderr.write(`\nWarning: could not resolve app '${app}' (${appLookup.error}); reporting readiness gates only.\n`);
@@ -145,6 +162,12 @@ async function main() {
       if (f.inEffect && !f.enabled) {
         // The distinction that matters: running, but not because of anything this app declares.
         process.stderr.write(`  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`);
+      } else if (f.effectiveDefault) {
+        // "Platform default" is not off. For the AI form-fill family `0` means "defer to flighting",
+        // so the feature may well be running; printing ✗ would assert something we cannot see.
+        process.stderr.write(`  ? ${label} (${f.setting}) — set to the platform default ("${f.effectiveValue}"), so whether it runs is decided by service flighting, not by this environment\n`);
+      } else if (f.effectiveIndeterminate) {
+        process.stderr.write(`  ? ${label} (${f.setting}) — holds an unrecognised value ("${f.effectiveValue}"), so its state cannot be determined from here\n`);
       } else {
         process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`);
       }

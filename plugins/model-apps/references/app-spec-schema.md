@@ -130,6 +130,59 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   pin is not silently lost — losing it would leave newly created columns in the org default while
   the existing ones keep the pinned language, with no error anywhere.
 
+## `description` — write one on everything that takes one
+
+`description` is optional on every artifact below and **recommended on all of them**. It is written
+to Dataverse **at create time**, so it costs nothing extra and needs no backfill pass.
+
+| Accepts `description` | Notes |
+|---|---|
+| `entities[]` · `entities[].columns[]` | The highest-value ones — table and column names are cryptic (`new_col3`) without them |
+| `views[]` · `charts[]` · `forms[]` · `dashboards[]` | What the artifact is *for*, not what it contains |
+| `businessRules[]` | Why the rule exists — the logic itself is already visible |
+| `solution` · `globalChoices[]` · `webResources[]` · `app.description` | |
+
+**Accepted by the spec but NOT written to Dataverse** (you get a build **warning**, never silent
+loss) — the vendored SDK's create surface has nowhere to put them:
+- **`commands[]`** — `createArtifact('command', …)` drops the field.
+- **`Customer` columns** — `createCustomerColumn`'s payload is only `{ Lookup, OneToManyRelationships }`.
+
+**Not accepted at all, deliberately:** **`personas[]`**. The SDK stamps its own ownership marker into
+a security role's `description` and then requires an *exact* match on it before it will touch that
+role, so a custom description would make the SDK disown the role it created and refuse to update it.
+
+**Why it matters beyond tidiness.** A description is the only durable, machine-readable statement of
+*intent* an app carries. Names say what a thing is called; descriptions say what it is for. When an
+agent later inspects an app it did not build — to extend it, debug it, or answer a question about it
+— descriptions are the grounding it has. Write them for that reader.
+
+Good: `"Severity 1-5; drives the escalation rule and the SLA clock."`
+Weak: `"The priority column."` (restates the name and adds nothing)
+
+**Rules:** must be a non-empty string, max 2000 characters (the Dataverse ceiling — the platform
+truncates silently past it, so it is rejected at author time instead). Omit the field entirely rather
+than setting `""`; every write site omits an absent description, so **a rebuild never blanks one a
+maker typed in the UI**.
+
+**Download/read-back:** `download-model-app` preserves descriptions on artifacts it can already
+reconstruct as rebuildable spec (`solution`, `entities[]`, `entities[].columns[]`, `dashboards[]`).
+Views, charts, forms, business rules and global choices are not fully reconstructed yet, so their
+deployed descriptions are exposed under `descriptionInventory` for inspection only rather than as
+partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted, never written as
+`""`.
+
+**Rebuild behaviour:** a description is written at CREATE, and is additionally **reconciled on an
+artifact that already exists** for **views and charts** — so authoring one on a table whose
+Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still lands. Those two
+write only when the spec **explicitly sets** a description **and** it differs from the deployed
+value, so an ordinary rebuild issues no extra write and an omitted description never blanks text a
+maker typed in the UI.
+
+Everything else is **create-only** — the description reaches Dataverse when the artifact is first
+created and is not revisited: tables, columns, the solution, global choices, `webResources[]`,
+`app.description`, forms, dashboards and business rules. Adding a description to one of those *after*
+it exists is accepted by validation, builds green, and does not change the deployed artifact.
+
 ## entities[]
 ```jsonc
 {
@@ -173,15 +226,24 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
                                           //   The build reuses it; teardown NEVER deletes it. System
                                           //   tables are auto-detected and skipped by teardown even
                                           //   without this flag — set it for a REUSED CUSTOM table
-                                          //   you want protected from teardown.
+                                          //   you want protected from teardown. ALSO skips
+                                          //   default-view enrichment (which replaces a view's
+                                          //   column set) — override with enrichDefaultViews: true.
+  "description": "A customer support ticket, from intake through resolution.",
+                                          // RECOMMENDED — see "description" below. Written to
+                                          //   Dataverse at create time; the grounding an agent reads
+                                          //   when it later inspects an app it did not build.
   "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
   // primary can be auto-numbered (the number IS the record identity — recommended for orders/cases):
   // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },
   "columns": [
-    { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"] },
+    { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"],
+      "description": "How urgently the ticket needs attention." },   // RECOMMENDED — see below
     { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" },
     { "schemaName": "new_score",    "displayName": "Score", "type": "Integer",
-      "visualization": "RadialDial" }         // optional — CUSTOM GRID RENDERING (preview), below
+      "visualization": "RadialDial" },        // optional — CUSTOM GRID RENDERING (preview), below
+    { "schemaName": "new_externalref", "displayName": "External Reference", "type": "Text",
+      "isValidForUpdate": false }             // optional — WRITE-ONCE after creation, below
   ]
 }
 ```
@@ -190,9 +252,34 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
 - **Per-type options** (all optional): `required: true` / `"recommended"`; Text → `maxLength`,
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
-  DateTime → `dateFormat` (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`;
-  File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber → `autoNumberFormat`
-  (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` + `formula`.
+  Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
+  raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
+  (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
+  `false` — see note below); File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber →
+  `autoNumberFormat` (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
+  `formula`.
+- **Write permissions** (optional, every column type **except Customer**): `isValidForCreate` /
+  `isValidForUpdate` / `isValidForRead` — see `isValidForCreate / isValidForUpdate /
+  isValidForRead` below.
+- **`defaultValue` and `integerFormat` are boolean-typed / enum-typed spec-gate checks, not
+  free-form.** `defaultValue` must be a literal `true`/`false` and only applies to a `Boolean`
+  column; `integerFormat` must be one of the five literals above and only applies to an `Integer`
+  column (not `BigInt`/`Decimal`/`Double`/`Money`, even though they share the same numeric
+  `minValue`/`maxValue`/`precision` options) — either mismatch is rejected by name at validation
+  time rather than surfacing as a mid-build SDK error.
+- **`required` converges on rebuild only when authored explicitly.** For a new column, `true` creates
+  Dataverse `ApplicationRequired` and `"recommended"` creates `Recommended`. For a column that
+  already exists (including the primary/name column), a rebuild first reads its current
+  `RequiredLevel` and only writes when the explicit spec value differs. If `required` is omitted,
+  the build leaves the existing column alone instead of treating omission as `None`, so it never
+  silently demotes a field a maker already made Business Required.
+- **`defaultValue`, `integerFormat`, and `isValidFor*` converge differently: by re-assertion, not
+  by diff.** Unlike `required` above, a rebuild does not read the column's current state first —
+  it simply re-sends whichever of these fields the spec sets explicitly, on every build, for both a
+  brand-new column and one that already exists. This is safe because re-sending an already-correct
+  value is a no-op on the wire; it does mean (unlike `required`) there is no "leave it alone if
+  omitted" behavior to rely on for a value set by hand in the portal — omit the field entirely to
+  leave portal-set state untouched, exactly as for `visualization` below.
 - **Choice / MultiChoice** need `options[]` (string labels) **or** a `globalChoice` reference
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
@@ -225,6 +312,36 @@ on each `views[]` entry.
   reports no divergence. Live-measured: the backing `controlconfigurations` table was present on
   only 1 of 18 test environments. If a renderer does not appear, check the environment first — the
   same spec succeeds unchanged on a provisioned org.
+
+### `isValidForCreate` / `isValidForUpdate` / `isValidForRead` — per-verb write/read permissions (optional)
+
+Governs which API verbs Dataverse allows against the column, independent of the table-level
+security a `personas[]` role grants. The common case is **write-once**: a column that should be
+populated at creation (an external system id, an intake source) and never touched again —
+`"isValidForUpdate": false` blocks every later write, whether from a form, a flow, or the API,
+without needing a business rule or a plug-in to enforce it.
+
+```jsonc
+{ "schemaName": "new_externalref", "displayName": "External Reference", "type": "Text",
+  "isValidForUpdate": false }
+```
+
+- **All three are independently optional booleans** — set only the ones you mean to constrain.
+  Omitting all three leaves the column at the Dataverse default (valid for create, update, AND
+  read).
+- **`false` is the entire point of the feature, and is honoured exactly like `true`.** The spec
+  validation and the build both use an explicit-value check (`!== undefined`), never a truthy
+  check, specifically so `isValidForUpdate: false` is never silently dropped the way a naive
+  `if (value)` guard would drop it.
+- **Every buildable column type accepts these EXCEPT Customer.** A `Customer` column is created
+  through a separate Dataverse API path (a polymorphic account/contact lookup) that carries no
+  such option. Setting any of the three on a Customer column does not fail the build — it
+  **warns** and the flag is silently not written, the same treatment `description` gets on a
+  Customer column elsewhere in this doc.
+- **Rebuild-safe, by re-assertion (see the reconcile note above).** Whichever of the three fields
+  the spec sets explicitly is re-sent on every build for an existing column, not just a newly
+  created one — so tightening `isValidForUpdate` to `false` in the spec and rebuilding converges an
+  already-shipped table, not only a fresh one.
 
 ### entity sub-sections (optional)
 ```jsonc
@@ -303,6 +420,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```jsonc
 { "entity": "new_ticket", "name": "Active Tickets", "columns": ["new_subject","new_priority"],
   "sort": [{ "attr": "new_subject", "dir": "asc" }], "activeOnly": true,
+  "description": "Unresolved tickets, most urgent first — the queue agents work from.",
   // optional rich filters (beyond the default active-records condition):
   "filters": [
     { "attr": "ownerid", "op": "eq-userid" },                       // "my" records — no value
@@ -319,14 +437,18 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - **Default-view enrichment (automatic):** the auto-generated **"Active &lt;Entity&gt;"** and
   **"Inactive &lt;Entity&gt;"** system views ship with only the primary column. The build enriches
   them with the primary column plus up to 6 meaningful declared columns (in declared order, skipping
-  wide/opaque types like MultilineText). This runs by default for every table that has extra columns;
-  opt a table out with **`"enrichDefaultViews": false`** on its `entities[]` entry. Author-declared
-  `views[]` are separate and always win.
+  wide/opaque types like MultilineText). This runs by default for every table the build **owns** that
+  has extra columns; opt a table out with **`"enrichDefaultViews": false`** on its `entities[]` entry.
+  A table marked **`"existing": true`** is skipped by default — enrichment *replaces* a view's column
+  set, and `existing` means the build cannot prove it owns the table, so rewriting another app's
+  default views is not a safe default. Set **`"enrichDefaultViews": true`** to override that when you
+  know the reused table is yours. Author-declared `views[]` are separate and always win.
 
 ## charts[]
 ```jsonc
 { "entity": "new_ticket", "name": "Tickets by Priority", "chartType": "Pie",
-  "groupBy": "new_priority", "measure": "count" }
+  "groupBy": "new_priority", "measure": "count",
+  "description": "Where the open workload is concentrated." }
 ```
 - `chartType`: `Column · Bar · Pie · Line`. **`groupBy` MUST be a Choice column** on `entity`.
 
@@ -334,6 +456,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```jsonc
 // auto layout (default): primary + all scalar columns + 1:N parent lookups; opt-in child grids
 { "entity": "new_customer", "type": "main", "name": "Customer", "layout": "auto",
+  "description": "The main customer record — profile, contacts and open tickets.",
   "notes": true,                                   // optional — add a Notes section
   "autoSubgrids": true,                            // optional — a sub-grid for every child relationship
   "deactivateOtherMainForms": true,                // optional — see below (own custom tables only)
@@ -343,6 +466,25 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 { "entity": "new_project", "type": "main", "name": "Project",
   "tabs": [ { "label": "General", "sections": [
     { "label": "Details", "columns": 2, "fields": ["new_name","new_budget","new_status"] } ] } ] }
+
+// per-field control options: read-only, hidden, and targeted positioning
+{ "entity": "new_workitem", "name": "Work Item", "layout": "auto",
+  "fieldOptions": {
+    "new_workitemnumber": { "readOnly": true },          // visible but locked (e.g. an AutoNumber)
+    "new_storypoints":    { "hidden": true },            // on the form for scripts, not shown
+    "new_daysremaining":  { "after": "new_duedate" }     // move it directly after Due Date
+  } }
+
+// offer this form only to particular personas (a form with no assignment is offered to EVERY role)
+{ "entity": "new_ticket", "name": "Dispatcher Ticket", "layout": "auto",
+  "securityRoles": { "personas": ["Dispatcher"], "fallbackForm": false, "order": 1 } }
+
+// the same options inline, when an explicit layout already lists the fields
+{ "entity": "new_workitem", "name": "Work Item", "layout": "explicit", "prune": false,
+  "tabs": [ { "label": "General", "sections": [ { "columns": 1, "fields": [
+    "new_name",
+    { "name": "new_workitemnumber", "readOnly": true },
+    { "name": "new_storypoints", "hidden": true } ] } ] } ] }
 
 // form JS: wire onload/onsave/onchange handlers to a web-resource library
 { "entity": "new_ticket", "type": "main", "name": "Ticket", "layout": "auto",
@@ -394,6 +536,88 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   is truthy in JS and would silently enable a handler you meant to disable.
   The build fetches the pushed form, injects the handlers, then publishes it.
 
+### Per-field control options — `readOnly`, `hidden`, `after`
+
+A form field can carry three per-control options. Declare them **form-level** in `fieldOptions`
+(keyed by column logical name) — the only route under an `auto` layout, which has no field list —
+or **inline** on an explicit layout's `fields[]` entry as `{ "name": …, "readOnly": …, "hidden": … }`.
+Where both apply to one field the inline entry wins; a plain string entry keeps working unchanged.
+
+- **`readOnly: true`** locks the control (`disabled="true"`), leaving it visible. Use it for a value
+  the platform generates but does **not** make immutable — an AutoNumber column is writable through
+  the API, so "read-only" for it is a form-level statement, not a metadata one.
+- **`hidden: true`** places the field as a hidden control (`visible="false"`) — present for form
+  scripts and business rules, not shown to the user.
+- **`after: "<logical>"`** moves the field so it immediately follows the named anchor. This is the
+  **non-destructive** way to reposition one control: it works on an already-deployed form and does
+  not require re-declaring the rest of the form. An anchor that is not on the form is ignored.
+  Only valid in `fieldOptions` — inside an explicit `tabs` layout the listed order already positions
+  the field, so `after` there is rejected rather than silently overriding the list.
+  Two anchor shapes are **rejected**, because neither has a satisfiable answer: only **one** field may
+  sit immediately after a given anchor (to place several in sequence, *chain* them — anchor the second
+  after the first), and anchors may not form a **cycle**.
+
+**Only the enabled state is ever written.** The build emits `readOnly`/`hidden` when you ask for
+them and writes *nothing* when you do not, so a rebuild never clears a lock or a hide someone applied
+in the form designer. The corollary is that `readOnly: false` / `hidden: false` cannot turn a flag
+back off — they are rejected at author time rather than accepted and ignored. To un-set one, clear it
+in the designer, or drop the field and let the next build re-add it.
+
+- **`prune`** *(optional, default `true`, explicit layouts only)* — an explicit `tabs` layout is
+  normally the complete desired state, so a rebuild removes any deployed field it does not list. Set
+  `prune: false` to keep those fields, which lets you restyle or reorder a **subset** of a form
+  without re-declaring every other field just to preserve it. It has no effect on an `auto` layout
+  (already additive) and is warned about there.
+
+### `securityRoles` — who the form is offered to
+
+A form with **no** `securityRoles` block is offered to **every** security role. Declaring one is
+therefore a **restriction**, not a grant, and that direction is what makes each mistake here
+access-relevant: an empty list or a mistyped persona would hide the form from everyone, not simply
+fail to add anyone. Every malformed shape is a hard error for that reason.
+
+```jsonc
+{ "securityRoles": { "personas": ["Dispatcher", "Supervisor"] } }   // only these roles see it
+{ "securityRoles": { "everyone": true } }                            // explicitly every role
+{ "securityRoles": { "personas": ["Dispatcher"], "fallbackForm": true, "order": 2 } }
+```
+
+- **`personas[]`** — names from this spec's `personas[]`, **not** role GUIDs. The build resolves each
+  to the role it created. A name that is not declared is rejected at the spec gate, and would halt the
+  build if it somehow reached it.
+- **`everyone`** — mutually exclusive with `personas`. That is the *platform's* model, not a rule of
+  this spec: `<Everyone />` **replaces** the role list rather than adding to it. `everyone: false` is
+  rejected, because it looks like "restrict to nobody" and means nothing.
+- **Removing a restriction needs `everyone: true`, not deleting the block.** A build only visits
+  forms that *declare* `securityRoles`, so deleting the block leaves the deployed
+  `<DisplayConditions>` exactly as it was — the form stays hidden from everyone outside the old list.
+  This direction fails closed (access never silently widens), but it does mean "undo" is an explicit
+  `{ "everyone": true }`.
+- **`fallbackForm`** *(optional)* — show this form to users whose roles have no form of their own.
+- **`order`** *(optional, non-negative integer)* — display order among the entity's forms.
+- Both `fallbackForm` and `order` are **preserved** when omitted, so a later build that sets only
+  `personas` does not reset them.
+
+**Two things worth knowing.** The roles are stored **inside `formxml`**, as a `<DisplayConditions>`
+element — `systemform` has no role relationship at all (it reports
+`CanBeInManyToMany: { Value: false, CanBeChanged: false }`), which is why no association-style API
+ever worked and why this needs a dedicated call. And the write lands on the **unpublished** layer:
+live-measured, the published form still reported `<Everyone />` until the customization was
+published, so the restriction takes effect only after a publish. The build publishes the entity when
+publishing is enabled.
+
+Assignment happens in the **security** phase, not the forms phase, because the roles do not exist
+until then. If you build with `--phases` excluding `forms`, the assignment is skipped with a message
+rather than applied to a form this run did not build.
+
+### Column types that cannot go on a form
+
+**Big Integer (`BigInt`) has no Unified Interface form control.** A BigInt placed on a form renders
+the text *"Error loading control"* on every record. The `auto` layout therefore **skips BigInt
+columns** — the column is still created and still readable/writable through the API, it just is not
+placed. An explicit layout still honours a BigInt you list by name (you may be pairing it with a
+custom control), but the spec validator emits a warning.
+
 ## commands[] (optional — modern command-bar buttons)
 ```jsonc
 { "entity": "new_order", "label": "Escalate", "location": "MainTab",
@@ -438,9 +662,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 
 ```jsonc
 { "entity": "new_ticket", "name": "Hide notes on closed tickets",
+  "description": "Closed tickets are read-only history, so the working fields are hidden.",
   "scope": "Entity",          // only Entity today
   "status": "Active",         // Active (default) | Draft — a Draft rule is deployed but inert
-  "conditions": [             // ALL must hold (ANDed)
+  "conditions": [             // ALL must hold (ANDed); more than one is allowed
     { "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" }
   ],  "actions": [
     { "type": "SetVisibility",       "field": "new_notes",  "visible": false },
@@ -450,29 +675,47 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   ] }
 ```
 
-- **Operators**: `Equals` · `DoesNotEqual`, and both must carry a `value`.
-  `ContainsData` / `DoesNotContainData` are **rejected**: the SDK compiles them to XAML the platform
-  answers with `HTTP 500 — Error generating UiData`, live-measured on every column type and in both
-  directions, while the two comparison operators succeed in the same run. Tracked as
-  [#481](https://github.com/microsoft/power-platform-skills/issues/481); to test presence, compare
-  the field to the value you care about instead.
+- **Environment gate — read this first.** The SDK writes a rule through the bound
+  `CreateProcessWithWfomJson` member, the same one the modern business-rule designer uses, and has
+  **no fallback**. An environment that does not declare that member cannot host business rules at
+  all, and that is the common case rather than an edge case. The build then
+  **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
+  so you get a working app without the rules, not a half-built one. `--verify` will report those
+  rules as not deployed, which is the truth.
+- **Operators**, all of which the SDK's own table defines:
+  `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
+  `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·
+  `EndsWith` · `DoesNotEndWith` · `On` · `NotOn` (all carry a `value`), plus the presence operators
+  `ContainsData` · `DoesNotContainData`, which must **not** carry one.
+  Mind the spelling: it is `IsGreaterThan`, **not** `GreaterThan`. The SDK resolves an operator it
+  does not recognise to **Equals** rather than rejecting it, so a misspelling would deploy, activate,
+  and quietly test equality. The spec rejects anything outside the table for exactly that reason, and
+  suggests the correct spelling when it can.
 - **Actions**: `SetVisibility` (`visible`) · `LockUnlock` (`lock`) · `SetBusinessRequired`
   (`required`) · `SetFieldValue` (`value`). The three boolean payloads must be **real booleans** — a
   string `"false"` is truthy and would invert the intent, so it is rejected.
-- **`dataType`** (optional, default `String`) is how the platform should read the literal:
-  `String` · `Picklist` · `Boolean` · `Integer` · `Decimal` · `Money` · `DateTime` · `Memo`. For a
-  Choice column use `Picklist` and give the option's **integer value**, not its label.
+  The SDK also models `SetDefaultValue`, `ShowErrorMessage` and `Recommendation`. They are not
+  exposed yet: each needs mapping that cannot be exercised end to end on an environment without the
+  bound member, and shipping unverified mapping is how a rule deploys and does the wrong thing.
+- **`conditions[]` are ANDed**, and there may be **more than one** — they are folded with the
+  platform's `LogicalAnd`. (An earlier single-condition limit came from a client-side XAML compiler
+  that has since been deleted upstream; it was never a platform limit.) `OR` is not exposed.
+- **`dataType`** (optional) — accepted values are `String` · `Memo` · `Picklist` · `State` ·
+  `Status` · `Boolean` · `Integer` · `Double` · `Decimal` · `Money`.
+  **It currently has no effect.** Measured across every accepted value, on both the condition and the
+  action path, the SDK types every literal as `String` and never consults this field. It is still
+  validated as a closed set so a typo is caught and so the surface stays forward-compatible, but do
+  not expect it to change the deployed rule. For a Choice column, give the option's **integer
+  value**, not its label — that part matters regardless.
 - Every `field` must be a column on the rule's own `entity` (its own columns, its primary name, or a
   lookup a relationship creates). A rule naming a column that does not exist is accepted by the
   platform and then simply **never fires**, so this is validated up front.
-- Why this slice and not more: the vendored SDK compiles rules to classic workflow XAML, and these
-  four actions plus four operators are what that compiler supports. Anything else throws mid-build.
 - **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
   edits are **not** re-applied. Recreate the rule to change it.
 
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
-{ "name": "Operations", "tiles": [
+{ "name": "Operations", "description": "Daily queue health for the support lead.", "tiles": [
   { "type": "chart", "chart": "Orders by Status", "view": "Active Orders" },  // chart needs both
   { "type": "list",  "view": "Active Orders", "name": "Recent" },             // list needs a view
   { "type": "iframe", "url": "https://…", "name": "Map" },

@@ -31,16 +31,47 @@ apart deliberately.
 - Relationships: OneToMany (lookup) **and** ManyToMany; Customer (polymorphic) columns.
 - Sample data: Choice/MultiChoice label→int resolution (inline **and** global choices), `$parent`/`$parents` lookup binds (incl. junction rows with both sides), custom status reasons; resolve-by-name idempotency via the SDK's `seedRecordGraph`.
 - ⚠ Calculated / Rollup formula columns — `source` + `formula` plumbed through, **not live-verified**.
+- **Per-column write permissions** (`isValidForCreate` / `isValidForUpdate` / `isValidForRead`) —
+  this is how a column is made read-only. Applied on create **and** reconciled on rebuild, and each
+  flag is sent independently so setting one does not disturb the others. Live-verified by reading the
+  deployed metadata back: `IsValidForUpdate: false` with Create/Read untouched at `true`, and
+  unchanged through a download → rebuild round trip (an omitted setting means *leave alone*, never
+  *reset*). Not available on `Customer` columns — the SDK has no update path for that type at all.
+  (AB#6651276)
+- **Boolean `defaultValue`** — which option a Yes/No column starts on; the SDK previously hardcoded
+  `false`. An explicit `false` is preserved rather than treated as absent. Live-verified.
+  (AB#6648523)
+- **Whole-number `integerFormat`** — `None` · `Duration` · `TimeZone` · `Language` · `Locale`; the
+  SDK previously hardcoded `None`, so a column holding minutes could not render as a duration.
+  Live-verified as `Duration`. (AB#6648522)
 - **Table icons** (`entities[].vectorIcon` = SVG web resource → `IconVectorName`; `entities[].icon` = raster web resource → `IconMediumName`) — sets a custom table's own icon (what the modern designer + nav render). Applied after the web-resources phase via the SDK's `setEntityIcon`; hard-validated against declared web resources so an unresolvable value can't break the designer (glimmer). Live-verified: `IconVectorName` set to a published SVG web resource.
 
-### Business rules — ✅ verified live
+### Business rules — ⚠️ environment-gated
 - `businessRules[]` — declarative form logic with no code: show/hide (`SetVisibility`), lock/unlock
-  (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on a
-  condition over the record (`Equals` · `DoesNotEqual`). `ContainsData`/`DoesNotContainData` are
-  rejected at the spec gate — the XAML they compile to makes the platform 500 on activation.
-- Compiled to classic workflow XAML by the vendored SDK and activated on create. The supported slice
-  is exactly what that compiler accepts; every field is validated against the rule's own entity, so a
-  rule naming a column that does not exist is rejected up front rather than deploying and never firing.
+  (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on one
+  or more conditions over the record (ANDed). Sixteen operators, taken from the SDK's own table:
+  `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
+  `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·
+  `EndsWith` · `DoesNotEndWith` · `On` · `NotOn` · `ContainsData` · `DoesNotContainData`.
+- **The SDK writes a rule through the bound `CreateProcessWithWfomJson` member, or not at all.** The
+  client-side workflow-XAML compiler it used to fall back on was removed upstream, because it covered
+  4 of the 7 action types and a single clause and therefore silently narrowed a rule into something
+  that did not say what the author wrote. An environment that does not declare that member **cannot
+  host business rules** — and that is the common case rather than an edge case. Where the member is
+  declared, a rule can still fail with a server-side MissingMethodException, which is a platform
+  defect on that environment rather than a rule-shape problem. The build then skips them,
+  warns once naming the member, and builds everything else normally; `--verify` reports them as *not
+  applicable on this environment* rather than missing, so the exit code, the deployed baseline and
+  the `--changed-only` snapshot are unaffected.
+- The operator allowlist is load-bearing rather than cosmetic: the SDK resolves an operator it does
+  not recognise to **Equals**, so `GreaterThan` (the natural misspelling of `IsGreaterThan`) would
+  deploy, activate and quietly test equality. The spec pins the list against the bundle's own table
+  in both directions.
+- `dataType` is currently **decorative** — measured across every accepted token, on both the
+  condition and the action path, the SDK types every literal as `String`. It is still validated as a
+  closed set so a typo is caught.
+- Every field is validated against the rule's own entity, so a rule naming a column that does not
+  exist is rejected up front rather than deploying and never firing.
 - Additive on rebuild (matched by `entity` + `name`, reused if present); torn down with the app.
 - **Activating a rule creates a second `workflows` row, and that is normal.** Dataverse keeps the
   definition (`type 1`, no parent) and an activated copy (`type 2`, parented to it). Live-measured: a
@@ -48,12 +79,24 @@ apart deliberately.
   anything, so the platform makes it. Every business-rule query in build, verify and teardown filters
   `type eq 1`; omitting it made the build attempt to delete the copy (405), warn about a duplicate
   that did not exist, and would have made `--verify` fail every active rule.
-- Live-verified end to end through the App Spec: rules authored from `businessRules[]` deployed,
-  activated, and the platform's own generated `clientdata` named the authored columns.
+- Live-verified end to end through the App Spec on an environment that supports it: rules authored
+  from `businessRules[]` deployed, activated, and the platform's own generated `clientdata` named the
+  authored columns.
 
 ### Forms, views & charts — ✅ verified live
 - Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
 - Quick-create + quick-view forms (`forms[].formType`); quick-view **placement** on a host form via a lookup (`forms[].quickViews[]`).
+- **Per-form security roles** (`forms[].securityRoles`) — offer a form to named `personas[]`, or to
+  `everyone`, with optional `fallbackForm` and `order`. The roles are **not** a relationship
+  (`systemform` reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }` and there is no
+  `systemformrole` entity, so no association shape can ever work); they live inside `formxml` as a
+  `<DisplayConditions>` element. Note the direction: a form with **no** assignment is offered to
+  **every** role, so this **restricts** a form rather than granting it — and removing a restriction
+  is an explicit `everyone: true`, not deleting the block. Applied in the **security** phase, because
+  the persona's role does not exist until then, and the write lands on the **unpublished** layer, so
+  it takes effect after a publish. Live-verified: the persona's real role id inside
+  `<DisplayConditions Order="2">` on the restricted form, `<Everyone />` on its unrestricted sibling.
+  (AB#6648526)
 - Form JS event handlers (`onload`/`onsave`/`onchange`) wired via web resources.
 - Views with rich filters (`eq-userid`/`this-week`/`in`/`not-in`/… + Choice-label resolution); default Active/Inactive view **column enrichment** via the SDK's `enrichDefaultViews`.
 - Choice-column charts.
@@ -124,12 +167,12 @@ apart deliberately.
   compares `AI_APP_SETTING` to the SDK's map and asserts the gate/per-app names stay distinct.
 
 ### Edit flow (download → edit → rebuild) — ✅ verified live
-- `download-model-app.js` pulls a **deployed app** back into an editable App Spec (+ page code, icons, referenced entities, and the app's **real unmanaged solution** — `recoverAppSolution` enumerates the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions, so the spec names the right container for a later clean teardown); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). The app-shell phase **re-syncs the sitemap + components of any existing app** (fetch → recompute-from-spec → push → publish), so subarea add/rename/reorder edits land for **page-less apps too** — not just generative-page apps — and `--only app-shell` can force the rewrite. **Classic DashBoard subareas are *designed* to round-trip** — the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them. **This does not currently work end to end:** live-verified 2026-08-27, the vendored SDK's `fetchArtifact('dashboard', …)` throws `Cannot read properties of null (reading 'length')` while deserializing the `<parameters>` block it itself serialized, so no tiles are recovered and the subarea is dropped — which then fails the whole download unless `--allow-lossy-download` is passed. Reproduced on the current **and** the previous bundle, so it is not a regression from the SDK uptake; tracked upstream. Download now names the cause instead of silently dropping the subarea. **Round-trip scope (not yet "complete"):** tables, sitemap/appShell, generative pages, icons, and solution round-trip; **dashboards, forms, views, charts, and commands do NOT yet** — view hydration was tried and reverted (LIVE-verified the deployed savedquery set can't reliably distinguish author views from Dataverse's auto-generated Active/Inactive/QuickFind system views). All survive on the live app (a rebuild preserves them by discovery) but are absent from the downloaded spec, so edit them in Maker or a fresh spec.
+- `download-model-app.js` pulls a **deployed app** back into an editable App Spec (+ page code, icons, referenced entities, and the app's **real unmanaged solution** — `recoverAppSolution` enumerates the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions, so the spec names the right container for a later clean teardown); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). The app-shell phase **re-syncs the sitemap + components of any existing app** (fetch → recompute-from-spec → push → publish), so subarea add/rename/reorder edits land for **page-less apps too** — not just generative-page apps — and `--only app-shell` can force the rewrite. **Classic DashBoard subareas are *designed* to round-trip** — the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them. **This now works end to end.** It previously did not: the vendored SDK’s `fetchArtifact(‘dashboard’, …)` threw `Cannot read properties of null (reading ‘length’)` while deserializing the `<parameters>` block it had itself serialized, so no tiles were recovered and the subarea was dropped — which failed the whole download unless `--allow-lossy-download` was passed. Root cause upstream: the grammar walk descended into **text** nodes, and the bundled XML parser returns `null` for a text node’s children. Fixed in the SDK and re-vendored; measured across the re-vendor as **0/4 → 4/4** round-trips (list tile, both chart-parameter spellings, and a tile with an empty parameter value), and pinned by `scripts/tests/dashboard-roundtrip.test.js`, which feeds a serialized dashboard straight back in. ([#478](https://github.com/microsoft/power-platform-skills/issues/478)) **Round-trip scope (not yet "complete"):** tables, sitemap/appShell, generative pages, icons, dashboards, and solution round-trip; **forms, views, charts, and commands do NOT yet** — view hydration was tried and reverted (LIVE-verified the deployed savedquery set can't reliably distinguish author views from Dataverse's auto-generated Active/Inactive/QuickFind system views). All survive on the live app (a rebuild preserves them by discovery) but are absent from the downloaded spec, so edit them in Maker or a fresh spec.
 - Live regression on the edit path found + fixed **4 bugs**, then re-verified clean.
 - `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing). Sitemap checks are **element-scoped**: an area/subarea icon is matched on its own `<Area>`/`<SubArea>` element, and a **dashboard subarea** is verified by resolving the dashboard id (systemform type 0, by name) and matching the sitemap's `DefaultDashboard` — so a value reused elsewhere can't produce a false pass. **Multi-area sitemaps** and the dashboard-subarea path were re-verified live (positive + negative).
 
 ### Teardown — ✅ verified live
-- `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (app → dashboards → commands → forms → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references); **web resources are removed AFTER tables** (a table's icon web resource is referenced by the table).
+- `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (app → dashboards → commands → forms → **security roles** → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references); **web resources are removed AFTER tables** (a table's icon web resource is referenced by the table).
 - **Classifier-safe** (every id resolved from a spec-declared name via an exact-match, entity-scoped filter), dry-run by default, best-effort continue, not-found aware, undeletable (system/managed) artifacts recorded as `skipped`. A **restricted system solution** (`Active`/`Default`/`Basic`) is skipped rather than attempted (Dataverse 400s any delete of one), so a downloaded spec that defaulted its solution to `Default` tears down cleanly. An already-gone relationship (Dataverse 400 *"…but 0 were found"*) is tolerated as deleted, like the table not-found case.
 
 ### Tooling & internals — ✅ verified live
