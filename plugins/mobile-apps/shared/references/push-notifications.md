@@ -7,7 +7,7 @@ the planner, and screen builders.
 The canonical lifecycle, stage owners, per-platform resume rules, and physical
 delivery boundary are defined in
 [push-lifecycle.md](./push-lifecycle.md). This document defines stage 3,
-runtime integration; it does not make Firebase setup, platform provisioning,
+runtime integration; it does not make Firebase setup, manual platform setup,
 sender authentication, flows, wrapped builds, installation, or physical
 delivery part of `/add-push-notifications`.
 

@@ -30,20 +30,25 @@ physical delivery verification.
 
 ## Signing boundary
 
-Apple signing assets remain in the retained project-specific keychain and the
-standard user provisioning-profile directory created by `/setup-apple-ios`.
-Never request, copy, move, print, encode, upload, commit, or generate:
+The user owns and manages all signing assets through Xcode and Apple-supported
+tools outside this workflow. Before the build, Xcode must already have access
+to the correct Apple account, Team, signing certificate, registered test
+devices, and provisioning profile for the exact bundle and selected mode.
 
-- certificates or certificate contents
-- private keys, `.p8`, `.p12`, `.pfx`, `.pem`, or `.key` files
-- provisioning profile contents or `.mobileprovision` files
-- Apple passwords, app-specific passwords, keychain data, or signing secrets
+Never request, discover, inspect, select, create, repair, copy, move, print,
+encode, upload, commit, or generate:
+
+- certificates, signing identities, or private keys
+- `.p8`, `.p12`, `.pfx`, `.pem`, `.key`, or `.mobileprovision` files
+- provisioning profile names, contents, UUIDs, or paths
+- device UDIDs or Apple account credentials
+- keychain names, paths, contents, passwords, or search-list state
 
 Do not accept paths to those assets. Do not add passwords, certificate names,
-profile UUIDs, device UDIDs, keychain paths, or credential fields to
-`wrap.config.json` or logs. The approved helper may inspect the dedicated
-keychain and installed profile in-process, but it emits only safe mode,
-Team/bundle, APNs-environment, and boolean proof.
+profile UUIDs, device UDIDs, keychain data, or credential fields to
+`wrap.config.json`, commands, memory, or logs. This workflow validates only
+safe project configuration and the user's explicit setup confirmations; Xcode
+remains responsible for resolving user-managed signing assets during Wrap.
 
 ## Phase 1 — Read-only preflight
 
@@ -53,39 +58,47 @@ Team/bundle, APNs-environment, and boolean proof.
 2. Require `package.json` script `build:ios` to equal `wrap ios`. Require a
    physical-device intent and one explicit mode: `development` or `ad-hoc`.
    STOP on any other mode.
-3. Consume the exact `/setup-fcm`, `/setup-apple-ios`, and `/setup-apns` handoff from
-   `memory-bank.md`: Firebase project ID, immutable iOS Firebase app ID, iOS
-   bundle ID, evaluated plist path, APNs manual-upload confirmation, APNs Key
-   ID, and Apple Team ID. Missing or conflicting handoff data blocks the build;
-   do not reconstruct it or select another Firebase app.
+3. Consume the exact `/setup-fcm`, `/setup-apple-ios`, and `/setup-apns`
+   handoffs from `memory-bank.md`: Firebase project ID, immutable iOS Firebase
+   app ID, iOS bundle ID, evaluated plist path, APNs manual-upload
+   confirmation, APNs Key ID, and Apple Team ID. Missing or conflicting
+   handoff data blocks the build; do not reconstruct it or select another
+   Firebase app.
 4. Require the native client integration, sender-auth handoff, and exact
    producer/sender flow handoff recorded by the prescribed iOS push chain:
    `/setup-fcm` -> `/setup-apple-ios` -> `/setup-apns` ->
    `/add-push-notifications` -> sender auth and
    `/create-push-notification-flow` -> `/build-ios` -> `/verify-ios-push`.
    Do not recreate or mutate those stages here.
-5. Validate the fresh Apple provisioning handoff for the exact selected mode,
-   Team, and bundle. This replaces manual device/certificate/profile
-   confirmation:
+5. Show the exact safe identity to be signed: Apple Team ID, bundle ID, selected
+   mode, expected APNs environment, and physical registered-device intent.
+   Require the user to confirm all of the following without providing asset
+   names, identifiers, paths, contents, or credentials:
+   - `/setup-apple-ios` completed manual Apple/Xcode setup for this exact Team
+     and explicit bundle identifier;
+   - `/setup-apns` completed its exact Team/bundle handoff and manual Firebase
+     Console APNs upload;
+   - Xcode currently has user-managed signing access for this exact Team,
+     bundle, and selected `development` or `ad-hoc` mode;
+   - every physical test device intended for this IPA is registered and covered
+     by the user's selected signing setup;
+   - the signing setup carries Push Notifications with the expected
+     `aps-environment`.
 
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/validate-apple-ios-provisioning.js" \
-     --project-root . --file apple-ios-provisioning.json \
-     --expected-team "<APPLE_TEAM_ID>" \
-     --expected-bundle "<IOS_BUNDLE_ID>" \
-     --expected-mode "<development|ad-hoc>"
-   ```
+   Ask for this exact confirmation:
 
-   Exit 0 and `status: valid` are required. Missing, stale, wrong-Team,
-   wrong-bundle, unsafe-path, unsupported-mode, certificate, profile, device
-   coverage, or APNs proof routes to `/setup-apple-ios` repair. Do not ask the
-   user to confirm a device, certificate, profile, name, UUID, or UDID.
+   > Type `confirm ios signing setup for <mode>` after verifying the manual
+   > Xcode checklist for Team `<TEAM_ID>` and bundle `<BUNDLE_ID>`.
+
+   A bare yes or an earlier confirmation for another Team, bundle, or mode is
+   insufficient. This is a safe attestation, not generated provisioning proof.
+   Never inspect signing assets to verify it.
 6. Scan the project before any write:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-ios-wrap-build.js" \
      --project-root . --mode "<development|ad-hoc>" \
-     --expected-team-id "<APNS_HANDOFF_TEAM_ID>"
+     --expected-team-id "<APNS_HANDOFF_TEAM_ID>" &&
    APNS_ENVIRONMENT="<development|production>" \
      node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
        --project-root . --strict-client-integration
@@ -145,7 +158,7 @@ values from another app or team.
 ## Phase 3 — Write confirmation
 
 Show only the safe proposed fields above, the selected mode, and the expected
-APNs environment. Do not show certificate/profile/keychain information.
+APNs environment. Do not show signing asset or keychain information.
 
 Ask for this exact confirmation:
 
@@ -153,14 +166,15 @@ Ask for this exact confirmation:
 
 A bare yes is insufficient. If no write is needed, state that the existing safe
 projection already matches. After a confirmed write, use structured JSON
-editing and rerun the validator. Exit 0 and `status: ready` are required.
+editing and rerun `validate-ios-wrap-build.js`. Exit 0 and `status: ready` are
+required.
 
-## Phase 4 — Validation and build confirmation
+## Phase 4 — Validation and direct build
 
 Run, in order:
 
 ```bash
-npm run type-check
+npm run type-check &&
 APNS_ENVIRONMENT="<development|production>" \
   node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
     --project-root . --strict-client-integration
@@ -176,36 +190,18 @@ APNS_ENVIRONMENT="<development|production>" npm run bundle:ios
 If a future installed package has no `bundle:ios` script, do not invent one:
 inspect that installed Wrap version's local help/package contract and run a
 separate bundle only when it requires one. Any type-check, push validator, or
-required bundle failure blocks the native build.
-
-Immediately before Wrap, prove that the selected mode's current installed
-profile still matches the exact Team/bundle/APNs environment and contains the
-required usable Apple Development or Apple Distribution identity from the
-retained dedicated keychain:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
-  --project-root . --timeout 3600 -- \
-  /usr/bin/env node \
-  "${PLUGIN_ROOT}/scripts/verify-apple-ios-build-signing.js" \
-  --project-root . --file apple-ios-provisioning.json \
-  --mode "<development|ad-hoc>" \
-  --expected-team "<APPLE_TEAM_ID>" \
-  --expected-bundle "<IOS_BUNDLE_ID>"
-```
-
-The secure helper temporarily unlocks and prepends only the retained
-project-specific keychain, then restores the previous search list on success
-or failure. Require `status: ready`. The verifier emits no certificate name,
-profile UUID, device identifier, keychain path, or profile contents.
+required bundle failure blocks the native build. Continue past each command
+block only when its exit status is zero; never let a later successful command
+mask an earlier failure.
 
 Print a safe summary: app name, bundle ID, version, mode, Team ID, export
 method, APNs environment, icon path, and output path. Then ask:
 
-> Type `build ios <mode>` to run `npm run build:ios` using existing
-> Wrap/Xcode signing assets.
+> Type `build ios <mode>` to run `npm run build:ios` using your existing
+> user-managed Xcode signing assets.
 
-Only the exact phrase proceeds. Then:
+Only the exact phrase proceeds. Then run Wrap directly, with only the bounded
+sanitized filter between its combined output and the terminal:
 
 ```bash
 mkdir -p .tmp
@@ -213,9 +209,7 @@ touch .tmp/ios-build-start
 set +e
 set -o pipefail
 APNS_ENVIRONMENT="<development|production>" \
-  node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
-    --project-root . --timeout 3600 -- \
-    /usr/bin/env npm run build:ios 2>&1 |
+  npm run build:ios 2>&1 |
   node "${PLUGIN_ROOT}/scripts/filter-ios-build-output.js"
 BUILD_STATUS=$?
 set +o pipefail
@@ -224,12 +218,28 @@ test "$BUILD_STATUS" -eq 0
 ```
 
 Never add verbose/debug flags that could expose signing command lines or
-environment details. The helper restores the previous keychain search list
-even when Wrap fails. Do not silently retry or attempt native-signing repairs.
-The filter retains only the final 80 safe lines. It suppresses signing command
-lines and `security find-identity` output, and redacts token/password/private
-key, certificate/signing identity, provisioning profile, development-team, and
-keychain metadata. On failure, identify the failing stage and STOP.
+environment details. Do not inspect signing assets, silently retry, or attempt
+signing repair. The filter retains only the final 80 safe lines, suppresses
+signing command lines, and redacts token/password/private-key, certificate,
+signing-identity, provisioning-profile, development-team, and keychain
+metadata.
+
+On a signing failure, report only the sanitized failure category and STOP.
+Route the user to this **manual Xcode setup checklist** before a new,
+explicitly confirmed build attempt:
+
+- confirm the Xcode account is signed in and authorized for the recorded Team;
+- confirm the explicit App ID exactly matches the recorded bundle ID;
+- confirm the selected mode has a valid user-managed certificate and
+  provisioning profile;
+- confirm intended physical devices are registered and covered;
+- confirm Push Notifications and the expected APNs environment are enabled;
+- complete any repair manually in Xcode/Apple tooling, then rerun
+  `/setup-apple-ios` and `/setup-apns` confirmations when their handoff changed.
+
+Do not auto-repair, install tooling, invoke signing helpers, or request asset
+details. Non-signing failures also stop at their failing type-check, push,
+bundle, Wrap, or export stage without retry.
 
 ## Phase 5 — Artifact verification
 
@@ -238,8 +248,8 @@ resolve `outputPath` from that fresh result; a new symlink or identity drift
 blocks discovery. Require at least one regular, non-symlink `.ipa` created
 after `.tmp/ios-build-start`, inside that directory. Do not traverse symlinks.
 Print only project-relative path, byte size, and modification time. Do not
-inspect the archive, embedded profile, signature, entitlements, or certificate
-chain.
+inspect the archive, embedded profile, signature, entitlements, certificate
+chain, or any signing asset.
 
 If no fresh `.ipa` exists, report the build as failed even when the command
 exited zero. Clean up `.tmp/ios-build-start`.

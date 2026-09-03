@@ -57,6 +57,10 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /customer supplies and approves recording the exact sender flow ID/);
   assert.match(lifecycle, /Use a distinct non-Flow handoff schema/);
   assert.match(lifecycle, /Omit `Sender flow ID` and `Sender flow state`/);
+  assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with explicit safe confirmations/);
+  assert.match(lifecycle, /Neither automates Apple configuration or emits an Apple proof artifact/);
+  assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
+  assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
 });
 
 test('add-push owns runtime integration and reports platform states independently', () => {
@@ -87,6 +91,10 @@ test('add-push owns runtime integration and reports platform states independentl
   assert.match(skill, /without requiring\s+`sender-auth\.json`/);
   assert.match(skill, /customer-supplied exact sender flow ID/);
   assert.match(skill, /non-Flow endpoint \/ plugin physical verification unavailable/);
+  assert.match(skill, /manual Apple Developer\/Xcode guidance/);
+  assert.match(skill, /does not automate Apple setup or emit a proof artifact/);
+  assert.match(skill, /user manages Xcode configuration and signing assets/);
+  assert.match(skill, /skill runs the direct Wrap command after exact confirmation/);
 });
 
 test('build and physical verification boundaries remain non-overlapping', () => {

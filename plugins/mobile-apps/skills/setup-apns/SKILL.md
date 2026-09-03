@@ -1,8 +1,8 @@
 ---
 name: setup-apns
-description: Use when configuring, validating, or repairing the APNs credential handoff for the exact iOS Firebase app after Apple provisioning. Owns Apple Team/bundle/Push-capability continuity and the supported manual APNs p8 upload in Firebase Console; use add-push-notifications for app entitlements/runtime/topics and verify-ios-push for physical delivery troubleshooting.
+description: Use when manually creating or reusing an Apple APNs authentication key and uploading it to Firebase Console for the exact iOS Firebase app after manual Apple setup. Preserves Team, Expo/Firebase bundle, and immutable Firebase app identity; never handles the .p8 key or automates Apple/Firebase portal actions. Use add-push-notifications for runtime integration and verify-ios-push for delivery proof.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__firebase__firebase_get_environment, mcp__firebase__firebase_login, mcp__firebase__firebase_update_environment, mcp__firebase__firebase_list_projects, mcp__firebase__firebase_get_project, mcp__firebase__firebase_list_apps
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
@@ -10,253 +10,198 @@ model: sonnet
 
 **Push contract: [push-notifications.md](${PLUGIN_ROOT}/shared/references/push-notifications.md)**.
 
-**Firebase MCP provisioning: [firebase-mcp-provisioning.md](${PLUGIN_ROOT}/shared/references/firebase-mcp-provisioning.md)** —
-use the read-only identity and project checks here whenever the `/setup-fcm`
-Firebase MCP session state is unavailable.
+**Manual Apple identity handoff: [apple-ios-signing-provisioning.md](${PLUGIN_ROOT}/shared/references/apple-ios-signing-provisioning.md)**.
 
-**Official MCP readiness: [official-mcp-servers.md](${PLUGIN_ROOT}/shared/references/official-mcp-servers.md)** —
-use the `/setup-apns` row as a hard preflight for Firebase MCP availability.
+# Set up APNs manually through Firebase
 
-# Setup APNs through Firebase
+Guide the user through APNs authentication-key creation/reuse in Apple Developer
+and manual upload in Firebase Console. FCM on iOS depends on Firebase Messaging
+mapping the APNs device token to an FCM registration token;
+`expo-notifications` alone is insufficient.
 
-FCM topics work on iOS because Firebase Messaging maps the APNs device token to
-an FCM registration token. `expo-notifications` alone is insufficient.
+Official references:
 
-## MCP readiness gate
+- Apple account keys:
+  <https://developer.apple.com/help/account/keys/>
+- APNs authentication tokens:
+  <https://developer.apple.com/help/account/capabilities/communicate-with-apns-using-authentication-tokens/>
+- Create a private key:
+  <https://developer.apple.com/help/account/keys/create-a-private-key/>
+- Firebase Cloud Messaging for Apple apps, including APNs key upload:
+  <https://firebase.google.com/docs/cloud-messaging/ios/get-started#upload_your_apns_authentication_key>
 
-Before any Firebase identity/project/app read-back in this workflow, verify the
-official Firebase MCP surface required by `/setup-apns`. If the `firebase`
-server is missing, disconnected, or any required tool from the shared
-official-MCP readiness table is unavailable, STOP and give these Copilot CLI
-steps in this exact order:
+## Non-negotiable boundary
+
+The APNs `.p8` is a credential. The user creates or selects, downloads, stores,
+and uploads it entirely in their own Apple Developer and Firebase Console
+browser sessions.
+
+Never request, accept, read, list, locate, copy, move, inspect, encode, validate,
+upload, or persist the `.p8`, its contents, derived values, or local path.
+Never persist the `.p8`.
+Never request Apple/Firebase credentials, 2FA, sessions, cookies, or screenshots
+containing sensitive data. Do not use third-party Apple automation, Apple APIs, Firebase APIs,
+Firebase MCP, Firebase CLI, browser automation, portal scraping, or
+undocumented endpoints for key creation or upload. Do not generate APNs
+certificates or `.p12` files.
+
+The only supported Firebase credential route in this workflow is the user's
+manual APNs authentication-key upload. There is no supported automated Firebase
+upload in this workflow.
+
+This skill does not manage App IDs, Push capability, devices, signing
+certificates, or provisioning profiles. Route those to `/setup-apple-ios`.
+
+## Phase 1 — Consume the `/setup-fcm` handoff and re-establish identity
+
+1. Read the `/setup-fcm` handoff and the `Apple iOS manual setup
+   (user-confirmed; not portal proof)` block from `memory-bank.md`.
+2. Require the Firebase project ID, immutable selected Firebase iOS app ID,
+   Firebase iOS bundle identifier, evaluated plist path, Apple Team ID, and
+   explicit App ID/Push user confirmations. Do not reconstruct missing values.
+   STOP if any field is absent.
+3. Run `npx expo config --type public --json` to evaluate the local
+   `ios.bundleIdentifier` and `ios.googleServicesFile`.
+4. Require exact equality among:
+   - Expo bundle identifier;
+   - `/setup-fcm` Firebase iOS bundle identifier;
+   - Apple manual setup bundle identifier.
+5. Require the evaluated plist path to equal the path recorded by `/setup-fcm`,
+   resolve inside the project root, and refer to a regular non-symlink file.
+   Only the bounded local validators may parse its non-secret project, app, and
+   bundle identity fields. Do not print raw plist contents or inspect unrelated
+   fields.
+6. Require the Apple Team ID to be exactly 10 uppercase ASCII letters/digits.
+   Display only project ID, immutable Firebase app ID, bundle ID, plist path,
+   and Team ID.
+
+Stop on missing state or drift. Preserve all recorded values and route Firebase
+or plist identity issues to `/setup-fcm`; route Apple Team, App ID, or Push
+confirmation issues to `/setup-apple-ios`. A newly typed Team, bundle, or
+Firebase app ID is not a repair.
+
+Require:
 
 ```text
-/mcp
-/setup
-/restart
-/mcp
+confirm APNs identity: <PROJECT_ID> <FIREBASE_IOS_APP_ID> <TEAM_ID> <BUNDLE_ID>
 ```
 
-Require the second `/mcp` check to show `firebase` connected with the required
-Firebase tools before continuing. Do not fall back to `firebase-tools`, raw
-REST, browser automation, or guessed Firebase Console behavior.
+This is a user confirmation of continuity, not Firebase or Apple portal proof.
 
-## Phase 1 — Consume the `/setup-fcm` handoff
+## Phase 2 — Create or reuse the APNs authentication key manually
 
-APNs setup extends the exact Firebase iOS app already configured by
-`/setup-fcm`; it must not select or register a second app.
+Guide the user to <https://developer.apple.com/account/resources/authkeys/list>
+while signed into the exact confirmed Team ID.
 
-1. Verify iOS is a target and the Firebase Messaging modules are runtime-shipped.
-2. Read the non-secret Firebase handoff from `memory-bank.md`: Firebase project
-   ID, the immutable selected iOS Firebase app ID, iOS bundle identifier, and
-   evaluated plist path. The app ID is the exact selection made by `/setup-fcm`,
-   including when multiple Firebase apps safely shared the same bundle ID.
-   STOP if any field is absent; do not reconstruct or replace the selection.
-   The expected default is `firebase/GoogleService-Info.plist`, but a validated
-   project-relative override recorded by `/setup-fcm` is also supported.
-3. Independently evaluate Expo config and resolve the final iOS bundle
-   identifier. STOP if it differs from the handoff, is missing, or is still a
-   template placeholder.
-4. Read `ios.googleServicesFile` from the evaluated Expo config and require it
-   to equal the handoff path. Resolve its real path and require it to remain
-   inside the real project root and be a regular non-symlink file. Do not accept
-   a newly supplied path or identity as a substitute for `/setup-fcm` output.
-5. Reuse the Firebase MCP authenticated user confirmed by `/setup-fcm`. If that
-   session state is not available in the current session, rerun the read-only
-   identity preflight from `firebase-mcp-provisioning.md`: use only
-   `mcp__firebase__firebase_get_environment`,
-   `mcp__firebase__firebase_update_environment`, and
-   `mcp__firebase__firebase_login` to restore the exact intended account. Do not
-   infer or switch accounts outside those tools.
+1. Prefer reusing an existing APNs-capable key when the organization knows it
+   is active, securely retained, and appropriate for this Firebase project.
+2. Otherwise guide an authorized user to create a key with Apple Push
+   Notifications service enabled. Do not enable unrelated services.
+3. Remind the user that the `.p8` can be downloaded only once and Apple account
+   key limits may apply.
+4. The user downloads it directly to a secure, user-controlled location outside
+   this and every other repository. They must not provide its path or contents.
+   Keep the one-time download outside this and every other repository.
+5. The user keeps the safe 10-character Key ID visible for the next manual
+   portal step. The Key ID is not the key.
 
-   Rerun `mcp__firebase__firebase_list_projects` with `{ "page_size": 1000 }`
-   and page until the exact recorded project ID appears or the list is
-   exhausted. Require the intended authenticated user to see that project ID in
-   the latest MCP result, then activate it with:
+If access is missing, agreements block the action, the Team differs, or the key
+limit is reached, stop for the Account Holder or Apple administrator. Do not
+delete/revoke another key or switch Teams.
 
-   ```json
-   {
-     "active_project": "<PROJECT_ID>"
-   }
-   ```
+Require:
 
-   Call that payload with `mcp__firebase__firebase_update_environment`, then
-   call `mcp__firebase__firebase_get_project` with `{}` and require the returned
-   current project to match the recorded `projectId`.
+```text
+confirm APNs key selected: <TEAM_ID> keyId=<KEY_ID>
+```
 
-   Next, call `mcp__firebase__firebase_list_apps` with:
+Validate only the format of Team ID and Key ID as 10 uppercase ASCII
+letters/digits and exact Team continuity. Do not validate or inspect the key.
 
-   ```json
-   {
-     "platform": "ios"
-   }
-   ```
+## Phase 3 — Upload manually to the exact Firebase iOS app
 
-   Write the **exact text result** from the MCP tool to
-   `firebase/.ios-apps.mcp.yaml`, then revalidate the recorded immutable app
-   selection against the evaluated bundle identifier using the same
-   deterministic resolver as `/setup-fcm`:
+Guide the user to Firebase Console:
 
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
-     --project-root . --input firebase/.ios-apps.mcp.yaml \
-     --match-platform ios \
-     --identifier "<IOS_BUNDLE_ID>" \
-     --selected-app-id "<IOS_APP_ID>"
-   ```
+1. Open the exact recorded Firebase project.
+2. Open Project settings > Cloud Messaging.
+3. Locate the exact immutable iOS Firebase app ID and bundle ID from Phase 1.
+4. In Apple app configuration, upload the APNs authentication key.
+5. The user selects the `.p8` locally and enters the safe Key ID and the exact
+   Apple Team ID.
 
-   Require `status == "match"`, `.selectedExplicitly == true`,
-   `.app.appId == "<IOS_APP_ID>"`, `.app.platform == "IOS"`, and
-   `.app.bundleId == "<IOS_BUNDLE_ID>"`. This remains deterministic when other
-   safe registrations have the same bundle ID: only the app ID selected by
-   `/setup-fcm` may continue, without a new selection prompt or app creation.
-   STOP on `selection-required`, `no-match`, `ambiguous`, `error`, project
-   mismatch, or any selected app-ID/platform/bundle drift. In particular,
-   `selected-app-id-not-found` means the recorded selection disappeared and
-   `selected-app-identity-mismatch` means it now resolves to a different
-   platform or identity. Direct the user back to `/setup-fcm`; never fall back
-   to another exact-bundle candidate or register a replacement app.
-6. Validate the installed plist against all three identities without printing
-   its contents. The shared validator expects distinct candidate/destination
-   paths, so make a short-lived project-local byte copy, validate it, then
-   remove only that copy:
+Stop if Firebase Console shows a different project, app ID, bundle ID, or Team
+ID. Do not fall back to another same-bundle Firebase app, create a replacement,
+replace the plist, or upload to a convenient default.
 
-   ```bash
-   PLIST_PATH="<EVALUATED_PROJECT_RELATIVE_PLIST_PATH>"
-   PLIST_DIR="$(dirname "$PLIST_PATH")"
-   PLIST_CHECK="${PLIST_DIR}/GoogleService-Info.apns-check.plist"
-   test ! -e "$PLIST_CHECK" || {
-     echo "BLOCKED: temporary APNs validation path already exists: $PLIST_CHECK"
-     exit 1
-   }
-   cp -- "$PLIST_PATH" "$PLIST_CHECK"
-   IOS_CONFIG_CHECK="$(
-     node "${PLUGIN_ROOT}/scripts/validate-firebase-client-config.js" \
-       --project-root . --platform ios \
-       --candidate "$PLIST_CHECK" \
-       --destination "$PLIST_PATH" \
-       --expected-project-id "<PROJECT_ID>" \
-       --expected-app-id "<IOS_APP_ID>" \
-       --expected-identifier "<IOS_BUNDLE_ID>"
-   )"
-   rm -- "$PLIST_CHECK"
-   rm -f -- firebase/.ios-apps.mcp.yaml
-   ```
+Require:
 
-   Require `status == "reuse"`. Together with the selected-app resolver result,
-   this proves one consistent recorded project/app/platform/bundle/plist
-   pairing. Any `invalid`, `conflict`, or `error` means the file is not the
-   exact `/setup-fcm` pairing. STOP and direct the user back to `/setup-fcm`;
-   never replace the plist or continue to APNs upload.
+```text
+confirm Firebase APNs upload: <PROJECT_ID> <FIREBASE_IOS_APP_ID> <TEAM_ID> <BUNDLE_ID> keyId=<KEY_ID>
+```
 
-## Phase 2 — Consume the Apple identifier/team handoff
+This attests that the user completed the Console action. It is not portal
+read-back or physical delivery evidence.
 
-The APNs authentication key must belong to the same Apple Team that owns the
-exact explicit iOS identifier. Prove that identity before asking the user to
-create or upload any credential.
+## Phase 4 — Static app checks and safe state
 
-1. Read the approved Apple Team ID recorded by `/setup-apple-ios` in
-   `memory-bank.md`. Require exactly 10 uppercase ASCII letters or digits.
-   STOP if it is absent or conflicts with another recorded Team ID; a newly
-   typed Team ID is not a replacement for the approved handoff.
-2. Validate the project-local identifier/capability proof against that Team ID
-   and the already-validated Firebase/Expo bundle ID:
+Verify local, non-secret app configuration includes:
 
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/validate-apple-identifier-capability.js" \
-     --project-root . --file apple-ios-identifier.json \
-     --expected-team "<APPLE_TEAM_ID>" \
-     --expected-bundle "<IOS_BUNDLE_ID>"
-   ```
+- `expo-notifications`;
+- Firebase app and messaging plugins;
+- the intended `aps-environment`;
+- `UIBackgroundModes: ['remote-notification']` when background data handling is
+  enabled.
 
-   Require exit `0`, `status == "valid"`, the exact expected Team ID and bundle
-   ID, and successful explicit-identifier and Push Notifications read-back.
-   The validator also enforces a current proof, a safe project-local
-   non-symlink file, and no Apple account or credential content.
-3. Validate the completed Apple provisioning handoff as well:
+Run the existing push configuration validator and changed-file validation
+appropriate to files actually changed. Static checks do not validate the
+credential or its upload.
 
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/validate-apple-ios-provisioning.js" \
-     --project-root . --file apple-ios-provisioning.json \
-     --expected-team "<APPLE_TEAM_ID>" \
-     --expected-bundle "<IOS_BUNDLE_ID>"
-   ```
+For each selected build mode, use the matching non-secret environment:
 
-   Require a fresh valid contract proving the retained keychain, modern
-   Development/Distribution identities, registered-device coverage, and
-   installed development/ad-hoc profiles. Do not replace this with manual
-   confirmation and do not print profile UUIDs, certificate names, or device
-   identifiers.
-4. STOP on a missing, stale, invalid, wrong-Team, or wrong-bundle handoff.
-   Preserve the Firebase selection and route the user to `/setup-apple-ios`;
-   never repair the mismatch by changing the Firebase app, Expo bundle ID,
-   Apple Team ID, or identifier inside this workflow.
+```bash
+APNS_ENVIRONMENT="<development|production>" \
+  node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
+    --project-root .
+```
 
-## Phase 3 — Guided APNs authentication-key handoff
+Use `development` for a development profile and `production` for an ad-hoc
+profile. Do not run strict client-integration validation here because
+`/add-push-notifications` owns the runtime wrapper and may not have run yet.
 
-APNs authentication keys are Apple credentials. Their creation and upload stay
-inside the user's Apple Developer and Firebase Console browser sessions; this
-skill must not automate either action.
+After the exact upload confirmation and static checks, update
+`memory-bank.md` with only:
 
-The only supported Firebase credential route is a manually uploaded Apple APNs
-authentication key (`.p8`). Do not use Fastlane `pem`, generate or upload an
-APNs certificate/`.p12`, automate either website, call undocumented endpoints,
-or substitute certificate-based APNs credentials. There is no supported
-Firebase MCP, Firebase CLI, or Firebase Management API operation for uploading
-an APNs authentication key; Firebase Console is the required handoff.
+```markdown
+## APNs manual setup (user-confirmed; not portal proof)
+- confirmationBasis: user-confirmed
+- portalProof: false
+- firebaseProjectId: <PROJECT_ID>
+- firebaseIosAppId: <FIREBASE_IOS_APP_ID>
+- bundleIdentifier: <BUNDLE_ID>
+- appleTeamId: <TEAM_ID>
+- apnsKeyId: <KEY_ID>
+- firebaseConsoleUpload: user-confirmed
+- status: configured, device verification pending
+- confirmedAt: <ISO-8601 timestamp>
+```
 
-1. Guide the user to Apple Developer -> Certificates, Identifiers & Profiles ->
-   Keys while signed into the **exact validated Apple Team ID** from Phase 2.
-   Have them select an existing APNs-capable authentication key for that Team or
-   explicitly create one with Apple Push Notifications service enabled. Do not
-   create a key on another visible Team. Remind them that Apple permits the
-   `.p8` download only once and that account key limits may apply.
-2. Tell the user to download the `.p8` themselves, once, into a secure
-   user-controlled location outside this and every other repository. They must
-   never paste it into chat, provide its path, or place it in a project. The
-   agent must not request, read, list, copy, move, inspect, encode, validate, or
-   upload the `.p8`, including through `Read`, `Bash`, Fastlane, Apple APIs,
-   browser automation, Firebase MCP, Firebase CLI, Firebase APIs, or an
-   undocumented endpoint.
-3. Guide the user to Firebase Console -> the exact recorded Firebase project ->
-   Project settings -> Cloud Messaging -> the **exact immutable iOS app ID and
-   bundle ID validated in Phase 1** -> APNs authentication key. The user
-   manually uploads the `.p8` and enters its Key ID and the exact Apple Team ID
-   validated in Phase 2. Do not continue if the Console app or either identifier
-   differs.
-4. Ask only for confirmation that the manual upload succeeded plus the safe Key
-   ID and Team ID. Require the Key ID and Team ID to each be exactly 10 uppercase
-   ASCII letters or digits, and require the Team ID to equal the validated
-   handoff. These identifiers are not the key. Never persist the `.p8`, its
-   contents, a derived value, a local path, or browser/session evidence. If the
-   user asks for Fastlane `pem`, `.p12` generation, browser automation, Firebase
-   MCP upload, Firebase CLI/API upload, or undocumented endpoints, decline that
-   unsupported portion and continue only with the manual `.p8` Console steps.
+Do not record key name, key contents/path, browser evidence, account identity,
+credentials, or diagnostics.
 
-## Phase 4 — App configuration and verification
+## Completion and separation
 
-1. Verify `app.config.js` includes:
-   - `expo-notifications`
-   - Firebase app/messaging plugins
-   - `aps-environment`
-   - `UIBackgroundModes: ['remote-notification']` when background data handling
-     is enabled
-2. Run `npx expo config --type public`, the push config validator, and changed
-   file validation.
-3. Record APNs setup status in `memory-bank.md` using only the verified Firebase
-   project/app/bundle identity, validated Apple identifier handoff, Key ID,
-   matching Team ID, manual-upload confirmation, and confirmation timestamp.
-   Do not record the key name if it may reveal user or organization data.
+End with exactly:
 
-End this workflow with the exact status **configured, device verification
-pending** after the manual upload is confirmed and static validation passes.
-Do not mark APNs complete here. Return to `/add-push-notifications` to complete
-the native client, then follow sender authentication and
-`/create-push-notification-flow`, `/build-ios`, and `/verify-ios-push`. Do not
-duplicate any owner workflow.
+```text
+APNs manual setup user-confirmed; not portal proof.
+Status: configured, device verification pending.
+```
 
-Only `/verify-ios-push` may change the status to physically verified after its
-entire physical-device matrix passes. A simulator, Expo Go, Metro, config
-validation, successful Firebase Console upload, accepted FCM request, or
-foreground-only receipt is not a substitute. Any partial or failed device run
-keeps the APNs status **configured, device verification pending**.
+Do not mark APNs physically verified. Return to `/add-push-notifications` for
+native client integration, then sender authentication and
+`/create-push-notification-flow`, `/build-ios`, and `/verify-ios-push`.
+
+Only `/verify-ios-push` may mark physical delivery verified after its complete
+physical-device matrix. Firebase Console upload, static checks, simulator,
+Expo Go, Metro, accepted FCM request, or foreground-only receipt are not
+delivery proof.

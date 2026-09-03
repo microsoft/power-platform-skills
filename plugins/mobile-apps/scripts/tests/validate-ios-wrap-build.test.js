@@ -13,6 +13,8 @@ const CLIENT_ID = '11111111-1111-4111-8111-111111111111';
 const TENANT_ID = '22222222-2222-4222-8222-222222222222';
 const TEAM_ID = 'ABCD1234EF';
 const EVAL_PATH = path.join(__dirname, '..', '..', 'skills', 'build-ios', 'evals', 'evals.json');
+const SKILL_PATH = path.join(__dirname, '..', '..', 'skills', 'build-ios', 'SKILL.md');
+const VERIFY_SKILL_PATH = path.join(__dirname, '..', '..', 'skills', 'verify-ios-push', 'SKILL.md');
 const FILTER_PATH = path.join(__dirname, '..', 'filter-ios-build-output.js');
 
 function project(name, overrides = {}) {
@@ -80,8 +82,8 @@ test('build-ios evals cover every planned branch exactly once', () => {
       'apple-team-drift',
       'bounded-build-failure',
       'bundle-identity-drift',
-      'dedicated-keychain-build-proof',
-      'fresh-apple-provisioning-contract',
+      'manual-signing-confirmation',
+      'manual-signing-failure-routing',
       'secret-signing-material',
       'successful-ad-hoc-artifact',
     ],
@@ -91,6 +93,29 @@ test('build-ios evals cover every planned branch exactly once', () => {
     assert.ok(evaluation.expected_output.trim());
     assert.deepStrictEqual(evaluation.files, []);
   }
+});
+
+test('build-ios uses manual Xcode signing confirmation and direct Wrap execution', () => {
+  const skill = fs.readFileSync(SKILL_PATH, 'utf8');
+  assert.match(skill, /confirm ios signing setup for <mode>/);
+  assert.match(skill, /--expected-team-id "<APNS_HANDOFF_TEAM_ID>" &&/);
+  assert.match(skill, /npm run type-check &&/);
+  assert.match(skill, /never let a later successful command\s+mask an earlier failure/);
+  assert.match(skill, /npm run build:ios 2>&1 \|\n\s*node "\$\{PLUGIN_ROOT\}\/scripts\/filter-ios-build-output\.js"/);
+  assert.match(skill, /manual Xcode setup checklist/);
+  assert.doesNotMatch(skill, /apple-ios-provisioning\.json/);
+  assert.doesNotMatch(skill, /Fastlane/i);
+  assert.doesNotMatch(skill, /manage-apple-signing-keychain/);
+  assert.doesNotMatch(skill, /verify-apple-ios-build-signing/);
+  assert.doesNotMatch(skill, /dedicated keychain/i);
+});
+
+test('verify-ios-push preserves IPA continuity without generated signing proof', () => {
+  const skill = fs.readFileSync(VERIFY_SKILL_PATH, 'utf8');
+  assert.match(skill, /same size and modification time/);
+  assert.match(skill, /manual `\/setup-apple-ios` and `\/setup-apns` Team, bundle,\s*\n\s*mode/);
+  assert.doesNotMatch(skill, /apple-ios-provisioning\.json/);
+  assert.doesNotMatch(skill, /validate-apple-ios-provisioning/);
 });
 
 test('accepts a consistent development registered-device build', () => {

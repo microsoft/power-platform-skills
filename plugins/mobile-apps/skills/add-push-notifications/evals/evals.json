@@ -70,13 +70,13 @@
     {
       "id": 12,
       "prompt": "Push client code and the selected iOS Firebase app are valid, APNs was uploaded manually, sender-auth.json is missing, no flows exist, and no IPA has been built. Tell me exactly where setup stands and continue.",
-      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It routes sender auth to setup-push-wif or the compatibility skill, flow authoring to create-push-notification-flow, then build to build-ios and delivery to verify-ios-push without performing those workflows itself.",
+      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It preserves the manual setup-apple-ios and Firebase Console setup-apns boundary, routes sender auth to setup-push-wif or the compatibility skill, flow authoring to create-push-notification-flow, then the direct user-managed Wrap build to build-ios and delivery to verify-ios-push without performing those workflows itself.",
       "files": []
     },
     {
       "id": 13,
       "prompt": "Everything for iOS push is configured and the flows are published. Please make the signed IPA and prove background and terminated delivery as part of /add-push-notifications.",
-      "expected_output": "The skill does not duplicate signing, build, FlowAgent read-back, or physical test procedures. It reports the existing states, routes the registered-device development/ad-hoc IPA to /build-ios, and routes physical delivery to /verify-ios-push after the exact build is ready.",
+      "expected_output": "The skill does not inspect signing assets or duplicate the user-managed Wrap build, FlowAgent read-back, or physical test procedures. It reports the existing states, routes the registered-device development/ad-hoc IPA to /build-ios, and routes physical delivery to /verify-ios-push after the exact build is ready.",
       "files": []
     },
     {

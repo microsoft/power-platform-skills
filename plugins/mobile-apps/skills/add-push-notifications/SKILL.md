@@ -1,6 +1,6 @@
 ---
 name: add-push-notifications
-description: Use whenever adding, configuring, repairing, or changing app-side push runtime integration in a Power Apps Expo mobile app. Owns notification permissions, registration-token lifecycle, FCM topic synchronization, listeners/background handling, and validated deep links; orchestrates but does not own Firebase/platform provisioning, sender authentication, flows, wrapped builds, installation, or physical delivery.
+description: Use whenever adding, configuring, repairing, or changing app-side push runtime integration in a Power Apps Expo mobile app. Owns notification permissions, registration-token lifecycle, FCM topic synchronization, listeners/background handling, and validated deep links; orchestrates but does not own Firebase/platform setup, sender authentication, flows, wrapped builds, installation, or physical delivery.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: opus
@@ -50,7 +50,7 @@ customer-owned; this plugin does not provision or validate it.
 ## Workflow
 
 1. Verify app and runtime -> 2. Verify auth identity -> 3. Resume/establish
-Firebase client setup -> 4. Resume Apple provisioning and APNs setup when
+Firebase client setup -> 4. Resume manual Apple and APNs setup when
 needed -> 5. Write wrapper
 -> 6. Add permission UX -> 7. Wire auth/topic lifecycle -> 8. Wire deep links
 -> 9. Validate -> 10. Update memory bank and report independent next steps
@@ -118,8 +118,12 @@ to CLI or console automation here.
 
 When iOS is selected, inspect `memory-bank.md` for a completed APNs/Firebase
 Console handoff for the same Firebase project and iOS app ID. First invoke
-`/setup-apple-ios --working-dir <root>` when its exact Team/bundle provisioning
-contract is missing, stale, or invalid. Only after that succeeds, invoke
+`/setup-apple-ios --working-dir <root>` when the exact Team, bundle, Push
+capability, registered-device, or development/ad-hoc choice has not been
+confirmed. This owner provides manual Apple Developer/Xcode guidance and
+requires explicit safe confirmation before each user-performed change; it
+does not automate Apple setup or emit a proof artifact. Only after that
+guidance is completed, invoke
 `/setup-apns --working-dir <root>` when iOS client setup is new, the app ID or
 project changed, or APNs completion cannot be proven. Android-only work skips
 both steps. Propagate blockers without downgrading them. Preserve the manual
@@ -251,7 +255,7 @@ even when several are pending and even when Android and iOS differ:
 | Sender authentication | missing / valid managed handoff present / stale or blocked / customer-owned Power Automate sender with observable contract read back but authentication not plugin-validated / customer-owned non-Flow endpoint with plugin physical verification unavailable | `/create-push-notification-flow` presents and records the safe manual handoff; `/setup-push-wif` is recommended and `/setup-push-service-account` is the managed compatibility path |
 | Power Automate flows | missing / producer only / exact producer+sender IDs recorded / published-and-read-back, without mutating or re-verifying them here | `/create-push-notification-flow`; manual Power Automate mode still requires the customer-supplied exact sender flow ID and safe FlowAgent read-back |
 | Wrapped Android build | not applicable / missing / stale / ready / blocked | `/build-android`; route by name only and do not assume its artifact format, build modes, or evidence contract |
-| Wrapped iOS build | not applicable / missing / stale / recorded `development` or `ad-hoc` IPA | `/build-ios`; never run Wrap/Xcode or inspect signing assets here |
+| Wrapped iOS build | not applicable / missing / stale / recorded `development` or `ad-hoc` IPA | `/build-ios`; the user manages Xcode configuration and signing assets, then the skill runs the direct Wrap command after exact confirmation |
 | Physical Android delivery | not applicable / pending / partial / failed / verified | `/verify-android-push`; route by name only and do not assume its internal matrix or evidence format |
 | Physical iOS delivery | not applicable / pending / partial / failed / verified | `/verify-ios-push`; never substitute config validation, Firebase acceptance, simulator, Expo Go, or Metro evidence |
 
@@ -265,9 +269,9 @@ customer-supplied exact sender flow ID plus observable FlowAgent read-back, and
 its authentication remains not plugin-validated. A bare manual choice,
 producer-only handoff, or non-Flow endpoint identifier is not sufficient for
 this build/readiness gate or plugin physical verification. These
-are handoffs, not substeps: do not copy
-their signing, build, FlowAgent read-back, or physical-device procedures into
-this workflow.
+are handoffs, not substeps: do not copy their manual Apple/Xcode guidance,
+user-managed Wrap build, FlowAgent read-back, or physical-device procedures
+into this workflow.
 
 For Android, preserve the same stage order:
 `/setup-fcm` -> any explicitly required platform-capability owner -> client

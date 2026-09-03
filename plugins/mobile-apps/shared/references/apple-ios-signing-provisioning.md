@@ -1,163 +1,279 @@
-# Apple retained signing and registered-device provisioning
+# Manual Apple signing and registered-device provisioning
 
-Canonical `/setup-apple-ios` lanes for the retained project keychain, modern
-signing certificates, explicit device registration, and installed development
-and ad-hoc profiles. These lanes support physical registered-device builds
-only—not simulator, TestFlight, App Store, enterprise, or store distribution.
+Canonical manual guidance for `/setup-apple-ios`. This workflow supports only
+physical, registered-device development and ad-hoc builds. Simulator, TestFlight,
+App Store, enterprise, and store distribution are outside its scope.
 
-All interactive Fastlane lanes run only in the user's own uncaptured terminal.
-Never execute them with Bash, redirect/pipe them, use `tee`, enable debug
-output, or request raw output. Use only pinned `bundle exec fastlane`.
+Apple Developer and Xcode actions are performed by the user in their own browser
+and local macOS UI. Do not use third-party Apple tooling, Apple APIs, browser
+automation, portal scraping, or signing-keychain automation. Do not create
+generated Apple proof files.
+The agent coordinates identity, sequencing, and safe confirmations; it does not
+claim portal proof.
 
-## 1. Retained project signing keychain
+Official references:
 
-Read `apple-signing-keychain.md`, then create or reuse:
+- Apple Developer Program enrollment:
+  <https://developer.apple.com/help/account/membership/program-enrollment/>
+- Apple Developer account help:
+  <https://developer.apple.com/help/account/>
+- Locate a Team ID:
+  <https://developer.apple.com/help/account/manage-your-team/locate-your-team-id/>
+- Roles and access:
+  <https://developer.apple.com/help/account/access/roles/>
+- Register an App ID:
+  <https://developer.apple.com/help/account/identifiers/register-an-app-id/>
+- Enable app capabilities:
+  <https://developer.apple.com/help/account/identifiers/enable-app-capabilities/>
+- Register a device:
+  <https://developer.apple.com/help/account/devices/register-a-single-device/>
+- Create a certificate signing request:
+  <https://developer.apple.com/help/account/certificates/create-a-certificate-signing-request/>
+- Create certificates:
+  <https://help.apple.com/xcode/mac/current/en.lproj/dev154b28f09.html>
+- Create a development provisioning profile:
+  <https://developer.apple.com/help/account/provisioning-profiles/create-a-development-provisioning-profile/>
+- Create an ad-hoc provisioning profile:
+  <https://developer.apple.com/help/account/provisioning-profiles/create-an-ad-hoc-provisioning-profile/>
+- Xcode support and downloads:
+  <https://developer.apple.com/support/xcode/>
+- Xcode accounts:
+  <https://help.apple.com/xcode/mac/current/en.lproj/dev8fbf65ad9.html>
+- Manual signing:
+  <https://help.apple.com/xcode/mac/current/en.lproj/dev80cc24546.html>
 
-```bash
-node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
-  --project-root . --timeout 3600
-```
+## Secret and privacy boundary
 
-The helper generates the password in-process, stores/retrieves it only as a
-generic-password item in login Keychain, and never exposes it in argv,
-environment, files, logs, or transcripts. It rejects repository/symlink paths
-and fails closed on missing, mismatched, or corrupt retained state.
+Never request, accept, read, repeat, inspect, store, or transmit:
 
-Offer only the reference's explicit paired recovery; never silently delete
-either retained asset. Record only `serviceIdentifier` and `pathFingerprint`,
-never the raw external path. Every later command needing signing material must
-use the same helper with `-- <absolute-command>` so the previous search list is
-restored on success or failure.
+- Apple account email, password, 2FA/OTP, recovery data, session, cookie, or
+  app-specific password;
+- certificate private keys, exported `.p12` files, keychain passwords, or
+  certificate signing request private material;
+- device UDIDs, device names, screenshots that expose them, profile contents,
+  profile UUIDs, or local credential/profile paths;
+- APNs `.p8` contents or paths. `/setup-apns` owns the separate manual APNs
+  authentication-key handoff.
 
-## 2. Modern signing certificates
+The user enters credentials and device identifiers only in Apple, Xcode, or
+macOS interfaces they control. If sensitive material appears in chat, do not
+quote or persist it; tell the user to rotate or invalidate it when appropriate.
 
-Have the user run:
+## Identity invariant
 
-```bash
-node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
-  --project-root . --timeout 3600 -- \
-  /usr/bin/env bundle exec fastlane ensure_signing_certificates \
-  team_id:<TEAM_ID>
-```
+Resolve these values before any portal action:
 
-The lane reads only the exact team's portal certificates and proves private-key
-usability in the dedicated keychain. Consider only modern `Apple Development`
-and `Apple Distribution`. Reuse an identity expiring more than 30 days away;
-otherwise propose creation with exact token:
+- the approved 10-character Apple Team ID;
+- the evaluated Expo `ios.bundleIdentifier`;
+- the exact Firebase iOS bundle identifier selected by `/setup-fcm`;
+- development and/or ad-hoc as the approved registered-device modes.
+
+The Expo and Firebase bundle identifiers must match exactly, including case.
+Every Apple identifier, certificate, profile, Xcode selection, and later APNs
+upload must remain on that bundle ID and Team ID. A convenient portal default,
+another visible team, a wildcard identifier, or a newly typed value is not a
+replacement.
+
+On drift, stop before changes. Show only the conflicting non-secret Team/bundle
+values and route the owning identity back to the plan or `/setup-fcm`. Do not
+silently update `memory-bank.md`.
+
+## Manual section protocol
+
+For each section:
+
+1. Explain the exact user action and its official URL.
+2. State what must match the approved Team ID and bundle ID.
+3. State what is out of scope and what must not be shared.
+4. Ask for the section's exact confirmation phrase.
+5. Continue only after the exact phrase is supplied.
+
+These confirmations are attestations from the user, not portal read-back,
+machine validation, or proof. Never describe them as verified, validated, or
+proven by Apple.
+
+## 1. Membership, access, and agreements
+
+Guide the user to sign in at <https://developer.apple.com/account/> and select
+the exact approved Team. They confirm:
+
+- Apple Developer Program membership is active;
+- their role can manage Certificates, Identifiers & Profiles for the work;
+- no blocking agreements or account notices remain.
+
+Do not accept agreements, alter membership, invite users, change roles, or
+change legal/billing data. Those actions belong to the Account Holder or the
+organization's Apple administrator.
+
+Require:
 
 ```text
-ensure-signing-certificates-<TEAM_ID>
+confirm Apple access: <TEAM_ID>
 ```
 
-Only after exact confirmation may the user rerun with
-`confirm:ensure-signing-certificates-<TEAM_ID>`. Fastlane `cert` uses
-`generate_apple_certs:true`; absent identity uses `force:false`, while an
-explicitly approved near-expiry renewal uses pinned Fastlane 2.238.0 with
-`force:true` to create a replacement without revocation.
+## 2. Exact explicit App ID and Push Notifications
 
-Never revoke/delete a certificate. Apple quota is a hard stop for an
-administrator decision. Transport certificate/private-key files may exist only
-in a unique mode-0700 OS staging directory outside repositories and must be
-removed on success/failure. Suppress Fastlane/security output that can disclose
-names, hashes, paths, or signing commands.
+In Certificates, Identifiers & Profiles, guide the user to Identifiers. They
+must reuse the exact explicit App ID for `<BUNDLE_ID>` or create it only if
+absent on the approved Team. Wildcard IDs are not acceptable.
 
-Require `apple-ios-certificates.json` containing only Team ID, renewal window,
-resource ID, safe type, expiry, reused/created action, and dedicated-keychain
-usability proof. It must not contain names/hashes, private-key/keychain paths,
-passwords, or commands.
+Before creation, require:
 
-## 3. Explicit development-device registration
-
-This lane is additive and idempotent. It never displays inventory, disables or
-removes devices, or manages certificates/profiles. The user runs:
-
-```bash
-bundle exec fastlane register_apple_devices
+```text
+create explicit App ID: <TEAM_ID> <BUNDLE_ID>
 ```
 
-Never accept a UDID in chat, `AskUserQuestion`, lane options, argv, environment,
-command history, project files, fixtures, logs, screenshots, memory, plans, or
-handoffs.
+The user then enables only the required Push Notifications capability for that
+exact identifier. Do not create an App Store Connect record, rename/delete
+another identifier, or alter unrelated capabilities.
 
-The lane requires the approved Team ID and matching preflight, then offers:
+Require after the portal displays the exact explicit identifier and capability:
 
-- **single:** prompt for ordinary display name/platform; read UDID only through
-  a non-echoing terminal prompt;
-- **external-batch:** absolute JSON, CSV, or Apple tab-delimited file path.
-  Require a regular non-symlink file outside every Git repository.
-
-The converter validates names, iOS platform, accepted 40-hex and 8-hex/16-hex
-UDIDs, limits, duplicate identifiers, and duplicate-name conflicts. It creates
-a mode-0600 Apple-compatible file in a unique mode-0700 OS temporary directory
-outside repositories. Confirmation exposes only aggregate counts and last-four
-masks; batch registration needs explicit confirmation.
-
-Suppress action output. Require exact matched count and `enabled=true`. Stop on
-wrong Team, malformed input, duplicates, device limits, Apple failure, disabled
-matches, count mismatch, or missing confirmation. Cleanup runs on success and
-failure. Record at most Team ID, timestamp, count, and enabled state—never
-names, masks, or identifiers.
-
-## 4. Development and ad-hoc profiles
-
-Have the user run:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
-  --project-root . --timeout 3600 -- \
-  /usr/bin/env bundle exec fastlane ensure_provisioning_profiles \
-  team_id:<TEAM_ID> bundle_id:<BUNDLE_ID>
+```text
+confirm App ID and Push: <TEAM_ID> <BUNDLE_ID>
 ```
 
-The lane validates current identifier/certificate proofs, Team/bundle,
-dedicated keychain, and complete enabled-device count. It uses
-`get_provisioning_profile`/sigh with the exact bundle, Team, and certificate
-resource ID, attempting read-only reuse first.
+If an identifier exists on another team, only a wildcard match exists, or the
+exact identifier cannot be created, stop for an Apple administrator decision.
 
-A missing, expired, stale-device, wrong-certificate, wrong-mode,
-wrong-Team/bundle, or wrong-APNs profile requires a narrow force refresh. Show
-the lane's exact token containing Team ID, bundle ID, enabled-device count, and
-`development`, `ad-hoc`, or both. A generic yes is not approval. Only after the
-exact token is confirmed may the wrapped command be rerun with
-`confirm:<TOKEN> refresh:true`.
+## 3. Physical device registration
 
-After device registration, the next run must include `devices_changed:true`;
-this forces explicit refresh approval for both registered-device profiles and
-their exact count/scope.
+For development and ad-hoc profiles, every target device must be registered on
+the approved Team. Guide the user to obtain each UDID locally through Finder,
+Xcode, or Apple Configurator and enter it directly in the Apple Developer portal.
 
-The lane decodes metadata in process and never prints profile contents,
-certificate bytes, device IDs, or raw paths. Require:
+Never ask for UDIDs or device names. Do not accept batch files, screenshots,
+paths, masks, suffixes, or pasted identifiers. Do not disable, remove, or rename
+existing devices.
 
-- exact application identifier, Team, and bundle;
-- development: `get-task-allow:true`,
-  `aps-environment:development`;
-- ad hoc: `get-task-allow:false`, `aps-environment:production`;
-- intended modern certificate resource ID/type;
-- expiry beyond the proof window;
-- exact enabled-device count.
+Ask only for the non-sensitive total count the user expects the profiles to
+cover, then require:
 
-Install only verified profiles to the directory for the selected Xcode:
-
-- Xcode 16+: `~/Library/Developer/Xcode/UserData/Provisioning Profiles`
-- older Xcode: `~/Library/MobileDevice/Provisioning Profiles`
-
-Never copy a profile into the project. Read back and reverify installation.
-Stop on stale coverage, wrong certificate/APNs/mode/Team/bundle, expiry,
-disabled devices, or install failure.
-
-## 5. Completion contract
-
-Emit `apple-ios-provisioning.json` only after identifier, Push capability,
-keychain, both modern certificate identities, both installed profiles, and
-device-count proofs validate. Its safe fields are limited to Team/bundle,
-keychain service/fingerprint, certificate resource IDs/types/expiry, and
-profile UUID/type/expiry/count/certificate proof.
-
-```bash
-node "${PLUGIN_ROOT}/scripts/validate-apple-ios-provisioning.js" \
-  --project-root . --file apple-ios-provisioning.json \
-  --expected-team "<TEAM_ID>" --expected-bundle "<BUNDLE_ID>"
+```text
+confirm registered devices: <TEAM_ID> count=<COUNT>
 ```
 
-Exit `0` and `status: valid` are required. This contract—not manual
-confirmation—is the build handoff. Route next to `/setup-apns`.
+If the portal reports a device-limit or registration conflict, stop and direct
+the user to their Apple administrator.
+
+## 4. Mode-specific signing certificates
+
+Explain which certificate type each selected mode requires:
+
+- **Apple Development** for development builds/profiles;
+- **Apple Distribution** for ad-hoc builds/profiles.
+
+Require only the certificate types needed by the approved mode set. A
+development-only setup does not require Apple Distribution; an ad-hoc-only
+setup does not require Apple Development.
+
+Guide the user to Xcode > Settings > Accounts, select the exact Team, open
+Manage Certificates, and reuse or create the required identities on the Mac
+that will build the app. If organizational policy requires portal-based
+creation, the user creates the certificate signing request locally, creates
+the certificate in Apple Developer, then opens the downloaded certificate on
+the same Mac so its matching private key remains available to Xcode.
+
+Private keys stay in the user's macOS login keychain. Never ask the user to
+export a `.p12`, share a keychain path/password, or provide certificate names,
+serial numbers, fingerprints, private-key details, or screenshots. Never revoke
+or delete a certificate. Certificate quota or an unusable/missing private key is
+a hard stop for the user or Apple administrator to resolve.
+
+Require the applicable confirmation or confirmations:
+
+```text
+confirm Apple Development certificate: <TEAM_ID>
+```
+
+```text
+confirm Apple Distribution certificate: <TEAM_ID>
+```
+
+## 5. Mode-specific provisioning profiles
+
+Guide the user to create or regenerate each profile selected in the approved
+mode set:
+
+- iOS App Development profile for the exact explicit App ID, Apple Development
+  certificate, and all intended registered devices;
+- Ad Hoc profile for the same App ID, Apple Distribution certificate, and all
+  intended registered devices.
+
+If devices changed after profile creation, every selected profile must be
+regenerated.
+Do not use wildcard identifiers, mismatched certificates, another Team, or a
+profile for another bundle. Never ask for profile contents, UUIDs, device lists,
+certificate identifiers, or local paths.
+
+Require the applicable confirmation or confirmations:
+
+```text
+confirm development profile: <TEAM_ID> <BUNDLE_ID> count=<COUNT>
+```
+
+```text
+confirm ad-hoc profile: <TEAM_ID> <BUNDLE_ID> count=<COUNT>
+```
+
+## 6. Local Xcode installation
+
+Guide the user to install the current supported Xcode from the Mac App Store or
+Apple Developer downloads, launch it once, accept its license locally, and
+install requested platform components. In Xcode Settings > Accounts, the user
+signs in locally and selects the approved Team. Credentials remain in Xcode.
+
+The user opens the downloaded certificates and selected development/ad-hoc
+profiles on the same Mac. In Xcode Settings > Accounts, they confirm that the
+exact Team is available and that every certificate type required by the
+approved mode set is managed on this Mac.
+When Wrap generates the Xcode build, its manual signing selection must use the
+same Team, bundle ID, and profile mode. Do not require a pre-existing native
+Xcode project, and do not inspect Keychain Access, Xcode account data,
+provisioning directories, or signing assets by script.
+
+Require:
+
+```text
+confirm local Xcode signing: <TEAM_ID> <BUNDLE_ID> modes=<SELECTED_MODES>
+```
+
+Use `development`, `ad-hoc`, or `development,ad-hoc` exactly as approved. If a
+selected mode is missing or Xcode selects another Team/bundle, stop and return
+to the relevant manual section.
+
+## Safe memory-bank handoff
+
+After all scoped confirmations, append or update only a clearly labeled,
+non-secret block:
+
+```markdown
+## Apple iOS manual setup (user-confirmed; not portal proof)
+- confirmationBasis: user-confirmed
+- portalProof: false
+- teamId: <TEAM_ID>
+- bundleIdentifier: <BUNDLE_ID>
+- scope: registered-device <SELECTED_MODES>
+- membershipAccessAgreements: user-confirmed
+- explicitAppId: user-confirmed
+- pushNotificationsCapability: user-confirmed
+- registeredDeviceCount: <COUNT>
+- appleDevelopmentCertificate: user-confirmed # development only; omit otherwise
+- developmentProfile: user-confirmed # development only; omit otherwise
+- appleDistributionCertificate: user-confirmed # ad-hoc only; omit otherwise
+- adHocProfile: user-confirmed # ad-hoc only; omit otherwise
+- localXcodeSigning: user-confirmed
+- confirmedAt: <ISO-8601 timestamp>
+```
+
+The comments above describe conditional fields; do not copy the comments into
+`memory-bank.md`.
+
+Do not store account identity, device data, certificate/profile identifiers,
+paths, screenshots, credentials, or diagnostics. This state is a resumable
+checklist and continuity handoff only. It is not evidence from Apple and must
+not be used to claim that a build or physical delivery succeeded.
+
+Route next to `/setup-apns`. `/build-ios` must still perform its own current
+local signing preflight, and `/verify-ios-push` remains the only physical
+delivery evidence.

@@ -19,7 +19,9 @@ This skill uses the standard 4-step deployment flow for this plugin: check memor
 - This workflow remains the Power Platform **web bundle deployment**:
   `npm run build` then `npx power-apps push`.
 - iOS registered-device native builds are owned by `/build-ios`, using the
-  supported `npm run build:ios` Wrap path for `development` or `ad-hoc`.
+  directly confirmed `npm run build:ios` Wrap path for `development` or
+  `ad-hoc`; the user owns Xcode signing, registered devices, profiles, and
+  credentials, while `/build-ios` runs the command after exact confirmation.
 - `expo run:ios` / `expo run:android` are not deployment steps.
 - OTA updates and store distribution — out of scope for v0.
 - Starting Metro for local dev — run `npm run dev` (= `expo start`) directly.
@@ -196,7 +198,8 @@ Runtime debugging for this plugin uses `/debug-app` with native dev-client sessi
 If they need a registered-device iOS binary, route to `/build-ios`; do not tell
 them to run an arbitrary platform-specific compile directly. `/build-ios`
 supports development and ad-hoc IPA export only, preserves Apple credential
-boundaries, and hands physical push testing to `/verify-ios-push`. Android
+boundaries through direct user ownership, and hands physical push testing to
+`/verify-ios-push`. Android
 native builds, OTA updates, TestFlight, App Store, and other distribution modes
 remain outside this deployment workflow.
 

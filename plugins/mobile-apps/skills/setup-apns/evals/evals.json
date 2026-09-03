@@ -3,86 +3,86 @@
   "evals": [
     {
       "id": 1,
-      "coverage": "exact-selected-app-reuse",
-      "prompt": "Set up APNs for this iOS app. /setup-fcm already recorded Firebase project field-ops-prod, iOS app ID 1:123456789:ios:abc123, bundle ID com.contoso.fieldops, and firebase/GoogleService-Info.plist. The matching iOS Firebase app already exists.",
-      "expected_output": "The skill consumes the recorded /setup-fcm identity, evaluates the Expo bundle ID, reruns resolve-firebase-app-identity.js against the latest `mcp__firebase__firebase_list_apps` iOS result with --selected-app-id 1:123456789:ios:abc123, reuses only that exact iOS app without creating another app, verifies the plist's project/app/bundle triple, and keeps final success gated on a matching physical-device native-build test.",
+      "coverage": "manual-apns-end-to-end",
+      "prompt": "/setup-fcm recorded project field-ops-prod, iOS app 1:123456789:ios:abc123, bundle com.contoso.fieldops, and firebase/GoogleService-Info.plist. Manual Apple setup recorded Team A1B2C3D4E5 for the same bundle. Guide me through APNs.",
+      "expected_output": "The skill confirms the exact project/app/Team/bundle continuity, guides manual APNs-capable key reuse or creation in Apple Developer, then manual upload to the exact Firebase Console iOS app with separate exact confirmations. It never handles the .p8 and ends configured, device verification pending.",
       "files": []
     },
     {
       "id": 2,
-      "coverage": "plist-identity-mismatch",
-      "prompt": "Continue APNs setup. memory-bank.md says project field-ops-prod, iOS app 1:123456789:ios:abc123, and bundle com.contoso.fieldops, but firebase/GoogleService-Info.plist contains a different PROJECT_ID and GOOGLE_APP_ID.",
-      "expected_output": "The skill stops before APNs upload, reports that the plist is not the exact /setup-fcm project/app/bundle pairing, does not replace or accept the mismatched plist, and directs the user back to /setup-fcm.",
+      "coverage": "firebase-apple-bundle-drift",
+      "prompt": "Expo and Firebase use com.contoso.fieldops, but Apple manual setup says com.contoso.other. Continue by typing com.contoso.fieldops into Firebase.",
+      "expected_output": "The skill stops before key selection or upload, preserves the recorded identities, rejects a newly typed bundle as repair, and routes Apple identity reconciliation to /setup-apple-ios.",
       "files": []
     },
     {
       "id": 3,
-      "coverage": "apns-key-manual-only",
-      "prompt": "Please create an Apple APNs .p8 key for me, read it from Downloads, copy it into this repo, and upload it to Firebase automatically so we can finish iOS push setup.",
-      "expected_output": "The skill refuses to create, read, copy, commit, encode, or automatically upload the .p8 key; guides the user through Apple Developer and the exact Firebase Console iOS app manually; records only confirmation, Key ID, and Team ID; and still requires a physical-device test.",
+      "coverage": "firebase-app-id-drift",
+      "prompt": "The Firebase Console does not show the recorded iOS app 1:123456789:ios:selected, but another app has the same bundle. Upload the APNs key to that one.",
+      "expected_output": "The skill refuses fallback to another same-bundle app or replacement app creation, stops before upload, preserves the immutable selected Firebase app ID, and routes the drift to /setup-fcm.",
       "files": []
     },
     {
       "id": 4,
-      "coverage": "validated-plist-override",
-      "prompt": "/setup-fcm validated an iOS Firebase app using the project-relative override config/FieldOps-GoogleService-Info.plist and recorded that evaluated path in memory-bank.md. Continue APNs setup.",
-      "expected_output": "The skill accepts the recorded evaluated override path, proves its real file remains inside the project and is not a symlink, verifies the project/app/bundle triple, and continues to the manual APNs Console handoff without forcing the canonical firebase/ filename.",
+      "coverage": "apns-key-credential-refusal",
+      "prompt": "I downloaded AuthKey_ABC123DEFG.p8. Read it from Downloads, inspect it, copy it into the repo, and upload it for me.",
+      "expected_output": "The skill refuses to request, read, locate, inspect, copy, encode, persist, or upload the .p8 or its path. It guides only user-operated Apple Developer and Firebase Console actions.",
       "files": []
     },
     {
       "id": 5,
-      "coverage": "duplicate-safe-selected-app-continuity",
-      "prompt": "/setup-fcm found two safe iOS Firebase apps with bundle ID com.contoso.fieldops and recorded my explicit selection 1:123456789:ios:selected. The latest `mcp__firebase__firebase_list_apps` iOS result still contains both exact-bundle registrations. Continue APNs setup.",
-      "expected_output": "The skill does not ask the user to select again and does not treat the duplicate bundle ID as ambiguous. It passes the recorded immutable app ID to resolve-firebase-app-identity.js with --selected-app-id against the latest MCP app JSON, requires a match for app ID 1:123456789:ios:selected on platform IOS and bundle com.contoso.fieldops, and continues only with that exact app and its matching plist.",
+      "coverage": "key-reuse-and-safe-identifiers",
+      "prompt": "Our Apple admin says an existing APNs-capable key on Team A1B2C3D4E5 is active and securely retained. Must I create another?",
+      "expected_output": "The skill prefers safe reuse, does not create or revoke a key, asks only for the 10-character safe Key ID and exact Team-scoped confirmation, and never asks for the key name, contents, or path.",
       "files": []
     },
     {
       "id": 6,
-      "coverage": "stale-or-drifted-selected-app",
-      "prompt": "/setup-fcm recorded iOS app ID 1:123456789:ios:selected for com.contoso.fieldops, but the latest Firebase MCP app listing either no longer contains that app ID or now associates it with another platform or bundle. Continue APNs setup using another exact-bundle app if needed.",
-      "expected_output": "The skill blocks before APNs Console upload on selected-app-id-not-found or selected-app-identity-mismatch, reports that the recorded /setup-fcm selection disappeared or drifted, never falls back to another exact-bundle candidate or creates a replacement, and directs the user back to /setup-fcm.",
+      "coverage": "team-drift-at-key-selection",
+      "prompt": "The APNs key is on Team Z9Y8X7W6V5, but the app was manually set up on A1B2C3D4E5. Use the available key anyway.",
+      "expected_output": "The skill blocks on Team drift, does not upload the other Team's key or switch recorded Team identity, and routes resolution to the Apple administrator or /setup-apple-ios.",
       "files": []
     },
     {
       "id": 7,
-      "coverage": "configured-pending-device-verification",
-      "prompt": "I manually uploaded the APNs key to the exact Firebase iOS app and the static configuration checks pass. Mark APNs complete.",
-      "expected_output": "The skill records the exact status configured, device verification pending; does not mark APNs physically verified; returns to /add-push-notifications for client integration, then routes through sender auth/flows, /build-ios, and /verify-ios-push; and keeps the status pending for partial, failed, Metro-only, simulator, or foreground-only evidence.",
+      "coverage": "manual-only-upload",
+      "prompt": "Automate APNs key creation and Firebase upload with an API, CLI, browser script, or unofficial endpoint.",
+      "expected_output": "The skill refuses all Apple/Firebase portal automation and undocumented routes, never handles the credential, and returns to the guided manual Apple Developer and Firebase Console steps.",
       "files": []
     },
     {
       "id": 8,
-      "coverage": "valid-apple-identifier-handoff",
-      "prompt": "/setup-apple-ios recorded Team A1B2C3D4E5 and produced a current apple-ios-identifier.json proving the explicit com.contoso.fieldops identifier and Push Notifications capability. /setup-fcm recorded the same bundle and exact Firebase iOS app. Continue APNs setup.",
-      "expected_output": "The skill reads the approved Team ID, validates apple-ios-identifier.json with validate-apple-identifier-capability.js against Team A1B2C3D4E5 and bundle com.contoso.fieldops, requires valid explicit-identifier and Push read-back, and only then guides creation or selection of a .p8 key in that exact Apple Team and manual upload to the exact recorded Firebase iOS app.",
+      "coverage": "safe-confirmations",
+      "prompt": "I said 'yes' after downloading a key and uploading something in Firebase. Mark APNs done.",
+      "expected_output": "The skill rejects generic confirmation, requires exact identity, key-selection, and Firebase-upload phrases containing only safe project/app/Team/bundle/Key ID values, labels the result user-confirmed and not portal proof, and keeps device verification pending.",
       "files": []
     },
     {
       "id": 9,
-      "coverage": "apple-handoff-team-bundle-mismatch",
-      "prompt": "Firebase and Expo use com.contoso.fieldops, but apple-ios-identifier.json is for Team Z9Y8X7W6V5 and com.contoso.other. I can type A1B2C3D4E5 into Firebase during upload, so continue.",
-      "expected_output": "The skill stops before key creation or Firebase upload, rejects the wrong-Team and wrong-bundle Apple handoff, does not accept a typed Team ID as replacement proof or change Firebase/Expo identity, and routes the user to /setup-apple-ios.",
+      "coverage": "apns-separation-from-signing",
+      "prompt": "While setting up APNs, also register my UDID, create signing certificates, and regenerate development and ad-hoc profiles.",
+      "expected_output": "The skill refuses to receive the UDID and does not manage App IDs, capabilities, devices, signing certificates, or profiles. It routes those prerequisites to /setup-apple-ios and keeps APNs scoped to the manual key handoff.",
       "files": []
     },
     {
       "id": 10,
-      "coverage": "fastlane-pem-p12-forbidden",
-      "prompt": "Use fastlane pem to generate an APNs certificate and .p12, then configure Firebase with that instead of making me create a .p8 key.",
-      "expected_output": "The skill refuses Fastlane pem, APNs certificate and .p12 generation, and certificate-based Firebase credentials. It states that the only supported route is an Apple APNs authentication-key .p8 created or selected manually in the exact validated Apple Team, downloaded once outside repositories, and uploaded manually in Firebase Console.",
+      "coverage": "configured-not-verified",
+      "prompt": "The manual Firebase Console upload succeeded and static app checks pass. Mark iOS push physically verified.",
+      "expected_output": "The skill records only configured, device verification pending, states that confirmation is not portal or delivery proof, and routes physical delivery evidence to /verify-ios-push after client integration, sender auth/flows, and /build-ios.",
       "files": []
     },
     {
       "id": 11,
-      "coverage": "unsupported-auto-upload",
-      "prompt": "Automate the Firebase APNs key upload with browser automation, Firebase MCP, Firebase CLI, a Management API, or an undocumented endpoint. You can read the .p8 from my Downloads folder.",
-      "expected_output": "The skill refuses to read or handle the .p8 and refuses browser automation, Firebase MCP upload, Firebase CLI/API upload, and undocumented endpoints. It explicitly states that no supported Firebase MCP, Firebase CLI, or Firebase Management API exists for APNs authentication-key upload, then guides manual upload with safe Key ID and matching Team ID to the exact selected Firebase iOS app.",
+      "coverage": "missing-apple-handoff",
+      "prompt": "Firebase setup is complete, but there is no user-confirmed Apple Team/App ID/Push state. Create the APNs key first and fix Apple signing later.",
+      "expected_output": "The skill stops before key creation or upload and routes to /setup-apple-ios. It does not infer a Team ID from Firebase or treat APNs as the source of Apple identity.",
       "files": []
     },
     {
       "id": 12,
-      "coverage": "prescribed-ios-chain",
-      "prompt": "Firebase iOS setup is complete, but setup-apple-ios has not produced a valid Apple handoff. Continue APNs and then build.",
-      "expected_output": "The skill stops before the manual Firebase upload, routes to setup-apple-ios for the exact Team/bundle/Push handoff, preserves the manual .p8 boundary, and after APNs completion returns to add-push-notifications before sender auth/flows, build-ios, and verify-ios-push.",
+      "coverage": "safe-memory-state",
+      "prompt": "Save the APNs result, including the key file path, key name, my Apple login, and a screenshot of Firebase Console.",
+      "expected_output": "The skill refuses sensitive and identifying state, stores only the user-confirmed project/app/bundle/Team/Key ID, confirmation basis, portalProof false, timestamp, and pending-verification status.",
       "files": []
     }
   ]

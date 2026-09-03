@@ -100,12 +100,6 @@ evidence -> 6. Complete or keep APNs pending
      --project-root . --mode "<development|ad-hoc>" \
      --expected-team-id "<RECORDED_TEAM_ID>"
 
-   node "${PLUGIN_ROOT}/scripts/validate-apple-ios-provisioning.js" \
-     --project-root . --file apple-ios-provisioning.json \
-     --expected-team "<RECORDED_TEAM_ID>" \
-     --expected-bundle "<RECORDED_BUNDLE_ID>" \
-     --expected-mode "<development|ad-hoc>"
-
    APNS_ENVIRONMENT="<development|production>" \
      node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
        --project-root . --strict-client-integration
@@ -119,11 +113,13 @@ evidence -> 6. Complete or keep APNs pending
    Every applicable command must succeed. Do not run the sender-auth validator
    for a customer-owned Power Automate sender; its credential design is outside
    plugin validation, while its exact published/read-back sender flow and
-   delivery behavior remain required. If Apple provisioning is stale or drifted,
-   route through `/setup-apple-ios` and then rebuild with `/build-ios`; never
-   replace this with manual certificate/profile/device confirmation. An
-   expired managed sender-auth proof is invalid even if
-   its resources still exist; return to its owner skill for a fresh proof.
+   delivery behavior remain required. Require the successful build row to
+   preserve the exact manual `/setup-apple-ios` and `/setup-apns` Team, bundle,
+   mode, and APNs-environment confirmation consumed by `/build-ios`; do not
+   inspect or regenerate signing proof. If those safe identities drift, return
+   to the manual owner checklist and then rebuild with `/build-ios`. An expired
+   managed sender-auth proof is invalid even if its resources still exist;
+   return to its owner skill for a fresh proof.
 4. Treat the IPA as stale if any bundled app input changed after its recorded
    modification time. Check regular non-symlink files under `app/`, `src/`, and
    `firebase/`, plus `package.json`, the lockfile, `app.config.js`,
@@ -331,12 +327,14 @@ Stop immediately and keep the matrix incomplete when:
 
 On a failed send, inspect one run's safe status/action metadata and bounded
 error category. Do not resubmit repeatedly. Route configuration/build/APNs
-issues to `/setup-apns` or `/build-ios`, sender-auth issues to its verifier
-skill, and flow/run issues to `/create-push-notification-flow`. After the owner
-fix, create a new case label and rerun only the failed case plus any dependent
-topic transition/control case. For Microsoft-stack uncertainty, use the
-Microsoft Learn guidance in `shared/shared-instructions.md` instead of
-guessing Dataverse, Power Platform, Entra, or Key Vault behavior.
+issues to `/setup-apns` or `/build-ios`; signing-related rebuild failures use
+`/build-ios`'s manual Xcode setup checklist and are never auto-repaired here.
+Route sender-auth issues to its verifier skill and flow/run issues to
+`/create-push-notification-flow`. After the owner fix, create a new case label
+and rerun only the failed case plus any dependent topic transition/control
+case. For Microsoft-stack uncertainty, use the Microsoft Learn guidance in
+`shared/shared-instructions.md` instead of guessing Dataverse, Power Platform,
+Entra, or Key Vault behavior.
 
 ## 6. Record safe outcomes and completion
 

@@ -43,20 +43,6 @@ const EXPECTED_COVERAGE = [
   'firebase-admin-key-forbidden',
   'apns-manual-handoff',
 ].sort();
-const EXPECTED_APNS_COVERAGE = [
-  'apple-handoff-team-bundle-mismatch',
-  'exact-selected-app-reuse',
-  'fastlane-pem-p12-forbidden',
-  'plist-identity-mismatch',
-  'apns-key-manual-only',
-  'validated-plist-override',
-  'duplicate-safe-selected-app-continuity',
-  'stale-or-drifted-selected-app',
-  'configured-pending-device-verification',
-  'prescribed-ios-chain',
-  'unsupported-auto-upload',
-  'valid-apple-identifier-handoff',
-].sort();
 const EXPECTED = {
   projectId: 'field-ops-prod',
   androidAppId: '1:123456789:android:a1b2c3',
@@ -98,16 +84,12 @@ test('every planned setup-fcm scenario is traceable exactly once', () => {
   }
 });
 
-test('every planned setup-apns scenario is traceable exactly once', () => {
+test('setup-apns guidance scenarios remain contiguous and fixture-free', () => {
   const document = JSON.parse(fs.readFileSync(APNS_EVAL_PATH, 'utf8'));
   assert.strictEqual(document.skill_name, 'setup-apns');
   assert.deepStrictEqual(
-    document.evals.map(({ coverage }) => coverage).sort(),
-    EXPECTED_APNS_COVERAGE,
-  );
-  assert.deepStrictEqual(
     document.evals.map(({ id }) => id),
-    Array.from({ length: EXPECTED_APNS_COVERAGE.length }, (_, index) => index + 1),
+    Array.from({ length: document.evals.length }, (_, index) => index + 1),
   );
 
   for (const evaluation of document.evals) {
@@ -322,8 +304,9 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(officialMcp, /Workflow readiness gates and `\/mcp` recovery/);
   assert.match(officialMcp, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
   assert.match(officialMcp, /\/setup-fcm[\s\S]*firebase[\s\S]*mcp__firebase__firebase_get_environment[\s\S]*mcp__firebase__firebase_get_sdk_config/s);
-  assert.match(officialMcp, /\/setup-apns[\s\S]*firebase[\s\S]*mcp__firebase__firebase_get_environment[\s\S]*mcp__firebase__firebase_list_apps/s);
-  assert.match(officialMcp, /Do \*\*not\*\* silently fall back[\s\S]*shell CLIs/i);
+  assert.match(officialMcp, /`\/setup-apns` has no MCP readiness gate/);
+  assert.match(officialMcp, /user performs the APNs key upload manually in\s+Firebase Console/);
+  assert.match(officialMcp, /Never call `gcloud` directly[\s\S]*extend this exception to Firebase or Azure/i);
   assert.match(provisioning, /mcp__firebase__firebase_get_environment/);
   assert.match(provisioning, /mcp__firebase__firebase_login/);
   assert.match(provisioning, /mcp__firebase__firebase_list_projects/);
@@ -353,6 +336,9 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(skill, /firebase-mcp-provisioning\.md/);
   assert.match(skill, /official-mcp-servers\.md/);
   assert.match(skill, /\/setup-apns/);
+  assert.match(skill, /manual Apple Developer\/Xcode\s+guidance/);
+  assert.match(skill, /explicit safe confirmation/);
+  assert.match(skill, /do not automate Apple setup or expect a generated proof\s+artifact/);
   assert.match(skill, /Never request, download, copy, or commit a Firebase Admin/);
   assert.match(provisioning, /## 1\. Verify Firebase MCP authentication/);
   assert.match(provisioning, /firebase_get_environment/);
@@ -368,34 +354,21 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.doesNotMatch(skill, /apps:sdkconfig ANDROID/);
 
   const apnsSkill = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'), 'utf8');
-  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_environment/);
-  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_login/);
-  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_update_environment/);
-  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_list_projects/);
-  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_project/);
-  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_list_apps/);
-  assert.match(apnsSkill, /MCP readiness gate/);
-  assert.match(apnsSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
-  assert.match(apnsSkill, /show `firebase` connected with the required[\s\S]*tools/i);
-  assert.match(apnsSkill, /--selected-app-id "<IOS_APP_ID>"/);
-  assert.match(apnsSkill, /selected-app-id-not-found/);
-  assert.match(apnsSkill, /selected-app-identity-mismatch/);
-  assert.match(apnsSkill, /firebase\/\.ios-apps\.mcp\.yaml/);
-  assert.doesNotMatch(apnsSkill, /\.ios-apps\.mcp\.json/);
-  assert.match(apnsSkill, /never fall back[\s\S]*exact-bundle candidate/i);
+  assert.doesNotMatch(apnsSkill, /mcp__firebase__/);
+  assert.match(apnsSkill, /Consume the `\/setup-fcm` handoff/);
+  assert.match(apnsSkill, /immutable selected Firebase iOS app ID/);
+  assert.match(apnsSkill, /Do not reconstruct missing values/);
+  assert.match(apnsSkill, /confirm APNs identity:/);
   assert.match(apnsSkill, /configured, device verification\s+pending/i);
-  assert.match(apnsSkill, /Only `\/verify-ios-push` may change the status to physically verified/);
+  assert.match(apnsSkill, /Only `\/verify-ios-push` may mark physical delivery verified/);
   assert.match(apnsSkill, /Return to `\/add-push-notifications`/);
-  assert.match(apnsSkill, /validate-apple-identifier-capability\.js/);
-  assert.match(apnsSkill, /--expected-team "<APPLE_TEAM_ID>"/);
-  assert.match(apnsSkill, /--expected-bundle "<IOS_BUNDLE_ID>"/);
-  assert.match(apnsSkill, /route the user to `\/setup-apple-ios`/i);
-  assert.match(apnsSkill, /only supported Firebase credential route[\s\S]*authentication key \(`\.p8`\)/i);
-  assert.match(apnsSkill, /Do not use Fastlane `pem`/);
-  assert.match(apnsSkill, /There is no supported\s+Firebase MCP, Firebase CLI, or Firebase Management API operation/i);
+  assert.match(apnsSkill, /route Apple[\s\S]*to `\/setup-apple-ios`/i);
+  assert.match(apnsSkill, /only supported Firebase credential route[\s\S]*APNs authentication-key upload/i);
+  assert.match(apnsSkill, /There is no supported automated Firebase\s+upload/i);
   assert.match(apnsSkill, /outside this and every other repository/);
-  assert.match(apnsSkill, /exact immutable iOS app ID and\s+bundle ID validated in Phase 1/i);
-  assert.match(apnsSkill, /confirmation that the manual upload succeeded plus the safe Key\s+ID and Team ID/i);
+  assert.match(apnsSkill, /exact immutable iOS Firebase app ID and bundle ID from Phase 1/i);
+  assert.match(apnsSkill, /confirm Firebase APNs upload:/);
+  assert.match(apnsSkill, /user-confirmed; not portal proof/);
   assert.doesNotMatch(apnsSkill, /npx firebase-tools/);
   assert.doesNotMatch(apnsSkill, /apps:create IOS/);
 });

@@ -129,10 +129,11 @@ gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.
 - **Microsoft Learn MCP remains the authoritative Microsoft doc source** — when
   Dataverse, Power Platform, Entra, Key Vault, or other Microsoft semantics
   are uncertain, query Microsoft Learn before guessing.
-- **Apple provisioning intentionally stays on Fastlane** — Apple does not
-  provide a vendor-official MCP for the required Developer Portal provisioning
-  operations, and community/unofficial MCP servers are out of scope for this
-  plugin.
+- **Apple setup is manual and user-owned** — `/setup-apple-ios` provides Apple
+  Developer/Xcode guidance with explicit safe confirmations, and
+  `/setup-apns` guides manual Firebase Console upload. Do not automate Apple
+  configuration, generate a proof contract, inspect signing assets, or imply
+  that an MCP or local tool performed Apple changes.
 
 ---
 

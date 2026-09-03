@@ -53,8 +53,8 @@
     {
       "id": 8,
       "coverage": "full-physical-success",
-      "prompt": "The exact fresh ad-hoc IPA is installed on a registered iPhone. Firebase/APNs/build identities match, sender-auth is valid, both flows are Started and read back correctly, and I approve generic test sends. Run and record the complete iOS push matrix.",
-      "expected_output": "The skill executes A-H in order, correlates safe source/outbox/run/provider/device/route evidence for each case, verifies permission denial/grant, signed-out foreground/background/cold-start, behavioral signed-in user-topic delivery using only safe case ID and topic category, sign-out, opt-out, and token-refresh or same-IPA re-registration recovery, validates memory-bank.md, and only then marks APNs physical verification complete.",
+      "prompt": "The exact fresh ad-hoc IPA recorded after the manual Team/bundle/mode signing confirmation is installed on a registered iPhone. Firebase/APNs/build identities match, sender-auth is valid, both flows are Started and read back correctly, and I approve generic test sends. Run and record the complete iOS push matrix.",
+      "expected_output": "The skill preserves exact recorded IPA path/size/mtime continuity without requiring generated provisioning proof, executes A-H in order, correlates safe source/outbox/run/provider/device/route evidence for each case, verifies permission denial/grant, signed-out foreground/background/cold-start, behavioral signed-in user-topic delivery using only safe case ID and topic category, sign-out, opt-out, and token-refresh or same-IPA re-registration recovery, validates memory-bank.md, and only then marks APNs physical verification complete.",
       "files": []
     },
     {

@@ -9,8 +9,8 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 
 /**
  * Cross-skill identity handoff chain regression test.
- * Validates the documented chain preserves Firebase project, iOS app ID, bundle ID,
- * APNs environment, and build mode without silent reselection/override.
+ * Validates the documented chain preserves Firebase project, iOS app ID,
+ * manual Apple/APNs boundaries, and build mode without silent automation.
  */
 
 test('iOS push chain: all required skills exist', () => {
@@ -49,7 +49,10 @@ test('iOS push chain: setup-fcm handles Google credentials safely', () => {
   assert.ok(skill.includes('mcp__firebase__firebase_login'), 'uses Firebase MCP login');
   assert.ok(skill.includes('Session ID'), 'requires session-id verification during login');
   assert.match(skill, /Hand off first to `\/setup-apple-ios`/);
-  assert.match(skill, /Only after that succeeds, hand off to\s+`\/setup-apns`/);
+  assert.match(skill, /manual Apple Developer\/Xcode\s+guidance/);
+  assert.match(skill, /explicit safe confirmation/);
+  assert.match(skill, /do not automate Apple setup or expect a generated proof\s+artifact/);
+  assert.match(skill, /Only after that guidance is complete, hand off to `\/setup-apns`/);
 });
 
 test('iOS push chain: setup-apns consumes setup-fcm handoff', () => {
@@ -64,25 +67,16 @@ test('iOS push chain: setup-apns consumes setup-fcm handoff', () => {
   assert.ok(skill.includes('Never persist the `.p8`'), 'blocks p8 file storage');
 });
 
-test('iOS push chain: setup-apns validates Apple identity before manual p8 upload', () => {
+test('iOS push chain: setup-apns keeps the p8 upload manual', () => {
   const skill = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'),
     'utf8',
   );
 
   assert.ok(
-    skill.includes('Consume the Apple identifier/team handoff'),
-    'consumes the Apple provisioning identity',
-  );
-  assert.ok(
-    skill.includes('validate-apple-identifier-capability.js'),
-    'validates the Apple handoff artifact',
-  );
-  assert.ok(
     skill.includes('The only supported Firebase credential route'),
     'limits Firebase to the manual p8 route',
   );
-  assert.ok(skill.includes('Fastlane `pem`'), 'forbids certificate generation');
   assert.ok(skill.includes('no supported') || skill.includes('There is no supported'),
     'states that no supported automated Firebase upload exists');
   assert.ok(
@@ -113,27 +107,26 @@ test('iOS push chain: create-push-notification-flow requires authentication', ()
 
   assert.ok(skill.includes('handoff'), 'documents handoff consumption');
   assert.ok(skill.includes('authentication'), 'mentions authentication');
-  assert.match(skill, /published-and-read-back flows hand off to\s+`\/build-ios`/);
-  assert.match(skill, /hand off to `\/verify-ios-push`/);
+  assert.match(skill, /published-and-read-back flows hand off to the direct user-managed\s+`\/build-ios` Wrap path/);
+  assert.match(skill, /hand off to\s+`\/verify-ios-push`/);
 });
 
-test('iOS push chain: build-ios preserves Firebase and APNs identity', () => {
-  const skill = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills/build-ios/SKILL.md'),
+test('iOS push chain: owned orchestration keeps Wrap and signing user-managed', () => {
+  const lifecycle = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-lifecycle.md'),
+    'utf8',
+  );
+  const deploy = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/deploy/SKILL.md'),
     'utf8',
   );
 
-  assert.ok(
-    skill.includes('Consume the exact `/setup-fcm`, `/setup-apple-ios`, and `/setup-apns` handoff'),
-    'consumes Firebase, Apple provisioning, and APNs handoffs',
-  );
-  assert.ok(skill.includes('do not reconstruct it or select another'),
-    'prevents reselection');
-  assert.ok(skill.includes('Missing or conflicting handoff data blocks'),
-    'validates handoff consistency');
-  assert.ok(skill.includes('Signing boundary'), 'enforces signing boundary');
-  assert.ok(skill.includes('Never request') && skill.includes('private keys'),
-    'blocks private key access');
+  assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with explicit safe confirmations/);
+  assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
+  assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
+  assert.match(deploy, /directly confirmed `npm run build:ios` Wrap path/);
+  assert.match(deploy, /user owns Xcode signing, registered devices, profiles, and\s+credentials/);
+  assert.match(deploy, /`\/build-ios` runs the command after exact confirmation/);
 });
 
 test('iOS push chain: verify-ios-push requires exact IPA and flow state', () => {
@@ -173,42 +166,37 @@ test('iOS push chain: build-ios and verify-ios-push are non-overlapping', () => 
   assert.ok(verifySkill.includes('manually installed on that device'), 'user installs');
 });
 
-test('iOS push chain: credentials are protected throughout', () => {
+test('iOS push chain: credentials remain user-owned throughout', () => {
   const fcm = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/setup-fcm/SKILL.md'), 'utf8');
   const apns = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'), 'utf8');
-  const build = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/build-ios/SKILL.md'), 'utf8');
+  const readme = fs.readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
   const verify = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/verify-ios-push/SKILL.md'), 'utf8');
 
   // All skills block credential storage
   assert.match(fcm, /Do not record Google\s+account/, 'setup-fcm blocks Google creds');
   assert.ok(apns.includes('Never persist the `.p8`'), 'setup-apns blocks .p8');
-  assert.ok(build.includes('credential fields to') && build.includes('`wrap.config.json` or logs'),
-    'build-ios blocks credential fields');
+  assert.match(readme, /keeps all signing assets and\s+secrets outside the\s+repository/);
+  assert.match(readme, /does not inspect, generate, stage,\s+or attest signing assets/);
   assert.ok(verify.includes('Never') && verify.includes('authorization header'),
     'verify-ios-push blocks auth headers');
 });
 
-test('iOS push chain: prescribed order and secure build proof stay explicit', () => {
+test('iOS push chain: prescribed order and manual boundaries stay explicit', () => {
   const addPush = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
     'utf8',
   );
-  const apple = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/SKILL.md'),
-    'utf8',
-  );
-  const build = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills/build-ios/SKILL.md'),
+  const shared = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/shared-instructions.md'),
     'utf8',
   );
   assert.match(
     addPush,
     /`\/setup-fcm` -> `\/setup-apple-ios` -> `\/setup-apns`[\s\S]*`\/build-ios` -> `\/verify-ios-push`/,
   );
-  assert.match(apple, /Exit 0 and `status: valid` are the only completion condition/);
-  assert.match(build, /validate-apple-ios-provisioning\.js/);
-  assert.match(build, /--expected-mode "<development\|ad-hoc>"/);
-  assert.match(build, /verify-apple-ios-build-signing\.js/);
-  assert.match(build, /manage-apple-signing-keychain\.js[\s\S]*npm run build:ios/);
-  assert.match(build, /restores the previous keychain search list[\s\S]*Wrap fails/);
+  assert.match(addPush, /does not automate Apple setup or emit a proof artifact/);
+  assert.match(addPush, /user manages Xcode configuration and signing assets/);
+  assert.match(addPush, /skill runs the direct Wrap command after exact confirmation/);
+  assert.match(shared, /Apple setup is manual and user-owned/);
+  assert.match(shared, /Do not automate Apple\s+configuration, generate a proof contract, inspect signing assets/);
 });

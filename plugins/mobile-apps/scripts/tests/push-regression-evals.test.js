@@ -52,7 +52,7 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
   );
 
   assert.match(shared, /Firebase MCP required/);
-  assert.match(shared, /gcloud MCP required for `\/setup-push-wif`/);
+  assert.match(shared, /gcloud MCP preferred for `\/setup-push-wif`/);
   assert.match(shared, /mcp__azure__role/);
   assert.match(shared, /mcp__azure__functionapp/);
   assert.match(shared, /mcp__azure__appservice/);
@@ -82,10 +82,10 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
   assert.match(agents, /`role_assignment_list`, `functionapp_get`, `appservice_webapp_get`/);
   assert.match(agents, /does not expose Azure MCP's `keyvault` namespace/i);
   assert.match(officialMcp, /Workflow readiness gates and `\/mcp` recovery/);
-  assert.match(officialMcp, /\/setup-push-wif[\s\S]*gcloud`, `azure[\s\S]*mcp__gcloud__run_gcloud_command[\s\S]*mcp__azure__role/s);
+  assert.match(officialMcp, /\/setup-push-wif[\s\S]*`azure`; `gcloud` preferred[\s\S]*mcp__azure__role[\s\S]*mcp__gcloud__run_gcloud_command/s);
   assert.match(officialMcp, /\/setup-push-service-account[\s\S]*azure[\s\S]*mcp__azure__functionapp[\s\S]*mcp__azure__appservice/s);
   assert.match(officialMcp, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
-  assert.match(officialMcp, /Do \*\*not\*\* silently fall back[\s\S]*shell CLIs/i);
+  assert.match(officialMcp, /Never call `gcloud` directly[\s\S]*extend this exception to Firebase or Azure/i);
 
   assert.match(addPush, /vendor-official Firebase MCP\s+only/);
   assert.doesNotMatch(addPush, /Firebase MCP[\s\S]*plus gcloud MCP/);
@@ -236,9 +236,9 @@ test('push sender auth skills pin GA MCP versions and namespace semantics', () =
   );
 
   assert.match(wifSkill, /allowed-tools: .*mcp__gcloud__run_gcloud_command.*mcp__azure__subscription.*mcp__azure__group.*mcp__azure__role/s);
-  assert.match(wifSkill, /MCP readiness gate/);
+  assert.match(wifSkill, /Google tool readiness gate/);
   assert.match(wifSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
-  assert.match(wifSkill, /show both servers connected with the[\s\S]*required tools/i);
+  assert.match(wifSkill, /require the Azure MCP surfaces and prefer the\s+official gcloud MCP surface/i);
   assert.match(wifSkill, /@google-cloud\/gcloud-mcp@0\.5\.3/);
   assert.match(wifSkill, /@azure\/mcp@2\.0\.5/);
   assert.match(wifSkill, /mcp__azure__subscription/);
@@ -264,7 +264,6 @@ test('push sender auth skills pin GA MCP versions and namespace semantics', () =
   assert.match(wifReference, /mcp__azure__role/);
   assert.match(wifReference, /role_assignment_list/);
   assert.match(wifReference, /Call the namespace tool with routed command\/parameters/);
-  assert.match(wifReference, /prepends the `gcloud` executable itself/);
   assert.match(wifReference, /does not expose its[\s\S]*`keyvault` namespace/i);
   assert.match(wifReference, /no safe[\s\S]*metadata-only route/i);
 
@@ -369,10 +368,11 @@ test('iOS push orchestration reports stage ownership without duplicating build o
   assert.match(debug, /Keep general Metro diagnostics here/);
   assert.match(readme, /\| `\/build-ios` \|/);
   assert.match(readme, /\| `\/verify-ios-push` \|/);
-  assert.match(readme, /development and ad-hoc registered-device IPA workflows/);
-  assert.match(readme, /certificates, private keys, provisioning profiles, device\s+UDIDs/s);
+  assert.match(readme, /development and ad-hoc\s+registered-device IPA workflows/);
+  assert.match(readme, /user directly manages signing; `\/build-ios` runs the confirmed Wrap\s+command/);
   assert.match(agents, /38 skills \+ 5 agents/);
-  assert.match(agents, /Apple certificates, private keys/);
+  assert.match(agents, /manual Apple Developer and Xcode guidance/);
+  assert.match(agents, /user owns signing assets, registered devices/);
 });
 
 test('push docs require official MCP-first orchestration boundaries', () => {
@@ -395,8 +395,8 @@ test('push docs require official MCP-first orchestration boundaries', () => {
     path.join(PLUGIN_ROOT, 'skills/verify-ios-push/SKILL.md'),
     'utf8',
   );
-  const apple = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/SKILL.md'),
+  const officialMcp = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/official-mcp-servers.md'),
     'utf8',
   );
 
@@ -406,7 +406,7 @@ test('push docs require official MCP-first orchestration boundaries', () => {
   assert.match(shared, /gcloud MCP \*\*0\.5\.3\*\*/);
   assert.match(shared, /Azure MCP GA \*\*2\.0\.5\*\*/);
   assert.match(shared, /Firebase MCP required/);
-  assert.match(shared, /gcloud MCP required for `\/setup-push-wif`/);
+  assert.match(shared, /gcloud MCP preferred for `\/setup-push-wif`/);
   assert.match(shared, /Azure MCP required for covered operations/);
   assert.match(shared, /role_assignment_list/);
   assert.match(shared, /functionapp_get/);
@@ -420,7 +420,8 @@ test('push docs require official MCP-first orchestration boundaries', () => {
   assert.match(shared, /Entra resource work/);
   assert.match(shared, /secret-safe writes/);
   assert.match(shared, /FlowAgent remains the Power Automate mutation path/);
-  assert.match(shared, /Apple provisioning intentionally stays on Fastlane/);
+  assert.match(shared, /Apple setup is manual and user-owned/);
+  assert.match(shared, /Do not automate Apple\s+configuration, generate a proof contract, inspect signing assets/);
   assert.match(readme, /Push cloud setup is \*\*official MCP-first\*\*/);
   assert.match(readme, /No CLI fallback/);
   assert.match(readme, /Microsoft Learn MCP\/docs remain the authoritative\s+source/);
@@ -443,8 +444,8 @@ test('push docs require official MCP-first orchestration boundaries', () => {
     /Do not fall\s+back to `firebase-tools`,\s*`gcloud`, or Azure provisioning from this skill/,
   );
   assert.match(verify, /consumes only previously validated MCP-first handoffs/i);
-  assert.match(apple, /does not provide a vendor-official MCP/);
-  assert.match(apple, /community\/unofficial MCP servers are out of scope/);
+  assert.match(officialMcp, /Apple Developer and Xcode setup is intentionally outside MCP automation/);
+  assert.match(officialMcp, /No MCP\s+server, local provisioning tool, or generated proof artifact substitutes/);
 });
 
 test('iOS push contract is consent-first and registers background handling before Router', () => {

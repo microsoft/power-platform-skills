@@ -194,6 +194,7 @@ Persist exactly one of the authoring reference's `Push flow handoff` schemas in
   Omit `Sender flow ID` and `Sender flow state` entirely; do not emit empty or
   `not applicable` placeholders.
 
-For iOS, published-and-read-back flows hand off to `/build-ios`. After the
-exact IPA is installed, hand off to `/verify-ios-push`; a flow smoke test is
-not physical delivery verification.
+For iOS, published-and-read-back flows hand off to the direct user-managed
+`/build-ios` Wrap path after manual `/setup-apple-ios` and `/setup-apns`
+completion. After the exact IPA is installed, hand off to
+`/verify-ios-push`; a flow smoke test is not physical delivery verification.

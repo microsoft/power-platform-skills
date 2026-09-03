@@ -15,6 +15,9 @@ This template is an Expo, React Native, and TypeScript starter for building a st
   Apple Developer team access, and a physical iPhone or iPad registered to that
   team. The preview supports registered-device `development` and `ad-hoc`
   builds only—not simulator, TestFlight, App Store, or enterprise distribution.
+  Apple Developer and Xcode configuration, signing assets, device registration,
+  and credentials remain user-managed; `/build-ios` runs the direct Wrap
+  command only after exact confirmation.
 
 ## Setup
 
@@ -235,31 +238,28 @@ Validated client files are stored as
 `firebase/google-services.json` and
 `firebase/GoogleService-Info.plist`. These client configurations are intended
 to be committed, and the template discovers them automatically; project-relative
-environment overrides remain available when needed. For iOS, `/setup-apple-ios` first creates or repairs a fresh, non-secret
-`apple-ios-provisioning.json` for the exact Team and bundle. `/setup-apns` then
-validates that Apple Team, explicit bundle identifier, and Push capability
-handoff before guiding the user through the
-only supported Firebase path: manual Apple APNs authentication-key (`.p8`)
-upload in Firebase Console. Fastlane `pem`, APNs `.p12` generation, browser
-automation, undocumented endpoints, and agent access to the one-time-downloaded
-key are prohibited. Static completion is recorded as **configured, device
-verification pending**. It remains pending until `/verify-ios-push` passes on a
-matching physical-device build.
+environment overrides remain available when needed. For iOS,
+`/setup-apple-ios` provides manual Apple Developer and Xcode guidance for the
+exact Team, explicit bundle identifier, Push Notifications capability,
+registered test devices, and the selected `development` or `ad-hoc` path. Each
+portal or Xcode change requires an explicit safe confirmation; the skill does
+not automate Apple configuration or generate an Apple proof artifact.
+`/setup-apns` then guides the only supported Firebase path: manual Apple APNs
+authentication-key (`.p8`) upload in Firebase Console. Browser automation,
+undocumented endpoints, and agent access to the one-time-downloaded key are
+prohibited. Completion is recorded as **configured, device verification
+pending** until `/verify-ios-push` passes on the matching physical-device
+build.
 
 After APNs configuration, complete the native client and sender auth/flows,
 then run `/build-ios` to create either a `development`
 IPA (`aps-environment=development`) or a registered-device `ad-hoc` IPA
 (`aps-environment=production`) through the template's `npm run build:ios`
-Wrap path. It requires a fresh `apple-ios-provisioning.json` for the exact
-Team, bundle, and selected mode. Immediately before Wrap, the secure keychain
-helper temporarily unlocks and prepends the retained project-specific keychain,
-proves the required Apple Development or Apple Distribution identity plus the
-matching installed profile/APNs environment, runs Wrap with that keychain in
-scope, and restores the previous search list on success or failure. Passwords,
-certificate names, profile UUIDs, device UDIDs, and keychain paths are never
-written to `wrap.config.json` or logs.
-Apple certificates, private keys, provisioning profiles, device UDIDs, passwords,
-and signing secrets remain outside the repository.
+Wrap path. The user directly manages Xcode signing, registered devices,
+profiles, and credentials, confirms the exact Team, bundle, and selected mode
+before building, and keeps all signing assets and secrets outside the
+repository. After explicit confirmation, `/build-ios` runs the direct Wrap
+command but does not inspect, generate, stage, or attest signing assets.
 
 Run `/verify-ios-push` only after the exact IPA is installed and sender auth
 plus both Power Automate flows are ready. It verifies the physical-device
@@ -375,17 +375,15 @@ use Microsoft Learn docs rather than guessed contracts.
   Automate. Azure hosting charges and Power Platform premium licensing may
   apply.
 - **iOS configuration:** Apple Developer access and manual APNs `.p8` upload
-  to Firebase. The agent never handles the key or its local path. Apple
-  provisioning stays on pinned local Fastlane because no vendor-official Apple
-  provisioning MCP exists for the required Developer Portal workflow, and
-  community MCPs are excluded.
+  to Firebase. `/setup-apple-ios` provides manual Apple Developer/Xcode
+  guidance with explicit safe confirmations; `/setup-apns` guides the manual
+  Firebase Console upload. The agent never handles the key or its local path
+  and does not automate Apple configuration.
 - **iOS build and verification:** macOS Wrap/Xcode tooling, a registered
   physical device, and Apple signing assets retained outside the repository.
-  `/setup-apple-ios` pins managed Ruby 3.3+, Bundler 4.0.19, and Fastlane
-  2.238.0. Install gems locally from the app root with
-  `bundle _4.0.19_ install`, and invoke Fastlane only as
-  `bundle exec fastlane`; do not rely on system Ruby or a global Fastlane.
-  Only development and ad-hoc registered-device IPA workflows are supported.
+  The user directly manages signing; `/build-ios` runs the confirmed Wrap
+  command and performs safe artifact checks. Only development and ad-hoc
+  registered-device IPA workflows are supported.
 
 ### 4. Add a connector
 
@@ -446,11 +444,11 @@ Example edit flows:
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
 | `/setup-fcm` | 🟡 preview | Official MCP-first Firebase owner — uses the vendor-official Firebase MCP to list/select/create Firebase projects, idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. No CLI fallback. |
-| `/setup-apns` | 🟡 preview | After `/setup-apple-ios`, validate the Firebase iOS identity plus exact Apple Team/identifier/Push handoff, then guide the supported manual APNs `.p8` upload in Firebase Console; no supported CLI/API upload exists and the agent never handles the key. |
-| `/setup-apple-ios` | 🟡 preview | Scaffold pinned local Bundler/Fastlane tooling; prove the exact Apple Team and Expo/Firebase bundle ID; create/reuse the explicit identifier, Push capability, registered devices, modern certificates, and verified development/ad-hoc profiles; emit the fresh non-secret build handoff. Fastlane stays because Apple provides no vendor-official provisioning MCP for this workflow, and community MCPs are excluded. Creates no App Store Connect listing and does not build. |
+| `/setup-apns` | 🟡 preview | After `/setup-apple-ios`, confirm the selected Firebase iOS identity and guide the supported manual APNs `.p8` upload in Firebase Console; no supported CLI/API upload exists and the agent never handles the key. |
+| `/setup-apple-ios` | 🟡 preview | Manual Apple Developer and Xcode guidance for the exact Team, explicit bundle identifier, Push Notifications capability, registered test devices, and development/ad-hoc signing choice. Requires explicit safe confirmation before each user-performed change; does not automate Apple configuration, generate proof artifacts, or build. |
 | `/build-android` | 🟡 preview | Build and validate a customer-signed direct-test APK through `npm run build:android` (`wrap android`). Requires an existing customer-managed signing setup, never creates a keystore or handles signing passwords, rejects repository-local/symlinked keystores and secret-bearing config, and emits a non-secret `android-build.json`. APK only; AAB/Google Play is deferred. |
 | `/verify-android-push` | 🟡 preview | Verify the exact fresh wrapped APK and published producer/sender flows on a physical Android 8+ device across permission/channel behavior, foreground/background/terminated delivery, exactly-once deep links, topic transitions, opt-out, and token refresh or same-APK re-registration recovery. |
-| `/build-ios` | 🟡 preview | Build a registered-device development or ad-hoc IPA through `npm run build:ios` (`wrap ios`), requiring the fresh exact Apple provisioning handoff and a secure dedicated-keychain/profile/APNs proof immediately before Wrap. The previous keychain search list is always restored. Not for simulator, TestFlight, App Store, or enterprise distribution. |
+| `/build-ios` | 🟡 preview | Run a confirmed registered-device development or ad-hoc IPA build directly through `npm run build:ios` (`wrap ios`) after manual Apple/Xcode and APNs setup. The user owns signing assets, device registration, profiles, and credentials; the skill retains safe local validation and artifact checks. Not for simulator, TestFlight, App Store, or enterprise distribution. |
 | `/verify-ios-push` | 🟡 preview | Verify the exact fresh wrapped IPA and published producer/sender flows on a registered physical iPhone/iPad across permission, foreground/background/terminated delivery, deep links, topic transitions, opt-out, and re-registration recovery. |
 | `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation through the official gcloud MCP plus Azure MCP read-back/settings coverage, while explicit `az` gaps remain for RBAC, Function provisioning/auth/managed identity, Entra resource work, and secret-safe writes that Azure MCP GA 2.0.5 does not cover. Then prove the complete exchange and write the non-secret sender-auth handoff. |
 | `/setup-push-service-account` | 🟡 preview | Compatibility path for an existing Firebase service-account integration: use Azure MCP for covered read-back/settings work, but keep RBAC mutations, Function provisioning/deployment/auth/managed identity, Entra resource work, and secret-safe writes on the documented `az` gap path. Never creates or downloads a Firebase Admin key. |

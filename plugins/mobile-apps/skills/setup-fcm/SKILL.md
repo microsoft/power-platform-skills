@@ -88,14 +88,15 @@ automation as fallback.
    validation gates. Never request, download, copy, or commit a Firebase Admin
    service-account private-key JSON.
 
-## iOS Apple provisioning and APNs handoff
+## iOS manual Apple and APNs handoff
 
 If iOS is selected, Firebase client setup alone does not establish APNs
-delivery. Hand off first to `/setup-apple-ios` for the approved exact Team/
-bundle identifier, Push capability, retained-keychain identities,
-registered-device coverage, installed development/ad-hoc profiles, and fresh
-non-secret provisioning contract. Only after that succeeds, hand off to
-`/setup-apns`.
+delivery. Hand off first to `/setup-apple-ios` for manual Apple Developer/Xcode
+guidance covering the exact Team, explicit bundle identifier, Push
+Notifications capability, registered test devices, and the selected
+`development` or `ad-hoc` path. Require explicit safe confirmation before each
+user-performed change; do not automate Apple setup or expect a generated proof
+artifact. Only after that guidance is complete, hand off to `/setup-apns`.
 
 APNs key creation and upload remain manual user actions in the Apple Developer
 and Firebase consoles. Never ask to read, copy, encode, commit, or

@@ -1,5 +1,0 @@
-source "https://rubygems.org"
-
-# Keep Apple automation reproducible. Update this pin and Gemfile.lock together
-# only after reviewing the fastlane release notes and rerunning scaffold tests.
-gem "fastlane", "= 2.238.0"

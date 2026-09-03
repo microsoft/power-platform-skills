@@ -9,6 +9,12 @@ The mobile-apps plugin ships four MCP entries in `.mcp.json`:
 
 ## Capability boundaries
 
+Apple Developer and Xcode setup is intentionally outside MCP automation.
+`/setup-apple-ios` provides manual guidance with explicit safe confirmations,
+and `/setup-apns` guides the manual Firebase Console `.p8` upload. No MCP
+server, local provisioning tool, or generated proof artifact substitutes for
+those user-owned steps.
+
 ### Firebase
 
 The plugin narrows Firebase to the exact project/app/bootstrap tools it needs for
@@ -94,6 +100,10 @@ provisioning run, or extend this exception to Firebase or Azure.
 | Workflow | Required server(s) | Required tool(s) that must be visible before the workflow continues |
 |---|---|---|
 | `/setup-fcm` | `firebase` | `mcp__firebase__firebase_get_environment`, `mcp__firebase__firebase_login`, `mcp__firebase__firebase_update_environment`, `mcp__firebase__firebase_list_projects`, `mcp__firebase__firebase_get_project`, `mcp__firebase__firebase_create_project`, `mcp__firebase__firebase_list_apps`, `mcp__firebase__firebase_create_app`, `mcp__firebase__firebase_get_sdk_config` |
-| `/setup-apns` | `firebase` | `mcp__firebase__firebase_get_environment`, `mcp__firebase__firebase_login`, `mcp__firebase__firebase_update_environment`, `mcp__firebase__firebase_list_projects`, `mcp__firebase__firebase_get_project`, `mcp__firebase__firebase_list_apps` |
 | `/setup-push-wif` | `azure`; `gcloud` preferred | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`; use `mcp__gcloud__run_gcloud_command` when available, otherwise the guarded official CLI fallback |
 | `/setup-push-service-account` | `azure` | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`, `mcp__azure__functionapp`, `mcp__azure__appservice` |
+
+`/setup-apns` has no MCP readiness gate. It consumes the exact `/setup-fcm`
+identity handoff, then the user performs the APNs key upload manually in
+Firebase Console because the official Firebase MCP exposes no credential-upload
+operation.

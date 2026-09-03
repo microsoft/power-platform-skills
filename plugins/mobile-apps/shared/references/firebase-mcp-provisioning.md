@@ -386,9 +386,9 @@ user-controlled location outside every repository, and manually uploaded by the
 user in Firebase Console to the exact selected Firebase iOS app.
 
 An agent must never request, read, copy, encode, validate, or upload the `.p8`.
-Do not use Fastlane `pem`, APNs certificate/`.p12` generation, certificate-based
-Firebase credentials, browser automation, undocumented endpoints, or reverse-
-engineered upload calls as substitutes.
+Do not automate APNs credential creation, generate APNs certificate/`.p12`
+credentials, use certificate-based Firebase credentials, automate the browser,
+or call undocumented/reverse-engineered upload endpoints as substitutes.
 
 ## Official references
 

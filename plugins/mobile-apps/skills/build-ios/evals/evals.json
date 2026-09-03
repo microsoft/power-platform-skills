@@ -33,28 +33,28 @@
       "id": 5,
       "coverage": "bounded-build-failure",
       "prompt": "Run a development iOS build. Type-check and push validation pass, but wrap ios fails during Xcode export.",
-      "expected_output": "The skill does not retry or auto-repair signing. It reports the failing stage with a redacted bounded tail of at most 80 lines, records no success metadata, and does not claim an artifact exists.",
+      "expected_output": "The skill runs npm run build:ios directly through the bounded redacting output filter, does not retry or auto-repair signing, reports the safe failing stage with at most 80 lines, records no success metadata, and routes signing failures to the manual Xcode setup checklist without requesting asset details.",
       "files": []
     },
     {
       "id": 6,
       "coverage": "successful-ad-hoc-artifact",
       "prompt": "Create an ad-hoc IPA for registered test devices. All Expo, Entra, Firebase, APNs, Team ID, icon, and version identities agree, and I provide both exact confirmations.",
-      "expected_output": "The skill writes only confirmed non-secret wrap fields if needed, runs type-check and strict push-client validation (implemented wrapper, mounted lifecycle, consent/settings surfaces, early real background delegation, exact native identities and one Firebase project), runs the current required iOS bundle step and npm run build:ios; requires a fresh project-local IPA; prints only safe artifact metadata; and records only safe build metadata in memory-bank.md.",
+      "expected_output": "The skill accepts the exact manual Xcode signing-setup confirmation plus the safe wrap-config write/build confirmations, writes only confirmed non-secret wrap fields if needed, runs validate-ios-wrap-build, type-check, strict push-client validation, the required iOS bundle step, and npm run build:ios directly through filter-ios-build-output; requires a fresh project-local IPA; prints only safe artifact metadata; and records only safe build metadata.",
       "files": []
     },
     {
       "id": 7,
-      "coverage": "fresh-apple-provisioning-contract",
-      "prompt": "Build a development IPA. The Apple Team and bundle match, but apple-ios-provisioning.json is missing or its proof expired yesterday. I confirm the device and profile are still fine.",
-      "expected_output": "The skill blocks before Wrap, rejects manual device/certificate/profile confirmation as a substitute, and routes to /setup-apple-ios to create or repair a fresh contract for the exact Team, bundle, and development mode.",
+      "coverage": "manual-signing-confirmation",
+      "prompt": "Build a development IPA. The setup handoffs identify Team ABCD1234EF and bundle com.contoso.fieldops, but I have not checked Xcode signing or registered-device coverage for this mode.",
+      "expected_output": "The skill blocks before Wrap and requires the exact safe manual signing confirmation for the recorded Team, bundle, development mode, registered-device coverage, Push Notifications, and development APNs environment. It does not inspect certificates, profiles, devices, or keychains and does not accept a bare yes.",
       "files": []
     },
     {
       "id": 8,
-      "coverage": "dedicated-keychain-build-proof",
-      "prompt": "The fresh ad-hoc provisioning handoff validates. Before Wrap, the retained keychain has no usable Apple Distribution identity matching the installed production-APNs profile.",
-      "expected_output": "The skill runs the safe build-signing verifier through the retained-keychain helper, blocks before Wrap with only a safe category, emits no certificate name/profile UUID/UDID/keychain path, restores the previous search list, and routes repair to /setup-apple-ios.",
+      "coverage": "manual-signing-failure-routing",
+      "prompt": "I confirmed the exact ad-hoc setup, but npm run build:ios reports a signing failure because Xcode cannot resolve a suitable profile.",
+      "expected_output": "The skill stops after the bounded sanitized failure, does not retry, inspect assets, invoke signing helpers, or auto-repair. It routes the user to the manual Xcode account, Team, App ID, certificate/profile, registered-device, Push Notifications, and APNs checklist, and requires a new explicit confirmation before another build.",
       "files": []
     }
   ]
