@@ -122,7 +122,8 @@ function finalHtml(contract) {
     #preview-navigation{padding:1rem;background:var(--color-primary)}
     .navigation-inner{display:flex;justify-content:center;gap:.5rem}
     [data-navigation-destination]{padding:.6rem .9rem;border:1px solid var(--color-border);color:var(--color-surface);text-decoration:none}
-    #preview-storyboard{display:grid;grid-template-columns:repeat(3,minmax(0,390px));justify-content:center;gap:1rem;padding:1rem}
+    #preview-storyboard{padding:1rem}
+    .storyboard-layout{display:grid;grid-template-columns:repeat(3,minmax(0,390px));justify-content:center;gap:1rem}
     [data-mobile-frame]{width:min(100%,390px);height:780px;overflow:auto;padding:1rem;background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px}
     [data-first-viewport]{height:740px;display:flex;flex-direction:column;gap:1rem}
     [data-viewport-region="focal-content"]{display:grid;gap:.75rem;min-height:0;overflow:auto;flex:1}
@@ -132,12 +133,12 @@ function finalHtml(contract) {
     [data-primary-action]{width:100%;min-height:48px;background:var(--color-primary);color:var(--color-surface);border:0}
     [data-screen-index]{display:flex;gap:.5rem;padding:.75rem;border:1px solid var(--color-border);background:var(--color-bg)}
     #preview-all-screens{padding:1rem}.review-screen,.requirement-index{padding:1rem;border-top:1px solid var(--color-border)}
-    @media(max-width:900px){#preview-storyboard{grid-template-columns:minmax(0,390px)}}
+    @media(max-width:900px){.storyboard-layout{grid-template-columns:minmax(0,390px)}}
   </style>
 </head>
 <body data-preview-mode="final" data-preview-authorship="design-system-model" data-preview-contract-revision="${contract.contractRevision}">
   <nav id="preview-navigation"><div class="navigation-inner">${navigation}</div></nav>
-  <main id="preview-storyboard">${frames}</main>
+  <main id="preview-storyboard"><div class="storyboard-layout">${frames}</div></main>
   <section id="preview-all-screens"><details><summary>Review complete experience</summary><div data-screen-index>${allScreens}</div>${supporting}<section class="requirement-index">${requirements}</section></details></section>
 </body>
 </html>\n`;
@@ -435,6 +436,11 @@ test('validator rejects drift, hidden evidence, placeholders, and structural sub
       {
         name: 'ineffective page styling',
         html: valid.replace('body{', '.unused-body{'),
+        code: 'preview-stylesheet-ineffective',
+      },
+      {
+        name: 'unstyled storyboard composition',
+        html: valid.replace('.storyboard-layout{', '.unused-storyboard-layout{'),
         code: 'preview-stylesheet-ineffective',
       },
       {

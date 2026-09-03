@@ -150,7 +150,15 @@ function validatePageStructure(parsed, expected, errors) {
   );
   const destinationNodes = elementsWith(parsed.elements, 'data-navigation-destination');
   const body = declarationsForNode(rules, bodyNode);
-  const storyboard = declarationsForNode(rules, storyboardNode);
+  const storyboardLayouts = storyboardNode
+    ? [storyboardNode, ...(storyboardNode.children || [])].map((node) => (
+      declarationsForNode(rules, node)
+    ))
+    : [];
+  const storyboardHasLayout = storyboardLayouts.some((declarations) => (
+    ['grid', 'flex'].includes(declarations.display)
+      && declaresAny(declarations, ['gap', 'column-gap', 'row-gap'])
+  ));
 
   if (css.trim().length < 160 || rules.length < 4) {
     errors.push(finding('preview-authored-styles-missing',
@@ -167,8 +175,7 @@ function validatePageStructure(parsed, expected, errors) {
   }
   if (!declaresAny(body, ['background', 'background-color'])
     || !declaresAny(body, ['font', 'font-family'])
-    || !['grid', 'flex'].includes(storyboard.display)
-    || !declaresAny(storyboard, ['gap', 'column-gap', 'row-gap'])) {
+    || !storyboardHasLayout) {
     errors.push(finding('preview-stylesheet-ineffective',
       'authored CSS must affect page background, typography, and storyboard layout'));
   }
