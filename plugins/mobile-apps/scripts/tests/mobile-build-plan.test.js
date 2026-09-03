@@ -309,72 +309,6 @@ test('connector-owned persistence makes the Dataverse data model not applicable'
   }
 });
 
-test('offline integration is displayed only from its canonical artifact', () => {
-  const projectRoot = makeProjectDir('mobile-build-plan-offline-integration');
-  try {
-    writeJson(projectRoot, '.tmp/product-experience-contract.json', {
-      productName: 'Field North',
-      operatingContext: { connectivity: 'offline-first' },
-    });
-
-    assert.equal(
-      ARTIFACTS.offlineIntegration,
-      '.tmp/offline-integration-contract.json',
-    );
-    let model = deriveBuildPlanModel(projectRoot);
-    assert.deepStrictEqual(model.offlineIntegration, {
-      selected: false,
-      owner: null,
-      adapter: null,
-      runtimeStates: [],
-      mediaBindingCount: 0,
-      profileRequired: false,
-    });
-    assert.doesNotMatch(
-      renderBuildPlanHtml(model, { live: true }),
-      /<h3>Offline integration<\/h3>/,
-    );
-
-    writeJson(projectRoot, '.tmp/offline-integration-contract.json', {
-      schemaVersion: 1,
-      contractType: 'offline-integration-contract',
-      selected: false,
-      owner: 'offline-package',
-      adapter: 'dataverse-mobile-offline-profile',
-      runtimeStates: ['connection-status', 'queued', 'syncing', 'failed', 'retry', 'conflict'],
-      mediaBindings: [{
-        screenId: 'home',
-        assetKey: 'hero-photo',
-        source: { kind: 'cdn', value: 'https://media.example.test/private.jpg' },
-        fallback: 'Private fallback copy',
-      }],
-      mobileOfflineProfileRequired: true,
-      environmentUrl: 'https://contoso.crm.dynamics.com',
-    });
-
-    model = deriveBuildPlanModel(projectRoot);
-    assert.deepStrictEqual(model.offlineIntegration, {
-      selected: true,
-      owner: 'offline-package',
-      adapter: 'dataverse-mobile-offline-profile',
-      runtimeStates: ['connection-status', 'queued', 'syncing', 'failed', 'retry', 'conflict'],
-      mediaBindingCount: 1,
-      profileRequired: true,
-    });
-    assert.deepStrictEqual(model.makerSummary.offlineIntegration, model.offlineIntegration);
-    assert.doesNotMatch(JSON.stringify(model), /contoso\.crm|private\.jpg|Private fallback copy/);
-    const html = renderBuildPlanHtml(model, { live: true });
-    assert.match(html, /<h3>Offline integration<\/h3>/);
-    assert.match(html, /Owner:<\/strong> offline package/);
-    assert.match(html, /dataverse mobile offline profile/);
-    assert.match(html, /connection status/);
-    assert.match(html, /1 media binding delegated to the package cache/);
-    assert.match(html, /Mobile Offline Profile required/);
-  } finally {
-    cleanup(projectRoot);
-  }
-});
-
 test('scenario facts project only revision bindings and counts', () => {
   const projectRoot = makeProjectDir('mobile-build-plan-scenario-facts');
   try {
@@ -850,9 +784,6 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
       tables: [],
     });
     writeJson(projectRoot, '.tmp/scenario-facts.json', { scenarioRevision: 'b'.repeat(64) });
-    writeJson(projectRoot, '.tmp/offline-integration-contract.json', {
-      integrationRevision: 'c'.repeat(64),
-    });
     const unrelatedScope = {
       contractType: 'product-scope',
       screens: [{ id: 'home', title: 'Unrelated Home contract' }],
@@ -908,10 +839,6 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
       false,
     );
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/scenario-facts.json')), true);
-    assert.strictEqual(
-      fs.existsSync(path.join(projectRoot, '.tmp/offline-integration-contract.json')),
-      true,
-    );
     assert.deepStrictEqual(
       JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp/product-scope-contract.json'))),
       unrelatedScope,
@@ -1037,9 +964,6 @@ test('adding a table updates and validates its explicit Product Scope mapping', 
     writeJson(projectRoot, '.tmp/product-experience-contract.json', bundle.experience);
     writeJson(projectRoot, '.tmp/product-scope-contract.json', bundle.scope);
     writeJson(projectRoot, '.tmp/scenario-facts.json', { scenarioRevision: 'b'.repeat(64) });
-    writeJson(projectRoot, '.tmp/offline-integration-contract.json', {
-      integrationRevision: 'c'.repeat(64),
-    });
     const jobId = bundle.scope.coreJobs[0].id;
 
     const result = applyDataModelEdit(projectRoot, {
@@ -1084,10 +1008,6 @@ test('adding a table updates and validates its explicit Product Scope mapping', 
       entity.name === 'Safety observation' && entity.realization === 'new-table'
     )));
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/scenario-facts.json')), false);
-    assert.strictEqual(
-      fs.existsSync(path.join(projectRoot, '.tmp/offline-integration-contract.json')),
-      false,
-    );
   } finally {
     cleanup(projectRoot);
   }

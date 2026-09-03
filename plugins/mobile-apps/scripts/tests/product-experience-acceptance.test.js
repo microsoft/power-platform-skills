@@ -3,7 +3,6 @@
 const assert = require('node:assert');
 const test = require('node:test');
 
-const { compileOfflineIntegration } = require('../compile-offline-integration');
 const { compileScreenBuildPack } = require('../compile-screen-build-pack');
 const { SCREEN_BUDGETS } = require('../lib/product-experience-contracts');
 const { validateExperienceContract } = require('../validate-product-experience');
@@ -31,17 +30,6 @@ function screenIds(bundle) {
 
 function pack(bundle, screenId) {
   return bundle.buildPack.packs.find((item) => item.screenId === screenId);
-}
-
-function dataverseOfflineIntegration() {
-  return compileOfflineIntegration({
-    persistenceRevision: 'a'.repeat(64),
-    mode: 'dataverse',
-    offline: { selected: true, source: 'explicit-request' },
-    dataverseConceptIds: ['work-item'],
-    connectorConceptIds: [],
-    localConceptIds: [],
-  });
 }
 
 test('five concrete briefs pass the canonical contract pipeline without a universal screen count', () => {
@@ -128,7 +116,7 @@ test('flight commerce keeps checkout bounded and Profile reachable outside its t
   assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
 });
 
-test('ICRC receiving embeds scanning, keeps retry in-product, and delegates offline UX', () => {
+test('offline prompt text does not create offline requirements or product UX', () => {
   const { bundle } = validateBundle('icrcReceiving');
   const required = [
     'view-expected-shipments',
@@ -141,12 +129,19 @@ test('ICRC receiving embeds scanning, keeps retry in-product, and delegates offl
     'capture-location',
     'handoff-custody',
   ];
+  assert.match(bundle.descriptor.brief, /offline[\s\S]*limited connectivity/i);
   assert.ok(required.every((id) => bundle.scope.requirements.some((item) => item.id === id)));
+  assert.doesNotMatch(
+    JSON.stringify({
+      scope: bundle.scope,
+      journey: bundle.journey,
+      buildPack: bundle.buildPack,
+    }),
+    /offline|sync/i,
+  );
   assert.ok(!screenIds(bundle).some((id) => /scan|barcode|role|offline|retry/.test(id)));
   assert.strictEqual(pack(bundle, 'receiving').primaryActions[0].label, 'Scan or enter shipment');
-  assert.ok(Object.hasOwn(pack(bundle, 'receiving').states, 'retry'));
   assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
-  assert.equal(dataverseOfflineIntegration().owner, 'offline-package');
   assert.strictEqual(bundle.scope.navigation.pattern, 'stack-only');
   assert.ok(bundle.scope.screens.length <= SCREEN_BUDGETS.complex.max);
   assert.strictEqual(
@@ -171,7 +166,6 @@ test('gym maintenance embeds scanning without inventing offline screens or state
   assert.strictEqual(bundle.scope.navigation.profileScreenId, 'profile');
   assert.strictEqual(bundle.scope.navigation.profileAccess, 'account-action');
   assert.ok(bundle.buildPack.packs.every((item) => !Object.hasOwn(item.states, 'offline')));
-  assert.equal(dataverseOfflineIntegration().adapter, 'dataverse-mobile-offline-profile');
   assert.ok(bundle.scope.dataEntities.some((entity) => (
     entity.name === 'Warranty' && entity.realization === 'connector-source'
   )));

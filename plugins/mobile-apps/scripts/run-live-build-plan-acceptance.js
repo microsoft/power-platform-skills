@@ -6,7 +6,6 @@ const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
 
-const { compileOfflineIntegration, validateOfflineInvariance } = require('./compile-offline-integration');
 const { compileNavigationManifest } = require('./compile-navigation-manifest');
 const { compilePersistenceContract, conceptId, validatePersistenceArtifacts } = require('./compile-persistence-contract');
 const { compileScreenBuildPack } = require('./compile-screen-build-pack');
@@ -32,13 +31,11 @@ const { scenarioInputForBundle } = require('./tests/helpers/scenario-facts-fixtu
 
 const VECTOR_PACKAGE = { dependencies: { '@expo/vector-icons': '15.1.1' } };
 const MATRIX = Object.freeze([
-  { id: 'flight-commerce-connector', scenario: 'flightCommerce', mode: 'connector-only', offline: false, storyboard: 'commerce' },
-  { id: 'humanitarian-dataverse-offline', scenario: 'icrcReceiving', mode: 'dataverse', offline: true, storyboard: 'operational' },
-  { id: 'gym-maintenance-mixed', scenario: 'gymMaintenance', mode: 'mixed', offline: false },
-  { id: 'it-inventory-local', scenario: 'itAssetTracking', mode: 'local-prototype', offline: false },
-  { id: 'connector-only-dispatch', scenario: 'connectorOnlyDispatch', mode: 'connector-only', offline: false },
-  { id: 'it-inventory-dataverse-online', scenario: 'itAssetTracking', mode: 'dataverse', offline: false, pair: 'it-offline' },
-  { id: 'it-inventory-dataverse-offline', scenario: 'itAssetTracking', mode: 'dataverse', offline: true, pair: 'it-offline' },
+  { id: 'flight-commerce-connector', scenario: 'flightCommerce', mode: 'connector-only', storyboard: 'commerce' },
+  { id: 'humanitarian-dataverse', scenario: 'icrcReceiving', mode: 'dataverse', storyboard: 'operational' },
+  { id: 'gym-maintenance-mixed', scenario: 'gymMaintenance', mode: 'mixed' },
+  { id: 'it-inventory-local', scenario: 'itAssetTracking', mode: 'local-prototype' },
+  { id: 'connector-only-dispatch', scenario: 'connectorOnlyDispatch', mode: 'connector-only' },
 ]);
 const STAGES = [
   'planning',
@@ -137,13 +134,6 @@ function architectureVariant(definition) {
       ? [{ apiName: 'acceptance-source', displayName: 'Acceptance source', approved: true }]
       : [],
     conceptOwners: ownerEntries,
-    offline: definition.offline
-      ? {
-        selected: true,
-        source: 'explicit-request',
-        reason: 'The acceptance variant explicitly requests package-owned offline integration.',
-      }
-      : { selected: false, source: 'not-selected' },
   };
   return { ...bundle, scope, journey, buildPack, architecture };
 }
@@ -385,7 +375,6 @@ function runVariant(definition) {
   let persistence;
   let navigation;
   let compiled;
-  let earlyOffline;
   let persistenceArtifactCheck;
   measure(timings, 'planning', () => {
     requireNoErrors(validateExperienceContract(bundle.experience), 'Product Experience');
@@ -404,14 +393,12 @@ function runVariant(definition) {
     const packResult = compileScreenBuildPack(bundle.buildPack, bundle);
     requireNoErrors(packResult, 'screen packs');
     compiled = packResult.compiled;
-    earlyOffline = compileOfflineIntegration(persistence);
   });
 
   let scenario;
   let contradictionCode;
   let usage;
   let obligations;
-  let offlineIntegration;
   let preview;
   let dataModel;
   measure(timings, 'dataAndDesign', () => {
@@ -445,7 +432,6 @@ function runVariant(definition) {
       persistence,
       navigation,
     });
-    offlineIntegration = compileOfflineIntegration(persistence, scenario);
     preview = renderProductExperiencePreview({
       ...bundle,
       compiled,
@@ -513,17 +499,6 @@ function runVariant(definition) {
     requireCondition(durableKinds.has('dataverse') && durableKinds.has('connector'), 'mixed owners missing');
     requireCondition(usage.tables.every((table) => table.owner === 'dataverse'), 'mixed schema duplicates connector data');
   }
-  requireCondition(
-    definition.offline === Boolean(offlineIntegration),
-    `${definition.id} offline selection drifted`,
-  );
-  if (offlineIntegration) {
-    requireCondition(offlineIntegration.owner === 'offline-package', 'offline owner drifted');
-    requireCondition(offlineIntegration.productScopeChanges.length === 0, 'offline changed scope');
-    requireCondition(offlineIntegration.navigationChanges.length === 0, 'offline changed navigation');
-    requireCondition(offlineIntegration.domainTableChanges.length === 0, 'offline changed domain tables');
-    requireCondition(earlyOffline.mediaBindings.length === 0, 'early offline compile bound scenario media');
-  }
 
   timings.afterHardenedPipeline = Number(STAGES.reduce(
     (total, stage) => total + timings[stage],
@@ -534,7 +509,6 @@ function runVariant(definition) {
     domain: definition.scenario,
     productName: bundle.experience.productName,
     mode: persistence.mode,
-    offline: definition.offline,
     screenCount: bundle.scope.screens.length,
     withinBudget,
     requirementCount: bundle.scope.requirements.length,
@@ -566,8 +540,6 @@ function runVariant(definition) {
       (total, binding) => total + binding.mediaAssetKeys.length,
       0,
     ),
-    offlineAdapter: offlineIntegration?.adapter || null,
-    offlineMediaBindingCount: offlineIntegration?.mediaBindings.length || 0,
     previewMode: preview.previewMode,
     designTokensReady: preview.designTokensReady,
     checks: {
@@ -579,7 +551,6 @@ function runVariant(definition) {
       scenarioInvariants: true,
       identityAndMediaBindings: true,
       navigationLayout: true,
-      packageOwnedOffline: true,
       metroStarted: false,
       nativeCaptureRequired: false,
       nativePixelsVerified: false,
@@ -594,7 +565,6 @@ function runVariant(definition) {
       scenario,
       usage,
       obligations,
-      offlineIntegration,
       dataModel,
       structuralPreviewHtml: preview.html,
     },
@@ -613,30 +583,6 @@ function publicRun(run) {
 
 function runAcceptanceMatrix(outputDirectory) {
   const runs = MATRIX.map(runVariant);
-  const pair = runs.filter((run) => MATRIX.find((item) => item.id === run.id)?.pair === 'it-offline');
-  requireCondition(pair.length === 2, 'offline invariance pair is incomplete');
-  const baseline = pair.find((run) => !run.offline);
-  const candidate = pair.find((run) => run.offline);
-  const invariance = validateOfflineInvariance(
-    {
-      experience: baseline.artifacts.bundle.experience,
-      scope: baseline.artifacts.bundle.scope,
-      buildPack: baseline.artifacts.bundle.buildPack,
-      persistence: baseline.artifacts.persistence,
-    },
-    {
-      experience: candidate.artifacts.bundle.experience,
-      scope: candidate.artifacts.bundle.scope,
-      buildPack: candidate.artifacts.bundle.buildPack,
-      persistence: candidate.artifacts.persistence,
-    },
-  );
-  requireNoErrors(invariance, 'offline invariance');
-
-  const warnings = [{
-    code: 'non-dataverse-offline-adapters-not-host-verified',
-    message: 'Connector-only, mixed connector-side, local-repository, and generic media-cache adapter entry points remain execution-time checks; the committed template dependency proves Dataverse offline support only.',
-  }];
   const publicRuns = runs.map(publicRun);
   const summary = {
     schemaVersion: 1,
@@ -654,13 +600,7 @@ function runAcceptanceMatrix(outputDirectory) {
       nativeScreenshotsCaptured: false,
       storyboardAuthority: 'neutral structural projection of canonical planning inputs only',
     },
-    offlineInvariance: {
-      pair: [baseline.id, candidate.id],
-      passed: invariance.ok,
-      changedSurfaces: ['persistence.offline', 'persistenceRevision', 'offline-integration-contract'],
-      unchangedSurfaces: ['Product Experience', 'Product Scope', 'screen packs', 'navigation', 'domain tables'],
-    },
-    warnings,
+    warnings: [],
     runs: publicRuns,
   };
 
@@ -669,7 +609,7 @@ function runAcceptanceMatrix(outputDirectory) {
     examples[mode] = runs.find((run) => run.mode === mode).artifacts.persistence;
   }
   const commerce = runs.find((run) => run.id === 'flight-commerce-connector');
-  const operational = runs.find((run) => run.id === 'humanitarian-dataverse-offline');
+  const operational = runs.find((run) => run.id === 'humanitarian-dataverse');
   const gym = runs.find((run) => run.id === 'gym-maintenance-mixed');
   const mixed = runs.find((run) => run.mode === 'mixed');
 
@@ -681,7 +621,6 @@ function runAcceptanceMatrix(outputDirectory) {
   jsonFile(path.join(outputDirectory, 'route-layout-evidence.json'), Object.fromEntries(
     runs.map((run) => [run.id, run.routeEvidence]),
   ));
-  jsonFile(path.join(outputDirectory, 'offline-invariance.json'), summary.offlineInvariance);
   jsonFile(path.join(outputDirectory, 'timings.json'), {
     measurement: 'local Node.js contract and synthetic-layout execution only',
     comparison: {

@@ -131,14 +131,10 @@ branching:
 
 ```bash
 PERSISTENCE_CONTRACT="<working_dir>/.tmp/persistence-contract.json"
-OFFLINE_INTEGRATION_CONTRACT="<working_dir>/.tmp/offline-integration-contract.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
   --project-root "<working_dir>" --check-artifacts
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-offline-integration.js" \
-  --project-root "<working_dir>" \
-  --scenario ".tmp/scenario-facts.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
 PERSISTENCE_MODE=$(node -e \
@@ -157,10 +153,10 @@ Branch on all four modes:
 
 | `persistence.mode` | Step 8 / 8.5 / 8.85 behavior |
 |---|---|
-| `dataverse` | Run Dataverse reconciliation/writes/services and seed only `dataverseConceptIds`; Step 8.85 accepts only adapter `dataverse-mobile-offline-profile`. |
-| `mixed` | Same Dataverse steps, but only for `dataverseConceptIds`; connector/local concepts remain with their declared owners and are never mirrored as tables. Step 8.85 accepts only adapter `mixed-owner-offline-adapters`. |
-| `connector-only` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Steps 8 and 8.5 are not applicable; Step 8.85 may consume only adapter `connector-offline-adapter`. |
-| `local-prototype` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Steps 8 and 8.5 are not applicable; Step 8.85 may consume only adapter `local-repository`. |
+| `dataverse` | Run Dataverse reconciliation/writes/services and seed only `dataverseConceptIds`; Step 8.85 asks the offline-support question. |
+| `mixed` | Same Dataverse steps, but only for `dataverseConceptIds`; connector/local concepts remain with their declared owners and are never mirrored as tables. Step 8.85 asks the offline-support question. |
+| `connector-only` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Steps 8, 8.5, and 8.85 are not applicable. |
+| `local-prototype` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Steps 8, 8.5, and 8.85 are not applicable. |
 
 For `connector-only` and `local-prototype`, require the approved `## Data
 Model` to say `Not applicable` and render every concept owner. The successful
@@ -364,46 +360,45 @@ error, etc.), surface the failure but continue to Step 8.85 — the app is still
 usable, just empty on first launch. The user can re-run `/add-sample-data`
 later to retry.
 
-### Step 8.85 — Apply the approved offline architecture decision
+Offline support is deliberately not selected from requirements, prompt
+keywords, operating-context assumptions, Product Experience, architecture, or
+persistence. Step 8.85 is the only selection point in `/create-mobile-app`.
 
-Step 8.85 consumes only `.tmp/offline-integration-contract.json`; never
-reconstruct selection from connectivity, persistence mode, plan prose, or a
-Mobile Offline Profile file. Do not ask an offline question here.
+### Step 8.85 — Ask about offline support
 
-- If the artifact is absent, do not invoke any offline skill, package adapter,
-  or profile workflow, and do not create `offline-profile.json` or a placeholder
-  integration artifact. Print
-  `↷ Step 8.85 skipped — no offline integration artifact was selected.`
-- If the artifact exists, require `contractType` to be
-  `offline-integration-contract`, `owner` to be `offline-package`, its
-  `persistenceRevision` to match the current persistence contract, and its
-  adapter to match the four-mode table above. Require `productScopeChanges`,
-  `navigationChanges`, and `domainTableChanges` to remain empty.
-- Require `scenarioRevision` to match `.tmp/scenario-facts.json`,
-  `mediaCacheOwner` to be `offline-package`, and every `mediaBindings[].assetKey`
-  to resolve in that scenario. The package adapter owns caching and fallback;
-  screens may not invent a second cache policy or remote host.
-- For `dataverse` or `mixed`, `mobileOfflineProfileRequired` is `true`. Parse
-  `.datamodel-manifest.json` and require at least one table tied to the current
-  Dataverse concept projection. Missing, malformed, empty, or out-of-projection
-  manifests are `BLOCKED`. Invoke `/setup-offline-profile` directly from the
-  project root with `--orchestrated-create`, `--persistence-contract
-  <working_dir>/.tmp/persistence-contract.json`, and
-  `--offline-integration-contract
-  <working_dir>/.tmp/offline-integration-contract.json`. It consumes the
-  approved integration decision and materialized Dataverse manifest without an
-  offline-selection question.
-- For `connector-only` or `local-prototype`,
-  `mobileOfflineProfileRequired` is `false`. Invoke only the documented package adapter integration
-  named by the contract. Do not create a Mobile Offline
-  Profile, `offline-profile.json`, or any Dataverse table. Inspect the exact
-  package already present in `template/package.json`; if that installed version
-  does not document the named adapter entry point, return `BLOCKED` rather than
-  inventing an API, adding a dependency, or hand-rolling a store/sync engine.
+Ask only for `dataverse` or `mixed`, after `.datamodel-manifest.json` has been
+materialized. For `connector-only` or `local-prototype`, print
+`↷ Step 8.85 skipped — Mobile Offline Profiles require Dataverse tables.` and
+continue to Step 9 without asking.
+
+If `memory-bank.md` `## Offline profile` already has `status: done` or
+`status: not-applicable`, print
+`↷ Step 8.85 skipped — offline profile already <done|not-applicable> from a prior run.`
+and continue to Step 9. Do not add any other skip condition.
+
+Ask one `AskUserQuestion` with no inferred default:
+
+> **Question header**: `Offline support`
+>
+> **Question body**: `Do you want offline support for this app? A Mobile Offline Profile lets users keep working without a connection and sync changes when connectivity returns.`
+>
+> **Options**:
+> - `Yes — configure offline support now`
+> - `No — continue without offline support`
+
+If the user answers Yes, invoke `/setup-offline-profile` directly from the
+project root with `--orchestrated-create`. The flag records that the parent has
+already received an affirmative answer; it is not a planning contract and the
+child must not ask the selection question again.
+
+If the user answers No, skip offline profile setup, write `status:
+not-applicable` under `memory-bank.md` `## Offline profile`, and continue to
+Step 9. Do not create `offline-profile.json` or any placeholder artifact.
 
 The connection, queued, syncing, failed, retry, and conflict runtime UX remains
-owned by the template host/offline package. Product screens, navigation, domain
-jobs, and domain tables remain unchanged for every mode.
+owned by the template host/offline package. The question and its answer do not
+change Product Scope, navigation, domain jobs, domain tables, Journey, or screen
+packs.
 
 Handle `/setup-offline-profile` through the canonical status switch: `DONE`
 continues, `DONE_WITH_CONCERNS:` is surfaced and recorded, and `BLOCKED:`

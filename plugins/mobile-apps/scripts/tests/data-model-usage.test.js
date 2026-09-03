@@ -73,7 +73,6 @@ function contracts() {
     schemaVersion: 1,
     contractType: 'persistence-contract',
     persistenceRevision: 'b'.repeat(64),
-    offline: { selected: false, source: 'not-selected' },
     conceptOwners: [
       { conceptId: 'inspection', conceptName: 'Inspection', owner: 'dataverse', role: 'primary', realization: 'new-table' },
       { conceptId: 'equipment', conceptName: 'Equipment', owner: 'dataverse', role: 'primary', realization: 'existing-table' },
@@ -290,20 +289,6 @@ test('duplicate Dataverse storage for one concept requires typed justification',
   };
   result = compileDataModelUsage(source.input, source);
   assert.equal(result.errors.some((item) => item.code === 'duplicate-concept-storage'), false);
-});
-
-test('offline synchronization tables require approved offline integration', () => {
-  const source = contracts();
-  source.scope.newTables[0].lifecycleJustification.reasons.push(
-    'offline-synchronization-boundary',
-  );
-  assert.ok(compileDataModelUsage(source.input, source).errors.some(
-    (item) => item.code === 'offline-table-without-approval',
-  ));
-  source.persistence.offline = { selected: true, source: 'explicit-request' };
-  assert.equal(compileDataModelUsage(source.input, source).errors.some(
-    (item) => item.code === 'offline-table-without-approval',
-  ), false);
 });
 
 test('compiled usage validates against current contract revisions', () => {

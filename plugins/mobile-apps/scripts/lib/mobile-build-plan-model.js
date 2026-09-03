@@ -45,7 +45,6 @@ const ARTIFACTS = {
   scope: '.tmp/product-scope-contract.json',
   architecture: '.tmp/architecture-decisions.json',
   persistence: '.tmp/persistence-contract.json',
-  offlineIntegration: '.tmp/offline-integration-contract.json',
   journey: '.tmp/workflow-journey-contract.json',
   screens: '.tmp/compiled-screen-build-pack.json',
   scenarioFacts: '.tmp/scenario-facts.json',
@@ -358,30 +357,6 @@ function scopeHealth(scope, experience) {
   return redactBrowserValue(validateScopeContract(scope, experience));
 }
 
-function offlineIntegrationSummary(integration, selected) {
-  const source = integration && typeof integration === 'object' && !Array.isArray(integration)
-    ? integration
-    : {};
-  return {
-    selected,
-    owner: selected && typeof source.owner === 'string'
-      ? redactBrowserText(source.owner)
-      : null,
-    adapter: selected && typeof source.adapter === 'string'
-      ? redactBrowserText(source.adapter)
-      : null,
-    runtimeStates: selected && Array.isArray(source.runtimeStates)
-      ? source.runtimeStates
-        .filter((state) => typeof state === 'string')
-        .map(redactBrowserText)
-      : [],
-    mediaBindingCount: selected && Array.isArray(source.mediaBindings)
-      ? source.mediaBindings.length
-      : 0,
-    profileRequired: selected && source.mobileOfflineProfileRequired === true,
-  };
-}
-
 function dataModelUsageSummary(usage) {
   const present = Boolean(usage && typeof usage === 'object' && !Array.isArray(usage));
   const requirements = present && Array.isArray(usage.requirements) ? usage.requirements : [];
@@ -464,7 +439,6 @@ function makerSummary(
   health,
   approvals,
   persistence,
-  offlineIntegration,
 ) {
   const screenById = new Map(screens.map((screen) => [screen.screenId, screen]));
   const primaryUser = experience?.primaryUser || {};
@@ -494,7 +468,6 @@ function makerSummary(
     userFacingScreenCount: health?.summary?.userFacingScreenCount
       ?? screens.filter((screen) => screen.userFacing !== false).length,
     persistenceMode: persistence?.mode || null,
-    offlineIntegration,
     dataOwnership: persistence?.conceptOwners?.length
       ? persistence.conceptOwners.map((entry) => ({
         name: entry.conceptName,
@@ -555,10 +528,6 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
     artifacts.screens,
     artifacts.progress?.screenStatuses,
   ));
-  const offlineIntegration = offlineIntegrationSummary(
-    artifacts.offlineIntegration,
-    fs.existsSync(resolveInsideProject(projectRoot, ARTIFACTS.offlineIntegration)),
-  );
   const scopeEntities = new Map((artifacts.scope?.dataEntities || []).map(
     (entity) => [entity.name, entity],
   ));
@@ -598,7 +567,6 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
     experience: browserExperience(artifacts.experience),
     scope,
     persistence: redactBrowserValue(artifacts.persistence),
-    offlineIntegration,
     dataModelUsage: dataModelUsageSummary(artifacts.dataModelUsage),
     scenarioFacts: scenarioFactsSummary(artifacts.scenarioFacts),
     journey: redactBrowserValue(artifacts.journey),
@@ -613,7 +581,6 @@ function deriveBuildPlanModel(projectRoot, options = {}) {
       health,
       artifacts.approvals,
       artifacts.persistence,
-      offlineIntegration,
     ),
     dataModelRevision,
     dataModelEditable: dataModelValid && !hasExecutionStarted(projectRoot),

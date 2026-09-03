@@ -254,7 +254,6 @@
                     "independent-ownership-or-security",
                     "repeated-child-records",
                     "independent-querying-or-reporting",
-                    "offline-synchronization-boundary",
                     "explicit-history-or-audit",
                     "many-to-many-relationship"
                   ]

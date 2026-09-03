@@ -134,15 +134,6 @@ function compilePersistenceContract(scope, architecture) {
     if (!ownerById.has(id)) throw new Error(`${entity.name} requires exactly one persistence owner`);
   }
 
-  const offline = architecture.offline || { selected: false, source: 'not-selected' };
-  if (typeof offline.selected !== 'boolean') throw new Error('offline.selected must be boolean');
-  if (offline.selected && !['explicit-request', 'foreground-confirmation'].includes(offline.source)) {
-    throw new Error('Offline can be selected only by explicit request or foreground confirmation');
-  }
-  if (!offline.selected && offline.source !== 'not-selected') {
-    throw new Error('Unselected offline architecture must use source not-selected');
-  }
-
   const conceptOwners = [...ownerById.values()].sort(
     (left, right) => left.conceptId.localeCompare(right.conceptId),
   );
@@ -170,11 +161,6 @@ function compilePersistenceContract(scope, architecture) {
         persistenceConsequence: String(capability.persistenceConsequence || '').trim(),
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
-    offline: {
-      selected: offline.selected,
-      source: offline.source,
-      ...(offline.reason ? { reason: String(offline.reason).trim() } : {}),
-    },
     dataverseConceptIds: idsFor('dataverse'),
     connectorConceptIds: idsFor('connector'),
     localConceptIds: idsFor('local'),

@@ -178,14 +178,13 @@ The Expo config registers the offline package, and `app/_layout.tsx` passes a
 valid root `offline-profile.json` to `PowerAppsProvider`. With no profile file,
 the Dataverse offline adapter remains inactive.
 
-Offline selection belongs to the create workflow's conditional
-`.tmp/offline-integration-contract.json`, not to connectivity metadata or an app
-screen. When selected, the host/offline package owns connection status, queued,
-syncing, failed, retry, and conflict behavior. A Dataverse Mobile Offline
-Profile is authored only when that contract requires one. Connector-only and
-local projects must use only an adapter documented by the installed package
-version; if none is documented, stop rather than inventing an API, adding a
-dependency, creating Dataverse tables, or hand-rolling a sync engine.
+Offline selection is not inferred from requirements, connectivity metadata, or
+an app screen. After Dataverse tables are materialized, `/create-mobile-app`
+asks whether the user wants offline support. Yes invokes
+`/setup-offline-profile`; No leaves the package inactive. Connector-only and
+local projects skip this Dataverse-only profile question. The host/offline
+package owns connection status, queued, syncing, failed, retry, and conflict
+behavior; do not add another dependency or hand-roll a sync engine.
 
 ## Web
 

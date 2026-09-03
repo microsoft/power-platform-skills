@@ -64,14 +64,6 @@ field, relationship, and consumer-link counts. It never exposes the raw usage
 contract and never independently revalidates or infers its consumers; the
 runtime validator remains authoritative.
 
-`.tmp/offline-integration-contract.json` is conditional: it exists only when
-offline was explicitly selected and is watched through the same `ARTIFACTS`
-projection as the always-present contracts. The Build Plan sets
-`offlineIntegration.selected` from artifact existence, never from Product
-Experience connectivity. It exposes only the redacted owner, adapter, runtime
-states, and profile-required flag in Capabilities & data. Absence renders no
-offline capability.
-
 `.tmp/dataverse-concepts.json`, the foreground snapshot/evidence, and
 `.tmp/dataverse-schema-contract.json` exist only when the persistence mode is
 `dataverse` or `mixed`. For `connector-only` or `local-prototype`, render Data

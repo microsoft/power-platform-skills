@@ -75,7 +75,7 @@ test('template preparation is delegated to the deterministic script', () => {
   assert.doesNotMatch(step, /Write `app\/_layout\.tsx`/);
 });
 
-test('template host package owns conditional offline runtime integration', () => {
+test('template host package owns runtime after explicit offline profile choice', () => {
   assert.equal(
     templatePackage.dependencies['@microsoft/power-apps-native-offline'],
     '^0.1.32',
@@ -86,8 +86,9 @@ test('template host package owns conditional offline runtime integration', () =>
   assert.match(templateLayout, /offlineProfile=\{offlineProfile\}/);
   assert.match(templateLayout, /installed offline package own runtime status/);
   assert.match(templateReadme, /do not add another offline dependency/);
-  assert.match(templateReadme, /Connector-only and[\s\S]*documented by the installed package/);
-  assert.match(templateReadme, /stop rather than inventing an API/);
+  assert.match(templateReadme, /not inferred from requirements/);
+  assert.match(templateReadme, /asks whether the user wants offline support/);
+  assert.match(templateReadme, /Connector-only and[\s\S]*skip this Dataverse-only profile question/);
 });
 
 test('environment discovery is non-persisting before the rough plan gate', () => {
@@ -179,10 +180,10 @@ test('browser data-model edits are checked before approvals and mutation', () =>
   assert.match(buildPlanProtocol, /subsequent schema work belongs to `\/edit-app`/);
 });
 
-test('Phase 7 branches on all persistence modes and executes only approved offline work', () => {
+test('Phase 7 asks once before directly invoking Dataverse offline profile setup', () => {
   const dataModel = dataWorkflow.indexOf('### Step 8 — Apply data model');
   const sampleData = dataWorkflow.indexOf('### Step 8.5 — Seed Dataverse sample data');
-  const offline = dataWorkflow.indexOf('### Step 8.85 — Apply the approved offline architecture decision');
+  const offline = dataWorkflow.indexOf('### Step 8.85 — Ask about offline support');
   const native = dataWorkflow.indexOf('### Step 9 — Apply native capabilities');
 
   assert.ok(dataModel < sampleData);
@@ -191,16 +192,7 @@ test('Phase 7 branches on all persistence modes and executes only approved offli
   for (const mode of ['dataverse', 'mixed', 'connector-only', 'local-prototype']) {
     assert.match(dataWorkflow, new RegExp(`\\b${mode}\\b`));
   }
-  for (const adapter of [
-    'dataverse-mobile-offline-profile',
-    'mixed-owner-offline-adapters',
-    'connector-offline-adapter',
-    'local-repository',
-  ]) {
-    assert.match(dataWorkflow, new RegExp(adapter));
-  }
   assert.match(dataWorkflow, /compile-persistence-contract\.js"[\s\S]{0,120}--project-root "<working_dir>" --check-artifacts/);
-  assert.match(dataWorkflow, /compile-offline-integration\.js"[\s\S]{0,120}--project-root "<working_dir>"/);
   const usageCheck = dataWorkflow.indexOf('scripts/validate-data-model-usage.js', dataModel);
   const manifestBuild = dataWorkflow.indexOf(
     'scripts/build-dataverse-operation-manifest.js',
@@ -210,17 +202,21 @@ test('Phase 7 branches on all persistence modes and executes only approved offli
   assert.match(dataWorkflow, /usage check is required in all four modes/);
   assert.match(dataWorkflow, /no Dataverse reconciliation[\s\S]*metadata write/);
   assert.match(dataWorkflow, /mixed[\s\S]*only for `dataverseConceptIds`/);
-  assert.match(dataWorkflow, /Step 8\.85 consumes only `.tmp\/offline-integration-contract\.json`/);
-  assert.match(dataWorkflow, /artifact is absent[\s\S]*do not invoke any offline skill/);
-  assert.match(dataWorkflow, /mobileOfflineProfileRequired` is `true`[\s\S]*\/setup-offline-profile/);
-  assert.match(dataWorkflow, /mobileOfflineProfileRequired` is `false`[\s\S]*documented package adapter integration/);
+  assert.match(dataWorkflow, /AskUserQuestion[\s\S]*Do you want offline support/);
+  assert.match(dataWorkflow, /only for `dataverse` or `mixed`/);
+  assert.match(dataWorkflow, /If the user answers Yes[\s\S]*\/setup-offline-profile[\s\S]*--orchestrated-create/);
+  assert.match(dataWorkflow, /If the user answers No[\s\S]*skip offline profile setup/);
   assert.match(dataWorkflow, /connection, queued, syncing, failed, retry, and conflict[\s\S]*package/);
+  assert.doesNotMatch(dataWorkflow, /offline-integration-contract|compile-offline-integration/);
+  assert.match(
+    dataWorkflow,
+    /Step 8\.85 is the only selection point[\s\S]*AskUserQuestion/,
+  );
   assert.doesNotMatch(
     dataWorkflow.slice(offline, native),
-    /persistence\.offline|screen packs|Dataverse table for (?:connector|local)/,
+    /persistence\.offline|Dataverse table for (?:connector|local)/,
   );
   assert.doesNotMatch(dataWorkflow, /<dataverse_planning_mode>/);
-  assert.doesNotMatch(dataWorkflow, /Asking whether to set up an offline profile|Set one up now\?|question is asked for every Dataverse-backed/);
 });
 
 test('persistence ownership compiles before conditional Dataverse planning and journey packs', () => {
@@ -232,10 +228,6 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   const persistenceCompile = planningWorkflow.indexOf(
     'node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js"',
     architecture,
-  );
-  const offlineCompile = planningWorkflow.indexOf(
-    'node "${CLAUDE_SKILL_DIR}/../../scripts/compile-offline-integration.js"',
-    persistenceCompile,
   );
   const publisherRead = planningWorkflow.indexOf('PUBLISHER_PREFIX_JSON=$(node', dataModel);
   const snapshotRead = planningWorkflow.indexOf(
@@ -250,8 +242,6 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   assert.ok(experience >= 0);
   assert.ok(experience < architecture);
   assert.ok(architecture < persistenceCompile);
-  assert.ok(persistenceCompile < offlineCompile);
-  assert.ok(offlineCompile < gateOne);
   assert.ok(persistenceCompile < gateOne);
   assert.ok(gateOne < dataModel);
   assert.ok(dataModel < publisherRead);
@@ -262,15 +252,13 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   for (const artifact of [
     '.tmp/architecture-decisions.json',
     '.tmp/persistence-contract.json',
-    '.tmp/offline-integration-contract.json',
     '.tmp/dataverse-concepts.json',
   ]) {
     assert.match(planningWorkflow, new RegExp(artifact.replaceAll('.', '\\.')));
   }
   assert.match(planningWorkflow, /compile-persistence-contract\.js --check-artifacts/);
-  assert.match(planningWorkflow, /validateOfflineInvariance/);
   assert.match(planningWorkflow, /never declare `states\.offline`/);
-  assert.match(planningWorkflow, /explicit offline requirement[\s\S]*integration mechanism[\s\S]*not a screen/);
+  assert.doesNotMatch(planningWorkflow, /offline-integration-contract|compile-offline-integration|offline may be selected/i);
   assert.doesNotMatch(
     planningWorkflow,
     /applicable loading, empty, error, permission, offline, and success states/,
@@ -279,9 +267,7 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   assert.match(planningWorkflow, /Every read, create, update, delete, sync, upload, download[\s\S]*exact owner/);
   assert.match(buildPlanProtocol, /\.tmp\/architecture-decisions\.json/);
   assert.match(buildPlanProtocol, /\.tmp\/persistence-contract\.json/);
-  assert.match(buildPlanProtocol, /\.tmp\/offline-integration-contract\.json/);
-  assert.match(buildPlanProtocol, /offlineIntegration\.selected` from artifact existence/);
-  assert.match(buildPlanProtocol, /never from Product[\s\S]*Experience connectivity/);
+  assert.doesNotMatch(buildPlanProtocol, /offline-integration-contract|offlineIntegration/);
 });
 
 test('planning authors and checks data-model usage after schema, Journey, and screen packs', () => {
@@ -349,7 +335,6 @@ test('planning compiles one canonical scenario before preview, data, and builder
   assert.match(planningWorkflow, /deterministic validator only resolves declared[\s\S]*never invents/);
   assert.match(planningWorkflow, /scenarioRevision/);
   assert.match(planningWorkflow, /approvals\.scenarioFacts/);
-  assert.match(planningWorkflow, /package[\s\S]*asset\/cache adapter[\s\S]*media keys/);
   assert.match(buildPlanProtocol, /\.tmp\/scenario-facts\.json/);
   assert.match(buildPlanProtocol, /record, scenario, screen-binding, media,[\s\S]*invariant counts/);
 
@@ -368,8 +353,9 @@ test('planning compiles one canonical scenario before preview, data, and builder
 });
 
 test('setup-offline-profile owns only the Dataverse profile in orchestrated create', () => {
-  assert.match(setupOfflineProfileSkill, /\.tmp\/persistence-contract\.json/);
-  assert.match(setupOfflineProfileSkill, /\.tmp\/offline-integration-contract\.json/);
+  assert.match(setupOfflineProfileSkill, /--orchestrated-create/);
+  assert.match(setupOfflineProfileSkill, /affirmative offline choice/i);
+  assert.doesNotMatch(setupOfflineProfileSkill, /offline-integration-contract/);
   assert.match(setupOfflineProfileSkill, /only authors the Dataverse Mobile Offline Profile/i);
   assert.match(setupOfflineProfileSkill, /does not own product screens, routes, jobs, or domain tables/i);
   assert.match(

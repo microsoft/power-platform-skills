@@ -35,7 +35,6 @@ function decisions(owners, connectors = []) {
       owner,
       reason: `${conceptId} is persisted by its approved architecture owner.`,
     })),
-    offline: { selected: false, source: 'not-selected' },
   };
 }
 
@@ -128,7 +127,7 @@ test('Product Scope concept names must remain unique after canonical normalizati
   );
 });
 
-test('native capabilities cannot silently select persistence or offline mode', () => {
+test('native capabilities cannot silently select persistence mode', () => {
   const input = decisions({ evidence: 'dataverse' });
   input.nativeCapabilities = [{
     id: 'camera',
@@ -138,7 +137,7 @@ test('native capabilities cannot silently select persistence or offline mode', (
   }];
   const contract = compilePersistenceContract(scope({ Evidence: 'new-table' }), input);
   assert.equal(contract.mode, 'dataverse');
-  assert.equal(contract.offline.selected, false);
+  assert.equal(Object.hasOwn(contract, 'offline'), false);
 });
 
 test('connector-only and local projects reject Dataverse planning or mutation artifacts', () => {

@@ -38,7 +38,6 @@ const UNDO_ARTIFACTS = [
   ARTIFACTS.scope,
   ARTIFACTS.approvals,
   ARTIFACTS.scenarioFacts,
-  ARTIFACTS.offlineIntegration,
   PROGRESS_ARTIFACT,
   ...STALE_DATA_MODEL_ARTIFACTS,
 ];
@@ -959,7 +958,7 @@ function applyDataModelEdit(projectRoot, command, now = new Date().toISOString()
   if (scopeValidation) writes[ARTIFACTS.scope] = nextScope;
   const staleArtifacts = [
     ...STALE_DATA_MODEL_ARTIFACTS,
-    ...(scopeValidation ? [ARTIFACTS.scenarioFacts, ARTIFACTS.offlineIntegration] : []),
+    ...(scopeValidation ? [ARTIFACTS.scenarioFacts] : []),
   ];
   transactionalFiles(projectRoot, writes, staleArtifacts.filter(
     (relativePath) => fs.existsSync(resolveInsideProject(projectRoot, relativePath)),

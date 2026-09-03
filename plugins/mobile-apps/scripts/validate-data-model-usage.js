@@ -359,15 +359,6 @@ function compileDataModelUsage(input, source) {
         pointer,
       ));
     }
-    if (scopeTable?.lifecycleJustification?.reasons?.includes('offline-synchronization-boundary')
-      && source.persistence.offline?.selected !== true) {
-      errors.push(finding(
-        'offline-table-without-approval',
-        `${table.logicalName} uses offline synchronization as a lifecycle reason without approved offline integration`,
-        pointer,
-      ));
-    }
-
     const fieldUsageNames = new Set();
     for (const [fieldIndex, field] of (entry.fields || []).entries()) {
       const name = String(field.logicalName || '').toLowerCase();

@@ -17,7 +17,7 @@ function read(directory, fileName) {
   return fs.readFileSync(path.join(directory, fileName), 'utf8');
 }
 
-test('acceptance matrix covers five briefs, all persistence modes, and explicit offline pairing', (context) => {
+test('acceptance matrix covers five briefs and all persistence modes', (context) => {
   const runnerSource = fs.readFileSync(
     path.join(__dirname, '..', 'run-live-build-plan-acceptance.js'),
     'utf8',
@@ -28,7 +28,7 @@ test('acceptance matrix covers five briefs, all persistence modes, and explicit 
 
   const summary = runAcceptanceMatrix(output);
   assert.equal(summary.allPassed, true);
-  assert.equal(summary.runCount, 7);
+  assert.equal(summary.runCount, 5);
   assert.deepEqual(summary.domains, [
     'connectorOnlyDispatch',
     'flightCommerce',
@@ -41,15 +41,6 @@ test('acceptance matrix covers five briefs, all persistence modes, and explicit 
     'dataverse',
     'local-prototype',
     'mixed',
-  ]);
-  assert.equal(MATRIX.filter((entry) => entry.pair === 'it-offline').length, 2);
-  assert.equal(summary.offlineInvariance.passed, true);
-  assert.deepEqual(summary.offlineInvariance.unchangedSurfaces, [
-    'Product Experience',
-    'Product Scope',
-    'screen packs',
-    'navigation',
-    'domain tables',
   ]);
   assert.deepEqual(summary.executionBoundary, {
     metroStarted: false,
@@ -67,7 +58,6 @@ test('acceptance matrix covers five briefs, all persistence modes, and explicit 
     assert.equal(run.checks.scenarioInvariants, true, run.id);
     assert.equal(run.checks.identityAndMediaBindings, true, run.id);
     assert.equal(run.checks.navigationLayout, true, run.id);
-    assert.equal(run.checks.packageOwnedOffline, true, run.id);
     assert.equal(run.fixtureContradictionRejectedAs, 'scenario-invariant-failed');
     assert.match(run.scenarioRevision, /^[a-f0-9]{64}$/);
     assert.ok(run.storyboardScreenIds.length >= 1 && run.storyboardScreenIds.length <= 3);
@@ -99,18 +89,14 @@ test('acceptance matrix covers five briefs, all persistence modes, and explicit 
   assert.equal(connectorOnly.dataverseSkipped, true);
   assert.equal(connectorOnly.dataverseTableCount, 0);
   assert.equal(connectorOnly.ownedConceptCount, 3);
-  const offline = summary.runs.filter((run) => run.offline);
-  assert.ok(offline.every((run) => run.offlineAdapter && run.offlineMediaBindingCount >= 0));
-
-  assert.equal(summary.warnings.length, 1);
-  assert.equal(summary.warnings[0].code, 'non-dataverse-offline-adapters-not-host-verified');
+  assert.deepEqual(summary.warnings, []);
 });
 
 test('flight, gym, and ICRC structural storyboards preserve approved semantic differences', () => {
   const runs = Object.fromEntries([
-    { id: 'flight', scenario: 'flightCommerce', mode: 'connector-only', offline: false },
-    { id: 'gym', scenario: 'gymMaintenance', mode: 'mixed', offline: false },
-    { id: 'icrc', scenario: 'icrcReceiving', mode: 'dataverse', offline: true },
+    { id: 'flight', scenario: 'flightCommerce', mode: 'connector-only' },
+    { id: 'gym', scenario: 'gymMaintenance', mode: 'mixed' },
+    { id: 'icrc', scenario: 'icrcReceiving', mode: 'dataverse' },
   ].map((definition) => [definition.id, runVariant(definition)]));
 
   assert.deepEqual(runs.flight.storyboardScreenIds, ['shop', 'product', 'checkout']);
@@ -179,7 +165,6 @@ test('acceptance runner emits deterministic contract examples and three three-fr
     'navigation-manifest-example.json',
     'data-model-usage-example.json',
     'route-layout-evidence.json',
-    'offline-invariance.json',
     'commerce-structural-storyboard.html',
     'gym-structural-storyboard.html',
     'operational-structural-storyboard.html',

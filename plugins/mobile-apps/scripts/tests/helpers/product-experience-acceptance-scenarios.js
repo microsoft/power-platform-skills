@@ -115,11 +115,9 @@ const ACCEPTANCE_SCENARIOS = {
       outcome: 'A reconciled shipment with evidence and recorded custody',
       surfaceScreenId: 'receiving',
       successOutcome: 'Shipment ICRC-KE-1042 is reconciled and handed to the named custodian',
-      failureRecovery: 'The in-progress receipt resumes locally and retries synchronization when connectivity returns',
+      failureRecovery: 'The in-progress receipt resumes at the same shipment after an interruption',
     }],
-    supportingJobs: [
-      { id: 'recover-sync', statement: 'As a receiver I want failed synchronization to preserve my work and retry', actor: 'ICRC warehouse receiver', outcome: 'Pending work remains visible and can synchronize later', screenId: 'receiving', surfaceKind: 'section' },
-    ],
+    supportingJobs: [],
     requirements: [
       { id: 'view-expected-shipments', jobId: 'receive-shipment', statement: 'View shipments expected at the current receiving location', evidence: 'view expected shipments', screenId: 'receiving', target: 'Open expected shipment', operation: { kind: 'read', entity: 'Shipment', classification: 'schema-backed' } },
       { id: 'receive-items', jobId: 'receive-shipment', statement: 'Scan a shipment barcode or QR code and receive its line items', evidence: 'scan barcodes or QR codes', screenId: 'receiving', target: 'Scan or enter shipment', operation: { kind: 'update', entity: 'Shipment', classification: 'schema-backed' } },
@@ -130,15 +128,14 @@ const ACCEPTANCE_SCENARIOS = {
       { id: 'attach-evidence', jobId: 'receive-shipment', statement: 'Photograph damage and bind it to the discrepancy', evidence: 'photograph damage', screenId: 'evidence', target: 'Save evidence', operation: { kind: 'create', entity: 'Evidence', classification: 'schema-backed' } },
       { id: 'capture-location', jobId: 'receive-shipment', statement: 'Record GPS location with the receiving evidence', evidence: 'record GPS location', screenId: 'evidence', surfaceKind: 'section', target: 'Capture location', operation: { kind: 'update', entity: 'Evidence', classification: 'schema-backed' } },
       { id: 'handoff-custody', jobId: 'receive-shipment', statement: 'Obtain recipient confirmation for the goods handoff', evidence: 'obtain recipient confirmation', screenId: 'handoff', target: 'Confirm handoff', operation: { kind: 'create', entity: 'Custody event', classification: 'schema-backed' } },
-      { id: 'retry-sync', jobId: 'recover-sync', statement: 'Retry synchronization without losing received quantities or evidence', evidence: 'retry synchronization', screenId: 'receiving', mechanism: 'state', target: 'retry' },
     ],
     screens: [
-      { id: 'receiving', title: 'Receiving', pattern: 'queue', classification: 'durable-destination', jobIds: ['receive-shipment', 'recover-sync'], focal: 'Current shipment, pending scans, and synchronization status', signature: 'Resume-safe receiving rail', primaryAction: 'Scan or enter shipment', stateExtras: { retry: 'Retry pending receipt synchronization without discarding local quantities or evidence' } },
+      { id: 'receiving', title: 'Receiving', pattern: 'queue', classification: 'durable-destination', jobIds: ['receive-shipment'], focal: 'Current shipment, expected items, and receiving progress', signature: 'Resume-safe receiving rail', primaryAction: 'Scan or enter shipment' },
       { id: 'shipment', title: 'Shipment', pattern: 'detail', classification: 'nested-detail', parentScreenId: 'receiving', jobIds: ['receive-shipment'], focal: 'Waybill, expected packages, and current receiving progress', signature: 'Waybill progress header', primaryAction: 'Continue receiving', parameterizedBy: 'shipmentId', interactionSignature: 'shipment-workspace' },
       { id: 'inspection', title: 'Inspect', pattern: 'workflow-step', classification: 'bounded-flow-step', jobIds: ['receive-shipment'], focal: 'Package quantity and condition checks in line-item order', signature: 'Condition-by-line sweep', primaryAction: 'Record inspection' },
       { id: 'discrepancy', title: 'Discrepancy', pattern: 'form', classification: 'bounded-flow-step', jobIds: ['receive-shipment'], focal: 'Expected versus received quantity with required reason', signature: 'Difference-first resolution', primaryAction: 'Resolve discrepancy' },
       { id: 'evidence', title: 'Evidence', pattern: 'capture', classification: 'modal-or-immersive-utility', jobIds: ['receive-shipment'], focal: 'Photo evidence anchored to pallet and discrepancy', signature: 'Identifier-locked evidence capture', primaryAction: 'Save evidence', mediaRole: 'supportive', cannotMergeBecause: { kind: 'capture-or-workflow-fit', evidence: 'Full-camera evidence capture needs an identifier-locked viewfinder and permission recovery.' } },
-      { id: 'handoff', title: 'Handoff', pattern: 'confirmation', classification: 'bounded-flow-step', jobIds: ['receive-shipment'], focal: 'Reconciled totals, pending sync, and receiving custodian', signature: 'Custody receipt', primaryAction: 'Confirm handoff' },
+      { id: 'handoff', title: 'Handoff', pattern: 'confirmation', classification: 'bounded-flow-step', jobIds: ['receive-shipment'], focal: 'Reconciled totals and receiving custodian', signature: 'Custody receipt', primaryAction: 'Confirm handoff' },
     ],
     navigation: { pattern: 'stack-only', durableDestinationIds: ['receiving'], visibleTabIds: [], authenticated: false, profileAccess: 'not-applicable', stackOnlyReason: 'One bounded receiving journey begins and ends at the receiving queue.', returnHomeMechanism: 'Completion or Back returns to Receiving.' },
     entities: [
