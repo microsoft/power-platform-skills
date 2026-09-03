@@ -171,6 +171,9 @@
         "Requires rendered checks for third-party open states and portal or overlay content",
         "Plans actual RTL and pseudo-LTR coverage because every new site receives selected and opposite-direction verification",
         "Runs the expanded static audit, fixes deterministic fixed-direction, physical-utility, shorthand, and unicode-bidi errors, and records raw horizontal scrolling assumptions for review and remediation when required",
+        "Builds an ephemeral rendered-verification specification from the reconciled scope and runs every applicable component state and viewport in actual RTL and pseudo-LTR",
+        "The rendered audit checks computed direction, page overflow, clipping, viewport escape, declared overlap, focus order, portals, and the third-party date-picker open state",
+        "Persists only the rendered evidence report and failure or review screenshots, not a second authoritative component manifest",
         "Uses a narrowly scoped bidi-fixed directive only for intentional machine-oriented LTR values, never for localized form UI",
         "Does not create a separate persistent component-inventory JSON file",
         "Requires Phase 5 to reconcile the planned review scope with the actual source and rendered application"
