@@ -68,6 +68,8 @@ const ENGLISH_LABELS = {
     noFindings: 'No readiness findings.',
     location: 'Location',
     rule: 'Rule',
+    scope: 'Scope',
+    affectedLocales: 'Affected locales',
     remediation: 'Planned remediation',
     componentScope: 'Component review scope',
     component: 'Component',
@@ -196,7 +198,7 @@ const SAMPLE_DATA = {
       locale: 'fr-FR',
       direction: 'ltr',
       roles: ['added'],
-      availability: 'available',
+      availability: 'pending-remediation',
     },
   ],
   FILES_DATA: [
@@ -221,6 +223,8 @@ const SAMPLE_DATA = {
         rule: 'directional-geometry-review',
         message: 'Review carousel movement in both directions.',
         remediation: 'Use semantic next and previous movement and browser-test both directions.',
+        scope: 'locale',
+        affectedLocales: ['fr-FR'],
       },
     ],
     componentScope: [
@@ -243,7 +247,7 @@ const SAMPLE_DATA = {
     ],
     physicalExceptions: [],
     scriptFonts: ['Existing font supports Latin source and target content.'],
-    unavailableLocales: [],
+    unavailableLocales: ['fr-FR'],
   },
   VALIDATION_DATA: [
     ['independent-validator', 'Run the independent localization validator.'],
@@ -338,6 +342,11 @@ test('keeps the plan in the source locale when the resulting default changes', (
         availability: 'available',
       },
     ],
+    READINESS_DATA: {
+      ...SAMPLE_DATA.READINESS_DATA,
+      findings: [],
+      unavailableLocales: [],
+    },
   };
 
   const result = run(data, outputPath);
@@ -391,9 +400,17 @@ test('renders an RTL source-language plan with logical layout CSS', () => {
         locale: 'en-US',
         direction: 'ltr',
         roles: ['added'],
-        availability: 'available',
+        availability: 'pending-remediation',
       },
     ],
+    READINESS_DATA: {
+      ...SAMPLE_DATA.READINESS_DATA,
+      findings: [{
+        ...SAMPLE_DATA.READINESS_DATA.findings[0],
+        affectedLocales: ['en-US'],
+      }],
+      unavailableLocales: ['en-US'],
+    },
   };
 
   const result = run(data, outputPath);
@@ -632,7 +649,7 @@ test('rejects contradictory source roles, duplicate locales, and incomplete find
   assert.match(scopeResult.stderr, /componentScope\[0\]\.states/);
 });
 
-test('keeps opposite-direction locales unavailable while blocking findings remain', () => {
+test('requires only the locales named by a readiness finding to remain unavailable', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'localization-plan-'));
   const outputPath = path.join(tempDir, 'unsafe-locale.html');
   const unsafePlan = {
@@ -657,6 +674,8 @@ test('keeps opposite-direction locales unavailable while blocking findings remai
         rule: 'directional-physical-css',
         message: 'Physical alignment blocks RTL.',
         remediation: 'Replace the physical property with its logical equivalent.',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
       }],
       unavailableLocales: [],
     },
@@ -667,8 +686,81 @@ test('keeps opposite-direction locales unavailable while blocking findings remai
   assert.equal(result.status, 1);
   assert.match(
     result.stderr,
-    /Blocking bidirectional findings require every opposite-direction locale/
+    /requires affected locale ar-SA to remain pending-remediation/
   );
+});
+
+test('rejects a plan that makes the selected default locale pending', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'localization-plan-'));
+  const outputPath = path.join(tempDir, 'pending-default.html');
+  const pendingDefault = {
+    ...SAMPLE_DATA,
+    OPERATION: 'reconfigure',
+    CONFIGURATION_DATA: {
+      ...SAMPLE_DATA.CONFIGURATION_DATA,
+      defaultLocale: { value: 'fr-FR', status: 'changed' },
+    },
+    LOCALES_DATA: [
+      {
+        ...SAMPLE_DATA.LOCALES_DATA[0],
+        roles: ['source', 'existing'],
+      },
+      {
+        ...SAMPLE_DATA.LOCALES_DATA[1],
+        roles: ['default', 'added'],
+      },
+    ],
+  };
+
+  const result = run(pendingDefault, outputPath);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /default locale must remain available/i);
+});
+
+test('keeps an existing ready RTL locale available when only a new RTL locale is affected', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'localization-plan-'));
+  const outputPath = path.join(tempDir, 'isolated-arabic-finding.html');
+  const isolatedPlan = {
+    ...SAMPLE_DATA,
+    LOCALES_DATA: [
+      SAMPLE_DATA.LOCALES_DATA[0],
+      {
+        language: 'Hebrew',
+        locale: 'he-IL',
+        direction: 'rtl',
+        roles: ['existing'],
+        availability: 'available',
+      },
+      {
+        language: 'Arabic',
+        locale: 'ar-SA',
+        direction: 'rtl',
+        roles: ['added'],
+        availability: 'pending-remediation',
+      },
+    ],
+    READINESS_DATA: {
+      ...SAMPLE_DATA.READINESS_DATA,
+      transition: 'mixed -> mixed',
+      findings: [{
+        severity: 'error',
+        file: 'src/components/ArabicCalendar.tsx',
+        line: 42,
+        rule: 'localized-font-failure',
+        message: 'The Arabic calendar font is unreadable.',
+        remediation: 'Load the approved Arabic script font for this component.',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
+      }],
+      unavailableLocales: ['ar-SA'],
+    },
+  };
+
+  const result = run(isolatedPlan, outputPath);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fs.existsSync(outputPath), true);
 });
 
 test('rejects plans for temporarily unavailable localization modes', () => {

@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const { detectBrowserLaunchOptions } = require('./lib/detect-browser');
 const {
+  MANIFEST_NAME,
+  validateLocalizationManifestShape,
+} = require('./lib/localization-config');
+const {
   runRenderedBidirectionalAudit,
 } = require('./lib/rendered-bidirectional-readiness');
 
@@ -59,11 +63,35 @@ async function main() {
   const spec = JSON.parse(
     args.specInline ?? fs.readFileSync(args.specPath, 'utf8')
   );
+  const manifestPath = path.join(args.projectRoot, MANIFEST_NAME);
+  let localizationContext = null;
+  if (fs.existsSync(manifestPath)) {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const manifestErrors = validateLocalizationManifestShape(manifest);
+    if (manifestErrors.length > 0) {
+      throw new Error(
+        `${MANIFEST_NAME} is invalid:\n- ${manifestErrors.join('\n- ')}`
+      );
+    }
+    localizationContext = {
+      locales: manifest.locales,
+      defaultLocale: manifest.defaultLocale,
+      mode: manifest.mode,
+      unavailableLocales: Array.isArray(manifest.unavailableLocales)
+        ? manifest.unavailableLocales
+        : [],
+    };
+  } else if (spec.runtimeSwitching === true) {
+    throw new Error(
+      `${MANIFEST_NAME} is required when runtimeSwitching is enabled.`
+    );
+  }
   const { chromium } = loadPlaywright(args.projectRoot);
   const result = await runRenderedBidirectionalAudit({
     url: args.url,
     spec,
     chromium,
+    localizationContext,
     browserLaunchOptions: detectBrowserLaunchOptions(),
     evidenceDir: args.evidenceDir,
   });

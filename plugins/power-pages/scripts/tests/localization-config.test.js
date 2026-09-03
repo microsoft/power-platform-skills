@@ -308,6 +308,10 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
     unavailableLocales: ['ar-SA'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
       findings: [],
       renderedFindings: [{
         caseId: 'calendar--open--desktop--ar',
@@ -315,6 +319,8 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
         severity: 'error',
         message: 'Expected rtl but found ltr.',
         selector: '.calendar',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
       }],
     },
   };
@@ -323,14 +329,26 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
   assert.match(
     validateLocalizationManifestShape({
       ...manifest,
-      unavailableLocales: undefined,
+      schemaVersion: 2,
     }).join('\n'),
-    /Pending bidirectional remediation requires at least one unavailable locale/
+    /schemaVersion must be 1/
   );
   assert.match(
     validateLocalizationManifestShape({
       ...manifest,
-      bidirectionalReadiness: { status: 'unknown', findings: [] },
+      unavailableLocales: undefined,
+    }).join('\n'),
+    /unavailableLocales must exactly match/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      bidirectionalReadiness: {
+        status: 'unknown',
+        localeReadiness: manifest.bidirectionalReadiness.localeReadiness,
+        findings: [],
+        renderedFindings: [],
+      },
     }).join('\n'),
     /bidirectionalReadiness\.status must be/
   );
@@ -340,28 +358,37 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
       unavailableLocales: [],
       bidirectionalReadiness: {
         status: 'ready',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'ready' },
+        },
         findings: [],
         renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
       },
     }).join('\n'),
-    /Ready bidirectional readiness cannot contain unresolved findings/
+    /requires locale ar-SA to be pending-remediation/
   );
   assert.match(
     validateLocalizationManifestShape({
       ...manifest,
       bidirectionalReadiness: {
         status: 'approved-with-limitations',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'approved-with-limitations' },
+        },
         findings: [],
         renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
       },
     }).join('\n'),
-    /must be a review finding for approved-with-limitations/
+    /requires locale ar-SA to be pending-remediation/
   );
   assert.match(
     validateLocalizationManifestShape({
       ...manifest,
       bidirectionalReadiness: {
         status: 'pending-remediation',
+        localeReadiness: manifest.bidirectionalReadiness.localeReadiness,
         findings: [],
         renderedFindings: [{ severity: 'error' }],
       },
@@ -398,6 +425,8 @@ test('requires explicit maker disposition for approved bidirectional limitations
     severity: 'review',
     message: 'The vendor calendar uses a culturally neutral next-page icon.',
     selector: '.calendar',
+    scope: 'locale',
+    affectedLocales: ['ar-SA'],
   };
 
   assert.match(
@@ -405,17 +434,25 @@ test('requires explicit maker disposition for approved bidirectional limitations
       ...base,
       bidirectionalReadiness: {
         status: 'approved-with-limitations',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'approved-with-limitations' },
+        },
         findings: [],
         renderedFindings: [limitation],
       },
     }).join('\n'),
-    /disposition must record the maker-approved limitation/
+    /requires only maker-approved review findings/
   );
 
   assert.deepEqual(validateLocalizationManifestShape({
     ...base,
     bidirectionalReadiness: {
       status: 'approved-with-limitations',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'approved-with-limitations' },
+      },
       findings: [],
       renderedFindings: [{
         ...limitation,
@@ -429,11 +466,45 @@ test('requires explicit maker disposition for approved bidirectional limitations
     },
   }), []);
 
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        ...limitation,
+        disposition: {
+          status: 'maker-approved',
+          impact: 'Calendar navigation remains usable; only the icon treatment differs.',
+          evidence: 'docs/bidirectional-evidence/run-1/calendar.png',
+          approvedAt: '2026-01-01T00:00:00.000Z',
+        },
+      }, {
+        caseId: 'calendar--open--narrow--ar',
+        rule: 'rendered-clipping',
+        severity: 'error',
+        message: 'The calendar clips at narrow width.',
+        selector: '.calendar',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
+      }],
+    },
+  }), []);
+
   assert.match(
     validateLocalizationManifestShape({
       ...base,
       bidirectionalReadiness: {
         status: 'approved-with-limitations',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'approved-with-limitations' },
+        },
         findings: [],
         renderedFindings: [{
           ...limitation,
@@ -455,17 +526,24 @@ test('requires explicit maker disposition for approved bidirectional limitations
       unavailableLocales: ['ar-SA'],
       bidirectionalReadiness: {
         status: 'pending-remediation',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'pending-remediation' },
+        },
         findings: [{
+          severity: 'error',
           file: 'src/app.tsx',
           line: 1,
           rule: 'fixed-direction',
           message: 'Fixed direction must be remediated.',
           fingerprint: 'abc123',
+          scope: 'direction',
+          affectedLocales: ['ar-SA'],
         }],
         renderedFindings: [],
       },
     }).join('\n'),
-    /findings\[0\]\.severity must be/
+    /findings\[0\]\.direction must be/
   );
 
   assert.match(
@@ -473,17 +551,24 @@ test('requires explicit maker disposition for approved bidirectional limitations
       ...base,
       bidirectionalReadiness: {
         status: 'ready',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'ready' },
+        },
         findings: [{
           severity: 'review',
           file: 'src/styles.css',
           line: 1,
           rule: 'horizontal-scroll-review',
           message: 'Review horizontal scrolling.',
+          fingerprint: 'abc123',
+          scope: 'locale',
+          affectedLocales: ['ar-SA'],
         }],
         renderedFindings: [],
       },
     }).join('\n'),
-    /Ready bidirectional readiness cannot contain unresolved findings/
+    /Undisposed review finding/
   );
 
   assert.match(
@@ -492,6 +577,10 @@ test('requires explicit maker disposition for approved bidirectional limitations
       unavailableLocales: ['ar-SA'],
       bidirectionalReadiness: {
         status: 'pending-remediation',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'pending-remediation' },
+        },
         findings: [],
         renderedFindings: [{
           ...limitation,
@@ -507,6 +596,93 @@ test('requires explicit maker disposition for approved bidirectional limitations
     }).join('\n'),
     /error findings cannot have maker-approved dispositions/
   );
+});
+
+test('scopes readiness findings to only the locales proven affected', () => {
+  const base = {
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'i18next',
+    packageVersion: '25.0.0',
+    defaultLocale: 'en-US',
+    locales: ['en-US', 'he-IL', 'ar-SA'],
+    translationMethod: 'agent',
+    lastOperation: 'add-languages',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    generatedFiles: [],
+    managedFiles: [],
+    resourcePaths: {},
+    adoptedExistingConfiguration: false,
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+  };
+  const arabicFinding = {
+    caseId: 'arabic-calendar--open--desktop--ar',
+    rule: 'localized-font-failure',
+    severity: 'error',
+    message: 'The Arabic calendar font is unreadable.',
+    selector: '.calendar',
+    scope: 'locale',
+    affectedLocales: ['ar-SA'],
+  };
+
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'he-IL': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [arabicFinding],
+    },
+  }), []);
+
+  const directionErrors = validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'he-IL': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        ...arabicFinding,
+        scope: 'direction',
+        direction: 'rtl',
+      }],
+    },
+  }).join('\n');
+  assert.match(directionErrors, /must affect every configured rtl locale/);
+
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['he-IL', 'ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'he-IL': { status: 'pending-remediation' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        ...arabicFinding,
+        scope: 'direction',
+        direction: 'rtl',
+        affectedLocales: ['he-IL', 'ar-SA'],
+      }],
+    },
+  }), []);
 });
 
 test('detects the persisted single-site language from document attributes', (t) => {
