@@ -1068,8 +1068,10 @@ If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in t
 Step 5 already performs the idempotent structural update and postcondition
 checks. Do not mutate `_layout.tsx` again here. Verify only that the prepared
 layout still contains `SafeAreaProvider`, `tamaguiConfig`, `offlineProfile`,
-and the host light/dark theme props; if any are missing, rerun the Step 5
-preparation script and stop if it reports an unsupported layout.
+and the color-scheme-driven `defaultTheme`. If brand-token wiring has already
+run, also verify its explicit `theme` and `darkTheme` props. If any applicable
+contract element is missing, rerun the Step 5 preparation script and stop if
+it reports an unsupported layout.
 
 ### Step 6.6 — Scaffold TypeScript gate
 

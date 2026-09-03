@@ -229,7 +229,7 @@ test('root preparation reuses semicolonless combined, named, and default imports
 import ReactNative, { useColorScheme } from 'react-native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { PowerAppsProvider } from '@microsoft/power-apps-native-host'
-import tamaguiConfig from '../tamagui.config'
+import tamaguiConfig, { appLightTheme } from '../tamagui.config'
 import authConfig from '../auth.config.json'
 import { offlineProfile } from '../offline'
 
@@ -252,6 +252,7 @@ export default function RootLayout() {
     1,
   );
   assert.strictEqual((result.match(/from ['"]\.\.\/tamagui\.config['"]/g) || []).length, 1);
+  assert.match(result, /import tamaguiConfig,\s*\{\s*appLightTheme\s*\}\s*from\s*'\.\.\/tamagui\.config'/s);
   assert.match(result, /import ReactNative,\s*\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*'react-native'/s);
   assert.doesNotMatch(result, /\blightTheme\b|\bdarkTheme\b/);
   assert.match(result, /<SafeAreaProvider>[\s\S]*<PowerAppsProvider/);

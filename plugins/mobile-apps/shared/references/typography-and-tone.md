@@ -122,11 +122,7 @@ Complete copy-paste block for `expo-font` + Tamagui wiring:
 
 ```tsx
 // app/_layout.tsx
-import {
-  darkTheme,
-  lightTheme,
-  PowerAppsProvider,
-} from '@microsoft/power-apps-native-host'
+import { PowerAppsProvider } from '@microsoft/power-apps-native-host'
 import { useFonts } from 'expo-font'
 import * as SplashScreen from 'expo-splash-screen'
 import { useEffect } from 'react'
@@ -156,8 +152,6 @@ export default function RootLayout() {
       // Keep the existing msalConfig, powerConfig, and schemaMap props.
       tamaguiConfig={tamaguiConfig}
       defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
-      theme={lightTheme}
-      darkTheme={darkTheme}
     >
       {/* ... */}
     </PowerAppsProvider>

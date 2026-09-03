@@ -199,11 +199,15 @@ function ensureNamedImports(source, moduleName, requiredNames) {
   return source.replace(importPattern, replacement);
 }
 
-function ensureDefaultImport(source, moduleName, localName) {
+function defaultImportPattern(moduleName, localName) {
   const modulePattern = escapeRegExp(moduleName);
-  const importPattern = new RegExp(
-    `import\\s+${escapeRegExp(localName)}\\s+from\\s*['"]${modulePattern}['"][ \\t]*;?`,
+  return new RegExp(
+    `import\\s+${escapeRegExp(localName)}\\s*(?:,\\s*(?:\\{[^}]*\\}|\\*\\s+as\\s+[A-Za-z_$][\\w$]*))?\\s+from\\s*['"]${modulePattern}['"][ \\t]*;?`,
   );
+}
+
+function ensureDefaultImport(source, moduleName, localName) {
+  const importPattern = defaultImportPattern(moduleName, localName);
   if (importPattern.test(source)) return source;
   return `import ${localName} from '${moduleName}';\n${source}`;
 }
@@ -393,7 +397,7 @@ function verifyRootLayout(source) {
     ['SafeAreaProvider import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\bSafeAreaProvider\b[^}]*\}\s*from\s*['"]react-native-safe-area-context['"]/],
     ['useColorScheme import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*['"]react-native['"]/],
     ['colorScheme binding', /\b(?:const|let)\s+colorScheme\s*=\s*useColorScheme\s*\(\s*\)/],
-    ['Tamagui config import', /tamaguiConfig\s+from\s*['"]\.\.\/tamagui\.config['"]/],
+    ['Tamagui config import', defaultImportPattern('../tamagui.config', 'tamaguiConfig')],
   ];
 
   const missing = requiredChecks
