@@ -65654,6 +65654,7 @@ function progress(extra) {
 
 // packages/core/dist/mcp/server.js
 init_backups();
+init_logger();
 
 // packages/core/dist/api/dynamic-resolvers.js
 init_logger();
@@ -66036,7 +66037,8 @@ async function buildUpdateProperties(ctx, envId, flow, input) {
       const current = await ctx.getClient().getFlow(envId, flow);
       effectiveRefs = current.properties?.connectionReferences;
       refsFromFlow = !!effectiveRefs;
-    } catch {
+    } catch (err) {
+      logger.warn(`buildUpdateProperties: could not read current connectionReferences for ${flow} in ${envId} (${err instanceof Error ? err.message : String(err)}). Existing bindings will not be preserved for this definition-only update; pass connectionRefs explicitly to keep them.`);
     }
   }
   let enrichedRefs = effectiveRefs;
