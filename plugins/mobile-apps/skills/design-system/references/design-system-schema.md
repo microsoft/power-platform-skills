@@ -244,6 +244,22 @@ Missing sections → skill surfaces error, asks user to re-run.
 
 `brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b imports it into `tamagui.config.ts` using [`tamagui-integration.md`](./tamagui-integration.md) and its `withSemanticAliases` helper:
 
+The file contract is exact. Export `tokens`, not `brandTokens`. These keys are
+required; additional token groups and dark values are allowed:
+
+```ts
+export const tokens = {
+  color: {
+    bg: '#...', surface: '#...', primary: '#...', accent: '#...',
+    text: '#...', textMuted: '#...', border: '#...',
+    statusSuccess: '#...', statusWarning: '#...', statusDanger: '#...', statusInfo: '#...',
+  },
+  typography: { heading: { family: '...', size: 22, weight: 700, lineHeight: 1.2, tracking: 0 } },
+  space: {}, size: {}, radius: {},
+} as const;
+export type BrandTokens = typeof tokens;
+```
+
 ```ts
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME
 import { createTokens } from '@tamagui/core';

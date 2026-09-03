@@ -20,11 +20,24 @@ node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
   --contract-output "<working_dir>/.tmp/product-experience-final-preview-contract.json"
 ```
 
+This command is mandatory and its canonical output file must remain present for
+React Native screen builders. If it fails, repair the generated brand artifact
+named by the finding and rerun this same command. Do not author
+`_plan_preview.html` until the command returns `"ok": true`. Do not substitute
+Python HTML parsing, a custom script, visual inspection, TypeScript compilation,
+or a different sidecar path for this command.
+
 Read the prepared contract. It is a projection of the same canonical
 authorities supplied to native screen builders: the root experience directive,
 semantically selected screen packs, navigation, scenario facts, generated
 tokens, and signature-component revision. Do not edit it or replace its screen
 selection.
+
+Test fixtures, snapshots, and benchmark implementations are prohibited
+authoring inputs. Generate the experience only from the current run's contracts
+and approved design references. Never read a previous `_plan_preview.html` as an
+input; author the current file from the prepared contract and generated brand
+artifacts only.
 
 ## Author the HTML
 
@@ -133,6 +146,13 @@ node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
   --project-root "<working_dir>"
 ```
 
+This exact command is the only completion validator for the final preview. A
+custom HTML parser, browser glance, file-size check, or TypeScript check is not a
+substitute. Preserve
+`.tmp/product-experience-final-preview-contract.json` after it passes, and do
+not return `DONE` unless the command's JSON contains literal `"ok": true` plus
+zero fixture-isolation findings.
+
 The validator always runs semantic-contract validation plus a portable
 parser-based structural quality gate. That mandatory gate catches ineffective
 authored styling, missing phone frames or hierarchy, excessive visible evidence,
@@ -142,7 +162,7 @@ the same command also measures computed desktop/mobile layout for frame size,
 overflow/clipping, visible primary actions, first-viewport hierarchy, and
 unstyled rendered controls. It never installs a browser. Browser absence,
 launch failure, or probe unavailability is a non-blocking
-`preview-rendered-layout-skipped` warning; parser and semantic gates still run.
+`layout-validation-skipped` warning; parser and semantic gates still run.
 
 If authored-HTML semantic findings, mandatory structural findings, or
 successfully computed browser-layout findings fail, stay in this existing

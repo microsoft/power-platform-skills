@@ -14,7 +14,7 @@ const {
   validateHtml,
   validateStructuralQuality,
 } = require('../validate-product-experience-preview');
-const { runVariant } = require('../run-live-build-plan-acceptance');
+const { runVariant } = require('./helpers/run-live-build-plan-acceptance');
 const {
   flightPreview,
   gymPreview,
@@ -84,7 +84,7 @@ function contractFor(run, tokenFixture) {
     scenario: run.artifacts.scenario,
     navigation: run.artifacts.navigation,
     tokenContract,
-    signatureComponentsRevision: sha256Hex(`fixture:${run.domain}:signature-components`),
+    signatureComponentsSource: `export interface ${run.domain}SignatureProps { state: 'ready' | 'busy'; }\n`,
   });
 }
 

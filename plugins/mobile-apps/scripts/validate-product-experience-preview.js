@@ -8,7 +8,14 @@ const { buildNavigationManifest } = require('./compile-navigation-manifest');
 const { compileScreenBuildPack } = require('./compile-screen-build-pack');
 const { readDesignTokenContract } = require('./lib/design-token-contract');
 const { validateRenderedLayout } = require('./lib/final-preview-browser-layout');
+const {
+  validatePreviewOutputIsolation,
+  validateProductionAuthoringIsolation,
+  validateProductionSourceIsolation,
+  validateProjectSourceIsolation,
+} = require('./lib/final-preview-isolation');
 const { validateStructuralQuality } = require('./lib/final-preview-quality');
+const { buildSharedDesignInputs } = require('./lib/shared-design-inputs');
 const {
   isDescendant,
   normalizedText,
@@ -146,21 +153,6 @@ function scenarioEvidence(screenId, facts) {
   return candidates;
 }
 
-function navigationContract(navigation) {
-  const projectDestination = (destination) => ({
-    destinationId: destination.destinationId,
-    label: destination.label,
-    rootScreenId: destination.rootScreenId,
-    targetPath: destination.targetPath,
-  });
-  return {
-    pattern: navigation.pattern,
-    visibleDestinations: (navigation.visibleTabs || []).map(projectDestination),
-    durableDestinations: (navigation.durableDestinations || []).map(projectDestination),
-    returnHomeMechanism: navigation.returnHomeMechanism,
-  };
-}
-
 function buildFinalPreviewContract({
   experience,
   scope,
@@ -169,10 +161,16 @@ function buildFinalPreviewContract({
   scenario,
   navigation,
   tokenContract,
-  signatureComponentsRevision,
+  signatureComponentsSource,
 }) {
   const selected = selectPreviewScreens(compiled, journey, navigation);
   const selectedScreenIds = selected.map((screen) => screen.screenId);
+  const sharedDesignInputs = buildSharedDesignInputs({
+    experienceDirective: compiled.experienceDirective,
+    navigation,
+    tokenContract,
+    signatureComponentsSource,
+  });
   const contract = {
     schemaVersion: 1,
     contractType: 'product-experience-final-preview',
@@ -185,14 +183,15 @@ function buildFinalPreviewContract({
       scenario: scenario.scenarioRevision,
       navigation: navigation.manifestRevision,
       designTokens: tokenContract.revision,
-      signatureComponents: signatureComponentsRevision,
+      signatureComponents: sharedDesignInputs.signatureComponents.revision,
     },
-    experienceDirective: compiled.experienceDirective,
+    sharedDesignInputs,
+    experienceDirective: sharedDesignInputs.experienceDirective,
     selectedScreenIds,
-    navigation: navigationContract(navigation),
+    navigation: sharedDesignInputs.navigation,
     designTokens: {
-      colors: tokenContract.colors,
-      typography: tokenContract.typography,
+      colors: sharedDesignInputs.tokens.colors,
+      typography: sharedDesignInputs.tokens.typography,
       css: tokenCss(tokenContract),
     },
     landmarks: {
@@ -521,11 +520,20 @@ function main(argv) {
       if (!fs.existsSync(file)) return fatal(TOOL, `missing ${label}: ${file}`);
     }
     const sources = loadSources(paths);
-    const sourceErrors = validateSources(sources);
+    const pluginRoot = path.resolve(__dirname, '..');
+    const productionIsolation = validateProductionAuthoringIsolation(pluginRoot);
+    const productionSourceIsolation = validateProductionSourceIsolation(pluginRoot);
+    const projectIsolation = validateProjectSourceIsolation(projectRoot);
+    const sourceErrors = [
+      ...validateSources(sources),
+      ...productionIsolation.errors,
+      ...productionSourceIsolation.errors,
+      ...projectIsolation.errors,
+    ];
     if (sourceErrors.length) return emitResult({ ok: false, tool: TOOL, errors: sourceErrors, warnings: [] });
     const contract = buildFinalPreviewContract({
       ...sources,
-      signatureComponentsRevision: sha256Hex(sources.signatureComponentsSource),
+      signatureComponentsSource: sources.signatureComponentsSource,
     });
     if (paths.contractOutput) {
       atomicWriteJson(paths.contractOutput, contract);
@@ -536,6 +544,14 @@ function main(argv) {
         contractPath: paths.contractOutput,
         selectedScreenIds: contract.selectedScreenIds,
         contractRevision: contract.contractRevision,
+        fixtureIsolation: {
+          productionPromptFilesScanned: productionIsolation.scannedFiles,
+          productionSourceFilesScanned: productionSourceIsolation.scannedFiles,
+          projectSourceFilesScanned: projectIsolation.scannedFiles,
+          forbiddenReferenceCount: productionIsolation.errors.length,
+          productionTestImportCount: productionSourceIsolation.errors.length,
+          forbiddenImportCount: projectIsolation.errors.length,
+        },
         errors: [],
         warnings: [],
       });
@@ -543,6 +559,7 @@ function main(argv) {
     if (!fs.existsSync(paths.preview)) return fatal(TOOL, `missing preview: ${paths.preview}`);
     const html = fs.readFileSync(paths.preview, 'utf8');
     const semanticValidation = validateHtml(html, contract);
+    const outputIsolation = validatePreviewOutputIsolation(html);
     const structuralValidation = validateStructuralQuality(
       html,
       contract,
@@ -560,12 +577,13 @@ function main(argv) {
       };
     const errors = [
       ...semanticValidation.errors,
+      ...outputIsolation.errors,
       ...structuralValidation.errors,
       ...renderedLayout.errors,
     ];
     const warnings = renderedLayout.status === 'skipped'
       ? [finding(
-        'preview-rendered-layout-skipped',
+        'layout-validation-skipped',
         `optional rendered-layout validation skipped: ${renderedLayout.reason}`,
       )]
       : [];
@@ -592,6 +610,15 @@ function main(argv) {
           reason: renderedLayout.reason,
           viewports: renderedLayout.viewports,
         },
+      },
+      fixtureIsolation: {
+        productionPromptFilesScanned: productionIsolation.scannedFiles,
+        productionSourceFilesScanned: productionSourceIsolation.scannedFiles,
+        projectSourceFilesScanned: projectIsolation.scannedFiles,
+        forbiddenReferenceCount: productionIsolation.errors.length,
+        productionTestImportCount: productionSourceIsolation.errors.length,
+        forbiddenImportCount: projectIsolation.errors.length,
+        fixtureMarkerCount: outputIsolation.leakedMarkers.length,
       },
       errors,
       warnings,

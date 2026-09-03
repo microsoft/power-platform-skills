@@ -95,16 +95,13 @@ Optional flags accepted by their owning routes:
 - Snapshot an existing design before replacement and cap `brand/.history/` at
   50 entries.
 - The existing design-system model execution authors the journey preview from
-  generated tokens, signature interfaces, and canonical scenario, navigation,
-  identity, media, and screen contracts. Deterministic code validates that HTML
-  but never chooses its final composition. It never claims React Native or
-  native pixel verification.
-- Final previews must pass the portable semantic and structural gates. A
-  supported already-installed browser may add computed-layout findings; browser
-  absence never blocks completion.
-- Any authored-HTML findings receive at most one focused repair in the same
-  design-system execution. Never rerun planning or regenerate the design system
-  for preview-only findings.
+  generated tokens, signatures, and canonical contracts. Deterministic code
+  validates HTML but never chooses composition or claims native rendering.
+- Test fixtures, snapshots, benchmark implementations, and prior generated
+  previews are prohibited authoring inputs. Use only the current run's approved
+  contracts and selected design references.
+- Final previews follow `final-experience-preview.md`: portable gates, optional
+  browser findings, and at most one same-execution HTML repair.
 - Do not start Metro, attach Dev Player, or capture native screenshots in this
   skill.
 - One major design change per prompt; maximum two direction regenerations.
@@ -112,17 +109,18 @@ Optional flags accepted by their owning routes:
 ## Write boundary
 
 Creation and review modes write only `brand/`, `_design_vibe.html`,
-`_plan_preview.html`, and `memory-bank.md`. An explicit theme operation may
-write the template's theme registry/provider/hook and patch `app/_layout.tsx`.
-No mode rewrites screens, services, data, or canonical planning contracts.
+`_plan_preview.html`, `.tmp/product-experience-final-preview-contract.json`, and
+`memory-bank.md`. An explicit theme operation may write the template's theme
+registry/provider/hook and patch `app/_layout.tsx`. No mode rewrites screens,
+services, data, or canonical planning contracts.
 
 ## Completion
 
 Use the selected workflow's status contract. In orchestrator mode, `DONE`
-requires current required brand artifacts, applicable contract checks, and
-`_plan_preview.html`. Return `NEEDS_CONTEXT` for one approval-relevant missing
-decision and `BLOCKED` for invalid/stale contracts or unsafe input. Never hide a
-failure behind a generic fallback.
+requires all referenced artifacts and final validator literal `"ok": true`. Return
+`NEEDS_CONTEXT` for one missing decision and `BLOCKED` for invalid/stale
+contracts or unsafe input. Never hide failure behind a fallback or substitute
+check.
 
 Downstream consumers:
 

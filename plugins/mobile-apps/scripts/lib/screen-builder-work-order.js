@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { validateGeneratedSourceIsolation } = require('./final-preview-isolation');
 const { canonicalJson, sha256Hex } = require('./product-experience-contracts');
 const { projectScreenFacts } = require('../validate-fixture-scenarios');
 
@@ -18,6 +19,7 @@ const FIELDS = new Set([
   'targetPath',
   'compiledRevision',
   'experienceDirective',
+  'sharedDesignInputs',
   'pack',
   'scenarioFacts',
   'routeContract',
@@ -72,6 +74,7 @@ function normalizeWorkOrder(value, {
   fileSystem = fs,
   compiledScreenBuildPack,
   compiledScenarioFacts,
+  sharedDesignInputs,
 } = {}) {
   if (!projectRoot) throw new Error('projectRoot is required');
   if (!isPlainObject(value)) throw new Error('screen work order must be an object');
@@ -100,6 +103,24 @@ function normalizeWorkOrder(value, {
   if (canonicalJson(value.experienceDirective)
     !== canonicalJson(compiledScreenBuildPack.experienceDirective)) {
     throw new Error('experienceDirective does not match the current compiled screen build pack');
+  }
+  if (!isPlainObject(sharedDesignInputs)
+    || sharedDesignInputs.contractType !== 'shared-product-design-inputs') {
+    throw new Error('current shared design inputs are required');
+  }
+  const designInputContent = structuredClone(sharedDesignInputs);
+  const designInputRevision = designInputContent.designInputRevision;
+  delete designInputContent.designInputRevision;
+  if (designInputRevision !== sha256Hex(canonicalJson(designInputContent))) {
+    throw new Error('current shared design input revision does not match its content');
+  }
+  if (!isPlainObject(value.sharedDesignInputs)
+    || canonicalJson(value.sharedDesignInputs) !== canonicalJson(sharedDesignInputs)) {
+    throw new Error('sharedDesignInputs must match the validated final preview contract');
+  }
+  if (canonicalJson(value.experienceDirective)
+    !== canonicalJson(value.sharedDesignInputs.experienceDirective)) {
+    throw new Error('experienceDirective must match sharedDesignInputs');
   }
   const compiledScreen = (compiledScreenBuildPack.screens || []).find(
     (screen) => screen.screenId === screenId,
@@ -134,6 +155,7 @@ function normalizeWorkOrder(value, {
     targetPath,
     compiledRevision,
     experienceDirective: value.experienceDirective,
+    sharedDesignInputs: value.sharedDesignInputs,
     pack: value.pack,
     scenarioFacts: value.scenarioFacts,
     routeContract: value.routeContract,
@@ -193,10 +215,12 @@ function delimiters(workOrder) {
   };
 }
 
-function hashGeneratedScreenContent(content) {
+function hashGeneratedScreenContent(content, sourcePath) {
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('generated screen content is empty');
   }
+  const isolation = validateGeneratedSourceIsolation(content, sourcePath);
+  if (!isolation.ok) throw new Error(isolation.errors.map((error) => error.message).join('; '));
   return { contentHash: sha256Hex(content) };
 }
 
@@ -264,7 +288,7 @@ function parseReturnOnly(responseText, sealedWorkOrder, options = {}) {
     throw new Error('DONE_WITH_CONCERNS requires at least one concern');
   }
   const contentValidation = content
-    ? hashGeneratedScreenContent(content)
+    ? hashGeneratedScreenContent(content, workOrder.targetPath)
     : { contentHash: null };
   return {
     status: header.STATUS,
@@ -305,7 +329,10 @@ function validateDirectWrite(sealedWorkOrder, result, options = {}) {
     throw new Error('DONE_WITH_CONCERNS requires at least one concern');
   }
   const contentValidation = ready
-    ? hashGeneratedScreenContent(fs.readFileSync(workOrder.targetPath, 'utf8'))
+    ? hashGeneratedScreenContent(
+      fs.readFileSync(workOrder.targetPath, 'utf8'),
+      workOrder.targetPath,
+    )
     : { contentHash: null };
   return { ...result, changedFiles, concerns, contentHash: contentValidation.contentHash };
 }

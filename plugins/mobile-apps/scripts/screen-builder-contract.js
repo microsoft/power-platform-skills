@@ -4,6 +4,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { readDesignTokenContract } = require('./lib/design-token-contract');
+const { canonicalJson } = require('./lib/product-experience-contracts');
+const { buildSharedDesignInputs } = require('./lib/shared-design-inputs');
 const {
   parseReturnOnly,
   sealWorkOrder,
@@ -94,20 +97,41 @@ function atomicWriteJson(file, value) {
   }
 }
 
+function loadCurrentBuilderInputs(root) {
+  const compiledScreenBuildPack = readJson(
+    path.join(root, '.tmp', 'compiled-screen-build-pack.json'),
+  );
+  const compiledScenarioFacts = readJson(path.join(root, '.tmp', 'scenario-facts.json'));
+  const navigation = readJson(path.join(root, '.tmp', 'navigation-manifest.json'));
+  const tokensPath = path.join(root, 'brand', 'tokens.ts');
+  const tokenContract = readDesignTokenContract(tokensPath);
+  if (!tokenContract.ok) throw new Error(tokenContract.message);
+  const signatureComponentsSource = fs.readFileSync(
+    path.join(root, 'brand', 'signature-components.ts'),
+    'utf8',
+  );
+  const sharedDesignInputs = buildSharedDesignInputs({
+    experienceDirective: compiledScreenBuildPack.experienceDirective,
+    navigation,
+    tokenContract,
+    signatureComponentsSource,
+  });
+  const previewContract = readJson(
+    path.join(root, '.tmp', 'product-experience-final-preview-contract.json'),
+  );
+  if (canonicalJson(previewContract.sharedDesignInputs) !== canonicalJson(sharedDesignInputs)) {
+    throw new Error('final preview shared design inputs do not match current design artifacts');
+  }
+  return { compiledScreenBuildPack, compiledScenarioFacts, sharedDesignInputs };
+}
+
 function run(args) {
   if (!args.projectRoot) throw new Error('--project-root is required');
   const root = path.resolve(args.projectRoot);
   const needsCompiledPack = ['seal', 'parse-return', 'verify-direct'].includes(args.action);
-  const compiledPackPath = path.join(root, '.tmp', 'compiled-screen-build-pack.json');
-  const scenarioFactsPath = path.join(root, '.tmp', 'scenario-facts.json');
   const options = {
     projectRoot: root,
-    ...(needsCompiledPack
-      ? {
-        compiledScreenBuildPack: readJson(compiledPackPath),
-        compiledScenarioFacts: readJson(scenarioFactsPath),
-      }
-      : {}),
+    ...(needsCompiledPack ? loadCurrentBuilderInputs(root) : {}),
     ...(args.maxInputBytes ? { maxInputBytes: args.maxInputBytes } : {}),
     ...(args.maxOutputBytes ? { maxOutputBytes: args.maxOutputBytes } : {}),
   };
@@ -209,4 +233,4 @@ function main(argv = process.argv) {
 
 if (require.main === module) process.exitCode = main();
 
-module.exports = { main, parseArgs, run };
+module.exports = { loadCurrentBuilderInputs, main, parseArgs, run };

@@ -6,28 +6,28 @@ const os = require('node:os');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
 
-const { compileNavigationManifest } = require('./compile-navigation-manifest');
-const { compilePersistenceContract, conceptId, validatePersistenceArtifacts } = require('./compile-persistence-contract');
-const { compileScreenBuildPack } = require('./compile-screen-build-pack');
-const { compileSampleDataObligations } = require('./lib/sample-data-obligations');
+const { compileNavigationManifest } = require('../../compile-navigation-manifest');
+const { compilePersistenceContract, conceptId, validatePersistenceArtifacts } = require('../../compile-persistence-contract');
+const { compileScreenBuildPack } = require('../../compile-screen-build-pack');
+const { compileSampleDataObligations } = require('../../lib/sample-data-obligations');
 const {
   SCREEN_BUDGETS,
   canonicalJson,
   contractRevision,
   sha256Hex,
-} = require('./lib/product-experience-contracts');
-const { renderProductExperiencePreview } = require('./render-product-experience-preview');
-const { compileDataModelUsage, validateDataModelUsage } = require('./validate-data-model-usage');
-const { compileScenarioFacts, projectScreenFacts, validateScenarioFacts } = require('./validate-fixture-scenarios');
-const { validateNavigationLayout } = require('./validate-navigation-layout');
-const { validateExperienceContract } = require('./validate-product-experience');
-const { validateScopeContract } = require('./validate-product-scope');
-const { validateJourneyContract } = require('./validate-workflow-journey');
+} = require('../../lib/product-experience-contracts');
+const { renderProductExperiencePreview } = require('../../render-product-experience-preview');
+const { compileDataModelUsage, validateDataModelUsage } = require('../../validate-data-model-usage');
+const { compileScenarioFacts, projectScreenFacts, validateScenarioFacts } = require('../../validate-fixture-scenarios');
+const { validateNavigationLayout } = require('../../validate-navigation-layout');
+const { validateExperienceContract } = require('../../validate-product-experience');
+const { validateScopeContract } = require('../../validate-product-scope');
+const { validateJourneyContract } = require('../../validate-workflow-journey');
 const {
   ACCEPTANCE_SCENARIOS,
   acceptanceBundle,
-} = require('./tests/helpers/product-experience-acceptance-scenarios');
-const { scenarioInputForBundle } = require('./tests/helpers/scenario-facts-fixtures');
+} = require('./product-experience-acceptance-scenarios');
+const { scenarioInputForBundle } = require('./scenario-facts-fixtures');
 
 const VECTOR_PACKAGE = { dependencies: { '@expo/vector-icons': '15.1.1' } };
 const MATRIX = Object.freeze([

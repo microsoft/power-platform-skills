@@ -13,8 +13,9 @@ function selectPreviewScreens(compiled, journey, navigation = null) {
       .sort((left, right) => left.order - right.order)
       .map((step) => step.surface?.screenId),
   );
-
-  if (journeyIds.length === 0) return screens.slice(0, 3);
+  const candidateIds = journeyIds.length > 0
+    ? journeyIds
+    : screens.map((screen) => screen.screenId);
 
   const destinations = navigation?.visibleTabs?.length
     ? navigation.visibleTabs
@@ -23,9 +24,9 @@ function selectPreviewScreens(compiled, journey, navigation = null) {
     .map((destination) => destination.rootScreenId)
     .find((screenId) => byId.has(screenId))
     || screens.find((screen) => screen.classification === 'durable-destination')?.screenId
-    || journeyIds[0];
-  const flowEntryId = journeyIds.find((screenId) => screenId !== primaryId) || null;
-  const decisionCandidates = journeyIds
+    || candidateIds[0];
+  const flowEntryId = candidateIds.find((screenId) => screenId !== primaryId) || null;
+  const decisionCandidates = candidateIds
     .filter((screenId) => screenId !== primaryId && screenId !== flowEntryId)
     .map((screenId, index) => ({ screen: byId.get(screenId), index }))
     .filter((entry) => entry.screen);

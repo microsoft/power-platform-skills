@@ -3,7 +3,7 @@
 Run the deterministic regression matrix from the repository root:
 
 ```bash
-node plugins/mobile-apps/scripts/run-live-build-plan-acceptance.js
+node plugins/mobile-apps/scripts/tests/helpers/run-live-build-plan-acceptance.js
 ```
 
 By default, evidence is written to

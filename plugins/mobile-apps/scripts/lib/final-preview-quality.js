@@ -11,6 +11,7 @@ const MAX_FRAME_EVIDENCE_COUNT = 8;
 const MAX_FRAME_EVIDENCE_TEXT = 640;
 const MAX_FRAME_VISIBLE_TEXT = 1800;
 const CONTRACT_COPY = /\b(?:durable-destination|nested-detail|bounded-flow-step|modal-or-immersive-utility|pack revision|requirement id|scenario evidence)\b/i;
+const INVENTED_OFFLINE_UI = /\b(?:offline|pending sync|syncing|retry synchronization|connection lost|queued changes)\b/i;
 
 function hasAttribute(node, name, value = null) {
   return Object.prototype.hasOwnProperty.call(node.attrs, name)
@@ -344,6 +345,10 @@ function validateScreenStructure(parsed, expected, review, errors) {
     if (CONTRACT_COPY.test(normalizedText(frame))) {
       errors.push(finding('preview-contract-dump-visible',
         `${screen.screenId} exposes implementation-contract vocabulary in its phone frame`));
+    }
+    if (INVENTED_OFFLINE_UI.test(normalizedText(frame))) {
+      errors.push(finding('preview-invented-offline-ui',
+        `${screen.screenId} invents offline runtime UI outside the approved product contracts`));
     }
     metrics.push({
       screenId: screen.screenId,

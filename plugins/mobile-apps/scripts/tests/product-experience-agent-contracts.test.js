@@ -43,6 +43,8 @@ test('screen builder defers model selection to the host', () => {
   assert.match(source, /sealed `tokenInterfaces`/);
   assert.match(source, /Every string in sealed `testIds` must appear literally/);
   assert.match(source, /canonical scenario-facts projection/);
+  assert.match(source, /`sharedDesignInputs` as the exact approved experience directive/);
+  assert.match(source, /Test fixtures, snapshots, benchmark implementations,[\s\S]*prohibited/);
   assert.match(source, /human-first `identityHierarchy`/);
   assert.match(source, /`experienceDirective` is the product-wide visual and experiential authority/);
   assert.match(source, /Archetype shards and sample screens provide code and API idioms only/);
@@ -119,7 +121,11 @@ test('screen work orders carry implementation contracts and bounded scenario fac
   assert.match(source, /one `scenarioFacts` projection/);
   assert.match(source, /Object\.values\(implementationContract\.testIds\)/);
   assert.match(source, /root `compiledRevision` and `experienceDirective` copied unchanged/);
+  assert.match(source, /exact `sharedDesignInputs` copied unchanged/);
+  assert.match(source, /product-experience-final-preview-contract\.json/);
+  assert.match(source, /same[\s\S]*generated token values\/revision,[\s\S]*navigation projection,[\s\S]*signature-component contracts/);
   assert.match(source, /rejects a missing[\s\S]*directive drift/);
+  assert.match(source, /rejects missing or changed shared design inputs/);
   assert.doesNotMatch(source, /validate-screen-implementation\.js|TypeScript AST/);
   assert.match(source, /Do not include the whole Markdown plan/);
   assert.match(source, /complete scenario artifact/);
@@ -154,6 +160,10 @@ test('automatic design mode preserves experience quality without another pause',
     path.join(skillRoot, 'design-system', 'references', 'final-experience-preview.md'),
     'utf8',
   );
+  const designSchema = fs.readFileSync(
+    path.join(skillRoot, 'design-system', 'references', 'design-system-schema.md'),
+    'utf8',
+  );
   const scaffold = fs.readFileSync(
     path.join(skillRoot, 'create-mobile-app', 'references', 'phase-4-scaffold.md'),
     'utf8',
@@ -164,7 +174,7 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(automatic, /brand\/signature-components\.ts/);
   assert.match(automatic, /one to three frames/);
   assert.match(automatic, /compact collapsed `All screens`/);
-  assert.match(automatic, /does not claim React Native or native\s+pixels were rendered/);
+  assert.match(automatic, /never claim React[\s\S]{0,20}Native or native pixels were rendered/);
   assert.ok(
     automatic.indexOf('brand/tokens.ts') < automatic.indexOf('Author the approval preview'),
     'automatic design must produce tokens before authoring the final preview',
@@ -173,7 +183,6 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(automatic, /same model\s+invocation/);
   assert.match(automatic, /validate-product-experience-preview\.js/);
   assert.match(automatic, /Do not invoke another model/);
-  assert.match(automatic, /Missing or incomplete tokens[\s\S]*are `BLOCKED`/);
   assert.doesNotMatch(automatic, /--mode final|render-product-experience-preview\.js/);
   assert.match(finalPreview, /credible mobile product screen/);
   assert.match(finalPreview, /parser-based structural quality gate/);
@@ -184,6 +193,20 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(finalPreview, /preserving the current Product Experience,[\s\S]*`experienceDirective`, tokens, signature components,[\s\S]*screen packs/);
   assert.doesNotMatch(finalPreview, /Flight|Gym|ICRC|commerce|field-operation/i);
   assert.match(finalPreview, /Do not inspect generated React Native TSX[\s\S]*with AST or regex/);
+  assert.match(finalPreview, /product-experience-final-preview-contract\.json/);
+  assert.match(finalPreview, /only completion validator/);
+  assert.match(finalPreview, /literal `"ok": true`/);
+  assert.match(finalPreview, /Do not substitute[\s\S]*Python HTML parsing[\s\S]*TypeScript compilation/);
+  assert.match(automatic, /no `npm install`, TypeScript, or ad hoc check/);
+  assert.match(automatic, /canonical final-[\s\S]*preview contract sidecar/);
+  assert.match(design, /product-experience-final-preview-contract\.json/);
+  assert.match(design, /literal `"ok": true`/);
+  assert.match(designSchema, /Export `tokens`, not `brandTokens`/);
+  for (const key of ['bg', 'surface', 'primary', 'accent', 'text', 'textMuted', 'border',
+    'statusSuccess', 'statusWarning', 'statusDanger', 'statusInfo']) {
+    assert.match(designSchema, new RegExp(`\\b${key}:`));
+  }
+  assert.match(designSchema, /typography:[\s\S]*heading:/);
   assert.match(scaffold, /pass `--auto-experience`/);
   assert.doesNotMatch(design, /^allowed-tools:.*\bTask\b/m);
 });

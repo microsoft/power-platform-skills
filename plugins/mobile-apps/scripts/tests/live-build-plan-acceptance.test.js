@@ -11,7 +11,7 @@ const {
   STAGES,
   runAcceptanceMatrix,
   runVariant,
-} = require('../run-live-build-plan-acceptance');
+} = require('./helpers/run-live-build-plan-acceptance');
 
 function read(directory, fileName) {
   return fs.readFileSync(path.join(directory, fileName), 'utf8');
@@ -19,7 +19,7 @@ function read(directory, fileName) {
 
 test('acceptance matrix covers five briefs and all persistence modes', (context) => {
   const runnerSource = fs.readFileSync(
-    path.join(__dirname, '..', 'run-live-build-plan-acceptance.js'),
+    path.join(__dirname, 'helpers', 'run-live-build-plan-acceptance.js'),
     'utf8',
   );
   assert.doesNotMatch(runnerSource, /readColors\(|readTokenContract|readDesignTokenContract|preview-mode="final"/);

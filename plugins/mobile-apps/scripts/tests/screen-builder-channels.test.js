@@ -8,7 +8,9 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { compileScreenBuildPack } = require('../compile-screen-build-pack');
+const { readDesignTokenContract } = require('../lib/design-token-contract');
 const { canonicalJson, sha256Hex } = require('../lib/product-experience-contracts');
+const { buildSharedDesignInputs } = require('../lib/shared-design-inputs');
 const { projectScreenFacts } = require('../validate-fixture-scenarios');
 
 const {
@@ -46,6 +48,55 @@ const EXPERIENCE_DIRECTIVE = {
   forbiddenDefaults: ['Generic dashboard'],
 };
 const COMPILED_REVISION = 'b'.repeat(64);
+const NAVIGATION = {
+  manifestRevision: 'c'.repeat(64),
+  pattern: 'stack-only',
+  visibleTabs: [],
+  durableDestinations: [{
+    destinationId: 'home',
+    label: 'Home',
+    rootScreenId: 'home',
+    targetPath: '/home',
+  }],
+  returnHomeMechanism: 'Back returns to Home',
+};
+const TOKENS_SOURCE = `export const tokens = {
+  color: {
+    bg: '#f7f7f7', surface: '#ffffff', primary: '#123456', accent: '#abcdef',
+    text: '#111111', textMuted: '#666666', border: '#dddddd',
+    statusSuccess: '#187a50', statusWarning: '#9a650d', statusDanger: '#b4232f',
+    statusInfo: '#176b87',
+  },
+  typography: {
+    heading: { family: 'Test Sans', size: 22, weight: 700, lineHeight: 1.2, tracking: 0 },
+  },
+  space: {}, size: {}, radius: {},
+} as const;
+export type BrandTokens = typeof tokens;
+`;
+const SIGNATURE_COMPONENTS_SOURCE = 'export interface SignatureHeroProps { state: "ready" | "busy"; }\n';
+
+function sharedDesignInputs(experienceDirective = EXPERIENCE_DIRECTIVE, tokensPath = null) {
+  const tokenContract = tokensPath
+    ? readDesignTokenContract(tokensPath)
+    : {
+      ok: true,
+      revision: sha256Hex(TOKENS_SOURCE),
+      colors: {
+        bg: '#f7f7f7', surface: '#ffffff', primary: '#123456', accent: '#abcdef',
+        text: '#111111', textMuted: '#666666', border: '#dddddd',
+        statusSuccess: '#187a50', statusWarning: '#9a650d', statusDanger: '#b4232f',
+        statusInfo: '#176b87',
+      },
+      typography: { family: 'Test Sans', size: 22, weight: 700, lineHeight: 1.2, tracking: 0 },
+    };
+  return buildSharedDesignInputs({
+    experienceDirective,
+    navigation: NAVIGATION,
+    tokenContract,
+    signatureComponentsSource: SIGNATURE_COMPONENTS_SOURCE,
+  });
+}
 
 function canonicalPackEntry(screenId) {
   return { screenId, pack: { screenId, purpose: `Implement ${screenId}` } };
@@ -94,6 +145,7 @@ function contractOptions(
     projectRoot: root,
     compiledScreenBuildPack: compiledPack(experienceDirective, screenIds),
     compiledScenarioFacts: scenarioContract(screenIds),
+    sharedDesignInputs: sharedDesignInputs(experienceDirective),
   };
 }
 
@@ -102,6 +154,12 @@ function project(context) {
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'app'), { recursive: true });
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'brand', 'tokens.ts'), TOKENS_SOURCE);
+  fs.writeFileSync(
+    path.join(root, 'brand', 'signature-components.ts'),
+    SIGNATURE_COMPONENTS_SOURCE,
+  );
   fs.writeFileSync(
     path.join(root, '.tmp', 'compiled-screen-build-pack.json'),
     `${JSON.stringify(compiledPack(), null, 2)}\n`,
@@ -109,6 +167,19 @@ function project(context) {
   fs.writeFileSync(
     path.join(root, '.tmp', 'scenario-facts.json'),
     `${JSON.stringify(scenarioContract(), null, 2)}\n`,
+  );
+  fs.writeFileSync(
+    path.join(root, '.tmp', 'navigation-manifest.json'),
+    `${JSON.stringify(NAVIGATION, null, 2)}\n`,
+  );
+  fs.writeFileSync(
+    path.join(root, '.tmp', 'product-experience-final-preview-contract.json'),
+    `${JSON.stringify({
+      sharedDesignInputs: sharedDesignInputs(
+        EXPERIENCE_DIRECTIVE,
+        path.join(root, 'brand', 'tokens.ts'),
+      ),
+    }, null, 2)}\n`,
   );
   return root;
 }
@@ -122,6 +193,7 @@ function workOrder(root, screenId = 'home') {
     targetPath: path.join(root, 'app', `${screenId}.tsx`),
     compiledRevision: COMPILED_REVISION,
     experienceDirective: EXPERIENCE_DIRECTIVE,
+    sharedDesignInputs: sharedDesignInputs(),
     pack: canonicalPackEntry(screenId),
     scenarioFacts: projectScreenFacts(scenarioContract(), screenId),
     routeContract: { route: `/${screenId}`, params: [] },
@@ -166,10 +238,13 @@ test('Product Experience directive reaches the sealed return-only builder input 
     projectRoot: root,
     compiledScreenBuildPack: compiled,
     compiledScenarioFacts: scenario,
+    sharedDesignInputs: sharedDesignInputs(compiled.experienceDirective),
   };
+  order.sharedDesignInputs = options.sharedDesignInputs;
   const { sealed } = sealWorkOrder(order, options);
 
   assert.deepEqual(sealed.experienceDirective, compiled.experienceDirective);
+  assert.deepEqual(sealed.sharedDesignInputs, options.sharedDesignInputs);
   assert.deepEqual(Object.keys(sealed.experienceDirective).sort(), [
     'accessibilityPriorities',
     'density',
@@ -207,6 +282,12 @@ test('Product Experience directive reaches the sealed return-only builder input 
       scenarioFacts: { ...order.scenarioFacts, headline: 'Stale fixture' },
     }, options),
     /scenarioFacts must be the assigned canonical screen projection/,
+  );
+  const changedDesign = structuredClone(order);
+  changedDesign.sharedDesignInputs.tokens.colors.primary = '#654321';
+  assert.throws(
+    () => sealWorkOrder(changedDesign, options),
+    /sharedDesignInputs must match the validated final preview contract/,
   );
 });
 
@@ -297,6 +378,27 @@ test('channels do not replace TypeScript and quality gates with regex TSX inspec
   const result = parseReturnOnly(response, sealed, contractOptions(root));
   assert.equal(result.content, content);
   assert.match(result.contentHash, /^[a-f0-9]{64}$/);
+});
+
+test('generated screen channels reject test fixture imports', (context) => {
+  const root = project(context);
+  const { sealed } = sealWorkOrder(workOrder(root), contractOptions(root));
+  const marker = delimiters(sealed);
+  const response = [
+    marker.resultBegin,
+    'STATUS: DONE',
+    `TARGET: ${sealed.targetPath}`,
+    'CONCERNS: []',
+    marker.contentBegin,
+    "import { flightPreview } from '../scripts/tests/fixtures/final-preview-model-outputs';",
+    'export default function Home() { return null; }',
+    marker.contentEnd,
+    marker.resultEnd,
+  ].join('\n');
+  assert.throws(
+    () => parseReturnOnly(response, sealed, contractOptions(root)),
+    /imports prohibited test, snapshot, or benchmark code/,
+  );
 });
 
 test('direct-write audit preserves the assigned screen and restores actual out-of-scope writes', (context) => {
@@ -434,7 +536,7 @@ test('screen-builder contract CLI audits actual direct-write paths', (context) =
   assert.equal(fs.readFileSync(path.join(root, 'app', 'home.tsx'), 'utf8'), 'export default null;\n');
 });
 
-test('screen-builder seal CLI binds the current compiled experience directive', (context) => {
+test('screen-builder seal CLI binds current compiled and preview design inputs', (context) => {
   const root = project(context);
   const cli = path.resolve(__dirname, '..', 'screen-builder-contract.js');
   const input = path.join(root, '.tmp', 'home.unsealed.json');
@@ -451,6 +553,7 @@ test('screen-builder seal CLI binds the current compiled experience directive', 
   assert.equal(sealedResult.status, 0, sealedResult.stderr);
   const sealed = JSON.parse(fs.readFileSync(output, 'utf8'));
   assert.deepEqual(sealed.experienceDirective, EXPERIENCE_DIRECTIVE);
+  assert.deepEqual(sealed.sharedDesignInputs, sharedDesignInputs());
   assert.equal(sealed.compiledRevision, COMPILED_REVISION);
 
   const drifted = workOrder(root);
@@ -465,6 +568,33 @@ test('screen-builder seal CLI binds the current compiled experience directive', 
   ], { encoding: 'utf8' });
   assert.equal(rejected.status, 2);
   assert.match(rejected.stderr, /experienceDirective does not match/);
+
+  const sidecarPath = path.join(
+    root,
+    '.tmp',
+    'product-experience-final-preview-contract.json',
+  );
+  const sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf8'));
+  sidecar.sharedDesignInputs.tokens.colors.primary = '#654321';
+  const revisionContent = structuredClone(sidecar.sharedDesignInputs);
+  delete revisionContent.designInputRevision;
+  sidecar.sharedDesignInputs.designInputRevision = sha256Hex(canonicalJson(revisionContent));
+  fs.writeFileSync(sidecarPath, `${JSON.stringify(sidecar, null, 2)}\n`);
+  const tamperedOrder = workOrder(root);
+  tamperedOrder.sharedDesignInputs = sidecar.sharedDesignInputs;
+  fs.writeFileSync(input, `${JSON.stringify(tamperedOrder, null, 2)}\n`);
+  const tampered = spawnSync(process.execPath, [
+    cli,
+    '--project-root', root,
+    '--seal',
+    '--input', '.tmp/home.unsealed.json',
+    '--output', '.tmp/home.json',
+  ], { encoding: 'utf8' });
+  assert.equal(tampered.status, 2);
+  assert.match(
+    tampered.stderr,
+    /final preview shared design inputs do not match current design artifacts/,
+  );
 });
 
 test('channel failure falls back per screen and preserves successful siblings', (context) => {

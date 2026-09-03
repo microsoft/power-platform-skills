@@ -142,6 +142,17 @@ test('validator prepares and accepts a canonical AI-authored final preview', () 
     assert.strictEqual(prepared.code, 0, prepared.stderr);
     assert.strictEqual(prepared.json.mode, 'contract-preparation');
     assert.deepStrictEqual(prepared.json.selectedScreenIds, ['discover', 'product', 'checkout']);
+    assert.ok(prepared.json.fixtureIsolation.productionPromptFilesScanned > 0);
+    assert.ok(prepared.json.fixtureIsolation.productionSourceFilesScanned > 0);
+    assert.deepStrictEqual({
+      forbiddenReferenceCount: prepared.json.fixtureIsolation.forbiddenReferenceCount,
+      productionTestImportCount: prepared.json.fixtureIsolation.productionTestImportCount,
+      forbiddenImportCount: prepared.json.fixtureIsolation.forbiddenImportCount,
+    }, {
+      forbiddenReferenceCount: 0,
+      productionTestImportCount: 0,
+      forbiddenImportCount: 0,
+    });
 
     const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
     const previewPath = path.join(projectRoot, '_plan_preview.html');
@@ -158,12 +169,13 @@ test('validator prepares and accepts a canonical AI-authored final preview', () 
     assert.deepStrictEqual(result.json.selectedScreenIds, ['discover', 'product', 'checkout']);
     assert.strictEqual(result.json.previewContractRevision, prepared.json.contractRevision);
     assert.match(result.json.previewRevision, /^[a-f0-9]{64}$/);
+    assert.strictEqual(result.json.fixtureIsolation.fixtureMarkerCount, 0);
     assert.deepStrictEqual(result.json.quality.semantic, { passed: true });
     assert.strictEqual(result.json.quality.structural.passed, true);
     assert.ok(['passed', 'skipped'].includes(result.json.quality.renderedLayout.status));
     if (result.json.quality.renderedLayout.status === 'skipped') {
       assert.ok(result.json.warnings.some(
-        (warning) => warning.code === 'preview-rendered-layout-skipped',
+        (warning) => warning.code === 'layout-validation-skipped',
       ));
     }
   } finally {
@@ -333,6 +345,19 @@ test('validator rejects drift, hidden evidence, placeholders, and structural sub
         html: valid.replace('Current journey', 'durable-destination contract'),
         code: 'preview-contract-dump-visible',
       },
+      {
+        name: 'invented offline runtime UI',
+        html: valid.replace('Current journey', 'Offline - retry synchronization'),
+        code: 'preview-invented-offline-ui',
+      },
+      {
+        name: 'fixture-only composition marker',
+        html: valid.replace(
+          '<body ',
+          '<body data-composition-id="equipment-command-surface" ',
+        ),
+        code: 'preview-fixture-marker-leaked',
+      },
     ];
     for (const candidate of cases) {
       fs.writeFileSync(previewPath, candidate.html);
@@ -402,11 +427,13 @@ test('final preview contract excludes explicitly deferred requirements', () => {
       returnHomeMechanism: 'Return home',
     },
     tokenContract: {
+      ok: true,
+      ready: true,
       revision: 'd'.repeat(64),
       colors: {},
       typography: { family: 'Test', size: 22, weight: 700, lineHeight: 1.2, tracking: 0 },
     },
-    signatureComponentsRevision: 'e'.repeat(64),
+    signatureComponentsSource: 'export interface TestSignatureProps { ready: boolean; }\n',
   });
   assert.deepStrictEqual(contract.requirements.map((item) => item.requirementId), [
     'current-work',

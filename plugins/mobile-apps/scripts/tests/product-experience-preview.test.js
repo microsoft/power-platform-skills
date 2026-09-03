@@ -315,6 +315,26 @@ test('large journeys select primary destination, key-flow entry, and strongest a
   );
 });
 
+test('missing journey still selects frames semantically rather than taking first three', () => {
+  const screens = [
+    { screenId: 'supporting-a', classification: 'nested-detail', pattern: 'detail', pack: {} },
+    { screenId: 'supporting-b', classification: 'nested-detail', pattern: 'detail', pack: {} },
+    { screenId: 'supporting-c', classification: 'nested-detail', pattern: 'detail', pack: {} },
+    {
+      screenId: 'strong-action',
+      classification: 'modal-or-immersive-utility',
+      pattern: 'capture',
+      pack: { primaryActionPlacement: 'sticky-bottom' },
+      implementationContract: { requiredOperations: [{ kind: 'create' }] },
+    },
+    { screenId: 'primary-home', classification: 'durable-destination', pattern: 'overview', pack: {} },
+  ];
+  assert.deepStrictEqual(
+    selectPreviewScreens({ screens }, { journeys: [] }).map((screen) => screen.screenId),
+    ['primary-home', 'supporting-a', 'strong-action'],
+  );
+});
+
 test('three-screen journeys use the same visible presentation board', () => {
   const bundle = bundleFor('commerce');
   const result = compileScreenBuildPack(bundle.buildPack, bundle);

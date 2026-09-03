@@ -37,6 +37,10 @@ create `.tmp/screen-work-orders/<screenId>.unsealed.json` with:
 - exact target path;
 - root `compiledRevision` and `experienceDirective` copied unchanged from
   `.tmp/compiled-screen-build-pack.json`;
+- exact `sharedDesignInputs` copied unchanged from
+  `.tmp/product-experience-final-preview-contract.json`; this binds the same
+  experience directive, generated token values/revision, navigation projection,
+  and signature-component contracts used to author the approved preview;
 - one screen build-pack entry;
 - that entry's deterministic `implementationContract` unchanged;
 - one `scenarioFacts` projection from `.tmp/scenario-facts.json`, containing
@@ -72,7 +76,9 @@ it fit.
 
 Sealing loads the current compiled screen build pack and rejects a missing
 directive, a mismatched `compiledRevision`, or any directive drift. Never
-reconstruct product-wide design intent from Markdown or an archetype shard.
+reconstruct product-wide design intent from Markdown or an archetype shard. It
+also rejects missing or changed shared design inputs, so preview and React
+Native builders cannot silently diverge.
 
 Initialize run-scoped per-screen channel state:
 

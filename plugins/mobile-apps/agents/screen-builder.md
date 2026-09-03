@@ -94,9 +94,9 @@ multiple files, or prose outside the result delimiters.
 In `direct-write`, read only:
 
 1. The supplied sealed work order, including its inline pack, route contract,
-  typed skeleton, service signatures, token/signature-component interfaces,
-  states, implementation contract, scenario facts, test IDs, and accessibility
-  requirements.
+  exact shared design inputs, typed skeleton, service signatures,
+  token/signature-component interfaces, states, implementation contract,
+  scenario facts, test IDs, and accessibility requirements.
 2. The existing typed skeleton at `target_file`; it must match the inline
   skeleton before implementation begins.
 3. `brand/design-system.md` and `tamagui.config.ts` only to verify the supplied
@@ -126,9 +126,14 @@ Read one matching code sample for API/import shape only:
 In both channels, the sealed work order is the semantic authority; direct-write
 does not reopen the whole plan or generated-service source. In `return-only`,
 the foreground already supplied every relevant fact inline, so do not attempt
-any read. Never copy a sample layout. Do not load the old whale reference
+any read. Treat `sharedDesignInputs` as the exact approved experience directive,
+token contract, navigation projection, and signature-component contract used by
+the preview. Never copy a sample layout. Do not load the old whale reference
 indexes or the full design philosophy/component recipe documents during a
 normal build.
+
+Test fixtures, snapshots, benchmark implementations, and previous generated
+previews are prohibited implementation inputs. Never search for or read them.
 
 Names supplied in `serviceSignatures` and `signatureComponentInterfaces` are
 shared interfaces to import and call. Never declare a local `const`, function,

@@ -24,6 +24,11 @@ Do not read input modes, style galleries, named directions, brand examples,
 Figma, extraction, reskin, migration, or history references. Do not infer an
 industry or choose a named style from product keywords.
 
+Test fixtures, snapshots, and benchmark implementations are prohibited
+authoring inputs. Generate the experience only from the current run's contracts
+and approved design references. Do not read an existing or previously generated
+preview before authoring the current `_plan_preview.html`.
+
 ## Preconditions
 
 Require current, hash-bound Product Experience, Product Scope, Workflow Journey,
@@ -89,15 +94,10 @@ invocation. Prepare the deterministic manifest, then author the final
 and run its validator. Do not invoke another model or use the deterministic
 structural renderer as a final-design substitute.
 
-The final storyboard shows one to three frames, semantically selected as the
-primary product destination, key-flow entry, and strongest decision/action when
-those distinct screens exist. The compact collapsed `All screens` surface
-exposes the complete graph and required states. Missing or incomplete tokens, signature
-components, canonical facts, or HTML contract evidence are `BLOCKED`.
-
-The HTML approves experience intent. It does not claim React Native or native
-pixels were rendered. React Native remains authoritative after implementation.
-Do not start Metro, attach Dev Player, or capture native screenshots.
+Use only the two validator commands and canonical sidecar in
+`final-experience-preview.md`; no `npm install`, TypeScript, or ad hoc check.
+Its one to three frames and compact collapsed `All screens` never claim React
+Native or native pixels were rendered. Never start Metro or native capture.
 
 ## Persist and return
 
@@ -115,7 +115,8 @@ visual_personality: <approved value>
 visual_companion: <yes|no|skip>
 ```
 
-Do not return `DONE` unless all three brand artifacts and the model-authored
-journey preview exist and `validate-product-experience-preview.js` passes. Gate
-3 in `/create-mobile-app` owns approval; this path asks no additional design or
-preview question.
+Do not return `DONE` unless all three brand artifacts, the canonical final-
+preview contract sidecar, and the model-authored journey preview exist and the
+final `validate-product-experience-preview.js` JSON returns literal `"ok":
+true`. Gate 3 in `/create-mobile-app` owns approval; this path asks no additional
+design or preview question.
