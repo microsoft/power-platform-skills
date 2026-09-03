@@ -7,6 +7,8 @@ const path = require('node:path');
 const { buildNavigationManifest } = require('./compile-navigation-manifest');
 const { compileScreenBuildPack } = require('./compile-screen-build-pack');
 const { readDesignTokenContract } = require('./lib/design-token-contract');
+const { validateRenderedLayout } = require('./lib/final-preview-browser-layout');
+const { validateStructuralQuality } = require('./lib/final-preview-quality');
 const {
   isDescendant,
   normalizedText,
@@ -332,7 +334,10 @@ function validateHtml(html, expected) {
       errors.push(finding('preview-pack-revision-mismatch', `${screen.screenId} does not declare its canonical pack revision`));
     }
     const signature = elementsWith(parsed.elements, 'data-signature-intent', screen.screenId)
-      .find((node) => !node.hidden && isDescendant(node, screenNode));
+      .find((node) => !node.hidden && (
+        isDescendant(node, screenNode)
+        || (allScreens && isDescendant(node, allScreens))
+      ));
     const signatureText = signature ? normalizedText(signature) : '';
     if (!signature
       || !signatureText.includes(screen.signatureIntent.name)
@@ -351,7 +356,10 @@ function validateHtml(html, expected) {
     for (const state of screen.states) {
       const markerId = `${screen.screenId}:${state.name}`;
       const marker = elementsWith(parsed.elements, 'data-preview-state', markerId)
-        .find((node) => isDescendant(node, screenNode));
+        .find((node) => !node.hidden && (
+          isDescendant(node, screenNode)
+          || (allScreens && isDescendant(node, allScreens))
+        ));
       if (!marker || !normalizedText(marker).includes(state.copy)) {
         errors.push(finding('preview-state-missing', `${screen.screenId} is missing state ${state.name}`));
       }
@@ -363,7 +371,10 @@ function validateHtml(html, expected) {
     }
     for (const evidence of screen.scenarioEvidence) {
       const marker = elementsWith(parsed.elements, 'data-scenario-evidence-id', evidence.id)
-        .find((node) => !node.hidden && isDescendant(node, screenNode));
+        .find((node) => !node.hidden && (
+          isDescendant(node, screenNode)
+          || (allScreens && isDescendant(node, allScreens))
+        ));
       if (!marker || !normalizedText(marker).includes(evidence.value)) {
         errors.push(finding('preview-scenario-evidence-missing', `${screen.screenId} is missing ${evidence.role}: ${evidence.value}`));
       }
@@ -531,9 +542,35 @@ function main(argv) {
     }
     if (!fs.existsSync(paths.preview)) return fatal(TOOL, `missing preview: ${paths.preview}`);
     const html = fs.readFileSync(paths.preview, 'utf8');
-    const validation = validateHtml(html, contract);
+    const semanticValidation = validateHtml(html, contract);
+    const structuralValidation = validateStructuralQuality(
+      html,
+      contract,
+      semanticValidation.parsed,
+    );
+    const renderedLayout = semanticValidation.errors.length === 0
+      ? process.env.POWER_PLATFORM_SKILLS_PREVIEW_BROWSER_LAYOUT === '0'
+        ? { status: 'skipped', reason: 'browser-disabled', errors: [], viewports: [] }
+        : validateRenderedLayout(html, contract)
+      : {
+        status: 'skipped',
+        reason: 'semantic-validation-failed',
+        errors: [],
+        viewports: [],
+      };
+    const errors = [
+      ...semanticValidation.errors,
+      ...structuralValidation.errors,
+      ...renderedLayout.errors,
+    ];
+    const warnings = renderedLayout.status === 'skipped'
+      ? [finding(
+        'preview-rendered-layout-skipped',
+        `optional rendered-layout validation skipped: ${renderedLayout.reason}`,
+      )]
+      : [];
     return emitResult({
-      ok: validation.errors.length === 0,
+      ok: errors.length === 0,
       tool: TOOL,
       previewPath: paths.preview,
       selectedScreenIds: contract.selectedScreenIds,
@@ -544,8 +581,20 @@ function main(argv) {
       signatureComponentsRevision: contract.revisions.signatureComponents,
       previewContractRevision: contract.contractRevision,
       previewRevision: sha256Hex(html),
-      errors: validation.errors,
-      warnings: [],
+      quality: {
+        semantic: { passed: semanticValidation.errors.length === 0 },
+        structural: {
+          passed: structuralValidation.errors.length === 0,
+          metrics: structuralValidation.metrics,
+        },
+        renderedLayout: {
+          status: renderedLayout.status,
+          reason: renderedLayout.reason,
+          viewports: renderedLayout.viewports,
+        },
+      },
+      errors,
+      warnings,
     });
   } catch (error) {
     return fatal(TOOL, error.message);
@@ -560,4 +609,5 @@ module.exports = {
   scenarioEvidence,
   tokenCss,
   validateHtml,
+  validateStructuralQuality,
 };

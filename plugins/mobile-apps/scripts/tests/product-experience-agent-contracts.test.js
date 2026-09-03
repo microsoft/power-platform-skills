@@ -150,6 +150,10 @@ test('automatic design mode preserves experience quality without another pause',
     path.join(skillRoot, 'design-system', 'references', 'auto-experience.md'),
     'utf8',
   );
+  const finalPreview = fs.readFileSync(
+    path.join(skillRoot, 'design-system', 'references', 'final-experience-preview.md'),
+    'utf8',
+  );
   const scaffold = fs.readFileSync(
     path.join(skillRoot, 'create-mobile-app', 'references', 'phase-4-scaffold.md'),
     'utf8',
@@ -159,7 +163,7 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(automatic, /without another design\s+question/);
   assert.match(automatic, /brand\/signature-components\.ts/);
   assert.match(automatic, /one to three frames/);
-  assert.match(automatic, /expandable `All screens`/);
+  assert.match(automatic, /compact collapsed `All screens`/);
   assert.match(automatic, /does not claim React Native or native\s+pixels were rendered/);
   assert.ok(
     automatic.indexOf('brand/tokens.ts') < automatic.indexOf('Author the approval preview'),
@@ -171,6 +175,15 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(automatic, /Do not invoke another model/);
   assert.match(automatic, /Missing or incomplete tokens[\s\S]*are `BLOCKED`/);
   assert.doesNotMatch(automatic, /--mode final|render-product-experience-preview\.js/);
+  assert.match(finalPreview, /credible mobile product screen/);
+  assert.match(finalPreview, /parser-based structural quality gate/);
+  assert.match(finalPreview, /Browser absence[\s\S]*non-blocking/);
+  assert.match(finalPreview, /one focused edit of[\s\S]*_plan_preview\.html/);
+  assert.match(finalPreview, /Rerun the same validator exactly once/);
+  assert.match(finalPreview, /Do not rerun planning, regenerate[\s\S]*design system/);
+  assert.match(finalPreview, /preserving the current Product Experience,[\s\S]*`experienceDirective`, tokens, signature components,[\s\S]*screen packs/);
+  assert.doesNotMatch(finalPreview, /Flight|Gym|ICRC|commerce|field-operation/i);
+  assert.match(finalPreview, /Do not inspect generated React Native TSX[\s\S]*with AST or regex/);
   assert.match(scaffold, /pass `--auto-experience`/);
   assert.doesNotMatch(design, /^allowed-tools:.*\bTask\b/m);
 });

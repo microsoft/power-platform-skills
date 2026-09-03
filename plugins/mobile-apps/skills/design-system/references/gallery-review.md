@@ -55,9 +55,10 @@ Any applicable contract, token, signature-component, scenario, or final HTML
 validation failure is `BLOCKED`.
 
 The default `_plan_preview.html` board shows one to three phones: entry/root,
-signature/core action, and outcome/review where distinct. `All screens` exposes
-the complete planned graph and states. Tabs and actions may focus or scroll, but
-must not replace or hide another storyboard phone.
+signature/core action, and outcome/review where distinct. A compact collapsed
+`All screens` review exposes the complete planned graph, states, and supporting
+evidence. Tabs and actions may focus or scroll, but must not replace or hide
+another storyboard phone.
 
 Use canonical scenario facts, navigation, identity hierarchy, media keys, first
 viewport, trust signals, actions, and screen contracts. Reject generic CRUD and

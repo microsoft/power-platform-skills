@@ -91,8 +91,8 @@ structural renderer as a final-design substitute.
 
 The final storyboard shows one to three frames, semantically selected as the
 primary product destination, key-flow entry, and strongest decision/action when
-those distinct screens exist. The expandable `All screens` surface exposes the
-complete graph and required states. Missing or incomplete tokens, signature
+those distinct screens exist. The compact collapsed `All screens` surface
+exposes the complete graph and required states. Missing or incomplete tokens, signature
 components, canonical facts, or HTML contract evidence are `BLOCKED`.
 
 The HTML approves experience intent. It does not claim React Native or native

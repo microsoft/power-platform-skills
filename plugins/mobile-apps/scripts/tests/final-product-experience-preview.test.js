@@ -59,29 +59,43 @@ function finalHtml(contract) {
   const navigation = contract.navigation.durableDestinations.map((destination) => (
     `<a data-navigation-destination="${destination.destinationId}" data-navigation-target-path="${destination.targetPath}">${escapeHtml(destination.label)}</a>`
   )).join('');
-  const screens = contract.screens.map((screen) => `
+  const focalMarkup = (screen, index) => {
+    const content = escapeHtml(screen.firstViewport.focalContent);
+    const attrs = `data-product-component="screen-focal-${index}" data-focal-point="${screen.screenId}"`;
+    if (index === 1) return `<ol ${attrs}><li><strong>${content}</strong></li></ol>`;
+    if (index === 2) return `<figure ${attrs}><figcaption>${content}</figcaption></figure>`;
+    return `<section ${attrs}><strong>${content}</strong></section>`;
+  };
+  const frames = contract.screens.map((screen, index) => `
     <article id="preview-screen-${screen.screenId}" data-preview-screen-id="${screen.screenId}" data-pack-revision="${screen.packRevision}">
-      <header><h2>${escapeHtml(screen.title)}</h2></header>
-      <section data-signature-intent="${screen.screenId}">
-        <strong>${escapeHtml(screen.signatureIntent.name)}</strong>
-        <p>${escapeHtml(screen.signatureIntent.description)}</p>
-      </section>
-      ${screen.primaryActions.map((action) => (
-    `<button data-primary-action="${action.markerId}"${action.targetScreenId ? ` data-target-screen-id="${action.targetScreenId}"` : ''}>${escapeHtml(action.label)}</button>`
-  )).join('')}
-      ${screen.states.map((state) => (
-    `<section data-preview-state="${screen.screenId}:${state.name}">${escapeHtml(state.copy)}</section>`
-  )).join('')}
-      ${screen.media.map((asset) => (
+      <section data-mobile-frame="${screen.screenId}">
+        <div data-first-viewport="${screen.screenId}">
+          <header data-viewport-region="context"><span>Current journey</span><h2>${escapeHtml(screen.title)}</h2></header>
+          <div data-viewport-region="focal-content">
+            ${focalMarkup(screen, index)}
+            <aside data-product-component="screen-signature-${index}" data-signature-component="${screen.screenId}">${escapeHtml(screen.signatureIntent.name)}</aside>
+            <div data-product-component="decision-evidence-${index}">${screen.scenarioEvidence.slice(0, 4).map((evidence) => (
+    `<span data-scenario-evidence-id="${evidence.id}">${escapeHtml(evidence.value)}</span>`
+  )).join('')}</div>
+            ${screen.media.map((asset) => (
     `<figure data-media-asset-key="${asset.key}">${escapeHtml(asset.fallback)}</figure>`
   )).join('')}
-      ${screen.scenarioEvidence.map((evidence) => (
-    `<span data-scenario-evidence-id="${evidence.id}">${escapeHtml(evidence.value)}</span>`
-  )).join('')}
+              </div>
+              <div data-viewport-region="primary-action">${screen.primaryActions.map((action, actionIndex) => (
+            `<button data-primary-action="${action.markerId}"${actionIndex === 0 ? ` data-primary-emphasis="${action.markerId}"` : ''}${action.targetScreenId ? ` data-target-screen-id="${action.targetScreenId}"` : ''}>${escapeHtml(action.label)}</button>`
+  )).join('')}</div>
+        </div>
+      </section>
     </article>`).join('');
   const allScreens = contract.allScreenIds.map(
     (screenId) => `<span data-all-screen-id="${screenId}">${screenId}</span>`,
   ).join('');
+  const supporting = contract.screens.map((screen) => `<section class="review-screen">
+    <h3>${escapeHtml(screen.title)}</h3>
+    <div data-signature-intent="${screen.screenId}"><strong>${escapeHtml(screen.signatureIntent.name)}</strong><p>${escapeHtml(screen.signatureIntent.description)}</p></div>
+    ${screen.states.map((state) => `<div data-preview-state="${screen.screenId}:${state.name}">${escapeHtml(state.copy)}</div>`).join('')}
+    ${screen.scenarioEvidence.slice(4).map((evidence) => `<span data-scenario-evidence-id="${evidence.id}">${escapeHtml(evidence.value)}</span>`).join('')}
+  </section>`).join('');
   const requirements = contract.requirements.map((requirement) => (
     `<p data-requirement-id="${requirement.requirementId}">${escapeHtml(requirement.statement)}</p>`
   )).join('');
@@ -92,11 +106,26 @@ function finalHtml(contract) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Final product experience</title>
   <style id="product-experience-token-contract">${contract.designTokens.css}</style>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:var(--font-heading-family),sans-serif}
+    #preview-navigation{display:flex;justify-content:center;gap:.5rem;padding:1rem;background:var(--color-primary)}
+    [data-navigation-destination]{padding:.6rem .9rem;border:1px solid var(--color-border);color:var(--color-surface);text-decoration:none}
+    #preview-storyboard{display:grid;grid-template-columns:repeat(3,minmax(0,390px));justify-content:center;gap:1rem;padding:1rem}
+    [data-mobile-frame]{width:min(100%,390px);height:780px;overflow:auto;padding:1rem;background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px}
+    [data-first-viewport]{height:740px;display:flex;flex-direction:column;gap:1rem}
+    [data-viewport-region="focal-content"]{display:grid;gap:.75rem;min-height:0;overflow:auto;flex:1}
+    [data-viewport-region="primary-action"]{margin-top:auto}
+    [data-product-component]{display:grid;gap:.4rem;padding:.75rem;border:1px solid var(--color-border);background:var(--color-bg)}
+    [data-primary-action]{width:100%;min-height:48px;background:var(--color-primary);color:var(--color-surface);border:0}
+    [data-screen-index]{display:flex;gap:.5rem;padding:.75rem;border:1px solid var(--color-border);background:var(--color-bg)}
+    #preview-all-screens{padding:1rem}.review-screen,.requirement-index{padding:1rem;border-top:1px solid var(--color-border)}
+    @media(max-width:900px){#preview-storyboard{grid-template-columns:minmax(0,390px)}}
+  </style>
 </head>
 <body data-preview-mode="final" data-preview-authorship="design-system-model" data-preview-contract-revision="${contract.contractRevision}">
   <nav id="preview-navigation">${navigation}</nav>
-  <main id="preview-storyboard">${screens}</main>
-  <section id="preview-all-screens">${allScreens}${requirements}</section>
+  <main id="preview-storyboard">${frames}</main>
+  <section id="preview-all-screens"><details><summary>Review complete experience</summary><div data-screen-index>${allScreens}</div>${supporting}<section class="requirement-index">${requirements}</section></details></section>
 </body>
 </html>\n`;
 }
@@ -129,6 +158,14 @@ test('validator prepares and accepts a canonical AI-authored final preview', () 
     assert.deepStrictEqual(result.json.selectedScreenIds, ['discover', 'product', 'checkout']);
     assert.strictEqual(result.json.previewContractRevision, prepared.json.contractRevision);
     assert.match(result.json.previewRevision, /^[a-f0-9]{64}$/);
+    assert.deepStrictEqual(result.json.quality.semantic, { passed: true });
+    assert.strictEqual(result.json.quality.structural.passed, true);
+    assert.ok(['passed', 'skipped'].includes(result.json.quality.renderedLayout.status));
+    if (result.json.quality.renderedLayout.status === 'skipped') {
+      assert.ok(result.json.warnings.some(
+        (warning) => warning.code === 'preview-rendered-layout-skipped',
+      ));
+    }
   } finally {
     cleanup(projectRoot);
   }
@@ -234,12 +271,74 @@ test('validator rejects drift, hidden evidence, placeholders, and structural sub
         ),
         code: 'preview-required-content-css-hidden',
       },
+      {
+        name: 'missing bounded mobile frame',
+        html: valid.replace('data-mobile-frame="', 'data-stale-mobile-frame="'),
+        code: 'preview-mobile-frame-missing',
+      },
+      {
+        name: 'expanded contract review',
+        html: valid.replace('<details>', '<details open>'),
+        code: 'preview-review-not-collapsed',
+      },
+      {
+        name: 'unstyled navigation',
+        html: valid.replace('#preview-navigation{', '#stale-navigation{'),
+        code: 'preview-navigation-unstyled',
+      },
+      {
+        name: 'missing first-viewport action region',
+        html: valid.replace(
+          '<div data-viewport-region="primary-action">',
+          '<div data-viewport-region="secondary-action">',
+        ),
+        code: 'preview-primary-action-hierarchy-invalid',
+      },
+      {
+        name: 'missing primary action emphasis',
+        html: valid.replace('data-primary-emphasis="', 'data-stale-primary-emphasis="'),
+        code: 'preview-primary-action-emphasis-invalid',
+      },
+      {
+        name: 'ineffective page styling',
+        html: valid.replace('body{', '.unused-body{'),
+        code: 'preview-stylesheet-ineffective',
+      },
+      {
+        name: 'excessive visible evidence',
+        html: valid.replace(
+          '<div data-product-component="decision-evidence-0">',
+          `<div data-product-component="decision-evidence-0">${Array.from(
+            { length: 9 },
+            (_, index) => `<span data-scenario-evidence-id="extra-${index}">Excess evidence ${index}</span>`,
+          ).join('')}`,
+        ),
+        code: 'preview-visible-evidence-excessive',
+      },
+      {
+        name: 'repeated screen shell',
+        html: valid
+          .replace(
+            /<ol data-product-component="screen-focal-1"([^>]*)>([\s\S]*?)<\/ol>/,
+            '<section data-product-component="screen-focal-1"$1>$2</section>',
+          )
+          .replace(
+            /<figure data-product-component="screen-focal-2"([^>]*)>([\s\S]*?)<\/figure>/,
+            '<section data-product-component="screen-focal-2"$1>$2</section>',
+          ),
+        code: 'preview-repeated-screen-shell',
+      },
+      {
+        name: 'visible contract dump vocabulary',
+        html: valid.replace('Current journey', 'durable-destination contract'),
+        code: 'preview-contract-dump-visible',
+      },
     ];
     for (const candidate of cases) {
       fs.writeFileSync(previewPath, candidate.html);
       const result = runCli('validate-product-experience-preview.js', [
         '--project-root', projectRoot,
-      ]);
+      ], { env: { POWER_PLATFORM_SKILLS_PREVIEW_BROWSER_LAYOUT: '0' } });
       assert.strictEqual(result.code, 1, candidate.name);
       assert.ok(result.json.errors.some((error) => error.code === candidate.code), candidate.name);
     }

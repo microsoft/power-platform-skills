@@ -2,16 +2,24 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 
 const { canonicalJson, sha256Hex } = require('../lib/product-experience-contracts');
 const {
+  findSupportedBrowser,
+  validateRenderedLayout,
+} = require('../lib/final-preview-browser-layout');
+const {
   buildFinalPreviewContract,
   validateHtml,
+  validateStructuralQuality,
 } = require('../validate-product-experience-preview');
 const { runVariant } = require('../run-live-build-plan-acceptance');
 const {
   flightPreview,
   gymPreview,
+  repairedFlightPreview,
+  repairedGymPreview,
   receivingPreview,
 } = require('./fixtures/final-preview-model-outputs');
 
@@ -42,6 +50,24 @@ const TOKEN_FIXTURES = {
   },
 };
 
+const REPAIRED_CASES = [
+  {
+    id: 'flight',
+    definition: { id: 'repaired-flight', scenario: 'flightCommerce', mode: 'connector-only' },
+    render: repairedFlightPreview,
+  },
+  {
+    id: 'gym',
+    definition: { id: 'repaired-gym', scenario: 'gymMaintenance', mode: 'mixed' },
+    render: repairedGymPreview,
+  },
+  {
+    id: 'receiving',
+    definition: { id: 'repaired-receiving', scenario: 'icrcReceiving', mode: 'dataverse' },
+    render: receivingPreview,
+  },
+];
+
 function contractFor(run, tokenFixture) {
   const tokenContract = {
     ok: true,
@@ -62,7 +88,7 @@ function contractFor(run, tokenFixture) {
   });
 }
 
-test('supplied flight, gym, and receiving final previews validate with distinct compositions', () => {
+test('supplied flight, gym, and receiving previews satisfy semantic contracts', () => {
   const cases = [
     {
       id: 'flight',
@@ -83,7 +109,7 @@ test('supplied flight, gym, and receiving final previews validate with distinct 
       definition: { id: 'fixture-receiving', scenario: 'icrcReceiving', mode: 'dataverse', offline: true },
       render: receivingPreview,
       composition: 'dense-receiving-ledger',
-      evidence: [/Receiving queue/, /Shipment quantity/, /Inspection and handoff/],
+      evidence: [/Receiving queue/, /Condition check/, /Evidence capture/],
     },
   ];
 
@@ -118,4 +144,136 @@ test('supplied flight, gym, and receiving final previews validate with distinct 
     htmlById.gym.match(/<main[\s\S]*<\/main>/)[0],
     htmlById.receiving.match(/<main[\s\S]*<\/main>/)[0],
   );
+});
+
+test('captured sparse previews fail structural quality while receiving passes', () => {
+  const cases = [
+    {
+      id: 'flight',
+      definition: { id: 'fixture-flight', scenario: 'flightCommerce', mode: 'connector-only' },
+      render: flightPreview,
+      expected: false,
+      expectedCodes: [
+        'preview-mobile-frame-missing',
+        'preview-review-not-collapsed',
+        'preview-navigation-unstyled',
+      ],
+    },
+    {
+      id: 'gym',
+      definition: { id: 'fixture-gym', scenario: 'gymMaintenance', mode: 'mixed' },
+      render: gymPreview,
+      expected: false,
+      expectedCodes: [
+        'preview-mobile-frame-missing',
+        'preview-review-not-collapsed',
+        'preview-navigation-unstyled',
+      ],
+    },
+    {
+      id: 'receiving',
+      definition: { id: 'fixture-receiving', scenario: 'icrcReceiving', mode: 'dataverse' },
+      render: receivingPreview,
+      expected: true,
+      expectedCodes: [],
+    },
+  ];
+
+  for (const candidate of cases) {
+    const run = runVariant(candidate.definition);
+    const contract = contractFor(run, TOKEN_FIXTURES[candidate.id]);
+    const html = candidate.render(contract);
+    assert.deepEqual(validateHtml(html, contract).errors, [], `${candidate.id} semantic contract`);
+    const quality = validateStructuralQuality(html, contract);
+    assert.equal(quality.errors.length === 0, candidate.expected, JSON.stringify(quality.errors));
+    const codes = new Set(quality.errors.map((error) => error.code));
+    for (const code of candidate.expectedCodes) assert.ok(codes.has(code), `${candidate.id}: ${code}`);
+  }
+});
+
+test('browser absence never blocks final preview validation', () => {
+  const result = validateRenderedLayout(
+    '<!doctype html><html><body></body></html>',
+    { screens: [] },
+    { browserExecutable: null },
+  );
+  assert.deepEqual(result, {
+    status: 'skipped',
+    reason: 'browser-not-found',
+    errors: [],
+    viewports: [],
+  });
+});
+
+test('repaired flight, gym, and receiving previews pass mandatory quality gates', () => {
+  for (const candidate of REPAIRED_CASES) {
+    const run = runVariant(candidate.definition);
+    const contract = contractFor(run, TOKEN_FIXTURES[candidate.id]);
+    const contractBeforeValidation = canonicalJson(contract);
+    const html = candidate.render(contract);
+    assert.deepEqual(validateHtml(html, contract).errors, [], `${candidate.id} semantic contract`);
+    assert.deepEqual(validateStructuralQuality(html, contract).errors, [], `${candidate.id} structure`);
+    assert.equal(
+      canonicalJson(contract),
+      contractBeforeValidation,
+      `${candidate.id} quality validation mutated canonical builder inputs`,
+    );
+  }
+});
+
+test('supported browser validates all three repaired previews', (context) => {
+  if (!findSupportedBrowser()) {
+    context.skip('browser executable not installed');
+    return;
+  }
+  for (const candidate of REPAIRED_CASES) {
+    const run = runVariant(candidate.definition);
+    const contract = contractFor(run, TOKEN_FIXTURES[candidate.id]);
+    const rendered = validateRenderedLayout(candidate.render(contract), contract);
+    if (rendered.status === 'skipped') {
+      context.skip(`browser probe unavailable: ${rendered.reason}`);
+      return;
+    }
+    assert.equal(rendered.status, 'passed', `${candidate.id}: ${JSON.stringify(rendered.errors)}`);
+  }
+});
+
+test('completed browser probes surface precise optional layout findings', () => {
+  const encoded = Buffer.from(JSON.stringify({
+    errors: [{
+      code: 'preview-layout-content-clipped',
+      message: 'home clips vertical content with no scroll path',
+    }],
+  })).toString('base64');
+  const result = validateRenderedLayout('<!doctype html><html></html>', { screens: [] }, {
+    browserExecutable: '/fixed/test-browser',
+    viewports: [{ name: 'mobile', width: 390, height: 844 }],
+    spawnSync(executable, args, options) {
+      assert.equal(executable, '/fixed/test-browser');
+      assert.ok(args.includes('--window-size=390,844'));
+      fs.writeSync(options.stdio[1], `<html data-preview-layout-result="${encoded}"></html>`);
+      return { status: 0, error: null };
+    },
+  });
+  assert.equal(result.status, 'failed');
+  assert.deepEqual(result.errors, [{
+    code: 'preview-layout-content-clipped',
+    message: 'mobile: home clips vertical content with no scroll path',
+  }]);
+});
+
+test('browser launch failures are nonblocking skips', () => {
+  const result = validateRenderedLayout('<!doctype html><html></html>', { screens: [] }, {
+    browserExecutable: '/fixed/test-browser',
+    viewports: [{ name: 'mobile', width: 390, height: 844 }],
+    spawnSync() {
+      throw new Error('simulated browser launch failure');
+    },
+  });
+  assert.deepEqual(result, {
+    status: 'skipped',
+    reason: 'browser-probe-error',
+    errors: [],
+    viewports: [],
+  });
 });

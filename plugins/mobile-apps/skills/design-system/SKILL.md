@@ -99,6 +99,12 @@ Optional flags accepted by their owning routes:
   identity, media, and screen contracts. Deterministic code validates that HTML
   but never chooses its final composition. It never claims React Native or
   native pixel verification.
+- Final previews must pass the portable semantic and structural gates. A
+  supported already-installed browser may add computed-layout findings; browser
+  absence never blocks completion.
+- Any authored-HTML findings receive at most one focused repair in the same
+  design-system execution. Never rerun planning or regenerate the design system
+  for preview-only findings.
 - Do not start Metro, attach Dev Player, or capture native screenshots in this
   skill.
 - One major design change per prompt; maximum two direction regenerations.
