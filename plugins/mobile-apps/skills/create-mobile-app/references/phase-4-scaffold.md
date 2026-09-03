@@ -291,7 +291,7 @@ node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
 
 This final preview check occurs only after `/design-system` has returned and all
 three brand artifacts exist. If any validator, generated-token readiness, or
-embedded preview-contract check fails, return to the owning planner/design step.
+preview contract-revision check fails, return to the owning planner/design step.
 Do not let a neutral structural, generic, or incomplete preview advance as
 approved visual intent.
 

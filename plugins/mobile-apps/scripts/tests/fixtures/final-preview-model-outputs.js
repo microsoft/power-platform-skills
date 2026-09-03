@@ -49,7 +49,6 @@ function documentShell(contract, options) {
   const requirements = contract.requirements.map((requirement) => (
     `<p data-requirement-id="${requirement.requirementId}">${escapeHtml(requirement.statement)}</p>`
   )).join('');
-  const manifest = JSON.stringify(contract).replace(/</g, '\\u003c');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -59,11 +58,10 @@ function documentShell(contract, options) {
   <style id="product-experience-token-contract">${contract.designTokens.css}</style>
   <style>${options.css}</style>
 </head>
-<body data-preview-mode="final" data-preview-authorship="design-system-model" data-composition-id="${options.compositionId}">
+<body data-preview-mode="final" data-preview-authorship="design-system-model" data-preview-contract-revision="${contract.contractRevision}" data-composition-id="${options.compositionId}">
   <nav id="preview-navigation">${navigation}</nav>
   <main id="preview-storyboard">${screens}</main>
   <section id="preview-all-screens"><h2>All screens</h2>${allScreens}<div class="requirement-index">${requirements}</div></section>
-  <script id="product-experience-preview-contract" type="application/json">${manifest}</script>
 </body>
 </html>\n`;
 }

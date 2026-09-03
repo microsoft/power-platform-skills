@@ -47,16 +47,17 @@ outside it remain model-authored:
 1. Use `<!doctype html>`, semantic HTML, responsive layout, keyboard-operable
    controls, focus styles, and reduced-motion handling.
 2. Set `<body data-preview-mode="final"
-   data-preview-authorship="design-system-model">`.
+   data-preview-authorship="design-system-model"
+   data-preview-contract-revision="<contractRevision>">` using the exact
+   revision returned by contract preparation and stored in the sidecar.
 3. Copy `designTokens.css` exactly into
    `<style id="product-experience-token-contract">`. Use those CSS variables
    throughout the authored design; do not add alternate hard-coded brand
    colors.
-4. Serialize the complete prepared JSON contract without changing any value,
-   escape literal `<` characters as `\u003c` so canonical text cannot terminate
-   the script element, and put it in
-   `<script id="product-experience-preview-contract"
-   type="application/json">`.
+4. Do not copy the complete contract JSON into the HTML. Keep the prepared
+   sidecar as the authoring input; the validator reconstructs it from canonical
+   artifacts and binds the HTML through `data-preview-contract-revision` plus
+   the visible markers below.
 5. Use `<nav id="preview-navigation">`, `<main id="preview-storyboard">`, and
    `<section id="preview-all-screens">` landmarks.
 6. Put every `selectedScreenId` in one visible storyboard element using

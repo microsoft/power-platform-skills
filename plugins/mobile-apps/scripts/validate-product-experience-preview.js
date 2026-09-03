@@ -119,7 +119,7 @@ function buildFinalPreviewContract({
 }) {
   const selected = selectPreviewScreens(compiled, journey, navigation);
   const selectedScreenIds = selected.map((screen) => screen.screenId);
-  return {
+  const contract = {
     schemaVersion: 1,
     contractType: 'product-experience-final-preview',
     authorship: 'design-system-model',
@@ -179,6 +179,8 @@ function buildFinalPreviewContract({
     }),
     allScreenIds: (compiled.screens || []).map((screen) => screen.screenId),
   };
+  contract.contractRevision = sha256Hex(canonicalJson(contract));
+  return contract;
 }
 
 function validateSources(sources) {
@@ -239,26 +241,15 @@ function validateHtml(html, expected) {
       'body must declare data-preview-mode="final" and data-preview-authorship="design-system-model"',
     ));
   }
+  if (!body || body.attrs['data-preview-contract-revision'] !== expected.contractRevision) {
+    errors.push(finding(
+      'preview-contract-revision-mismatch',
+      'body data-preview-contract-revision does not match current canonical artifacts',
+    ));
+  }
   const navigation = requireUnique(expected.landmarks.navigation, 'nav');
   const storyboard = requireUnique(expected.landmarks.storyboard, 'main');
   const allScreens = requireUnique(expected.landmarks.allScreens, 'section');
-
-  const manifestNodes = findId('product-experience-preview-contract');
-  let manifest = null;
-  if (manifestNodes.length !== 1
-    || manifestNodes[0].tag !== 'script'
-    || manifestNodes[0].attrs.type !== 'application/json') {
-    errors.push(finding('preview-contract-missing', 'final preview requires one application/json contract script'));
-  } else {
-    try {
-      manifest = JSON.parse(manifestNodes[0].text);
-      if (canonicalJson(manifest) !== canonicalJson(expected)) {
-        errors.push(finding('preview-contract-mismatch', 'embedded preview contract does not match current canonical artifacts'));
-      }
-    } catch (error) {
-      errors.push(finding('preview-contract-invalid', `embedded preview contract is not valid JSON: ${error.message}`));
-    }
-  }
 
   const tokenStyles = findId('product-experience-token-contract');
   if (tokenStyles.length !== 1
@@ -380,7 +371,7 @@ function validateHtml(html, expected) {
   ))) {
     errors.push(finding('preview-external-stylesheet-forbidden', 'final preview must not load external stylesheets'));
   }
-  return { errors, manifest, parsed };
+  return { errors, parsed };
 }
 
 function loadSources(paths) {
@@ -457,7 +448,7 @@ function main(argv) {
         mode: 'contract-preparation',
         contractPath: paths.contractOutput,
         selectedScreenIds: contract.selectedScreenIds,
-        contractRevision: sha256Hex(canonicalJson(contract)),
+        contractRevision: contract.contractRevision,
         errors: [],
         warnings: [],
       });
@@ -475,6 +466,7 @@ function main(argv) {
       compiledRevision: contract.revisions.compiled,
       designTokenRevision: contract.revisions.designTokens,
       signatureComponentsRevision: contract.revisions.signatureComponents,
+      previewContractRevision: contract.contractRevision,
       previewRevision: sha256Hex(html),
       errors: validation.errors,
       warnings: [],

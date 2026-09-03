@@ -92,11 +92,10 @@ function finalHtml(contract) {
   <title>Final product experience</title>
   <style id="product-experience-token-contract">${contract.designTokens.css}</style>
 </head>
-<body data-preview-mode="final" data-preview-authorship="design-system-model">
+<body data-preview-mode="final" data-preview-authorship="design-system-model" data-preview-contract-revision="${contract.contractRevision}">
   <nav id="preview-navigation">${navigation}</nav>
   <main id="preview-storyboard">${screens}</main>
   <section id="preview-all-screens">${allScreens}${requirements}</section>
-  <script id="product-experience-preview-contract" type="application/json">${JSON.stringify(contract).replace(/</g, '\\u003c')}</script>
 </body>
 </html>\n`;
 }
@@ -116,13 +115,18 @@ test('validator prepares and accepts a canonical AI-authored final preview', () 
 
     const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
     const previewPath = path.join(projectRoot, '_plan_preview.html');
-    fs.writeFileSync(previewPath, finalHtml(contract));
+    const html = finalHtml(contract);
+    assert.strictEqual(contract.contractRevision, prepared.json.contractRevision);
+    assert.match(html, new RegExp(`data-preview-contract-revision="${contract.contractRevision}"`));
+    assert.doesNotMatch(html, /application\/json|product-experience-preview-contract/);
+    fs.writeFileSync(previewPath, html);
     const result = runCli('validate-product-experience-preview.js', [
       '--project-root', projectRoot,
     ]);
     assert.strictEqual(result.code, 0, JSON.stringify(result.json?.errors));
     assert.strictEqual(result.json.ok, true);
     assert.deepStrictEqual(result.json.selectedScreenIds, ['discover', 'product', 'checkout']);
+    assert.strictEqual(result.json.previewContractRevision, prepared.json.contractRevision);
     assert.match(result.json.previewRevision, /^[a-f0-9]{64}$/);
   } finally {
     cleanup(projectRoot);
@@ -169,12 +173,12 @@ test('validator rejects drift, hidden evidence, placeholders, and structural sub
         code: 'preview-screen-selection-mismatch',
       },
       {
-        name: 'embedded contract drift',
+        name: 'contract revision drift',
         html: valid.replace(
-          '"contractType":"product-experience-final-preview"',
-          '"contractType":"stale-final-preview"',
+          `data-preview-contract-revision="${contract.contractRevision}"`,
+          'data-preview-contract-revision="stale"',
         ),
-        code: 'preview-contract-mismatch',
+        code: 'preview-contract-revision-mismatch',
       },
       {
         name: 'navigation drift',
