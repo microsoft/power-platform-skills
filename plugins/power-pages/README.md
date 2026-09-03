@@ -390,15 +390,16 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 
 > "Add French and German to my site"
 
-Adds or extends multilingual localization for React, Vue, Angular, and Astro
-Power Pages code-site SPAs.
+Adds or extends multilingual localization for React, Vue, and Angular runtime
+Power Pages code-site SPAs. Astro and Angular static localization are
+temporarily unavailable.
 
 - Detects and preserves existing localization configuration and translations
 - Renders and opens a persistent `docs/add-localization-plan.html` in the
   site's current source language before the terminal approval gate
 - Validates canonical BCP-47 language tags against the bundled IANA registry
-- Recommends runtime localization for React/Vue, official static localization
-  for Angular, and built-in static locale routes for Astro
+- Centralizes mode availability: React, Vue, and Angular runtime are active;
+  Angular static and Astro static remain dormant for future re-enablement
 - Generates translations with the agent or creates blank values for manual
   completion
 - Resolves direction from each locale's writing script, including languages

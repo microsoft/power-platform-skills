@@ -12,7 +12,11 @@
 const fs = require('fs');
 const path = require('path');
 const { renderTemplate, parseArgs } = require('./lib/render-template');
-const { resolveLocale } = require('./lib/localization-config');
+const {
+  KNOWN_PACKAGES,
+  getLocalizationModeAvailability,
+  resolveLocale,
+} = require('./lib/localization-config');
 
 const args = parseArgs(process.argv);
 
@@ -266,6 +270,31 @@ function validatePlanData(data) {
       if (!CHANGE_STATUSES.has(item.status)) {
         errors.push(
           `CONFIGURATION_DATA.${key}.status must be new, preserved, or changed.`
+        );
+      }
+    }
+    if (typeof data.FRAMEWORK === 'string' &&
+        typeof config.mode?.value === 'string') {
+      const availability = getLocalizationModeAvailability(
+        data.FRAMEWORK.toLowerCase(),
+        config.mode.value
+      );
+      if (!availability.available) {
+        errors.push(availability.reason);
+      }
+    }
+    if (config.package && typeof config.package === 'object') {
+      validateString(config.package.name, 'CONFIGURATION_DATA.package.name', errors);
+      validateString(config.package.version, 'CONFIGURATION_DATA.package.version', errors);
+      const knownPackage = KNOWN_PACKAGES[config.package.name];
+      if (knownPackage && typeof data.FRAMEWORK === 'string' &&
+          typeof config.mode?.value === 'string' &&
+          (knownPackage.framework !== data.FRAMEWORK.toLowerCase() ||
+           knownPackage.mode !== config.mode.value)) {
+        errors.push(
+          `Package "${config.package.name}" is for ${knownPackage.framework} ` +
+          `${knownPackage.mode} localization, not ` +
+          `${data.FRAMEWORK.toLowerCase()} ${config.mode.value}.`
         );
       }
     }

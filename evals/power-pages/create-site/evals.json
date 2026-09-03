@@ -88,6 +88,7 @@
         "Images use appropriate sizing (w=1600 for heroes, w=800 for cards) with descriptive alt text",
         "Each page gets its own dedicated git commit; each component gets its own commit",
         "Playwright browser_snapshot verifies each page (no screenshots taken)",
+        "Checks centralized localization availability and does not offer the add-localization child workflow because Astro has no currently available mode",
         "axe-core audit script runs with --routes flag covering all site routes",
         "All critical/serious accessibility violations are fixed, committed, and re-verified",
         "Accessibility summary table shows per-page violations found vs fixed",
@@ -143,16 +144,16 @@
     {
       "id": 6,
       "prompt": "Create an Astro Power Pages site called Local Bakery. Keep it English-only.",
-      "expected_output": "The workflow builds the site, asks the fixed localization question in Phase 5.7, records the opt-out, and continues without invoking add-localization. It may suggest the skill later as an optional enhancement.",
+      "expected_output": "The workflow builds the site, reads centralized localization availability in Phase 5.7, explains that Astro localization is temporarily unavailable, and continues without invoking or suggesting add-localization.",
       "files": [],
       "expectations": [
-        "Asks the localization question only after the real pages are built",
-        "Shows the localization scope subtext",
-        "Offers exactly 'Yes — configure localization now' and 'No — keep this site single-language'",
+        "Checks mode availability only after the real pages are built",
+        "Uses the centralized Astro temporarily-unavailable reason",
+        "Does not ask the additional-languages question",
         "Records LOCALIZATION_REQUESTED=false",
         "Does not invoke add-localization during implementation",
         "Continues normal accessibility, review, and deployment phases",
-        "May list add-localization as an optional next step"
+        "Does not list add-localization as an available optional next step"
       ]
     }
   ]
