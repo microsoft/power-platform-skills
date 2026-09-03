@@ -115,77 +115,27 @@ Use this fast path when the request is only to enable Application Insights, chan
 
 If the request also adds or changes customer-defined events in app screens, configure Application Insights here first, then continue through the normal edit workflow for those source changes.
 
-Read `/create-mobile-app` Step 6.8 before continuing and reuse its Azure discovery, connection-string validation, privacy, and support-boundary rules. Do not duplicate or weaken those rules here.
+All Application Insights logic lives in the dedicated `/setup-app-insights` skill. Delegate to it rather than duplicating Azure discovery, connection-string handling, provider wiring, or privacy rules here:
 
-Determine the requested action:
+```
+Invoke skill: /setup-app-insights
 
-- `enable` — Application Insights is disabled and the user wants to configure it.
-- `change-resource` — Application Insights is enabled and the user wants a different destination.
-- `disable` — the user wants customer Application Insights turned off.
-- If the request says only "update Application Insights", ask one `AskUserQuestion` with these three choices.
+Environment:
+  CODE_APPS_NATIVE_ORCHESTRATING=1
 
-Inspect:
-
-- `<working_dir>/app.json`
-- `<working_dir>/app/_layout.tsx`
-- `<working_dir>/memory-bank.md`, when present
-
-If `app.json` is missing, malformed, or does not contain an `expo` object, STOP without mutation. If uncommitted work overlaps `app.json` or `app/_layout.tsx`, follow Step 0's overlap approval rule.
-
-Show one focused mutation preview:
-
-```text
-─── Application Insights edit ──────────────────────
-Action        <enable|change resource|disable>
-Configuration app.json → expo.extra.appInsightsConfig
-Provider      app/_layout.tsx → PowerAppsProvider appConfig
-Plan/screens  unchanged
-Sensitive data connection string will not be printed or stored in memory-bank.md
+Arguments:
+  --working-dir <working_dir>
+  --action <enable|change-resource|disable>   # omit to let the skill infer + ask
 ```
 
-Ask: `Apply this Application Insights configuration change?` Continue only after approval.
+Determine `--action` from the request (`enable` / `change-resource` / `disable`); omit it if the request only says "update Application Insights" and let the skill ask. The skill owns the mutation preview, approval, `app.json` + `PowerAppsProvider` `appConfig` wiring, `memory-bank.md` updates, and the selection telemetry emit.
 
-For `enable` and `change-resource`:
+Handle the return per the status protocol (AGENTS.md rule #12):
 
-1. Execute the resource discovery and configure branch from `/create-mobile-app` Step 6.8. Do not ask the create-flow Yes/No question again; this edit request and approval are the explicit opt-in.
-2. Let the user select a visible Application Insights resource or provide an administrator-supplied connection string exactly as Step 6.8 specifies.
-3. Preserve the existing non-empty `appInsightsConfig.appId`; otherwise use `expo.slug`, then `package.json` `name` as the fallback.
-4. Preserve the existing `environment` and `includeUserId` values when present. Default to `environment: "development"` and `includeUserId: false`; never turn on user identity collection implicitly.
-5. Set `enabled: true` and replace only the connection string.
-
-For `disable`:
-
-1. Preserve the existing `appId` and `environment` values when present.
-2. Set `enabled: false`, clear `connectionString`, and keep `includeUserId: false` unless an existing explicitly approved value must be preserved.
-3. Do not require Azure CLI sign-in or resource discovery.
-
-Create the `expo.extra.appInsightsConfig` object when it is missing. For every action, preserve all unrelated `app.json` fields. Never print the connection string, pass it to another agent, write it to `native-app-plan.md` or `memory-bank.md`, or include it in a summary.
-
-Verify that `app/_layout.tsx` imports the root `app.json` and passes the complete object to `PowerAppsProvider`:
-
-```tsx
-import appConfig from '../app.json';
-
-<PowerAppsProvider appConfig={appConfig}>
-```
-
-If either part is missing, patch only the import and `appConfig` prop; preserve all other provider props and layout behavior. Run `npx tsc --noEmit` when the layout changed.
-
-Parse `app.json` with Node after the mutation and assert:
-
-- `enable` / `change-resource`: `enabled === true` and `connectionString` is non-empty.
-- `disable`: `enabled === false` and `connectionString === ""`.
-
-For `enable` and `change-resource`, update only these non-sensitive memory-bank facts:
-
-```markdown
-- Customer telemetry: <enabled|disabled>
-- Customer telemetry app ID: <appId>
-- Customer telemetry resource ID: <selected-resource-id or admin-provided>
-- Customer telemetry destination: one C1-owned workspace-based Application Insights resource
-```
-
-For `disable`, persist only `Customer telemetry: disabled` and the app ID, and remove stale resource ID/destination lines. Never store the connection string. Print the action completed and stop; do not continue to Step 1.
+- `DONE` → print the action completed and stop; do not continue to Step 1.
+- `DONE_WITH_CONCERNS` → surface concerns, then stop.
+- `NEEDS_CONTEXT` → surface the question, re-invoke with the answer.
+- `BLOCKED` → surface the error (usually `app.json` unusable) and stop.
 
 ### Step 1 — Discover intent + inspect existing app
 

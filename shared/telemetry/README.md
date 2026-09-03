@@ -101,7 +101,7 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
   - `invocationSource` — `prompt` or `pretool`.
   - `appInstanceId` — a random per-project UUID, or `null` outside a prepared project.
-  - `appInsightsSelection` — `enabled` or `disabled`, the creator's answer at the `/create-mobile-app` Application Insights prompt. A closed two-value enum that carries no resource name, connection string, instrumentation key, or subscription — only whether the option was taken. Present only after that prompt is answered.
+  - `appInsightsSelection` — `enabled` or `disabled`, the user's choice from the `/setup-app-insights` skill. A closed two-value enum that carries no resource name, connection string, instrumentation key, or subscription — only whether the option was taken. Present only on the `app_insights_selection` event.
 
   Each key is omitted independently when its source is unavailable; `eventInfo` itself is omitted only when every key would be absent.
 

@@ -220,7 +220,7 @@ test('Application Insights prompt selections emit only the approved choice', (t)
     });
     assert.equal(captured, event);
     assert.equal(event.data.eventName, 'app_insights_selection');
-    assert.equal(event.data.skillName, 'create-mobile-app');
+    assert.equal(event.data.skillName, 'setup-app-insights');
     assert.deepEqual(event.data.eventInfo, {
       appInstanceId: null,
       appInsightsSelection: selection,
