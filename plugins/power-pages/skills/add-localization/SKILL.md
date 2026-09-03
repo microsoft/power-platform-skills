@@ -570,6 +570,12 @@ introduced regression.
 
 ## Phase 6: Verify localization
 
+If `.powerpages-localization-verification.json` already exists, treat it as an
+interrupted run. Invoke `manage-localization-verification.js --fail`, restore
+every recorded target locale to fail-closed `pending-remediation` availability,
+and finalize that transaction before beginning another one. Never delete or
+overwrite the transaction file to bypass recovery.
+
 Run the independent validator:
 
 ```bash
@@ -577,7 +583,33 @@ node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" -
 ```
 Fix all reported errors.
 
-Run the project's existing build. Start or reuse its dev server. Read
+Before exposing newly added pending locales, begin an exclusive verification
+transaction while they are still listed in `unavailableLocales`:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
+  --begin \
+  --projectRoot "<PROJECT_ROOT>" \
+  --locales "<NEW_LOCALE[,NEW_LOCALE]>"
+```
+
+Then remove only those transaction target locales from `unavailableLocales`
+and from the managed availability module. Leave their readiness entries
+`pending-remediation` until verification succeeds. This is the only permitted
+temporary mismatch: the transaction records the prior fail-closed state,
+blocks completion and deployment, and allows the Phase 6 validator to
+distinguish deliberate local verification from an accidentally exposed
+pending locale. Do not change the availability of any non-target locale.
+
+Run the transaction-aware validator:
+
+```bash
+node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --verification
+```
+
+Run the project's existing build. Start a loopback-only dev server. Read
 `${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md` and build an
 ephemeral run specification from the reconciled `componentScope` and actual
 implementation. Do not persist the specification as a component manifest.
@@ -589,8 +621,11 @@ Reuse the project's Playwright dependency. If neither `playwright` nor
 do not download a separate bundled browser when a supported system browser is
 available.
 
-The specification must include every configured real locale so the CLI can
-reconcile it with `.powerpages-localization.json`, and it must cover:
+The specification must include every currently available real locale,
+including every transaction target. Exclude pre-existing unavailable locales
+from activation and list them in `unavailableLocaleChecks` with every selector
+surface that must remain hidden. The CLI reconciles both sets with
+`.powerpages-localization.json`. The specification must cover:
 
 - The default locale and every newly added locale independently.
 - Application-driven activation plus representative localized-content
@@ -633,19 +668,15 @@ Separately verify persisted selection, browser-language matching, invalid
 saved-value fallback, and that stale resource requests cannot overwrite a
 newer selection.
 
-Do not expose a pending locale through a normal selector or switching path for
-testing. For each unavailable runtime locale, add a development-only
-`window.__powerPagesLocalizationAudit.activate(locale)` adapter behind the
-framework's development-mode guard. It must invoke the same coordinator and
-resource-loading behavior through a dedicated
-`activateLocaleForAudit(locale)` operation while bypassing availability only
-for the audit.
-Use only the run-spec `audit-activate` action (plus waits when needed) for that
-locale, and list every normal locale-selector surface in
-`unavailableSelectors`. The rendered audit verifies those selectors are absent
-before each component and transition activation. Normal detection, metadata,
-and production output must continue to reject the locale and are enforced by
-source validation; never create an unconditional production bypass.
+Activate every transaction target through the site's real selector or
+locale-navigation control using one locale-bound `activate-locale` action with
+`method: click` or `method: select`. Allow only optional waits beside that
+action. Do not add an exported bypass, test-only locale function, or arbitrary
+browser JavaScript. The target is locally available only while the transaction
+blocks completion and deployment.
+Pre-existing unavailable locales remain excluded from selector, switching,
+detection, metadata, and production output, and their selectors are checked
+through `unavailableLocaleChecks`.
 
 Run:
 
@@ -659,10 +690,12 @@ node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
 ```
 
 Parse stdout even when the expected blocking exit code is `1`. Exit code `2`
-means the runner or specification failed. Delete the temporary specification
-after the report is written. Fix every rendered error and rerun affected
-cases. Give every review finding explicit evidence and a proposed disposition
-for the Phase 7 maker decision.
+means the runner or specification failed. Either outcome moves the transaction
+to `remediation-required`; immediately restore each target to
+`unavailableLocales` and the managed availability module before retrying.
+Delete the temporary specification after the report is written. Fix every
+rendered error and rerun affected cases. Give every review finding explicit
+evidence and a proposed disposition for the Phase 7 maker decision.
 
 Re-run the static audit after remediation and reconcile its exact current
 findings with the rendered report. Update each locale's provisional readiness before Phase 7, then derive the
@@ -735,7 +768,11 @@ Use `AskUserQuestion`:
 Explicit acceptance applies only to usable degradation. It cannot override a
 build/runtime failure, incorrect direction, unreadable content, unreachable
 critical control, or serious accessibility failure. Apply requested revisions,
-then repeat Phase 6 and this gate.
+then repeat Phase 6 and this gate. Before repeating after a verified or failed
+run, invoke `manage-localization-verification.js --fail`, restore every target
+to pending unavailable state, finalize the old transaction, and begin a new
+transaction. Each rendered run must have its own fail-closed starting point and
+cannot reuse a prior verified result.
 
 After the maker's choice, finalize `.powerpages-localization.json`:
 
@@ -754,9 +791,19 @@ After the maker's choice, finalize `.powerpages-localization.json`:
   affected locales unavailable.
 
 Never add a maker-approved disposition to an error finding. After changing
-status or availability, rerun the independent validator, project build, and
-the locale activation cases affected by that change. Do not complete the
-workflow until the final manifest, selector/detection boundaries, and actual
+status or availability, finalize the transaction:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
+  --finalize \
+  --projectRoot "<PROJECT_ROOT>"
+```
+
+Finalization succeeds only when the normal manifest invariant and all
+localization checks pass. Then rerun the independent validator without
+`--verification`, the project build, and the locale activation cases affected
+by that change. Do not complete the workflow until the transaction file is
+gone and the final manifest, selector/detection boundaries, and actual
 rendered availability agree. If the maker saves a pending locale, do not offer
 deployment in Phase 8.
 

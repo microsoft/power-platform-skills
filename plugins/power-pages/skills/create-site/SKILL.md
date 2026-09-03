@@ -885,12 +885,16 @@ sequences for every real non-default locale, with route, form-state,
 application-state, and focus preservation checks. Pseudo locales do not
 participate in application-switch transitions. Every real locale, including
 the default, needs a reusable application activation action; `use-current`
-cannot restore a locale during a round trip. For a pending runtime locale, use
-the development-only audit adapter and declare `unavailableSelectors` so the
-runner proves normal selector surfaces do not expose it before activation. Bare
-`preserve` selectors are only for form controls; use explicit text, attribute,
-or property preservation entries for tabs, panels, counters, and other
-application state.
+cannot restore a locale during a round trip. For a newly added runtime locale,
+use the localization verification transaction defined by add-localization:
+temporarily expose only the recorded target through the normal selector, run
+Playwright against a loopback dev server, keep it available on success, and
+restore fail-closed availability on failure. Exclude pre-existing unavailable
+locales from activation and declare them in `unavailableLocaleChecks`. Do not
+complete creation or offer deployment while the verification transaction
+exists. Bare `preserve` selectors are only for form controls; use explicit
+text, attribute, or property preservation entries for tabs, panels, counters,
+and other application state.
 
 Retain evidence for every applicable `REVIEW_DATA.agentChecks` item: audit
 result, routes/viewports exercised, direction used, mixed-content fixtures,

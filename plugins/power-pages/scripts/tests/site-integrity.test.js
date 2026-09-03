@@ -18,20 +18,10 @@ const {
 
 const CLI_PATH = path.join(__dirname, '..', 'validate-site-integrity.js');
 
-function runtimeIndexWithAuditAdapter() {
+function runtimeIndex() {
   return "import i18next from 'i18next'; i18next.init({ fallbackLng: 'en-US' });\n" +
     "import { isLocaleAvailable } from './localeAvailability';\n" +
-    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n" +
-    "async function activateLocaleForAudit(locale) {\n" +
-    "  await i18next.changeLanguage(locale);\n" +
-    "  document.documentElement.lang = locale;\n" +
-    "  document.documentElement.dir = locale === 'ar-SA' ? 'rtl' : 'ltr';\n" +
-    "}\n" +
-    "if (import.meta.env.DEV) {\n" +
-    "  window.__powerPagesLocalizationAudit = {\n" +
-    "    activate: (locale) => activateLocaleForAudit(locale),\n" +
-    "  };\n" +
-    "}\n";
+    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n";
 }
 
 test('defers exact recorded static bidi blockers but not unsafe or changed findings', () => {
@@ -194,7 +184,7 @@ test('defers known bidi blockers while affected locales remain unavailable', (t)
   writeProjectFile(
     projectRoot,
     'src/i18n/index.ts',
-    runtimeIndexWithAuditAdapter()
+    runtimeIndex()
   );
   writeProjectFile(projectRoot, availabilityPath, `
     const unavailableLocales = new Set(['ar-SA']);
@@ -280,7 +270,7 @@ test('pending remediation still blocks newly introduced bidi defects', (t) => {
   writeProjectFile(
     projectRoot,
     'src/i18n/index.ts',
-    runtimeIndexWithAuditAdapter()
+    runtimeIndex()
   );
   writeProjectFile(projectRoot, availabilityPath, `
     const unavailableLocales = new Set(['ar-SA']);
@@ -364,7 +354,7 @@ test('one recorded finding cannot defer a second same-line declaration', (t) => 
   writeProjectFile(
     projectRoot,
     'src/i18n/index.ts',
-    runtimeIndexWithAuditAdapter()
+    runtimeIndex()
   );
   writeProjectFile(projectRoot, availabilityPath, `
     const unavailableLocales = new Set(['ar-SA']);

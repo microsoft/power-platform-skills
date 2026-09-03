@@ -231,7 +231,7 @@ function validateFindingDisposition(finding, prefix, errors, required) {
   }
 }
 
-function validateLocalizationManifestShape(manifest) {
+function validateLocalizationManifestShape(manifest, options = {}) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return ['Localization manifest must be a JSON object.'];
   }
@@ -351,12 +351,12 @@ function validateLocalizationManifestShape(manifest) {
       'Schema version 1 manifests require bidirectionalReadiness metadata.'
     );
   } else if (manifest.bidirectionalReadiness !== undefined) {
-    validateBidirectionalReadiness(manifest, errors);
+    validateBidirectionalReadiness(manifest, errors, options);
   }
   return errors;
 }
 
-function validateBidirectionalReadiness(manifest, errors) {
+function validateBidirectionalReadiness(manifest, errors, options = {}) {
   const readiness = manifest.bidirectionalReadiness;
   const statuses = new Set([
     'ready',
@@ -488,9 +488,11 @@ function validateBidirectionalReadiness(manifest, errors) {
     );
   }
 
+  const verificationLocales = new Set(options.verificationLocales || []);
   const expectedUnavailable = [...localeStatuses.entries()]
     .filter(([, status]) => status === 'pending-remediation')
     .map(([locale]) => locale)
+    .filter((locale) => !verificationLocales.has(locale))
     .sort();
   const actualUnavailable = Array.isArray(manifest.unavailableLocales)
     ? [...manifest.unavailableLocales].sort()

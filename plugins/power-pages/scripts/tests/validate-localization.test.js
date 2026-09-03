@@ -7,6 +7,10 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const { createTempProject, writeProjectFile } = require('./test-utils');
+const {
+  beginLocalizationVerification,
+  markLocalizationVerificationPassed,
+} = require('../lib/localization-verification-transaction');
 
 const VALIDATOR_PATH = path.join(
   __dirname,
@@ -17,14 +21,124 @@ const VALIDATOR_PATH = path.join(
   'scripts',
   'validate-localization.js'
 );
+const VERIFICATION_MANAGER_PATH = path.join(
+  __dirname,
+  '..',
+  'manage-localization-verification.js'
+);
 const { compareXlfResources, extractXlfMessages } = require(VALIDATOR_PATH);
 
-function runValidator(projectRoot) {
+function runValidator(projectRoot, options = {}) {
+  if (options.verification) {
+    return spawnSync(
+      process.execPath,
+      [VALIDATOR_PATH, '--projectRoot', projectRoot, '--verification'],
+      { encoding: 'utf8' }
+    );
+  }
   return spawnSync(process.execPath, [VALIDATOR_PATH], {
     input: JSON.stringify({ cwd: projectRoot }),
     encoding: 'utf8',
   });
 }
+
+test('allows an explicitly active Phase 6 verification but blocks completion', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    unavailableLocales: ['fr-FR'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+  });
+  beginLocalizationVerification(projectRoot, ['fr-FR']);
+  const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.unavailableLocales = [];
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const verificationResult = runValidator(projectRoot, { verification: true });
+  assert.equal(verificationResult.status, 0, verificationResult.stderr);
+
+  const completionResult = runValidator(projectRoot);
+  assert.equal(completionResult.status, 2);
+  assert.match(
+    completionResult.stderr,
+    /unavailableLocales must exactly match|verification is still active/i
+  );
+});
+
+test('finalizes an active verification only after full localization validation', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    unavailableLocales: ['fr-FR'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+  });
+  beginLocalizationVerification(projectRoot, ['fr-FR']);
+  markLocalizationVerificationPassed(projectRoot);
+  const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.unavailableLocales = [];
+  manifest.bidirectionalReadiness = {
+    status: 'ready',
+    localeReadiness: {
+      'en-US': { status: 'ready' },
+      'fr-FR': { status: 'ready' },
+    },
+    findings: [],
+    renderedFindings: [],
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      VERIFICATION_MANAGER_PATH,
+      '--finalize',
+      '--projectRoot',
+      projectRoot,
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(!fs.existsSync(
+    path.join(projectRoot, '.powerpages-localization-verification.json')
+  ));
+});
+
+test('keeps verification blocking when its localization manifest is missing', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    unavailableLocales: ['fr-FR'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+  });
+  beginLocalizationVerification(projectRoot, ['fr-FR']);
+  fs.unlinkSync(path.join(projectRoot, '.powerpages-localization.json'));
+
+  const result = runValidator(projectRoot);
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /cannot continue or complete without a valid manifest/i);
+});
 
 function createLocalizedReactProject(t, overrides = {}) {
   const projectRoot = createTempProject(t);
@@ -516,17 +630,7 @@ test('allows a mixed-direction locale to remain unavailable pending remediation'
   fs.appendFileSync(
     path.join(projectRoot, 'src/i18n/index.ts'),
     "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
-    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n" +
-    "async function activateLocaleForAudit(locale) {\n" +
-    "  await i18next.changeLanguage(locale);\n" +
-    "  document.documentElement.lang = locale;\n" +
-    "  document.documentElement.dir = locale === 'ar-SA' ? 'rtl' : 'ltr';\n" +
-    "}\n" +
-    "if (import.meta.env.DEV) {\n" +
-    "  window.__powerPagesLocalizationAudit = {\n" +
-    "    activate: (locale) => activateLocaleForAudit(locale),\n" +
-    "  };\n" +
-    "}\n"
+    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n"
   );
 
   const result = runValidator(projectRoot);
@@ -598,17 +702,7 @@ test('keeps a previously ready RTL locale available when only a new RTL locale i
   fs.appendFileSync(
     path.join(projectRoot, 'src/i18n/index.ts'),
     "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
-    "export const selectorLocales = ['en-US', 'he-IL', 'ar-SA'].filter(isLocaleAvailable);\n" +
-    "async function activateLocaleForAudit(locale) {\n" +
-    "  await i18next.changeLanguage(locale);\n" +
-    "  document.documentElement.lang = locale;\n" +
-    "  document.documentElement.dir = locale === 'en-US' ? 'ltr' : 'rtl';\n" +
-    "}\n" +
-    "if (import.meta.env.DEV) {\n" +
-    "  window.__powerPagesLocalizationAudit = {\n" +
-    "    activate: (locale) => activateLocaleForAudit(locale),\n" +
-    "  };\n" +
-    "}\n"
+    "export const selectorLocales = ['en-US', 'he-IL', 'ar-SA'].filter(isLocaleAvailable);\n"
   );
 
   const result = runValidator(projectRoot);
@@ -655,20 +749,13 @@ test('requires pending locale availability to be applied at activation boundarie
     path.join(projectRoot, 'src/i18n/index.ts'),
     "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
     "isLocaleAvailable('en-US');\n" +
-    "export const diagnostics = ['en-US'].filter(isLocaleAvailable);\n" +
-    "async function activateLocaleForAudit(locale) {\n" +
-    "  return i18next.changeLanguage(locale);\n" +
-    "}\n" +
-    "window.__powerPagesLocalizationAudit = {\n" +
-    "  activate: (locale) => activateLocaleForAudit(locale),\n" +
-    "};\n"
+    "export const diagnostics = ['en-US'].filter(isLocaleAvailable);\n"
   );
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /does not apply isLocaleAvailable/i);
   assert.match(result.stderr, /managed availability logic/i);
-  assert.match(result.stderr, /must be development-gated/i);
 });
 
 test('requires readiness metadata for mixed-direction localization', (t) => {
