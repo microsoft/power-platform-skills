@@ -125,6 +125,10 @@ function createLocalizedReactProject(t, overrides = {}) {
     unavailableLocales: [],
     bidirectionalReadiness: {
       status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'ready' },
+      },
       findings: [],
       renderedFindings: [],
     },
@@ -170,14 +174,26 @@ function createUnavailableLocaleProject(
     ],
     bidirectionalReadiness: {
       status: 'pending-remediation',
-      findings: [{ rule: 'directional-physical-css' }],
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        caseId: 'arabic-menu--open--desktop--ar',
+        rule: 'localized-font-failure',
+        severity: 'error',
+        message: 'The Arabic menu font is unreadable.',
+        selector: '.menu',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
+      }],
     },
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
     greeting: 'مرحبا {{name}}',
     navigation: { home: 'الرئيسية' },
   }));
-  writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
   writeProjectFile(projectRoot, availabilityPath, availabilitySource);
   writeProjectFile(projectRoot, 'src/components/LanguageSelector.tsx', `
     import { isLocaleAvailable } from '../i18n/localeAvailability';
@@ -190,7 +206,17 @@ function createUnavailableLocaleProject(
   fs.appendFileSync(
     path.join(projectRoot, 'src/i18n/index.ts'),
     "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
-    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n"
+    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n" +
+    "async function activateLocaleForAudit(locale) {\n" +
+    "  await i18next.changeLanguage(locale);\n" +
+    "  document.documentElement.lang = locale;\n" +
+    "  document.documentElement.dir = locale === 'ar-SA' ? 'rtl' : 'ltr';\n" +
+    "}\n" +
+    "if (import.meta.env.DEV) {\n" +
+    "  window.__powerPagesLocalizationAudit = {\n" +
+    "    activate: (locale) => activateLocaleForAudit(locale),\n" +
+    "  };\n" +
+    "}\n"
   );
   if (includeCoordinator) {
     writeProjectFile(projectRoot, coordinatorPath, `
@@ -305,7 +331,12 @@ function createAngularRuntimeProjectWithStaticResidue(t) {
     unavailableLocales: [],
     bidirectionalReadiness: {
       status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'ready' },
+      },
       findings: [],
+      renderedFindings: [],
     },
     adoptedExistingConfiguration: false,
     lastOperation: 'reconfigure',
@@ -612,7 +643,15 @@ test('blocks mixed-direction runtime localization without a locale coordinator',
       'en-US': 'src/i18n/locales/en-US.json',
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
-    bidirectionalReadiness: { status: 'ready', findings: [] },
+    bidirectionalReadiness: {
+      status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'ready' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
     greeting: 'مرحبا {{name}}',
@@ -633,7 +672,15 @@ test('approves a mixed-direction runtime localization with a coordinator', (t) =
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
     managedFiles: ['src/i18n/index.ts', coordinatorPath],
-    bidirectionalReadiness: { status: 'ready', findings: [] },
+    bidirectionalReadiness: {
+      status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'ready' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
     greeting: 'مرحبا {{name}}',
@@ -662,7 +709,15 @@ test('blocks a mixed-direction coordinator with a fixed document direction', (t)
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
     managedFiles: ['src/i18n/index.ts', coordinatorPath],
-    bidirectionalReadiness: { status: 'ready', findings: [] },
+    bidirectionalReadiness: {
+      status: 'ready',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'ready' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
     greeting: 'مرحبا {{name}}',
@@ -688,6 +743,10 @@ test('enforces unavailable locales for same-direction locale sets', (t) => {
     unavailableLocales: ['fr-FR'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'pending-remediation' },
+      },
       findings: [],
       renderedFindings: [],
     },
@@ -718,6 +777,10 @@ test('requires maker-approved limitation evidence to exist in the project', (t) 
   const projectRoot = createLocalizedReactProject(t, {
     bidirectionalReadiness: {
       status: 'approved-with-limitations',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'approved-with-limitations' },
+      },
       findings: [],
       renderedFindings: [{
         caseId: 'calendar--open--desktop--fr',
@@ -725,6 +788,8 @@ test('requires maker-approved limitation evidence to exist in the project', (t) 
         severity: 'review',
         message: 'The vendor-owned calendar arrow remains unchanged.',
         selector: '.calendar',
+        scope: 'locale',
+        affectedLocales: ['fr-FR'],
         disposition: {
           status: 'maker-approved',
           impact: 'Calendar navigation remains understandable and usable.',
@@ -925,38 +990,47 @@ test('rejects inverted unavailable-locale predicates', (t) => {
   }
 });
 
-test('does not let pending remediation hide an available opposite-direction locale', (t) => {
+test('keeps a previously ready RTL locale available when only a new RTL locale is pending', (t) => {
   const availabilityPath = 'src/i18n/localeAvailability.ts';
+  const coordinatorPath = 'src/i18n/localeCoordinator.ts';
   const projectRoot = createLocalizedReactProject(t, {
-    locales: ['en-US', 'ar-SA', 'fr-FR'],
+    locales: ['en-US', 'he-IL', 'ar-SA'],
     resourcePaths: {
       'en-US': 'src/i18n/locales/en-US.json',
+      'he-IL': 'src/i18n/locales/he-IL.json',
       'ar-SA': 'src/i18n/locales/ar-SA.json',
-      'fr-FR': 'src/i18n/locales/fr-FR.json',
     },
-    unavailableLocales: ['fr-FR'],
-    managedFiles: ['src/i18n/index.ts', availabilityPath],
+    unavailableLocales: ['ar-SA'],
+    managedFiles: ['src/i18n/index.ts', availabilityPath, coordinatorPath],
     bidirectionalReadiness: {
       status: 'pending-remediation',
-      findings: [{
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'he-IL': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        caseId: 'arabic-calendar--open--desktop--ar',
+        rule: 'localized-font-failure',
         severity: 'error',
-        file: 'src/theme.css',
-        line: 1,
-        rule: 'directional-physical-css',
-        message: 'Use a logical CSS property.',
+        message: 'The Arabic calendar font is unreadable.',
+        selector: '.calendar',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
       }],
-      renderedFindings: [],
     },
   });
-  const resource = JSON.stringify({
-    greeting: 'Hello {{name}}',
-    navigation: { home: 'Home' },
-  });
-  writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', resource);
-  writeProjectFile(projectRoot, 'src/i18n/locales/fr-FR.json', resource);
-  writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
+  writeProjectFile(projectRoot, 'src/i18n/locales/he-IL.json', JSON.stringify({
+    greeting: 'שלום {{name}}',
+    navigation: { home: 'בית' },
+  }));
+  writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
+    greeting: 'مرحبا {{name}}',
+    navigation: { home: 'الرئيسية' },
+  }));
   writeProjectFile(projectRoot, availabilityPath, `
-    const unavailableLocales = new Set(['fr-FR']);
+    const unavailableLocales = new Set(['ar-SA']);
     export const isLocaleAvailable = (locale: string) => !unavailableLocales.has(locale);
   `);
   writeProjectFile(projectRoot, 'src/components/LanguageSelector.tsx', `
@@ -964,22 +1038,38 @@ test('does not let pending remediation hide an available opposite-direction loca
     export const LanguageSelector = () => {
       document.documentElement.lang = 'en-US';
       document.documentElement.dir = 'ltr';
-      return ['en-US', 'ar-SA'].filter(isLocaleAvailable).map((locale) => locale);
+      return ['en-US', 'he-IL', 'ar-SA'].filter(isLocaleAvailable).map((locale) => locale);
     };
+  `);
+  writeProjectFile(projectRoot, coordinatorPath, `
+    import i18next from 'i18next';
+    import { isLocaleAvailable } from './localeAvailability';
+    export async function switchLocale(locale: string) {
+      if (!isLocaleAvailable(locale)) return;
+      await i18next.changeLanguage(locale);
+      document.documentElement.lang = locale;
+      document.documentElement.dir = locale === 'he-IL' ? 'rtl' : 'ltr';
+      localStorage.setItem('site-locale', locale);
+    }
   `);
   fs.appendFileSync(
     path.join(projectRoot, 'src/i18n/index.ts'),
     "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
-    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n"
+    "export const selectorLocales = ['en-US', 'he-IL', 'ar-SA'].filter(isLocaleAvailable);\n" +
+    "async function activateLocaleForAudit(locale) {\n" +
+    "  await i18next.changeLanguage(locale);\n" +
+    "  document.documentElement.lang = locale;\n" +
+    "  document.documentElement.dir = locale === 'en-US' ? 'ltr' : 'rtl';\n" +
+    "}\n" +
+    "if (import.meta.env.DEV) {\n" +
+    "  window.__powerPagesLocalizationAudit = {\n" +
+    "    activate: (locale) => activateLocaleForAudit(locale),\n" +
+    "  };\n" +
+    "}\n"
   );
 
   const result = runValidator(projectRoot);
-  assert.equal(result.status, 2);
-  assert.match(
-    result.stderr,
-    /every locale opposite to the default direction to be unavailable/i
-  );
-  assert.match(result.stderr, /directional-physical-css/i);
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('requires pending locale availability to be applied at activation boundaries', (t) => {
@@ -994,30 +1084,48 @@ test('requires pending locale availability to be applied at activation boundarie
     managedFiles: ['src/i18n/index.ts', availabilityPath],
     bidirectionalReadiness: {
       status: 'pending-remediation',
-      findings: [{
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        caseId: 'calendar--open--desktop--ar',
+        rule: 'computed-direction-mismatch',
         severity: 'error',
-        file: 'src/theme.css',
-        line: 1,
-        rule: 'directional-physical-css',
-        message: 'Use a logical CSS property.',
+        message: 'Expected rtl but found ltr.',
+        selector: '.calendar',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
       }],
-      renderedFindings: [],
     },
   });
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
     greeting: 'مرحبا {{name}}',
     navigation: { home: 'الرئيسية' },
   }));
-  writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
   writeProjectFile(projectRoot, availabilityPath, `
     const unavailableLocales = new Set(['ar-SA']);
     export const isLocaleAvailable = (locale: string) => !unavailableLocales.has(locale);
   `);
+  fs.appendFileSync(
+    path.join(projectRoot, 'src/i18n/index.ts'),
+    "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
+    "isLocaleAvailable('en-US');\n" +
+    "export const diagnostics = ['en-US'].filter(isLocaleAvailable);\n" +
+    "async function activateLocaleForAudit(locale) {\n" +
+    "  return i18next.changeLanguage(locale);\n" +
+    "}\n" +
+    "window.__powerPagesLocalizationAudit = {\n" +
+    "  activate: (locale) => activateLocaleForAudit(locale),\n" +
+    "};\n"
+  );
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 2);
   assert.match(result.stderr, /does not apply isLocaleAvailable/i);
-  assert.match(result.stderr, /directional-physical-css/i);
+  assert.match(result.stderr, /managed availability logic/i);
+  assert.match(result.stderr, /must be development-gated/i);
 });
 
 test('requires readiness metadata for mixed-direction localization', (t) => {
@@ -1263,6 +1371,15 @@ test('blocks noncanonical manifest locale values', (t) => {
     resourcePaths: {
       'en-us': 'src/i18n/locales/en-US.json',
       'fr-FR': 'src/i18n/locales/fr-FR.json',
+    },
+    bidirectionalReadiness: {
+      status: 'ready',
+      localeReadiness: {
+        'en-us': { status: 'ready' },
+        'fr-FR': { status: 'ready' },
+      },
+      findings: [],
+      renderedFindings: [],
     },
   });
   const result = runValidator(projectRoot);
