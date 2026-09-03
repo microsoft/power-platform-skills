@@ -31,6 +31,11 @@ const {
 const {
   partitionDeferredFindings,
 } = require('../../../scripts/lib/bidirectional-finding-disposition');
+const {
+  listVerificationTransactionArtifacts,
+  readLocalizationVerificationTransaction,
+  validateTransactionAgainstManifest,
+} = require('../../../scripts/lib/localization-verification-transaction');
 
 const MAX_REPORTED_RESOURCE_IDS = 20;
 const MAX_RESOURCE_FILE_BYTES = 1024 * 1024;
@@ -406,9 +411,28 @@ function compareXlfResources(projectRoot, manifest, errors, options = {}) {
   }
 }
 
-function validateLocalization(projectRoot, warnings = []) {
+function validateLocalization(projectRoot, options = {}) {
+  const warnings = options.warnings || [];
   const manifestPath = path.join(projectRoot, MANIFEST_NAME);
+  const transactionResult =
+    readLocalizationVerificationTransaction(projectRoot);
+  const transactionArtifacts = listVerificationTransactionArtifacts(projectRoot);
+  const earlyTransactionErrors = [...transactionResult.errors];
+  for (const artifact of transactionArtifacts) {
+    if (artifact !== '.powerpages-localization-verification.json') {
+      earlyTransactionErrors.push(
+        `Localization verification transaction candidate ${artifact} remains ` +
+        'in the project.'
+      );
+    }
+  }
   if (!fs.existsSync(manifestPath)) {
+    if (transactionResult.transaction || earlyTransactionErrors.length > 0) {
+      return [
+        ...earlyTransactionErrors,
+        'Localization verification cannot continue or complete without a valid manifest.',
+      ];
+    }
     const detected = detectLocalization(projectRoot);
     if (!detected.detected) return [];
     return [
@@ -418,10 +442,54 @@ function validateLocalization(projectRoot, warnings = []) {
   }
 
   const manifest = readJson(manifestPath);
-  if (!manifest) return [`${MANIFEST_NAME} is not valid JSON.`];
-  const shapeErrors = validateLocalizationManifestShape(manifest, projectRoot);
-  if (shapeErrors.length) return shapeErrors;
+  if (!manifest) {
+    return [
+      ...earlyTransactionErrors,
+      ...(transactionResult.transaction
+        ? ['Localization verification is blocked until the manifest is restored.']
+        : []),
+      `${MANIFEST_NAME} is not valid JSON.`,
+    ];
+  }
   const errors = [];
+  errors.push(...earlyTransactionErrors);
+  const transaction = transactionResult.errors.length === 0
+    ? transactionResult.transaction
+    : null;
+  const allowActiveVerification =
+    options.allowActiveVerification === true &&
+    transaction?.state === 'in-progress';
+  const shapeErrors = validateLocalizationManifestShape(manifest, {
+    projectRoot,
+    verificationLocales: allowActiveVerification
+      ? transaction.targetLocales
+      : [],
+  });
+  if (shapeErrors.length) return [...errors, ...shapeErrors];
+  if (options.allowActiveVerification === true && !transaction) {
+    errors.push(
+      'Phase 6 verification requires an active localization verification transaction.'
+    );
+  } else if (options.allowActiveVerification === true &&
+      transaction?.state !== 'in-progress') {
+    errors.push(
+      'The localization verification transaction requires remediation before testing.'
+    );
+  } else if (transaction &&
+      options.allowActiveVerification !== true &&
+      options.allowTransactionFinalization !== true) {
+    errors.push(
+      'Localization verification is still active. Reconcile the target locales ' +
+      'and finalize the transaction before completing or deploying the site.'
+    );
+  }
+  if (allowActiveVerification) {
+    errors.push(...validateTransactionAgainstManifest(
+      transaction,
+      manifest,
+      { requireExposed: true }
+    ));
+  }
   for (const finding of [
     ...(manifest.bidirectionalReadiness?.findings || []),
     ...(manifest.bidirectionalReadiness?.renderedFindings || []),
@@ -590,9 +658,6 @@ function validateLocalization(projectRoot, warnings = []) {
         (availableDirectionSet.classification === 'mixed' ||
          unavailableLocales.length > 0)) {
       validateRuntimeCoordinator(projectRoot, allManagedFiles, errors);
-    }
-    if (manifest.mode === 'runtime' && unavailableLocales.length > 0) {
-      validateRuntimeAuditAdapter(projectRoot, allManagedFiles, errors);
     }
   }
 
@@ -968,53 +1033,31 @@ function validateLocaleAvailability(
   return valid;
 }
 
-function validateRuntimeAuditAdapter(projectRoot, allManagedFiles, errors) {
-  const managedSources = allManagedFiles
-    .filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)))
-    .map((relativePath) => ({
-      relativePath,
-      source: fs.readFileSync(path.join(projectRoot, relativePath), 'utf8'),
-    }));
-  const assignments = [];
-  for (const managedSource of managedSources) {
-    const assignmentPattern =
-      /window\.__powerPagesLocalizationAudit\s*=\s*\{/g;
-    for (const match of managedSource.source.matchAll(assignmentPattern)) {
-      assignments.push({ ...managedSource, assignmentIndex: match.index });
+function collectProjectFiles(projectRoot, includeFile) {
+  const excludedDirectories = new Set([
+    '.git',
+    '.powerpages-site',
+    'build',
+    'coverage',
+    'dist',
+    'docs',
+    'node_modules',
+  ]);
+  const files = [];
+  const pending = [projectRoot];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (!excludedDirectories.has(entry.name)) pending.push(fullPath);
+      } else if (entry.isFile() && includeFile(entry)) {
+        files.push(fullPath);
+      }
     }
   }
-  if (assignments.length !== 1) {
-    errors.push(
-      'Pending runtime locales require one managed development-only ' +
-      '__powerPagesLocalizationAudit adapter.'
-    );
-    return;
-  }
-
-  const [{ relativePath, source, assignmentIndex }] = assignments;
-  const sourceBeforeAssignment = source.slice(0, assignmentIndex);
-  const lastDevelopmentGuard = Math.max(
-    sourceBeforeAssignment.lastIndexOf('if (import.meta.env.DEV)'),
-    sourceBeforeAssignment.lastIndexOf("if (process.env.NODE_ENV !== 'production')"),
-    sourceBeforeAssignment.lastIndexOf('if (process.env.NODE_ENV !== "production")'),
-    sourceBeforeAssignment.lastIndexOf('if (ngDevMode)'),
-    sourceBeforeAssignment.lastIndexOf('if (isDevMode())')
-  );
-  const guardBodyPrefix = lastDevelopmentGuard >= 0
-    ? sourceBeforeAssignment.slice(lastDevelopmentGuard)
-    : '';
-  const adapterBody = source.slice(assignmentIndex, assignmentIndex + 1000);
-  const isInsideDevelopmentGuard =
-    lastDevelopmentGuard >= 0 && !guardBodyPrefix.includes('}');
-  const invokesAuditCoordinator =
-    /\bactivate\s*:\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*(?:await\s+)?activateLocaleForAudit\s*\(/s
-      .test(adapterBody);
-  if (!isInsideDevelopmentGuard || !invokesAuditCoordinator) {
-    errors.push(
-      `Localization audit adapter ${relativePath} must be development-gated ` +
-      'and invoke activateLocaleForAudit from the application locale coordinator.'
-    );
-  }
+  return files;
 }
 
 function validateRuntimeCoordinator(projectRoot, allManagedFiles, errors) {
@@ -1127,9 +1170,12 @@ function validateFrameworkModePackage(projectRoot, manifest, dependencies, detec
 
 }
 
-function finishValidation(projectRoot) {
+function finishValidation(projectRoot, options = {}) {
   const warnings = [];
-  const errors = validateLocalization(projectRoot, warnings);
+  const errors = validateLocalization(projectRoot, {
+    ...options,
+    warnings,
+  });
   if (warnings.length) {
     process.stderr.write(
       `Localization validation warnings (preserved, nonblocking):\n- ${warnings.join('\n- ')}\n`
@@ -1139,9 +1185,9 @@ function finishValidation(projectRoot) {
   approve();
 }
 
-function finishValidationFailClosed(projectRoot) {
+function finishValidationFailClosed(projectRoot, options = {}) {
   try {
-    finishValidation(projectRoot);
+    finishValidation(projectRoot, options);
   } catch {
     block(
       'Localization validation failed unexpectedly and must be reviewed before continuing.'
@@ -1156,7 +1202,9 @@ if (require.main === module && process.argv.includes('--projectRoot')) {
     process.stderr.write('Usage: validate-localization.js --projectRoot <path>\n');
     process.exit(1);
   }
-  finishValidationFailClosed(path.resolve(projectRoot));
+  finishValidationFailClosed(path.resolve(projectRoot), {
+    allowActiveVerification: process.argv.includes('--verification'),
+  });
 } else if (require.main === module) {
   runValidation((cwd) => {
     const projectRoot = findLocalizationProjectRoot(cwd);
