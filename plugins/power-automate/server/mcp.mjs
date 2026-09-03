@@ -50097,13 +50097,13 @@ async function enrichRefsWithLogicalNames(client, envId, refs, log) {
     const candidates = connectorToRefs[connectorId] ?? [];
     const connectionName = ref.connectionName;
     const exactMatches = connectionName ? candidates.filter((candidate) => candidate.connectionid === connectionName) : [];
-    const match = exactMatches.length === 1 ? exactMatches[0] : candidates.length === 1 ? candidates[0] : void 0;
+    const match = exactMatches.length === 1 ? exactMatches[0] : !connectionName && candidates.length === 1 ? candidates[0] : void 0;
     const logicalName = match?.connectionreferencelogicalname;
     if (logicalName) {
       enriched[key] = { ...ref, connectionReferenceLogicalName: logicalName };
       count++;
-    } else if (candidates.length > 1) {
-      log?.(`Skipped ambiguous connection reference logical name for ${key}; pass connectionReferenceLogicalName explicitly.`);
+    } else if (candidates.length > 1 || connectionName) {
+      log?.(`Skipped unmatched or ambiguous connection reference logical name for ${key}; pass connectionReferenceLogicalName explicitly.`);
     }
   }
   if (count > 0) {
