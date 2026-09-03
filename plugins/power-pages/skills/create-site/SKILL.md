@@ -400,6 +400,21 @@ Immediately after the dev server starts, verify the scaffold is working:
    | Routes              | 4     | /, /about, /services, /contact |
    ```
 
+   Build `BIDIRECTIONAL_REVIEW_DATA` for every planned visible or interactive
+   component, including page-local controls that are not shared source
+   components. Classify each entry as `direction-neutral`, `direction-aware`,
+   `direction-fixed`, or `unknown-third-party` using the shared bidirectional
+   standard. Record the localized reason, applicable states, applicable
+   `desktop`/`narrow` viewports, and planned checks. Treat anything involving
+   inline placement, text direction, horizontal movement, sequence,
+   directional meaning, mixed-script content, or rendering outside the normal
+   component subtree as a potential bidirectional surface.
+
+   This is the expected review scope, not a project manifest. Phase 5 must
+   reconcile it against the actual source and rendered application, adding
+   components or states discovered during implementation. Do not write a
+   separate component-inventory JSON file.
+
 8. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
 
    | CSS Variable | Description | Value |
@@ -450,6 +465,7 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` — `content` is an outline of what's on the page, `components` is shared component names used |
 | `COMPONENTS_DATA` | array | `[{ name, purpose, usedBy: [...] }]` — shared components with the page names that consume them |
 | `ROUTES_DATA` | array | `[{ path, page }]` — every route the router will register |
+| `BIDIRECTIONAL_REVIEW_DATA` | array | Every planned visible or interactive component as `{ component, classification, reason, states: [...], viewports: ["desktop" or "narrow"], checks: [...] }`; all maker-facing strings are localized |
 | `REVIEW_DATA` | object | `{ agentChecks: [...], makerReview: [...] }` using the responsibility contract below |
 | `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
@@ -520,6 +536,25 @@ Do not omit keys or fall back to English for individual labels.
     "usedBy": "Used by",
     "noComponents": "No shared components planned yet."
   },
+  "bidirectional": {
+    "title": "Bidirectional review scope",
+    "description": "Planned component, state, and viewport coverage; reconciled with the actual implementation before handoff",
+    "classification": "Classification",
+    "reason": "Reason",
+    "states": "Applicable states",
+    "viewports": "Applicable viewports",
+    "checks": "Planned checks",
+    "classifications": {
+      "directionNeutral": "Direction-neutral",
+      "directionAware": "Direction-aware",
+      "directionFixed": "Direction-fixed",
+      "unknownThirdParty": "Unknown or third-party"
+    },
+    "viewport": {
+      "desktop": "Desktop",
+      "narrow": "Narrow or mobile"
+    }
+  },
   "deployment": {
     "title": "Deployment & Review",
     "description": "Verification checklist and deployment options",
@@ -561,6 +596,9 @@ Build `REVIEW_DATA` as two non-empty localized string arrays:
   "agentChecks": [
     "The root document uses the canonical site locale and resolved writing direction",
     "The bidirectional-readiness audit reports no errors; layout uses logical CSS and every physical exception is documented and verified",
+    "Every visible or interactive component is classified, and the planned review scope is reconciled with the actual source and rendered application",
+    "Every applicable state and viewport of direction-aware, direction-fixed, and unknown or third-party components has verification evidence",
+    "Localized form labels, placeholders, hints, helper text, validation messages, prefixes, suffixes, and overlays follow the active UI direction; only classified machine-oriented values remain LTR",
     "Representative routes work in the selected direction and a pseudo-opposite direction at desktop and narrow widths without console errors, broken reading order, or broken focus order",
     "Unknown-direction content uses bdi or dir=auto, while URLs, email addresses, code, paths, GUIDs, and identifiers are explicitly isolated",
     "Dates, numbers, currency, percentages, and relative time use locale-aware Intl formatting",
@@ -721,6 +759,13 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 - For every locale, use logical CSS properties and preserve meaningful DOM
   reading/focus order. Do not reverse arrays or use `row-reverse` to simulate
   RTL. Initial RTL sites must also be visually verified in RTL.
+- Treat each form field as one compound direction surface: localized labels,
+  placeholders, hints, helper text, validation messages, prefixes, suffixes,
+  icons, and open menus follow the active UI direction and use logical
+  alignment. Use `dir="auto"` for free-form multilingual values. Keep only
+  classified machine-oriented values such as email addresses, URLs, code,
+  paths, GUIDs, and identifiers LTR; their surrounding field UI remains
+  direction-aware.
 - Wrap independently inserted unknown-direction content (names, comments,
   titles, search queries) with `<bdi>` or `dir="auto"`. Keep URLs, email,
   code, file paths, GUIDs, and other machine values explicitly isolated,
@@ -805,6 +850,18 @@ add the validated adjacent `bidi-physical` directive, and verify that component
 in both LTR and RTL. Use pseudo-opposite-direction content to check wrapping,
 navigation, forms, mixed names/identifiers, icons, calendars, and narrow/mobile
 layout even when no second real locale exists yet.
+
+Reconcile `BIDIRECTIONAL_REVIEW_DATA` against the completed source and rendered
+routes. Add every implemented visible or interactive component that was not
+known during planning, and add every applicable state or viewport discovered
+during implementation. Verify the selected direction and pseudo-opposite
+direction for every site: LTR sites receive pseudo-RTL coverage, and RTL sites
+receive pseudo-LTR coverage. Direction-neutral components need an inheritance
+check; direction-aware components need all applicable states in both
+directions; direction-fixed components need a semantic reason plus surrounding
+UI checks; unknown/third-party components need rendered checks including
+dialogs, menus, autocomplete panels, tooltips, teleports, portals, overlays,
+Shadow DOM, or iframes they open.
 
 Retain evidence for every applicable `REVIEW_DATA.agentChecks` item: audit
 result, routes/viewports exercised, direction used, mixed-content fixtures,
@@ -975,6 +1032,12 @@ not asked to reproduce the automated audit.
    ```
 
    Include `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION`.
+
+   Present the reconciled bidirectional review scope with each component's
+   classification and the applicable states/viewports exercised. Report
+   direction-aware, direction-fixed, and unknown/third-party evidence
+   separately; do not treat the pre-implementation plan as proof that the
+   implemented component was verified.
 
    Then report the `REVIEW_DATA.agentChecks` criteria separately with the
    evidence gathered in Phases 5–6. Every criterion must be reported as

@@ -155,6 +155,24 @@
         "Continues normal accessibility, review, and deployment phases",
         "Does not list add-localization as an available optional next step"
       ]
+    },
+    {
+      "id": 7,
+      "prompt": "Create a Hebrew React Power Pages customer portal with a contact form, autocomplete address field, mobile navigation drawer, and a third-party date picker.",
+      "expected_output": "The workflow plans every visible or interactive component using language-agnostic bidirectional classifications, treats form states and viewports as separate surfaces, and records rendered checks for the third-party date picker without creating a component-inventory manifest.",
+      "files": [],
+      "expectations": [
+        "Resolves the Hebrew locale direction from its writing script rather than a hardcoded language-only allowlist",
+        "Builds BIDIRECTIONAL_REVIEW_DATA for shared and page-local visible or interactive components before plan approval",
+        "Classifies the contact form, address autocomplete, mobile drawer, and third-party date picker as direction-neutral, direction-aware, direction-fixed, or unknown-third-party with localized reasons",
+        "Records only applicable component states, including form validation, autocomplete-open, drawer-open, and date-picker-open states",
+        "Records desktop and/or narrow viewports independently for each component",
+        "Treats form labels, placeholders, hints, validation messages, prefixes, suffixes, icons, and open panels as one compound direction surface",
+        "Requires rendered checks for third-party open states and portal or overlay content",
+        "Plans actual RTL and pseudo-LTR coverage because every new site receives selected and opposite-direction verification",
+        "Does not create a separate persistent component-inventory JSON file",
+        "Requires Phase 5 to reconcile the planned review scope with the actual source and rendered application"
+      ]
     }
   ]
 }

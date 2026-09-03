@@ -93,6 +93,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .component-head{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap;}
 .component-name{font-size:14px;font-weight:700;color:var(--text-bright);}
 .component-purpose{font-size:12px;color:var(--text-dim);margin-bottom:8px;}
+.bidi-scope{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;}
+.bidi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;}
+.bidi-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+.bidi-meta{margin-top:10px;}
 .routes-table{width:100%;border-collapse:separate;border-spacing:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
 .routes-table th{text-align:start;font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;padding:10px 16px;background:var(--surface2);border-bottom:1px solid var(--border);}
 .routes-table td{font-size:13px;padding:10px 16px;border-bottom:1px solid var(--border);}
@@ -214,7 +218,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
       <h3 data-label="pages.components"></h3>
       <div id="componentsContainer"></div>
-
+      <h3 data-label="bidirectional.title"></h3>
+      <p class="section-desc" data-label="bidirectional.description"></p>
+      <div class="bidi-scope" id="bidirectionalReviewContainer"></div>
       <h3 data-label="pages.routing"></h3>
       <table class="routes-table" id="routesTable">
         <thead><tr><th data-label="pages.path"></th><th data-label="pages.page"></th></tr></thead>
@@ -260,6 +266,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 <script id="pagesData" type="application/json">__PAGES_DATA__</script>
 <script id="componentsData" type="application/json">__COMPONENTS_DATA__</script>
 <script id="routesData" type="application/json">__ROUTES_DATA__</script>
+<script id="bidirectionalReviewData" type="application/json">__BIDIRECTIONAL_REVIEW_DATA__</script>
 <script id="reviewData" type="application/json">__REVIEW_DATA__</script>
 <script id="deploymentData" type="application/json">__DEPLOYMENT_DATA__</script>
 <script id="planLabelsData" type="application/json">__PLAN_LABELS__</script>
@@ -277,6 +284,7 @@ const BACKGROUNDS = readJsonData('backgroundsData');
 const PAGES = readJsonData('pagesData');
 const COMPONENTS = readJsonData('componentsData');
 const ROUTES = readJsonData('routesData');
+const BIDIRECTIONAL_REVIEW = readJsonData('bidirectionalReviewData');
 const REVIEW = readJsonData('reviewData');
 const DEPLOYMENT = readJsonData('deploymentData');
 const LABELS = readJsonData('planLabelsData');
@@ -421,6 +429,28 @@ if (!COMPONENTS.length) {
     + '</div>'
   ).join('');
 }
+
+// --- Planned bidirectional review scope ---
+const classificationLabels = {
+  'direction-neutral':'directionNeutral',
+  'direction-aware':'directionAware',
+  'direction-fixed':'directionFixed',
+  'unknown-third-party':'unknownThirdParty'
+};
+document.getElementById('bidirectionalReviewContainer').innerHTML =
+  BIDIRECTIONAL_REVIEW.map(item =>
+    '<article class="bidi-card">'
+    + '<div class="bidi-card-head"><div class="component-name">'+esc(item.component)+'</div>'
+    + '<span class="chip chip-accent">'+esc(label('bidirectional.classifications.'+classificationLabels[item.classification]))+'</span></div>'
+    + '<div class="component-purpose"><strong>'+esc(label('bidirectional.reason'))+':</strong> '+esc(item.reason)+'</div>'
+    + '<div class="bidi-meta"><div class="field-label">'+esc(label('bidirectional.states'))+'</div>'
+    + item.states.map(value=>'<span class="chip">'+esc(value)+'</span>').join('')+'</div>'
+    + '<div class="bidi-meta"><div class="field-label">'+esc(label('bidirectional.viewports'))+'</div>'
+    + item.viewports.map(value=>'<span class="chip">'+esc(label('bidirectional.viewport.'+value))+'</span>').join('')+'</div>'
+    + '<div class="bidi-meta"><div class="field-label">'+esc(label('bidirectional.checks'))+'</div>'
+    + '<ul class="bullet-list">'+item.checks.map(value=>'<li>'+esc(value)+'</li>').join('')+'</ul></div>'
+    + '</article>'
+  ).join('');
 
 // --- Routes ---
 document.getElementById('routesBody').innerHTML = ROUTES.map(r =>

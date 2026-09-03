@@ -44,7 +44,7 @@
     {
       "id": 4,
       "prompt": "Our Angular site must switch language instantly without a reload. Add English and Arabic localization.",
-      "expected_output": "Offer the official static recommendation but allow the explicit runtime requirement to select Transloco, including persisted selection and RTL handling.",
+      "expected_output": "Use the available Angular runtime mode, recommend Transloco while allowing validated runtime alternatives, and include persisted selection and RTL handling.",
       "files": [],
       "expectations": [
         "Chooses Transloco only because runtime switching was explicitly requested",
@@ -261,6 +261,24 @@
         "Records AddLocalization usage",
         "Does not ask to deploy from add-localization",
         "Returns control to create-site"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Add Hebrew to our existing English React customer portal. It has a contact form with helper text, a mobile drawer, an autocomplete menu rendered in a portal, and a third-party scheduling widget. Keep the existing brand and layout style.",
+      "expected_output": "The workflow treats the first LTR-only to mixed-direction change as a targeted bidirectional adaptation, inventories and classifies the existing components and their applicable states/viewports before approval, preserves unrelated design choices, and keeps Hebrew unavailable if blocking remediation remains.",
+      "files": [],
+      "expectations": [
+        "Detects the transition from LTR-only to mixed direction and runs the readiness audit before plan approval",
+        "Builds a non-empty READINESS_DATA.componentScope from the actual existing implementation",
+        "Classifies every visible or interactive shared and page-local component using the four language-agnostic classifications",
+        "Plans separate applicable states and desktop or narrow viewports for the form, drawer, autocomplete, and scheduling widget",
+        "Treats form labels, placeholders, hints, helper text, errors, prefixes, suffixes, values, and open panels as one compound direction surface",
+        "Requires rendered checks for the portal-mounted autocomplete and third-party scheduling widget",
+        "Describes remediation as a targeted bidirectional adaptation that preserves branding, routes, features, and visual character",
+        "Does not create a separate persistent component-inventory JSON file",
+        "Keeps Hebrew unavailable when an externally owned or existing component has a blocking unremediated defect",
+        "Requires the approved review scope to be reconciled with components and states discovered during implementation"
       ]
     }
   ]

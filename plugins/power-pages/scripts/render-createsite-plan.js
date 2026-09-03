@@ -12,7 +12,8 @@
  *   SITE_NAME, PLAN_TITLE, FRAMEWORK, SITE_LANGUAGE, SITE_LOCALE, SITE_DIRECTION,
  *   AESTHETIC, MOOD, SUMMARY, PLAN_LABELS,
  *   TYPOGRAPHY_DATA, PALETTE_DATA, MOTION_DATA, BACKGROUNDS_DATA,
- *   PAGES_DATA, COMPONENTS_DATA, ROUTES_DATA, REVIEW_DATA, DEPLOYMENT_DATA
+ *   PAGES_DATA, COMPONENTS_DATA, ROUTES_DATA, BIDIRECTIONAL_REVIEW_DATA,
+ *   REVIEW_DATA, DEPLOYMENT_DATA
  */
 
 const path = require('path');
@@ -57,6 +58,7 @@ const requiredKeys = [
   'PAGES_DATA',
   'COMPONENTS_DATA',
   'ROUTES_DATA',
+  'BIDIRECTIONAL_REVIEW_DATA',
   'REVIEW_DATA',
   'DEPLOYMENT_DATA',
 ];
@@ -102,6 +104,19 @@ const requiredLabelPaths = [
   'pages.componentsUsed',
   'pages.usedBy',
   'pages.noComponents',
+  'bidirectional.title',
+  'bidirectional.description',
+  'bidirectional.classification',
+  'bidirectional.reason',
+  'bidirectional.states',
+  'bidirectional.viewports',
+  'bidirectional.checks',
+  'bidirectional.classifications.directionNeutral',
+  'bidirectional.classifications.directionAware',
+  'bidirectional.classifications.directionFixed',
+  'bidirectional.classifications.unknownThirdParty',
+  'bidirectional.viewport.desktop',
+  'bidirectional.viewport.narrow',
   'deployment.title',
   'deployment.description',
   'deployment.verify',
@@ -114,6 +129,14 @@ const requiredLabelPaths = [
   'common.noneSpecified',
   'footer.aiWarning',
 ];
+
+const BIDIRECTIONAL_CLASSIFICATIONS = new Set([
+  'direction-neutral',
+  'direction-aware',
+  'direction-fixed',
+  'unknown-third-party',
+]);
+const BIDIRECTIONAL_VIEWPORTS = new Set(['desktop', 'narrow']);
 
 function getNestedValue(value, dottedPath) {
   return dottedPath.split('.').reduce(
@@ -156,6 +179,37 @@ function validatePlanData(dataObject) {
     return [
       `REVIEW_DATA requires non-empty string arrays: ${invalidReviewGroups.join(', ')}`,
     ];
+  }
+
+  if (!Array.isArray(dataObject.BIDIRECTIONAL_REVIEW_DATA) ||
+      !dataObject.BIDIRECTIONAL_REVIEW_DATA.length) {
+    return ['BIDIRECTIONAL_REVIEW_DATA must contain every planned visible or interactive component.'];
+  }
+  for (let index = 0; index < dataObject.BIDIRECTIONAL_REVIEW_DATA.length; index += 1) {
+    const entry = dataObject.BIDIRECTIONAL_REVIEW_DATA[index];
+    const prefix = `BIDIRECTIONAL_REVIEW_DATA[${index}]`;
+    for (const key of ['component', 'reason']) {
+      if (typeof entry?.[key] !== 'string' || !entry[key].trim()) {
+        return [`${prefix}.${key} must be a non-empty localized string.`];
+      }
+    }
+    if (!BIDIRECTIONAL_CLASSIFICATIONS.has(entry?.classification)) {
+      return [
+        `${prefix}.classification must be direction-neutral, direction-aware, ` +
+        'direction-fixed, or unknown-third-party.',
+      ];
+    }
+    for (const key of ['states', 'checks']) {
+      if (!Array.isArray(entry?.[key]) || !entry[key].length ||
+          entry[key].some((value) => typeof value !== 'string' || !value.trim())) {
+        return [`${prefix}.${key} must be a non-empty array of localized strings.`];
+      }
+    }
+    if (!Array.isArray(entry?.viewports) || !entry.viewports.length ||
+        entry.viewports.some((value) => !BIDIRECTIONAL_VIEWPORTS.has(value)) ||
+        new Set(entry.viewports).size !== entry.viewports.length) {
+      return [`${prefix}.viewports must contain unique desktop and/or narrow values.`];
+    }
   }
 
   const missingLabels = requiredLabelPaths.filter((labelPath) => {

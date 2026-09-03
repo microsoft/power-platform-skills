@@ -310,6 +310,24 @@ script font coverage, directional assets, calendars/date-pickers, gestures,
 drawers, breadcrumbs, tables, charts, carousels, overlays, SVG/canvas, and
 third-party components. Do not modify files before plan approval.
 
+For every localization plan, build `READINESS_DATA.componentScope` from the
+existing implementation. Include
+every visible or interactive shared or page-local component and classify it as
+`direction-neutral`, `direction-aware`, `direction-fixed`, or
+`unknown-third-party`. For each entry, record the localized reason, every
+applicable state, applicable `desktop`/`narrow` viewports, and planned checks.
+Treat anything involving inline placement, text direction, horizontal
+movement, sequence, directional meaning, mixed-script content, or rendering
+outside the normal component subtree as a potential bidirectional surface.
+
+Treat a form as a compound surface: include its labels, values, placeholders,
+hints, helper text, validation messages, prefixes, suffixes, icons, autofill,
+select/autocomplete panels, and validation summary when applicable. Include
+portals, teleports, overlay containers, Shadow DOM, iframes, and other
+third-party open states. This scope is plan data retained in workflow context
+and the human-readable HTML; do not persist a separate component-inventory
+JSON file.
+
 ---
 
 ## Phase 3: Plan and approve
@@ -350,8 +368,9 @@ must include:
 - Language-selector placement and runtime/static behavior.
 - Build, validator, browser, RTL, and token checks.
 - Direction-set transition, readiness findings, proposed remediations, physical
-  exceptions, script-font changes, and whether any locale may remain
-  unavailable pending remediation.
+  exceptions, script-font changes, the classified component/state/viewport
+  review scope, and whether any locale may remain unavailable pending
+  remediation.
 - Known limitations and any approved translation replacements.
 
 Write maker-facing plan text in `SOURCE_LOCALE`; preserve technical values
@@ -473,6 +492,27 @@ machine values, `Intl` formatting for locale-sensitive data, and script-aware
 font profiles only where the configured scripts need them. Preserve brand
 character across font profiles.
 
+For an existing site, this is a targeted bidirectional adaptation rather than
+an unrelated visual redesign. Preserve branding, routes, features, and visual
+character while replacing direction-specific assumptions. Reconcile the
+approved component scope against the files and components actually changed,
+adding any visible or interactive surface or state discovered during
+implementation.
+
+Localized form labels, placeholders, hints, helper text, validation messages,
+prefixes, suffixes, icons, and open menus follow the active UI direction and
+use logical alignment. Free-form multilingual values use `dir="auto"`.
+Machine-oriented email addresses, URLs, code, paths, GUIDs, and identifiers may
+remain LTR only when classified as direction-fixed; their surrounding field UI
+remains direction-aware.
+
+For unknown or third-party components, prefer the package's public locale and
+direction API. If none exists, use a documented wrapper or supported theme
+override and verify the rendered integration, including body-mounted portals
+or overlays. Do not edit `node_modules`. If an externally owned surface cannot
+be adapted or verified and the impact is blocking, keep the affected locale
+unavailable.
+
 Write `.powerpages-localization.json` using reference schema version 1
 after the approved implementation is complete. Record `packageVerification`
 from the package-validator result. For an unverified alternative, record
@@ -517,6 +557,12 @@ with Playwright:
 - One RTL locale when configured.
 - Every representative route in one LTR and one RTL locale at desktop and
   narrow/mobile viewports when the configured set is mixed.
+- Every applicable state and viewport in the classified component scope.
+  Direction-neutral components require an inheritance check; direction-aware
+  components require LTR and RTL checks; direction-fixed components require a
+  semantic reason and surrounding-UI checks; unknown/third-party components
+  require rendered checks for supported open states and out-of-subtree
+  overlays.
 - Script font loading, mixed-direction names/comments/URLs/identifiers,
   locale-aware dates/numbers/percentages, directional icons, calendars, and
   any audited complex component.
@@ -541,7 +587,11 @@ Repeat the AI translation warning when applicable.
 Present files as **Created**, **Updated**, **Preserved**, or **Skipped**, each
 with a one-line reason. Include locale/key counts, blank/stale values,
 translation warning, build result, browser checks, and RTL areas needing
-manual visual review.
+manual visual review. Present the reconciled component scope with each
+classification and the applicable states/viewports exercised. The
+pre-implementation plan is scope, not evidence; report the implementation and
+rendered checks that satisfied each direction-aware, direction-fixed, and
+unknown/third-party entry.
 
 Classify the result as:
 
