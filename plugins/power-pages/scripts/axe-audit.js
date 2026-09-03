@@ -18,7 +18,7 @@
 // Exit code: 1 when a critical or serious violation is found, a route could not be audited, or
 // the audit cannot run at all; 0 only when every route was audited and passed.
 
-const { detectBrowser } = require('./lib/detect-browser');
+const { detectBrowserLaunchOptions } = require('./lib/detect-browser');
 const { loadPlaywright } = require('./lib/load-playwright');
 const { downloadPinned } = require('./lib/pinned-download');
 const fs = require('node:fs');
@@ -105,8 +105,11 @@ async function loadAxeSource({ download = downloadPinned } = {}) {
   return (await download(AXE_SCRIPT)).toString('utf8');
 }
 
-async function auditRoutes({ playwright, channel, url, routes, axeSource }) {
-  const browser = await playwright.chromium.launch({ channel, headless: true });
+async function auditRoutes({ playwright, channel, launchOptions, url, routes, axeSource }) {
+  const browser = await playwright.chromium.launch({
+    ...(launchOptions || (channel ? { channel } : {})),
+    headless: true,
+  });
   const results = [];
   try {
     // axe is injected as an inline <script> holding the verified source. A deployed site's
@@ -142,7 +145,8 @@ async function main(argv = process.argv.slice(2), {
   writeError = (s) => process.stderr.write(s),
   loadPlaywrightFn = loadPlaywright,
   loadAxeSourceFn = loadAxeSource,
-  channel = detectBrowser,
+  launchOptions = detectBrowserLaunchOptions,
+  channel,
   readStdin,
 } = {}) {
   const args = parseArgs(argv, { readStdin });
@@ -163,7 +167,16 @@ async function main(argv = process.argv.slice(2), {
     return 1;
   }
   try {
-    const results = await auditRoutes({ playwright, channel: channel(), url: args.url, routes: args.routes, axeSource });
+    const browserOptions = channel
+      ? { channel: channel() }
+      : launchOptions();
+    const results = await auditRoutes({
+      playwright,
+      launchOptions: browserOptions,
+      url: args.url,
+      routes: args.routes,
+      axeSource,
+    });
     write(`${JSON.stringify(results, null, 2)}\n`);
     return hasBlockingResult(results) ? 1 : 0;
   } catch (error) {
