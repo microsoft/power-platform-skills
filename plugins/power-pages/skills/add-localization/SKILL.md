@@ -550,10 +550,23 @@ node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" -
 ```
 Fix all reported errors.
 
-Run the project's existing build. Start or reuse its dev server and verify
-with Playwright:
+Run the project's existing build. Start or reuse its dev server. Read
+`${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md` and build an
+ephemeral run specification from the reconciled `componentScope` and actual
+implementation. Do not persist the specification as a component manifest.
+Use stable semantic selectors or add focused `data-bidi-id` verification
+anchors where necessary.
+
+Reuse the project's Playwright dependency. If neither `playwright` nor
+`playwright-core` is installed, add `playwright` as a development dependency;
+do not download a separate bundled browser when a supported system browser is
+available.
+
+The specification must cover:
 
 - Default locale and one target locale.
+- Application-driven activation plus representative localized-content
+  assertions for every real locale; `set-document` is pseudo-only.
 - Selector behavior or equivalent static locale navigation.
 - Representative translated content.
 - `html[lang]` and `html[dir]`.
@@ -571,11 +584,42 @@ with Playwright:
   locale-aware dates/numbers/percentages, directional icons, calendars, and
   any audited complex component.
 
-For static modes, verify equivalent locale URLs/builds. For runtime modes,
-verify persisted selection, browser-language matching, invalid saved-value
-fallback, no page reload, and both LTR -> RTL -> LTR and RTL -> LTR -> RTL
-round trips. Preserve route, form state, focus, and application state. Verify
-that stale resource requests cannot overwrite a newer selection.
+Use real configured locales for both directions when the resulting locale set
+is mixed. For a same-direction set, add a browser-only pseudo-opposite locale
+so this localization change cannot introduce a future LTR/RTL regression.
+
+For static modes, verify equivalent locale URLs/builds. For runtime modes, set
+`runtimeSwitching: true` and include both LTR -> RTL -> LTR and
+RTL -> LTR -> RTL sequences. Preserve route, form state, focus, and application
+state without page reload. Use bare `preserve` selectors only for form
+controls; declare text, attribute, or property preservation evidence for
+tabs, panels, counters, and other non-form state. Separately verify persisted selection,
+browser-language matching, invalid saved-value fallback, and that stale
+resource requests cannot overwrite a newer selection.
+
+Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --url "<DEV_SERVER_URL>" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --spec "<TEMP_SPEC_PATH>" \
+  --evidence-dir "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>" \
+  --output "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>/report.json"
+```
+
+Parse stdout even when the expected blocking exit code is `1`. Exit code `2`
+means the runner or specification failed. Delete the temporary specification
+after the report is written. Fix every rendered error and rerun affected
+cases. Give every review finding explicit evidence and disposition.
+
+Record unresolved rendered errors in
+`bidirectionalReadiness.renderedFindings`, set readiness to
+`pending-remediation`, and keep every opposite-direction locale unavailable.
+A known usable limitation may be recorded as `approved-with-limitations` only
+after maker approval. A visible opaque third-party surface, unreadable or
+clipped text, incorrect direction, unreachable control, broken focus order,
+or state-losing locale switch cannot be approved as ready.
 
 For an explicitly unverified package, all build, initialization, switching or
 route navigation, resource loading, `lang`/`dir`, and console checks are
@@ -596,6 +640,9 @@ classification and the applicable states/viewports exercised. The
 pre-implementation plan is scope, not evidence; report the implementation and
 rendered checks that satisfied each direction-aware, direction-fixed, and
 unknown/third-party entry.
+Include the rendered report path, passed/review/failed case totals, and
+failure/review screenshots. The run specification is temporary workflow input,
+not a new project inventory.
 
 Classify the result as:
 

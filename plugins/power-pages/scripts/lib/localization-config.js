@@ -322,6 +322,44 @@ function validateLocalizationManifestShape(manifest) {
       if (readiness.findings !== undefined && !Array.isArray(readiness.findings)) {
         errors.push('Manifest bidirectionalReadiness.findings must be an array.');
       }
+      const renderedFindings = readiness.renderedFindings;
+      if (renderedFindings !== undefined && !Array.isArray(renderedFindings)) {
+        errors.push('Manifest bidirectionalReadiness.renderedFindings must be an array.');
+      } else if (Array.isArray(renderedFindings)) {
+        for (const [index, finding] of renderedFindings.entries()) {
+          const prefix = `Manifest bidirectionalReadiness.renderedFindings[${index}]`;
+          if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
+            errors.push(`${prefix} must be an object.`);
+            continue;
+          }
+          for (const field of ['caseId', 'rule', 'message', 'selector']) {
+            if (typeof finding[field] !== 'string' || !finding[field].trim()) {
+              errors.push(`${prefix}.${field} must be a non-empty string.`);
+            }
+          }
+          if (!['error', 'review'].includes(finding.severity)) {
+            errors.push(`${prefix}.severity must be "error" or "review".`);
+          }
+        }
+        const renderedErrors = renderedFindings.some(
+          (finding) => finding?.severity === 'error'
+        );
+        if (readiness.status === 'ready' && renderedFindings.length > 0) {
+          errors.push(
+            'Ready bidirectional readiness cannot contain unresolved renderedFindings.'
+          );
+        }
+        if (readiness.status === 'approved-with-limitations' && renderedErrors) {
+          errors.push(
+            'Approved-with-limitations bidirectional readiness cannot contain rendered errors.'
+          );
+        }
+        if (renderedErrors && readiness.status !== 'pending-remediation') {
+          errors.push(
+            'Rendered bidirectional errors require status "pending-remediation".'
+          );
+        }
+      }
       if (readiness.status === 'pending-remediation' &&
           (!Array.isArray(manifest.unavailableLocales) ||
            manifest.unavailableLocales.length === 0)) {

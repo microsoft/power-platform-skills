@@ -43,6 +43,7 @@ scripts/
   suggest-content-locale.js    ← Best-effort Dataverse base-language suggestion for create-site
   render-add-localization-plan.js ← Validates and renders the source-language localization plan artifact
   audit-bidirectional-readiness.js ← Audits generated source for deterministic bidirectional blockers and review findings
+  audit-rendered-bidirectional-readiness.js ← Runs the component/state/viewport/direction matrix in Playwright
   validate-site-integrity.js ← Shared post-modification/deployment localization and bidirectional integrity check
   validate-i18n-package.js      ← Validates npm localization package compatibility, stability, maintenance, mode, docs, and license
   check-activation-status.js   ← Checks if site is already activated (used by deploy-site, activate-site)

@@ -869,6 +869,23 @@ UI checks; unknown/third-party components need rendered checks including
 dialogs, menus, autocomplete panels, tooltips, teleports, portals, overlays,
 Shadow DOM, or iframes they open.
 
+Build the ephemeral rendered-verification specification described in
+`${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`. Derive it
+from the reconciled component scope and actual selectors; do not commit it as a
+component manifest. Give unstable but important verification surfaces a
+`data-bidi-id` attribute. Include every applicable state and viewport, compound
+form parts, body-mounted overlays, explicit focus sequences, non-overlap pairs,
+and direction-specific computed-style expectations. Use the real configured
+LTR and RTL locales when both exist; otherwise add a browser-only
+pseudo-opposite locale. Real locales must be activated through the application
+and prove representative localized content; only pseudo locales may use the
+browser-only `set-document` action. If runtime localization was added, include both
+LTR -> RTL -> LTR and RTL -> LTR -> RTL transition sequences with route,
+form-state, application-state, and focus preservation checks. Bare
+`preserve` selectors are only for form controls; use explicit text, attribute,
+or property preservation entries for tabs, panels, counters, and other
+application state.
+
 Retain evidence for every applicable `REVIEW_DATA.agentChecks` item: audit
 result, routes/viewports exercised, direction used, mixed-content fixtures,
 font/text-expansion observations, component/asset classifications, console
@@ -961,6 +978,39 @@ The script launches a headless browser, navigates to each route, injects axe-cor
 
 Parse the JSON output and record all violations.
 
+### 6.2b Run Rendered Bidirectional Audit
+
+Read `${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`, then
+rebuild the component/state/viewport specification from the current
+implementation if add-localization changed the site, then run it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --url "<DEV_SERVER_URL>" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --spec "<TEMP_SPEC_PATH>" \
+  --evidence-dir "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>" \
+  --output "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>/report.json"
+```
+
+The command prints JSON and exits `1` when blocking rendered findings exist;
+parse stdout on that expected path. Exit `2` is a runner/specification failure
+and must be fixed before continuing. Delete the temporary specification after
+the report is written.
+
+Fix every rendered `error` and rerun the complete affected matrix. Review
+findings require screenshot-backed disposition; they are not automatic passes.
+The audit must cover computed `lang`/`dir`, component and compound-field
+direction, clipping, page overflow, viewport escape, declared non-overlap,
+focus order, portals/overlays, unknown/third-party surfaces, and runtime
+round-trip preservation when applicable. A visible opaque external surface is
+blocking unless it is replaced or intentionally unavailable for the affected
+locale.
+
+> **GATE: Do NOT proceed to Phase 7 while the rendered report contains errors
+> or an undisposed review finding.** A screenshot documents what rendered; it
+> does not override a deterministic failure.
+
 ### 6.3 Fix Accessibility Violations
 
 For each violation found, identify the source file and apply the fix:
@@ -1044,6 +1094,10 @@ not asked to reproduce the automated audit.
    direction-aware, direction-fixed, and unknown/third-party evidence
    separately; do not treat the pre-implementation plan as proof that the
    implemented component was verified.
+
+   Link each scope entry to its rendered report cases and any captured
+   screenshots. Show case totals for passed, review, and failed. Do not expose
+   temporary specification internals as project configuration.
 
    Then report the `REVIEW_DATA.agentChecks` criteria separately with the
    evidence gathered in Phases 5–6. Every criterion must be reported as

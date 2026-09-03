@@ -253,6 +253,13 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
     bidirectionalReadiness: {
       status: 'pending-remediation',
       findings: [],
+      renderedFindings: [{
+        caseId: 'calendar--open--desktop--ar',
+        rule: 'computed-direction-mismatch',
+        severity: 'error',
+        message: 'Expected rtl but found ltr.',
+        selector: '.calendar',
+      }],
     },
   };
 
@@ -270,6 +277,40 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
       bidirectionalReadiness: { status: 'unknown', findings: [] },
     }).join('\n'),
     /bidirectionalReadiness\.status must be/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      unavailableLocales: [],
+      bidirectionalReadiness: {
+        status: 'ready',
+        findings: [],
+        renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
+      },
+    }).join('\n'),
+    /Ready bidirectional readiness cannot contain unresolved renderedFindings/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      bidirectionalReadiness: {
+        status: 'approved-with-limitations',
+        findings: [],
+        renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
+      },
+    }).join('\n'),
+    /cannot contain rendered errors/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      bidirectionalReadiness: {
+        status: 'pending-remediation',
+        findings: [],
+        renderedFindings: [{ severity: 'error' }],
+      },
+    }).join('\n'),
+    /renderedFindings\[0\]\.caseId/
   );
 });
 

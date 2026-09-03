@@ -218,7 +218,8 @@ Write `.powerpages-localization.json` after implementation using this shape:
   "unavailableLocales": [],
   "bidirectionalReadiness": {
     "status": "ready",
-    "findings": []
+    "findings": [],
+    "renderedFindings": []
   },
   "adoptedExistingConfiguration": false,
   "lastOperation": "create",
@@ -254,6 +255,10 @@ Each pending finding must preserve the exact scanner result with `file`, `line`,
 `rule`, `message`, and `fingerprint`. The fingerprint binds the record to the
 source context and occurrence that produced it, so replacing an item at the
 same line does not inherit the old deferral.
+Keep rendered browser blockers in `renderedFindings` with their `caseId`,
+`rule`, `severity`, `message`, and `selector`. Rendered findings are validation
+evidence and readiness state; they are not used to suppress later source
+scanner findings.
 Only those recorded physical-layout blockers are deferred by lifecycle validation; newly
 introduced findings, invisible bidi controls, and invalid exception directives still block.
 

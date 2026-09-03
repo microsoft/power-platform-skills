@@ -257,6 +257,9 @@ enabled.
 
 ## Verification
 
+- Follow `rendered-bidirectional-verification.md` for the deterministic
+  Playwright run specification, computed-style checks, failure evidence, and
+  readiness disposition.
 - Audit every generated or modified site, not only the first RTL locale.
 - Classify every implemented visible or interactive component and reconcile
   the review scope against the final source and rendered application.
