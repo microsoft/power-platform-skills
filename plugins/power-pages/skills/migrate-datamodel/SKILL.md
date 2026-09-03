@@ -225,7 +225,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 ### 1.3 Site Discovery and Validate Data Model
 
-<!-- not-a-gate: The `AskUserQuestion` references in this section are the template-family selection tree (pure data-gathering that only shapes the step 1.6 package check — no side effect to undo) plus prose mentions of the tool's 4-option limit. Per approval-gates.md §2, data-gathering prompts are not approval gates. -->
+<!-- not-a-gate: The `AskUserQuestion` references in this section are the automatic template-detection confirm/pick prompts (pure data-gathering that only shapes the step 1.6 package install — no side effect to undo). Per approval-gates.md §2, data-gathering prompts are not approval gates. -->
 
 **Goal**: Find the site in the environment and verify it's on SDM (not already EDM)
 
@@ -247,7 +247,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    - URL slug (from Friendly Name, the part after " - ")
    - Current ModelVersion (`Standard` or `Enhanced`)
 
-   > **Note:** Template name is not included in `pac pages list` output. Template will be confirmed separately in step 4.
+   > **Note:** Template name is not included in `pac pages list` output. Template is auto-detected separately in step 4.
    >
    > **PAC CLI version note:** The Portal Id column was added on 2026-02-24. If your installed PAC build predates that and the column is missing entirely, treat Portal Id as missing — the activation step in Phase 3 will prompt the user before the data-model update.
 
@@ -263,45 +263,67 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    - **If EDM**: Stop with message: "This site is already on Enhanced Data Model. Migration not needed."
    - **If SDM**: Continue to step 1.4
 
-4. **Identify Site Template**
+4. **Identify Site Template (automatic)**
 
-   Template name is not available from `pac pages list`. If step 1.4 reads `adx_templatename` from the migration tracker (populated by a prior migration), use that and skip this prompt.
+   Template name is not available from `pac pages list`, and the migration tracker's `adx_templatename` is not reliably populated — so the template is detected automatically from two indicators, combined by [detect-template.js](scripts/detect-template.js):
 
-   Otherwise ask the user via a **2-question tree** (Claude Code's `AskUserQuestion` tool caps at 4 options per question, so the flat 16-template list errors out with `InputValidationError: too_big`). Ask the family first, then drill down based on the answer.
+   - **Site inspection** — recognizes the D365 portals that ship distinctive built-in components (Community, Employee Self-Service, Partner) from the downloaded site source.
+   - **Installed template "anchor" solution** — the authoritative source of truth. Covers Customer Self-Service and the medium templates (FAQ, Application Processing, Program Registration, Schedule & Manage Meetings), and confirms/overrides the site-inspection result.
 
-   **Q1 — Template family:**
+   **4a. Ensure a local SDM copy of the site (reuse or download).**
+
+   - **If step 1.2 already resolved a local `<SITE_ROOT>`** (cwd is the site, or a single site subfolder): **reuse it — do not download again.** A stale local copy only affects site inspection (Community/ESS/Partner recognition), never the authoritative anchor check, so this is safe; if you want certainty, note any local edits to the user. The site's data model was already confirmed Standard in step 1.3.3.
+
+   - **If no local site was resolved**, download the SDM source once (Phase 2's snapshot step reuses it, so it isn't downloaded twice):
+
+     ```powershell
+     pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "<PARENT_OUTPUT_DIR>/site-sdm"
+     $SITE_ROOT = (Get-ChildItem "<PARENT_OUTPUT_DIR>/site-sdm" -Directory | Select-Object -First 1).FullName
+     ```
+
+     Capture the inner slug-named folder as `<SITE_ROOT>` (the `--path` value is a wrapper; the site lives in the child folder).
+
+   **4b. Capture installed solutions (reused by steps 1.5 and 1.6).**
+
+   ```powershell
+   pac solution list --includeSystemSolutions | Out-File "<PARENT_OUTPUT_DIR>/solution-list.txt"
+   ```
+
+   `--includeSystemSolutions` is required — the anchor solutions are first-party and hidden without it.
+
+   **4c. Run detection.**
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/detect-template.js" `
+     --site-root "<SITE_ROOT>" `
+     --solutions-file "<PARENT_OUTPUT_DIR>/solution-list.txt" `
+     --pretty
+   ```
+
+   The script returns JSON with `inspection`, `installedAnchors`, and a `resolution`. Act on `resolution.decision`:
+
+   | `decision` | Meaning | Action |
+   |---|---|---|
+   | `install-v2` | Template resolved (site inspection + anchor, or anchor alone; anchor is authoritative on any disagreement). | Store `template`, `v1Anchor`, `v2Package`. No prompt. |
+   | `prompt-confirm` | Site looks like a D365 portal but its anchor solution isn't installed. | Ask the user to confirm (below). |
+   | `prompt-pick` | Multiple D365 anchors installed, none match the site. | Ask the user to pick among `candidates`. |
+   | `prompt-pick-or-install-all` | Multiple template solutions installed, site not distinctive. | Ask the user to pick one, or install all `candidates`. |
+   | `low-complexity-skip` | No template anchor present. | Treat as low-complexity (Blank / Starter Layout). No template package — step 1.6 is skipped. |
+
+   **Prompt — `prompt-confirm`:**
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | What family is this site's template in? | Template Family | Starter Layout / Blank Page, Power Pages template (FAQ / Event / Application / etc.), D365 portal template, Other or Unknown |
+   | This site appears to be `<confirmTemplate>`, but its template solution isn't installed here. Is that the correct template? | Confirm Template | Yes — it's `<confirmTemplate>`, No — treat as basic (no template package) |
 
-   **Q2a — if "Starter Layout / Blank Page":**
+   - **Yes** → store `template` / `v2Package` from the resolution; step 1.6 installs it.
+   - **No** → treat as low-complexity; step 1.6 skips the install.
 
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Which Starter Layout or Blank template? | Starter | Starter layout 1, Starter layout 2 / 3, Starter layout 4 / 5, Blank page |
+   **Prompt — `prompt-pick` / `prompt-pick-or-install-all`:** present `candidates[].label` (max 4 per `AskUserQuestion`). For `prompt-pick-or-install-all`, add an **Install all** option that installs every candidate's `v2Package` in step 1.6.
 
-   (If user picks "Starter layout 2 / 3" or "Starter layout 4 / 5", drill once more to the specific number with a 4-option follow-up. Or accept the pair and pick the conservative V2 package — the install probe in step 1.6 will fail if it's wrong and surface the actual name.)
+   Store `<TEMPLATE_NAME>` (resolution `template` or the user's choice), `<TEMPLATE_V2_PACKAGE>` (resolution `v2Package`, or the list when "Install all"), `<TEMPLATE_DECISION>` (the `decision`), and `<SITE_ROOT>` — these drive step 1.6 and are reused by Phase 2.
 
-   **Q2b — if "Power Pages template (FAQ / Event / Application / etc.)":**
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Which Power Pages template? | Template | FAQ, Event registration, Application processing, Program registration / Schedule and manage meetings |
-
-   **Q2c — if "D365 portal template":**
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Which D365 portal? | D365 Portal | Community, Customer Self-Service, Employee Self-Service, Partner |
-
-   **Q2d — if "Other or Unknown":** no follow-up. Treat as Other/Unknown — step 1.6 skips the template-specific V2 package check entirely. The foundation packages (CDSBasePortal, PowerPages_Core) were already validated in step 1.5.
-
-   Store the final chosen template — it drives the V2 package check in step 1.6.
-
-   > **Why the chunking:** `AskUserQuestion` errors with `InputValidationError: questions.0.options: Too big: expected array to have <=4 items` when more than 4 options are passed. The tree shape keeps every individual question within the limit while still letting the user pick from the full 15 supported templates plus Other/Unknown.
-
-**Output**: Target site confirmed as SDM, template confirmed by user, WebSiteId/ModelVersion/URL slug/Portal Id captured (Portal Id marked "captured" or "needs prompt")
+**Output**: Target site confirmed as SDM; template auto-detected (or user-confirmed / low-complexity); `<SITE_ROOT>`, `<TEMPLATE_NAME>`, `<TEMPLATE_V2_PACKAGE>` captured; WebSiteId/ModelVersion/URL slug/Portal Id captured (Portal Id marked "captured" or "needs prompt")
 
 > **→ Initialize live report (per-migration subfolder).** Now that env name (from step 1.1's `pac auth list`) and website slug (from `pac pages list -v` above) are both known, initialize state. Run:
 >
@@ -488,89 +510,42 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 ---
 
-### 1.6 Validate Site Template and V2 Package
+### 1.6 Ensure the Template's V2 Package Is Installed
 
-**Goal**: Ensure the EDM-compatible (V2) solution for the site's template is installed in the environment
+**Goal**: Make sure the Enhanced (V2) solution for the template detected in step 1.3 is installed, installing it via `pac application install` when it isn't.
 
 **Actions**:
 
-1. **Look Up V2 Package for the Captured Template**
+1. **Honor the step 1.3 decision.**
 
-   Use this mapping (template → V2 solution `UniqueName` to check in `pac solution list --includeSystemSolutions`):
+   - If `<TEMPLATE_DECISION>` from step 1.3 is **`low-complexity-skip`** (Blank Page / Starter Layout, or the user declined the `prompt-confirm`): **skip this step entirely** — these templates need no template package. Migration proceeds on the foundation packages (`CDSBasePortal`, `PowerPages_Core`) verified in step 1.5.
+   - Otherwise continue with `<TEMPLATE_V2_PACKAGE>` — a single package, or the list captured when the user chose "Install all".
 
-   | Template | V2 Package UniqueName |
-   | --- | --- |
-   | Starter layout 1 | `DefaultPortalTemplate_V2` |
-   | Starter layout 2 | `PowerPages_BlankDesign002_V2` |
-   | Starter layout 3 | `PowerPages_BlankDesign003_V2` |
-   | Starter layout 4 | `PowerPages_BlankDesign004_V2` |
-   | Starter layout 5 | `PowerPages_BlankDesign005_V2` |
-   | Blank page | `PowerPages_BlankTemplate_V2` |
-   | FAQ | `PowerPages_FAQ_V2` |
-   | Application processing | `PowerPages_BuildingPermit_V2` |
-   | Program registration | `PowerPages_ProgramRegistration_V2` |
-   | Schedule and manage meetings | `PowerPages_BookMeeting_V2` |
-   | Event registration | `EventRegistrationTemplate_V2` |
-   | Community Portal (D365) | `PowerPages_CommunityPortal_V2` |
-   | Customer Self-Service Portal (D365) | `PowerPages_CustomerPortal_V2` |
-   | Employee Self-Service Portal (D365) | `PowerPages_ESSPortal_V2` |
-   | Partner Portal (D365) | `PowerPages_PartnerPortal_V2` |
-   | Other/Unknown | (skip — fall through to step 3) |
+2. **Check whether the V2 package is already installed.**
 
-2. **Check Installation**
+   Reuse the `pac solution list --includeSystemSolutions` output captured in step 1.3 (`<PARENT_OUTPUT_DIR>/solution-list.txt`). For each `<TEMPLATE_V2_PACKAGE>`:
+   - **Present** → nothing to do; log `OK · already installed`.
+   - **Not present** → install it in step 3.
+
+3. **Install via `pac application install`.**
 
    ```powershell
-   pac solution list --includeSystemSolutions
+   pac application install --application-name "<TEMPLATE_V2_PACKAGE>"
    ```
 
-   > V2 template packages are first-party — the `--includeSystemSolutions` flag is required to see them. Without it the lookup will always return "not found" even when the package is installed.
+   Run once per package when installing multiple (the "Install all" case). The install is asynchronous on some clouds, so afterwards re-run `pac solution list --includeSystemSolutions` and confirm each package now appears; if it doesn't yet, wait a minute and re-check.
 
-   Search output for the V2 `UniqueName` from step 1.
+   **If `pac application install` errors** (missing tenant role, transient catalog issue, older PAC build): surface the exact error and ask the user to install the package manually from Power Platform admin center → Resources → Dynamics 365 apps, then re-run the verification in step 2.
 
-   - **Found**: Proceed to step 3.
-   - **Not found**: Continue to step 2a below to determine the best install method.
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | `pac application install --application-name "<TEMPLATE_V2_PACKAGE>"` failed: `<error>`. Install it manually via Power Platform admin center → Resources → Dynamics 365 apps, then continue? | Manual Install | I've installed it — re-verify, Cancel — stop the skill |
 
-2a. **Check if V2 package is in the Microsoft application catalog**
+   The V2 package is required for the detected template, so there is no "skip" option — either it gets installed, or the user stops to resolve the install.
 
-   The fastest install path is `pac application install` — it pulls the solution from the Microsoft application catalog and installs it directly. But not every V2 template package is available in the catalog. Check first:
+**Output**: The detected template's V2 package is installed (or confirmed already present), or the site was low-complexity and no template package was needed. `PowerPages_Core` was already verified in step 1.5.
 
-   ```powershell
-   pac application list 2>&1 | Select-String -Pattern "<V2_UNIQUE_NAME>" -CaseSensitive:$false
-   ```
-
-   - **Match found in catalog**: ask user with `pac application install` as **recommended**:
-
-     | Question | Header | Options |
-     |----------|--------|---------|
-     | The V2 EDM solution `<UNIQUE_NAME>` for your template is not installed, but it's available in the Microsoft application catalog. How to proceed? | V2 Package | Install via `pac application install` (recommended), Install via dummy EDM site, Skip and let migration warn, Cancel |
-
-     - **Install via `pac application install`**:
-
-       ```powershell
-       pac application install --application-name "<V2_UNIQUE_NAME>"
-       ```
-
-       Wait for completion. After it returns, re-run `pac solution list --includeSystemSolutions` to confirm the package now appears (the install is async on some clouds).
-
-     - **Install via dummy EDM site**: Guide user to provision a new EDM site using the same template in this environment. Creating that site auto-installs the V2 solution. Once installed, the dummy site can be deleted. Slower but works even when the catalog method fails.
-     - **Skip**: Continue to step 1.7; migration may warn or fail if the solution is genuinely needed.
-     - **Cancel**: Halt the skill.
-
-   - **No match in catalog**: fall back to the dummy-site method (the catalog doesn't carry this V2 package, so `pac application install` won't work):
-
-     | Question | Header | Options |
-     |----------|--------|---------|
-     | The V2 EDM solution `<UNIQUE_NAME>` for your template is not installed and not in the Microsoft application catalog. How to proceed? | V2 Package | Install via dummy EDM site (recommended), Skip and let migration warn, Cancel |
-
-     - **Install via dummy EDM site**: Same as above — provision a new EDM site with the template, V2 solution auto-installs, delete the dummy site afterward.
-     - **Skip**: Continue to step 1.7; migration may warn or fail if the solution is genuinely needed.
-     - **Cancel**: Halt the skill.
-
-   > **Note:** if `pac application list` itself errors out (older PAC builds, missing role), fall back to offering the dummy-site method directly without the catalog check.
-
-**Output**: V2 template package verified/installed (or explicitly skipped). `PowerPages_Core` was already verified and installed/upgraded as needed in step 1.5.
-
-> **→ Update report:** `--set-step 1.6 --status completed --output "<V2_UNIQUE_NAME> <state>"`. If the V2 package was installed during this step, mention the method explicitly so the user can audit — e.g., `"installed via pac application install"` or `"installed via dummy EDM site"`.
+> **→ Update report:** `--set-step 1.6 --status completed --output "<TEMPLATE_V2_PACKAGE> <state>"` where `<state>` is one of `already installed`, `installed via pac application install`, or `low-complexity — no template package needed`.
 
 ---
 
@@ -677,7 +652,9 @@ This phase has **two completely different shapes** depending on the migration tr
 
 **Actions**:
 
-1. **Download SDM source**
+1. **Download SDM source (reuse if already local)**
+
+   Step 1.3.4 already established a local SDM copy at `<SITE_ROOT>` — either the reused cwd/site folder or a fresh download to `<PARENT_OUTPUT_DIR>/site-sdm`. **If `<SITE_ROOT>` is already set and still present, reuse it and skip the download.** Only download when no local copy exists:
 
    ```powershell
    pac pages download --webSiteId "<WEBSITE_ID>" --modelVersion 1 --path "<MIGRATION_OUTPUT_DIR>/site-sdm"
@@ -745,9 +722,16 @@ This phase has **two completely different shapes** depending on the migration tr
    node update-state.js --output-dir "<OUTPUT_DIR>" --set-activity "Polling migration status (attempt <N>/30)"
    ```
 
-   - **Completed**: clear activity, proceed to step 2.2.
-   - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch.
+   - **Completed**: clear activity, proceed to step 2.3.
+   - **Still `Running` (loop exited at i=30 without status change)**: this usually just means the migration is still working — large sites process in 5K-record batches and can take a long time. **Recommend the user wait and keep polling** rather than resetting. Re-enter the poll loop and show elapsed time (from the tracker's `Created On` / `Modified On`). Only if it stays `Running` with **no forward progress for an extended period** (`Modified On` not advancing, no newly completed chunks in the verbose output) treat it as genuinely stuck — see **"Unblocking a stuck `Running` tracker"** below.
    - **Failed / Reverted**: surface error, ask user (retry / reset / exit).
+
+   > **Unblocking a stuck `Running` tracker.** Do **not** infer completion from the internal `currentStep` (e.g. `ConfigurationDataCompleted`) while the status still reads `Running` — wait first. If it is genuinely stuck for an extended period:
+   > 1. Try the supported reset: `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration` (flips the tracker `Running → Failed`).
+   > 2. If that doesn't clear it, **ask the customer to reset the field manually in Dataverse**: on the `adx_websitemigrationtracker` record (find it by `adx_websiteid` = WebSiteId), set **`adx_migrationstatus`** to **Failed (`746610003`)** — or **NotStarted (`746610000`)** for a clean slate.
+   > 3. Re-run the migrate command and resume polling.
+   >
+   > Reset only unblocks a new run — it does **not** undo already-migrated records.
 
    > **Why this matters:** an earlier real-world test session ran the poll as a Bash `until [ "$(pac ... | grep -oE ...)" != "" ]` loop. `pac` wasn't on the Bash `$PATH` in that environment, so the subshell silently produced empty output, the until condition stayed false, and the loop printed "Still running..." for 12+ iterations after the migration had actually completed. The user had to type "check status" to force the agent to verify via PowerShell. Using PowerShell directly with a bounded `for` loop avoids both issues — PATH consistency and runaway iteration.
 
@@ -1320,7 +1304,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    ```
 
    - **Completed**: clear activity, proceed to step 3.3. The card now shows status=Completed.
-   - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch. The card shows the last captured running state.
+   - **Still `Running` (loop exited at i=30 without status change)**: recommend the user **wait and keep polling** (refs migration on large sites can take a long time). Only if genuinely stuck for an extended period (`Modified On` not advancing, no newly completed chunks), unblock per **"Unblocking a stuck `Running` tracker"** in step 2.2 — `--resetMigration`, then a manual `adx_migrationstatus` = Failed (`746610003`) reset on the `adx_websitemigrationtracker` record — then re-run. The card shows the last captured running state.
    - **Failed / Reverted**: surface error, ask user (retry / reset / exit). Add the top-level failure message to the `--set-refs-migration` payload's `error` field so the card logs it as an error banner (the card also shows chunk-level error details from the last poll).
 
    > **Chunk-level generic SQL errors — auto-retry before escalating.** When individual chunks fail with a **Generic SQL error** (e.g., `1205` deadlock victim, `3732` type still referenced), these come from the **Dataverse SQL backend, not PAC/client-side**. Under chunked migration most are transient — `1205` is always a deadlock retry, and `3732` ("type still referenced") is frequently a concurrency side-effect from parallel chunk processing that clears on a fresh pass. **The refs migration is resumable**: re-running `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences` re-processes only the still-unmigrated chunks, so a retry is cheap and non-destructive. **Automatically retry the command up to 3 times** (30–60s backoff between attempts, re-entering the poll loop each time) whenever the only failures are chunk-level generic SQL errors — **do this even when the tracker labels a chunk `Non Retriable`**, because that label reflects PAC's in-run retry classification, not whether a fresh command invocation can succeed. Only escalate if the **same** chunks still fail with the **same** generic SQL error after the retries: capture the failing chunk IDs, error numbers, `pac --version`, WebSiteId, and environment URL for a Microsoft support ticket. Do **not** proceed to step 3.3 (Activate EDM) until refs migration reports `Completed`.
@@ -1582,7 +1566,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    ```
 
    - **Completed**: clear activity, proceed to step 3.3. The card now shows status=Completed.
-   - **In Progress (30-min timeout)**: surface timeout, ask user (retry / reset / exit). The card shows the last captured running state.
+   - **Still `Running` (30-min poll elapsed, no status change)**: recommend the user **wait and keep polling** (refs migration on large sites can take a long time). Only if genuinely stuck for an extended period (`Modified On` not advancing, no newly completed chunks), unblock per **"Unblocking a stuck `Running` tracker"** in step 2.2 — `--resetMigration`, then a manual `adx_migrationstatus` = Failed (`746610003`) reset on the `adx_websitemigrationtracker` record — then re-run. The card shows the last captured running state.
    - **Failed / Reverted**: surface error, ask user; card shows the failed status and chunk-level errors from the last poll.
 
    > **Chunk-level generic SQL errors — auto-retry before escalating.** Same handling as Authoring Track 3.2: chunk-level **Generic SQL error** failures (e.g., `1205` deadlock victim, `3732` type still referenced) are **Dataverse SQL-backend errors, not PAC/client-side**, and are usually transient under chunked migration. Because the refs migration is resumable (re-running re-processes only the still-unmigrated chunks), **automatically retry the command up to 3 times** (30–60s backoff, re-entering the poll loop) whenever the only failures are chunk-level generic SQL errors — **even when a chunk is labeled `Non Retriable`**, since that label is PAC's in-run classification, not a verdict on a fresh invocation. Only escalate to a Microsoft support ticket (chunk IDs, error numbers, `pac --version`, WebSiteId, env URL) if the **same** chunks fail with the **same** error after the retries. Do **not** proceed until refs migration reports `Completed`.
