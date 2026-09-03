@@ -66027,6 +66027,32 @@ function enhanceFlowApiError(err) {
 
 Fix: ${hints.join("\n")}` : msg;
 }
+async function buildUpdateProperties(ctx, envId, flow, input) {
+  let refsFromFlow = false;
+  let effectiveRefs = input.connectionRefs;
+  if (input.definition && !effectiveRefs) {
+    const current = await ctx.getClient().getFlow(envId, flow);
+    effectiveRefs = current.properties?.connectionReferences;
+    refsFromFlow = !!effectiveRefs;
+  }
+  let enrichedRefs = effectiveRefs;
+  if (enrichedRefs && !refsFromFlow) {
+    try {
+      enrichedRefs = await enrichRefsWithLogicalNames(ctx.getClient(), envId, enrichedRefs);
+    } catch {
+    }
+  }
+  const props = {};
+  if (input.definition)
+    props.definition = input.definition;
+  if (enrichedRefs)
+    props.connectionReferences = enrichedRefs;
+  if (input.name)
+    props.displayName = input.name;
+  if (input.state)
+    props.state = input.state;
+  return props;
+}
 function inferActionType(opProps) {
   if (!opProps)
     return "OpenApiConnection";
@@ -66329,29 +66355,12 @@ async function createMcpServer(authProvider, deps = {}) {
   server2.tool("update_flow", "Update an existing flow's definition or properties. **Refuses by default if the flow lives in a managed Dataverse solution** (returns ManagedSolutionReadOnly). Pass forceManaged: true only if you understand the change will be overwritten on the next solution import \u2014 see docs/recipes/upgrade-managed-flow.md for the right pattern. **Recommended two-phase update**: call preview_update first to obtain a previewToken bound to the exact change, then pass that token back here. update_flow will only apply if the proposal still matches what was previewed (prevents lost writes from concurrent edits). Auto-captures a backup snapshot before applying (last 10 retained per flow, accessible via list_backups). **Use this for**: any change to an existing flow. **Do NOT use for**: creating a new flow (use create_flow) or starting/stopping a flow (use publish_flow / disable_flow).", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Connection references JSON"), name: external_exports.string().optional().describe("New name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("State"), forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."), autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true. Set false to skip if auto-merge is causing errors."), previewToken: external_exports.string().optional().describe("Token issued by preview_update for this exact (env, flow, body) tuple. When supplied, the update only applies if the proposed change still matches what was previewed; mismatched tokens throw PreviewTokenMismatch.") }, { readOnlyHint: false, title: "Update Flow" }, async ({ env, flow, definition, connectionRefs, name: name3, state, forceManaged, autoResolveConnectionRefs, previewToken }) => {
     try {
       const envId = ctx.resolveEnv(env);
-      let refsFromFlow = false;
-      let effectiveRefs = connectionRefs;
-      if (definition && !effectiveRefs) {
-        const current = await ctx.getClient().getFlow(envId, flow);
-        effectiveRefs = current.properties?.connectionReferences;
-        refsFromFlow = !!effectiveRefs;
-      }
-      let enrichedRefs = effectiveRefs;
-      if (enrichedRefs && !refsFromFlow) {
-        try {
-          enrichedRefs = await enrichRefsWithLogicalNames(ctx.getClient(), envId, enrichedRefs);
-        } catch {
-        }
-      }
-      const props = {};
-      if (definition)
-        props.definition = definition;
-      if (enrichedRefs)
-        props.connectionReferences = enrichedRefs;
-      if (name3)
-        props.displayName = name3;
-      if (state)
-        props.state = state;
+      const props = await buildUpdateProperties(ctx, envId, flow, {
+        definition,
+        connectionRefs,
+        name: name3,
+        state
+      });
       const r = await ctx.getClient().updateFlow(envId, flow, { properties: props }, { forceManaged, autoResolveConnectionRefs, previewToken });
       return safeResult({ name: r.name, displayName: r.properties?.displayName, state: r.properties?.state, lastModifiedTime: r.properties?.lastModifiedTime });
     } catch (e) {
@@ -66361,22 +66370,12 @@ async function createMcpServer(authProvider, deps = {}) {
   server2.tool("preview_update", "Read-only: compute a diff between the live flow and the proposed update body, and return a short-lived single-use token. Use the token with update_flow to apply the change only if the proposal still matches what you reviewed. No mutation is performed by this tool.", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Proposed updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Proposed connection references JSON"), name: external_exports.string().optional().describe("Proposed new name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("Proposed state") }, { readOnlyHint: true, title: "Preview Update" }, async ({ env, flow, definition, connectionRefs, name: name3, state }) => {
     try {
       const envId = ctx.resolveEnv(env);
-      let enrichedRefs = connectionRefs;
-      if (enrichedRefs) {
-        try {
-          enrichedRefs = await enrichRefsWithLogicalNames(ctx.getClient(), envId, enrichedRefs);
-        } catch {
-        }
-      }
-      const props = {};
-      if (definition)
-        props.definition = definition;
-      if (enrichedRefs)
-        props.connectionReferences = enrichedRefs;
-      if (name3)
-        props.displayName = name3;
-      if (state)
-        props.state = state;
+      const props = await buildUpdateProperties(ctx, envId, flow, {
+        definition,
+        connectionRefs,
+        name: name3,
+        state
+      });
       const result = await ctx.getClient().previewUpdate(envId, flow, { properties: props });
       return safeResult(result);
     } catch (e) {
