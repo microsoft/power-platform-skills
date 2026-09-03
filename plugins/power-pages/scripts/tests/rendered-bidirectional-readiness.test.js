@@ -81,8 +81,7 @@ test('requires complete component, viewport, direction, and runtime round-trip c
   assert.ok(errors.some((error) => /LTR and RTL/.test(error)));
   assert.ok(errors.some((error) => /unknown viewport "tablet"/.test(error)));
   assert.ok(errors.some((error) => /third-party targets/.test(error)));
-  assert.ok(errors.some((error) => /LTR -> RTL -> LTR/.test(error)));
-  assert.ok(errors.some((error) => /RTL -> LTR -> RTL/.test(error)));
+  assert.ok(errors.some((error) => /valid defaultLocaleId/.test(error)));
 });
 
 test('rejects malformed nested checks instead of silently weakening coverage', () => {
@@ -140,6 +139,121 @@ test('validates explicit application-state preservation entries', () => {
 
   assert.ok(errors.some((error) => /name is required for attribute/.test(error)));
   assert.ok(errors.some((error) => /kind must be auto, value, checked/.test(error)));
+});
+
+test('requires runtime round trips for every real non-default locale', () => {
+  const spec = validSpec();
+  spec.runtimeSwitching = true;
+  spec.defaultLocaleId = 'en';
+  spec.locales[1] = {
+    id: 'ar',
+    locale: 'ar-SA',
+    direction: 'rtl',
+    activate: [{ type: 'click', selector: '[data-locale="ar-SA"]' }],
+    expect: [{ selector: 'h1', text: 'مرحبا' }],
+  };
+  spec.locales.push({
+    id: 'fr',
+    locale: 'fr-FR',
+    direction: 'ltr',
+    activate: [{ type: 'click', selector: '[data-locale="fr-FR"]' }],
+    expect: [{ selector: 'h1', text: 'Accueil' }],
+  });
+  spec.transitions = [
+    { name: 'en-ar-en', route: '/', sequence: ['en', 'ar', 'en'] },
+    { name: 'ar-en-ar', route: '/', sequence: ['ar', 'en', 'ar'] },
+  ];
+
+  const errors = validateRunSpec(spec);
+
+  assert.ok(errors.some((error) => /en -> fr -> en/.test(error)));
+  assert.ok(errors.some((error) => /fr -> en -> fr/.test(error)));
+  assert.ok(!errors.some((error) => /en -> ar -> en/.test(error)));
+});
+
+test('reconciles runtime verification locales with the localization manifest', () => {
+  const spec = validSpec();
+  spec.runtimeSwitching = true;
+  spec.defaultLocaleId = 'en';
+  spec.locales[0].activate = [{
+    type: 'click',
+    selector: '[data-locale="en-US"]',
+  }];
+  spec.locales[1] = {
+    id: 'ar',
+    locale: 'ar-SA',
+    direction: 'rtl',
+    activate: [{ type: 'click', selector: '[data-locale="ar-SA"]' }],
+    expect: [{ selector: 'h1', text: 'مرحبا' }],
+  };
+  spec.transitions = [
+    { name: 'en-ar-en', route: '/', sequence: ['en', 'ar', 'en'] },
+    { name: 'ar-en-ar', route: '/', sequence: ['ar', 'en', 'ar'] },
+  ];
+
+  const missingLocaleErrors = validateRunSpec(spec, {
+    locales: ['en-US', 'he-IL', 'ar-SA'],
+    defaultLocale: 'en-US',
+    mode: 'runtime',
+  });
+  assert.ok(missingLocaleErrors.some((error) =>
+    /real locales must exactly match/i.test(error)
+  ));
+
+  const wrongDefaultErrors = validateRunSpec(spec, {
+    locales: ['en-US', 'ar-SA'],
+    defaultLocale: 'ar-SA',
+    mode: 'runtime',
+  });
+  assert.ok(wrongDefaultErrors.some((error) =>
+    /defaultLocaleId must match/i.test(error)
+  ));
+
+  spec.locales[1].direction = 'ltr';
+  const directionErrors = validateRunSpec(spec, {
+    locales: ['en-US', 'ar-SA'],
+    defaultLocale: 'en-US',
+    mode: 'runtime',
+  });
+  assert.ok(directionErrors.some((error) =>
+    /direction must be rtl for ar-SA/i.test(error)
+  ));
+
+  spec.locales[1].direction = 'rtl';
+  const unavailableErrors = validateRunSpec(spec, {
+    locales: ['en-US', 'ar-SA'],
+    defaultLocale: 'en-US',
+    mode: 'runtime',
+    unavailableLocales: ['ar-SA'],
+  });
+  assert.ok(unavailableErrors.some((error) =>
+    /unavailable locales require development-only audit-activate/i.test(error)
+  ));
+
+  spec.locales[1].activate = [{
+    type: 'audit-activate',
+    locale: 'ar-SA',
+  }];
+  spec.locales[1].unavailableSelectors = ['[data-locale="ar-SA"]'];
+  assert.deepEqual(validateRunSpec(spec, {
+    locales: ['en-US', 'ar-SA'],
+    defaultLocale: 'en-US',
+    mode: 'runtime',
+    unavailableLocales: ['ar-SA'],
+  }), []);
+});
+
+test('does not allow a runtime manifest to disable runtime transition checks', () => {
+  const errors = validateRunSpec(validSpec(), {
+    locales: ['en-US'],
+    defaultLocale: 'en-US',
+    mode: 'runtime',
+    unavailableLocales: [],
+  });
+
+  assert.ok(errors.some((error) =>
+    /runtime localization manifests require runtimeSwitching: true/i.test(error)
+  ));
 });
 
 test('expands every applicable state, viewport, and locale into a separate case', () => {
@@ -286,6 +400,27 @@ test('CLI exits 2 for an invalid run specification', (t) => {
   assert.match(result.stderr, /Invalid rendered bidirectional run specification/);
 });
 
+test('CLI requires the localization manifest for runtime switching', (t) => {
+  const projectRoot = createTempProject(t);
+  const spec = validSpec();
+  spec.runtimeSwitching = true;
+  spec.defaultLocaleId = 'en';
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--url', 'http://localhost:4173',
+      '--projectRoot', projectRoot,
+      '--spec-inline', JSON.stringify(spec),
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /is required when runtimeSwitching is enabled/);
+});
+
 test('accepts an intentionally absent restricted target', async () => {
   const spec = validSpec();
   spec.components[0].states[0].targets = [{
@@ -346,6 +481,7 @@ test('accepts an intentionally absent restricted target', async () => {
 test('runtime transitions fail when preservation selectors do not exist', async () => {
   const spec = validSpec();
   spec.runtimeSwitching = true;
+  spec.defaultLocaleId = 'en';
   spec.locales[0].activate = [{ type: 'click', selector: '[data-locale="en-US"]' }];
   spec.locales[1].pseudo = false;
   spec.locales[1].locale = 'ar-SA';
@@ -454,12 +590,15 @@ test('runtime transitions fail when preservation selectors do not exist', async 
 });
 
 test('runtime transitions capture console errors and explicit application-state loss', async () => {
+  let unavailableVisibility = [false, true];
   const spec = validSpec();
   spec.runtimeSwitching = true;
+  spec.defaultLocaleId = 'en';
   spec.locales[0].activate = [{ type: 'click', selector: '[data-locale="en-US"]' }];
   spec.locales[1].pseudo = false;
   spec.locales[1].locale = 'ar-SA';
-  spec.locales[1].activate = [{ type: 'click', selector: '[data-locale="ar-SA"]' }];
+  spec.locales[1].activate = [{ type: 'audit-activate', locale: 'ar-SA' }];
+  spec.locales[1].unavailableSelectors = ['[data-locale="ar-SA"]'];
   spec.locales[1].expect = [{ selector: 'h1', text: 'مرحبا' }];
   spec.transitions = [
     {
@@ -487,24 +626,25 @@ test('runtime transitions capture console errors and explicit application-state 
       this.page = page;
       this.selector = selector;
     }
-    first() { return this; }
-    async count() { return 1; }
+    first() { return this.nth(0); }
+    nth(index) {
+      const locator = new Locator(this.page, this.selector);
+      locator.index = index;
+      return locator;
+    }
+    async count() {
+      return this.selector === '[data-locale="ar-SA"]'
+        ? unavailableVisibility.length
+        : 1;
+    }
+    async isVisible() {
+      return this.selector !== '[data-locale="ar-SA"]' ||
+        unavailableVisibility[this.index || 0];
+    }
     async click() {
-      this.page.clicks += 1;
-      if (this.selector.includes('ar-SA')) {
-        this.page.locale = 'ar-SA';
-        this.page.direction = 'rtl';
-      } else {
-        this.page.locale = 'en-US';
-        this.page.direction = 'ltr';
-      }
-      if (this.page.clicks === 2) {
-        this.page.expanded = 'false';
-        this.page.handlers.console?.({
-          type: () => 'error',
-          text: () => 'locale transition failed internally',
-        });
-      }
+      this.page.activate(
+        this.selector.includes('ar-SA') ? 'ar-SA' : 'en-US'
+      );
     }
     async textContent() {
       return this.page.direction === 'rtl' ? 'مرحبا' : 'Home';
@@ -545,11 +685,27 @@ test('runtime transitions capture console errors and explicit application-state 
       this.keyboard = { press: async () => {} };
     }
     on(name, handler) { this.handlers[name] = handler; }
+    activate(locale) {
+      this.clicks += 1;
+      this.locale = locale;
+      this.direction = locale === 'ar-SA' ? 'rtl' : 'ltr';
+      if (this.clicks === 2) {
+        this.expanded = 'false';
+        this.handlers.console?.({
+          type: () => 'error',
+          text: () => 'locale transition failed internally',
+        });
+      }
+    }
     async goto() {}
     async waitForTimeout() {}
     locator(selector) { return new Locator(this, selector); }
-    async evaluate(fn) {
+    async evaluate(fn, arg) {
       const source = String(fn);
+      if (source.includes('__powerPagesLocalizationAudit')) {
+        this.activate(arg);
+        return;
+      }
       if (source.includes('lang: document.documentElement.lang')) {
         return { lang: this.locale, direction: this.direction };
       }
@@ -566,6 +722,12 @@ test('runtime transitions capture console errors and explicit application-state 
   const report = await runRenderedBidirectionalAudit({
     url: 'http://localhost:4173',
     spec,
+    localizationContext: {
+      locales: ['en-US', 'ar-SA'],
+      defaultLocale: 'en-US',
+      mode: 'runtime',
+      unavailableLocales: ['ar-SA'],
+    },
     chromium: {
       launch: async () => ({
         newPage: async () => new Page(),
@@ -584,5 +746,30 @@ test('runtime transitions capture console errors and explicit application-state 
   assert.ok(report.findings.some(
     (finding) => finding.rule === 'locale-switch-preservation-unsupported'
   ));
-  assert.equal(report.summary.failed, 2);
+  assert.ok(report.findings.some(
+    (finding) => finding.rule === 'unavailable-locale-exposed' &&
+      finding.selector === '[data-locale="ar-SA"]'
+  ));
+  assert.equal(report.summary.failed, 4);
+
+  unavailableVisibility = [false, false];
+  const hiddenSelectorReport = await runRenderedBidirectionalAudit({
+    url: 'http://localhost:4173',
+    spec,
+    localizationContext: {
+      locales: ['en-US', 'ar-SA'],
+      defaultLocale: 'en-US',
+      mode: 'runtime',
+      unavailableLocales: ['ar-SA'],
+    },
+    chromium: {
+      launch: async () => ({
+        newPage: async () => new Page(),
+        close: async () => {},
+      }),
+    },
+  });
+  assert.ok(!hiddenSelectorReport.findings.some(
+    (finding) => finding.rule === 'unavailable-locale-exposed'
+  ));
 });

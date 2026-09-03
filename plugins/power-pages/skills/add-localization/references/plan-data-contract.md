@@ -215,7 +215,9 @@ generic directory entry when exact files are known.
       "line": 42,
       "rule": "directional-physical-css",
       "message": "Localized explanation",
-      "remediation": "Localized proposed remediation"
+      "remediation": "Localized proposed remediation",
+      "scope": "locale",
+      "affectedLocales": ["ar-SA"]
     }
   ],
   "componentScope": [
@@ -235,9 +237,17 @@ generic directory entry when exact files are known.
 ```
 
 Finding severity is `error` or `review`. Preserve the audit's exact `file`,
-positive `line`, and `rule`, and provide the proposed `remediation`. An empty
-array is valid for findings, physical exceptions, script fonts, and unavailable
-locales.
+positive `line`, and `rule`, and provide the proposed `remediation`. Every
+finding also has a `scope` and nonempty, unique `affectedLocales`:
+
+- `locale` affects exactly one language-specific locale.
+- `direction` affects every configured locale in its `ltr` or `rtl`
+  `direction`.
+- `shared` affects an explicitly tested subset of configured locales.
+- `global` affects every configured locale.
+
+An empty array is valid for findings, physical exceptions, script fonts, and
+unavailable locales.
 
 `componentScope` must be non-empty and cover every visible or interactive
 component in the existing implementation, including page-local controls.
@@ -259,11 +269,15 @@ reconcile it against the implementation during Phase 5.
 
 The source locale must be `existing` and `available`, locale tags must be
 unique, and `unavailableLocales` must exactly match locales marked
-`pending-remediation`.
-When the plan contains an error-severity bidirectional finding, every
-configured locale whose direction is opposite to the default locale must be
-`pending-remediation`. Plan approval authorizes the proposed remediation; it
-does not authorize enabling a locale while that blocker remains.
+`pending-remediation`. The selected default locale must also remain available.
+When a newly proposed default is still pending, preserve the previous default
+until that locale is verified and can be enabled.
+Every locale named by an unresolved finding must be
+`pending-remediation`. A finding for a newly added Arabic locale therefore
+does not disable an already verified Hebrew locale unless the finding is
+direction-scoped or shared evidence identifies Hebrew as affected. Plan
+approval authorizes the proposed remediation; it does not authorize enabling
+an affected locale while that blocker remains.
 
 ## Verification and limitations
 
@@ -357,6 +371,8 @@ unchanged and preserve `{siteName}` exactly.
     "noFindings": "No readiness findings.",
     "location": "Location",
     "rule": "Rule",
+    "scope": "Scope",
+    "affectedLocales": "Affected locales",
     "remediation": "Planned remediation",
     "componentScope": "Component review scope",
     "component": "Component",

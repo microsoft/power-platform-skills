@@ -85,7 +85,7 @@ skills/
     SKILL.md                   ← SPA localization workflow for React, Vue, Angular, and Astro
     assets/add-localization-plan.html ← Localized, RTL-safe implementation-plan template
     references/plan-data-contract.md ← Source-language plan schema, labels, persistence, and source-of-truth rules
-    scripts/validate-localization.js ← Validates manifest, resources, selectors, lang/dir, opposite-direction readiness, and runtime coordinators
+    scripts/validate-localization.js ← Validates manifest, resources, selectors, lang/dir, per-locale bidirectional readiness, and runtime coordinators
   activate-site/
     SKILL.md                   ← Site activation/provisioning skill definition
     scripts/activate-site.js   ← Activates a site via PP API + polls status

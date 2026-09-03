@@ -15,7 +15,6 @@ const {
   classifyLocaleDirections,
   detectFramework,
   detectLocalization,
-  getLocaleDirection,
   getLocalizationModeAvailability,
   protectedTokenSignature,
   validateLocalizationManifestShape,
@@ -24,6 +23,9 @@ const {
 const {
   auditBidirectionalReadiness,
 } = require('../../../scripts/lib/bidirectional-readiness');
+const {
+  partitionDeferredFindings,
+} = require('../../../scripts/lib/bidirectional-finding-disposition');
 
 function readJson(filePath) {
   try {
@@ -355,56 +357,42 @@ function validateLocalization(projectRoot) {
     : true;
 
   if (Array.isArray(manifest.locales) && manifest.locales.length >= 2) {
-    const directionSet = classifyLocaleDirections(manifest.locales);
-    if (directionSet.classification === 'mixed') {
-      const bidiAudit = auditBidirectionalReadiness(projectRoot);
-      const readinessPending =
-        manifest.bidirectionalReadiness?.status === 'pending-remediation';
-      if (!manifest.bidirectionalReadiness) {
-        errors.push(
-          'Mixed-direction localization requires manifest bidirectionalReadiness metadata.'
-        );
-      }
-      const unavailableLocaleSet = new Set(unavailableLocales);
-      const defaultDirection = getLocaleDirection(manifest.defaultLocale);
-      const oppositeDirectionLocales = manifest.locales.filter(
-        (locale) => getLocaleDirection(locale) !== defaultDirection
+    const bidiAudit = auditBidirectionalReadiness(projectRoot);
+    const { blocking, unmatchedRecorded } = partitionDeferredFindings(
+      bidiAudit.findings,
+      manifest.bidirectionalReadiness?.findings || [],
+      unavailableLocales
+    );
+    for (const finding of unmatchedRecorded) {
+      errors.push(
+        `Recorded bidirectional finding ${finding.file}:${finding.line} ` +
+        `[${finding.rule}] no longer exactly matches the source audit. ` +
+        'Rerun the audit and remove or replace the stale manifest finding.'
       );
-      const allOppositeLocalesUnavailable = oppositeDirectionLocales.every(
-        (locale) => unavailableLocaleSet.has(locale)
+    }
+    for (const finding of blocking) {
+      errors.push(
+        `Bidirectional readiness ${finding.file}:${finding.line} ` +
+        `[${finding.rule}]: ${finding.message}`
       );
-      if (readinessPending && !allOppositeLocalesUnavailable) {
-        errors.push(
-          'Pending bidirectional remediation requires every locale opposite to the ' +
-          'default direction to be unavailable.'
-        );
-      }
-      if (readinessPending && !hasAvailabilityImplementation) {
-        errors.push(
-          'Pending bidirectional remediation requires managed availability logic that ' +
-          'excludes each unavailable opposite-direction locale.'
-        );
-      }
-      const canSuppressReadinessErrors =
-        readinessPending &&
-        allOppositeLocalesUnavailable &&
-        hasAvailabilityImplementation;
-      if (!canSuppressReadinessErrors) {
-        for (const finding of bidiAudit.findings.filter((item) => item.severity === 'error')) {
-          errors.push(
-            `Bidirectional readiness ${finding.file}:${finding.line} ` +
-            `[${finding.rule}]: ${finding.message}`
-          );
-        }
-      }
-      const availableLocales = manifest.locales.filter(
-        (locale) => !unavailableLocaleSet.has(locale)
+    }
+    if (unavailableLocales.length > 0 && !hasAvailabilityImplementation) {
+      errors.push(
+        'Pending bidirectional remediation requires managed availability logic ' +
+        'that excludes each unavailable locale.'
       );
-      const availableDirectionSet = classifyLocaleDirections(availableLocales);
-      if (manifest.mode === 'runtime' &&
-          availableDirectionSet.classification === 'mixed') {
-        validateRuntimeCoordinator(projectRoot, allManagedFiles, errors);
-      }
+    }
+    const unavailableLocaleSet = new Set(unavailableLocales);
+    const availableLocales = manifest.locales.filter(
+      (locale) => !unavailableLocaleSet.has(locale)
+    );
+    const availableDirectionSet = classifyLocaleDirections(availableLocales);
+    if (manifest.mode === 'runtime' &&
+        availableDirectionSet.classification === 'mixed') {
+      validateRuntimeCoordinator(projectRoot, allManagedFiles, errors);
+    }
+    if (manifest.mode === 'runtime' && unavailableLocales.length > 0) {
+      validateRuntimeAuditAdapter(projectRoot, allManagedFiles, errors);
     }
   }
 
@@ -457,8 +445,28 @@ function validateLocaleAvailability(
       source: fs.readFileSync(path.join(projectRoot, relativePath), 'utf8'),
     }))
     .filter(({ source }) => boundaryPattern.test(source));
+  const filteredLocaleCollection =
+    /\.filter\s*\(\s*(?:isLocaleAvailable\b|(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*isLocaleAvailable\s*\()/s;
+  const guardedLocaleCandidate =
+    /if\s*\(\s*!\s*isLocaleAvailable\s*\([^)]+\)\s*\)\s*(?:\{[^}]*\b(?:return|continue)\b|(?:return|continue)\b)/s;
   for (const { relativePath, source } of boundaryFiles) {
-    if (!/\bisLocaleAvailable\s*\(|\bfilter\s*\(\s*isLocaleAvailable\b/.test(source)) {
+    const exposesSelector =
+      /LanguageSelector|language selector|locale-switcher/i.test(source);
+    const filtersEveryUnavailableSelectorLocale = unavailableLocales.every((locale) => {
+      const escaped = locale.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(
+        `\\[[^\\]]*['"]${escaped}['"][^\\]]*\\]\\s*` +
+        '\\.filter\\s*\\(\\s*(?:isLocaleAvailable\\b|' +
+        '(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>\\s*' +
+        'isLocaleAvailable\\s*\\()',
+        's'
+      ).test(source);
+    });
+    const appliesAvailability = exposesSelector
+      ? filtersEveryUnavailableSelectorLocale
+      : filteredLocaleCollection.test(source) ||
+        guardedLocaleCandidate.test(source);
+    if (!appliesAvailability) {
       errors.push(
         `Locale activation boundary ${relativePath} does not apply isLocaleAvailable.`
       );
@@ -472,6 +480,55 @@ function validateLocaleAvailability(
     valid = false;
   }
   return valid;
+}
+
+function validateRuntimeAuditAdapter(projectRoot, allManagedFiles, errors) {
+  const managedSources = allManagedFiles
+    .filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)))
+    .map((relativePath) => ({
+      relativePath,
+      source: fs.readFileSync(path.join(projectRoot, relativePath), 'utf8'),
+    }));
+  const assignments = [];
+  for (const managedSource of managedSources) {
+    const assignmentPattern =
+      /window\.__powerPagesLocalizationAudit\s*=\s*\{/g;
+    for (const match of managedSource.source.matchAll(assignmentPattern)) {
+      assignments.push({ ...managedSource, assignmentIndex: match.index });
+    }
+  }
+  if (assignments.length !== 1) {
+    errors.push(
+      'Pending runtime locales require one managed development-only ' +
+      '__powerPagesLocalizationAudit adapter.'
+    );
+    return;
+  }
+
+  const [{ relativePath, source, assignmentIndex }] = assignments;
+  const sourceBeforeAssignment = source.slice(0, assignmentIndex);
+  const lastDevelopmentGuard = Math.max(
+    sourceBeforeAssignment.lastIndexOf('if (import.meta.env.DEV)'),
+    sourceBeforeAssignment.lastIndexOf("if (process.env.NODE_ENV !== 'production')"),
+    sourceBeforeAssignment.lastIndexOf('if (process.env.NODE_ENV !== "production")'),
+    sourceBeforeAssignment.lastIndexOf('if (ngDevMode)'),
+    sourceBeforeAssignment.lastIndexOf('if (isDevMode())')
+  );
+  const guardBodyPrefix = lastDevelopmentGuard >= 0
+    ? sourceBeforeAssignment.slice(lastDevelopmentGuard)
+    : '';
+  const adapterBody = source.slice(assignmentIndex, assignmentIndex + 1000);
+  const isInsideDevelopmentGuard =
+    lastDevelopmentGuard >= 0 && !guardBodyPrefix.includes('}');
+  const invokesAuditCoordinator =
+    /\bactivate\s*:\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*(?:await\s+)?activateLocaleForAudit\s*\(/s
+      .test(adapterBody);
+  if (!isInsideDevelopmentGuard || !invokesAuditCoordinator) {
+    errors.push(
+      `Localization audit adapter ${relativePath} must be development-gated ` +
+      'and invoke activateLocaleForAudit from the application locale coordinator.'
+    );
+  }
 }
 
 function validateRuntimeCoordinator(projectRoot, allManagedFiles, errors) {

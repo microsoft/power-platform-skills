@@ -880,8 +880,14 @@ LTR and RTL locales when both exist; otherwise add a browser-only
 pseudo-opposite locale. Real locales must be activated through the application
 and prove representative localized content; only pseudo locales may use the
 browser-only `set-document` action. If runtime localization was added, include both
-LTR -> RTL -> LTR and RTL -> LTR -> RTL transition sequences with route,
-form-state, application-state, and focus preservation checks. Bare
+default -> locale -> default and locale -> default -> locale transition
+sequences for every real non-default locale, with route, form-state,
+application-state, and focus preservation checks. Pseudo locales do not
+participate in application-switch transitions. Every real locale, including
+the default, needs a reusable application activation action; `use-current`
+cannot restore a locale during a round trip. For a pending runtime locale, use
+the development-only audit adapter and declare `unavailableSelectors` so the
+runner proves normal selector surfaces do not expose it before activation. Bare
 `preserve` selectors are only for form controls; use explicit text, attribute,
 or property preservation entries for tabs, panels, counters, and other
 application state.

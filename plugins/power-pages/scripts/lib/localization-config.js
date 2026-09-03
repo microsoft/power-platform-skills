@@ -236,8 +236,8 @@ function validateLocalizationManifestShape(manifest) {
     return ['Localization manifest must be a JSON object.'];
   }
   const errors = [];
-  if (typeof manifest.schemaVersion !== 'number') {
-    errors.push('Manifest schemaVersion must be a number.');
+  if (manifest.schemaVersion !== 1) {
+    errors.push('Manifest schemaVersion must be 1.');
   }
   for (const field of [
     'framework',
@@ -346,153 +346,244 @@ function validateLocalizationManifestShape(manifest) {
       }
     }
   }
-  if (manifest.bidirectionalReadiness !== undefined) {
-    const readiness = manifest.bidirectionalReadiness;
-    if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) {
-      errors.push('Manifest bidirectionalReadiness must be an object.');
-    } else {
-      if (!['ready', 'approved-with-limitations', 'pending-remediation'].includes(
-        readiness.status
-      )) {
-        errors.push(
-          'Manifest bidirectionalReadiness.status must be "ready", ' +
-          '"approved-with-limitations", or "pending-remediation".'
-        );
-      }
-      if (readiness.findings !== undefined && !Array.isArray(readiness.findings)) {
-        errors.push('Manifest bidirectionalReadiness.findings must be an array.');
-      } else if (Array.isArray(readiness.findings)) {
-        readiness.findings.forEach((finding, index) => {
-          const prefix = `Manifest bidirectionalReadiness.findings[${index}]`;
-          if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
-            errors.push(`${prefix} must be an object.`);
-            return;
-          }
-          for (const field of ['file', 'rule', 'message']) {
-            if (typeof finding[field] !== 'string' || !finding[field].trim()) {
-              errors.push(`${prefix}.${field} must be a non-empty string.`);
-            }
-          }
-          if (!Number.isInteger(finding.line) || finding.line < 1) {
-            errors.push(`${prefix}.line must be a positive integer.`);
-          }
-          const isLegacyPhysicalCss =
-            readiness.status === 'pending-remediation' &&
-            finding.rule === 'directional-physical-css';
-          if (!['error', 'review'].includes(finding.severity) &&
-              !(isLegacyPhysicalCss && finding.severity === undefined)) {
-            errors.push(`${prefix}.severity must be "error" or "review".`);
-          }
-          if ((typeof finding.fingerprint !== 'string' ||
-               !finding.fingerprint.trim()) &&
-              !isLegacyPhysicalCss) {
-            errors.push(`${prefix}.fingerprint must be a non-empty string.`);
-          }
-          if (finding?.disposition !== undefined) {
-            validateFindingDisposition(
-              finding,
-              prefix,
-              errors,
-              false
-            );
-          }
-        });
-      }
-      const renderedFindings = readiness.renderedFindings;
-      if (renderedFindings !== undefined && !Array.isArray(renderedFindings)) {
-        errors.push('Manifest bidirectionalReadiness.renderedFindings must be an array.');
-      } else if (Array.isArray(renderedFindings)) {
-        for (const [index, finding] of renderedFindings.entries()) {
-          const prefix = `Manifest bidirectionalReadiness.renderedFindings[${index}]`;
-          if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
-            errors.push(`${prefix} must be an object.`);
-            continue;
-          }
-          for (const field of ['caseId', 'rule', 'message', 'selector']) {
-            if (typeof finding[field] !== 'string' || !finding[field].trim()) {
-              errors.push(`${prefix}.${field} must be a non-empty string.`);
-            }
-          }
-          if (!['error', 'review'].includes(finding.severity)) {
-            errors.push(`${prefix}.severity must be "error" or "review".`);
-          }
-          validateFindingDisposition(finding, prefix, errors, false);
-        }
-      }
-      const staticFindings = Array.isArray(readiness.findings)
-        ? readiness.findings
-        : [];
-      const validRenderedFindings = Array.isArray(renderedFindings)
-        ? renderedFindings
-        : [];
-      const allFindings = [...staticFindings, ...validRenderedFindings];
-      const hasErrors = allFindings.some(
-        (finding, index) =>
-          finding?.severity === 'error' ||
-          (index < staticFindings.length &&
-            readiness.status === 'pending-remediation' &&
-            finding?.rule === 'directional-physical-css' &&
-            finding?.severity === undefined)
-      );
-      for (const [index, finding] of allFindings.entries()) {
-        if (finding?.severity === 'error' && finding.disposition !== undefined) {
-          const prefix = index < staticFindings.length
-            ? `Manifest bidirectionalReadiness.findings[${index}]`
-            : 'Manifest bidirectionalReadiness.renderedFindings[' +
-              `${index - staticFindings.length}]`;
-          errors.push(`${prefix} error findings cannot have maker-approved dispositions.`);
-        }
-      }
-      if (readiness.status === 'ready' && allFindings.length > 0) {
-        errors.push(
-          'Ready bidirectional readiness cannot contain unresolved findings.'
-        );
-      }
-      if (readiness.status === 'approved-with-limitations') {
-        if (allFindings.length === 0) {
-          errors.push(
-            'Approved-with-limitations bidirectional readiness requires at least one limitation.'
-          );
-        }
-        for (const [index, finding] of allFindings.entries()) {
-          const prefix = index < staticFindings.length
-            ? `Manifest bidirectionalReadiness.findings[${index}]`
-            : 'Manifest bidirectionalReadiness.renderedFindings[' +
-              `${index - staticFindings.length}]`;
-          if (finding?.severity !== 'review') {
-            errors.push(
-              `${prefix} must be a review finding for approved-with-limitations readiness.`
-            );
-          }
-          validateFindingDisposition(finding, prefix, errors, true);
-        }
-      }
-      if (hasErrors && readiness.status !== 'pending-remediation') {
-        errors.push(
-          'Bidirectional errors require status "pending-remediation".'
-        );
-      }
-      if (['ready', 'approved-with-limitations'].includes(readiness.status) &&
-          Array.isArray(manifest.unavailableLocales) &&
-          manifest.unavailableLocales.length > 0) {
-        errors.push(
-          `${readiness.status} bidirectional readiness cannot retain unavailable locales.`
-        );
-      }
-      if (readiness.status === 'pending-remediation' &&
-          (!Array.isArray(manifest.unavailableLocales) ||
-           manifest.unavailableLocales.length === 0)) {
-        errors.push(
-          'Pending bidirectional remediation requires at least one unavailable locale.'
-        );
-      }
-    }
-  } else if (manifest.schemaVersion === 1) {
+  if (manifest.bidirectionalReadiness === undefined) {
     errors.push(
       'Schema version 1 manifests require bidirectionalReadiness metadata.'
     );
+  } else if (manifest.bidirectionalReadiness !== undefined) {
+    validateBidirectionalReadiness(manifest, errors);
   }
   return errors;
+}
+
+function validateBidirectionalReadiness(manifest, errors) {
+  const readiness = manifest.bidirectionalReadiness;
+  const statuses = new Set([
+    'ready',
+    'approved-with-limitations',
+    'pending-remediation',
+  ]);
+  if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) {
+    errors.push('Manifest bidirectionalReadiness must be an object.');
+    return;
+  }
+  if (!statuses.has(readiness.status)) {
+    errors.push(
+      'Manifest bidirectionalReadiness.status must be "ready", ' +
+      '"approved-with-limitations", or "pending-remediation".'
+    );
+  }
+
+  const localeReadiness = readiness.localeReadiness;
+  if (!localeReadiness || typeof localeReadiness !== 'object' ||
+      Array.isArray(localeReadiness)) {
+    errors.push('Manifest bidirectionalReadiness.localeReadiness must be an object.');
+  }
+  const locales = Array.isArray(manifest.locales) ? manifest.locales : [];
+  const localeSet = new Set(locales);
+  const readinessLocales = localeReadiness &&
+    typeof localeReadiness === 'object' &&
+    !Array.isArray(localeReadiness)
+    ? Object.keys(localeReadiness)
+    : [];
+  const missingLocales = locales.filter((locale) => !readinessLocales.includes(locale));
+  const extraLocales = readinessLocales.filter((locale) => !localeSet.has(locale));
+  if (missingLocales.length || extraLocales.length) {
+    errors.push(
+      'Manifest bidirectionalReadiness.localeReadiness keys must exactly match locales.'
+    );
+  }
+
+  const localeStatuses = new Map();
+  for (const locale of readinessLocales) {
+    const entry = localeReadiness[locale];
+    const prefix = `Manifest bidirectionalReadiness.localeReadiness["${locale}"]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`${prefix} must be an object.`);
+      continue;
+    }
+    if (!statuses.has(entry.status)) {
+      errors.push(
+        `${prefix}.status must be "ready", "approved-with-limitations", ` +
+        'or "pending-remediation".'
+      );
+    } else {
+      localeStatuses.set(locale, entry.status);
+    }
+  }
+  if (localeStatuses.get(manifest.defaultLocale) === 'pending-remediation') {
+    errors.push('The default locale cannot be pending remediation.');
+  }
+
+  const staticFindings = validateReadinessFindings(
+    readiness.findings,
+    'findings',
+    manifest,
+    errors,
+    true
+  );
+  const renderedFindings = validateReadinessFindings(
+    readiness.renderedFindings,
+    'renderedFindings',
+    manifest,
+    errors,
+    false
+  );
+  const allFindings = [...staticFindings, ...renderedFindings];
+
+  for (const finding of allFindings) {
+    for (const locale of finding.affectedLocales || []) {
+      const status = localeStatuses.get(locale);
+      if (finding.severity === 'error' && status !== 'pending-remediation') {
+        errors.push(
+          `Bidirectional error "${finding.rule}" requires locale ${locale} ` +
+          'to be pending-remediation.'
+        );
+      }
+      if (finding.severity === 'review' && finding.disposition &&
+          !['approved-with-limitations', 'pending-remediation'].includes(status)) {
+        errors.push(
+          `Maker-approved limitation "${finding.rule}" requires locale ${locale} ` +
+          'to be approved-with-limitations or pending-remediation.'
+        );
+      }
+      if (finding.severity === 'review' && !finding.disposition &&
+          status !== 'pending-remediation') {
+        errors.push(
+          `Undisposed review finding "${finding.rule}" requires locale ${locale} ` +
+          'to be pending-remediation.'
+        );
+      }
+    }
+  }
+
+  for (const [locale, status] of localeStatuses) {
+    const localeFindings = allFindings.filter(
+      (finding) => finding.affectedLocales?.includes(locale)
+    );
+    if (status === 'ready' && localeFindings.length > 0) {
+      errors.push(`Ready locale ${locale} cannot have unresolved findings.`);
+    }
+    if (status === 'approved-with-limitations' &&
+        (localeFindings.length === 0 ||
+         localeFindings.some(
+           (finding) => finding.severity !== 'review' || !finding.disposition
+         ))) {
+      errors.push(
+        `Approved-with-limitations locale ${locale} requires only ` +
+        'maker-approved review findings.'
+      );
+    }
+  }
+
+  const expectedOverall = [...localeStatuses.values()].includes('pending-remediation')
+    ? 'pending-remediation'
+    : [...localeStatuses.values()].includes('approved-with-limitations')
+      ? 'approved-with-limitations'
+      : 'ready';
+  if (localeStatuses.size > 0 && readiness.status !== expectedOverall) {
+    errors.push(
+      `Manifest bidirectionalReadiness.status must be "${expectedOverall}" ` +
+      'to summarize localeReadiness.'
+    );
+  }
+
+  const expectedUnavailable = [...localeStatuses.entries()]
+    .filter(([, status]) => status === 'pending-remediation')
+    .map(([locale]) => locale)
+    .sort();
+  const actualUnavailable = Array.isArray(manifest.unavailableLocales)
+    ? [...manifest.unavailableLocales].sort()
+    : [];
+  if (JSON.stringify(expectedUnavailable) !== JSON.stringify(actualUnavailable)) {
+    errors.push(
+      'Manifest unavailableLocales must exactly match locales whose readiness ' +
+      'is pending-remediation.'
+    );
+  }
+}
+
+function validateReadinessFindings(value, field, manifest, errors, isStatic) {
+  if (!Array.isArray(value)) {
+    errors.push(`Manifest bidirectionalReadiness.${field} must be an array.`);
+    return [];
+  }
+  const valid = [];
+  for (const [index, finding] of value.entries()) {
+    const prefix = `Manifest bidirectionalReadiness.${field}[${index}]`;
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
+      errors.push(`${prefix} must be an object.`);
+      continue;
+    }
+    const requiredFields = isStatic
+      ? ['file', 'rule', 'message', 'fingerprint']
+      : ['caseId', 'rule', 'message', 'selector'];
+    for (const requiredField of requiredFields) {
+      if (typeof finding[requiredField] !== 'string' ||
+          !finding[requiredField].trim()) {
+        errors.push(`${prefix}.${requiredField} must be a non-empty string.`);
+      }
+    }
+    if (isStatic && (!Number.isInteger(finding.line) || finding.line < 1)) {
+      errors.push(`${prefix}.line must be a positive integer.`);
+    }
+    if (!['error', 'review'].includes(finding.severity)) {
+      errors.push(`${prefix}.severity must be "error" or "review".`);
+    }
+    validateFindingScope(finding, prefix, manifest, errors);
+    if (finding.severity === 'error' && finding.disposition !== undefined) {
+      errors.push(`${prefix} error findings cannot have maker-approved dispositions.`);
+    } else {
+      validateFindingDisposition(finding, prefix, errors, false);
+    }
+    valid.push(finding);
+  }
+  return valid;
+}
+
+function validateFindingScope(finding, prefix, manifest, errors) {
+  const scopes = new Set(['locale', 'direction', 'shared', 'global']);
+  if (!scopes.has(finding.scope)) {
+    errors.push(`${prefix}.scope must be locale, direction, shared, or global.`);
+  }
+  const locales = Array.isArray(manifest.locales) ? manifest.locales : [];
+  if (!Array.isArray(finding.affectedLocales) ||
+      finding.affectedLocales.length === 0 ||
+      finding.affectedLocales.some(
+        (locale) => typeof locale !== 'string' || !locales.includes(locale)
+      ) ||
+      new Set(finding.affectedLocales).size !== finding.affectedLocales.length) {
+    errors.push(
+      `${prefix}.affectedLocales must contain unique configured locale tags.`
+    );
+    return;
+  }
+  if (finding.scope === 'global') {
+    const expected = [...locales].sort();
+    const actual = [...finding.affectedLocales].sort();
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      errors.push(`${prefix} global findings must affect every configured locale.`);
+    }
+  }
+  if (finding.scope === 'locale' && finding.affectedLocales.length !== 1) {
+    errors.push(`${prefix} locale findings must affect exactly one locale.`);
+  }
+  if (finding.scope === 'direction') {
+    if (!['ltr', 'rtl'].includes(finding.direction)) {
+      errors.push(`${prefix}.direction must be ltr or rtl for direction scope.`);
+      return;
+    }
+    const expected = locales
+      .filter((locale) => getLocaleDirection(locale) === finding.direction)
+      .sort();
+    const actual = [...finding.affectedLocales].sort();
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      errors.push(
+        `${prefix} direction findings must affect every configured ` +
+        `${finding.direction} locale.`
+      );
+    }
+  }
 }
 
 function verifyInitializationEvidence(projectRoot, packageName, evidence) {

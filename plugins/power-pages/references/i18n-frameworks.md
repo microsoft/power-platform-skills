@@ -218,6 +218,10 @@ Write `.powerpages-localization.json` after implementation using this shape:
   "unavailableLocales": [],
   "bidirectionalReadiness": {
     "status": "ready",
+    "localeReadiness": {
+      "en-US": { "status": "ready" },
+      "fr-FR": { "status": "ready" }
+    },
     "findings": [],
     "renderedFindings": []
   },
@@ -239,9 +243,10 @@ implementation must expose one managed `localeAvailability` module with an
 `isLocaleAvailable` predicate that rejects the unavailable set. Every selector,
 switch/detection path, alternate-language metadata generator, and static output
 configuration must apply that predicate; recording the array in the manifest
-does not disable a locale by itself. During `pending-remediation`, all
-configured locales opposite to the default locale's direction must remain
-unavailable.
+does not disable a locale by itself. `unavailableLocales` must exactly match
+the locales whose individual `localeReadiness` status is
+`pending-remediation`. A failure in one locale does not disable another locale
+unless a scoped finding explicitly identifies both as affected.
 `bidirectionalReadiness` is required for every schema-version-1 localization
 manifest. Same-direction locale sets still require pseudo-opposite validation,
 so omitting readiness metadata would expose a new locale before that check:
@@ -253,6 +258,12 @@ so omitting readiness metadata would expose a new locale before that check:
 - `pending-remediation` — hard compatibility work remains; affected locales
   belong in `unavailableLocales` and managed availability logic.
 
+`localeReadiness` contains exactly one entry for every configured locale. The
+top-level status is derived from those entries: any pending locale makes it
+`pending-remediation`; otherwise any approved locale makes it
+`approved-with-limitations`; otherwise it is `ready`. The default locale cannot
+be pending because it cannot be safely hidden.
+
 Each pending finding must preserve the exact scanner result with `file`, `line`,
 `rule`, `message`, and `fingerprint`. The fingerprint binds the record to the
 source context and occurrence that produced it, so replacing an item at the
@@ -261,6 +272,22 @@ Keep rendered browser blockers in `renderedFindings` with their `caseId`,
 `rule`, `severity`, `message`, and `selector`. Rendered findings are validation
 evidence and readiness state; they are not used to suppress later source
 scanner findings.
+
+Every static or rendered finding also records a nonempty `affectedLocales`
+array and one scope:
+
+- `"locale"` — one language-specific locale.
+- `"direction"` — every configured locale of the recorded `"ltr"` or `"rtl"`
+  direction.
+- `"shared"` — an explicitly tested subset affected by shared implementation.
+- `"global"` — every configured locale.
+
+An error or undisposed review finding makes every affected locale pending.
+Maker-approved review findings make an otherwise unblocked affected locale
+`approved-with-limitations`; the locale remains pending if another error or
+undisposed review finding still affects it. A ready locale cannot be named by
+an unresolved finding. Existing ready locales keep their status unless
+regression evidence shows the changed implementation affects them.
 
 `ready` must not retain static or rendered findings. For
 `approved-with-limitations`, retain only review-severity findings and add this

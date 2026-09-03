@@ -519,10 +519,13 @@ unavailable.
 Write `.powerpages-localization.json` using reference schema version 1 before
 Phase 6 validation. At this point it is a provisional safety state, not a
 readiness claim: set `bidirectionalReadiness.status` to
-`pending-remediation`, record the current static findings, leave
-`renderedFindings` empty, and keep every newly added or otherwise affected
-locale unavailable until verification and disposition finish. Existing
-unaffected locales remain available. Record `packageVerification`
+`pending-remediation`, create one `localeReadiness` entry for every configured
+locale, record the current static findings, leave `renderedFindings` empty,
+and keep every newly added or otherwise affected locale unavailable until
+verification and disposition finish. Mark those locale entries
+`pending-remediation`. Preserve the readiness and availability of existing
+locales unless current regression evidence shows they are affected. Record
+`packageVerification`
 from the package-validator result. For an unverified alternative, record
 `status: unverified`, `source: user-approved`, and the official evidence URL
 when one was supplied. Record `initializationEvidence` when deterministic
@@ -540,11 +543,28 @@ for remediation. Generate one managed `localeAvailability` module that exports
 `isLocaleAvailable`, rejects entries in `unavailableLocales`, and is applied
 by every selector, locale switch/detection path, alternate-language metadata
 generator, and static locale output configuration. The manifest alone does not
-disable a locale. While readiness is `pending-remediation`, every configured
-locale whose direction is opposite to the default locale remains unavailable.
-Record each pending scanner finding with its exact `file`, `line`, `rule`, `message`,
-and `fingerprint` so lifecycle validation can defer the same known source item
-without allowing a replacement or newly introduced regression.
+disable a locale. `unavailableLocales` must exactly match locale entries whose
+individual readiness is `pending-remediation`.
+
+Assign every static and rendered finding a `scope` and explicit
+`affectedLocales`:
+
+- `locale` for a language-specific problem affecting one locale.
+- `direction` for a shared LTR or RTL problem; include every configured locale
+  of that direction and record `direction`.
+- `shared` for a shared implementation problem affecting an explicitly tested
+  subset.
+- `global` for a problem affecting every configured locale.
+
+Do not infer that all locales of one direction are affected merely because a
+new locale of that direction fails. Regression-test an existing locale when
+shared direction-sensitive implementation changed, and include it only when
+the evidence shows it is affected. If impact cannot be isolated safely,
+include every potentially affected locale. Record each pending scanner finding
+with its exact `file`, `line`, `rule`, `message`, and `fingerprint` so lifecycle
+validation can defer the same known source item only while all explicitly
+affected locales remain unavailable, without allowing a replacement or newly
+introduced regression.
 
 ---
 
@@ -569,9 +589,10 @@ Reuse the project's Playwright dependency. If neither `playwright` nor
 do not download a separate bundled browser when a supported system browser is
 available.
 
-The specification must cover:
+The specification must include every configured real locale so the CLI can
+reconcile it with `.powerpages-localization.json`, and it must cover:
 
-- Default locale and one target locale.
+- The default locale and every newly added locale independently.
 - Application-driven activation plus representative localized-content
   assertions for every real locale; `set-document` is pseudo-only.
 - Selector behavior or equivalent static locale navigation.
@@ -590,19 +611,41 @@ The specification must cover:
 - Script font loading, mixed-direction names/comments/URLs/identifiers,
   locale-aware dates/numbers/percentages, directional icons, calendars, and
   any audited complex component.
+- Existing locales on every shared or direction-sensitive surface changed by
+  this operation, so a regression is assigned only to locales proven affected.
 
 Use real configured locales for both directions when the resulting locale set
 is mixed. For a same-direction set, add a browser-only pseudo-opposite locale
 so this localization change cannot introduce a future LTR/RTL regression.
 
 For static modes, verify equivalent locale URLs/builds. For runtime modes, set
-`runtimeSwitching: true` and include both LTR -> RTL -> LTR and
-RTL -> LTR -> RTL sequences. Preserve route, form state, focus, and application
-state without page reload. Use bare `preserve` selectors only for form
-controls; declare text, attribute, or property preservation evidence for
-tabs, panels, counters, and other non-form state. Separately verify persisted selection,
-browser-language matching, invalid saved-value fallback, and that stale
-resource requests cannot overwrite a newer selection.
+`runtimeSwitching: true`, set `defaultLocaleId`, and include two round trips for
+every real non-default locale: default -> locale -> default and locale ->
+default -> locale. Do not require every possible locale pair, and do not use
+pseudo locales for application-switch transitions. Preserve route, form state,
+focus, and application state without page reload. Use bare `preserve`
+selectors only for form controls; declare text, attribute, or property
+preservation evidence for tabs, panels, counters, and other non-form state.
+Every real locale, including the default, needs a reusable application
+activation action. Do not use `use-current` for a real runtime locale because
+the round trip must be able to restore it after switching away.
+Separately verify persisted selection, browser-language matching, invalid
+saved-value fallback, and that stale resource requests cannot overwrite a
+newer selection.
+
+Do not expose a pending locale through a normal selector or switching path for
+testing. For each unavailable runtime locale, add a development-only
+`window.__powerPagesLocalizationAudit.activate(locale)` adapter behind the
+framework's development-mode guard. It must invoke the same coordinator and
+resource-loading behavior through a dedicated
+`activateLocaleForAudit(locale)` operation while bypassing availability only
+for the audit.
+Use only the run-spec `audit-activate` action (plus waits when needed) for that
+locale, and list every normal locale-selector surface in
+`unavailableSelectors`. The rendered audit verifies those selectors are absent
+before each component and transition activation. Normal detection, metadata,
+and production output must continue to reject the locale and are enforced by
+source validation; never create an unconditional production bypass.
 
 Run:
 
@@ -622,16 +665,19 @@ cases. Give every review finding explicit evidence and a proposed disposition
 for the Phase 7 maker decision.
 
 Re-run the static audit after remediation and reconcile its exact current
-findings with the rendered report. Update the provisional manifest before
-Phase 7:
+findings with the rendered report. Update each locale's provisional readiness before Phase 7, then derive the
+overall status: any pending locale makes the overall status
+`pending-remediation`; otherwise any locale approved with limitations makes it
+`approved-with-limitations`; otherwise it is `ready`.
 
-- With any static or rendered error, retain the unresolved findings, keep
-  `pending-remediation`, and keep every affected locale unavailable.
-- With review findings but no errors, retain `pending-remediation` and keep
-  affected locales unavailable until the maker disposes every review item.
-- With no unresolved findings, set `ready`, clear both finding arrays, remove
-  the affected locales from `unavailableLocales`, and update every managed
-  availability boundary.
+- With any static or rendered error, retain the unresolved finding and mark
+  every locale in its `affectedLocales` as `pending-remediation`.
+- With review findings but no errors, keep each affected locale
+  `pending-remediation` until the maker disposes every review item.
+- For a locale with no unresolved findings, set its entry to `ready`. Remove it
+  from `unavailableLocales` and update every managed availability boundary.
+- Do not change an existing ready locale merely because another locale remains
+  pending.
 
 A known usable limitation may become `approved-with-limitations` only after
 maker approval in Phase 7. A visible opaque third-party surface, unreadable or
@@ -661,7 +707,7 @@ Include the rendered report path, passed/review/failed case totals, and
 failure/review screenshots. The run specification is temporary workflow input,
 not a new project inventory.
 
-Classify the result as:
+Classify each newly added or regression-tested locale as:
 
 - **Ready** — the new locale may be enabled.
 - **Approved with limitations** — only usable degradation remains; show the
@@ -693,16 +739,19 @@ then repeat Phase 6 and this gate.
 
 After the maker's choice, finalize `.powerpages-localization.json`:
 
-- **Accept changes:** keep `ready` with empty finding arrays.
+- **Accept changes:** set the reviewed locale entries to `ready` and remove
+  findings that affected only those locales.
 - **Enable with documented limitations:** retain only the accepted
-  review-severity findings, set `approved-with-limitations`, remove the
-  affected locales from `unavailableLocales`, and add a `disposition` to every
-  retained finding with `status: maker-approved`, the exact component/page
-  impact, the report or screenshot evidence path, and an ISO `approvedAt`
-  timestamp. Accepted review checks that are not limitations are removed from
-  the unresolved finding arrays.
-- **Save but keep locale unavailable:** keep `pending-remediation`, retain the
-  undisposed findings, and keep the affected locales unavailable.
+  review-severity findings, set each affected locale entry to
+  `approved-with-limitations`, remove those locales from
+  `unavailableLocales`, and add a `disposition` to every retained finding with
+  `status: maker-approved`, the exact component/page impact, the report or
+  screenshot evidence path, and an ISO `approvedAt` timestamp. Accepted review
+  checks that are not limitations are removed from the unresolved finding
+  arrays.
+- **Save but keep locale unavailable:** keep the affected locale entries
+  `pending-remediation`, retain the undisposed findings, and keep only those
+  affected locales unavailable.
 
 Never add a maker-approved disposition to an error finding. After changing
 status or availability, rerun the independent validator, project build, and
