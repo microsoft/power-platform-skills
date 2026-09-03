@@ -25,10 +25,20 @@ The runner covers:
 
 These runs exercise five distinct briefs, every persistence mode, and an
 offline invariance pair. They do not impose universal screen or table counts.
-The flight, gym, and humanitarian outputs also prove that materially different
-directives, screen compositions, media roles, and navigation shells produce
-materially different storyboards. `/preview-screens` reruns this same canonical
-renderer rather than translating TSX into a second HTML artifact.
+The flight, gym, and humanitarian runner outputs prove semantic screen
+selection, media binding, navigation, and canonical scenario projection. They
+are deliberately neutral structural storyboards, not final design output.
+`/preview-screens` validates and opens an existing model-authored final preview;
+only when none exists may it run this structural renderer into a separately
+named diagnostic file.
+
+Final-preview coverage is separate. Supplied model-output fixtures exercise an
+editorial flight-merchandise runway, an equipment identity/scan/maintenance
+surface, and a dense receiving/quantity/inspection-handoff ledger. All three
+must pass `validate-product-experience-preview.js` against their canonical
+screen selection, navigation, actions, scenario values, token CSS, signature
+intent, states, media keys, landmarks, and complete graph. Tests also assert
+that their compositions differ materially rather than by title or palette.
 
 ## Evidence
 
@@ -40,21 +50,23 @@ The output directory contains:
 - `navigation-manifest-example.json` and `route-layout-evidence.json`;
 - `data-model-usage-example.json`;
 - `offline-invariance.json`;
-- `commerce-storyboard.html`, `gym-storyboard.html`, and
-    `operational-storyboard.html`;
+- `commerce-structural-storyboard.html`, `gym-structural-storyboard.html`, and
+    `operational-structural-storyboard.html`;
 - `timings.json`: local Node.js contract/synthetic-layout timing only.
 
-Contract examples and storyboards are deterministic for identical sources.
+Contract examples and structural storyboards are deterministic for identical
+sources.
 Timing values are observations and are intentionally excluded from byte-level
 determinism checks. The before value measures the comparable experience/scope/
 journey/pack core; the after stages include the hardened contract pipeline.
 These workloads differ, so the report does not claim model-time, Dataverse-time,
 native startup, or pixel-rendering performance.
 
-The deterministic fixtures prove compiler, binding, validation, and rendering
-behavior. They are not evidence of AI planning quality. A release-quality model
-comparison requires five separate prompts against the installed plugin and a
-human review of requirement coverage and product judgment.
+The deterministic runner proves compiler, binding, validation, and structural
+projection behavior. The supplied final HTML fixtures prove validator coverage,
+not model quality. A release-quality model comparison requires separate prompts
+against the installed plugin and human review of requirement coverage, product
+judgment, and native implementation fidelity.
 
 ## Host Boundary
 

@@ -11,12 +11,13 @@ Read only:
 
 1. this file;
 2. [`design-system-schema.md`](./design-system-schema.md);
-3. `native-app-plan.md` Product Experience, Product Scope, and Screens;
-4. the approved canonical contracts under `.tmp/`:
+3. [`final-experience-preview.md`](./final-experience-preview.md);
+4. `native-app-plan.md` Product Experience, Product Scope, and Screens;
+5. the approved canonical contracts under `.tmp/`:
    `product-experience-contract.json`, `product-scope-contract.json`,
    `workflow-journey-contract.json`, `navigation-manifest.json`,
    `compiled-screen-build-pack.json`, and `scenario-facts.json` when present;
-5. existing `brand/design-system.md` and `brand/tokens.ts` only for drift
+6. existing `brand/design-system.md` and `brand/tokens.ts` only for drift
    detection in an existing project.
 
 Do not read input modes, style galleries, named directions, brand examples,
@@ -79,30 +80,20 @@ mkdir -p brand/.history
 cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-auto.md" 2>/dev/null || true
 ```
 
-## Render the approval preview
+## Author the approval preview
 
-Run the deterministic contract checks and renderer:
+After all three brand artifacts are complete, read and execute
+[`final-experience-preview.md`](./final-experience-preview.md) in this same model
+invocation. Prepare the deterministic manifest, then author the final
+`_plan_preview.html` from the generated design system and canonical authorities,
+and run its validator. Do not invoke another model or use the deterministic
+structural renderer as a final-design substitute.
 
-```bash
-node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
-  --project-root "<working_dir>" --check
-node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
-  --project-root "<working_dir>" --check
-node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
-  --project-root "<working_dir>"
-```
-
-The scenario check is required when `.tmp/scenario-facts.json` exists or the
-packs bind scenario facts. A non-zero command is `BLOCKED`; never hand-author a
-fallback preview.
-
-The default `_plan_preview.html` storyboard shows one to three frames:
+The final storyboard shows one to three frames, semantically selected as the
 primary product destination, key-flow entry, and strongest decision/action when
-those distinct screens exist. The expandable `All screens` area exposes the
-complete graph and required states. Every frame uses the compiled root
-`experienceDirective`, canonical scenario facts, navigation, identity hierarchy,
-chrome, media keys, signature intent, and screen contracts. `/preview-screens`
-reruns this same renderer; it does not translate TSX into another HTML design.
+those distinct screens exist. The expandable `All screens` surface exposes the
+complete graph and required states. Missing or incomplete tokens, signature
+components, canonical facts, or HTML contract evidence are `BLOCKED`.
 
 The HTML approves experience intent. It does not claim React Native or native
 pixels were rendered. React Native remains authoritative after implementation.
@@ -124,6 +115,7 @@ visual_personality: <approved value>
 visual_companion: <yes|no|skip>
 ```
 
-Do not return `DONE` unless all three brand artifacts and the journey preview
-exist and the contract checks pass. Gate 3 in `/create-mobile-app` owns approval;
-this path asks no additional design or preview question.
+Do not return `DONE` unless all three brand artifacts and the model-authored
+journey preview exist and `validate-product-experience-preview.js` passes. Gate
+3 in `/create-mobile-app` owns approval; this path asks no additional design or
+preview question.

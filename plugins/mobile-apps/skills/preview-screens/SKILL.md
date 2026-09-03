@@ -1,6 +1,6 @@
 ---
 name: preview-screens
-description: Re-renders the approved mobile product experience as a self-contained HTML storyboard without starting Metro or a simulator.
+description: Validates and opens the final mobile experience HTML, or renders a separately named neutral structural storyboard when no final preview exists.
 user-invocable: true
 allowed-tools: Read, Glob, Grep, Bash
 model: sonnet
@@ -10,9 +10,9 @@ model: sonnet
 
 # Preview Screens
 
-Render the existing canonical product-experience storyboard. Do not inspect or
-translate TSX into a separate preview representation and do not create a second
-preview-only design system.
+Validate and open the existing model-authored product-experience storyboard. Do
+not inspect or translate TSX, author another final design, call another model, or
+create a second preview-only design system.
 
 ## When to use
 
@@ -41,25 +41,36 @@ Require the following current artifacts:
 .tmp/scenario-facts.json
 ```
 
-`brand/tokens.ts` is optional only for an older approved project; the renderer
-uses its safe defaults when tokens are absent. Missing or stale canonical
-contracts are `BLOCKED`. Never reconstruct them from `native-app-plan.md`, app
-routes, TSX source, screen names, or entity names.
+Complete `brand/tokens.ts` and `brand/signature-components.ts` are required to
+validate a final design preview. When `_plan_preview.html` does not exist, this
+skill may render only a clearly labelled neutral structural diagnostic. Missing
+or stale canonical contracts remain `BLOCKED`.
+Never reconstruct them from `native-app-plan.md`, app routes, TSX source,
+screen names, or entity names.
 
-## Validate and render
+## Validate or render structure
 
-Run the deterministic gates and existing renderer:
+Run the deterministic gates. Validate an existing final preview; only when it
+does not exist, render the separate structural diagnostic:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
   --project-root "<working_dir>" --check
 node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
-node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
-  --project-root "<working_dir>"
+if test -f "<working_dir>/_plan_preview.html"; then
+  node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
+    --project-root "<working_dir>"
+else
+  node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
+    --project-root "<working_dir>"
+fi
 ```
 
-Stop on a nonzero result. Do not hand-author a fallback.
+If final validation fails, stop and return the finding to `/design-system`; do
+not overwrite the final file or hide the failure behind structural output. When
+no final file exists, surface the renderer's `neutral-structural-preview`
+warning and direct the user to `/design-system` for final visual intent.
 
 The renderer consumes the same authorities as screen building:
 
@@ -78,27 +89,28 @@ destination, key-flow entry, and strongest decision/action screen. Short flows
 remain one or two frames. Expandable `All screens` exposes the rest of the graph
 and required states without turning every route into a phone column.
 
-The result is `<working_dir>/_plan_preview.html`. It replaces the prior
-storyboard atomically for the current approved contracts. It never writes app
-source, starts Metro, launches Dev Player, calls another model, or captures a
-native screenshot.
+The validated final result remains `<working_dir>/_plan_preview.html`. The
+fallback result is `<working_dir>/_plan_preview.structural.html` and never
+replaces the final artifact. Neither path writes app source, starts Metro,
+launches Dev Player, calls another model, or captures a native screenshot.
 
 ## Open the result
 
 Read `visual_companion` from `memory-bank.md`; default to `yes` when absent.
 
-- `visual_companion: no`: print the absolute file URL and stop.
-- `visual_companion: yes` or missing: print the URL and open it with the first
-  available platform command.
+- `visual_companion: no`: print the selected artifact's absolute file URL and
+  stop.
+- `visual_companion: yes` or missing: print the selected artifact URL and open
+  it with the first available platform command.
 
 ```bash
-open "<working_dir>/_plan_preview.html" 2>/dev/null \
-  || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
+open "<validated-final-or-structural-path>" 2>/dev/null \
+  || xdg-open "<validated-final-or-structural-path>" 2>/dev/null \
   || powershell.exe -NoProfile -Command \
-    "Start-Process '<working_dir>\\_plan_preview.html'" 2>/dev/null \
-  || echo "Open: file://<working_dir>/_plan_preview.html"
+    "Start-Process '<validated-final-or-structural-path>'" 2>/dev/null \
+  || echo "Open: file://<validated-final-or-structural-path>"
 ```
 
-Report the selected screen IDs, complete graph count, scenario revision,
-compiled fingerprint, and target viewport returned by the renderer. Do not
-claim native rendering or pixel verification.
+Report artifact kind, selected screen IDs, complete graph count, scenario
+revision, compiled fingerprint, and target viewport when returned. Do not claim
+native rendering or pixel verification.

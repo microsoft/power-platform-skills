@@ -44,19 +44,15 @@ presentation contracts, rerender the gallery, and show the summary again.
 ## Journey preview
 
 For an orchestrated project, require current `native-app-plan.md`, Workflow
-Journey, navigation manifest, compiled screen packs, and scenario facts. Run:
+Journey, navigation manifest, compiled screen packs, scenario facts, and all
+three generated brand artifacts. Read and execute
+[`final-experience-preview.md`](./final-experience-preview.md) in this same
+design-system model invocation: prepare the manifest, author
+`_plan_preview.html` from the confirmed design, then validate it. Do not invoke
+another model and do not substitute the neutral structural renderer.
 
-```bash
-node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
-  --project-root "<working_dir>" --check
-node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
-  --project-root "<working_dir>" --check
-node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
-  --project-root "<working_dir>"
-```
-
-The scenario check is conditional only when no scenario artifact or binding
-exists. Any applicable failure is `BLOCKED`; do not hand-author a fallback.
+Any applicable contract, token, signature-component, scenario, or final HTML
+validation failure is `BLOCKED`.
 
 The default `_plan_preview.html` board shows one to three phones: entry/root,
 signature/core action, and outcome/review where distinct. `All screens` exposes
@@ -64,9 +60,10 @@ the complete planned graph and states. Tabs and actions may focus or scroll, but
 must not replace or hide another storyboard phone.
 
 Use canonical scenario facts, navigation, identity hierarchy, media keys, first
-viewport, trust signals, actions, and screen contracts. Reject generic CRUD.
-This HTML approves intent; it does not claim React Native or native pixels were
-rendered. Never start Metro or capture native screenshots here.
+viewport, trust signals, actions, and screen contracts. Reject generic CRUD and
+same-template composition with palette-only variation. This HTML approves
+intent; it does not claim React Native or native pixels were rendered. Never
+start Metro or capture native screenshots here.
 
 Standalone projects with no plan may skip the journey preview after an explicit
 choice. When a plan exists, skip is unavailable.

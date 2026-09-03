@@ -18,6 +18,11 @@ function read(directory, fileName) {
 }
 
 test('acceptance matrix covers five briefs, all persistence modes, and explicit offline pairing', (context) => {
+  const runnerSource = fs.readFileSync(
+    path.join(__dirname, '..', 'run-live-build-plan-acceptance.js'),
+    'utf8',
+  );
+  assert.doesNotMatch(runnerSource, /readColors\(|readTokenContract|readDesignTokenContract|preview-mode="final"/);
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-hardening-acceptance-'));
   context.after(() => fs.rmSync(output, { recursive: true, force: true }));
 
@@ -50,7 +55,7 @@ test('acceptance matrix covers five briefs, all persistence modes, and explicit 
     metroStarted: false,
     nativeRuntimeRendered: false,
     nativeScreenshotsCaptured: false,
-    storyboardAuthority: 'approved experience intent and canonical planning inputs only',
+    storyboardAuthority: 'neutral structural projection of canonical planning inputs only',
   });
 
   for (const run of summary.runs) {
@@ -101,7 +106,7 @@ test('acceptance matrix covers five briefs, all persistence modes, and explicit 
   assert.equal(summary.warnings[0].code, 'non-dataverse-offline-adapters-not-host-verified');
 });
 
-test('flight, gym, and ICRC previews differ by approved structure rather than title or color', () => {
+test('flight, gym, and ICRC structural storyboards preserve approved semantic differences', () => {
   const runs = Object.fromEntries([
     { id: 'flight', scenario: 'flightCommerce', mode: 'connector-only', offline: false },
     { id: 'gym', scenario: 'gymMaintenance', mode: 'mixed', offline: false },
@@ -141,14 +146,22 @@ test('flight, gym, and ICRC previews differ by approved structure rather than ti
   assert.deepEqual(selectedPatterns(runs.flight), ['discovery', 'detail', 'workflow-step']);
   assert.deepEqual(selectedPatterns(runs.gym), ['overview', 'workflow-step', 'capture']);
   assert.deepEqual(selectedPatterns(runs.icrc), ['queue', 'workflow-step', 'capture']);
-  assert.match(runs.flight.artifacts.previewHtml, /data-tone="editorial"/);
-  assert.match(runs.flight.artifacts.previewHtml, /class="phone-nav"/);
-  assert.match(runs.gym.artifacts.previewHtml, /data-emphasis="status-signals"/);
-  assert.match(runs.icrc.artifacts.previewHtml, /data-density="dense"/);
-  assert.match(runs.icrc.artifacts.previewHtml, /--preview-pad:14px/);
-  assert.match(runs.icrc.artifacts.previewHtml, /class="stack-return"/);
-  assert.notEqual(runs.flight.artifacts.previewHtml, runs.gym.artifacts.previewHtml);
-  assert.notEqual(runs.gym.artifacts.previewHtml, runs.icrc.artifacts.previewHtml);
+  assert.match(runs.flight.artifacts.structuralPreviewHtml, /data-tone="editorial"/);
+  assert.match(runs.flight.artifacts.structuralPreviewHtml, /data-preview-mode="structural"/);
+  assert.match(runs.flight.artifacts.structuralPreviewHtml, /class="phone-nav"/);
+  assert.match(runs.gym.artifacts.structuralPreviewHtml, /data-emphasis="status-signals"/);
+  assert.match(runs.icrc.artifacts.structuralPreviewHtml, /data-density="dense"/);
+  assert.match(runs.icrc.artifacts.structuralPreviewHtml, /--preview-pad:14px/);
+  assert.match(runs.icrc.artifacts.structuralPreviewHtml, /class="stack-return"/);
+  const cssValue = (html, name) => html.match(new RegExp(`--${name}:([^;]+)`))?.[1];
+  const primaryColors = Object.values(runs).map(
+    (run) => cssValue(run.artifacts.structuralPreviewHtml, 'primary'),
+  );
+  assert.deepEqual(primaryColors, ['#4d514f', '#4d514f', '#4d514f']);
+  assert.ok(Object.values(runs).every((run) => run.previewMode === 'structural'));
+  assert.ok(Object.values(runs).every((run) => run.designTokensReady === false));
+  assert.notEqual(runs.flight.artifacts.structuralPreviewHtml, runs.gym.artifacts.structuralPreviewHtml);
+  assert.notEqual(runs.gym.artifacts.structuralPreviewHtml, runs.icrc.artifacts.structuralPreviewHtml);
 });
 
 test('acceptance runner emits deterministic contract examples and three three-frame storyboards', (context) => {
@@ -167,9 +180,9 @@ test('acceptance runner emits deterministic contract examples and three three-fr
     'data-model-usage-example.json',
     'route-layout-evidence.json',
     'offline-invariance.json',
-    'commerce-storyboard.html',
-    'gym-storyboard.html',
-    'operational-storyboard.html',
+    'commerce-structural-storyboard.html',
+    'gym-structural-storyboard.html',
+    'operational-structural-storyboard.html',
   ]) {
     assert.equal(read(first, fileName), read(second, fileName), fileName);
   }
@@ -186,14 +199,16 @@ test('acceptance runner emits deterministic contract examples and three three-fr
   const usage = JSON.parse(read(first, 'data-model-usage-example.json'));
   assert.match(usage.usageRevision, /^[a-f0-9]{64}$/);
 
-  const commerce = read(first, 'commerce-storyboard.html');
-  const gym = read(first, 'gym-storyboard.html');
-  const operational = read(first, 'operational-storyboard.html');
+  const commerce = read(first, 'commerce-structural-storyboard.html');
+  const gym = read(first, 'gym-structural-storyboard.html');
+  const operational = read(first, 'operational-structural-storyboard.html');
   for (const html of [commerce, gym, operational]) {
     assert.equal((html.match(/<article class="phone/g) || []).length, 3);
     assert.match(html, /<details class="all-screens">/);
     assert.match(html, /data-contract-fingerprint="[a-f0-9]{64}"/);
     assert.match(html, /data-target-viewport="390x844"/);
+    assert.match(html, /data-preview-mode="structural"/);
+    assert.match(html, /Neutral structural preview/);
     assert.doesNotMatch(html, /React Native (?:was|has been) rendered|pixel-verified/);
   }
   assert.match(commerce, /https:\/\/cdn\.contoso\.com\/mobile-acceptance\//);

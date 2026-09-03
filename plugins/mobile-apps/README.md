@@ -173,7 +173,8 @@ What happens:
    capabilities + connectors → materialized experience + interactive HTML
    journey preview → final implementation confirmation
 5. **Design system** — materializes the approved Product Experience into
-   `brand/design-system.md`, `brand/tokens.ts`, and `_plan_preview.html`.
+    `brand/design-system.md` and `brand/tokens.ts`, then authors and validates
+    `_plan_preview.html` in the same design-system model execution.
     The preview retains state controls but shows at most three journey frames:
     entry, representative core work, and outcome. Inspection styling is an
     explicit option, not the no-brand default.
@@ -223,13 +224,13 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 > /edit-app "Improve the search screen to make it easier to use on mobile"
 > /deploy                        # npm run build + npx power-apps push
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
-> /preview-screens               # browser preview of generated screens (no Metro needed)
+> /preview-screens               # validate/open final intent, or neutral structure (no Metro)
 > /list-connections              # diagnostic when a service call returns 401
 > /check-updates                 # ordered dependency updates
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
-Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
+Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and routes design-intent preview updates through `/design-system`. `/preview-screens` validates and opens that final artifact or emits a separately named neutral structural diagnostic. You do not need to manually run `npm run generate-schemas`, `npx tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
 
 Common follow-ups:
 
@@ -266,14 +267,14 @@ Example edit flows:
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
-| `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
+| `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and routes final intent preview changes through `/design-system`. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |
-| `/design-system` | ✅ v0 | Materializes Product Experience and optional brand input into `brand/design-system.md` + `brand/tokens.ts`, with optional style alternatives and one deterministic, interactive journey preview rendered from compiled build packs. No-brand paths do not default to inspection. |
-| `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
+| `/design-system` | ✅ v0 | Materializes Product Experience and optional brand input into `brand/design-system.md` + `brand/tokens.ts`, then authors one interactive final journey preview in the same model execution and validates it against canonical contracts. No-brand paths do not default to inspection. |
+| `/preview-screens` | ✅ v0 | Validates and opens the model-authored final experience HTML; if it does not exist, writes a separately named neutral structural storyboard without starting Metro. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
 | `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire, foreground schema-and-screen-aware proposal, and a single `accept` confirmation. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Offered after Dataverse materialization and also runs standalone on existing apps. |

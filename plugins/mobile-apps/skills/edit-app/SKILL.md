@@ -365,7 +365,8 @@ Show the user a side-by-side diff (or before/after) for every changed plan secti
 - Screen files to create, rewrite, rename, or delete
 - Navigation/layout files to update
 - Verification commands to run
-- Whether `preview.html` will be regenerated
+- Whether `_plan_preview.html` will be reauthored by `/design-system`, validated,
+  or left unchanged
 
 Ask:
 
@@ -594,7 +595,13 @@ If verification fails because the edit exposed stale generated services, rerun t
 
 Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
-If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
+If approved Product Experience, design, navigation, or visible scenario facts
+changed, the owning `/design-system` execution must reauthor and validate
+`_plan_preview.html` before this step. For any UI change, or when the user
+explicitly asks for a preview, read and execute `/preview-screens` after static
+verification. It validates and opens that final intent artifact; when none
+exists, it can emit only `_plan_preview.structural.html`. It never derives final
+design from TSX.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 
@@ -609,7 +616,7 @@ Append an edit entry to `memory-bank.md`:
 - Plan sections changed: <Data Model / Native Capabilities / Screens / Design / Connectors>
 - App changes: <screens/routes/native wrappers/data sources>
 - Verification: <commands/gates + pass/fail/skipped with reason>
-- Preview: <preview.html path or not generated>
+- Preview: <validated _plan_preview.html, neutral _plan_preview.structural.html, or not requested>
 - Debug handoff: <not requested / /debug-app "<symptom>" invoked>
 - Blocks/concerns: <none or list>
 ```
@@ -621,4 +628,8 @@ Final summary must say what changed in the app, what verification ran, where the
 - `native-app-plan.md` is still the durable source of truth. The change should be planned before it is applied, but planning is not the end state.
 - For complex multi-section edits, update and gate every required section first, then apply the mutation in dependency order. Do not leave a native capability entry that references missing Dataverse storage or a screen state that was never planned.
 - Edit planning uses the same foreground contracts, validators, and compilers as initial creation, so planning improvements flow through here.
-- This skill intentionally covers post-generation iteration. It is acceptable for `/edit-app` to touch Dataverse, `src/native/`, route layouts, screen TSX, brand tokens, `preview.html`, and `memory-bank.md` when the approved edit requires it.
+- This skill intentionally covers post-generation iteration. It is acceptable
+  for `/edit-app` to touch Dataverse, `src/native/`, route layouts, screen TSX,
+  brand tokens, and `memory-bank.md` when the approved edit requires it.
+  `/design-system` alone authors `_plan_preview.html`; `/preview-screens` only
+  validates/opens it or writes the separately named structural diagnostic.

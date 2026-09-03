@@ -230,10 +230,16 @@ approved experience calls for them.
 The pre-build preview is the experience approval artifact, not a generic
 component gallery.
 
-Render it deterministically:
+The existing `/design-system` model execution authors it after materializing
+tokens and signature components. Prepare and validate its deterministic
+contract:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
+node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
+  --project-root "<working_dir>" \
+  --contract-output "<working_dir>/.tmp/product-experience-final-preview-contract.json"
+# The design-system model authors _plan_preview.html here.
+node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
   --project-root "<working_dir>"
 ```
 
@@ -245,9 +251,14 @@ node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
   the complete screen graph plus required states in expandable `All screens`.
 - Use tabs and journey actions only to focus or scroll to a phone. They must
   never replace or hide another storyboard screen.
-- Use the approved design tokens, screen build packs, journey order, populated
-  scenario facts, media keys, and state controls. The HTML approves experience
-  intent and does not claim React Native or native pixel verification.
+- Use the approved design tokens, signature components, screen build packs,
+  journey order, populated scenario facts, media keys, and state controls. The
+  HTML approves experience intent and does not claim React Native or native
+  pixel verification.
+
+`render-product-experience-preview.js` is a neutral structural diagnostic only.
+It writes `_plan_preview.structural.html` and cannot create or overwrite the
+final approval artifact.
 
 Reject the preview before implementation when it:
 

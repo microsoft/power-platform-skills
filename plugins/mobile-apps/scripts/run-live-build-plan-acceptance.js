@@ -17,7 +17,7 @@ const {
   contractRevision,
   sha256Hex,
 } = require('./lib/product-experience-contracts');
-const { readColors, renderProductExperiencePreview } = require('./render-product-experience-preview');
+const { renderProductExperiencePreview } = require('./render-product-experience-preview');
 const { compileDataModelUsage, validateDataModelUsage } = require('./validate-data-model-usage');
 const { compileScenarioFacts, projectScreenFacts, validateScenarioFacts } = require('./validate-fixture-scenarios');
 const { validateNavigationLayout } = require('./validate-navigation-layout');
@@ -47,7 +47,6 @@ const STAGES = [
   'supportingScreens',
   'finalValidation',
 ];
-
 function clone(value) {
   return structuredClone(value);
 }
@@ -453,7 +452,6 @@ function runVariant(definition) {
       scenario,
       persistence,
       navigation,
-      colors: readColors(path.join(os.tmpdir(), 'missing-mobile-acceptance-tokens.ts')),
     });
     requireCondition(preview.ok, `preview failed: ${JSON.stringify(preview.errors || [])}`);
   });
@@ -570,6 +568,8 @@ function runVariant(definition) {
     ),
     offlineAdapter: offlineIntegration?.adapter || null,
     offlineMediaBindingCount: offlineIntegration?.mediaBindings.length || 0,
+    previewMode: preview.previewMode,
+    designTokensReady: preview.designTokensReady,
     checks: {
       canonicalContracts: true,
       requirementCoverage: true,
@@ -596,7 +596,7 @@ function runVariant(definition) {
       obligations,
       offlineIntegration,
       dataModel,
-      previewHtml: preview.html,
+      structuralPreviewHtml: preview.html,
     },
   };
 }
@@ -652,7 +652,7 @@ function runAcceptanceMatrix(outputDirectory) {
       metroStarted: false,
       nativeRuntimeRendered: false,
       nativeScreenshotsCaptured: false,
-      storyboardAuthority: 'approved experience intent and canonical planning inputs only',
+      storyboardAuthority: 'neutral structural projection of canonical planning inputs only',
     },
     offlineInvariance: {
       pair: [baseline.id, candidate.id],
@@ -692,9 +692,9 @@ function runAcceptanceMatrix(outputDirectory) {
     stages: ['beforeComparableCore', ...STAGES, 'afterHardenedPipeline'],
     runs: Object.fromEntries(runs.map((run) => [run.id, run.timings])),
   });
-  writeText(path.join(outputDirectory, 'commerce-storyboard.html'), commerce.artifacts.previewHtml);
-  writeText(path.join(outputDirectory, 'gym-storyboard.html'), gym.artifacts.previewHtml);
-  writeText(path.join(outputDirectory, 'operational-storyboard.html'), operational.artifacts.previewHtml);
+  writeText(path.join(outputDirectory, 'commerce-structural-storyboard.html'), commerce.artifacts.structuralPreviewHtml);
+  writeText(path.join(outputDirectory, 'gym-structural-storyboard.html'), gym.artifacts.structuralPreviewHtml);
+  writeText(path.join(outputDirectory, 'operational-structural-storyboard.html'), operational.artifacts.structuralPreviewHtml);
   return summary;
 }
 

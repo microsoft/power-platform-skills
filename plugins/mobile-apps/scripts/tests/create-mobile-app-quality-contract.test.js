@@ -161,6 +161,10 @@ test('live Build Plan starts after proceed and remains separate from design prev
   assert.match(scaffold, /at most three phone frames/);
   assert.match(scaffold, /expandable `All screens` area/);
   assert.match(scaffold, /does not claim[\s\S]*native pixel verification/);
+  assert.match(scaffold, /validate-product-experience-preview\.js/);
+  assert.doesNotMatch(scaffold, /--mode final|--tokens "<working_dir>\/brand\/tokens\.ts"/);
+  assert.match(scaffold, /only after `\/design-system` has returned/);
+  assert.match(scaffold, /neutral structural[\s\S]*approved visual intent/i);
   assert.match(scaffold, /remain state controls on those frames rather than routes/);
 });
 

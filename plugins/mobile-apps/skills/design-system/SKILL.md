@@ -22,8 +22,8 @@ Every creation path writes:
 2. `brand/tokens.ts` - importable Tamagui token values;
 3. `brand/signature-components.ts` - typed presentation contracts for approved
    signature interactions;
-4. `_plan_preview.html` - the deterministic journey approval preview when an
-   approved app plan exists.
+4. `_plan_preview.html` - the model-authored, deterministically validated journey
+  approval preview when an approved app plan exists.
 
 `brand/design-system.html` is an optional component gallery, not a substitute
 for the journey preview.
@@ -58,7 +58,7 @@ Choose the first matching route. Do not preload references from another row.
 
 | Invocation | Read and execute | Explicitly do not read |
 |---|---|---|
-| `--auto-experience` | [`references/auto-experience.md`](./references/auto-experience.md), [`references/design-system-schema.md`](./references/design-system-schema.md), approved canonical project contracts | input modes, style picker/directions, brand examples, galleries, Figma/extraction, reskin, migration, history |
+| `--auto-experience` | [`references/auto-experience.md`](./references/auto-experience.md), [`references/design-system-schema.md`](./references/design-system-schema.md), [`references/final-experience-preview.md`](./references/final-experience-preview.md), approved canonical project contracts | input modes, style picker/directions, brand examples, galleries, Figma/extraction, reskin, migration, history |
 | `--fast-experience` | [`references/auto-experience.md`](./references/auto-experience.md) | optional design-library references |
 | `--refresh`, `--reskin`, `--add-dark-mode`, `--add-theme`, `--history`, `--diff`, `--rollback` | [`references/lifecycle-migration.md`](./references/lifecycle-migration.md), then only the reference that workflow selects | automatic, gallery, or extraction references not selected by the operation |
 | `--from-figma` | [`references/figma-extraction.md`](./references/figma-extraction.md), then [`references/brand-style-workflow.md`](./references/brand-style-workflow.md) | Canvas, code-app, Power Pages, and named-style references unless explicitly selected later |
@@ -94,9 +94,11 @@ Optional flags accepted by their owning routes:
   presentation interfaces; compiled packs retain domain operations.
 - Snapshot an existing design before replacement and cap `brand/.history/` at
   50 entries.
-- The journey preview uses canonical scenario facts, navigation, identity,
-  media keys, and screen contracts. It never claims React Native or native
-  pixel verification.
+- The existing design-system model execution authors the journey preview from
+  generated tokens, signature interfaces, and canonical scenario, navigation,
+  identity, media, and screen contracts. Deterministic code validates that HTML
+  but never chooses its final composition. It never claims React Native or
+  native pixel verification.
 - Do not start Metro, attach Dev Player, or capture native screenshots in this
   skill.
 - One major design change per prompt; maximum two direction regenerations.
@@ -122,7 +124,7 @@ Downstream consumers:
 |---|---|
 | `screen-builder` | reads design spec plus signature interfaces; negatives are hard rules |
 | Tamagui integration | imports `brand/tokens.ts` |
-| `preview-screens` | respects `visual_companion` and brand tokens |
+| `preview-screens` | validates and opens the final preview, or emits a separately named neutral structural diagnostic when no final preview exists |
 | `/edit-app` | routes visual changes here while keeping plan/data changes in their owners |
 | `/deploy` | ships `brand/` without special handling |
 

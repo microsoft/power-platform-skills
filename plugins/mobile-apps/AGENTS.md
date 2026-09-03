@@ -99,8 +99,8 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 
 ## Decisions made
 
-- ✅ Markdown plan with Mermaid plus a deterministic interactive HTML
-  experience preview before implementation
+- ✅ Markdown plan with Mermaid plus a model-authored, deterministically
+  validated interactive HTML experience preview before implementation
 - ✅ Product Experience Compiler with adaptive screen/table budgets,
   workflow journeys, classified assumptions, and revision-bound build packs
 - ✅ **Four user gates** owned by the foreground workflow; graph/spec passes are
@@ -113,9 +113,11 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Template is supplied as a fresh `pa-wrap-tools/templates/expo-app-standalone` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `npx power-apps init`.
 - ✅ `brand/` directory convention: `/design-system` (Step 6.75) always writes
   `brand/design-system.md` and `brand/tokens.ts`, and writes
-  `_plan_preview.html` from the compiled primary journey. No-brand paths
-  materialize Product Experience with neutral semantic tokens; inspection
-  presets are explicit-only.
+  `_plan_preview.html` in the same design-system model execution from generated
+  tokens, signature components, and the compiled primary journey. The
+  deterministic renderer writes only `_plan_preview.structural.html`. No-brand
+  paths materialize Product Experience deliberately; inspection presets are
+  explicit-only.
 - ✅ Offline selection is explicit and package-owned. `/create-mobile-app` compiles `.tmp/offline-integration-contract.json` only after an explicit request or approved evidence-backed choice; absence means no offline artifact, question, screen state, component, table, route, or job. Product Scope, Journey, and screen packs never own `states.offline`. The template's existing `@microsoft/power-apps-native-host` / `@microsoft/power-apps-native-offline` integration owns connection, queued, syncing, failed, retry, and conflict UX. Do not add or invent another offline dependency or adapter API.
 - ✅ Offline profile creation is **Dataverse profile authoring only** — when the integration contract requires it for `dataverse` or `mixed`, `/setup-offline-profile` and `/enable-tables-offline` POST `mobileofflineprofile` / `mobileofflineprofileitem` / `mobileofflineprofileitemassociation` to Dataverse and write `offline-profile.json` for the template host integration. They do not own product screens, routes, jobs, domain tables, or a parallel runtime. Connector/local modes never create a Mobile Offline Profile and may invoke only an adapter documented by the existing package version.
 - ✅ Custom filter mode (`recorddistributioncriteria=3`, `profileitemrule` → `savedquery`) is **deferred to v0.5**. v0.1 supports Related-rows-only / All-records / Organization-rows radio options only.

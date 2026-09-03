@@ -8,7 +8,6 @@ const path = require('node:path');
 const { compileNavigationManifest } = require('../compile-navigation-manifest');
 const { compileScreenBuildPack } = require('../compile-screen-build-pack');
 const {
-  readColors,
   renderHtml,
   selectPreviewScreens,
 } = require('../render-product-experience-preview');
@@ -52,6 +51,9 @@ export const tokens = {
     statusDanger: '#b23b45',
     statusInfo: '#315ea8',
   },
+  typography: {
+    heading: { family: 'Avenir Next', size: 23, weight: '700', lineHeight: 1.2, tracking: 0 },
+  },
 };
 `);
 }
@@ -72,11 +74,10 @@ function renderBundle(bundle) {
     journey: bundle.journey,
     scenario,
     navigation,
-    colors: readColors('/path/that/does/not/exist'),
   });
 }
 
-test('renderer creates a deterministic three-screen interactive commerce preview', () => {
+test('renderer creates a deterministic neutral three-screen commerce storyboard', () => {
   const projectRoot = makeProjectDir('experience-preview');
   try {
     prepare(projectRoot, bundleFor('commerce'));
@@ -84,8 +85,13 @@ test('renderer creates a deterministic three-screen interactive commerce preview
     const first = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
     assert.strictEqual(first.code, 0);
     assert.deepStrictEqual(first.json.screenIds, ['discover', 'product', 'checkout']);
+    assert.strictEqual(first.json.previewMode, 'structural');
+    assert.strictEqual(first.json.designTokensReady, false);
+    assert.strictEqual(first.json.tokenSource, 'neutral-structural');
+    assert.strictEqual(first.json.tokenRevision, null);
+    assert.strictEqual(first.json.warnings[0].code, 'neutral-structural-preview');
 
-    const outputPath = path.join(projectRoot, '_plan_preview.html');
+    const outputPath = path.join(projectRoot, '_plan_preview.structural.html');
     const html = fs.readFileSync(outputPath, 'utf8');
     assert.strictEqual((html.match(/<article class="phone/g) || []).length, 3);
     assert.match(html, /class="preview-grid" style="--screen-count:3"/);
@@ -101,6 +107,9 @@ test('renderer creates a deterministic three-screen interactive commerce preview
     assert.match(html, /data-target-viewport="390x844"/);
     assert.match(html, /class="frame-provenance"/);
     assert.match(html, /data-tone="editorial"/);
+    assert.match(html, /data-preview-mode="structural"/);
+    assert.match(html, /Neutral structural preview/);
+    assert.match(html, /not final visual intent/i);
     assert.match(html, /data-density="sparse"/);
     assert.match(html, /data-navigation-source="manifest"/);
     assert.match(html, /class="stack-return" data-navigation-pattern="stack-only"/);
@@ -119,7 +128,8 @@ test('renderer creates a deterministic three-screen interactive commerce preview
     assert.match(html, /data-state="empty"/);
     assert.match(html, /data-state="error"/);
     assert.match(html, /SAMPLE PREVIEW/);
-    assert.match(html, /--primary:#5b3fd1/);
+    assert.match(html, /--primary:#4d514f/);
+    assert.doesNotMatch(html, /#5b3fd1/);
     assert.match(html, /data:image\/svg\+xml;base64,/);
     assert.strictEqual((html.match(/class="hero-media"/g) || []).length, 3);
     assert.match(html, /data-target="product"/);
@@ -173,10 +183,44 @@ test('resolved scenario CDN media renders directly and retains its stable asset 
     journey: bundle.journey,
     scenario,
     navigation,
-    colors: readColors('/path/that/does/not/exist'),
   });
   assert.match(html, /https:\/\/images\.example\.test\/catalog\/cloud-runner\.jpg/);
   assert.match(html, new RegExp(`data-asset-key="${asset.key}"`));
+});
+
+test('structural renderer ignores brand tokens and cannot overwrite the final preview', () => {
+  const projectRoot = makeProjectDir('experience-preview-structural-boundary');
+  try {
+    prepare(projectRoot, bundleFor('inspection'));
+    const finalPath = path.join(projectRoot, '_plan_preview.html');
+    fs.writeFileSync(finalPath, '<!doctype html><title>AI-authored final</title>');
+
+    const structuralResult = runCli('render-product-experience-preview.js', [
+      '--project-root', projectRoot,
+    ]);
+    assert.strictEqual(structuralResult.code, 0);
+    assert.strictEqual(structuralResult.json.previewMode, 'structural');
+    assert.strictEqual(structuralResult.json.designTokensReady, false);
+    assert.strictEqual(structuralResult.json.tokenSource, 'neutral-structural');
+    assert.strictEqual(structuralResult.json.warnings[0].code, 'neutral-structural-preview');
+    assert.strictEqual(fs.readFileSync(finalPath, 'utf8'), '<!doctype html><title>AI-authored final</title>');
+    const structuralPath = path.join(projectRoot, '_plan_preview.structural.html');
+    const html = fs.readFileSync(structuralPath, 'utf8');
+    assert.match(html, /Neutral structural preview/);
+    assert.match(html, /data-preview-mode="structural"/);
+    assert.match(html, /--primary:#4d514f/);
+    assert.doesNotMatch(html, /#123456|#5b3fd1|Final approved intent preview/);
+
+    const finalModeResult = runCli('render-product-experience-preview.js', [
+      '--project-root', projectRoot,
+      '--mode', 'final',
+    ]);
+    assert.strictEqual(finalModeResult.code, 2);
+    assert.match(finalModeResult.json.errors[0].message, /unknown argument/);
+    assert.strictEqual(fs.readFileSync(finalPath, 'utf8'), '<!doctype html><title>AI-authored final</title>');
+  } finally {
+    cleanup(projectRoot);
+  }
 });
 
 test('renderer escapes contract content before placing it in HTML', () => {
@@ -188,7 +232,7 @@ test('renderer escapes contract content before placing it in HTML', () => {
 
     const result = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
     assert.strictEqual(result.code, 0);
-    const html = fs.readFileSync(path.join(projectRoot, '_plan_preview.html'), 'utf8');
+    const html = fs.readFileSync(path.join(projectRoot, '_plan_preview.structural.html'), 'utf8');
     assert.doesNotMatch(html, /<img src=x onerror="alert\(1\)">/);
     assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   } finally {
@@ -203,7 +247,7 @@ test('renderer preserves product-specific richness for an unfamiliar domain', ()
     const result = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
     assert.strictEqual(result.code, 0);
 
-    const html = fs.readFileSync(path.join(projectRoot, '_plan_preview.html'), 'utf8');
+    const html = fs.readFileSync(path.join(projectRoot, '_plan_preview.structural.html'), 'utf8');
     assert.match(html, /GraftRound/);
     assert.match(html, /Rounds due today/);
     assert.match(html, /data:image\/svg\+xml;base64,/);
@@ -244,7 +288,7 @@ test('renderer rejects a stale compiled build pack', () => {
     const result = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
     assert.strictEqual(result.code, 1);
     assert.strictEqual(result.json.errors[0].code, 'stale-compiled-artifact');
-    assert.strictEqual(fs.existsSync(path.join(projectRoot, '_plan_preview.html')), false);
+    assert.strictEqual(fs.existsSync(path.join(projectRoot, '_plan_preview.structural.html')), false);
   } finally {
     cleanup(projectRoot);
   }
@@ -285,7 +329,6 @@ test('three-screen journeys use the same visible presentation board', () => {
     experience: bundle.experience,
     compiled: { ...result.compiled, screens },
     journey,
-    colors: readColors('/path/that/does/not/exist'),
   });
 
   assert.strictEqual((html.match(/<article class="phone/g) || []).length, 3);
@@ -344,7 +387,6 @@ test('large-journey actions to omitted screens are visibly disabled', () => {
     experience: bundle.experience,
     compiled: { productComplexity: 'standard', screens },
     journey,
-    colors: readColors('/path/that/does/not/exist'),
   });
 
   const flowEntry = screenHtml(html, 'screen-1');

@@ -251,9 +251,9 @@ Arguments:
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`),
 materializes the approved Product Experience, writes
 `brand/design-system.md`, `brand/tokens.ts`, and
-`brand/signature-components.ts`, then renders the interactive journey preview
-at `_plan_preview.html`. Auto mode does not render the optional component
-gallery.
+`brand/signature-components.ts`, then authors and deterministically validates the
+interactive journey preview at `_plan_preview.html` in that same model
+invocation. Auto mode does not render the optional component gallery.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
 - `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
@@ -285,12 +285,15 @@ node "${PLUGIN_ROOT}/scripts/validate-workflow-journey.js" \
   --project-root "<working_dir>"
 node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
   --project-root "<working_dir>" --check
-node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
+node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
   --project-root "<working_dir>"
 ```
 
-If any validator fails, return to the owning planner/design step. Do not let a
-generic or incomplete preview advance to React Native generation.
+This final preview check occurs only after `/design-system` has returned and all
+three brand artifacts exist. If any validator, generated-token readiness, or
+embedded preview-contract check fails, return to the owning planner/design step.
+Do not let a neutral structural, generic, or incomplete preview advance as
+approved visual intent.
 
 #### Consolidated plan review (optional)
 
@@ -341,8 +344,9 @@ On rejection, revise only the owning layer and regenerate deterministically:
 - jobs, budgets, tables, or persistence → reopen Gate 1
 - capabilities/connectors → reopen Gate 2
 
-Revalidate and rerender `_plan_preview.html` before re-entering Gate 3. On
-approval, mark Gate 3 approved in `native-app-plan.md` and set
+Return to `/design-system` to reauthor and revalidate `_plan_preview.html`
+before re-entering Gate 3. On approval, mark Gate 3 approved in
+`native-app-plan.md` and set
 `screenPlan.status` plus `experience.status` to `approved` in
 `.tmp/mobile-plan-status.json`, recording current plan, contract, build-pack,
 and preview hashes.

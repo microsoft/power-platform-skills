@@ -1,6 +1,9 @@
 # Refresh Flow — `/design-system --refresh <dimension>`
 
-Single-dimension edit to an existing design system. Changes one section of `brand/design-system.md`, regenerates `brand/tokens.ts`, optionally re-renders the HTML gallery.
+Single-dimension edit to an existing design system. Changes one section of
+`brand/design-system.md`, regenerates `brand/tokens.ts`, reauthors the required
+final journey preview for a planned project, and optionally rerenders the HTML
+component gallery.
 
 ## Allowed dimensions
 
@@ -169,9 +172,15 @@ cp brand/design-system.md "brand/.history/${ts}-refresh-${dimension}.md"
 cp brand/tokens.ts "brand/.history/${ts}-refresh-${dimension}.tokens.ts"
 ```
 
-### Step 8 — Re-render HTML (if requested)
+### Step 8 — Refresh HTML artifacts
 
-If user said yes to HTML preview:
+For a project with current canonical planning contracts, read and execute
+[`final-experience-preview.md`](./final-experience-preview.md) after the token and
+signature artifacts are complete. Author and validate the replacement
+`_plan_preview.html` in this same model invocation. This is mandatory because
+the previous embedded token/signature revisions are stale.
+
+If the user also requested the optional component gallery:
 1. Re-render `brand/design-system.html` using updated spec
 2. Open in browser
 

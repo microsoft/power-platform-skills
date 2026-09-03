@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 'use strict';
 
-// Deterministically renders the approved Product Experience into a self-contained HTML file.
-// It consumes only validated local contracts and generated tokens: no browser, network, package,
-// prompt, or industry classifier participates, so the same inputs produce byte-identical HTML.
+// Deterministically renders canonical contracts as a neutral structural storyboard.
+// This output does not apply generated brand tokens or claim final design fidelity.
 
 const fs = require('node:fs');
 const path = require('node:path');
 
 const { compileScreenBuildPack } = require('./compile-screen-build-pack');
 const { buildNavigationManifest } = require('./compile-navigation-manifest');
+const {
+  selectPreviewScreens,
+} = require('./lib/product-experience-preview-selection');
 const {
   CONTRACT_ARTIFACTS,
   canonicalJson,
@@ -27,29 +29,28 @@ const {
 } = require('./validate-fixture-scenarios');
 
 const TOOL = 'render-product-experience-preview';
-const USAGE = 'Usage: node render-product-experience-preview.js [--project-root <dir>] [--compiled <path>] [--scenario <path>] [--persistence <path>] [--navigation <path>] [--tokens <path>] [--output <path>]';
+const USAGE = 'Usage: node render-product-experience-preview.js [--project-root <dir>] [--compiled <path>] [--scenario <path>] [--persistence <path>] [--navigation <path>] [--output <path>]';
 const ARG_SPEC = {
   '--project-root': 'projectRoot',
   '--compiled': 'compiled',
   '--scenario': 'scenario',
   '--persistence': 'persistence',
   '--navigation': 'navigation',
-  '--tokens': 'tokens',
   '--output': 'output',
 };
 
-const DEFAULT_COLORS = {
-  bg: '#f4f6f8',
+const STRUCTURAL_COLORS = {
+  bg: '#f2f2f0',
   surface: '#ffffff',
-  primary: '#2457d6',
-  accent: '#dce6ff',
-  text: '#18202a',
-  textMuted: '#65717f',
-  border: '#dfe4ea',
-  statusSuccess: '#2f7d4a',
-  statusWarning: '#a56513',
-  statusDanger: '#b43a3a',
-  statusInfo: '#315ea8',
+  primary: '#4d514f',
+  accent: '#e5e6e3',
+  text: '#202321',
+  textMuted: '#676c69',
+  border: '#d4d7d3',
+  statusSuccess: '#59635d',
+  statusWarning: '#706a5e',
+  statusDanger: '#6f5f5f',
+  statusInfo: '#5e656b',
 };
 
 function escapeHtml(value) {
@@ -59,73 +60,6 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function readColors(tokensPath) {
-  const colors = { ...DEFAULT_COLORS };
-  if (!fs.existsSync(tokensPath)) return colors;
-  const source = fs.readFileSync(tokensPath, 'utf8');
-  for (const key of Object.keys(colors)) {
-    const match = source.match(new RegExp(`\\b${key}\\s*:\\s*['"](#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8}))['"]`));
-    if (match) colors[key] = match[1];
-  }
-  return colors;
-}
-
-function unique(values) {
-  return [...new Set(values.filter((value) => value !== undefined && value !== null && value !== ''))];
-}
-
-function selectPreviewScreens(compiled, journey, navigation = null) {
-  const byId = new Map((compiled.screens || []).map((screen) => [screen.screenId, screen]));
-  const primary = journey.journeys?.[0];
-  const journeyIds = unique(
-    [...(primary?.steps || [])]
-      .sort((left, right) => left.order - right.order)
-      .map((step) => step.surface?.screenId),
-  );
-
-  if (journeyIds.length === 0) {
-    return (compiled.screens || []).slice(0, 3);
-  }
-
-  const destinations = navigation?.visibleTabs?.length
-    ? navigation.visibleTabs
-    : navigation?.durableDestinations || [];
-  const primaryId = destinations
-    .map((destination) => destination.rootScreenId)
-    .find((screenId) => byId.has(screenId))
-    || (compiled.screens || []).find(
-      (screen) => screen.classification === 'durable-destination',
-    )?.screenId
-    || journeyIds[0];
-  const flowEntryId = journeyIds.find((screenId) => screenId !== primaryId) || null;
-  const decisionCandidates = journeyIds
-    .filter((screenId) => screenId !== primaryId && screenId !== flowEntryId)
-    .map((screenId, index) => ({ screen: byId.get(screenId), index }))
-    .filter((entry) => entry.screen);
-  const nonConfirmation = decisionCandidates.filter(
-    ({ screen }) => screen.pattern !== 'confirmation',
-  );
-  const candidates = nonConfirmation.length ? nonConfirmation : decisionCandidates;
-  const score = ({ screen, index }) => {
-    const operations = screen.implementationContract?.requiredOperations || [];
-    const writes = operations.filter(
-      (operation) => ['create', 'update', 'delete', 'external-call'].includes(operation.kind),
-    ).length;
-    return (screen.pack.primaryActionPlacement === 'sticky-bottom' ? 8 : 0)
-      + (['bounded-flow-step', 'modal-or-immersive-utility'].includes(screen.classification) ? 4 : 0)
-      + (['form', 'capture', 'workflow-step', 'comparison'].includes(screen.pattern) ? 3 : 0)
-      + writes * 2
-      + index / 100;
-  };
-  const decisionId = [...candidates]
-    .sort((left, right) => score(right) - score(left))[0]?.screen.screenId || null;
-
-  return unique([primaryId, flowEntryId, decisionId])
-    .slice(0, 3)
-    .map((id) => byId.get(id))
-    .filter(Boolean);
 }
 
 function directivePresentation(directive = {}) {
@@ -161,7 +95,7 @@ function directivePresentation(directive = {}) {
     editorial: 700,
   }[directive.tone] || 700;
   return {
-    css: `--preview-pad:${density.pad}px;--preview-gap:${density.gap}px;--preview-row-pad:${density.row}px;--preview-motion:${motionMs}ms;--preview-shadow-alpha:${shadowAlpha};--preview-media-height:${mediaHeight}px;--preview-heading-weight:${headingWeight}`,
+    css: `--preview-pad:${density.pad}px;--preview-gap:${density.gap}px;--preview-row-pad:${density.row}px;--preview-motion:${motionMs}ms;--preview-shadow-alpha:${shadowAlpha};--preview-media-height:${mediaHeight}px;--preview-heading-weight:${headingWeight};--preview-heading-size:22px;--preview-heading-line:1.25;--preview-heading-tracking:0;--preview-font:ui-sans-serif`,
     attributes: [
       ['tone', directive.tone],
       ['expressiveness', directive.expressiveness],
@@ -533,7 +467,7 @@ function applyScenarioFacts(compiled, scenario) {
   };
 }
 
-function renderHtml({ experience, compiled, journey, colors, scenario = null, navigation = null }) {
+function renderHtml({ experience, compiled, journey, scenario = null, navigation = null }) {
   const scenarioCompiled = applyScenarioFacts(compiled, scenario);
   const screens = selectPreviewScreens(scenarioCompiled, journey, navigation);
   const previewScreenIds = new Set(screens.map((screen) => screen.screenId));
@@ -544,6 +478,7 @@ function renderHtml({ experience, compiled, journey, colors, scenario = null, na
   };
   const productName = escapeHtml(experience.productName);
   const directive = compiled.experienceDirective || {};
+  const colors = STRUCTURAL_COLORS;
   const presentation = directivePresentation(directive);
   const stateButtons = ['populated', 'loading', 'empty', 'error'];
   const screenTabs = screens.map((screen, index) =>
@@ -557,7 +492,7 @@ function renderHtml({ experience, compiled, journey, colors, scenario = null, na
 <link rel="icon" href="data:,">
 <title>${productName} — Product Experience Preview</title>
 <style>
-:root{--bg:${colors.bg};--surface:${colors.surface};--primary:${colors.primary};--accent:${colors.accent};--text:${colors.text};--muted:${colors.textMuted};--border:${colors.border};--success:${colors.statusSuccess};--warning:${colors.statusWarning};--danger:${colors.statusDanger};${presentation.css};font-family:ui-rounded,"Avenir Next",Avenir,sans-serif;color:var(--text);background:var(--bg)}
+:root{--bg:${colors.bg};--surface:${colors.surface};--primary:${colors.primary};--accent:${colors.accent};--text:${colors.text};--muted:${colors.textMuted};--border:${colors.border};--success:${colors.statusSuccess};--warning:${colors.statusWarning};--danger:${colors.statusDanger};--info:${colors.statusInfo};${presentation.css};font-family:var(--preview-font),ui-rounded,Avenir,sans-serif;color:var(--text);background:var(--bg)}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,var(--bg),color-mix(in srgb,var(--accent) 28%,var(--bg)));min-height:100vh}
 .page-head{padding:32px clamp(20px,5vw,72px) 18px;display:flex;gap:24px;align-items:end;justify-content:space-between;flex-wrap:wrap}.eyebrow,.step-label{font-size:11px;font-weight:800;letter-spacing:.14em;color:var(--primary)}h1{font-size:clamp(28px,4vw,48px);margin:6px 0}.page-head p{color:var(--muted);max-width:720px;margin:0;line-height:1.55}.controls{padding:0 clamp(20px,5vw,72px) 24px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}.tabs,.states{display:flex;gap:8px;flex-wrap:wrap}.tabs button,.states button{border:1px solid var(--border);background:color-mix(in srgb,var(--surface) 85%,transparent);color:var(--text);border-radius:999px;padding:9px 14px;font-weight:700;cursor:pointer}.tabs button.active,.states button.active{background:var(--text);color:var(--surface);border-color:var(--text)}
 .preview-grid{display:grid;grid-template-columns:repeat(3,minmax(280px,370px));gap:28px;padding:0 clamp(20px,5vw,72px) 56px;align-items:start;overflow-x:auto}.phone-shell{height:760px;border:10px solid #101419;border-radius:42px;background:var(--surface);box-shadow:0 24px 70px rgba(18,25,32,.18);overflow:hidden;display:grid;grid-template-rows:auto auto 1fr}.statusbar{background:#101419;color:white;padding:8px 18px 5px;font-size:10px;display:flex;justify-content:space-between}.phone header{padding:18px 20px 14px;position:relative;background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 38%,var(--surface)),var(--surface))}.phone header small{color:var(--muted);font-weight:700}.phone h2{font-size:25px;margin:3px 0 0;line-height:1.1}.sample-badge{position:absolute;right:18px;top:18px;font-size:8px;font-weight:900;letter-spacing:.09em;background:var(--accent);color:var(--primary);padding:5px 7px;border-radius:6px}.phone main{overflow:auto;padding:4px 20px 24px}
@@ -565,10 +500,11 @@ function renderHtml({ experience, compiled, journey, colors, scenario = null, na
 .media-block{border-radius:22px;background:var(--bg);position:relative;display:block;padding:0;margin:12px 0 18px;font-weight:800;overflow:hidden;box-shadow:0 12px 30px color-mix(in srgb,var(--text) 10%,transparent)}.media-essential{height:220px}.media-supportive{height:150px}.media-incidental{height:92px}.hero-media{width:100%;height:100%;display:block;object-fit:cover}.media-block figcaption{position:absolute;left:12px;bottom:12px;max-width:82%;padding:7px 10px;border-radius:10px;background:color-mix(in srgb,var(--text) 78%,transparent);color:var(--surface);font-size:11px}.search,.fake-input,.composer{border:1px solid var(--border);background:var(--bg);border-radius:13px;padding:13px;color:var(--muted)}.search{margin:4px 0 12px;font-weight:700}.screen-intro{margin:12px 0 14px}.screen-intro h3{margin:5px 0 7px}.screen-intro p{margin:0;font-size:13px}.tile-grid,.metric-grid,.comparison,.trust-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.tile-grid.horizontal{display:flex;overflow:auto;padding-bottom:5px}.tile-grid.horizontal .tile-card{min-width:150px}.tile-card,.metric-grid>div,.comparison>article,.trust-item{background:var(--bg);border-radius:16px;overflow:hidden}.tile-card{display:grid;grid-template-rows:105px auto;border:1px solid color-mix(in srgb,var(--border) 80%,transparent)}.tile-media,.comparison-media{width:100%;height:100%;object-fit:cover;display:block}.media-fallback{display:grid;place-items:center;background:var(--accent);color:var(--primary);font-weight:900}.tile-copy{padding:11px;display:grid;gap:3px}.tile-copy strong{font-size:13px}.tile-copy small{font-size:10px;line-height:1.35}.tile-copy b{font-size:11px;color:var(--primary);margin-top:5px}.metric-grid>div{padding:13px;border:1px solid color-mix(in srgb,var(--border) 75%,transparent)}.metric-grid span{display:block;font-size:17px;line-height:1.15;font-weight:900;color:var(--primary)}small{display:block;color:var(--muted);margin-top:3px}.trust-item{display:flex;gap:8px;align-items:flex-start;font-size:11px;padding:11px;border:1px solid color-mix(in srgb,var(--success) 20%,var(--border))}.trust-item span{color:var(--success)}.record-list{margin:10px 0}.record-row,.settings-list>div{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:11px;align-items:center;padding:12px 0;border-bottom:1px solid var(--border)}.record-thumb{width:54px;height:54px;object-fit:cover;border-radius:14px;background:var(--accent)}.record-index{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:var(--accent);color:var(--primary);font-weight:900}.record-copy{min-width:0}.record-copy strong{font-size:13px}.record-copy small{font-size:10px;white-space:normal}.record-copy em{display:inline-block;margin-top:5px;padding:3px 6px;border-radius:6px;background:var(--accent);color:var(--primary);font-size:8px;font-style:normal;font-weight:900}.record-meta{font-size:10px;font-weight:800;color:var(--text);max-width:82px;text-align:right}.form-stack{display:grid;gap:10px;margin:13px 0}.form-stack.compact{grid-template-columns:1fr 1fr}.field{display:grid;gap:5px}.field>span:first-child{font-size:11px;font-weight:800}.fake-input{padding:11px;color:var(--text);min-height:49px}.fake-input strong{display:block;font-size:12px}.fake-input small{font-size:9px}.summary-card{margin:14px 0;padding:5px 14px;border:1px solid var(--border);border-radius:16px;background:color-mix(in srgb,var(--surface) 70%,var(--bg))}.summary-card>div{display:flex;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);font-size:11px}.summary-card>div:last-child{border-bottom:0}.summary-card .summary-total{font-size:13px;color:var(--primary)}.progress-track{height:7px;background:var(--bg);border-radius:99px;margin:8px 0 18px}.progress-track span{display:block;width:58%;height:100%;background:var(--primary);border-radius:99px}.check-list{display:grid;gap:9px;margin-top:14px}.check-list>div{display:flex;gap:10px;padding:11px;border-radius:13px;background:var(--bg)}.check-list strong{font-size:12px}.check-list small{font-size:10px}.confirmation{text-align:left;padding-top:20px}.confirmation>.checkmark{margin-left:auto;margin-right:auto}.confirmation>.screen-intro{text-align:center}.checkmark,.state-icon{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;margin:0 auto 16px;background:color-mix(in srgb,var(--success) 16%,var(--surface));color:var(--success);font-size:30px;font-weight:900}.comparison{grid-template-columns:1fr 1fr}.comparison>article{padding:11px;border:1px solid var(--border)}.comparison-media{height:105px;border-radius:11px;margin-bottom:10px}.comparison article strong{display:block;font-size:12px}.comparison article b{display:block;color:var(--primary);font-size:11px;margin-top:7px}.bubble{max-width:86%;padding:12px;border-radius:17px;margin:10px 0}.bubble strong{font-size:12px}.bubble small{font-size:10px}.incoming{background:var(--bg)}.outgoing{background:var(--accent);margin-left:auto}.composer{margin-top:24px;display:flex;justify-content:space-between}.calendar-head{display:flex;justify-content:space-between;padding:8px 0}.calendar-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:8px 0 15px}.calendar-grid span{display:grid;place-items:center;aspect-ratio:1;border-radius:8px;font-size:11px}.calendar-grid span:nth-child(11){background:var(--primary);color:white}.map-block{height:210px;border-radius:20px;background:repeating-linear-gradient(35deg,var(--bg),var(--bg) 18px,var(--border) 19px,var(--bg) 20px);position:relative;overflow:hidden;padding:16px}.map-line{position:absolute;height:5px;background:var(--primary);border-radius:99px;transform:rotate(-18deg)}.map-line.one{width:240px;left:15px;top:92px}.map-line.two{width:160px;left:85px;top:128px;transform:rotate(24deg)}.pin{position:absolute;width:28px;height:28px;border-radius:50% 50% 50% 0;background:var(--danger);color:white;display:grid;place-items:center;transform:rotate(-45deg);font-size:11px;font-weight:900}.pin::first-letter{transform:rotate(45deg)}.p1{left:38px;top:61px}.p2{left:132px;top:98px}.p3{right:30px;bottom:35px}.choice-tag{font-size:9px;font-weight:900;color:var(--primary);display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}.state-view{display:none;text-align:left}.state-view.active{display:block}.state-view[data-state-view="loading"],.state-view[data-state-view="empty"],.state-view[data-state-view="error"]{padding-top:50px;text-align:center}.skeleton{height:48px;border-radius:12px;background:linear-gradient(90deg,var(--bg),var(--border),var(--bg));margin:12px 0}.skeleton.hero{height:180px}.skeleton.short{width:65%}
 body{background:#fff}.page-head,.controls,.review-links{max-width:1800px;margin-left:auto;margin-right:auto}.review-links{display:flex;gap:8px;flex-wrap:wrap;padding:0 clamp(20px,5vw,72px) 18px}.review-links a{border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--primary);font-size:12px;font-weight:800;text-decoration:none}.preview-grid{grid-template-columns:repeat(var(--screen-count),minmax(300px,1fr));gap:18px;width:calc(100% - 48px);max-width:1800px;margin:0 auto 28px;padding:30px 28px 40px;overflow-x:auto;background:linear-gradient(180deg,#f8fafc,#f2f5f9);border:1px solid #e5e9ef;border-radius:24px}.phone,.phone.extra{display:block;min-width:300px}.screen-label{min-height:62px;padding:0 8px 12px;text-align:center}.screen-label strong{display:block;font-size:12px;letter-spacing:.035em;color:#111827}.screen-label span{display:block;max-width:240px;margin:5px auto 0;color:#667085;font-size:10px;line-height:1.35}.phone-shell{height:720px;border:1px solid #dfe4ea;border-radius:34px;background:var(--surface);box-shadow:0 16px 34px rgba(32,45,63,.12);overflow:hidden;display:grid;grid-template-rows:auto auto 1fr}.statusbar{background:var(--surface);color:var(--text);padding:10px 18px 5px}.phone header{padding:15px 18px 12px}.phone h2{font-size:22px}.sample-badge{right:16px;top:15px}.phone main{padding:4px 18px 24px}.phone-caption{display:none}.frame-provenance{font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace!important;color:var(--muted)!important;text-align:center}.media-product,.media-hero{height:205px}.media-supportive,.media-evidence{height:150px}.tile-card{grid-template-rows:96px auto}.record-thumb{width:50px;height:50px}.phone.focused .phone-shell{outline:3px solid color-mix(in srgb,var(--primary) 35%,transparent);box-shadow:0 20px 46px color-mix(in srgb,var(--primary) 22%,transparent)}.all-screens{width:calc(100% - 48px);max-width:1800px;margin:0 auto 56px;border:1px solid var(--border);border-radius:16px;background:var(--surface)}.all-screens>summary{cursor:pointer;padding:16px 18px;font-weight:900}.all-screens>summary span{color:var(--muted);font-weight:600;margin-left:8px}.all-screen-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1px;background:var(--border);border-top:1px solid var(--border)}.graph-screen{background:var(--surface);padding:15px;min-width:0}.graph-screen header{display:flex;justify-content:space-between;gap:8px}.graph-screen header span{font-size:9px;color:var(--primary);font-weight:900;text-transform:uppercase}.graph-screen p{font-size:11px}.graph-screen dl{margin:0}.graph-screen dl div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:8px;padding:5px 0;border-top:1px solid var(--border);font-size:10px}.graph-screen dt{color:var(--muted)}.graph-screen dd{margin:0;overflow-wrap:anywhere}
 .page-head,.controls,.review-links,.experience-directive{max-width:1800px;margin-left:auto;margin-right:auto}.experience-directive{display:flex;gap:8px;flex-wrap:wrap;padding:0 clamp(20px,5vw,72px) 18px}.experience-directive span{padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:10px;font-weight:800;color:var(--muted)}.phone-shell{grid-template-rows:auto auto 1fr auto;box-shadow:0 16px 34px rgba(32,45,63,var(--preview-shadow-alpha));transition:box-shadow var(--preview-motion) ease}.statusbar{padding-left:var(--preview-pad);padding-right:var(--preview-pad)}.phone header{padding:var(--preview-pad)}.phone h2{font-weight:var(--preview-heading-weight)}.sample-badge{right:var(--preview-pad);top:var(--preview-pad)}.phone main{padding:4px var(--preview-pad) var(--preview-pad)}.media-product,.media-hero,.media-essential{height:var(--preview-media-height)}.media-supportive,.media-evidence{height:min(170px,var(--preview-media-height))}.media-incidental{height:min(110px,var(--preview-media-height))}.tile-grid,.metric-grid,.comparison,.trust-grid{gap:var(--preview-gap)}.record-row,.settings-list>div{padding:var(--preview-row-pad) 0}body[data-risk-level="high"] .trust-item,body[data-risk-level="critical"] .trust-item{border-left:4px solid var(--warning)}.phone-nav{display:grid;grid-template-columns:repeat(auto-fit,minmax(60px,1fr));gap:2px;padding:8px 10px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--surface)}.phone-nav span{display:grid;place-items:center;gap:3px;font-size:8px;color:var(--muted)}.phone-nav span.active{color:var(--primary);font-weight:900}.phone-nav b{font-size:8px}.stack-return{padding:8px var(--preview-pad) max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--border);font-size:9px;color:var(--muted)}@media(max-width:980px){.preview-grid{grid-template-columns:repeat(var(--screen-count),300px);justify-content:start}}@media(max-width:600px){.page-head{padding-top:22px}.preview-grid{width:calc(100% - 24px);grid-template-columns:repeat(var(--screen-count),286px);gap:16px;padding:24px 16px 32px}.phone{min-width:286px}.phone-shell{height:680px}}
-.asset-frame{position:relative;display:block;width:100%;height:100%;min-width:0;overflow:hidden}.record-thumb-frame{width:50px;height:50px;border-radius:14px}.comparison-media-frame{height:105px;border-radius:11px;margin-bottom:10px}.asset-fallback{position:absolute;inset:0;display:grid;place-items:center;padding:10px;background:var(--accent);color:var(--primary);font-size:10px;font-weight:900;text-align:center}.asset-fallback[hidden]{display:none}
+.asset-frame{position:relative;display:block;width:100%;height:100%;min-width:0;overflow:hidden}.record-thumb-frame{width:50px;height:50px;border-radius:14px}.comparison-media-frame{height:105px;border-radius:11px;margin-bottom:10px}.asset-fallback{position:absolute;inset:0;display:grid;place-items:center;padding:10px;background:var(--accent);color:var(--primary);font-size:10px;font-weight:900;text-align:center}.asset-fallback[hidden]{display:none}.preview-fidelity{display:flex;justify-content:center;gap:10px;align-items:center;padding:9px 16px;font-size:11px;border-bottom:1px solid var(--border)}.preview-fidelity strong{font-weight:900}.preview-fidelity-structural{background:#e7e7e3;color:#303330}.preview-fidelity-structural strong{text-transform:uppercase;letter-spacing:.08em}.phone h2,.phone h3{font-family:var(--preview-font),ui-rounded,Avenir,sans-serif;font-weight:var(--preview-heading-weight);letter-spacing:var(--preview-heading-tracking);line-height:var(--preview-heading-line)}.phone h3{font-size:var(--preview-heading-size)}
 </style>
 </head>
-<body ${presentation.attributes}>
+<body ${presentation.attributes} data-preview-mode="structural" data-token-source="neutral-structural">
+<section class="preview-fidelity preview-fidelity-structural"><strong>Neutral structural preview</strong><span>Colors, typography, and composition are schematic. This is not final visual intent.</span></section>
 <section class="page-head"><div><div class="eyebrow">GATE 3 · PRODUCT EXPERIENCE</div>
 <h1>${productName}</h1><p>${escapeHtml(experience.primaryGoal)} · ${escapeHtml(experience.signatureExperience.description)}</p></div>
 <div class="eyebrow">${escapeHtml(compiled.productComplexity)} scope · ${screens.length} preview screens</div></section>
@@ -640,7 +576,6 @@ function renderProductExperiencePreview({
   scenario,
   persistence = null,
   navigation = null,
-  colors,
 }) {
   const expected = compileScreenBuildPack(buildPack, { experience, scope, journey });
   if (!expected.ok) return expected;
@@ -693,7 +628,7 @@ function renderProductExperiencePreview({
       warnings: [],
     };
   }
-  const html = renderHtml({ experience, compiled, journey, colors, scenario, navigation });
+  const html = renderHtml({ experience, compiled, journey, scenario, navigation });
   return {
     ok: true,
     tool: TOOL,
@@ -703,10 +638,17 @@ function renderProductExperiencePreview({
     contractFingerprint: compiled.compiledRevision,
     targetViewport: '390x844',
     scenarioRevision: scenario.scenarioRevision,
+    previewMode: 'structural',
+    designTokensReady: false,
+    tokenSource: 'neutral-structural',
+    tokenRevision: null,
     html,
     revision: sha256Hex(html),
     errors: [],
-    warnings: [],
+    warnings: [finding(
+      'neutral-structural-preview',
+      'structural output is schematic and makes no final design-fidelity claim',
+    )],
   };
 }
 
@@ -727,14 +669,13 @@ function main(argv) {
     compiled: resolveContractPath(projectRoot, args.compiled, CONTRACT_ARTIFACTS['compiled-screen-build-pack']),
     scenario: resolveContractPath(projectRoot, args.scenario, '.tmp/scenario-facts.json'),
     navigation: resolveContractPath(projectRoot, args.navigation, '.tmp/navigation-manifest.json'),
-    tokens: resolveContractPath(projectRoot, args.tokens, 'brand/tokens.ts'),
-    output: resolveContractPath(projectRoot, args.output, '_plan_preview.html'),
+    output: resolveContractPath(projectRoot, args.output, '_plan_preview.structural.html'),
   };
 
   let contracts;
   try {
     for (const [label, filePath] of Object.entries(paths)) {
-      if (['tokens', 'output'].includes(label)) continue;
+      if (label === 'output') continue;
       if (!fs.existsSync(filePath)) return fatal(TOOL, `missing ${label}: ${filePath}`);
     }
     contracts = {
@@ -749,7 +690,6 @@ function main(argv) {
         const file = resolveContractPath(projectRoot, args.persistence, '.tmp/persistence-contract.json');
         return fs.existsSync(file) ? readJsonFile(file) : null;
       })(),
-      colors: readColors(paths.tokens),
     };
   } catch (error) {
     return fatal(TOOL, error.message);
@@ -772,7 +712,6 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
   escapeHtml,
-  readColors,
   applyScenarioFacts,
   renderHtml,
   renderProductExperiencePreview,

@@ -13,8 +13,16 @@ Allowed dimensions are `palette`, `typography`, `components`, `density`,
 2. Show the operation's cost/impact before work.
 3. Ask for one named dimension change; refuse bundled changes.
 4. Update only that section and dependent signature presentation contracts.
-5. Regenerate matching tokens, snapshot history, rerender selected previews, and
-   confirm.
+5. Regenerate matching tokens and dependent signature interfaces, snapshot
+  history, reauthor the final journey preview when canonical planning contracts
+  exist, rerender any requested component gallery, and confirm.
+
+For a planned project, read and execute
+[`final-experience-preview.md`](./final-experience-preview.md) in this same
+design-system model invocation after the updated brand artifacts are complete.
+The previous `_plan_preview.html` is stale as soon as its token or signature
+revision changes. Do not ask `/preview-screens` to repair it and do not replace
+it with structural output.
 
 ## Reskin
 
@@ -43,7 +51,8 @@ Store snapshots in `brand/.history/` and cap them at 50 entries.
 - `--history`: list timestamps, command, and one-line change summary.
 - `--diff <timestamp>`: compare current artifacts with the selected snapshot.
 - `--rollback <timestamp>`: snapshot current state, ask for confirmation, restore
-  the selected artifacts, validate drift, and rerender applicable previews.
+  the selected artifacts, validate drift, reauthor the final journey preview for
+  a planned project, and rerender any requested component gallery.
 
 ## Migration inputs
 

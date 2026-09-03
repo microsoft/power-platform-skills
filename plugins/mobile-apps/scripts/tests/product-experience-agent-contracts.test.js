@@ -161,18 +161,33 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(automatic, /one to three frames/);
   assert.match(automatic, /expandable `All screens`/);
   assert.match(automatic, /does not claim React Native or native\s+pixels were rendered/);
+  assert.ok(
+    automatic.indexOf('brand/tokens.ts') < automatic.indexOf('Author the approval preview'),
+    'automatic design must produce tokens before authoring the final preview',
+  );
+  assert.match(automatic, /final-experience-preview\.md/);
+  assert.match(automatic, /same model\s+invocation/);
+  assert.match(automatic, /validate-product-experience-preview\.js/);
+  assert.match(automatic, /Do not invoke another model/);
+  assert.match(automatic, /Missing or incomplete tokens[\s\S]*are `BLOCKED`/);
+  assert.doesNotMatch(automatic, /--mode final|render-product-experience-preview\.js/);
   assert.match(scaffold, /pass `--auto-experience`/);
   assert.doesNotMatch(design, /^allowed-tools:.*\bTask\b/m);
 });
 
-test('preview-screens reuses the canonical product-experience renderer', () => {
+test('preview-screens validates final HTML or renders a separate structural diagnostic', () => {
   const source = fs.readFileSync(path.join(skillRoot, 'preview-screens', 'SKILL.md'), 'utf8');
+  assert.match(source, /validate-product-experience-preview\.js/);
   assert.match(source, /render-product-experience-preview\.js/);
   assert.match(source, /root `experienceDirective`/);
   assert.match(source, /\.tmp\/navigation-manifest\.json/);
   assert.match(source, /\.tmp\/scenario-facts\.json/);
   assert.match(source, /primary product\s+destination, key-flow entry, and strongest decision\/action screen/);
   assert.match(source, /React Native is authoritative after implementation/);
+  assert.match(source, /_plan_preview\.structural\.html/);
+  assert.match(source, /neutral-structural-preview/);
+  assert.match(source.replace(/\s+/g, ' '), /do not overwrite the final file or hide the failure behind structural output/);
+  assert.doesNotMatch(source, /--mode final|--mode structural/);
   assert.doesNotMatch(source, /<working_dir>\/preview\.html|Read the full TSX|Generate equivalent HTML\/CSS|programmatic TSX parsing/);
   assert.doesNotMatch(source, /npx expo start/);
 });
