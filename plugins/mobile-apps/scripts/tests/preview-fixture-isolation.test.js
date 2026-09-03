@@ -77,6 +77,11 @@ test('fresh acceptance workspaces expose only canonical run inputs', (context) =
     assert.equal(fs.existsSync(path.join(root, 'scripts', 'tests')), false, scenario);
     assert.equal(fs.existsSync(path.join(root, 'tests')), false, scenario);
     assert.equal(fs.existsSync(path.join(root, 'fixtures')), false, scenario);
+    assert.doesNotMatch(
+      fs.readFileSync(path.join(root, 'native-app-plan.md'), 'utf8'),
+      /\b(?:offline|sync(?:ing|ed)?|synchronization)\b/i,
+      scenario,
+    );
   }
 });
 

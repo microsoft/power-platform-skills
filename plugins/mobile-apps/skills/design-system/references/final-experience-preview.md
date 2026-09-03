@@ -20,6 +20,11 @@ node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
   --contract-output "<working_dir>/.tmp/product-experience-final-preview-contract.json"
 ```
 
+These commands are execution-only. Do not glob, grep, search, or read
+`${PLUGIN_ROOT}/scripts` before or after running them. Never inspect validator
+implementation or test output to author or repair the preview; use only the
+emitted finding codes and messages.
+
 This command is mandatory and its canonical output file must remain present for
 React Native screen builders. If it fails, repair the generated brand artifact
 named by the finding and rerun this same command. Do not author
@@ -27,11 +32,17 @@ named by the finding and rerun this same command. Do not author
 Python HTML parsing, a custom script, visual inspection, TypeScript compilation,
 or a different sidecar path for this command.
 
-Read the prepared contract. It is a projection of the same canonical
-authorities supplied to native screen builders: the root experience directive,
-semantically selected screen packs, navigation, scenario facts, generated
-tokens, and signature-component revision. Do not edit it or replace its screen
-selection.
+Keep the prepared full contract for deterministic validators and native screen
+builders, but do not read it for HTML authoring. Read only
+`.tmp/product-experience-preview-authoring.json`, the compact projection of the
+same experience directive, selected screen packs and rationale, first viewport,
+navigation, scenario values, generated tokens, signature contracts, actions,
+states, and prohibited defaults. Do not edit either projection or replace its
+screen selection.
+
+If preparation returns `NEEDS_CONTEXT`, stop and return the exact finding to the
+planning owner. Never reorder journeys or rewrite screen, navigation, or
+scenario authorities to obtain different frames.
 
 Test fixtures, snapshots, and benchmark implementations are prohibited
 authoring inputs. Generate the experience only from the current run's contracts
@@ -153,30 +164,41 @@ substitute. Preserve
 not return `DONE` unless the command's JSON contains literal `"ok": true` plus
 zero fixture-isolation findings.
 
+Before returning any status, run packaged
+`design-run-ownership.js --project-root "<working_dir>" --verify`. It restores
+an immutable or out-of-allowlist write and returns `NEEDS_DESIGN_REPAIR`; repair
+only design artifacts against the preserved plan. Never regenerate the plan.
+
 The validator always runs semantic-contract validation plus a portable
 parser-based structural quality gate. That mandatory gate catches ineffective
 authored styling, missing phone frames or hierarchy, excessive visible evidence,
 unstyled navigation/indexes, repeated shells, and contract-dump composition.
-When a supported local Chrome, Chromium, or Edge executable is already present,
-the same command also measures computed desktop/mobile layout for frame size,
-overflow/clipping, visible primary actions, first-viewport hierarchy, and
-unstyled rendered controls. It never installs a browser. Browser absence,
-launch failure, or probe unavailability is a non-blocking
-`layout-validation-skipped` warning; parser and semantic gates still run.
+The optional adapter prefers an available agent/in-app browser, then a connected
+Chrome or Edge, then a locally installed Chromium-family executable. It serves
+the static HTML from memory on an OS-selected `127.0.0.1` port, measures three
+mobile widths, and always stops the server afterward. It never installs a
+browser, starts Metro, binds externally, uploads data, or inspects React Native
+source. Results are `passed`, `failed`, or `skipped: browser-unavailable`.
+Failure is non-blocking visual evidence; unavailability emits
+`layout-validation-skipped`. Parser and semantic gates still run.
+Browser absence is always non-blocking and never implies complete visual validation.
 
-If authored-HTML semantic findings, mandatory structural findings, or
-successfully computed browser-layout findings fail, stay in this existing
+If authored-HTML semantic or mandatory structural findings fail, stay in this existing
 design-system model execution. Feed the exact finding codes/messages back into one focused edit of
 `_plan_preview.html`, preserving the current Product Experience,
 `experienceDirective`, tokens, signature components, navigation, scenario facts,
-and screen packs. Rerun the same validator exactly once. If it still fails,
-return `BLOCKED` with the remaining findings. Do not rerun planning, regenerate
+and screen packs. Rerun the same validator exactly once. If only cosmetic
+structural findings remain, return `DONE_WITH_CONCERNS` and continue app
+generation. Use `BLOCKED` only for unsafe/unsupported capability, missing
+explicit requirements, invalid relationships that prevent compilation, or
+uncompilable output. Do not rerun planning, regenerate
 the design system, invoke another model, or attempt a second repair.
 
-A contract, token, scenario, navigation, signature, action, state, media,
-landmark, placeholder, authorship, structural-quality, or successful rendered-
-layout finding is blocking after that one repair. Never replace the final file
-with deterministic output.
+After the focused repair, remaining preview-only semantic, styling, hierarchy,
+layout, or browser findings are concerns, not app-generation blockers. Preserve
+their exact codes in provenance and continue without substituting deterministic
+HTML. Route genuinely missing product requirements or uncompilable planning
+contracts to their owner.
 
 `render-product-experience-preview.js` is a separate diagnostic. It always uses
 neutral styling and writes `_plan_preview.structural.html`; it cannot create or

@@ -14,14 +14,28 @@ const {
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const templateRoot = path.join(pluginRoot, 'template');
+const temporaryDirectories = new Set();
+
+test.after(() => {
+  for (const directory of temporaryDirectories) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 function tempDirectory(name) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
+  temporaryDirectories.add(directory);
+  return directory;
 }
 
 function copyTemplate() {
   const projectRoot = tempDirectory('mobile-template');
-  fs.cpSync(templateRoot, projectRoot, { recursive: true });
+  fs.cpSync(templateRoot, projectRoot, {
+    recursive: true,
+    filter(source) {
+      return path.relative(templateRoot, source).split(path.sep)[0] !== 'node_modules';
+    },
+  });
   fs.mkdirSync(path.join(projectRoot, 'node_modules', 'expo'), { recursive: true });
   return projectRoot;
 }

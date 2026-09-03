@@ -6,7 +6,17 @@ const path = require('node:path');
 
 const { buildNavigationManifest } = require('./compile-navigation-manifest');
 const { compileScreenBuildPack } = require('./compile-screen-build-pack');
+const {
+  AUTHORING_PROJECTION_PATH,
+  FULL_PREVIEW_CONTRACT_PATH,
+  STATE_PATH,
+  verifyDesignRun,
+  writeDesignRunProvenance,
+} = require('./design-run-ownership');
 const { readDesignTokenContract } = require('./lib/design-token-contract');
+const {
+  buildPreviewAuthoringProjection,
+} = require('./lib/final-preview-authoring-projection');
 const { validateRenderedLayout } = require('./lib/final-preview-browser-layout');
 const {
   validatePreviewOutputIsolation,
@@ -14,7 +24,10 @@ const {
   validateProductionSourceIsolation,
   validateProjectSourceIsolation,
 } = require('./lib/final-preview-isolation');
-const { validateStructuralQuality } = require('./lib/final-preview-quality');
+const {
+  INVENTED_OFFLINE_RUNTIME,
+  validateStructuralQuality,
+} = require('./lib/final-preview-quality');
 const { buildSharedDesignInputs } = require('./lib/shared-design-inputs');
 const {
   isDescendant,
@@ -22,7 +35,7 @@ const {
   parseHtmlDocument,
 } = require('./lib/html-document-lite');
 const {
-  selectPreviewScreens,
+  selectPreviewScreensWithRationale,
 } = require('./lib/product-experience-preview-selection');
 const {
   CONTRACT_ARTIFACTS,
@@ -163,7 +176,8 @@ function buildFinalPreviewContract({
   tokenContract,
   signatureComponentsSource,
 }) {
-  const selected = selectPreviewScreens(compiled, journey, navigation);
+  const selection = selectPreviewScreensWithRationale(compiled, journey, navigation);
+  const selected = selection.map((entry) => entry.screen);
   const selectedScreenIds = selected.map((screen) => screen.screenId);
   const sharedDesignInputs = buildSharedDesignInputs({
     experienceDirective: compiled.experienceDirective,
@@ -188,6 +202,11 @@ function buildFinalPreviewContract({
     sharedDesignInputs,
     experienceDirective: sharedDesignInputs.experienceDirective,
     selectedScreenIds,
+    selectionRationale: selection.map((entry) => ({
+      screenId: entry.screen.screenId,
+      role: entry.role,
+      rationale: entry.rationale,
+    })),
     navigation: sharedDesignInputs.navigation,
     designTokens: {
       colors: sharedDesignInputs.tokens.colors,
@@ -215,6 +234,7 @@ function buildFinalPreviewContract({
         pattern: screen.pattern,
         classification: screen.classification,
         packRevision: sha256Hex(canonicalJson(screen.pack)),
+        navigationShell: screen.navigationShell,
         identityHierarchy: screen.pack.identityHierarchy,
         firstViewport: screen.pack.firstViewport,
         signatureIntent: screen.pack.signatureInteraction,
@@ -230,6 +250,7 @@ function buildFinalPreviewContract({
           role: screen.pack.media?.role || 'none',
         })),
         scenarioEvidence: scenarioEvidence(screen.screenId, facts),
+        prohibitedDefaults: screen.pack.forbiddenDefaults || [],
       };
     }),
     allScreenIds: (compiled.screens || []).map((screen) => screen.screenId),
@@ -257,7 +278,62 @@ function validateSources(sources) {
   if (!sources.signatureComponentsSource.trim()) {
     errors.push(finding('signature-components-empty', 'brand/signature-components.ts must not be empty'));
   }
+  if (INVENTED_OFFLINE_RUNTIME.test(sources.designSystemSource)) {
+    errors.push(finding(
+      'design-system-invented-offline-runtime',
+      'brand/design-system.md must not introduce offline or sync behavior before offline setup',
+    ));
+  }
+  if (INVENTED_OFFLINE_RUNTIME.test(sources.signatureComponentsSource)) {
+    errors.push(finding(
+      'signature-components-invented-offline-runtime',
+      'brand/signature-components.ts must not introduce offline or sync behavior before offline setup',
+    ));
+  }
   return errors;
+}
+
+function validateAuthoringContext(contract) {
+  const missing = contract.screens.flatMap((screen) => {
+    const fields = [];
+    if (!screen.firstViewport?.regionOrder?.length) fields.push('first-viewport hierarchy');
+    if (!screen.signatureIntent?.name) fields.push('signature interaction');
+    if (!screen.primaryActions?.length) fields.push('primary action');
+    if (!screen.scenarioEvidence?.length) fields.push('scenario evidence');
+    return fields.length > 0 ? [`${screen.screenId}: ${fields.join(', ')}`] : [];
+  });
+  if (contract.screens.length === 0) missing.push('no suitable preview screens');
+  return missing.length === 0 ? [] : [finding(
+    'preview-authoring-context-insufficient',
+    `planning must supply suitable preview evidence before design: ${missing.join('; ')}`,
+  )];
+}
+
+function canonicalAutomaticRunRequired(projectRoot, contractOutput) {
+  const canonicalContract = path.join(projectRoot, FULL_PREVIEW_CONTRACT_PATH);
+  return contractOutput === canonicalContract
+    || fs.existsSync(path.join(projectRoot, STATE_PATH));
+}
+
+function collectPreviewFindings({
+  semanticValidation,
+  outputIsolation,
+  structuralValidation,
+  renderedLayout,
+}) {
+  const errors = [
+    ...semanticValidation.errors,
+    ...outputIsolation.errors,
+    ...structuralValidation.errors,
+  ];
+  const warnings = [
+    ...(renderedLayout.status === 'skipped' ? [finding(
+      'layout-validation-skipped',
+      `optional rendered-layout validation skipped: ${renderedLayout.reason}`,
+    )] : []),
+    ...(renderedLayout.status === 'failed' ? renderedLayout.errors : []),
+  ];
+  return { errors, warnings };
 }
 
 function sameMembers(actual, expected) {
@@ -471,6 +547,7 @@ function loadSources(paths) {
     navigation: readJsonFile(paths.navigation),
     persistence: fs.existsSync(paths.persistence) ? readJsonFile(paths.persistence) : null,
     tokenContract: readDesignTokenContract(paths.tokens),
+    designSystemSource: fs.readFileSync(paths.designSystem, 'utf8'),
     signatureComponentsSource: fs.readFileSync(paths.signatureComponents, 'utf8'),
   };
 }
@@ -486,7 +563,7 @@ function atomicWriteJson(file, value) {
   }
 }
 
-function main(argv) {
+async function main(argv) {
   const args = parseArgs(argv, ARG_SPEC);
   if (args.help) {
     process.stdout.write(`${USAGE}\n`);
@@ -504,6 +581,7 @@ function main(argv) {
     navigation: resolveContractPath(projectRoot, null, '.tmp/navigation-manifest.json'),
     persistence: resolveContractPath(projectRoot, null, '.tmp/persistence-contract.json'),
     tokens: resolveContractPath(projectRoot, args.tokens, 'brand/tokens.ts'),
+    designSystem: resolveContractPath(projectRoot, null, 'brand/design-system.md'),
     signatureComponents: resolveContractPath(
       projectRoot,
       args.signatureComponents,
@@ -513,11 +591,48 @@ function main(argv) {
     contractOutput: args.contractOutput
       ? resolveContractPath(projectRoot, args.contractOutput, args.contractOutput)
       : null,
+    authoringProjection: resolveContractPath(
+      projectRoot,
+      null,
+      AUTHORING_PROJECTION_PATH,
+    ),
   };
   try {
     for (const [label, file] of Object.entries(paths)) {
-      if (['preview', 'contractOutput', 'persistence', 'tokens'].includes(label)) continue;
+      if (['preview', 'contractOutput', 'authoringProjection', 'persistence', 'tokens'].includes(label)) continue;
       if (!fs.existsSync(file)) return fatal(TOOL, `missing ${label}: ${file}`);
+    }
+    const ownershipRequired = canonicalAutomaticRunRequired(projectRoot, paths.contractOutput);
+    const ownership = ownershipRequired ? verifyDesignRun({ projectRoot }) : null;
+    if (ownership && !ownership.ok) {
+      writeDesignRunProvenance({
+        projectRoot,
+        status: ownership.recoverable ? 'needs-design-repair' : 'blocked',
+        errors: ownership.errors,
+      });
+      return emitResult({
+        ok: false,
+        status: ownership.recoverable ? 'NEEDS_DESIGN_REPAIR' : 'BLOCKED',
+        owner: 'design-system',
+        recoverable: ownership.recoverable,
+        tool: TOOL,
+        ownership: {
+          immutableMutations: ownership.immutableMutations,
+          writeViolations: ownership.writeViolations,
+          restoredFiles: ownership.restoredFiles,
+        },
+        errors: ownership.errors,
+        warnings: [],
+      });
+    }
+    if (ownership && paths.contractOutput
+      && paths.contractOutput !== path.join(projectRoot, FULL_PREVIEW_CONTRACT_PATH)) {
+      const errors = [finding(
+        'design-ownership-contract-path-invalid',
+        `automatic design must write ${FULL_PREVIEW_CONTRACT_PATH}`,
+      )];
+      writeDesignRunProvenance({ projectRoot, status: 'blocked', errors });
+      return emitResult({ ok: false, status: 'BLOCKED', owner: 'design-system', tool: TOOL, errors, warnings: [] });
     }
     const sources = loadSources(paths);
     const pluginRoot = path.resolve(__dirname, '..');
@@ -530,20 +645,72 @@ function main(argv) {
       ...productionSourceIsolation.errors,
       ...projectIsolation.errors,
     ];
-    if (sourceErrors.length) return emitResult({ ok: false, tool: TOOL, errors: sourceErrors, warnings: [] });
+    if (sourceErrors.length) {
+      if (ownership) writeDesignRunProvenance({ projectRoot, status: 'blocked', errors: sourceErrors });
+      return emitResult({ ok: false, tool: TOOL, errors: sourceErrors, warnings: [] });
+    }
     const contract = buildFinalPreviewContract({
       ...sources,
       signatureComponentsSource: sources.signatureComponentsSource,
     });
+    const contextErrors = validateAuthoringContext(contract);
+    if (contextErrors.length > 0) {
+      if (ownership) writeDesignRunProvenance({
+        projectRoot,
+        status: 'needs-context',
+        contract,
+        errors: contextErrors,
+      });
+      return emitResult({
+        ok: false,
+        status: 'NEEDS_CONTEXT',
+        owner: 'planning',
+        tool: TOOL,
+        selectedScreenIds: contract.selectedScreenIds,
+        selectionRationale: contract.selectionRationale,
+        errors: contextErrors,
+        warnings: [],
+      });
+    }
+    const authoringProjection = buildPreviewAuthoringProjection(contract);
     if (paths.contractOutput) {
       atomicWriteJson(paths.contractOutput, contract);
+      atomicWriteJson(paths.authoringProjection, authoringProjection);
+      const postWriteOwnership = ownership ? verifyDesignRun({ projectRoot }) : null;
+      if (postWriteOwnership && !postWriteOwnership.ok) {
+        writeDesignRunProvenance({
+          projectRoot,
+          status: 'blocked',
+          contract,
+          authoringProjection,
+          errors: postWriteOwnership.errors,
+        });
+        return emitResult({
+          ok: false,
+          status: 'BLOCKED',
+          owner: 'design-system',
+          tool: TOOL,
+          errors: postWriteOwnership.errors,
+          warnings: [],
+        });
+      }
+      const provenance = ownership ? writeDesignRunProvenance({
+        projectRoot,
+        status: 'prepared',
+        contract,
+        authoringProjection,
+      }) : null;
       return emitResult({
         ok: true,
         tool: TOOL,
         mode: 'contract-preparation',
         contractPath: paths.contractOutput,
+        authoringProjectionPath: paths.authoringProjection,
+        authoringProjectionRevision: authoringProjection.projectionRevision,
         selectedScreenIds: contract.selectedScreenIds,
+        selectionRationale: contract.selectionRationale,
         contractRevision: contract.contractRevision,
+        designRunProvenancePath: provenance ? path.join(projectRoot, '.tmp', 'design-run-provenance.json') : null,
         fixtureIsolation: {
           productionPromptFilesScanned: productionIsolation.scannedFiles,
           productionSourceFilesScanned: productionSourceIsolation.scannedFiles,
@@ -555,6 +722,33 @@ function main(argv) {
         errors: [],
         warnings: [],
       });
+    }
+    if (ownership) {
+      const sidecar = readJsonFile(path.join(projectRoot, FULL_PREVIEW_CONTRACT_PATH));
+      const preparedProjection = readJsonFile(paths.authoringProjection);
+      const preparedErrors = [];
+      if (canonicalJson(sidecar) !== canonicalJson(contract)) {
+        preparedErrors.push(finding(
+          'preview-canonical-contract-drift',
+          'prepared full preview contract does not match current canonical inputs',
+        ));
+      }
+      if (canonicalJson(preparedProjection) !== canonicalJson(authoringProjection)) {
+        preparedErrors.push(finding(
+          'preview-authoring-projection-drift',
+          'compact preview authoring projection does not match current canonical inputs',
+        ));
+      }
+      if (preparedErrors.length > 0) {
+        writeDesignRunProvenance({
+          projectRoot,
+          status: 'blocked',
+          contract,
+          authoringProjection,
+          errors: preparedErrors,
+        });
+        return emitResult({ ok: false, status: 'BLOCKED', owner: 'design-system', tool: TOOL, errors: preparedErrors, warnings: [] });
+      }
     }
     if (!fs.existsSync(paths.preview)) return fatal(TOOL, `missing preview: ${paths.preview}`);
     const html = fs.readFileSync(paths.preview, 'utf8');
@@ -568,25 +762,32 @@ function main(argv) {
     const renderedLayout = semanticValidation.errors.length === 0
       ? process.env.POWER_PLATFORM_SKILLS_PREVIEW_BROWSER_LAYOUT === '0'
         ? { status: 'skipped', reason: 'browser-disabled', errors: [], viewports: [] }
-        : validateRenderedLayout(html, contract)
+        : await validateRenderedLayout(html, contract)
       : {
         status: 'skipped',
         reason: 'semantic-validation-failed',
         errors: [],
         viewports: [],
       };
-    const errors = [
-      ...semanticValidation.errors,
-      ...outputIsolation.errors,
-      ...structuralValidation.errors,
-      ...renderedLayout.errors,
-    ];
-    const warnings = renderedLayout.status === 'skipped'
-      ? [finding(
-        'layout-validation-skipped',
-        `optional rendered-layout validation skipped: ${renderedLayout.reason}`,
-      )]
-      : [];
+    const { errors, warnings } = collectPreviewFindings({
+      semanticValidation,
+      outputIsolation,
+      structuralValidation,
+      renderedLayout,
+    });
+    const previewRevision = sha256Hex(html);
+    const provenance = ownership ? writeDesignRunProvenance({
+      projectRoot,
+      status: errors.length === 0 ? 'passed' : 'failed',
+      contract,
+      authoringProjection,
+      previewRevision,
+      renderedLayoutStatus: renderedLayout.status === 'skipped'
+        ? `skipped: ${renderedLayout.reason}`
+        : renderedLayout.status,
+      errors,
+      warnings,
+    }) : null;
     return emitResult({
       ok: errors.length === 0,
       tool: TOOL,
@@ -598,7 +799,10 @@ function main(argv) {
       designTokenRevision: contract.revisions.designTokens,
       signatureComponentsRevision: contract.revisions.signatureComponents,
       previewContractRevision: contract.contractRevision,
-      previewRevision: sha256Hex(html),
+      previewRevision,
+      selectionRationale: contract.selectionRationale,
+      designRunProvenancePath: provenance ? path.join(projectRoot, '.tmp', 'design-run-provenance.json') : null,
+      previewRepairCount: provenance?.previewRepairCount || 0,
       quality: {
         semantic: { passed: semanticValidation.errors.length === 0 },
         structural: {
@@ -628,13 +832,20 @@ function main(argv) {
   }
 }
 
-if (require.main === module) process.exitCode = main(process.argv.slice(2));
+if (require.main === module) {
+  main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
+}
 
 module.exports = {
   buildFinalPreviewContract,
+  canonicalAutomaticRunRequired,
+  collectPreviewFindings,
   stylesheetHidingFindings,
   scenarioEvidence,
   tokenCss,
+  validateAuthoringContext,
   validateHtml,
   validateStructuralQuality,
 };

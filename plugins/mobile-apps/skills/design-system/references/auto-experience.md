@@ -29,6 +29,14 @@ authoring inputs. Generate the experience only from the current run's contracts
 and approved design references. Do not read an existing or previously generated
 preview before authoring the current `_plan_preview.html`.
 
+Do not glob, grep, search, or read `${PLUGIN_ROOT}/scripts`; the final-preview
+workflow supplies exact executable paths. A broader search that returns a test,
+fixture, snapshot, or benchmark file is itself a prohibited authoring read.
+
+Connectivity describes operating conditions, not an approved capability. Do
+not add offline or sync UI, copy, design rules, states, or signature props.
+Offline setup is a later workflow outside this design execution.
+
 ## Preconditions
 
 Require current, hash-bound Product Experience, Product Scope, Workflow Journey,
@@ -36,6 +44,12 @@ navigation manifest, and compiled screen build pack artifacts. Require scenario
 facts when the compiled packs bind scenario IDs or media keys. Missing or stale
 contracts are `BLOCKED`; return to the owning planning step rather than inventing
 replacement facts.
+
+Require the orchestrator-created `.tmp/design-run-state.json`. In standalone
+mode, create it with packaged `scripts/design-run-ownership.js --begin` before
+reading or writing project artifacts. Never recreate the state after work has
+started. Product planning, navigation, scenario, persistence, data-model, and
+compiled-pack files are immutable for this entire execution.
 
 The approved contracts own product scope, behavior, navigation, data meaning,
 identity, and media meaning. This workflow owns presentation decisions only.
@@ -94,6 +108,11 @@ invocation. Prepare the deterministic manifest, then author the final
 and run its validator. Do not invoke another model or use the deterministic
 structural renderer as a final-design substitute.
 
+Contract preparation writes the full validator/builder sidecar and the compact
+`.tmp/product-experience-preview-authoring.json`. Read only the compact file for
+HTML authoring. Do not reread full planning contracts, the full preview sidecar,
+schemas, or validator implementation after preparation.
+
 Use only the two validator commands and canonical sidecar in
 `final-experience-preview.md`; no `npm install`, TypeScript, or ad hoc check.
 Its one to three frames and compact collapsed `All screens` never claim React
@@ -101,8 +120,9 @@ Native or native pixels were rendered. Never start Metro or native capture.
 
 ## Persist and return
 
-Append a compact entry to `memory-bank.md` with timestamp, derived direction,
-artifact paths, and `visual_companion`. In orchestrator mode return:
+The orchestrator appends memory only after ownership verification. This skill
+writes compact run evidence to `.tmp/design-run-provenance.json`. In orchestrator
+mode return:
 
 ```text
 DONE

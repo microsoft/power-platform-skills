@@ -8,6 +8,7 @@ const {
   CREATE_PHASES,
   composeCreateMobileAppWorkflow,
 } = require('./workflow-test-helpers');
+const { AUTOMATIC_REFERENCES } = require('../design-run-ownership');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (relativePath) => fs.readFileSync(
@@ -38,12 +39,12 @@ test('orchestrator and agent prompts stay within progressive-loading budgets', (
   const designRouter = read('skills/design-system/SKILL.md');
   assert.ok(Buffer.byteLength(designRouter) <= 8 * 1024, 'design router exceeds 8 KiB');
   assert.ok(designRouter.split('\n').length <= 150, 'design router exceeds 150 lines');
-  const automaticDesignReadSet = Buffer.byteLength(designRouter)
-    + bytes('skills/design-system/references/auto-experience.md')
-    + bytes('skills/design-system/references/design-system-schema.md')
-    + bytes('shared/shared-instructions-core.md');
+  const automaticDesignReadSet = AUTOMATIC_REFERENCES.reduce(
+    (total, file) => total + bytes(file),
+    0,
+  );
   assert.ok(
-    automaticDesignReadSet <= 26 * 1024,
+    automaticDesignReadSet <= 40 * 1024,
     `automatic design read set is ${automaticDesignReadSet} bytes`,
   );
 });

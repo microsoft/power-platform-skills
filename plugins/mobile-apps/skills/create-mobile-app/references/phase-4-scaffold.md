@@ -239,6 +239,20 @@ Start `designMaterialization` immediately before invoking `/design-system` and
 finish it only after all required design/preview artifacts and contract checks
 pass. Record a bounded failure reason on `NEEDS_CONTEXT` or `BLOCKED`.
 
+Before invoking the skill, fingerprint the approved planning authorities and
+open the automatic-design write boundary:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/design-run-ownership.js" \
+  --project-root "<working_dir>" --begin
+```
+
+This preflight is mandatory. It seals `native-app-plan.md`, Product Experience,
+Product Scope, Workflow Journey, screen and compiled packs, navigation,
+scenario facts, persistence, and present data-model/data-use contracts. Design
+may write only `brand/**`, `_plan_preview.html`, the canonical full and compact
+preview projections, and `.tmp/design-*.json` evidence/status files.
+
 ```
 Invoke skill: /design-system
 
@@ -259,12 +273,30 @@ Handle the return per the status protocol (AGENTS.md rule #10):
 - `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
-- `BLOCKED` → surface error, STOP.
+- `BLOCKED` → STOP only for unsafe/unsupported capability, missing explicit
+  requirements, invalid relationships that prevent compilation, or
+  uncompilable output. Otherwise normalize to design-only repair/concerns.
+
+On every return path, including `NEEDS_CONTEXT` and `BLOCKED`, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/design-run-ownership.js" \
+  --project-root "<working_dir>" --verify
+```
+
+The ownership tool restores protected files from its hash-verified preflight
+snapshot and returns `NEEDS_DESIGN_REPAIR` with exact mutation paths. Retry only
+the affected design artifacts; never regenerate or restamp the plan. If that
+local repair still has cosmetic concerns, record `DONE_WITH_CONCERNS` and
+continue. `NEEDS_CONTEXT` for genuinely missing frame evidence goes back to the
+planning owner; design never reorders a journey, screen graph, or scenario facts
+to improve preview selection.
 
 After `/design-system` returns `DONE`, require
 `brand/design-system.md`, `brand/tokens.ts`, `brand/signature-components.ts`,
 and `_plan_preview.html`. Missing
-artifacts are `BLOCKED`; do not silently continue with a generic fallback.
+artifacts trigger one design-only repair. If they remain absent, record
+`DONE_WITH_CONCERNS` and continue without inventing a generic fallback.
 
 The preview is the **FIRST and ONLY HTML experience preview** in the flow. Its
 default storyboard contains one to three frames selected from the Workflow
@@ -272,6 +304,7 @@ Journey: entry/root, signature/core action, and outcome/review when available.
 The expandable `All screens` area contains the complete graph and required
 states. It is not selected from List/Form/Detail archetypes and does not claim
 React Native or native pixel verification.
+Neutral structural diagnostics remain separate and can never become approved visual intent.
 
 Before continuing, verify the product-experience, scope, journey, and build-pack
 contracts:
@@ -287,13 +320,16 @@ node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
   --project-root "<working_dir>" --check
 node "${PLUGIN_ROOT}/scripts/validate-product-experience-preview.js" \
   --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/design-run-ownership.js" \
+  --project-root "<working_dir>" --verify
 ```
 
 This final preview check occurs only after `/design-system` has returned and all
-three brand artifacts exist. If any validator, generated-token readiness, or
-preview contract-revision check fails, return to the owning planner/design step.
-Do not let a neutral structural, generic, or incomplete preview advance as
-approved visual intent.
+three brand artifacts exist. Repair generated-token or preview findings only in
+their owning design artifact. Browser unavailability and remaining cosmetic
+preview findings are warnings; continue generation without claiming complete
+visual validation. Never weaken or regenerate a valid plan to make the preview
+pass.
 
 #### Consolidated plan review (optional)
 

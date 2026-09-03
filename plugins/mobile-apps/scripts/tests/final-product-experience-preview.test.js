@@ -6,7 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { compileNavigationManifest } = require('../compile-navigation-manifest');
-const { buildFinalPreviewContract } = require('../validate-product-experience-preview');
+const {
+  beginDesignRun,
+  verifyDesignRun,
+} = require('../design-run-ownership');
+const {
+  buildFinalPreviewContract,
+  collectPreviewFindings,
+} = require('../validate-product-experience-preview');
 const { bundleFor } = require('./helpers/product-experience-scenarios');
 const { cleanup, makeProjectDir, runCli, writeContracts } = require('./helpers/contract-cli');
 const { scenarioFactsForBundle } = require('./helpers/scenario-facts-fixtures');
@@ -36,6 +43,10 @@ function prepare(projectRoot) {
     `${JSON.stringify(scenario, null, 2)}\n`,
   );
   fs.mkdirSync(path.join(projectRoot, 'brand'), { recursive: true });
+  fs.writeFileSync(
+    path.join(projectRoot, 'brand', 'design-system.md'),
+    '# Final product design\n\nCurrent approved visual and interaction rules.\n',
+  );
   fs.writeFileSync(path.join(projectRoot, 'brand', 'tokens.ts'), `
 export const tokens = {
   color: {
@@ -108,7 +119,8 @@ function finalHtml(contract) {
   <style id="product-experience-token-contract">${contract.designTokens.css}</style>
   <style>
     *{box-sizing:border-box}body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:var(--font-heading-family),sans-serif}
-    #preview-navigation{display:flex;justify-content:center;gap:.5rem;padding:1rem;background:var(--color-primary)}
+    #preview-navigation{padding:1rem;background:var(--color-primary)}
+    .navigation-inner{display:flex;justify-content:center;gap:.5rem}
     [data-navigation-destination]{padding:.6rem .9rem;border:1px solid var(--color-border);color:var(--color-surface);text-decoration:none}
     #preview-storyboard{display:grid;grid-template-columns:repeat(3,minmax(0,390px));justify-content:center;gap:1rem;padding:1rem}
     [data-mobile-frame]{width:min(100%,390px);height:780px;overflow:auto;padding:1rem;background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px}
@@ -124,7 +136,7 @@ function finalHtml(contract) {
   </style>
 </head>
 <body data-preview-mode="final" data-preview-authorship="design-system-model" data-preview-contract-revision="${contract.contractRevision}">
-  <nav id="preview-navigation">${navigation}</nav>
+  <nav id="preview-navigation"><div class="navigation-inner">${navigation}</div></nav>
   <main id="preview-storyboard">${frames}</main>
   <section id="preview-all-screens"><details><summary>Review complete experience</summary><div data-screen-index>${allScreens}</div>${supporting}<section class="requirement-index">${requirements}</section></details></section>
 </body>
@@ -179,6 +191,109 @@ test('validator prepares and accepts a canonical AI-authored final preview', () 
         (warning) => warning.code === 'layout-validation-skipped',
       ));
     }
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
+test('automatic canonical run seals ownership and records compact provenance', () => {
+  const projectRoot = makeProjectDir('final-experience-preview-owned');
+  try {
+    prepare(projectRoot);
+    fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Approved plan\n');
+    beginDesignRun({
+      projectRoot,
+      now: () => '2026-09-03T00:00:00.000Z',
+      runId: () => 'owned-design-run',
+    });
+    const contractPath = path.join(
+      projectRoot,
+      '.tmp',
+      'product-experience-final-preview-contract.json',
+    );
+    const prepared = runCli('validate-product-experience-preview.js', [
+      '--project-root', projectRoot,
+      '--contract-output', contractPath,
+    ]);
+    assert.strictEqual(prepared.code, 0, prepared.stdout);
+    assert.match(prepared.json.authoringProjectionRevision, /^[a-f0-9]{64}$/);
+    assert.ok(fs.existsSync(path.join(
+      projectRoot,
+      '.tmp',
+      'product-experience-preview-authoring.json',
+    )));
+
+    const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+    fs.writeFileSync(path.join(projectRoot, '_plan_preview.html'), finalHtml(contract));
+    const validated = runCli('validate-product-experience-preview.js', [
+      '--project-root', projectRoot,
+    ], { env: { POWER_PLATFORM_SKILLS_PREVIEW_BROWSER_LAYOUT: '0' } });
+    assert.strictEqual(validated.code, 0, JSON.stringify(validated.json?.errors));
+    assert.equal(validated.json.previewRepairCount, 0);
+    assert.equal(verifyDesignRun({ projectRoot }).ok, true);
+
+    const provenance = JSON.parse(fs.readFileSync(
+      path.join(projectRoot, '.tmp', 'design-run-provenance.json'),
+      'utf8',
+    ));
+    assert.equal(provenance.status, 'passed');
+    assert.equal(provenance.runId, 'owned-design-run');
+    assert.ok(provenance.totalAutomaticReferenceBytes > 0);
+    assert.deepStrictEqual(provenance.selectedScreenIds, ['discover', 'product', 'checkout']);
+    assert.deepStrictEqual(
+      provenance.selectionRationale.map((entry) => entry.role),
+      ['primary-destination', 'flow-entry', 'strongest-decision'],
+    );
+    assert.match(provenance.revisions.tokens, /^[a-f0-9]{64}$/);
+    assert.match(provenance.revisions.signatureComponents, /^[a-f0-9]{64}$/);
+    assert.match(provenance.revisions.authoringProjection, /^[a-f0-9]{64}$/);
+    assert.equal(provenance.previewRepairCount, 0);
+    assert.deepStrictEqual(provenance.immutableInputMutationAttempts, []);
+    assert.deepStrictEqual(provenance.writeViolationAttempts, []);
+    assert.equal(provenance.renderedLayoutStatus, 'skipped: browser-disabled');
+    assert.ok(provenance.filesRead.includes('.tmp/product-experience-preview-authoring.json'));
+    assert.ok(provenance.filesWritten.some(
+      (entry) => entry.path === '_plan_preview.html',
+    ));
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
+test('automatic canonical run restores ICRC-style planning mutations', () => {
+  const projectRoot = makeProjectDir('final-experience-preview-owned-mutation');
+  try {
+    prepare(projectRoot);
+    fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Approved plan\n');
+    beginDesignRun({ projectRoot });
+    const journeyPath = path.join(projectRoot, '.tmp', 'workflow-journey-contract.json');
+    const scenarioPath = path.join(projectRoot, '.tmp', 'scenario-facts.json');
+    const journey = JSON.parse(fs.readFileSync(journeyPath, 'utf8'));
+    journey.journeys.reverse();
+    fs.writeFileSync(journeyPath, `${JSON.stringify(journey, null, 2)}\n`);
+    const scenario = JSON.parse(fs.readFileSync(scenarioPath, 'utf8'));
+    scenario.records[0].fields.headline = 'Rewritten preview evidence';
+    fs.writeFileSync(scenarioPath, `${JSON.stringify(scenario, null, 2)}\n`);
+
+    const result = runCli('validate-product-experience-preview.js', [
+      '--project-root', projectRoot,
+      '--contract-output', path.join(
+        projectRoot,
+        '.tmp',
+        'product-experience-final-preview-contract.json',
+      ),
+    ]);
+    assert.strictEqual(result.code, 1);
+    assert.equal(result.json.status, 'NEEDS_DESIGN_REPAIR');
+    assert.equal(result.json.recoverable, true);
+    assert.deepStrictEqual(
+      result.json.ownership.immutableMutations.map((entry) => entry.path),
+      ['.tmp/workflow-journey-contract.json', '.tmp/scenario-facts.json'],
+    );
+    assert.ok(result.json.errors.some(
+      (error) => error.code === 'design-ownership-immutable-input-mutated',
+    ));
+    assert.equal(verifyDesignRun({ projectRoot }).ok, true);
   } finally {
     cleanup(projectRoot);
   }
@@ -353,7 +468,10 @@ test('validator rejects drift, hidden evidence, placeholders, and structural sub
       },
       {
         name: 'invented offline runtime UI',
-        html: valid.replace('Current journey', 'Offline - retry synchronization'),
+        html: valid.replace(
+          '<nav id="preview-navigation">',
+          '<nav id="preview-navigation"><small>Offline field receiving</small>',
+        ),
         code: 'preview-invented-offline-ui',
       },
       {
@@ -401,6 +519,54 @@ test('validator reports missing and incomplete generated token contracts', () =>
   } finally {
     cleanup(projectRoot);
   }
+});
+
+test('validator rejects offline runtime behavior in design artifacts', () => {
+  const projectRoot = makeProjectDir('final-experience-preview-offline-design');
+  try {
+    prepare(projectRoot);
+    const contractPath = path.join(projectRoot, '.tmp', 'preview-contract.json');
+    const designSystemPath = path.join(projectRoot, 'brand', 'design-system.md');
+    const signaturePath = path.join(projectRoot, 'brand', 'signature-components.ts');
+
+    fs.writeFileSync(designSystemPath, '# Design\n\nShow pending sync and offline status.\n');
+    const designResult = runCli('validate-product-experience-preview.js', [
+      '--project-root', projectRoot,
+      '--contract-output', contractPath,
+    ]);
+    assert.strictEqual(designResult.code, 1);
+    assert.ok(designResult.json.errors.some(
+      (error) => error.code === 'design-system-invented-offline-runtime',
+    ));
+
+    fs.writeFileSync(designSystemPath, '# Design\n\nCurrent approved interaction rules.\n');
+    fs.writeFileSync(signaturePath, "export type SyncState = 'offline' | 'syncing';\n");
+    const signatureResult = runCli('validate-product-experience-preview.js', [
+      '--project-root', projectRoot,
+      '--contract-output', contractPath,
+    ]);
+    assert.strictEqual(signatureResult.code, 1);
+    assert.ok(signatureResult.json.errors.some(
+      (error) => error.code === 'signature-components-invented-offline-runtime',
+    ));
+  } finally {
+    cleanup(projectRoot);
+  }
+});
+
+test('rendered clipping and overlap are nonblocking visual evidence', () => {
+  const layoutErrors = [
+    { code: 'preview-layout-content-clipped', message: 'home clips content' },
+    { code: 'preview-layout-elements-overlap', message: 'home overlaps actions' },
+  ];
+  const result = collectPreviewFindings({
+    semanticValidation: { errors: [] },
+    outputIsolation: { errors: [] },
+    structuralValidation: { errors: [] },
+    renderedLayout: { status: 'failed', reason: null, errors: layoutErrors },
+  });
+  assert.deepStrictEqual(result.errors, []);
+  assert.deepStrictEqual(result.warnings, layoutErrors);
 });
 
 test('final preview contract excludes explicitly deferred requirements', () => {

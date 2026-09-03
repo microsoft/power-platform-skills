@@ -16,14 +16,9 @@ mode.
 
 ## Required outputs
 
-Every creation path writes:
-
-1. `brand/design-system.md` - complete visual and interaction specification;
-2. `brand/tokens.ts` - importable Tamagui token values;
-3. `brand/signature-components.ts` - typed presentation contracts for approved
-   signature interactions;
-4. `_plan_preview.html` - the model-authored, deterministically validated journey
-  approval preview when an approved app plan exists.
+Creation writes `brand/design-system.md`, `brand/tokens.ts`,
+`brand/signature-components.ts`, and, when an approved plan exists, the
+model-authored and deterministically validated `_plan_preview.html`.
 
 `brand/design-system.html` is an optional component gallery, not a substitute
 for the journey preview.
@@ -70,15 +65,6 @@ Full design or Spec + reference is explicitly selected. The standard
 prompt-only prototype is `--auto-experience`; it reads only its automatic path,
 the design schema, shared core, and approved canonical contracts.
 
-Optional flags accepted by their owning routes:
-
-- `--brand-doc`, `--logo`, `--from-url`, `--design-spec`, `--from-canvas-app`,
-  `--from-code-app`, `--from-figma`, `--stylesheet`, `--power-pages-mode`;
-- `--direction <name>`;
-- `--refresh <palette|typography|components|density|negatives|motion>`;
-- `--reskin`, `--add-dark-mode`, `--add-theme <name>`;
-- `--history`, `--diff <timestamp>`, `--rollback <timestamp>`.
-
 ## Common invariants
 
 - Never select an industry or named visual direction from product keywords or
@@ -100,6 +86,15 @@ Optional flags accepted by their owning routes:
 - Test fixtures, snapshots, benchmark implementations, and prior generated
   previews are prohibited authoring inputs. Use only the current run's approved
   contracts and selected design references.
+- Automatic modes do not glob, grep, search, or read plugin scripts. Their
+  workflow gives exact validator commands, which are execution-only.
+- Connectivity context does not authorize offline or sync UI, copy, design
+  rules, or signature props. Offline setup is owned by its later workflow.
+- Automatic design requires `.tmp/design-run-state.json` created before the
+  skill starts. Never restamp it after reading or writing project artifacts.
+- Product planning sidecars are immutable. Missing suitable frame evidence is
+  `NEEDS_CONTEXT` for the planning owner, never permission to reorder journeys,
+  screens, navigation, or scenario facts.
 - Final previews follow `final-experience-preview.md`: portable gates, optional
   browser findings, and at most one same-execution HTML repair.
 - Do not start Metro, attach Dev Player, or capture native screenshots in this
@@ -109,10 +104,12 @@ Optional flags accepted by their owning routes:
 ## Write boundary
 
 Creation and review modes write only `brand/`, `_design_vibe.html`,
-`_plan_preview.html`, `.tmp/product-experience-final-preview-contract.json`, and
-`memory-bank.md`. An explicit theme operation may write the template's theme
-registry/provider/hook and patch `app/_layout.tsx`. No mode rewrites screens,
-services, data, or canonical planning contracts.
+`_plan_preview.html`, `.tmp/product-experience-final-preview-contract.json`,
+`.tmp/product-experience-preview-authoring.json`, and `.tmp/design-*.json`
+evidence/status files. The create orchestrator updates
+`memory-bank.md` only after ownership verification. Explicit theme operations
+may write their template registry/provider/hook and patch `app/_layout.tsx`.
+No mode rewrites screens, services, data, or canonical planning contracts.
 
 ## Completion
 

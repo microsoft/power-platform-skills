@@ -3,6 +3,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
 
 const { canonicalJson, sha256Hex } = require('../lib/product-experience-contracts');
 const {
@@ -49,6 +52,22 @@ const TOKEN_FIXTURES = {
     typography: { family: 'Helvetica Neue', size: 22, weight: 700, lineHeight: 1.2, tracking: 0 },
   },
 };
+
+function probeDom(errors = []) {
+  const encoded = Buffer.from(JSON.stringify({ errors })).toString('base64');
+  return `<html data-preview-layout-result="${encoded}"></html>`;
+}
+
+function readUrl(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => resolve({ body, statusCode: response.statusCode }));
+    }).once('error', reject);
+  });
+}
 
 const REPAIRED_CASES = [
   {
@@ -191,15 +210,15 @@ test('captured sparse previews fail structural quality while receiving passes', 
   }
 });
 
-test('browser absence never blocks final preview validation', () => {
-  const result = validateRenderedLayout(
+test('browser absence never blocks final preview validation', async () => {
+  const result = await validateRenderedLayout(
     '<!doctype html><html><body></body></html>',
     { screens: [] },
     { browserExecutable: null },
   );
   assert.deepEqual(result, {
     status: 'skipped',
-    reason: 'browser-not-found',
+    reason: 'browser-unavailable',
     errors: [],
     viewports: [],
   });
@@ -221,7 +240,7 @@ test('repaired flight, gym, and receiving previews pass mandatory quality gates'
   }
 });
 
-test('supported browser validates all three repaired previews', (context) => {
+test('supported browser validates all three repaired previews', async (context) => {
   if (!findSupportedBrowser()) {
     context.skip('browser executable not installed');
     return;
@@ -229,7 +248,7 @@ test('supported browser validates all three repaired previews', (context) => {
   for (const candidate of REPAIRED_CASES) {
     const run = runVariant(candidate.definition);
     const contract = contractFor(run, TOKEN_FIXTURES[candidate.id]);
-    const rendered = validateRenderedLayout(candidate.render(contract), contract);
+    const rendered = await validateRenderedLayout(candidate.render(contract), contract);
     if (rendered.status === 'skipped') {
       context.skip(`browser probe unavailable: ${rendered.reason}`);
       return;
@@ -238,42 +257,102 @@ test('supported browser validates all three repaired previews', (context) => {
   }
 });
 
-test('completed browser probes surface precise optional layout findings', () => {
-  const encoded = Buffer.from(JSON.stringify({
-    errors: [{
+test('completed browser probes surface precise optional layout findings', async () => {
+  const findings = [
+    {
       code: 'preview-layout-content-clipped',
       message: 'home clips vertical content with no scroll path',
-    }],
-  })).toString('base64');
-  const result = validateRenderedLayout('<!doctype html><html></html>', { screens: [] }, {
+    },
+    {
+      code: 'preview-layout-elements-overlap',
+      message: 'home contains overlapping text or actions',
+    },
+  ];
+  const result = await validateRenderedLayout('<!doctype html><html></html>', { screens: [] }, {
     browserExecutable: '/fixed/test-browser',
     viewports: [{ name: 'mobile', width: 390, height: 844 }],
-    spawnSync(executable, args, options) {
+    runBrowser({ executable, url, viewport }) {
       assert.equal(executable, '/fixed/test-browser');
-      assert.ok(args.includes('--window-size=390,844'));
-      fs.writeSync(options.stdio[1], `<html data-preview-layout-result="${encoded}"></html>`);
-      return { status: 0, error: null };
+      assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/preview$/);
+      assert.deepEqual(viewport, { name: 'mobile', width: 390, height: 844 });
+      return { status: 0, error: null, stdout: probeDom(findings) };
     },
   });
   assert.equal(result.status, 'failed');
-  assert.deepEqual(result.errors, [{
-    code: 'preview-layout-content-clipped',
-    message: 'mobile: home clips vertical content with no scroll path',
-  }]);
+  assert.deepEqual(result.errors, findings.map((finding) => ({
+    ...finding,
+    message: `mobile: ${finding.message}`,
+  })));
 });
 
-test('browser launch failures are nonblocking skips', () => {
-  const result = validateRenderedLayout('<!doctype html><html></html>', { screens: [] }, {
+test('browser launch failures are nonblocking skips', async () => {
+  const result = await validateRenderedLayout('<!doctype html><html></html>', { screens: [] }, {
     browserExecutable: '/fixed/test-browser',
     viewports: [{ name: 'mobile', width: 390, height: 844 }],
-    spawnSync() {
+    runBrowser() {
       throw new Error('simulated browser launch failure');
     },
   });
   assert.deepEqual(result, {
     status: 'skipped',
-    reason: 'browser-probe-error',
+    reason: 'browser-unavailable',
     errors: [],
     viewports: [],
   });
+});
+
+test('loopback browser rendering is read-only, private, and cleaned up', async (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'preview-loopback-test-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const previewFile = path.join(directory, '_plan_preview.html');
+  const html = '<!doctype html><html><body>loopback preview marker</body></html>';
+  fs.writeFileSync(previewFile, html);
+  let servedUrl;
+  let serverAddress;
+  let closed = false;
+  const result = await validateRenderedLayout(fs.readFileSync(previewFile, 'utf8'), { screens: [] }, {
+    browserExecutable: '/fixed/test-browser',
+    viewports: [{ name: 'mobile', width: 390, height: 844 }],
+    onServerStarted(loopback) {
+      servedUrl = loopback.url;
+      serverAddress = loopback.address;
+    },
+    onServerClosed() { closed = true; },
+    async runBrowser({ url }) {
+      const response = await readUrl(url);
+      assert.equal(response.statusCode, 200);
+      assert.match(response.body, /loopback preview marker/);
+      return { status: 0, error: null, stdout: probeDom() };
+    },
+  });
+  assert.equal(result.status, 'passed');
+  assert.equal(result.viewports[0].adapter, 'local-chromium');
+  assert.equal(serverAddress.address, '127.0.0.1');
+  assert.ok(serverAddress.port > 0);
+  assert.equal(closed, true);
+  await assert.rejects(readUrl(servedUrl));
+  assert.equal(fs.readFileSync(previewFile, 'utf8'), html);
+});
+
+test('browser adapter preference is agent, connected, then local Chromium', async () => {
+  const calls = [];
+  const result = await validateRenderedLayout('<!doctype html><html></html>', { screens: [] }, {
+    agentBrowserAdapter() {
+      calls.push('agent');
+      return { status: 0, error: null, stdout: probeDom() };
+    },
+    connectedBrowserAdapter() {
+      calls.push('connected');
+      return { status: 0, error: null, stdout: probeDom() };
+    },
+    browserExecutable: '/fixed/test-browser',
+    runBrowser() {
+      calls.push('local');
+      return { status: 0, error: null, stdout: probeDom() };
+    },
+    viewports: [{ name: 'mobile', width: 390, height: 844 }],
+  });
+  assert.equal(result.status, 'passed');
+  assert.deepEqual(calls, ['agent']);
+  assert.equal(result.viewports[0].adapter, 'agent-browser');
 });

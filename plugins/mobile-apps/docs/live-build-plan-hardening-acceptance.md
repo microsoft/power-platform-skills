@@ -68,6 +68,28 @@ not model quality. A release-quality model comparison requires separate prompts
 against the installed plugin and human review of requirement coverage, product
 judgment, and native implementation fidelity.
 
+For streamed Copilot CLI acceptance, audit each JSONL transcript before treating
+the model output as evidence:
+
+```bash
+node plugins/mobile-apps/scripts/tests/helpers/audit-final-preview-live-log.js \
+    --input <copilot-output.jsonl>
+```
+
+The audit fails for direct test/fixture/snapshot/benchmark reads and for broader
+searches whose returned results expose those paths. Prompt prose alone does not
+count as a read.
+
+Classify the complete design reference library without loading it into the
+automatic route:
+
+```bash
+node plugins/mobile-apps/scripts/design-reference-reachability.js
+```
+
+Only `genuinely-unreachable` entries are deletion candidates. Missing explicit
+optional-mode references are warnings and never block automatic generation.
+
 ## Host Boundary
 
 The committed template proves Dataverse offline package integration. Connector

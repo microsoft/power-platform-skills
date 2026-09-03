@@ -56,7 +56,7 @@ function materializeWorkspace(scenario, outputRoot, pluginRoot = path.resolve(__
     `# ${run.productName}`,
     '',
     '## Overview',
-    run.artifacts.bundle.descriptor.brief,
+    `Build the approved mobile experience for ${run.artifacts.bundle.experience.primaryUser.role} to ${run.artifacts.bundle.experience.primaryGoal}.`,
     '',
     '## Product Experience',
     `Primary goal: ${run.artifacts.bundle.experience.primaryGoal}`,

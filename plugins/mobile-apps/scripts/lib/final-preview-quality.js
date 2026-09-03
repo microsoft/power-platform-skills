@@ -12,7 +12,7 @@ const MAX_FRAME_EVIDENCE_TEXT = 640;
 const MAX_FRAME_VISIBLE_TEXT = 1800;
 const COMPONENT_PRESENTATION_PROPERTIES = ['display', 'padding', 'gap', 'background', 'border'];
 const CONTRACT_COPY = /\b(?:durable-destination|nested-detail|bounded-flow-step|modal-or-immersive-utility|pack revision|requirement id|scenario evidence)\b/i;
-const INVENTED_OFFLINE_UI = /\b(?:offline|pending sync|syncing|retry synchronization|connection lost|queued changes)\b/i;
+const INVENTED_OFFLINE_RUNTIME = /\b(?:offline(?:-first)?|sync(?:ing|ed|state)?|pending[- ]sync|synchronization|connection lost|queued changes)\b/i;
 
 function hasAttribute(node, name, value = null) {
   return Object.prototype.hasOwnProperty.call(node.attrs, name)
@@ -190,8 +190,16 @@ function validatePageStructure(parsed, expected, errors) {
       'style product component regions rather than exposing raw contract text'));
   }
   const navigation = declarationsForNode(rules, navigationNode);
-  if (!['grid', 'flex'].includes(navigation.display)
-    || !declaresAny(navigation, ['gap', 'column-gap', 'row-gap', 'justify-content'])
+  const navigationNodes = navigationNode
+    ? [navigationNode, ...descendants(parsed.elements, navigationNode)]
+    : [];
+  const navigationHasLayout = navigationNodes.some((node) => {
+    const declarations = declarationsForNode(rules, node);
+    return ['grid', 'flex'].includes(declarations.display)
+      && declaresAny(declarations, ['gap', 'column-gap', 'row-gap', 'justify-content']);
+  });
+  if (!navigationHasLayout
+    || !declaresAny(navigation, ['padding', 'background', 'background-color', 'border'])
     || destinationNodes.length === 0
     || destinationNodes.some((node) => !declaresAny(
       declarationsForNode(rules, node),
@@ -199,6 +207,10 @@ function validatePageStructure(parsed, expected, errors) {
     ))) {
     errors.push(finding('preview-navigation-unstyled',
       'preview navigation and destinations need authored layout and visual treatment'));
+  }
+  if (bodyNode && INVENTED_OFFLINE_RUNTIME.test(normalizedText(bodyNode))) {
+    errors.push(finding('preview-invented-offline-ui',
+      'final preview invents offline or sync runtime UI outside this workflow'));
   }
   const allScreens = parsed.elements.find(
     (node) => node.attrs.id === expected.landmarks.allScreens,
@@ -361,10 +373,6 @@ function validateScreenStructure(parsed, expected, review, errors) {
       errors.push(finding('preview-contract-dump-visible',
         `${screen.screenId} exposes implementation-contract vocabulary in its phone frame`));
     }
-    if (INVENTED_OFFLINE_UI.test(normalizedText(frame))) {
-      errors.push(finding('preview-invented-offline-ui',
-        `${screen.screenId} invents offline runtime UI outside the approved product contracts`));
-    }
     metrics.push({
       screenId: screen.screenId,
       evidenceCount: evidence.length,
@@ -405,6 +413,7 @@ function validateStructuralQuality(html, expected, parsedInput = null) {
 }
 
 module.exports = {
+  INVENTED_OFFLINE_RUNTIME,
   MAX_FRAME_EVIDENCE_COUNT,
   MAX_FRAME_EVIDENCE_TEXT,
   MAX_FRAME_VISIBLE_TEXT,

@@ -198,6 +198,11 @@ test('automatic design mode preserves experience quality without another pause',
   assert.match(finalPreview, /literal `"ok": true`/);
   assert.match(finalPreview, /Do not substitute[\s\S]*Python HTML parsing[\s\S]*TypeScript compilation/);
   assert.match(automatic, /no `npm install`, TypeScript, or ad hoc check/);
+  assert.match(automatic, /Do not glob, grep, search, or read `\$\{PLUGIN_ROOT\}\/scripts`/);
+  assert.match(automatic, /broader search that returns a test,[\s\S]*prohibited authoring read/);
+  assert.match(finalPreview, /commands are execution-only/);
+  assert.match(finalPreview, /Never inspect validator[\s\S]*test output/);
+  assert.match(design, /do not glob, grep, search, or read plugin scripts/i);
   assert.match(automatic, /canonical final-[\s\S]*preview contract sidecar/);
   assert.match(design, /product-experience-final-preview-contract\.json/);
   assert.match(design, /literal `"ok": true`/);
