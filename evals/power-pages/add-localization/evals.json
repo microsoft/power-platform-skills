@@ -284,7 +284,27 @@
         "Does not create a separate persistent component-inventory JSON file",
         "Keeps Hebrew unavailable when an externally owned or existing component has a blocking unremediated defect",
         "Records unresolved rendered blockers separately from static scanner findings and does not offer locale enablement while they remain",
-        "Requires the approved review scope to be reconciled with components and states discovered during implementation"
+        "Writes a provisional pending-remediation manifest before validation, keeping affected locales unavailable until static and rendered verification are complete",
+        "Requires the approved review scope to be reconciled with components and states discovered during implementation",
+        "Finalizes the manifest only after the maker decision: ready has no findings, approved limitations retain only review findings with maker-approved impact/evidence/timestamp, and unresolved work remains pending",
+        "Reruns validation and affected locale activation checks after changing readiness or availability",
+        "Final summary reports the manifest path, readiness status, available and unavailable locales, finding totals, rendered report, and every approved limitation"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Add Arabic to our English React site. The third-party booking widget works in RTL, but its vendor-owned calendar arrow remains visually unchanged. If testing proves it is still understandable and usable, I may accept that limitation.",
+      "expected_output": "The workflow verifies the widget in its open state, treats any deterministic functional or readability failure as blocking, and permits only an evidence-backed review-severity limitation to be explicitly approved after testing.",
+      "files": [],
+      "expectations": [
+        "Plans the booking widget as unknown-third-party with its open state, desktop and narrow coverage, portal or iframe target, and exact rendered checks",
+        "Keeps Arabic unavailable in the provisional manifest until static and rendered verification and maker disposition are complete",
+        "Does not treat the user's advance willingness as approval and asks again only after showing the rendered evidence and exact impact",
+        "Does not offer approval if the widget is unreadable, clipped, unreachable, incorrectly directed, or otherwise has an error-severity finding",
+        "If the remaining issue is review-severity usable degradation, offers Fix before enabling, Enable with documented limitations, Save but keep locale unavailable, and Request revisions",
+        "On enablement, records only the accepted review finding with maker-approved disposition, impact, report or screenshot evidence, and ISO approval timestamp",
+        "Removes Arabic from unavailableLocales only after approval, updates all managed availability boundaries, and reruns the validator, build, and affected activation cases",
+        "Reports the final readiness and limitation consistently in the manifest and final summary"
       ]
     }
   ]
