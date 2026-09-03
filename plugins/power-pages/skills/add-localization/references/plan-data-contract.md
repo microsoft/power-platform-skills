@@ -25,6 +25,28 @@ Keep technical values unchanged: framework/package names, versions, file paths,
 commands, locale tags, CSS properties, identifiers, API names, audit rule
 names, URLs, and code markers.
 
+## Mode availability
+
+Before building this data, read the selected framework/mode from
+`scripts/lib/localization-config.js`. A plan may use only a mode whose
+centralized status is `available`.
+
+Currently available:
+
+- React runtime localization
+- Vue runtime localization
+- Angular runtime localization
+
+The recommended packages are `react-i18next`, `vue-i18n`, and
+`@jsverse/transloco`, respectively. A compatible validated alternative runtime
+package may be selected.
+
+Angular static and Astro static remain known implementation capabilities but
+are `temporarily-unavailable`. Do not represent them as proposed, preserved, or
+changed plan modes. Astro has no currently available localization mode, so an
+Astro invocation stops before rendering this artifact. The renderer enforces
+this policy independently.
+
 ## Required top-level data
 
 ```json
@@ -75,6 +97,8 @@ conflicts were found.
 {
   "package": {
     "value": "react-i18next 15.0.0",
+    "name": "react-i18next",
+    "version": "15.0.0",
     "status": "new",
     "verification": "verified",
     "selection": "recommended",
@@ -107,6 +131,10 @@ conflicts were found.
 ```
 
 `package`, `mode`, and `defaultLocale` use `new`, `preserved`, or `changed`.
+`package.value` is localized presentation text. `package.name` and
+`package.version` are required technical identities and remain untranslated.
+The renderer validates known packages against `FRAMEWORK` and `mode.value`, so
+a static package cannot enter a runtime plan under a different display label.
 `package.verification` is `verified` or `unverified`. For a custom package,
 `initializationEvidence` is `{ "file": "<path>", "marker": "<exact API marker>" }`.
 `package.selection` is `recommended`, `alternative`, or `preserved`.

@@ -12,12 +12,12 @@ const {
 } = require('../../../scripts/lib/validation-helpers');
 const {
   KNOWN_PACKAGES,
-  LOCALIZATION_CAPABILITIES,
   MANIFEST_NAME,
   classifyLocaleDirections,
   detectLocalization,
   hasLocaleNavigationSignal,
   getLocaleDirection,
+  getLocalizationModeAvailability,
   protectedTokenSignature,
   resolveProjectRelativePath,
   validateLocalizationManifestShape,
@@ -990,10 +990,23 @@ function validateRuntimeCoordinator(projectRoot, allManagedFiles, errors) {
 }
 
 function validateFrameworkModePackage(projectRoot, manifest, dependencies, detected, errors) {
-  const frameworkCapability = LOCALIZATION_CAPABILITIES.frameworks[manifest.framework];
-  if (frameworkCapability &&
-      !frameworkCapability.supportedModes.includes(manifest.mode)) {
-    errors.push('The manifest framework does not support the configured localization mode.');
+  const modeAvailability = getLocalizationModeAvailability(
+    manifest.framework,
+    manifest.mode
+  );
+  if (!modeAvailability.available) {
+    errors.push(modeAvailability.reason);
+  }
+  for (const evidence of detected.unavailableModeEvidence || []) {
+    if (evidence.mode === manifest.mode) continue;
+    const availability = getLocalizationModeAvailability(
+      manifest.framework,
+      evidence.mode
+    );
+    errors.push(
+      `${availability.reason} Remove or migrate detected ${evidence.detail} ` +
+      'before validation can pass.'
+    );
   }
 
   const knownPackage = KNOWN_PACKAGES[manifest.packageName];
