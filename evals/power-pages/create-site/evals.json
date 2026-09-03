@@ -170,6 +170,8 @@
         "Treats form labels, placeholders, hints, validation messages, prefixes, suffixes, icons, and open panels as one compound direction surface",
         "Requires rendered checks for third-party open states and portal or overlay content",
         "Plans actual RTL and pseudo-LTR coverage because every new site receives selected and opposite-direction verification",
+        "Runs the expanded static audit, fixes deterministic fixed-direction, physical-utility, shorthand, and unicode-bidi errors, and records raw horizontal scrolling assumptions for review and remediation when required",
+        "Uses a narrowly scoped bidi-fixed directive only for intentional machine-oriented LTR values, never for localized form UI",
         "Does not create a separate persistent component-inventory JSON file",
         "Requires Phase 5 to reconcile the planned review scope with the actual source and rendered application"
       ]
