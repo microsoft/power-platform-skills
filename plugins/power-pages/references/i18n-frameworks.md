@@ -4,27 +4,30 @@ Use this reference from `/power-pages:add-localization` after deterministic
 project inspection. Localization affects only the code-site SPA. It does not
 install or enable languages in the Dataverse environment.
 
-## Supported choices
+## Current availability
 
-| Framework | Recommended mode | Recommended tooling | Alternative |
+| Framework | Available mode | Recommended tooling | Temporarily unavailable |
 |---|---|---|---|
-| React | Runtime | `i18next` + `react-i18next` | Validated compatible runtime package |
-| Vue | Runtime | Stable `vue-i18n` | Validated compatible runtime package |
-| Angular | Static/build-time | Matching `@angular/localize` | `@jsverse/transloco` for runtime switching |
-| Astro | Static locale routes | Built-in Astro i18n routing | No version-1 runtime mode |
+| React | Runtime | `i18next` + `react-i18next` | — |
+| Vue | Runtime | Stable `vue-i18n` | — |
+| Angular | Runtime | `@jsverse/transloco` | Static/build-time localization (`@angular/localize`) |
+| Astro | None | — | Static locale routes (built-in Astro i18n) |
 
 React and Vue use runtime localization because the current Vite templates
 produce one SPA build. Per-locale static output would require a separately
 designed multi-build, routing, output-directory, and asset-path pipeline.
 
-Angular recommends `@angular/localize` because it is Angular's official,
-compiler-integrated localization package. It creates a build per locale.
-Transloco remains available when the maker specifically needs in-place
-language switching.
+Angular currently uses Transloco for in-place runtime switching. Its
+`@angular/localize` static implementation remains documented below but is not
+selectable until the centralized availability registry re-enables it.
 
-Astro uses static locale routes because its built-in i18n routing and
-static-first output naturally produce fully localized HTML and shareable
-locale URLs.
+Astro's built-in static implementation remains documented below but is not
+currently selectable. An Astro invocation stops before configuration or plan
+rendering.
+
+`scripts/lib/localization-config.js` is the source of truth. Workflows,
+package validation, plan rendering, and final validation must consume that
+registry rather than maintaining separate availability lists.
 
 ## Shared implementation rules
 
@@ -108,9 +111,11 @@ Ordinary components using logical CSS need no subscription.
 The language selector calls the coordinator; it must not independently mutate
 the localization library, `lang`, `dir`, or persistence.
 
-## Static locale behavior
+## Dormant static locale behavior
 
-Applies to Angular with `@angular/localize` and Astro.
+This guidance is retained for Angular with `@angular/localize` and Astro so the
+implementations can be re-enabled without reconstruction. Current workflows
+must not execute it while those modes are `temporarily-unavailable`.
 
 - Generate a locale-specific build or route for every configured locale.
 - Include the active locale in the URL/build output.
@@ -146,7 +151,7 @@ Install a stable `vue-i18n` release; never silently use an npm prerelease tag.
 Register the i18n plugin once in the app entry point. Use `$t` or
 `useI18n()` consistently with the existing Composition/Options API style.
 
-## Angular static
+## Angular static (dormant)
 
 Use `@angular/localize` matching the installed Angular major/version.
 
@@ -173,7 +178,7 @@ Use `@jsverse/transloco`.
 - Use Transloco services/directives/pipes consistently.
 - Implement the shared runtime locale behavior above.
 
-## Astro
+## Astro static (dormant)
 
 Use Astro's built-in `i18n` configuration.
 
@@ -287,7 +292,8 @@ Offer repair/reconfiguration when one or more of these conditions apply:
 - Multiple localization packages or runtime/static modes conflict.
 - Package is missing, deprecated, incompatible, or the maker wants to change
   it.
-- Angular maker wants to switch between static and runtime localization.
+- An existing Angular static setup must be explicitly reconfigured to the
+  currently available runtime mode before this skill can modify it.
 - Default locale is missing, invalid, duplicated, conflicting, or explicitly
   being changed.
 - Locale resources/routes or translation keys are missing.

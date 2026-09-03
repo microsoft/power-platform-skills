@@ -82,6 +82,112 @@ function createLocalizedReactProject(t, overrides = {}) {
   return projectRoot;
 }
 
+function createManifestlessAngularStaticProject(t) {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      '@angular/core': '^19.1.0',
+      '@angular/compiler': '^19.1.0',
+      '@angular/compiler-cli': '^19.1.0',
+      '@angular/localize': '^19.1.0',
+    },
+  }));
+  writeProjectFile(projectRoot, 'angular.json', JSON.stringify({
+    projects: {
+      portal: {
+        i18n: { sourceLocale: 'en-US' },
+      },
+    },
+  }));
+  writeProjectFile(projectRoot, 'src/locale/messages.en-US.xlf', '<xliff></xliff>');
+  writeProjectFile(projectRoot, 'src/locale/messages.fr-FR.xlf', '<xliff></xliff>');
+  writeProjectFile(
+    projectRoot,
+    'src/app/language-selector.ts',
+    "export class LanguageSelector { switchLanguage(){ document.documentElement.lang='fr-FR'; document.documentElement.dir='ltr'; } }"
+  );
+  return projectRoot;
+}
+
+function createManifestlessAstroStaticProject(t) {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: { astro: '^6.1.0' },
+  }));
+  writeProjectFile(
+    projectRoot,
+    'astro.config.mjs',
+    "export default { i18n: { defaultLocale: 'en-US', locales: ['en-US', 'ja-JP'] } };"
+  );
+  writeProjectFile(projectRoot, 'src/i18n/en-US.json', '{"home":"Home"}');
+  writeProjectFile(projectRoot, 'src/i18n/ja-JP.json', '{"home":"Home JA"}');
+  writeProjectFile(
+    projectRoot,
+    'src/pages/index.astro',
+    "---\nconst href = getRelativeLocaleUrl('ja-JP');\n---\n<html lang=\"en-US\" dir=\"ltr\"><a href={href}>LanguageSelector</a></html>"
+  );
+  return projectRoot;
+}
+
+function createAngularRuntimeProjectWithStaticResidue(t) {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      '@angular/core': '^19.1.0',
+      '@angular/compiler': '^19.1.0',
+      '@angular/compiler-cli': '^19.1.0',
+      '@angular/localize': '^19.1.0',
+      '@jsverse/transloco': '^7.6.0',
+    },
+  }));
+  writeProjectFile(projectRoot, 'angular.json', JSON.stringify({
+    projects: {
+      portal: {
+        i18n: { sourceLocale: 'en-US' },
+      },
+    },
+  }));
+  writeProjectFile(projectRoot, 'src/assets/i18n/en-US.json', '{"home":"Home"}');
+  writeProjectFile(projectRoot, 'src/assets/i18n/fr-FR.json', '{"home":"Accueil"}');
+  writeProjectFile(
+    projectRoot,
+    'src/app/i18n/locale-coordinator.service.ts',
+    "import '@jsverse/transloco'; provideTransloco({}); setActiveLang('fr-FR'); document.documentElement.lang='fr-FR'; const direction = locale === 'ar-SA' ? 'rtl' : 'ltr'; document.documentElement.dir=direction; export class LanguageSelector {}"
+  );
+  writeProjectFile(projectRoot, '.powerpages-localization.json', JSON.stringify({
+    schemaVersion: 1,
+    framework: 'angular',
+    mode: 'runtime',
+    packageName: '@jsverse/transloco',
+    packageVersion: '^7.6.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/assets/i18n/en-US.json',
+      'fr-FR': 'src/assets/i18n/fr-FR.json',
+    },
+    generatedFiles: ['src/app/i18n/locale-coordinator.service.ts'],
+    managedFiles: [],
+    unavailableLocales: [],
+    bidirectionalReadiness: {
+      status: 'ready',
+      findings: [],
+    },
+    adoptedExistingConfiguration: false,
+    lastOperation: 'reconfigure',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  }));
+  return projectRoot;
+}
+
 test('approves when no localization manifest exists', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
@@ -538,6 +644,34 @@ test('blocks a framework-package-mode mismatch', (t) => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /react does not support "static"/);
   assert.match(result.stderr, /react-i18next.*runtime localization/);
+});
+
+test('blocks manifests that select temporarily unavailable localization modes', (t) => {
+  const angularRoot = createManifestlessAngularStaticProject(t);
+  const angularResult = runValidator(angularRoot);
+  assert.equal(angularResult.status, 2);
+  assert.match(
+    angularResult.stderr,
+    /Angular static localization is temporarily unavailable/
+  );
+
+  const astroRoot = createManifestlessAstroStaticProject(t);
+  const astroResult = runValidator(astroRoot);
+  assert.equal(astroResult.status, 2);
+  assert.match(
+    astroResult.stderr,
+    /No Astro localization mode is currently available/
+  );
+});
+
+test('blocks Angular runtime validation while static implementation residue remains', (t) => {
+  const projectRoot = createAngularRuntimeProjectWithStaticResidue(t);
+  const result = runValidator(projectRoot);
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Angular static localization is temporarily unavailable/);
+  assert.match(result.stderr, /Remove or migrate detected @angular\/localize/);
+  assert.match(result.stderr, /Remove or migrate detected Angular i18n build configuration/);
 });
 
 test('blocks noncanonical manifest locale values', (t) => {

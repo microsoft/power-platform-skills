@@ -6,38 +6,87 @@ const path = require('path');
 
 const MANIFEST_NAME = '.powerpages-localization.json';
 const REGISTRY_PATH = path.join(__dirname, '..', '..', 'references', 'bcp47-subtags.json');
+
+function defineFrameworkCapability({
+  modes,
+  recommendedMode,
+  recommendedPackages,
+  frameworkPeers,
+}) {
+  const frozenModes = Object.freeze(Object.fromEntries(
+    Object.entries(modes).map(([mode, availability]) => [
+      mode,
+      Object.freeze({ ...availability }),
+    ])
+  ));
+  const supportedModes = Object.freeze(Object.keys(frozenModes));
+  const availableModes = Object.freeze(supportedModes.filter(
+    (mode) => frozenModes[mode].status === 'available'
+  ));
+  return Object.freeze({
+    modes: frozenModes,
+    supportedModes,
+    availableModes,
+    recommendedMode,
+    recommendedPackages: Object.freeze(recommendedPackages),
+    frameworkPeers: Object.freeze(frameworkPeers),
+  });
+}
+
 const LOCALIZATION_CAPABILITIES = Object.freeze({
   frameworks: Object.freeze({
-    react: Object.freeze({
-      supportedModes: Object.freeze(['runtime']),
+    react: defineFrameworkCapability({
+      modes: {
+        runtime: { status: 'available' },
+      },
       recommendedMode: 'runtime',
-      recommendedPackages: Object.freeze({ runtime: 'react-i18next' }),
-      frameworkPeers: Object.freeze(['react', 'react-dom']),
+      recommendedPackages: { runtime: 'react-i18next' },
+      frameworkPeers: ['react', 'react-dom'],
     }),
-    vue: Object.freeze({
-      supportedModes: Object.freeze(['runtime']),
+    vue: defineFrameworkCapability({
+      modes: {
+        runtime: { status: 'available' },
+      },
       recommendedMode: 'runtime',
-      recommendedPackages: Object.freeze({ runtime: 'vue-i18n' }),
-      frameworkPeers: Object.freeze(['vue']),
+      recommendedPackages: { runtime: 'vue-i18n' },
+      frameworkPeers: ['vue'],
     }),
-    angular: Object.freeze({
-      supportedModes: Object.freeze(['runtime', 'static']),
-      recommendedMode: 'static',
-      recommendedPackages: Object.freeze({
+    angular: defineFrameworkCapability({
+      modes: {
+        runtime: { status: 'available' },
+        static: {
+          status: 'temporarily-unavailable',
+          reasonCode: 'angular-static-temporarily-unavailable',
+          reason:
+            'Angular static localization is temporarily unavailable in this release. ' +
+            'Angular runtime localization is available; @jsverse/transloco is recommended, ' +
+            'and compatible validated runtime alternatives are allowed.',
+        },
+      },
+      recommendedMode: 'runtime',
+      recommendedPackages: {
         runtime: '@jsverse/transloco',
         static: '@angular/localize',
-      }),
-      frameworkPeers: Object.freeze([
+      },
+      frameworkPeers: [
         '@angular/core',
         '@angular/compiler',
         '@angular/compiler-cli',
-      ]),
+      ],
     }),
-    astro: Object.freeze({
-      supportedModes: Object.freeze(['static']),
-      recommendedMode: 'static',
-      recommendedPackages: Object.freeze({ static: 'astro-built-in' }),
-      frameworkPeers: Object.freeze(['astro']),
+    astro: defineFrameworkCapability({
+      modes: {
+        static: {
+          status: 'temporarily-unavailable',
+          reasonCode: 'astro-static-temporarily-unavailable',
+          reason:
+            'Astro static localization is temporarily unavailable in this release. ' +
+            'No Astro localization mode is currently available.',
+        },
+      },
+      recommendedMode: null,
+      recommendedPackages: { static: 'astro-built-in' },
+      frameworkPeers: ['astro'],
     }),
   }),
   packages: Object.freeze({
@@ -50,6 +99,70 @@ const LOCALIZATION_CAPABILITIES = Object.freeze({
   }),
 });
 const KNOWN_PACKAGES = LOCALIZATION_CAPABILITIES.packages;
+
+function getLocalizationModeAvailability(framework, mode) {
+  const capability = LOCALIZATION_CAPABILITIES.frameworks[framework];
+  if (!capability) {
+    return {
+      framework,
+      mode,
+      supported: false,
+      available: false,
+      status: 'unsupported',
+      recommendedPackage: null,
+      builtIn: false,
+      reasonCode: 'unsupported-framework',
+      reason: `Framework "${framework}" is not supported by add-localization.`,
+    };
+  }
+  const availability = capability.modes[mode];
+  if (!availability) {
+    return {
+      framework,
+      mode,
+      supported: false,
+      available: false,
+      status: 'unsupported',
+      recommendedPackage: null,
+      builtIn: false,
+      reasonCode: 'unsupported-mode',
+      reason: `${framework} does not support "${mode}" mode in add-localization.`,
+    };
+  }
+  const recommendedPackage = capability.recommendedPackages[mode] || null;
+  return {
+    framework,
+    mode,
+    supported: true,
+    available: availability.status === 'available',
+    recommendedPackage,
+    builtIn: Boolean(KNOWN_PACKAGES[recommendedPackage]?.builtIn),
+    ...availability,
+  };
+}
+
+function getFrameworkLocalizationAvailability(framework) {
+  const capability = LOCALIZATION_CAPABILITIES.frameworks[framework];
+  if (!capability) {
+    return {
+      framework,
+      supported: false,
+      availableModes: [],
+      recommendedMode: null,
+      modes: {},
+    };
+  }
+  return {
+    framework,
+    supported: true,
+    availableModes: [...capability.availableModes],
+    recommendedMode: capability.recommendedMode,
+    modes: Object.fromEntries(capability.supportedModes.map((mode) => [
+      mode,
+      getLocalizationModeAvailability(framework, mode),
+    ])),
+  };
+}
 const DEFAULT_SOURCE_SCAN_LIMITS = Object.freeze({
   maxFileBytes: 1024 * 1024,
   maxTotalBytes: 10 * 1024 * 1024,
@@ -646,6 +759,46 @@ function detectLocalization(projectRoot) {
     if (modes.size > 1) conflicts.push('runtime and static localization packages are both installed');
   }
 
+  // Preserve every source rather than only the inferred winner. A manifest can
+  // claim runtime mode while stale @angular/localize/angular.json evidence
+  // still leaves a dormant static implementation in the project.
+  const modeEvidence = [];
+  if (manifestMode) {
+    modeEvidence.push({
+      mode: manifestMode,
+      source: MANIFEST_NAME,
+      detail: `manifest mode "${manifestMode}"`,
+    });
+  }
+  for (const packageName of packages) {
+    modeEvidence.push({
+      mode: KNOWN_PACKAGES[packageName].mode,
+      source: 'package',
+      detail: packageName,
+    });
+  }
+  if (angularI18n) {
+    modeEvidence.push({
+      mode: 'static',
+      source: 'angular.json',
+      detail: 'Angular i18n build configuration',
+    });
+  }
+  if (astroConfig) {
+    modeEvidence.push({
+      mode: 'static',
+      source: astroConfig,
+      detail: 'Astro i18n configuration',
+    });
+  }
+  const detectedEvidenceModes = [...new Set(modeEvidence.map((entry) => entry.mode))];
+  if (manifestMode && detectedEvidenceModes.some((mode) => mode !== manifestMode)) {
+    conflicts.push(
+      `manifest mode "${manifestMode}" conflicts with detected ` +
+      `${detectedEvidenceModes.filter((mode) => mode !== manifestMode).join('/')} mode evidence`
+    );
+  }
+
   const inferredMode = manifestMode || inferMode(packages, angularI18n, astroConfig);
   const inferredPackage = manifestPackage || inferPrimaryPackage(packages, astroConfig);
   const inferredResources = manifestResources ||
@@ -697,6 +850,19 @@ function detectLocalization(projectRoot) {
       frameworkDetection.candidates.includes(manifestObject?.framework)
       ? manifestObject.framework
       : null);
+  const unavailableModeEvidence = implementationFramework
+    ? modeEvidence.filter((entry) =>
+        !getLocalizationModeAvailability(implementationFramework, entry.mode).available
+      )
+    : [];
+  for (const mode of [...new Set(unavailableModeEvidence.map((entry) => entry.mode))]) {
+    const availability = getLocalizationModeAvailability(implementationFramework, mode);
+    const sources = unavailableModeEvidence
+      .filter((entry) => entry.mode === mode)
+      .map((entry) => entry.detail)
+      .join(', ');
+    conflicts.push(`${availability.reason} Detected evidence: ${sources}.`);
+  }
   const implementation = discoverLocalizationImplementation(
     projectRoot,
     implementationFramework,
@@ -755,6 +921,8 @@ function detectLocalization(projectRoot) {
     resourceDirectories: resourceCandidates,
     angularI18n,
     astroConfig: astroConfig || null,
+    modeEvidence,
+    unavailableModeEvidence,
     implementation,
     conflicts,
   };
@@ -1025,6 +1193,9 @@ function inspectProject(projectRoot) {
   return {
     projectRoot: resolvedRoot,
     framework,
+    availability: framework.framework
+      ? getFrameworkLocalizationAvailability(framework.framework)
+      : null,
     siteLanguage: detectSiteLanguage(resolvedRoot, framework.framework),
     localization: detectLocalization(resolvedRoot),
   };
@@ -1216,10 +1387,21 @@ function runCli() {
     process.exitCode = result.valid ? 0 : 1;
     return;
   }
+  if (args.command === 'mode-availability' && args.framework !== undefined) {
+    const result = args.mode === undefined
+      ? getFrameworkLocalizationAvailability(args.framework)
+      : getLocalizationModeAvailability(args.framework, args.mode);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = args.mode === undefined
+      ? (result.supported ? 0 : 1)
+      : (result.available ? 0 : 1);
+    return;
+  }
   process.stderr.write(
     'Usage: localization-config.js inspect --projectRoot <path> | ' +
     'validate-locales --locales <comma-separated-tags> | ' +
-    'resolve-locale --locale <language-tag>\n'
+    'resolve-locale --locale <language-tag> | ' +
+    'mode-availability --framework <framework> [--mode <runtime|static>]\n'
   );
   process.exitCode = 1;
 }
@@ -1235,8 +1417,10 @@ module.exports = {
   detectFramework,
   detectLocalization,
   detectSiteLanguage,
+  getFrameworkLocalizationAvailability,
   getLocaleDirection,
   getLocaleMetadata,
+  getLocalizationModeAvailability,
   inspectProject,
   loadRegistry,
   resolveLocale,

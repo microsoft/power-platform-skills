@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const {
   LOCALIZATION_CAPABILITIES,
@@ -12,7 +13,10 @@ const {
   detectLocalization,
   detectSiteLanguage,
   discoverLocalizationImplementation,
+  getFrameworkLocalizationAvailability,
   getLocaleDirection,
+  getLocalizationModeAvailability,
+  inspectProject,
   protectedTokenSignature,
   resolveLocale,
   verifyInitializationEvidence,
@@ -20,6 +24,7 @@ const {
   validateLocales,
 } = require('../lib/localization-config');
 const { createTempProject, writeProjectFile } = require('./test-utils');
+const CONFIG_PATH = path.join(__dirname, '..', 'lib', 'localization-config.js');
 
 function writePackage(projectRoot, dependencies) {
   writeProjectFile(projectRoot, 'package.json', JSON.stringify({ dependencies }, null, 2));
@@ -27,6 +32,13 @@ function writePackage(projectRoot, dependencies) {
 
 test('centralizes framework modes, recommendations, packages, and peers', () => {
   assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.react.supportedModes, ['runtime']);
+  assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.react.availableModes, ['runtime']);
+  assert.deepEqual(
+    LOCALIZATION_CAPABILITIES.frameworks.angular.supportedModes,
+    ['runtime', 'static']
+  );
+  assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.angular.availableModes, ['runtime']);
+  assert.equal(LOCALIZATION_CAPABILITIES.frameworks.angular.recommendedMode, 'runtime');
   assert.equal(
     LOCALIZATION_CAPABILITIES.frameworks.angular.recommendedPackages.static,
     '@angular/localize'
@@ -38,6 +50,82 @@ test('centralizes framework modes, recommendations, packages, and peers', () => 
   assert.deepEqual(
     LOCALIZATION_CAPABILITIES.packages['astro-built-in'],
     { framework: 'astro', mode: 'static', builtIn: true }
+  );
+  assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.astro.availableModes, []);
+  assert.equal(LOCALIZATION_CAPABILITIES.frameworks.astro.recommendedMode, null);
+});
+
+test('reports centralized localization mode availability and stable reasons', () => {
+  assert.deepEqual(getLocalizationModeAvailability('react', 'runtime'), {
+    framework: 'react',
+    mode: 'runtime',
+    supported: true,
+    available: true,
+    status: 'available',
+    recommendedPackage: 'react-i18next',
+    builtIn: false,
+  });
+
+  const angularStatic = getLocalizationModeAvailability('angular', 'static');
+  assert.equal(angularStatic.supported, true);
+  assert.equal(angularStatic.available, false);
+  assert.equal(angularStatic.status, 'temporarily-unavailable');
+  assert.equal(
+    angularStatic.reasonCode,
+    'angular-static-temporarily-unavailable'
+  );
+  assert.match(angularStatic.reason, /Angular runtime localization is available/);
+  assert.match(angularStatic.reason, /validated runtime alternatives are allowed/);
+
+  const astro = getFrameworkLocalizationAvailability('astro');
+  assert.deepEqual(astro.availableModes, []);
+  assert.equal(astro.modes.static.available, false);
+  assert.equal(astro.modes.static.recommendedPackage, 'astro-built-in');
+  assert.equal(astro.modes.static.builtIn, true);
+  assert.equal(
+    astro.modes.static.reasonCode,
+    'astro-static-temporarily-unavailable'
+  );
+});
+
+test('includes detected framework availability in project inspection', (t) => {
+  const projectRoot = createTempProject(t);
+  writePackage(projectRoot, { astro: '^6.1.0' });
+
+  const inspection = inspectProject(projectRoot);
+  assert.equal(inspection.framework.framework, 'astro');
+  assert.deepEqual(inspection.availability.availableModes, []);
+  assert.equal(
+    inspection.availability.modes.static.reasonCode,
+    'astro-static-temporarily-unavailable'
+  );
+});
+
+test('exposes mode availability through the shared CLI', () => {
+  const frameworkResult = spawnSync(
+    process.execPath,
+    [CONFIG_PATH, 'mode-availability', '--framework', 'astro'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(frameworkResult.status, 0, frameworkResult.stderr);
+  assert.deepEqual(JSON.parse(frameworkResult.stdout).availableModes, []);
+
+  const modeResult = spawnSync(
+    process.execPath,
+    [
+      CONFIG_PATH,
+      'mode-availability',
+      '--framework',
+      'angular',
+      '--mode',
+      'static',
+    ],
+    { encoding: 'utf8' }
+  );
+  assert.equal(modeResult.status, 1);
+  assert.equal(
+    JSON.parse(modeResult.stdout).reasonCode,
+    'angular-static-temporarily-unavailable'
   );
 });
 
@@ -317,6 +405,69 @@ test('derives mode, locales, default, and resources for a manifestless existing 
   assert.deepEqual(result.locales, ['en-US', 'fr-FR']);
   assert.equal(result.defaultLocale, 'en-US');
   assert.equal(result.resourcePaths['fr-FR'], 'src/i18n/locales/fr-FR.json');
+});
+
+test('reports unavailable static evidence even when an Angular manifest claims runtime', (t) => {
+  const projectRoot = createTempProject(t);
+  writePackage(projectRoot, {
+    '@angular/core': '^19.1.0',
+    '@angular/compiler': '^19.1.0',
+    '@angular/compiler-cli': '^19.1.0',
+    '@angular/localize': '^19.1.0',
+    '@jsverse/transloco': '^7.6.0',
+  });
+  writeProjectFile(projectRoot, 'angular.json', JSON.stringify({
+    projects: {
+      portal: {
+        i18n: { sourceLocale: 'en-US' },
+      },
+    },
+  }));
+  writeProjectFile(projectRoot, 'src/assets/i18n/en-US.json', '{"home":"Home"}');
+  writeProjectFile(projectRoot, 'src/assets/i18n/fr-FR.json', '{"home":"Accueil"}');
+  writeProjectFile(
+    projectRoot,
+    'src/app/i18n.ts',
+    "provideTransloco({}); setActiveLang('fr-FR'); document.documentElement.lang='fr-FR'; document.documentElement.dir='ltr';"
+  );
+  writeProjectFile(projectRoot, '.powerpages-localization.json', JSON.stringify({
+    schemaVersion: 1,
+    framework: 'angular',
+    mode: 'runtime',
+    packageName: '@jsverse/transloco',
+    packageVersion: '^7.6.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/assets/i18n/en-US.json',
+      'fr-FR': 'src/assets/i18n/fr-FR.json',
+    },
+    generatedFiles: [],
+    managedFiles: ['src/app/i18n.ts'],
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  }));
+
+  const result = detectLocalization(projectRoot);
+  assert.equal(result.mode, 'runtime');
+  assert.deepEqual(
+    result.unavailableModeEvidence.map((entry) => entry.detail).sort(),
+    ['@angular/localize', 'Angular i18n build configuration']
+  );
+  assert.match(
+    result.conflicts.join('\n'),
+    /manifest mode "runtime" conflicts with detected static mode evidence/
+  );
+  assert.match(
+    result.conflicts.join('\n'),
+    /Angular static localization is temporarily unavailable/
+  );
 });
 
 test('scans source files incrementally and stops after all signals are found', (t) => {

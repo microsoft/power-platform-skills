@@ -10,6 +10,7 @@ const {
   KNOWN_PACKAGES,
   LOCALIZATION_CAPABILITIES,
   detectFramework,
+  getLocalizationModeAvailability,
 } = require('./lib/localization-config');
 const telemetry = require('./lib/telemetry/power-pages-telemetry');
 
@@ -258,6 +259,16 @@ function selectFramework(detection, requestedFramework) {
   return null;
 }
 
+function validateRequestedMode(framework, mode) {
+  const availability = getLocalizationModeAvailability(framework, mode);
+  if (!availability.available) {
+    const error = new Error(availability.reason);
+    error.code = availability.reasonCode;
+    throw error;
+  }
+  return availability;
+}
+
 function evaluatePackage(metadata, options) {
   const { packageName, framework, frameworkVersion, mode, now = new Date() } = options;
   const version = metadata.version;
@@ -480,6 +491,7 @@ async function runCli() {
       'Cannot validate package because the selected framework is not supported by project evidence.'
     );
   }
+  validateRequestedMode(framework, args.mode);
   const frameworkPeers =
     LOCALIZATION_CAPABILITIES.frameworks[framework]?.frameworkPeers || [];
   const frameworkDependency = frameworkPeers[0];
@@ -598,4 +610,5 @@ module.exports = {
   validateModeEvidenceUrl,
   resolvePackage,
   selectFramework,
+  validateRequestedMode,
 };

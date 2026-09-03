@@ -30,7 +30,10 @@ site changes.
 ## Core principles
 
 - Detect framework and existing localization from project evidence.
-- Preserve valid package, mode, default locale, and non-empty translations.
+- Read mode availability only from `localization-config.js`; never plan or
+  preserve a mode that is currently unavailable.
+- Preserve valid available package/mode choices, the default locale, and
+  non-empty translations.
 - Ask questions in the fixed order below; skip only documented conditional
   questions.
 - Validate language tags and package alternatives with deterministic scripts.
@@ -41,7 +44,7 @@ site changes.
 - Treat `[FROM_CREATE_SITE]` in `$ARGUMENTS` as invocation context. It suppresses
   this skill's deploy prompt so create-site remains deployment owner.
 - Generate a locale coordinator only for React, Vue, and runtime Angular.
-  Single-language, Angular static, and Astro static sites do not receive it.
+  Single-language and dormant static implementations do not receive it.
 
 ## Workflow
 
@@ -87,6 +90,34 @@ file and use `AskUserQuestion`:
 If the maker stops, make no changes, list the files requiring review, explain
 that framework repair is outside localization scope, and end.
 
+After resolving one evidence-backed framework, use the inspection result's
+`availability` object. If framework ambiguity required a maker selection, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" mode-availability --framework "<SELECTED_FRAMEWORK>"
+```
+
+This centralized result is the source of truth for selectable modes.
+
+If `availableModes` is empty, show each centralized temporarily-unavailable
+reason and stop without gathering configuration, rendering a plan, installing
+dependencies, or editing files. This currently applies to Astro.
+
+If `localization.unavailableModeEvidence` is non-empty, do not offer
+add-languages while preserving that evidence, even when the manifest claims an
+available mode:
+
+- Angular static: explain that static localization is temporarily unavailable
+  and use `AskUserQuestion` with **Reconfigure to Angular runtime localization**
+  and **Stop without changes**. Continue only when the maker explicitly selects
+  reconfiguration; set `OPERATION=reconfigure`. Phase 2.4 then offers the
+  recommended `@jsverse/transloco` package or a validated runtime alternative.
+- Any framework with no available alternative: stop without changes and show
+  the centralized reason.
+
+Never render a plan for a temporarily unavailable mode. The renderer and final
+validator enforce the same registry as a backstop.
+
 When no localization is detected and this is a direct invocation, display:
 
 > **Localization scope**
@@ -120,6 +151,11 @@ When localization is detected, display package, mode, locales, default locale,
 resource paths, and conflicts.
 
 <!-- not-a-gate: choosing add/repair/stop selects workflow scope before any write -->
+
+Skip the generic existing-localization question when Phase 1 already forced
+`OPERATION=reconfigure` because unavailable mode evidence was detected; the
+maker already chose reconfiguration instead of stopping, and add-languages
+must not be offered again.
 
 Use `AskUserQuestion`:
 
@@ -170,14 +206,16 @@ mode, ask only when missing, invalid, conflicting, or explicitly being changed.
 
 <!-- not-a-gate: mode selection shapes the upcoming plan and writes nothing -->
 
-- React: runtime; state the decision without asking.
-- Vue: runtime; state the decision without asking.
-- Angular new setup: use `AskUserQuestion` with **Static locale builds with
-  @angular/localize (Recommended)** and **Runtime switching with Transloco**.
-- Astro: static locale routes; state the decision without asking.
-- Add-languages mode: preserve the detected mode without asking.
-- Repair mode: ask only when Angular mode is changing or mode evidence
-  conflicts.
+- If `availableModes` contains one mode, select it and state the decision
+  without asking.
+- If a future registry change exposes multiple modes, use `AskUserQuestion`
+  with only those modes and identify `recommendedMode` as recommended.
+- Use the selected mode's centralized `recommendedPackage`; do not reconstruct
+  framework-specific mode/package mappings in this workflow.
+- Add-languages mode: preserve the detected mode without asking only when its
+  registry availability is `available`.
+- Repair/reconfigure mode: allow only modes listed in
+  `availability.availableModes`.
 
 ### 2.4 Package
 
@@ -189,7 +227,8 @@ For new setup or relevant repair, use `AskUserQuestion`:
 |---|---|---|
 | Which localization package should be used? | Package | Framework recommendation (Recommended), Suggest a different package, Cancel |
 
-Skip for Astro built-in i18n and add-languages mode. Validate alternatives:
+Skip for add-languages mode or when the selected mode reports
+`builtIn: true`. Validate alternatives:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
@@ -388,6 +427,10 @@ Adopt valid existing conventions rather than creating a second initialization
 or resource hierarchy. In repair mode, apply only the approved delta. Never
 remove a package, switch Angular mode, or replace custom initialization unless
 the approved plan names that change.
+
+The Angular static and Astro static implementation guidance remains documented
+for future re-enablement, but current runs must never execute those dormant
+paths.
 
 For runtime mode, create or adopt exactly one locale coordinator at the path
 defined in the framework reference. The language selector must call

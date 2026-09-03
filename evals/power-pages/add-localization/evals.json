@@ -31,14 +31,14 @@
     {
       "id": 3,
       "prompt": "Add localization to this Angular 19.1 Power Pages site. Support en-US and fr-FR. I am fine with the recommended option.",
-      "expected_output": "Recommend Angular's official matching @angular/localize package and static locale builds, then create XLF catalogs and locale build configuration.",
+      "expected_output": "Use the currently available Angular runtime mode with Transloco and do not offer or plan the temporarily unavailable static mode.",
       "files": [],
       "expectations": [
-        "Recommends static @angular/localize rather than Transloco",
-        "Uses a package version compatible with Angular 19.1",
-        "Configures Angular i18n locale builds and XLF resources",
-        "Adds navigation between equivalent locale builds",
-        "Does not add runtime browser persistence"
+        "Reads Angular mode availability from the centralized localization capability registry",
+        "Selects Angular runtime localization and recommends @jsverse/transloco while allowing a validated runtime alternative",
+        "Does not offer or plan @angular/localize static builds",
+        "Adds in-place language switching with browser-local persistence",
+        "Validates the runtime implementation and manifest"
       ]
     },
     {
@@ -57,14 +57,14 @@
     {
       "id": 5,
       "prompt": "Make my Astro Power Pages site available at English and Japanese locale URLs.",
-      "expected_output": "Use Astro built-in i18n static routes and navigate between locale-specific URLs.",
+      "expected_output": "Explain that Astro static localization is temporarily unavailable and stop before configuration, plan rendering, or file changes.",
       "files": [],
       "expectations": [
-        "Uses Astro built-in i18n without an npm localization package",
-        "Creates static locale routes",
-        "Uses equivalent-route navigation in the selector",
-        "Configures explicit default-locale routing and fallback",
-        "Does not add client-side locale persistence"
+        "Reads Astro availability from the centralized localization capability registry",
+        "Shows the stable temporarily-unavailable reason",
+        "Does not gather locale or package configuration",
+        "Does not render an add-localization plan",
+        "Does not install dependencies or change project files"
       ]
     },
     {
@@ -83,14 +83,15 @@
     {
       "id": 7,
       "prompt": "Repair localization in this Angular project. The manifest says Transloco runtime but angular.json and dependencies use @angular/localize static builds.",
-      "expected_output": "Surface the conflict, enter repair/reconfigure flow, ask which evidence-backed mode should remain, and change only the approved delta.",
+      "expected_output": "Surface the conflict and static-mode availability block, then allow only explicit reconfiguration to the available Transloco runtime mode or a clean stop.",
       "files": [],
       "expectations": [
-        "Does not guess which conflicting mode is authoritative",
-        "Shows manifest, dependency, and angular.json evidence",
+        "Reports the manifest, dependency, and angular.json conflict",
+        "Explains that Angular static localization is temporarily unavailable",
+        "Offers reconfiguration to Angular runtime localization or Stop without changes",
+        "Does not allow static mode to enter the plan",
         "Requires a new plan approval before replacement",
-        "Preserves translations unless replacement is explicitly approved",
-        "Rewrites the manifest to match the repaired implementation"
+        "Preserves translations unless replacement is explicitly approved"
       ]
     },
     {

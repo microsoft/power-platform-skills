@@ -11,6 +11,7 @@ const {
   resolveInstalledVersion,
   resolveVersionWithNpm,
   selectFramework,
+  validateRequestedMode,
   validateModeEvidenceUrl,
   versionSatisfiesRangeWithNpm,
 } = require('../validate-i18n-package');
@@ -52,6 +53,26 @@ test('uses shared package capabilities for known framework support', () => {
   assert.equal(packageSupportsFramework('react-i18next', 'react'), true);
   assert.equal(packageSupportsFramework('@angular/localize', 'react'), false);
   assert.equal(packageSupportsFramework('astro-built-in', 'astro'), true);
+});
+
+test('blocks package validation for temporarily unavailable modes', () => {
+  assert.equal(validateRequestedMode('angular', 'runtime').available, true);
+  assert.throws(
+    () => validateRequestedMode('angular', 'static'),
+    (error) => {
+      assert.equal(error.code, 'angular-static-temporarily-unavailable');
+      assert.match(error.message, /temporarily unavailable/);
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateRequestedMode('astro', 'static'),
+    (error) => {
+      assert.equal(error.code, 'astro-static-temporarily-unavailable');
+      assert.match(error.message, /No Astro localization mode is currently available/);
+      return true;
+    }
+  );
 });
 
 test('rejects prereleases without explicit confirmation', () => {

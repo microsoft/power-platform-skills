@@ -818,6 +818,19 @@ Once the scaffold loader is gone, `public/scaffold-status.json` is just dead wei
 
 ### 5.7 Offer Additional Languages
 
+Query the centralized add-localization availability before offering the child
+workflow:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" mode-availability --framework "<react|vue|angular|astro>"
+```
+
+If `availableModes` is empty, explain that localization is temporarily
+unavailable for the selected framework using the returned reason, set
+`LOCALIZATION_REQUESTED=false`, and do not ask the additional-languages
+question. This currently applies to Astro. Do not hardcode a separate
+framework availability list in create-site.
+
 Ask whether more languages should be added now:
 
 > **Would you like to add more languages now?**
@@ -1020,7 +1033,8 @@ not asked to reproduce the automated audit.
 6. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
    - `/add-localization` — Add or extend SPA languages (suggest only when
-     `LOCALIZATION_REQUESTED=false`)
+     `LOCALIZATION_REQUESTED=false` and the centralized availability result
+     contains at least one available mode)
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.

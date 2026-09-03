@@ -143,6 +143,8 @@ const SAMPLE_DATA = {
   CONFIGURATION_DATA: {
     package: {
       value: 'react-i18next 15.0.0',
+      name: 'react-i18next',
+      version: '15.0.0',
       status: 'new',
       verification: 'verified',
       selection: 'recommended',
@@ -568,6 +570,81 @@ test('rejects contradictory source roles, duplicate locales, and incomplete find
   assert.equal(findingResult.status, 1);
   assert.match(findingResult.stderr, /line must be a positive integer/);
   assert.match(findingResult.stderr, /remediation must be a non-empty string/);
+});
+
+test('rejects plans for temporarily unavailable localization modes', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'localization-plan-'));
+  const angularOutput = path.join(tempDir, 'angular-static.html');
+  const angularStatic = {
+    ...SAMPLE_DATA,
+    FRAMEWORK: 'Angular',
+    CONFIGURATION_DATA: {
+      ...SAMPLE_DATA.CONFIGURATION_DATA,
+      package: {
+        ...SAMPLE_DATA.CONFIGURATION_DATA.package,
+        value: '@angular/localize 19.1.0',
+        name: '@angular/localize',
+        version: '19.1.0',
+      },
+      mode: {
+        ...SAMPLE_DATA.CONFIGURATION_DATA.mode,
+        value: 'static',
+      },
+    },
+  };
+  const angularResult = run(angularStatic, angularOutput);
+  assert.equal(angularResult.status, 1);
+  assert.match(angularResult.stderr, /Angular static localization is temporarily unavailable/);
+  assert.equal(fs.existsSync(angularOutput), false);
+
+  const astroOutput = path.join(tempDir, 'astro-static.html');
+  const astroStatic = {
+    ...angularStatic,
+    FRAMEWORK: 'Astro',
+    CONFIGURATION_DATA: {
+      ...angularStatic.CONFIGURATION_DATA,
+      package: {
+        ...angularStatic.CONFIGURATION_DATA.package,
+        value: 'Astro built-in i18n',
+        name: 'astro-built-in',
+        version: 'built-in',
+      },
+    },
+  };
+  const astroResult = run(astroStatic, astroOutput);
+  assert.equal(astroResult.status, 1);
+  assert.match(astroResult.stderr, /No Astro localization mode is currently available/);
+  assert.equal(fs.existsSync(astroOutput), false);
+});
+
+test('rejects a known package that does not match the planned framework mode', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'localization-plan-'));
+  const output = path.join(tempDir, 'package-mismatch.html');
+  const mismatch = {
+    ...SAMPLE_DATA,
+    FRAMEWORK: 'Angular',
+    CONFIGURATION_DATA: {
+      ...SAMPLE_DATA.CONFIGURATION_DATA,
+      package: {
+        ...SAMPLE_DATA.CONFIGURATION_DATA.package,
+        value: '@angular/localize 19.1.0',
+        name: '@angular/localize',
+        version: '19.1.0',
+      },
+      mode: {
+        ...SAMPLE_DATA.CONFIGURATION_DATA.mode,
+        value: 'runtime',
+      },
+    },
+  };
+
+  const result = run(mismatch, output);
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /@angular\/localize.*angular static localization, not angular runtime/
+  );
+  assert.equal(fs.existsSync(output), false);
 });
 
 test('rejects invalid JSON and refuses to overwrite an existing plan', () => {
