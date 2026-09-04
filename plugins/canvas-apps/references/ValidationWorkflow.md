@@ -300,15 +300,20 @@ Immediately before the summary:
    no failed row, and has passed its required validation.
 2. Confirm no delegated agent remains running or queued and every app, planning, and
    acceptance-artifact write is complete.
-3. Call `compile_canvas`, even when the clean-candidate compile succeeded.
-4. After it succeeds, do not call `edit`, `create`, `apply_patch`, or `sync_canvas`.
-   Return the summary without another workspace mutation.
-5. If any later write or repair occurs, repeat this gate. A compile predating the last
-   successful write is not final proof.
+3. Cross the finalization barrier: from this point onward, do not invoke `Task`, resume an
+   agent, request another QA pass, or perform another inspection. If any of those are still
+   needed, remain before the barrier and complete them first.
+4. Call `compile_canvas`, even when the clean-candidate compile succeeded.
+5. After it succeeds, make no further tool call. Return the summary immediately. In
+   particular, do not call `Task`, `read_agent`, `edit`, `create`, `apply_patch`,
+   `sync_canvas`, `view`, `glob`, `rg`, `Bash`, or another MCP tool.
+6. If any later tool call, delegation, write, inspection, or repair occurs, the compile is
+   no longer final. Finish that work, confirm every agent has returned, and repeat this
+   entire gate. A compile predating later activity is not final proof.
 
-The final successful `compile_canvas` must be the final authoring operation. This ordering
-also lets external generation proof distinguish a completed app from an app changed after
-validation.
+The final successful `compile_canvas` must be the final tool call. This ordering prevents
+late agent waves from changing the workspace and lets external generation proof
+distinguish a completed app from an app changed after validation.
 
 ## 3. Summary
 

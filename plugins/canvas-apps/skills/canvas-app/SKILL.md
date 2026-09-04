@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.6
+version: 3.0.7
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.6`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.7`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -169,6 +169,10 @@ After all builders finish:
 - Confirm every dispatched builder and every targeted self-QA follow-up has returned before
   final validation begins. Do not leave a worker running or queued that can write after the
   final compile.
+- Treat final validation as a one-way barrier. Before crossing it, finish every `Task`,
+  `read_agent`, builder repair, QA follow-up, inspection, and evidence update that could
+  require another workspace change. Once final validation begins, do not launch or resume
+  an agent.
 - Check each builder's `Functional:` section before accepting its QA report. It must
   contain exactly one `PASS` trace per Required Action in that screen's brief, and each
   trace must name the precondition, control event, source/stable-ID operation,
@@ -255,8 +259,11 @@ discards prior fixes and does not converge.
 - Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
 - Complete every app, planning, and acceptance-artifact write before the final compile.
   The final successful `compile_canvas` must occur after the last `edit`, `create`, or
-  `apply_patch` and must be the final authoring operation before the summary. If any later
-  write or repair occurs, run `compile_canvas` again.
+  `apply_patch` and must be the final tool call before the summary. After it succeeds,
+  return the summary immediately without calling `Task`, `read_agent`, `view`, `glob`,
+  `rg`, `Bash`, another MCP tool, or any other tool. If any later tool call, delegation,
+  write, inspection, or repair occurs, the compile is no longer final: finish that work,
+  wait for every agent, and repeat the final generation-proof gate.
 
 ## Shared Invariants
 
