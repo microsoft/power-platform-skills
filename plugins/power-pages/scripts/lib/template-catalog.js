@@ -4,7 +4,6 @@ const fs = require('fs');
 const https = require('https');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const DEFAULT_OWNER = 'microsoft';
@@ -574,8 +573,14 @@ function repositoryDirectoryCheckoutRoot({ cacheRoot = getDefaultCacheRoot(), sh
   assertValidSha(sha);
   const pathError = validateSpaCodePath(directoryPath);
   if (pathError) throw new Error(pathError);
-  const key = crypto.createHash('sha256').update(directoryPath).digest('hex').slice(0, 16);
-  return path.join(cacheDirForSha(cacheRoot, sha), '.directory-checkouts', key);
+  // Keep cached content under a reserved leaf so a cached parent path and one of
+  // its descendants cannot overwrite each other.
+  return path.join(
+    cacheDirForSha(cacheRoot, sha),
+    '.directory-checkouts',
+    ...directoryPath.split('/'),
+    '.checkout'
+  );
 }
 
 function runGitCheckoutCommand(args, deps = {}) {
@@ -600,7 +605,7 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
   const pathError = validateSpaCodePath(directoryPath);
   if (pathError) throw new Error(pathError);
   const checkoutRoot = repositoryDirectoryCheckoutRoot({ cacheRoot, sha, directoryPath });
-  const localPath = path.join(checkoutRoot, ...directoryPath.split('/'));
+  const localPath = checkoutRoot;
   if (fsImpl.existsSync(checkoutRoot)) {
     const cachedError = validateDirectory(localPath);
     if (!cachedError) return { localPath, cached: true };
@@ -619,7 +624,8 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
     const partialPath = path.join(partialRoot, ...directoryPath.split('/'));
     const validationError = validateDirectory(partialPath);
     if (validationError) throw new Error(validationError);
-    fsImpl.renameSync(partialRoot, checkoutRoot);
+    fsImpl.renameSync(partialPath, checkoutRoot);
+    fsImpl.rmSync(partialRoot, { recursive: true, force: true });
   } catch (err) {
     fsImpl.rmSync(partialRoot, { recursive: true, force: true });
     throw err;

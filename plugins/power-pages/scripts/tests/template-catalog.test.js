@@ -22,6 +22,7 @@ const {
   validateZipContainsSolution,
   validateSpaCodeDirectory,
   validateSpaCodePath,
+  repositoryDirectoryCheckoutRoot,
   templateVariantRoot,
   zipFileNames,
   validateCatalogShape,
@@ -603,7 +604,10 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
 
   assert.equal(result.ok, true);
   assert.equal(result.cached, false);
-  assert.equal(result.variantPath.endsWith(path.join('templates', 'spa', 'company', 'variants', 'react')), true);
+  assert.equal(
+    result.variantPath,
+    repositoryDirectoryCheckoutRoot({ cacheRoot: dir, sha: SHA, directoryPath: variantPath })
+  );
   assert.equal(result.solutionPath, path.join(result.variantPath, 'solution', 'Company_1_0_0_0.zip'));
   assert.equal(result.spaCodePath, path.join(result.variantPath, 'spa-code'));
   assert.deepEqual(cached, { ...result, cached: true });
