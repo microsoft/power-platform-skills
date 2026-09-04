@@ -13,6 +13,20 @@ const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 // The migration's pure intent helpers, used to drive the generic surface in the CONTRACT tests below.
 const { formEventsRegionIntent, findFieldCellPointer } = require('../lib/artifact-intent.js');
 
+// Every app the PLUGIN creates carries an icon: `ensureAppIcon` (sdk-build.js) resolves the author's
+// `spec.app.icon` or generates an SVG web resource, and `appDef` passes its id as
+// `iconWebResourceId`. These tests drive the SDK directly, so they must supply one too or they are
+// exercising a path production never takes.
+//
+// The SDK now REQUIRES it: `appmodule.webresourceid` is a required attribute, and when no explicit id
+// is given it auto-resolves an IMAGE web resource (PNG/JPG/GIF/ICO/SVG) and throws
+// `APP_ICON_UNRESOLVED` if the environment has none. Previously it fell back to ANY unmanaged web
+// resource — which on an org whose images are all managed returned a JAVASCRIPT file, and the platform
+// rejected the create with an opaque "dependent component WebResource does not exist". Failing fast
+// with a clear message is the better behaviour; these tests just have to stop relying on the old
+// silent fallback. A synthetic id is right here — the mock transport never dereferences it.
+const APP_ICON_ID = '11111111-2222-3333-4444-555555555555';
+
 // Track temp workspace dirs created by the smoke tests and remove them once the suite finishes,
 // so repeated runs don't leak directories into the test runner's temp folder.
 const tempDirs = [];
@@ -70,7 +84,11 @@ test('pushArtifact builds a real FormXML payload headlessly', async () => {
   const sdk = freshSdk(capture);
   const form = sdk.createArtifact('form', { entityLogicalName: 'account', name: 'Push Test Form' });
   const result = await sdk.pushArtifact('form', form.id);
-  assert.strictEqual(result.success, true);
+  // The SDK renamed PushResult.success -> saved to force call sites to distinguish "the write
+  // committed" from "the runtime serves it" (`shipped`, true only on a VERIFIED publish). Accept
+  // either spelling so this pins the CONTRACT rather than one bundle generation.
+  assert.strictEqual(result.saved !== undefined ? result.saved : result.success, true);
+  assert.strictEqual(result.shipped, false, 'a push with no publish requested is saved but NOT shipped');
   assert.ok(capture.length > 0, 'a POST should have been issued');
   const body = capture[0].body;
   assert.ok(typeof body.formxml === 'string' && body.formxml.includes('<form'), 'payload carries FormXML');
@@ -125,7 +143,7 @@ test('CONTRACT: a canonical /bag/c <events> region wires a handler into the reta
     // retired addFormEventHandler is gone). The adapter mints the handlerUniqueId at serialize.
     const bagC = (fetched.bag && fetched.bag.c) || [];
     const nextI = bagC.reduce((m, e) => Math.max(m, e.i), -1) + 1;
-    sdk.addElement('form', FID, '/bag/c', { i: nextI, node: formEventsRegionIntent([{ event: 'onload', library: 'new_smoke.js', function: 'Ticket.onLoad' }]) });
+    await sdk.addElement('form', FID, '/bag/c', { i: nextI, node: formEventsRegionIntent([{ event: 'onload', library: 'new_smoke.js', function: 'Ticket.onLoad' }]) });
     await sdk.pushArtifact('form', FID);
     assert.match(pushedXml, /Ticket\.onLoad/, 'the handler function is baked into the pushed formxml');
     assert.match(pushedXml, /handlerUniqueId/, 'the adapter minted the handlerUniqueId the caller omitted');
@@ -156,9 +174,9 @@ test('CONTRACT: removeElement drops a bound field from a fetched form (reconcile
   const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
   await sdk.fetchArtifact('form', FID);
-  const ptr = findFieldCellPointer(sdk.getArtifact('form', FID), 'new_tier');
+  const ptr = findFieldCellPointer(await sdk.getArtifact('form', FID), 'new_tier');
   assert.ok(ptr, 'the cell hosting the dropped field is located in the canonical tree');
-  sdk.removeElement('form', FID, ptr);
+  await sdk.removeElement('form', FID, ptr);
   await sdk.pushArtifact('form', FID);
   assert.ok(/datafieldname="new_name"/.test(pushedXml), 'the kept field survives the push');
   assert.ok(!/datafieldname="new_tier"/.test(pushedXml), 'the removed field is gone from the pushed formxml');
@@ -285,7 +303,7 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   };
   const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
-  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components });
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'special-char titles/URLs must serialize, not throw');
   assert.ok(sitemapXml, 'the sitemap was serialized and posted');
   assert.match(sitemapXml, /&amp;/, 'ampersands in titles/URLs are escaped');
@@ -293,15 +311,22 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   assert.ok(!/<Title[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(sitemapXml), 'no raw unescaped ampersand inside a Title');
 });
 
-test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures } result surfacing child-cleanup failures (teardown relies on this to report orphaned genpage rows)', async () => {
-  // The app (and its sitemap) delete atomically, but a cascaded GENERATIVE-PAGE delete fails (a
-  // locked/500 row). The old void contract swallowed this; the skill's teardown reads
-  // result.failures to flag the orphan, so the bundle MUST keep returning the structured result
-  // after a re-vendor.
+test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures, retained } result and RETAINS generative pages rather than cascading them', async () => {
+  // The app (and its sitemap) delete atomically. A generative page referenced by the sitemap is
+  // deliberately NOT deleted: a `uxagentproject` is REFERENCED by an app, not owned by one — another
+  // app's sitemap, or a form's UxAgentControl `RefId`, can point at the same row — so the SDK reports
+  // it in `retained[]` and leaves the decision to the caller. `scripts/lib/sdk-teardown.js` is that
+  // caller: it deletes only the pages the build's own page manifest records as authored here, and
+  // lets Dataverse's dependency graph reject anything still referenced.
   //
-  // The sitemap is deliberately NOT the failing row here: it is no longer an independently
-  // addressable cascade target — it is deleted in the SAME atomic $batch change set as the app, so
-  // a sitemap failure rejects the whole call instead of landing in failures[].
+  // This test previously asserted the OPPOSITE contract — that a failed cascaded genpage delete set
+  // `success=false` and landed in `failures[]`. That was written against a bundle which cascaded
+  // genpage deletes. Keep it pinned to `retained[]`: silently reverting to a cascade would delete a
+  // page another app still surfaces.
+  //
+  // The sitemap is deliberately not the failing row here: it is not an independently addressable
+  // cascade target — it is deleted in the SAME atomic $batch change set as the app, so a sitemap
+  // failure rejects the whole call instead of landing in failures[].
   const APP_ID = '77777777-7777-7777-7777-777777777777';
   const APP_UNIQUE = '88888888-8888-8888-8888-888888888888';
   const SITEMAP_ID = '99999999-9999-9999-9999-999999999999';
@@ -348,9 +373,13 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
   const sdk = sdkWith(client);
   const result = await sdk.deleteAppCascade(APP_ID, APP_UNIQUE);
   assert.ok(result && typeof result === 'object', 'deleteAppCascade returns a structured result (not void)');
-  assert.strictEqual(result.success, false, 'a failed child cleanup makes success=false');
   assert.ok(Array.isArray(result.deleted) && result.deleted.some((d) => d.type === 'app'), 'the primary app delete is reported in deleted[]');
-  assert.ok(Array.isArray(result.failures) && result.failures.some((f) => f.type === 'genPage'), 'the orphaned generative-page cleanup failure is surfaced in failures[]');
+  assert.strictEqual(result.success, true, 'retaining a referenced generative page is not a failure');
+  assert.deepStrictEqual(result.failures, [], 'nothing was attempted against the genpage, so nothing failed');
+  assert.ok(
+    Array.isArray(result.retained) && result.retained.some((r) => r.type === 'genPage' && r.id === GENPAGE_ID),
+    'the referenced generative page is surfaced in retained[] so the caller can decide'
+  );
 });
 
 test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids] } } (the sample-data phase reads createdIds to bind children)', async () => {
@@ -530,3 +559,124 @@ test('CONTRACT: the vendored bundle still carries the exact SDK role-ownership m
 });
 
 
+
+// A custom nav glyph — and the download->build round-trip — depend on a PLATFORM-REF `VectorIcon`
+// surviving serialization onto an ENTITY subarea. Reading the minified bundle cannot prove that; only
+// the serialized payload can, so assert the bytes the SDK would POST.
+test('CONTRACT: a platform-ref VectorIcon on an Entity subarea reaches the serialized sitemap XML', async () => {
+  const { createMakerSdk } = require(BUNDLE);
+  const { appDef } = require('../lib/sdk-build.js');
+  const { buildSmokeSpec } = require('../smoke-eval.js');
+  const spec = buildSmokeSpec('t');
+  const def = appDef(spec, { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {} });
+
+  let sitemapXml = '';
+  const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
+  // The push resolves each sitemap table to an OData reference and reads the pinned components back,
+  // both fail-closed — answer those reads (same shape as the escaping contract above) so an unrelated
+  // refusal cannot masquerade as an icon-serialization failure.
+  const httpClient = {
+    get: async (url) => {
+      const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
+      if (/\/appmodulecomponents/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: TABLE_METADATA_ID, componenttype: 1 }] } };
+      if (/\/appmodules/.test(url)) {
+        const row = { appmoduleid: '11111111-1111-1111-1111-111111111111', appmoduleidunique: '33333333-3333-3333-3333-333333333333' };
+        return { status: 200, headers: {}, body: /RetrieveUnpublishedMultiple/i.test(url) ? { value: [row] } : row };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
+    post: async (url, body) => {
+      if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) sitemapXml = String(body.sitemapxml);
+      return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} };
+    },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: mkTempWorkspace('sdk-vecicon-'), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_vecapp', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
+  await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'the smoke spec must push without a component-verification refusal');
+
+  assert.ok(sitemapXml, 'the sitemap was serialized and posted');
+  assert.match(sitemapXml, /<SubArea[^>]*Entity="new_torder"[^>]*VectorIcon="\/WebResources\/new_tvec\.svg"/, 'platform-ref VectorIcon is serialized onto the Entity subarea');
+  // The bare token is absent only because appDef already removed it — asserting that here would
+  // re-test appDef, not the bundle. The test below establishes what the BUNDLE actually does.
+  assert.ok(!/VectorIcon="Grid"/.test(sitemapXml), 'appDef removed the bare token before the payload reached the SDK');
+});
+
+// Establishes WHERE the bare-Fluent-token guard lives, by pushing a hand-built siteMap that bypasses
+// appDef entirely. The vendored SDK happily serializes `VectorIcon="Grid"` onto an Entity subarea —
+// it has no such guard — which is exactly why `appDef` must drop it (lib/sdk-build.js) and why the
+// drop cannot be delegated to the bundle. If a future re-vendor ADDS a guard, this test fails and
+// tells us the defense moved, rather than silently leaving two layers that both assume the other.
+test('CONTRACT: the vendored SDK does NOT filter a bare Fluent VectorIcon — appDef is the only guard', async () => {
+  const { createMakerSdk } = require(BUNDLE);
+  let sitemapXml = '';
+  const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
+  const httpClient = {
+    get: async (url) => {
+      const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
+      if (/\/appmodulecomponents/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: TABLE_METADATA_ID, componenttype: 1 }] } };
+      if (/\/appmodules/.test(url)) {
+        const row = { appmoduleid: '11111111-1111-1111-1111-111111111111', appmoduleidunique: '33333333-3333-3333-3333-333333333333' };
+        return { status: 200, headers: {}, body: /RetrieveUnpublishedMultiple/i.test(url) ? { value: [row] } : row };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
+    post: async (url, body) => { if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) sitemapXml = String(body.sitemapxml); return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} }; },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: mkTempWorkspace('sdk-vecraw-'), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  const siteMap = { areas: [{ id: 'area_0', title: 'Main', groups: [{ id: 'g0', title: 'G', subAreas: [
+    { id: 's0', title: 'Orders', type: 'Entity', entity: 'new_torder', vectorIcon: 'Grid' },
+  ] }] }] };
+  const art = sdk.createArtifact('app', { name: 'Raw Token', uniqueName: 'new_rawtoken', description: '', siteMap, components: { forms: [], views: [], charts: [] }, iconWebResourceId: APP_ICON_ID });
+  await sdk.pushArtifact('app', art.id);
+  assert.match(sitemapXml, /<SubArea[^>]*Entity="new_torder"[^>]*VectorIcon="Grid"/, 'the bundle serializes a bare token when handed one — so the plugin must not hand it one');
+});
+
+test('CONTRACT: vendored publishArtifact RESOLVES with publish.kind on failure — it does NOT throw', async () => {
+  // This is the contract whose change slipped through unnoticed. The SDK moved publishArtifact from
+  // throwing to reporting by value; the engine discarded the result at all nine call sites, so every
+  // publish failure became invisible and `ok: true` was reported anyway. There was a method-PRESENCE
+  // guard for publishArtifact but no BEHAVIOURAL one, which is exactly the gap that let it land.
+  //
+  // A throw would also silently re-arm the transient-retry path, and a by-value failure would silently
+  // disarm it, so which one the bundle does is load-bearing and must be pinned rather than assumed.
+  const client = {
+    get: async (url) => {
+      if (/EntityDefinitions\(LogicalName=/i.test(url)) {
+        const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x';
+        return { status: 200, headers: {}, body: { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln, PrimaryIdAttribute: `${ln}id`, PrimaryNameAttribute: 'name', SchemaName: ln, IsCustomEntity: true, ObjectTypeCode: 10001 } };
+      }
+      if (/\/systemforms\(/.test(url)) return { status: 200, headers: {}, body: { '@odata.etag': 'W/"1"', formid: FID, formxml: '<form/>', name: 'F', objecttypecode: 'account', type: 2 } };
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
+    // Only PublishXml fails; everything else succeeds, so this isolates the publish half.
+    post: async (url) => (/PublishXml/i.test(url)
+      ? { status: 500, headers: {}, body: { error: { message: 'PublishXml exploded' } } }
+      : { status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    postRaw: async () => ({ status: 200, headers: {}, body: '' }),
+  };
+  const FID = '11111111-1111-1111-1111-111111111111';
+  const sdk = sdkWith(client);
+  await sdk.fetchArtifact('form', FID);
+
+  let threw = null;
+  let result = null;
+  try { result = await sdk.publishArtifact('form', FID); } catch (e) { threw = e; }
+
+  assert.strictEqual(threw, null, 'publishArtifact must RESOLVE on a failed publish, not throw — the engine reads the result');
+  assert.ok(result && typeof result === 'object', 'it returns a structured result');
+  assert.ok(result.publish && result.publish.kind === 'failed', `publish.kind must be 'failed'; got ${JSON.stringify(result.publish)}`);
+  assert.strictEqual(result.shipped, false, 'a failed publish is not shipped');
+});

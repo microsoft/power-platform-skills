@@ -50,6 +50,11 @@ exactly, record an explicit approximation and reason; never silently rename butt
 "drag-style", call buttons "handles", or put copy in the app that promises an interaction
 the controls do not provide.
 
+Plan in functional-first order: shared state and stable identity, complete executable
+workflows, observable evidence, responsive/accessibility behavior, then visual polish.
+When a control or screen budget is tight, remove decorative complexity before omitting,
+combining, or weakening a requested action.
+
 Use `ModernTabList` only when it switches visible panels within one screen. For navigation
 between separate screen files, plan a repeated ModernButton row with direct `OnSelect:
 =Navigate(...)` actions and an explicit current-screen appearance.
@@ -60,8 +65,9 @@ Read:
 
 - `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
 - `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
-- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, colour contrast
+- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
 - `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
+- `${PLUGIN_ROOT}/references/BehaviorGuide.md` — action contracts, lifecycle behavior, mutation evidence
 - `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
 - `${PLUGIN_ROOT}/references/PlanTemplates.md` — the exact shape of every artifact you write
 
@@ -89,6 +95,13 @@ ManualLayout.
    recorded, because the builder cannot look it up.
 5. Call API and schema detail tools only for resources involved in the edit.
 
+### Component refresh checkpoint
+
+Immediately before auditing properties, re-run `describe_control` for
+every Canvas or Code Component used by the plan to ensure any imported or updated components made in Studio are available.
+Especially if a successful compile applied local component-definition changes, since the previous lookup.
+Treat earlier component responses as stale; builders cannot refresh them.
+
 ## 3. Audit Control Properties
 
 Before writing plans:
@@ -111,29 +124,85 @@ Before writing plans:
    - Compute a toggle's next value once before `Patch` or `UpdateIf`, then reuse that value
      for both the write and its confirmation text. Do not inspect the mutated `ThisItem`
      afterward to decide what action occurred.
-   - When failed-submit validation becomes visible, clear it from each relevant input's
-     `OnChange`, or gate visibility on the fields still being invalid. Do not leave an
-     error visible after all required inputs are valid.
+   - Derive validation visibility and submit availability from the current input values.
+     If validation must wait for a submit attempt, combine one attempt flag with the
+     current invalid expression; do not maintain or clear separate validity flags in each
+     input's `OnChange`.
 7. Define data-field semantics once and reuse them. If a task has `ScheduledDate`,
    `DueDate` and `CompletedDate`, state which field drives calendar placement, which date
    the task list displays, and which field the monthly report groups by. Seed data,
    visible labels and every filter must agree; do not display a due date while silently
    filtering the calendar and report by a different date.
 8. For each semantic display control, record its visible value property in the brief
-   (`Badge.Content`, card slots, avatar identity). Accessible labels and color bindings do
-   not substitute for visible content.
+   (`Badge.Content`, card slots, avatar identity). For every primary-record row or detail,
+   name the canonical human-readable identity field and the text control/property that
+   renders its full value. Avatar initials, icons, IDs, accessible labels, and color
+   bindings do not substitute for visible identity text.
 9. Before selecting `ModernDataGrid`, confirm its current definition can declare every
    requested visible column in YAML. If it exposes no Fields/Columns contract and there is
    no existing configured grid to preserve, plan a sortable Gallery table with explicit
    headers instead.
+10. Classify the approved requirements with the capability inventory in
+    `${PLUGIN_ROOT}/references/BehaviorGuide.md`. Use it to find missing behaviors, not to invent
+    unrequested features.
+11. Build one Action Contract row for each requested or approved action. Do not infer
+    universal CRUD for supporting entities, but treat role-scoped management of primary
+    records as requiring reachable list/detail, correction/update, and remove/cancel
+    flows. A named role that must "manage all" primary records therefore requires separate
+    list/select, edit/save, and remove/cancel contracts; a read-only queue is insufficient.
+    Split create, edit, delete, search, filter, approve, reject, period, and export
+    behaviors into separate rows when requested or implied by that role-scoped lifecycle.
+    When review has approved and rejected outcomes, require both Approve and Reject/Decline
+    contracts on the same eligible record surface. A lone decision is an incomplete plan;
+    phone density may change their arrangement but may not remove either contract.
+12. For every Action Contract, name its eligible precondition, source of truth, immutable
+    record identity, exact event, source transition, postcondition, observer formula, and
+    visible evidence. Verify the observer reads the same source and field the event writes.
+    A control label and an `OnSelect` formula are not a complete contract.
+13. For every mutation, name the target source, exact data operation, refresh or collection
+    update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
+    stable ID, or deletion snapshot. Record the mutation's **write set** and **proof set** in
+    its Action Contract. The write set lists every field or status the handler changes. The
+    proof set lists the identity plus the values the receipt renders. For create and edit,
+    proof every user-entered or user-selected field in the write set; never omit a field merely
+    because the destination list does not display it. Specify the receipt control, visibility
+    state, and one labeled binding per proof-set field. The changed list, detail, dashboard,
+    or metric must also read the updated source, but navigation, a notification, or a record
+    somewhere in a longer list cannot replace the receipt.
+14. Verify every Action Contract has a reachable entry point and owner screen. Include
+    supporting setup actions when they are necessary to exercise an explicitly requested
+    lifecycle, comparison, relationship, or ranking with local/mock data.
+15. For create and edit contracts, specify every required input, requiredness, finite-choice
+    source, concrete option values, default/placeholder, stable record ID, and post-save
+    destination. For short static choices, prefer visible radio or button choices, then a
+    dropdown that commits by click or tap; do not plan a searchable combobox unless the set
+    requires search or allows free-form entry. Give required short choices valid defaults
+    when the business rule permits them. The edit contract must name the visible per-record
+    Edit entry point, selected-record state, prepopulation formulas, stable-ID update, cancel
+    behavior, mutation write set, and receipt proof set shown after save. Reject the contract
+    if any submitted visible field appears in the write set but not the proof set.
+16. Write a `## Functional Test Matrix` with at least one deterministic Given/When/Then
+    success scenario per Action Contract and one scenario for each required boundary or
+    negative path. Use concrete seeded IDs and values for local/mock data. Each `Then`
+    names the source postcondition and the exact observer/evidence surface that proves it.
+    In EDIT mode, add regression scenarios for existing behaviors whose source, fields,
+    controls, or observer formulas are touched.
+17. For every selector or filter, couple the concrete option source, readable option
+    formula, pointer-committed selected value, consumer predicate, active-selection
+    indicator, and clear behavior. Apply the short-choice rule to filters as well as form
+    inputs. Seed at least two matching records and one non-matching record for every
+    filter scenario.
 
 Property support is per-control. Never transfer radius, shadow, padding, or other styling
 properties by analogy. Text styling in particular is spelled differently across families:
 the modern React controls use `Color` and `Size`, `Badge` uses `FontColor` and `FontSize`,
 and `ModernCard` uses `TitleColor`/`TitleSize` with a single `BorderRadius`.
 
-Never plan a `Control:` value with an `@version` suffix. Use the bare name returned by
-`list_controls`.
+Use `list_controls` only to discover the name passed to `describe_control`. For every
+planned control type, copy the `Control:` value and all other required creation keywords
+from the `describe_control` response verbatim into the control definition and screen
+brief. Never strip an `@version` suffix or infer `ComponentName`,
+`ComponentLibraryUniqueName`, `Variant`, or `Layout` from the list result.
 
 ## 4. Size the Screens
 
@@ -150,7 +219,7 @@ clear navigation is cheaper than a screen that no builder can write correctly in
 and no user can scan. Prefer splitting by task (entry vs. history vs. analysis) rather
 than by control count.
 
-## 5. Specify the Narrow-Width Behaviour
+## 5. Specify the Narrow-Width Behavior
 
 Builders implement exactly what the brief specifies. If the brief describes only the
 desktop composition, the screen will break on a phone — this is the most frequently
@@ -163,11 +232,13 @@ For every screen brief, state explicitly:
   breakpoint consistently; when none is specified, use 640 for phone and 1024 for tablet.
 - That responsive layout properties derive directly from `App.Width`, `Parent.Width` or
   `Self.Width`. Do not initialize layout variables such as `varIsMobile` or `varColumns`
-  in `OnVisible`; they can be unset in Studio and stale after resize.
+  in `OnVisible`; they can be unset in Studio and become stale after resize.
 - That the root container scrolls (`LayoutOverflowY: =LayoutOverflow.Scroll`).
+- That the sole responsive root uses exact `Width: =Parent.Width`,
+  `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`.
 - That the screen-level `Children:` list contains only that root, with every visible
   section nested under the root's `Children:` list.
-- The foreground colour for text on every coloured surface, so nothing renders
+- The foreground color for text on every colored surface, so nothing renders
   dark-on-dark.
 - A width or `LayoutMinWidth` for status badges and KPI values that fits the longest value
   they can display.
@@ -186,8 +257,17 @@ For every screen brief, state explicitly:
   gaps, padding and the resulting section size. Presence of a breakpoint is not enough.
 - Group each visible label with its corresponding input in one field container before
   the row stacks.
+- For galleries with record actions, define the phone row as an action-first composition:
+  render the canonical identity's full text, status, and required lifecycle actions by
+  stacking them or placing the actions in an immediately visible overflow/detail entry.
+  Avatar initials do not satisfy identity. When Approve and Reject/Decline are required,
+  keep both on the same eligible row or in the same immediately reachable detail. Do not
+  preserve a desktop column layout that moves Edit, approve, reject, or remove beyond the
+  canvas width, and do not drop an action to make the row fit.
 - For bounded local galleries of about ten rows or fewer, size the gallery to all rows
-  and rely on the root scroll; do not plan a hidden nested scroll region.
+  and rely on the root scroll; do not plan a hidden nested scroll region. Dynamic gallery
+  height is valid, but derive it from `CountRows(<the same source/filter used by Items>)`,
+  never from rendered-item state such as `Self.AllItemsCount`.
 
 ## 6. Assign the Control Name Space
 
@@ -198,8 +278,9 @@ can prevent one.
 1. Assign every dispatch row a short, distinct `Name Prefix` derived from its screen
    (`Disc`, `Detail`, `Itin`, `Spk`, `Guide`). No two rows share a prefix.
 2. Record the prefix in the dispatch table and in that screen's brief.
-3. Name every control in a brief with its prefix already applied — `DiscNavBar`,
-   `DetailNavBar` — never a bare `NavBar`.
+3. Follow the standard control-type abbreviation, then apply the screen prefix as a
+   namespace — `conDiscNavBar`, `conDetailNavBar`, `btnDiscBack` — never a bare `NavBar`
+   or `btnBack`.
 4. When a UI block repeats across screens (nav bars, headers, toolbars), describe it
    once in the shared plan as a **pattern**, and state explicitly that each screen
    instantiates it under its own prefix. Never hand builders a literal block of shared
@@ -242,6 +323,12 @@ Do not edit any `.pa.yaml` file. Put all required app-level edits in the plan in
 
 If a group is empty, write `None` for it.
 
+### All modes
+
+Put requested screen or component-definition ordering in `## Editor State Changes` as
+the exact final `ScreensOrder` and `ComponentDefinitionsOrder` lists. Write `None` when
+the current Studio order should remain unchanged.
+
 ## 8. Write Progressive Plan Artifacts
 
 Follow `${PLUGIN_ROOT}/references/PlanTemplates.md`.
@@ -251,10 +338,13 @@ Follow `${PLUGIN_ROOT}/references/PlanTemplates.md`.
 Write only orchestration information:
 
 - Mode and requirements
+- Requirement coverage and complete Action Contracts
+- Functional Test Matrix
 - Working directory
 - Compact discovery summary
 - Dispatch table
 - EDIT-mode App changes
+- Editor state changes
 
 The dispatch table columns are:
 
@@ -293,8 +383,11 @@ Each brief contains only what that builder needs:
 - For every control type used on that screen: the complete list of valid input
   property names, plus the full `Enum name:` and the **compile-ready enum literal** for
   each enum property the screen actually sets
-- Every literal seed value the screen needs: dropdown `Items` that are not bound to a
-  collection, `Default` values, static option lists, seeded names
+- Every inline literal value the screen writes directly: screen-local `Items`, `Default`
+  values, and static option lists
+- Every Action Contract and Functional Test Matrix scenario owned or exercised by the
+  screen, including preconditions, source/ID, transition, observer, evidence, and boundary
+  behavior
 
 Two things a builder cannot recover on its own, and both cost a full round trip:
 
@@ -302,9 +395,9 @@ Two things a builder cannot recover on its own, and both cost a full round trip:
   not `values: 0, 1, 2, 3, 4, 5, Auto`. A member list is transcribed verbatim, and a member
   starting with a digit then fails to compile with `Expected operator` — a diagnostic that
   never mentions enums.
-- **Enumerate literal data instead of describing it.** A builder has no discovery tools and
-  cannot read `App.pa.yaml`. "The six seeded speaker names" is unresolvable and returns
-  `Status: Blocked`; the six names are not.
+- **Write inline literal data instead of describing an unstated set.** When a screen owns
+  a small local table, include its exact records in the brief. When App owns the records,
+  bind to the named collection instead of duplicating or paraphrasing its seed data.
 
 Do not paste the whole `describe_control` response. The property-name list is what
 prevents `Unknown property`, and the `Enum name:` lines are what prevent
@@ -338,12 +431,13 @@ Planning complete.
 
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
 |--------|--------|-------------|----------|-------------|--------------|
-| [Create / Modify] | [Screen] | [absolute file path] | [key] | [prefix] | [absolute brief path] |
+| [Create / Modify] | [Screen] | `[working directory]/[file].pa.yaml` | [key] | [prefix] | `[working directory]/[file-base].screen-plan.md` |
 
-Plan index: [absolute plan index path]
-Shared plan: [absolute shared plan path]
-App file: [[absolute App.pa.yaml path] for CREATE, "unchanged" for EDIT]
+Plan index: `[working directory]/canvas-app-plan.md`
+Shared plan: `[working directory]/canvas-app-shared.md`
+App file: [`[working directory]/App.pa.yaml` for CREATE, "unchanged" for EDIT]
 App compile: [Clean / diagnostics remaining, with detail]
+Functional scenarios: [N total; all assigned to screen briefs / defects]
 ```
 
 ## Constraints
@@ -352,11 +446,12 @@ App compile: [Clean / diagnostics remaining, with detail]
 - Do not edit existing `.pa.yaml` files in EDIT mode.
 - Call `compile_canvas` only to validate CREATE-mode `App.pa.yaml`. Do not use it to
   chase screen-file diagnostics; the orchestrator owns full-app validation.
-- Do not edit `[working directory]/_EditorState.pa.yaml`.
+- Do not edit `[working directory]/_EditorState.pa.yaml`; record ordering work in `## Editor State Changes` for the top-level orchestrator.
 - Do not embed all discovery output in the index or shared plan.
 - Every screen brief must be self-sufficient when read with the shared plan.
 - Never assign two screens the same control name prefix.
-- Never plan a `Control:` value carrying an `@version` suffix.
+- Never derive or normalize control creation keywords from `list_controls`; copy them
+  from `describe_control`.
 - When re-invoked to repair a defective brief, change only what the reported defect
   requires. Do not restructure the dispatch table, rewrite unaffected briefs, or redesign
   the app.

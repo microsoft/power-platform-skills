@@ -340,7 +340,7 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified',
+  'Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
@@ -349,8 +349,17 @@ WORKFLOW_ASSERTIONS.set(
     if (/node\s+--version\s*&&\s*pac\s+help/.test(log)) {
       return fail('node --version and pac help are chained with && (forbidden)');
     }
-    if (!/2\.\s*7|>=\s*2\.7|version\s+\d+\.\d+/i.test(log)) {
-      return fail('no PAC CLI version verification recorded');
+    // Parse the recorded PAC CLI version and enforce the contract (> 2.10.0), rather than merely
+    // matching version-shaped text — an older pac (e.g. 2.7.x) must fail. Anchor on the "PAC CLI" /
+    // "PowerPlatform CLI" phrase so the earlier `node --version → v20.x` line can't be mistaken for the
+    // pac version. Accepts the forms pac emits, e.g. "PAC CLI Version 2.11.0", "PAC CLI: 2.11.0",
+    // "Microsoft PowerPlatform CLI Version: 2.11.0+g06bb2eb (.NET 10.0.8)".
+    const m = /(?:PAC|PowerPlatform)\s+CLI(?:\s+Version)?[:\s]+v?(\d+)\.(\d+)(?:\.(\d+))?/i.exec(log);
+    if (!m) return fail('no PAC CLI version recorded (expected e.g. "PAC CLI Version 2.11.0")');
+    const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3] || 0)];
+    const gtMin = major > 2 || (major === 2 && (minor > 10 || (minor === 10 && patch > 0)));
+    if (!gtMin) {
+      return fail(`recorded PAC CLI version ${major}.${minor}.${patch} does not satisfy > 2.10.0`);
     }
     return pass();
   }

@@ -6,7 +6,7 @@
 
 ## Reference apps
 
-Microsoft Dynamics 365 Field Service mobile, Salesforce Field Service, ServiceTitan (light theme), the equipment-inspector Power Apps template (`pa-wrap-tools-1/templates/equipment-inspector`), Procore (light), Notion enterprise
+Microsoft Dynamics 365 Field Service mobile, Salesforce Field Service, ServiceTitan (light theme), the equipment-inspector Power Apps template (`plugins/mobile-apps/template`), Procore (light), Notion enterprise
 
 ## Gestalt
 
@@ -43,7 +43,7 @@ tone: professional-utilitarian
 
 ## Provenance
 
-- **Brand color `#007d48`** — pulled directly from `pa-wrap-tools-1/templates/equipment-inspector/src/components/EquipmentRow.tsx` line 7 ("Active — success green"). Identical to / adjacent to Microsoft Power Platform green family. Production-validated.
+- **Brand color `#007d48`** — pulled directly from `plugins/mobile-apps/template` line 7 ("Active — success green"). Identical to / adjacent to Microsoft Power Platform green family. Production-validated.
 - **Danger color `#d30005`** — same source, line 9 ("Out of Service — danger red"). Production-validated.
 - **Muted text `#707072`** — same source, line 8 ("Retired — muted").
 - **Icon-only `#9e9ea0`** — same source, line 70 (chevron-forward color).

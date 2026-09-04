@@ -322,7 +322,7 @@ Prompt:
   User request: <verbatim>
   Current section content: <verbatim>
   Working directory: <absolute path>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
+  Plugin root: ${PLUGIN_ROOT}
 
   Mode: edit (preserve existing decisions where the change doesn't affect them).
   Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
@@ -384,7 +384,7 @@ Apply sections in dependency order so screens always build against the current d
 1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
 2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
-4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
+4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
 6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
 
@@ -415,10 +415,10 @@ If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profi
 Run the local, no-network delta check:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
 
 ### Step 6 — Rebuild affected screens
 
@@ -447,6 +447,7 @@ Before spawning builders:
 Navigation/layout algorithm:
 
 - Read the approved `## Screens` Screen Map and Navigation Contracts.
+- Normalize every target file to its Expo route before editing. Reject duplicate normalized routes, especially `<parent>/[id].tsx` together with `<parent>/[id]/<child>.tsx`; move the detail contract to `<parent>/[id]/index.tsx` before builders run.
 - For every new route, create the parent folder and inner `_layout.tsx` when the route is nested.
 - For modal/formSheet/detail routes, add the correct `<Stack.Screen name="..." options={{ presentation: 'modal' | 'formSheet' }} />` in the owning folder layout.
 - For tab/root changes, patch only the route list in `app/(app)/_layout.tsx`; preserve auth/provider logic and imports not related to route registration.
@@ -521,8 +522,8 @@ node scripts/check-routes.js
 When screen files changed, run the mobile plugin's report-mode validators explicitly:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
+node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
+node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
 ```
 
 Treat validator findings like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator once. These scripts are invoked only inside the mobile workflow; do not register them as plugin-wide hooks.

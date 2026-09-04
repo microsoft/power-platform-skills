@@ -9,10 +9,13 @@ const libPath = path.join(__dirname, '..', 'lib', 'feature-flags.js');
 const {
   isEnabled,
   isConnectorsEnabled,
+  isCustomApiEnabled,
   connectorsDisabledMessage,
+  customApiDisabledMessage,
   envVarName,
   parseBool,
   exitIfConnectorsDisabled,
+  exitIfCustomApiDisabled,
   describe,
   validateFlags,
   KNOWN_FLAGS,
@@ -24,6 +27,18 @@ const {
 test('connectors flag is OFF by default (no env override)', () => {
   // Empty env → falls through to the committed feature-flags.json, which ships false.
   assert.equal(isConnectorsEnabled({ env: {} }), false);
+});
+
+test('custom-api flag is OFF by default (no env override)', () => {
+  // Same fail-closed contract as connectors: empty env falls through to the committed
+  // feature-flags.json, which ships custom-api:false until the runtime stack is GA in PROD.
+  assert.equal(isCustomApiEnabled({ env: {} }), false);
+});
+
+test('custom-telemetry flag is OFF by default (no env override)', () => {
+  // custom-telemetry has no helper of its own (it gates code generation, not scripts), so
+  // the generic probe is the contract the skill markdown actually calls.
+  assert.equal(isEnabled('custom-telemetry', { env: {} }), false);
 });
 
 test('unknown flags are OFF (fail-closed)', () => {
@@ -83,6 +98,12 @@ test('connectorsDisabledMessage explains how to enable', () => {
   assert.match(m, /feature-flags\.json/);
 });
 
+test('customApiDisabledMessage explains how to enable', () => {
+  const m = customApiDisabledMessage();
+  assert.match(m, /GENPAGE_ENABLE_CUSTOM_API/);
+  assert.match(m, /feature-flags\.json/);
+});
+
 // --- Committed config actually ships OFF ------------------------------------
 
 test('committed feature-flags.json ships connectors: false', () => {
@@ -90,6 +111,20 @@ test('committed feature-flags.json ships connectors: false', () => {
     fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
   );
   assert.equal(json.connectors, false);
+});
+
+test('committed feature-flags.json ships custom-api: false', () => {
+  const json = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
+  );
+  assert.equal(json['custom-api'], false);
+});
+
+test('committed feature-flags.json ships custom-telemetry: false', () => {
+  const json = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
+  );
+  assert.equal(json['custom-telemetry'], false);
 });
 
 // --- CLI probe (deterministic gate for the skill markdown) ------------------
@@ -142,10 +177,40 @@ test('exitIfConnectorsDisabled is a no-op when ON', () => {
   assert.equal(exitCalled, false);
 });
 
+test('exitIfCustomApiDisabled exits 3 and writes the message when OFF', () => {
+  let exitCode = null;
+  let written = '';
+  exitIfCustomApiDisabled({
+    env: {},
+    exit: (c) => { exitCode = c; },
+    write: (s) => { written += s; },
+  });
+  assert.equal(exitCode, 3);
+  assert.match(written, /disabled/i);
+});
+
+test('exitIfCustomApiDisabled is a no-op when ON', () => {
+  let exitCalled = false;
+  exitIfCustomApiDisabled({
+    env: { GENPAGE_ENABLE_CUSTOM_API: '1' },
+    exit: () => { exitCalled = true; },
+    write: () => {},
+  });
+  assert.equal(exitCalled, false);
+});
+
 // --- known-flag registry + describe() + validation --------------------------
 
 test('KNOWN_FLAGS includes connectors', () => {
   assert.ok(KNOWN_FLAGS.includes('connectors'));
+});
+
+test('KNOWN_FLAGS includes custom-api', () => {
+  assert.ok(KNOWN_FLAGS.includes('custom-api'));
+});
+
+test('KNOWN_FLAGS includes custom-telemetry', () => {
+  assert.ok(KNOWN_FLAGS.includes('custom-telemetry'));
 });
 
 test('describe reports effective state and source per known flag', () => {
@@ -178,6 +243,14 @@ test('FLAGS catalog documents connectors with a status and summary', () => {
   assert.ok(['experimental', 'in-progress', 'ga'].includes(FLAGS.connectors.status));
   assert.match(FLAGS.connectors.summary, /connector/i);
   assert.ok(FLAGS.connectors.dependencies, 'should document what it depends on');
+});
+
+test('FLAGS catalog documents custom-api with a status and summary', () => {
+  assert.ok(FLAGS['custom-api'], 'custom-api flag should be in the catalog');
+  assert.ok(['experimental', 'in-progress', 'ga'].includes(FLAGS['custom-api'].status));
+  assert.match(FLAGS['custom-api'].summary, /custom api|action|function|plug-?in/i);
+  assert.ok(FLAGS['custom-api'].dependencies, 'should document what it depends on');
+  assert.match(FLAGS['custom-api'].enableEnv, /GENPAGE_ENABLE_CUSTOM_API/);
 });
 
 test('KNOWN_FLAGS is derived from the FLAGS catalog', () => {

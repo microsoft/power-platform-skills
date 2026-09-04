@@ -702,6 +702,34 @@ New skill (Power Pages source & dependency security scan). Runs local static ana
 
 ---
 
+### 6.31 `migrate-bootstrap` (6 calls / 5 gates + 1 sub-prompt)
+
+New skill (migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap 5). The engine does the bulk class renames; the skill assists with residual hierarchy/CSS fixes, then uploads (which auto-flips the runtime flag).
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `migrate-bootstrap:1.confirm-env` | gate | consent | 1 | Echoes current env — *"Use this environment / choose another"*. Migrating against the wrong environment is destructive, so confirmation is mandatory. Covers the free-text env-URL sub-prompt in the same step. | nothing |
+| `migrate-bootstrap:2.1.select-site` | gate | plan | 2.1 | Multiple websites found — *"Which website to download?"* | nothing |
+| `migrate-bootstrap:4.run-engine` | gate | consent | 4 | *"Run the Bootstrap 5 migration on `<SITE_FOLDER>`?"* — engine writes a new `<SITE_FOLDER>V5` copy and never edits the source. | nothing |
+| `migrate-bootstrap:6.residual-fixes` | gate | progress | 6 | Per-category consent — *"Apply the `<category>` fixes to `<N>` file(s)?"* — repeated per residual category; changes are local to the V5 copy. | nothing |
+| `migrate-bootstrap:7.2.upload` | gate | final | 7.2 | First outward-facing change — *"Upload `<MIGRATED_FOLDER>` to `<ENV_NAME>`?"* — publishes the Bootstrap 5 site and auto-enables the runtime flag. | nothing |
+
+---
+
+### 6.32 `migrate-webapi-selectall` (6 calls / 5 gates + 1 sub-prompt)
+
+Reviews traditional and SPA sites for deprecated Web API wildcard fields settings, derives least-privilege columns from every call chain, and applies only a complete approved migration.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `migrate-webapi-selectall:1.download-site` | gate | consent | 1 | Approves an optional site download after confirming environment, website name and ID, site type, data model, and target path. | nothing |
+| `migrate-webapi-selectall:2.confirm-scope` | gate | plan | 2 | Confirms all configuration scopes, wildcard and explicit counts, and the source call inventory before schema retrieval. | draft migration report |
+| Phase 3 environment URL | sub-prompt | — | 3.1 | Collects the environment URL only when project and PAC context cannot resolve it. This is read-only metadata input and grants no write consent. | draft migration report |
+| `migrate-webapi-selectall:4.apply-plan` | gate | consent | 4 | Approves every wildcard replacement, required source projection, selected explicit hardening, and local edits. No partial wildcard option is offered. | reviewed migration report |
+| `migrate-webapi-selectall:7.deploy` | gate | final | 7 | Approves one independently verified deployment after re-confirming environment, website, site type, data model, and profile. Repeat for another target. | local migration |
+| `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
+
+---
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.

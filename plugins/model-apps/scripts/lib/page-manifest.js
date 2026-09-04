@@ -3,9 +3,12 @@
 // carries the FULL design-time page semantics — { schemaVersion, pages:[{ key, name, pageId, purpose,
 // dataSources, navigatesTo, pageInput, source }], design } — so a download→edit→rebuild round-trip
 // restores intent + navigation that pac's page download (name + resolved-GUID source only) drops. It
-// travels inside the solution and survives export/import. See docs/app-builder-staged-flow-design.md §7.3.
+// travels inside the solution and survives export/import. See docs/app-builder-design.md §7.3.
 // PURE: the engine reads/writes the web-resource bytes; this module only shapes/parses strings (no I/O,
-// no SDK handle).
+// no SDK handle). The one import is app-spec's `DIRECT_ENTRY_BEHAVIORS` — also pure, and shared rather
+// than mirrored so the manifest parser and App Spec validation cannot drift into disagreeing about
+// which values are legal (a drift here would let a manifest round-trip a value the next build rejects).
+const { DIRECT_ENTRY_BEHAVIORS } = require('./app-spec.js');
 
 // Manifest payload schema version. `parseManifest` rejects any other version fail-closed: an unknown
 // version means an incompatible producer, so reconstruct from live state rather than mis-read the payload.
@@ -38,6 +41,10 @@ function buildManifest(spec, keyToId) {
     if (p.dataSources && p.dataSources.length) entry.dataSources = p.dataSources;
     if (p.navigatesTo && p.navigatesTo.length) entry.navigatesTo = p.navigatesTo;
     if (p.pageInput !== undefined) entry.pageInput = p.pageInput;
+    // Carried with pageInput, not separately: a page that declares an input is REQUIRED to declare
+    // what direct entry renders (validation rejects one without the other), so dropping it here
+    // would make a downloaded spec fail its own validation on the next build.
+    if (p.directEntry !== undefined) entry.directEntry = p.directEntry;
     // Carry the source discriminant so the download round-trip can reconstruct the full spec shape
     // (§7.3): intent pages stay intent, tsx pages remember their codeFile. Omit when absent.
     if (p.source !== undefined) entry.source = p.source;
@@ -145,6 +152,16 @@ function parseManifest(text) {
     // pageInput — when present, must be a plain non-null, non-array object
     if (p.pageInput !== undefined) {
       if (!p.pageInput || typeof p.pageInput !== 'object' || Array.isArray(p.pageInput)) return null;
+    }
+
+    // directEntry — a plain object whose `behavior` is one of the values App Spec validation
+    // accepts. Checking only the object-ness would let a corrupt `behavior` round-trip into a
+    // rebuild that then fails App Spec validation, which is exactly what parsing the manifest
+    // strictly is supposed to prevent — the manifest is a stored artifact and can be edited or
+    // truncated, so a bad value here surfaces far from its cause.
+    if (p.directEntry !== undefined) {
+      if (!p.directEntry || typeof p.directEntry !== 'object' || Array.isArray(p.directEntry)) return null;
+      if (!DIRECT_ENTRY_BEHAVIORS.includes(p.directEntry.behavior)) return null;
     }
 
     // source — when present, must be a valid discriminated intent|tsx shape

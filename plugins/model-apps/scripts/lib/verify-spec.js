@@ -6,9 +6,12 @@
 
 const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
+const { resolveSurfaces } = require('./surface-resolver.js');
+const { isVisualizationUnsupported } = require('./entity-provision.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -20,6 +23,31 @@ const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, reso
 async function verifySpec(spec, read, opts = {}) {
   const checks = [];
   const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
+  // Artifacts the BUILD reported as impossible on this environment, keyed `entity|name`. Supplied by
+  // the caller because verify is also runnable standalone, where no build result exists — in that
+  // case the set is empty and every declared rule is checked, which is the right default: absent a
+  // build's own report, "not deployed" is the honest verdict.
+  const environmentSkippedRules = new Set(
+    ((opts.environmentSkipped && opts.environmentSkipped.businessRules) || []).map((k) => String(k)));
+  // The phases the invocation actually ran, when it ran a SUBSET. A `--changed-only` fast apply runs
+  // `phases: ['pages']`, so the business-rules loop never executes and `skipped.businessRules` comes
+  // back empty — which made the skip list above useless on exactly the runs that need it most, and
+  // reported every rule as missing on an environment that can never host one.
+  //
+  // Scoped to business rules on purpose. Business rules are the only artifact class that can be
+  // PERMANENTLY absent through no fault of the run; everything else is absent because something
+  // failed or has not been built yet, which is precisely what verify exists to report. Generalising
+  // this would turn "verify is spec-complete regardless of --phases" into "verify checks whatever
+  // this run happened to touch", and the failure mode of getting THAT wrong is a verify that
+  // silently checks nothing.
+  const ranPhases = Array.isArray(opts.phases) ? new Set(opts.phases) : null;
+  const businessRulesPhaseRan = !ranPhases || ranPhases.has('business-rules');
+  // Two DIFFERENT reasons a check was not performed, kept apart because they warrant opposite
+  // messages. Reporting a phase that simply did not run as "this environment cannot host it" tells
+  // an operator on a perfectly healthy environment that their environment is broken — and on the
+  // normal `--changed-only` fast-apply path that would be wrong every single time.
+  const environmentSkipped = [];
+  const phaseSkipped = [];
 
   // Entities + their declared columns.
   for (const e of spec.entities || []) {
@@ -29,6 +57,33 @@ async function verifySpec(spec, read, opts = {}) {
     if (tbl) {
       const cols = new Set(((await read.findColumns(logical)) || []).map((c) => String(c.logicalName || c).toLowerCase()));
       for (const c of e.columns || []) add('column', `${e.schemaName}.${c.schemaName}`, cols.has(String(c.schemaName).toLowerCase()));
+      // Grid data visualization (preview). Reconciled by VALUE, not existence: the build writes a
+      // specific renderer, so "a config row exists" would pass even if the deployed renderer were a
+      // star rating where the spec asked for a radial dial.
+      //
+      // Guarded on the reader exposing the capability — most callers construct a reader with only
+      // the methods they need, and an optional preview must never turn into a TypeError for them.
+      // A 404 means the preview is not provisioned on this environment, which is exactly the case
+      // the build SKIPS; reporting it as a failed check would flag every app on such an org for a
+      // divergence the build deliberately declined to create.
+      if (typeof read.columnVisualization === 'function') {
+        for (const c of e.columns || []) {
+          if (!c || c.visualization === undefined) continue;
+          const name = `${e.schemaName}.${c.schemaName}`;
+          let deployed;
+          try {
+            deployed = await read.columnVisualization(logical, String(c.schemaName).toLowerCase());
+          } catch (err) {
+            // Skip ONLY the "preview not provisioned here" case, matched on the server's
+            // segment-missing phrasing rather than on the status alone. A bare `status === 404`
+            // test also swallowed a row-level 404, turning a real divergence into silence.
+            if (isVisualizationUnsupported(err)) continue;
+            throw err;
+          }
+          add('column-visualization', name, deployed === c.visualization,
+            deployed === c.visualization ? '' : `expected '${c.visualization}', deployed '${deployed}'`);
+        }
+      }
     }
   }
 
@@ -39,9 +94,15 @@ async function verifySpec(spec, read, opts = {}) {
     // (reconcileView is additive-union, so a removed/renamed spec column would otherwise silently NOT
     // apply and still pass an existence-only verify). Best-effort: the column check only runs when the
     // deployed row actually carries layoutxml — an existence-only reader (no layoutxml) skips it.
-    const rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+    let rows = [];
+    let readError = null;
+    try {
+      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+    } catch (error) {
+      readError = error;
+    }
     const row = rows && rows[0];
-    add('view', viewName, row);
+    add('view', viewName, row, readError ? String(readError.message || readError) : '');
     const specCols = (v.columns || []).map((c) => String(c).toLowerCase());
     if (row && row.layoutxml && specCols.length) {
       // Deployed column set from the saved view's layoutxml (<cell name="…"/> per column). We require
@@ -102,6 +163,89 @@ async function verifySpec(spec, read, opts = {}) {
       try { present = !!(await read.commandBar(entity)); } catch { present = false; }
       add('command', `${entity} command bar`, present);
     }
+  }
+
+  // Business rules. A rule that EXISTS is not a rule that RUNS: a Draft (statecode 0) rule is inert,
+  // and a duplicate means the same logic fires twice. Both are states the BUILD can legitimately end
+  // in without failing — activation is best-effort, and the SDK's fallback can leave a duplicate it
+  // cannot remove (#482) — so the build warns and relies on verify to report the outcome. Without
+  // this block that promise was empty: a missing, inert, or duplicated rule still verified PASS.
+  //
+  // Reconciled on THREE axes, because each fails differently and silently:
+  //   existence   — the rule never built at all
+  //   cardinality — more than one row for the same (entity, name) fires the logic repeatedly
+  //   state       — deployed Draft when the spec asked for Active (or the reverse)
+  for (const rule of spec.businessRules || []) {
+    const entityLogical = String(rule.entity).toLowerCase();
+    const name = `${entityLogical}.${rule.name}`;
+    // A rule the BUILD skipped because this environment cannot host business rules at all is not a
+    // verification failure — it is a capability gap the operator was already told about, by name,
+    // during the build. Checking it anyway would report `not deployed` forever on the 18-of-20
+    // environments that lack the bound member.
+    //
+    // That is not merely noisy. `verify.ok` gates the process EXIT CODE, whether
+    // `.last-applied.json` is written, and whether the `--changed-only` snapshot is persisted — and
+    // page-bearing specs make verify MANDATORY. So a permanently-false `ok` would permanently
+    // withhold the changed-only baseline, forcing a full build on every subsequent run forever.
+    // Those three gates are built for TRANSIENT failures that a later run clears; this one never
+    // clears.
+    //
+    // Reported as its own outcome rather than passed: nothing here claims the rule exists.
+    if (environmentSkippedRules.has(`${entityLogical}|${rule.name}`)) {
+      environmentSkipped.push(`business-rule:${name}`);
+      continue;
+    }
+    // A phase-limited run (a `--changed-only` fast apply is `phases: ['pages']`) never executed the
+    // business-rules phase, so it has no skip list to offer and demanding the rule here would fail
+    // a run that never touched it. On a gated environment that turned every fast apply into a
+    // non-zero exit plus an invalidated snapshot, alternating full/failing-fast forever, and the log
+    // line blamed PAGES for a business-rule gate.
+    //
+    // Reported SEPARATELY from the environment gate: on a healthy environment the rules are deployed
+    // and fine, and telling that operator their environment cannot host business rules would be
+    // wrong on every fast apply they ever run.
+    if (!businessRulesPhaseRan) {
+      phaseSkipped.push(`business-rule:${name}`);
+      continue;
+    }
+    let rows;
+    try {
+      // `top: 50`, not 1 — the whole point is to SEE duplicates. Scoped to DEFINITION rows only
+      // (see businessRuleFilter): activating a rule makes the platform create a second, `type 2`
+      // activated copy, so counting both would report every healthy ACTIVE rule as duplicated.
+      rows = await read.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        filter: businessRuleFilter(rule.name, entityLogical),
+        top: 50,
+      });
+    } catch (e) {
+      // Fail CLOSED: a read that could not run must not read as "present and correct".
+      add('business-rule', name, false, `could not be read: ${e && e.message}`);
+      continue;
+    }
+    const list = rows || [];
+    if (!list.length) {
+      // Name the most likely cause instead of the bare fact. The SDK writes rules ONLY through the
+      // bound `CreateProcessWithWfomJson` member and no longer compiles a workflow-XAML fallback, so
+      // an environment that does not declare that member cannot host business rules at all — and
+      // that is the COMMON case. The build already skips them with a warning, so
+      // without this hint the operator reads "not deployed" as a build failure and goes looking for
+      // one that is not there.
+      //
+      // It stays a FAIL, not a pass or a skip: the app genuinely does not have the rule the spec
+      // asks for, and verify's job is to report the deployed truth.
+      add('business-rule', name, false,
+        'not deployed — if the build reported "business rules were NOT created", this environment does not expose the CreateProcessWithWfomJson member and cannot host them');
+      continue;
+    }
+    if (list.length > 1) {
+      add('business-rule', name, false, `${list.length} rules share this name on ${entityLogical} — duplicates fire the same logic more than once (see issue #482)`);
+      continue;
+    }
+    const wantActive = (rule.status || 'Active') === 'Active';
+    const isActive = list[0].statecode === 1;
+    add('business-rule', name, wantActive === isActive,
+      wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the rule does not run' : 'deployed ACTIVE but the spec asks for Draft — the rule is running'));
   }
 
   // Sitemap subareas (+ icons). Scope every check to the specific element type (and, for a subarea
@@ -255,6 +399,37 @@ async function verifySpec(spec, read, opts = {}) {
       }
     } catch { row = undefined; }
     add('role', roleName, row, row ? '' : 'persona security role not found (or its business unit could not be resolved)');
+
+    // Privilege depth check — reader-gated (see `entityRelationships` / `commandBar` above for the
+    // same pattern), so an existence-only reader behaves exactly as before. Proving the role ROW
+    // exists says nothing about what it GRANTS: a role created with the wrong access, or one whose
+    // privilege write failed after the row landed, verified clean until this check existed.
+    // SUBSET semantics — see lib/role-privileges.js for why equality would be wrong.
+    if (row && typeof read.rolePrivileges === 'function' && typeof read.entityPrivileges === 'function') {
+      const declared = declaredPrivileges(p);
+      let actual = null;
+      try {
+        actual = await read.rolePrivileges(row.roleid);
+      } catch { actual = null; }
+      if (!Array.isArray(actual)) {
+        // Fail CLOSED: an unreadable role is not a role we can call correct.
+        add('role-privileges', roleName, false, 'could not read the role\'s privileges');
+      } else {
+        const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
+        const entityPrivileges = new Map();
+        for (const entity of new Set(declared.map((d) => d.entity))) {
+          try {
+            const privs = await read.entityPrivileges(entity);
+            if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
+          } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
+        }
+        const cmp = compareRolePrivileges(declared, entityPrivileges, actualByPrivilegeId);
+        const detail = cmp.ok
+          ? `${declared.length} declared privilege(s) held`
+          : cmp.missing.map((m) => `${m.entity}.${m.access}: ${m.reason}`).join('; ');
+        add('role-privileges', roleName, cmp.ok, detail);
+      }
+    }
   }
 
   // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose
@@ -295,7 +470,9 @@ async function verifySpec(spec, read, opts = {}) {
     for (const [feature, requested] of Object.entries(requestedFeatures)) {
       const setting = AI_APP_SETTING[feature];
       if (!setting) continue; // unknown key — validation already reports it
-      const want = featureWantValue(requested);
+      // Feature-aware: `true` means '2' for the form-fill family and '1' elsewhere. Comparing
+      // against the wrong spelling reports a correctly-applied feature as missing.
+      const want = featureWantValue(requested, feature);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
       //     A small retry on the ABSENT case only: an override row can lag briefly behind the write
@@ -325,9 +502,49 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
+  // JTBD rollup — translates a technical failure into the business impact it caused. Every other
+  // check answers "is this artifact deployed?"; this one answers "can this persona still do this
+  // job?".
+  //
+  // Deliberately a PURE ROLLUP over checks already computed — no extra reads, so it costs nothing
+  // and cannot fail independently. A job fails when a surface it names resolves to a spec artifact
+  // whose own check failed. An UNRESOLVED surface is NOT failed here: it may name an out-of-the-box
+  // artifact this spec never authors (see lib/surface-resolver.js), and spec-lint already warns at
+  // authoring time — failing it here would turn a plan-time smell into a deploy-time error.
+  const failedNames = new Set(checks.filter((c) => !c.present).map((c) => String(c.name).toLowerCase()));
+  if (failedNames.size) {
+    // Each check kind names itself differently (a view is `<entity>.<name>`, a form/page/subarea is
+    // its bare name, an entity is its schemaName), so a resolved surface is mapped to the candidate
+    // check-name(s) its kind would have produced. Derived here rather than in the resolver because
+    // the naming convention belongs to THIS file — a resolver that guessed it would silently rot
+    // the moment a check kind renamed itself.
+    const candidatesFor = (m) => {
+      const name = String(m.name || '');
+      if (m.kind === 'view') return [`${String(m.entity || '').toLowerCase()}.${name}`];
+      if (m.kind === 'entity') return [String(m.entity || name)];
+      return [name]; // form · page · subarea · dashboard
+    };
+    for (const r of resolveSurfaces(spec).resolved) {
+      const broken = r.matches
+        .flatMap(candidatesFor)
+        .filter((n) => n && failedNames.has(n.toLowerCase()));
+      if (broken.length) {
+        add('job-surface', `${r.persona} → ${r.job}`, false, `surface "${r.surface}" is not deployed (${[...new Set(broken)].join(', ')})`);
+      }
+    }
+  }
+
   const missing2 = checks.filter((c) => !c.present);
   // Keep unableToRun absent (undefined) on the normal path so existing callers and tests are unaffected.
-  return { ok: missing2.length === 0 && !unableToRun, checks, missing: missing2, unableToRun: unableToRun || undefined };
+  // `environmentSkipped` / `phaseSkipped` are likewise omitted when empty, for the same reason.
+  return {
+    ok: missing2.length === 0 && !unableToRun,
+    checks,
+    missing: missing2,
+    unableToRun: unableToRun || undefined,
+    ...(environmentSkipped.length ? { environmentSkipped } : {}),
+    ...(phaseSkipped.length ? { phaseSkipped } : {}),
+  };
 }
 
 function escapeRe(s) {

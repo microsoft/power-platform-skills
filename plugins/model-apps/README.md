@@ -22,7 +22,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
-| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) >= 2.7.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
 
 After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.

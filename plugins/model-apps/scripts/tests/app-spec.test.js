@@ -17,6 +17,19 @@ test('validateAppSpec accepts the sample', () => {
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('validateAppSpec returns structured errors for malformed collections instead of throwing', () => {
+  for (const spec of [
+    { entities: {} },
+    { forms: {} },
+    { entities: [null] },
+    { forms: [null] },
+  ]) {
+    assert.doesNotThrow(() => validateAppSpec(spec));
+    const result = validateAppSpec(spec);
+    assert.equal(result.ok, false, JSON.stringify(spec));
+  }
+});
+
 test('relationshipSchemaName: all-custom default is unchanged (backward compatible)', () => {
   const rel = { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket' };
   assert.strictEqual(relationshipSchemaName(rel, 'new'), 'new_customer_new_ticket');

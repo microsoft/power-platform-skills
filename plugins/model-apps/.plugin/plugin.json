@@ -1,7 +1,7 @@
 {
   "name": "model-apps",
-  "version": "2.4.2",
-  "description": "Build model-driven Power Apps end to end: /app-builder authors whole apps (tables, relationships, forms, views, charts, security roles, app + sitemap) from a natural-language intent, and /genpage builds generative pages with specialist agents for planning, entity creation, and parallel code generation. Requires PAC CLI >= 2.7.0 and Azure CLI (`az`). See CHANGELOG.md for v1.x -> v2.x migration.",
+  "version": "2.5.1",
+  "description": "Build model-driven Power Apps end to end: /app-builder authors whole apps (tables, relationships, forms, views, charts, security roles, app + sitemap) from a natural-language intent, and /genpage builds generative pages with specialist agents for planning, entity creation, and parallel code generation. Requires PAC CLI > 2.10.0 and Azure CLI (`az`). See CHANGELOG.md for v1.x -> v2.x migration.",
   "author": {
     "name": "Microsoft",
     "url": "https://www.microsoft.com"

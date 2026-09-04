@@ -8,10 +8,11 @@ const { createTempProject, writeProjectFile } = require('./test-utils');
 
 const scriptPath = path.join(__dirname, '..', 'clear-site-cache.js');
 
-function runClearSiteCache(args) {
+function runClearSiteCache(args, options = {}) {
   return spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: 'utf8',
     timeout: 30000,
+    ...options,
   });
 }
 
@@ -45,13 +46,13 @@ test('fails when powerpages.config.json is invalid JSON', (t) => {
 });
 
 test('fails gracefully when PAC CLI is not authenticated', (t) => {
-  // This test depends on the PAC CLI auth state.
-  // If PAC is authenticated, it will proceed further and fail at the API call.
-  // If not authenticated, it will fail at the PAC auth check.
-  // Either way, the script should exit 1 with success: false.
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'powerpages.config.json', JSON.stringify({ siteName: 'nonexistent-test-site' }));
-  const result = runClearSiteCache(['--projectRoot', projectRoot]);
+  const result = runClearSiteCache(['--projectRoot', projectRoot], {
+    // Hide locally installed CLIs so the test cannot inherit a developer's live
+    // PAC session and turn this unit test into a network-dependent integration test.
+    env: { ...process.env, PATH: '' },
+  });
   assert.equal(result.status, 1);
   const parsed = JSON.parse(result.stdout);
   assert.equal(parsed.success, false);

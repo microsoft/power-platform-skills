@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Add Sample Data
 
@@ -17,7 +17,7 @@ Populate Dataverse tables with realistic sample records so a freshly-scaffolded 
 - **Coverage over volume — every table in the manifest gets seeded.** The #1 failure mode of a freshly-scaffolded code app is a home / dashboard / list screen that renders an empty state on first launch because its source table has zero rows. An empty downstream table is **worse than a 3-row table.** Default to minimal-but-complete: small counts everywhere, no table left empty. Volume is a secondary knob — coverage is the contract.
 - **Insertion order matters.** Parent / referenced tables must be inserted before child / referencing tables so lookup IDs are available.
 - **Contextual data, not Lorem Ipsum.** Generate values that match column names + types. A `cr3e9_sitename` column in an inspection app gets "Westside Construction Site", not "Sample Name 1".
-- **Scenario-aware rows.** Read `native-app-plan.md`, especially `### Shared Conventions` and per-screen `Operational pattern` values defined in [screen-templates.md](${CLAUDE_SKILL_DIR}/../../shared/references/screen-templates.md). Seed rows should exercise the app's actual workflow: statuses, dates, relationships, priority/severity, media metadata, and edge cases that make the planned first viewport light up.
+- **Scenario-aware rows.** Read `native-app-plan.md`, especially `### Shared Conventions` and per-screen `Operational pattern` values defined in [screen-templates.md](${PLUGIN_ROOT}/shared/references/screen-templates.md). Seed rows should exercise the app's actual workflow: statuses, dates, relationships, priority/severity, media metadata, and edge cases that make the planned first viewport light up.
 - **Fail gracefully.** On insertion failure, log the error and continue with remaining records — never auto-rollback. The user can re-run after fixing the issue.
 - **Idempotent re-runs.** If a previous run partially completed, the second run reads `memory-bank.md`'s seeded-data table and skips records already inserted.
 - **Solution-scoped inserts.** Always pass `--solution <uniqueName>` so records land in our solution, not the default.
@@ -51,7 +51,7 @@ If a seed file cannot be mapped safely, fall back to generated contextual sample
 
 ```bash
 test -f power.config.json && test -f app.config.js
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture the **environment URL** for subsequent script calls. If resolution fails, instruct `az login --tenant <env-tenant>` or ask for the environment URL directly, then stop.
@@ -85,14 +85,14 @@ Skip Step 2b.
 If `.datamodel-manifest.json` is missing, discover custom tables via the script:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
 ```
 
 For each table the project uses, fetch its custom columns:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true"
 ```
 
@@ -107,7 +107,7 @@ All tables from the manifest are evaluated — including reused ones — because
 For each table, query its current record count using the entity set name from the manifest (or derive it by appending `s` to the logical name as a fallback):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "<entitySetName>?\$top=5&\$select=<primaryKeyColumn>"
 ```
 
@@ -224,7 +224,7 @@ For each selected table, generate N rows. Match values to column names + types:
 For every choice column in the selected tables, query its option set before generating rows:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
 ```
 
@@ -268,7 +268,7 @@ Insert in the tier order from Step 3c. **Within a tier, parallelize across both 
 For each table, get its `EntitySetName` (the URL-path name, usually plural — e.g. `cr3e9_jobsites`). Read from `.datamodel-manifest.json` if it carries this; otherwise:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName"
 ```
 
@@ -296,7 +296,7 @@ For each tier from 0 → N:
 2. **Fire BATCH-RECORDS once per tier.** The script handles concurrency, retry, GUID extraction, and adaptive throttling internally:
 
    ```bash
-   node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
+   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
      "Tier <N>" \
      --operations '<json-from-step-1>' \
      --concurrency 5 \
@@ -334,7 +334,7 @@ For Tier 1+ tables, build each row's body with `@odata.bind` referencing the par
 Then:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
   "Tier 1" \
   --operations '<json-with-bound-lookups>' \
   --concurrency 5 \

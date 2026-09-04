@@ -101,7 +101,7 @@ OnSelect: |-
   Set(currentPlayer, If(currentPlayer = "X", "O", "X"))
 ```
 
-### Confirm the action and clear the state that caused it
+### Close every data mutation loop
 
 An action that changes data must say so, and must leave the form in a clean state. Two
 defects show up constantly in generated apps: a quantity silently changes with no
@@ -110,18 +110,142 @@ about was successfully saved.
 
 ```yaml
 OnSelect: |-
-  =Patch(colInventory, ThisItem, {Quantity: ThisItem.Quantity - varAdjustBy});
-  Notify("Issued " & varAdjustBy & " units", NotificationType.Success);
-  Set(varAdjustBy, 0);
-  Set(varShowValidation, false)
+  =With(
+    {
+      targetId: ThisItem.ID,
+      nextQuantity: ThisItem.Quantity - varAdjustBy
+    },
+    Set(
+      varLastInventoryMutation,
+      Patch(
+        colInventory,
+        LookUp(colInventory, ID = targetId),
+        {Quantity: nextQuantity}
+      )
+    );
+    Set(varInventoryReceiptVisible, true);
+    Set(varAdjustBy, 0)
+  )
 ```
 
-- Use `Notify(...)` or a transient in-screen message after every create, update, or delete.
-- Reset the inputs and the flags that drove validation in the same handler.
-- Gate validation text on a variable you clear on success, not on the raw field value.
-- After a failed submit shows validation, clear that flag from every relevant input's
-  `OnChange`, or keep the message visible only while the required fields remain invalid.
-  An error must not remain visible once the user has corrected all fields.
+- Capture the returned record, changed stable ID, or deletion snapshot before resetting inputs or navigating. Bind an in-screen receipt to that captured value.
+- Use `Notify(...)` only as supplemental feedback. It does not prove persistence or the resulting values.
+- Reset inputs only after the successful source operation and captured receipt state.
+- Read the target record from the source by immutable ID. Do not patch by display name and do not inspect a stale `ThisItem` after mutation.
+- Derive validation text and submit availability directly from the current input values:
+
+  ```yaml
+  # Validation message
+  Visible: =IsBlank(Trim(NameInput.Value))
+
+  # Submit action
+  DisplayMode: =If(IsBlank(Trim(NameInput.Value)), DisplayMode.Disabled, DisplayMode.Edit)
+  ```
+
+- When validation must wait until the first submit attempt, combine one attempt flag with
+  the current invalid expression: `Visible: =varSubmitAttempted && IsBlank(...)`. Do not
+  maintain separate validity flags or clear them from every input's `OnChange`; correcting
+  the input must make the formula false declaratively.
+
+### Canonical local-collection mutation patterns
+
+Create and capture the record before resetting inputs:
+
+```yaml
+OnSelect: |-
+  =If(
+    !IsBlank(Trim(txtName.Value)),
+    Set(
+      varLastRecord,
+      Patch(
+        colRecords,
+        Defaults(colRecords),
+        {
+          ID: GUID(),
+          Name: Trim(txtName.Value),
+          Category: varSelectedCategory,
+          Status: "Pending"
+        }
+      )
+    );
+    Set(varLastAction, "Created");
+    Set(varReceiptVisible, true);
+    Reset(txtName)
+  )
+```
+
+Edit the selected stable ID and preserve fields not present in the change record:
+
+```yaml
+OnSelect: |-
+  =Set(
+    varLastRecord,
+    Patch(
+      colRecords,
+      LookUp(colRecords, ID = varEditRecordId),
+      {
+        Name: Trim(txtName.Value),
+        Category: varSelectedCategory
+      }
+    )
+  );
+  Set(varLastAction, "Updated");
+  Set(varReceiptVisible, true);
+  Set(varEditMode, false)
+```
+
+Apply an eligible status transition and capture the resulting record:
+
+```yaml
+OnSelect: |-
+  =With(
+    {targetId: ThisItem.ID},
+    If(
+      LookUp(colRecords, ID = targetId).Status = "Pending",
+      Set(
+        varLastRecord,
+        Patch(
+          colRecords,
+          LookUp(colRecords, ID = targetId),
+          {Status: "Approved"}
+        )
+      );
+      Set(varLastAction, "Approved");
+      Set(varReceiptVisible, true)
+    )
+  )
+```
+
+Capture a deletion snapshot before removing the source row:
+
+```yaml
+OnSelect: |-
+  =With(
+    {targetId: ThisItem.ID},
+    Set(varDeletedRecord, LookUp(colRecords, ID = targetId));
+    RemoveIf(colRecords, ID = targetId);
+    Set(varLastAction, "Deleted");
+    Set(varDeleteReceiptVisible, true)
+  )
+```
+
+The receipt renders the captured identity, action, and proof-set values. The list, badge, filter, metric, or leaderboard separately reads `colRecords`, so the immediate proof and downstream state agree.
+
+### Selector and filter bindings
+
+Treat a selector as four coupled formulas: option source, visible option text, committed selected value, and consumer predicate. Use the exact selected-value property returned by `describe_control`; do not guess it.
+
+For six or fewer static choices, prefer visible choice buttons or radio controls. They avoid an inaccessible or uncommitted dropdown state and make the active filter visible. A category filter can set `varCategoryFilter` directly, while the gallery reads:
+
+```yaml
+Items: |-
+  =Filter(
+    colRecords,
+    varCategoryFilter = "All" || Category = varCategoryFilter
+  )
+```
+
+The clear action restores `"All"`. Seed or create at least two matching records and one non-matching record so the planned Given/When/Then scenario can prove inclusion, exclusion, and reset.
 
 ### Toggle once, report the same next value
 
@@ -130,11 +254,16 @@ Compute the next value once and use it for both the write and the confirmation:
 
 ```yaml
 OnSelect: |-
-  =Set(varNextCheckedIn, !ThisItem.CheckedIn);
-  Patch(colMembers, ThisItem, {CheckedIn: varNextCheckedIn});
-  Notify(
-    ThisItem.Name & If(varNextCheckedIn, " checked in", " marked not ready"),
-    NotificationType.Success
+  =With(
+    {
+      member: ThisItem,
+      nextCheckedIn: !ThisItem.CheckedIn
+    },
+    Patch(colMembers, member, {CheckedIn: nextCheckedIn});
+    Notify(
+      member.Name & If(nextCheckedIn, " checked in", " marked not ready"),
+      NotificationType.Success
+    )
   )
 ```
 
@@ -172,11 +301,11 @@ For a small, read-only table used by only one control, keep it local instead:
 
 ```yaml
 Items: |-
-  =Table(
+  =[
     {Title: "Draft"},
     {Title: "Review"},
     {Title: "Publish"}
-  )
+  ]
 ```
 
 Use an `App.OnStart` collection when several screens share the records or interactions

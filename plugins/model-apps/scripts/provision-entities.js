@@ -4,15 +4,15 @@
 // a structured JSON result. Dry-run by default; --apply writes. --sample-data opt-in.
 //
 // Usage:
-//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data]
+//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
-const { quickCreateEnabledFor } = require('./lib/app-spec.js');
+const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -116,7 +116,7 @@ function buildPlan(input, opts) {
 }
 
 // The testable core: validates, computes plan, runs the shared provision functions.
-// `deps` injects { sdk, provision, emit, log } so tests never touch the network.
+// `deps` injects { sdk, provision, emit, log, warn } so tests never touch the network.
 async function provisionEntities(input, opts = {}, deps = {}) {
   // 1. Validation gate first — if invalid, return errors with ZERO SDK writes.
   const v = validateProvisionInput(input);
@@ -133,6 +133,7 @@ async function provisionEntities(input, opts = {}, deps = {}) {
   // 3. Apply: run the shared core (solution → data-model → sample-data-if-requested).
   const log = deps.log || (() => undefined);
   const emit = deps.emit || (() => undefined);
+  const warn = deps.warn || (() => undefined);
   const sdk = deps.sdk;
   const provision = deps.provision;
   
@@ -146,18 +147,31 @@ async function provisionEntities(input, opts = {}, deps = {}) {
     relationships: input.relationships || [],
     globalChoices: input.globalChoices || [],
     sampleData: input.sampleData,
+    // Carried through so a caller can pin the label LCID here exactly as an App Spec can. Without
+    // it the field would be silently dropped on this path while working on the build path.
+    ...(input.languageCode !== undefined ? { languageCode: input.languageCode } : {}),
   };
   
   // Provision solution
   await provisionSolution({ sdk, provision, runner, solution: spec.solution });
   
   // Provision data model (entities, columns, relationships)
+  // `warn` is threaded so a fallback to the default label LCID is REPORTED here too. This CLI is the
+  // genpage create flow's data-model path, so without it a non-English org would hit the same opaque
+  // "language code 1033 is not a valid language for this organization" that #447 describes, with no
+  // diagnostic — the build path would explain itself and this one would not.
   const dataModel = await provisionDataModel({
     sdk,
     provision,
     runner,
     spec,
     apply: true,
+    languageCode: opts.languageCode,
+    // Same guard as the build path: an explicit override the org has not provisioned fails here,
+    // before any write, rather than half-succeeding (labels silently coerced to the base language,
+    // then a hard 400 on the first DateTime/Memo column).
+    provisionedLanguages: deps.provisionedLanguages,
+    warn,
   });
   
   // Provision sample data (if requested)
@@ -270,17 +284,34 @@ async function main() {
   
   if (!env || !inputArg || flags.input === true) {
     process.stderr.write(
-      'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data]\n'
+      'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]\n'
     );
+    process.exit(1);
+  }
+  // A value-less `--language-code` is a usage error, never a silent fall-through to the org default.
+  const valuelessLang = ['language-code', 'languageCode'].find((k) => flags[k] === true);
+  if (valuelessLang) {
+    process.stderr.write(`✗ --${valuelessLang} requires a value.\n`);
     process.exit(1);
   }
   
   const inputPath = path.resolve(typeof inputArg === 'string' && inputArg.startsWith('@') ? inputArg.slice(1) : inputArg);
   const input = readJsonArg('@' + inputPath);
   
+  const rawLang = readAliasedFlag(flags, 'language-code', 'languageCode');
+  let languageCode;
+  if (rawLang !== undefined) {
+    languageCode = normalizeLanguageCode(rawLang);
+    if (languageCode === null) {
+      process.stderr.write(`✗ --language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${rawLang}')\n`);
+      process.exit(1);
+    }
+  }
+
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
+    languageCode,
   };
   
   // Construct SDK clients (offline until first call)
@@ -290,8 +321,12 @@ async function main() {
   try {
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
+      warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk,
       provision,
+      // Only consulted for an explicit override, and any failure resolves to null so a build never
+      // breaks on the diagnostic itself.
+      provisionedLanguages: () => readProvisionedLanguages(env),
     };
 
     r = await provisionEntities(input, opts, deps);

@@ -92,15 +92,16 @@ function designSection(spec) {
 function securitySection(spec) {
   const personas = spec.personas || [];
   if (!personas.length) return [];
+  const accessText = (access) => (Array.isArray(access) ? access : access == null ? [] : [access]).join('/');
   const out = [h('Security roles (personas)')];
   for (const p of personas) {
     const appOpens = p.appAccess !== false;
     out.push(`  ⛊ role "${p.persona}"${appOpens ? '  (app opens for this persona)' : '  (data-only — no app access)'}`);
     for (const j of p.jobs || []) {
       out.push(`     • job: ${j.name || '(unnamed)'}`);
-      for (const pr of j.privileges || []) out.push(`         - ${lc(pr.entity)}: ${(pr.access || []).join('/')} @ ${pr.scope || 'user'}`);
+      for (const pr of j.privileges || []) out.push(`         - ${lc(pr.entity)}: ${accessText(pr.access)} @ ${pr.scope || 'user'}`);
     }
-    for (const pr of p.additionalPrivileges || []) out.push(`     • baseline: ${lc(pr.entity)}: ${(pr.access || []).join('/')} @ ${pr.scope || 'user'}`);
+    for (const pr of p.additionalPrivileges || []) out.push(`     • baseline: ${lc(pr.entity)}: ${accessText(pr.access)} @ ${pr.scope || 'user'}`);
     const assigned = [...((p.assignTo && p.assignTo.teams) || []), ...((p.assignTo && p.assignTo.users) || [])];
     if (assigned.length) out.push(`     • assigned to ${assigned.length} principal(s)`);
   }

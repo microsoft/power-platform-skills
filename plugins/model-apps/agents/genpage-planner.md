@@ -49,7 +49,7 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
   by the user's response (`approved` / `revised`).
 - The PAC CLI version output is recorded explicitly (the assertion checks
-  for `>= 2.7.0`-shaped text — `PAC CLI Version 2.7.x` is the canonical
+  for `> 2.10.0`-shaped text — `PAC CLI Version 2.10.x` is the canonical
   form).
 
 Decisions and outcomes can be summarized at the end of the section, but they
@@ -70,9 +70,10 @@ node --version
 pac help
 ```
 
-`pac help` output includes the version number. Verify the version is **>= 2.7.0**
-(required for `pac model create` support). If the version is older, instruct the
-user to update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
+`pac help` output includes the version number. Verify the version is **> 2.10.0**
+(required for `pac model create` support and the genpage `upload` connector/Custom API
+flags). If the version is older, instruct the user to update:
+`dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
 Do NOT proceed until prerequisites are met.
@@ -250,6 +251,37 @@ Read `connector-bindings.md` and splice its contents verbatim into the
 If the request implies **only** Dataverse and/or mock data (no connector source),
 write `## Connector Bindings` as exactly `No connector bindings.`.
 
+### Custom API Detection (delegated to genpage-customapi-builder)
+
+If the request implies **server-side Dataverse logic** — approving/escalating a record,
+running a calculation or validation, or any operation that maps to a Dataverse **Custom API**
+(Action or Function) rather than a plain row read/write — delegate ALL Custom API work to the
+`genpage-customapi-builder` agent via the `Task` tool. Do **not** run the feature-gate probe
+or any Custom API discovery inline — that agent is the single owner of the `custom-api`
+feature gate, Custom API discovery, and the binding contract.
+
+Invoke `genpage-customapi-builder` with a prompt containing:
+
+- **Mode:** `create`
+- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
+- **Page tables:** the table logical name(s) the page is bound to (from `## Existing
+  Entities` / `pageInput`), or "none"
+- **Intent:** the server-side operation(s) the request implies (e.g. "approve the order",
+  "escalate the case", "compute an order summary")
+
+It writes two files into the working directory:
+
+- `custom-api-bindings.md` — the exact body for the plan's `## Custom API Bindings` section
+  (either `No custom API bindings.` or the binding table).
+- `actions.json` — the bare-array binding file for deployment (`--actions`).
+
+Read `custom-api-bindings.md` and splice its contents verbatim into the
+`## Custom API Bindings` section of `genpage-plan.md`.
+
+If the request implies **no** server-side Custom API operation (plain Dataverse CRUD and/or
+mock data only), skip the agent entirely and write `## Custom API Bindings` as exactly
+`No custom API bindings.`.
+
 ### App Detection
 
 Run:
@@ -378,6 +410,7 @@ Enter plan mode (`EnterPlanMode`) and present:
 - Entities that exist: [list]
 - Entities to create: [list — with columns, types, relationships, choices]
 - Connector bindings: [ready-to-bind connectionreference logical names, or "none"]
+- Custom API bindings: [bound Custom API names (Action/Function), or "none"]
 - Sample data: will ask after entity creation
 
 ### App

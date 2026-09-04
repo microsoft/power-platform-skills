@@ -149,7 +149,7 @@ async function fetchSitemap(sdk, appUnique) {
 }
 
 // Env-wide MEMBERSHIP scan (Imp5): which apps' sitemaps reference each id in `pageIds`. GROUNDED by a live
-// Dataverse probe (aurorabapenv03468): a generative page has NO `appmodulecomponent` row —
+// Dataverse probe (test environment): a generative page has NO `appmodulecomponent` row —
 // `appmodulecomponents?$filter=objectid eq <genPageId>` returns 0 rows. So a genpage's app membership lives
 // ONLY inside the sitemap XML (`GenPageId="…"`), with NO direct genpage→apps join. The ONLY way to find a
 // page shared across apps is to scan every OTHER app's sitemap XML for the id.

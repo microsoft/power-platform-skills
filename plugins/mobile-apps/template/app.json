@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "extra": {
+      "telemetry": {
+        "appInstanceId": null
+      },
+      "appInsightsConfig": {
+        "enabled": false,
+        "connectionString": "",
+        "appId": "",
+        "environment": ""
+      },
+      "powerappsNative": {
+        "schemaVersion": 1,
+        "templateVersion": 1,
+        "nativeRuntimeVersions": {
+          "android": 1,
+          "ios": 1
+        }
+      }
+    }
+  }
+}

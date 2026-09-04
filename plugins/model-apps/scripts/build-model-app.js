@@ -13,11 +13,14 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateAppSpec, migrateAppSpec, normalizePageSource } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
+// #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
+// bakes it into the App/Form/Dashboard adapters.
+const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult, dataverseRequest } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
@@ -39,7 +42,7 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 //                  (findTables/findColumns/fetchEntityMetadata) and every artifact
 //                  (views/charts/forms/app) lands here, so the app folder accumulates the
 //                  metadata for reuse/edits. Construction is offline (no token until first call).
-function makeSdk(env, spec, workspaceDir) {
+function makeSdk(env, spec, workspaceDir, languageCode) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
@@ -48,14 +51,30 @@ function makeSdk(env, spec, workspaceDir) {
     instanceUrl: env,
     httpClient,
     solutionUniqueName: spec.solution && spec.solution.uniqueName,
+    // #455: the App, Form and Dashboard adapters bake this in at construction, so it is the ONLY
+    // way to stop sitemap titles and FormXML labels being written at a hardcoded 1033. Omitted
+    // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
+    ...(languageCode ? { languageCode } : {}),
   });
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const provisionSdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
+  const provisionSdk = createMakerSdk({
+    workspacePath: workspaceDir,
+    instanceUrl: env,
+    httpClient,
+    // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
+    // language disagrees with the SDK performing it (for language-sensitive registrations), so two
+    // instances at different LCIDs would make every push of a fetched artifact fail.
+    ...(languageCode ? { languageCode } : {}),
+  });
   provisionSdk.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
-  return { sdk, provisionSdk, cleanup };
+  // `httpClient` is returned so the caller can wire verify's role-privilege reader, which needs the
+  // raw client (and the org URL) to compose an absolute `EntityDefinitions(...)?$select=Privileges`
+  // request — the SDK's entity metadata projects `Privileges` away. Returning the SAME instance
+  // rather than constructing a second one keeps token acquisition and retry state shared.
+  return { sdk, provisionSdk, httpClient, cleanup };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -120,7 +139,7 @@ async function discoverOpDiffState(spec, provision) {
     const id = await resolveExistingFormId(provision, def);
     if (!id) continue; // not deployed yet → nothing to prune
     await provision.fetchArtifact('form', id); // seed the workspace copy so getArtifact can read it
-    forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: provision.getArtifact('form', id) || {}, def });
+    forms.push({ label: `form "${f.name || f.entity}" (${String(f.entity).toLowerCase()})`, deployedForm: await provision.getArtifact('form', id) || {}, def });
   }
   // Sitemap removals only make sense when the app already exists (a fresh app has no deployed sitemap).
   let sitemap = null;
@@ -128,7 +147,7 @@ async function discoverOpDiffState(spec, provision) {
     const appId = await provision.findArtifact('app', { uniqueName: collision.appUnique });
     if (appId) {
       await provision.fetchArtifact('app', appId);
-      const deployed = provision.getArtifact('app', appId) || {};
+      const deployed = await provision.getArtifact('app', appId) || {};
       sitemap = { deployedTargets: sitemapTargets(deployed.siteMap || {}), wantTargets: sitemapTargets(spec.appShell) };
     }
   }
@@ -260,6 +279,15 @@ async function buildModelApp(spec, opts, deps) {
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        languageCode: opts.languageCode,
+        // Forwarded explicitly because this is a fresh literal, not a spread of `opts`: without it
+        // the data-model phase re-resolves, and on a transient org-read failure that fallback lands
+        // on 1033 while the SDK is already baked at the resolved LCID — the exact split-language
+        // build (translated FormXML, English columns) this threading exists to prevent.
+        preResolvedLanguageCode: opts.preResolvedLanguageCode,
+        // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
+        provisionedLanguages: deps.provisionedLanguages,
+        warn: deps.warn,
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
@@ -314,14 +342,34 @@ async function buildModelApp(spec, opts, deps) {
         // opts.verify without mustVerifyPages and no verifier → silently skip (no pages to enforce).
       } else {
         try {
-          const vr = await deps.verify(spec);
+          // Hand verify what the BUILD could not do on this environment, and which phases actually
+          // ran. Without the first, an environment-gated business-rule skip reports `not deployed`
+          // and drives `verify.ok` false forever — and that value gates the exit code,
+          // `.last-applied.json` AND the `--changed-only` snapshot, so the baseline would never be
+          // written and every later run would fall back to a full build. Without the second, the
+          // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
+          // at all) fails the same way on every run after the first.
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
-          if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}`);
+          // Named explicitly rather than folded into the pass, so a green verify never reads as
+          // "everything the spec asked for is deployed" when part of it could not be. Two distinct
+          // causes get two distinct messages: telling an operator on a HEALTHY environment that it
+          // cannot host business rules — which is what a single shared message did on every
+          // `--changed-only` fast apply — is worse than saying nothing.
+          if (vr.environmentSkipped && vr.environmentSkipped.length) {
+            log(`  ⊘ ${vr.environmentSkipped.length} check(s) not applicable on this environment: ${vr.environmentSkipped.join(', ')}`);
+          }
+          if (vr.phaseSkipped && vr.phaseSkipped.length) {
+            log(`  ⊘ ${vr.phaseSkipped.length} check(s) not verified because their phase did not run in this build: ${vr.phaseSkipped.join(', ')}`);
+          }
+          // Include `detail` on a failure so a READ that failed (throttling, auth expiry, a 5xx) is
+          // not reported identically to an artifact that is genuinely absent.
+          if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
           // Propagate unableToRun from verifySpec (RECONCILIATION 1): verifySpec itself sets
           // unableToRun when the reader lacks pages/pageCode methods. Only include the property
           // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
-          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}`), ...(vr.unableToRun ? { unableToRun: true } : {}) };
+          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}) };
           if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
         } catch (e) {
           if (mustVerifyPages) {
@@ -380,6 +428,21 @@ function list(v) {
   return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
 
+// Read the language flag from either spelling, rejecting a conflicting pair rather than silently
+// preferring one.
+const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'languageCode');
+
+function parseLanguageCode(value) {
+  if (value === undefined) return undefined;
+  // Shares app-spec's normalizer so the CLI flag, the App Spec field and the resolver can never
+  // disagree about which LCIDs are valid.
+  const lc = normalizeLanguageCode(value);
+  if (lc === null) {
+    throw new Error(`--language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${value}')`);
+  }
+  return lc;
+}
+
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   // parseArgs sets a value-less flag to boolean `true`. Coerce required-VALUE flags to missing so a
@@ -391,14 +454,14 @@ async function main() {
   const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
+      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
   // A value-less phase selector (or --workspace) is a USAGE ERROR — never a silent all-phases select
   // or default workspace. `--only`/`--skip`/`--from`/`--to`/`--stage` with no value would otherwise be
   // dropped by list()/stagePhasesOrResolve and resolve to the full phase set.
-  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace'].find((k) => flags[k] === true);
+  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace', 'language-code', 'languageCode'].find((k) => flags[k] === true);
   if (valuelessFlag) {
     process.stderr.write(`✗ --${valuelessFlag} requires a value.\n`);
     process.exit(1);
@@ -414,22 +477,61 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  const languageCode = parseLanguageCode(readLanguageFlag(flags));
+  const phases = stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to });
+  // Phases that stamp an authoring language onto something. `data-model` writes Dataverse label
+  // objects; `forms`, `dashboards` and `app-shell` write FormXML `<labels>` and sitemap
+  // `<Titles><Title LCID=…>` through the SDK, which since #455 takes the LCID as a construction
+  // option. Anything else (views, pages, web-resources, publish, sample-data) creates no labels.
+  //
+  // This list must stay in step with what actually consumes the language. When it drifted before,
+  // the warning told users the flag was ignored on `--stage ui` at the same time as the build was
+  // faithfully applying it — worse than no warning, because it stops them investigating.
+  const LANGUAGE_CONSUMING_PHASES = ['data-model', 'forms', 'dashboards', 'app-shell'];
+  // A selector that excludes ALL of them makes the flag a genuine no-op. Say so rather than accept
+  // it silently: a user who passed --language-code believes their labels are being pinned, and
+  // finding out otherwise means re-running the whole build.
+  if (languageCode !== undefined && Array.isArray(phases) && phases.length
+      && !phases.some((p) => LANGUAGE_CONSUMING_PHASES.includes(p))) {
+    process.stderr.write(`⚠ --language-code ${languageCode} has no effect for the selected phases (${phases.join('·')}) — none of them create labels (${LANGUAGE_CONSUMING_PHASES.join(', ')} do).\n`);
+  }
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
     verify: flags.verify === true,
-    phases: stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
+    phases,
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
+    languageCode,
     appDir: path.dirname(specPath),
     env,
     workspaceDir,
   };
+  // #455: the App, Form and Dashboard adapters bake the authoring LCID in at CONSTRUCTION, so it
+  // has to be resolved before the SDK exists — which is why this reads over the transport hatch
+  // rather than through `provision.queryRecords`. Resolving here also means the provisioned-language
+  // halt fires once, before anything is constructed or written. Dry runs skip it: they perform no
+  // writes, and a language read is a round trip a plan does not need.
+  //
+  // Resolution is best-effort in its *fallback* direction: an unreadable organization language, a
+  // failed probe, or a missing value all degrade to the 1033 default with a warning rather than
+  // failing the build. It is deliberately NOT best-effort in one direction — an EXPLICIT
+  // `--language-code` / spec `languageCode` that the organization has not provisioned halts here
+  // (#456), before the SDK is constructed and before any label is written. That halt is the point:
+  // Dataverse would otherwise accept some labels under the wrong language and reject others
+  // mid-build, phases away from the flag that caused it.
+  const authoringLanguageCode = opts.apply
+    ? await resolveAuthoringLanguage({ envUrl: env, languageCode, spec, warn: (m) => process.stderr.write(`⚠ ${m}\n`) })
+    : undefined;
+  // Reuse the SAME resolved value for the data-model phase instead of repeating the org read and the
+  // provisioned-languages probe. A disagreement between the two would label columns in one language
+  // and FormXML/sitemap titles in another — assigned after resolution because `opts` is built above.
+  opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir);
+  const { sdk, provisionSdk, httpClient, cleanup } = makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply
@@ -443,7 +545,7 @@ async function main() {
   }
   // #3 (track the diff): on a DRY-RUN, if a prior apply left a snapshot, report which phases changed
   // since — so a small edit is visibly "only pages changed", not a re-read of the whole plan. Advisory
-  // only (it does not yet gate --apply; see docs/app-builder-roadmap.md). Never fatal.
+  // only (it does not yet gate --apply; see docs/app-builder-capabilities.md). Never fatal.
   const lastAppliedPath = path.join(workspaceDir, 'last-applied.json');
   // #2 (content-aware diff): resolve a page codeFile / web-resource contentPath the SAME way the build
   // engine does — relative to the app folder (opts.appDir) — and return its bytes, or null when it can't
@@ -481,8 +583,18 @@ async function main() {
     // core stays free of SDK-reader wiring and fully injectable for tests.
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
+      warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal,
-      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir })),
+      // `httpClient` + `envUrl` are threaded through so the role-privileges check actually RUNS
+      // here. verify-spec skips it unless BOTH `rolePrivileges` and `entityPrivileges` readers are
+      // present, and `entityPrivileges` needs the raw client and the org URL to compose an absolute
+      // EntityDefinitions request. Omitting them degraded silently: `--apply --verify` reported a
+      // clean PASS having never checked what any persona's role actually grants. Caught live —
+      // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
+      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env }), verifyOpts),
+      // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
+      // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
+      provisionedLanguages: () => readProvisionedLanguages(env),
     };
     if (changedOnly && opts.apply) {
       // #changed-only: the flow decides fast (pages-only via the sdk-build seams) vs full, gated on the
@@ -543,4 +655,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode };

@@ -35,7 +35,7 @@ references/
   GridLayoutGuide.md           ← Conditional GridLayout formulas and invariants
   PowerFxGuide.md              ← State, events, named formulas, and mock data
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
-  QAChecks.md                  ← 32 runtime anti-pattern checks for per-screen self-QA
+  QAChecks.md                  ← Named runtime anti-pattern checks for per-screen self-QA
   PlanTemplates.md             ← Progressive index, shared plan, and screen-brief structures
   CreateWorkflow.md            ← Empty-app planning and planner handoff
   EditWorkflow.md              ← Simple vs complex edit routing and planning
@@ -67,7 +67,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
 | `canvas-app-planner` | `canvas-app` | Receives the approved plan, discovers resources, validates CREATE-mode `App.pa.yaml`, and writes a compact dispatch index, shared conventions, and one self-sufficient brief per screen. |
-| `canvas-screen-builder` | `canvas-app` | Creates or modifies exactly one screen from its shared plan and screen brief, then reports all 32 self-QA outcomes. Builders run in waves of at most three; `canvas-app` owns compilation. |
+| `canvas-screen-builder` | `canvas-app` | Creates or modifies exactly one screen from its shared plan and screen brief, then reports every named self-QA outcome. Builders run in waves of at most three; `canvas-app` owns compilation. |
 
 ## MCP Tools
 

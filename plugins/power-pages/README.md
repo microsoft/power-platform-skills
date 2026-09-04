@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -136,7 +136,7 @@ The skill first scans your codebase to find components using mock data, placehol
 - TypeScript entity types and domain mappers per table
 - CRUD service layer per table using `/_api/` endpoints with dual token headers and `@odata.bind` for lookups
 - Framework-specific patterns: React hooks, Vue composables, Angular injectable services
-- Table permission YAML files and site setting YAML files (with explicit validated column lists by default; use `*` only for aggregate OData scenarios that otherwise 403)
+- Table permission YAML files and site setting YAML files with explicit validated column lists
 
 **What gets updated:**
 
@@ -391,6 +391,29 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
 
+### Migration
+
+#### `/migrate-bootstrap`
+
+> "Upgrade my Power Pages site from Bootstrap 3 to Bootstrap 5"
+
+Migrates a traditional Power Pages site (Liquid web templates, not code sites) from Bootstrap 3 to Bootstrap 5. Runs the `pac pages bootstrap-migrate` engine for the bulk class renames, then assists with the residual hierarchy/CSS fixes the engine can only flag.
+
+- Non-destructive: the engine writes a new `<folder>V5` copy and never edits the source
+- AI-assisted per-category fixes for grid, navbar, panel/card, and page-header changes
+- Uploads (auto-enabling the Bootstrap 5 runtime flag) and verifies the flip via `pac-log.txt`
+
+#### `/migrate-webapi-selectall`
+
+> "Replace every wildcard Web API fields setting with the columns my site actually uses"
+
+Reviews every authored Power Pages Web API source call and response consumer, maps entity sets through Dataverse metadata, and replaces deprecated `Webapi/<table>/fields = *` values with evidence-backed explicit columns. Compiled and generated output is excluded. Works with both traditional/Liquid sites and React, Vue, Angular, or Astro SPA sites.
+
+- Reports every wildcard with its exact proposed fix and every already-explicit configuration
+- Adds missing `$select` projections where normal record reads relied on implicit selection
+- Traces every call site reaching a table, including duplicated wrappers and differing query shapes
+- Verifies all configuration scopes and deployment profiles contain zero wildcards
+
 ### Support
 
 #### `/report-issue`
@@ -519,6 +542,7 @@ This Dataverse relationship check is intended for local validation only and shou
 This plugin sends usage telemetry by default to help Microsoft improve it.
 Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
 When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
+When you are working in a Power Pages code site, the site's SPA framework (`react`, `vue`, `angular`, or `astro`) is recorded under `eventInfo.framework`; that field is omitted otherwise. It names the scaffold only, never your site or its location.
 Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
 
 **Turn it on or off (per-user, applies to every project):**

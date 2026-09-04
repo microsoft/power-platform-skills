@@ -94,7 +94,7 @@ Do not drop any screens — this rule only reorders. Every discovered screen sti
 Load the Tamagui-to-HTML mapping reference:
 
 ```text
-Read file_path="${CLAUDE_SKILL_DIR}/../../shared/references/tamagui-html-mapping.md"
+Read file_path="${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md"
 ```
 
 Internalize:

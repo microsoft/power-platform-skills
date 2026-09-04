@@ -6,6 +6,7 @@ Choosing a control type, and writing properties and enum values that the compile
 ## Contents
 
 - Discover before you choose
+- Interpret property defaults and requirements
 - Layout containers
 - Data display
 - Selection controls — `ItemDisplayText` is a per-item formula
@@ -14,8 +15,11 @@ Choosing a control type, and writing properties and enum values that the compile
 - Enum type names
 - Enum member values
 - Option set values
-- Colour and button-state patterns
+- Color and button-state patterns
 - Timer lifecycle
+- Read-only ancestors
+- Cross-screen navigation
+- Semantic display values
 - Common property reference
 - Troubleshooting
 
@@ -24,7 +28,26 @@ Choosing a control type, and writing properties and enum values that the compile
 **⚠️ Required — not optional:** run `list_controls` before planning your layout. Controls
 you don't know exist can't influence your design, and the catalog includes high-level
 controls (`ModernTabList`, `ModernCard`, and others) that are easy to miss and expensive
-to reinvent with primitives. Then run `describe_control` on every type you plan to use.
+to reinvent with primitives.
+
+The resulting list will also specify if any Code Components or Canvas Components are available as control instances in the app. The result identifies the `ComponentName` to pass to `describe_control`.
+
+Run `describe_control` on every type you plan to use.
+
+## Interpret property defaults and requirements
+
+The `Default` shown for a property is the value the property takes when it is omitted from the YAML.
+Properties marked `Required: true` must be provided, even when no default is shown.
+Omit other properties to accept their default.
+
+### Refresh Canvas and Code Component descriptions
+
+`describe_control` results for Canvas and Code Components are snapshots of the current
+Studio document, not durable catalog entries. Re-run `describe_control` for the returned
+`ComponentName` after a successful `compile_canvas` applies changes to a local component
+definition or its custom properties. Do not reuse component descriptions from an earlier
+turn after any of those events. Refresh immediately before recording component properties
+in a plan or editing a component instance.
 
 ## Layout containers
 
@@ -36,8 +59,7 @@ to reinvent with primitives. Then run `describe_control` on every type you plan 
 
 Default to AutoLayout. Use ManualLayout only when the user explicitly requests
 pixel-perfect positioning or the app is a fixed-size desktop dashboard. Mobile and
-cross-device apps MUST use AutoLayout. See `${PLUGIN_ROOT}/references/LayoutGuide.md` for
-the patterns.
+cross-device apps MUST use AutoLayout. See `${PLUGIN_ROOT}/references/LayoutGuide.md` for the patterns.
 
 ⚠️ **`GroupContainer` has no `OnSelect` — it cannot be clicked.** This is a common dead
 end when building card UI: the container lays out perfectly but tapping it does nothing.
@@ -99,7 +121,20 @@ child-column contract, do not create a new grid for a local collection. It can c
 and still render "There are no fields in this data table." Use an explicit header row
 plus a Gallery row shell and implement sorting through the Gallery `Items` formula.
 
-## Selection controls — `ItemDisplayText` is a per-item formula
+## Selection controls and filters — `ItemDisplayText` is a per-item formula
+
+Choose the interaction before styling the control. These rules apply equally to form
+fields, filters, sort choices, periods, statuses, and category selectors:
+
+- For a short static required set, prefer `ModernRadio` or visible choice buttons when the options fit, then a `ModernDropdown` that selects an option by click or tap.
+- Use `ModernCombobox` only for a large set that benefits from search or when free-form entry is explicitly required. Do not use it for a short required set merely because modern controls are preferred.
+- Give a required short-choice field a valid initial selection when the business rule permits one. If an explicit choice is required, show a visible placeholder and validation, but keep selection independent of typed filtering or keyboard-only commitment.
+- A populated `Items` formula is not enough. The planned control must expose readable options and commit the selected record or value through its normal pointer interaction.
+- Record the exact selected-value property returned by `describe_control` and bind it into
+  the consumer formula. Never guess `Selected.Value`, invent a child listbox, or assume
+  that opening a popup commits a value.
+- For a filter, show the active choice and provide a reachable clear/reset action. Verify
+  the consumer against at least two matching records and one non-matching record.
 
 `ItemDisplayText` and `ItemKey` on `ModernDropdown`, `ModernCombobox` and similar controls
 are evaluated once per row with `ThisItem` in scope. They take an expression, not a column
@@ -154,17 +189,18 @@ the most common single-property mistake:
 `Gallery` has `Fill` but no text properties at all — style the labels inside it, not the
 container.
 
-### Trap 3 — writing a template version on `Control:`
+### Trap 3 — deriving creation keywords from `list_controls`
 
-Never write `Control: ModernText@1.5.0`. Use the bare name that `list_controls` returned.
+`list_controls` returns the name used to query `describe_control`; it is not the authored
+YAML contract. The `Control creation keywords` block in `describe_control` is
+authoritative. Copy its `Control:` value and any required `ComponentName`,
+`ComponentLibraryUniqueName`, `Variant`, and `Layout` keywords verbatim.
 
 ## Control template versions
 
-Every control type resolves to exactly one template version per app. You do not choose it
-and you do not need to: write the bare control name everywhere and the app stays
-consistent.
-
-Writing an explicit `@version` on even one control breaks that:
+Do not add, remove, or replace an `@version` suffix yourself. If compilation reports a
+template-version conflict, re-run `describe_control` and make every instance use the
+exact `Control:` value currently returned for that type:
 
 ```text
 Another instance of control type 'ModernText' has already been referenced using a
@@ -182,12 +218,9 @@ not the one you wrote:
 Unknown property 'Color' for control type 'Text'.
 ```
 
-Those properties are valid on `ModernText`. Nothing is wrong with them. The only defect is
-the version suffix, and removing every suffix clears the entire cascade in one compile.
-
-- ✅ `Control: ModernText`
-- ❌ `Control: ModernText@1.5.0`
-- ❌ mixing `Control: Badge` in one file with `Control: Badge@1.2.0` in another
+Those properties may be valid on `ModernText`; resolve the creation-keyword mismatch
+before changing them. Do not assume the bare or versioned form is correct without
+checking `describe_control`.
 
 ## Enum type names
 
@@ -281,10 +314,10 @@ or starts with a number:
       Visible: =ThisItem.Status = 'Status (Assignments)'.Active
 ```
 
-## Colour and button-state patterns
+## Color and button-state patterns
 
 ```yaml
-# Colour constants
+# Color constants
 Fill: =Color.White
 BasePaletteColor: =Color.Blue
 
@@ -292,7 +325,7 @@ BasePaletteColor: =Color.Blue
 Fill: =RGBA(240, 240, 240, 1)
 FontColor: =RGBA(0, 0, 0, 1)
 
-# Conditional colour
+# Conditional color
 BasePaletteColor: =If(isActive, Color.Blue, Color.Gray)
 ```
 
@@ -300,18 +333,6 @@ Fluent appearances own their surface. `ButtonAppearance.Secondary`, `Outline`, `
 and `Transparent` can remain light even when `Fill` is set. Pair those appearances with a
 dark `Color`, or switch to `Primary` and set `BasePaletteColor` for a dark surface. Do not
 assume `Fill` overrides the variant.
-
-```yaml
-Properties:
-  DisplayMode: =If(isDisabled, DisplayMode.Disabled, DisplayMode.Edit)
-  Text: =buttonText
-  OnSelect: |-
-    =If(condition,
-      false,                           # Guard clause - do nothing
-      Set(variable, value);            # Execute logic
-      Set(anotherVar, anotherValue)
-    )
-```
 
 ## Timer lifecycle
 
@@ -328,16 +349,22 @@ initial value until the user clicks it. For timers that gate a workflow:
 - Do not use the timer surface as an unlabeled pause button. Add a separate labelled
   control when pause/resume is required.
 
+## Read-only ancestors
+
 `DisplayMode` is inherited. Do not put row action buttons inside a Gallery or container
 set to `DisplayMode.View`; the descendants become disabled even when they look enabled.
 Use `Selectable: =false` to prevent Gallery selection while leaving the Gallery in
 `DisplayMode.Edit`.
+
+## Cross-screen navigation
 
 `ModernTabList` is for tabs that switch panels within one screen. Do not use its
 `OnChange` to navigate between screens: the selected tab can update while `Navigate`
 does not, leaving the highlight and visible screen out of sync. For cross-screen primary
 navigation, use a row of ModernButtons whose `OnSelect` performs the navigation and whose
 appearance is derived from the current screen.
+
+## Semantic display values
 
 Semantic controls need their visible value property. `Badge.AccessibleLabel` does not
 replace `Badge.Content`; omitting Content can render placeholder text such as `AB`.
@@ -353,13 +380,13 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 
 **Styling:**
 
-- `Fill` — background colour (absent on `Badge` and `Progress`)
-- `Color` — text colour on the modern React controls; `Badge` spells it `FontColor`
-- `BasePaletteColor` — theme colour for `Badge`, `Progress`, and the modern inputs
+- `Fill` — background color (absent on `Badge` and `Progress`)
+- `Color` — text color on the modern React controls; `Badge` spells it `FontColor`
+- `BasePaletteColor` — theme color for `Badge`, `Progress`, and the modern inputs
 - `Size` — font size on the modern React controls; `Badge` spells it `FontSize`
 - `FontWeight` — Bold, Semibold, Normal, Lighter
 
-**Behaviour:**
+**Behavior:**
 
 - `DisplayMode` — Edit, View, Disabled
 - `Visible` — boolean visibility
@@ -374,15 +401,16 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 - `LayoutGap` — spacing between items
 - `LayoutOverflowY` — vertical overflow (`Scroll` for scrollable containers)
 - `FillPortions` — proportional sizing
-- `PaddingTop/Bottom/Left/Right` — container padding
+- `PaddingTop`/`Bottom`/`Left`/`Right` — container padding
 
 ## Troubleshooting
 
 - **`Unknown property`:** run `describe_control` and use only the properties it returns
   for that exact control type.
 - **Many `Unknown property` errors naming a control type you never wrote** (e.g. `'Text'`
-  when your YAML says `ModernText`): a template version conflict. Strip every `@version`
-  suffix from every `Control:` value and re-compile.
+  when your YAML says `ModernText`): a template version conflict. Re-run
+  `describe_control`, copy its complete creation-keyword block to every instance of that
+  type, and re-compile.
 - **A property works on one control but not a similar one:** property support is per
   control type, and the modern React, FluentV9 and Classic families disagree. Check the
   per-control table above rather than reasoning by analogy.

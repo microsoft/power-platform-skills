@@ -16,7 +16,7 @@
 //
 // When you bump + re-vendor the SDK, run this first: a method the skill depends on that the
 // new bundle no longer exposes fails HERE (listing the exact names) instead of silently at
-// build time. Update the migration accordingly (see docs/app-builder-roadmap.md).
+// build time. Update the migration accordingly (see docs/app-builder-capabilities.md).
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
@@ -49,6 +49,7 @@ const SKILL_SDK_SURFACE = [
   'createWebResource',
   'deleteAppCascade',
   'deleteGlobalOptionSet',
+  'deleteRecord',
   'deleteRelationship',
   'deleteRemoteArtifact',
   'deleteSecurityRole',
@@ -64,17 +65,35 @@ const SKILL_SDK_SURFACE = [
   'findTables',
   'getAiReadiness',
   'getArtifact',
+  'getColumnVisualization',
+  'getSolution',
   'initWorkspace',
   'insertStatusValue',
+  'moveElement',
   'publishArtifact',
   'pushArtifact',
   'queryRecords',
   'removeElement',
   'removeRowSummary',
   'resolveArtifact',
+  'retrieveSetting',
   'seedRecordGraph',
   'setAppAiFeatures',
+  'setColumnVisualization',
+  // Offers a form to specific security roles (AB#6648526). The roles are NOT a relationship —
+  // `systemform` reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }` and there is no
+  // `systemformrole` entity — they live inside `formxml` as `<DisplayConditions>`, so this dedicated
+  // call is the only way to write them.
+  'setFormSecurityRoles',
+  // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
+  // (`NewLookAlwaysOn`), not an appmodule column.
+  'saveSettingValue',
   'setEntityIcon',
+  // Wave 2 header/navigation refresh (`app.headerNavigationRefresh`). Used instead of a raw setting
+  // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted
+  // by the API and silently fails to enable the feature. The SDK owns that encoding.
+  'setHeaderAndNavigationRefresh',
+  'updateColumn',
   'updateElement',
   'updateRecord',
   'updateTable',
@@ -111,24 +130,60 @@ test('CONTRACT: every SDK method the skill depends on is a function on the real 
   }
 });
 
-// Collect every `provision.<name>(` / `sdk.<name>(` identifier the two engines call. These
-// aliases are the MakerSdk instance in sdk-build.js (`provision`) and sdk-teardown.js (`sdk`).
+// Collect every `provision.<name>(` / `sdk.<name>(` identifier the plugin calls. These aliases are
+// the MakerSdk instance in sdk-build.js (`provision`) and sdk-teardown.js (`sdk`).
 // e.g. matches `provision.createTable(o)` and `await sdk.deleteTable(...)` -> 'createTable' / 'deleteTable'.
+//
+// The scan covers scripts/ RECURSIVELY, not a hand-listed set of library files. An adversarial
+// review found that the hand-listed version silently omitted two real calls made from the top-level
+// CLI scripts — `sdk.getSolution(...)` in download-model-app.js and `sdk.retrieveSetting(...)` in
+// verify-model-app.js — so the "every method the engines call is guarded" claim was false, and a
+// future bundle could drop either method with this test still green and download/verify failing at
+// runtime with a TypeError. A list of files to scan is exactly the kind of thing that rots; a walk
+// does not.
 function calledSdkMethods() {
-  const files = [
-    path.join(LIB_DIR, 'sdk-build.js'),
-    path.join(LIB_DIR, 'sdk-teardown.js'),
-    path.join(LIB_DIR, 'entity-provision.js'),
-    // artifact-intent.js is PURE (no SDK calls) by design, but scan it too so a future SDK call
-    // added to the compiler is caught by this guard rather than slipping past the mock-based tests.
-    path.join(LIB_DIR, 'artifact-intent.js'),
-  ].filter((f) => fs.existsSync(f));
-  const re = /\b(?:provision|sdk)\.([A-Za-z][A-Za-z0-9]*)\s*\(/g;
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // vendor/ is the generated SDK itself; _vendor-build is the dev-only bundler; tests/ define
+        // MOCK sdk objects whose method set is deliberately not the real surface.
+        if (['vendor', '_vendor-build', 'node_modules', 'tests'].includes(entry.name)) continue;
+        walk(full);
+      } else if (entry.name.endsWith('.js')) {
+        files.push(full);
+      }
+    }
+  };
+  walk(SCRIPTS_DIR);
+  // Receivers: any identifier that plausibly holds an SDK instance, not a two-name allow-list.
+  //
+  // A review found `provisionSdk.initWorkspace()` in build-model-app.js was invisible to the old
+  // `(provision|sdk)` pattern — the method happened to be listed anyway, via a `sdk.` call
+  // elsewhere, so nothing failed; a method used ONLY through such a receiver would have been
+  // silently unguarded. Matching any identifier containing "sdk" or "provision" (case-insensitive)
+  // covers every handle the plugin actually uses (`provision`, `sdk`, `provisionSdk`) and errs
+  // toward over-collecting: a false positive here just adds a name to SKILL_SDK_SURFACE, where the
+  // bundle check immediately proves whether it is real.
+  //
+  // Still invisible, and deliberately not chased: a destructured or fully dynamic call. Those need
+  // real data-flow analysis, and unlike the async guard — where an unguarded call CORRUPTS data —
+  // the failure here is a loud TypeError at runtime, so a tripwire is proportionate.
+  // `matchAll`, not a shared `/g` regex with `exec`. The exec form is CORRECT here as written — a
+  // loop run to exhaustion gets `lastIndex` reset to 0 by the failing `exec`, verified: three files
+  // scanned in sequence find all matches and leave `lastIndex` at 0 after each. But the correctness
+  // depends entirely on nobody ever adding a `break`, `continue` or early `return` inside the loop:
+  // with one `break`, the same three files yield 2 of 5 matches instead of 5, silently. A guard whose
+  // soundness rests on an invisible invariant is one edit from being a no-op, and this one exists to
+  // catch unguarded SDK calls. `matchAll` does not touch the source regex's `lastIndex` at all.
+  const re = /\b([A-Za-z_$][\w$]*)\.([A-Za-z][A-Za-z0-9]*)\s*\(/g;
   const found = new Set();
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
-    let m;
-    while ((m = re.exec(src)) !== null) found.add(m[1]);
+    for (const m of src.matchAll(re)) {
+      if (/sdk|provision/i.test(m[1])) found.add(m[2]);
+    }
   }
   return found;
 }

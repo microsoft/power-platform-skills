@@ -3,6 +3,8 @@
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
 const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef } = require('./app-spec.js');
+const { normalizeSpecShape } = require('./spec-shape.js');
+const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -16,11 +18,17 @@ function lintAppSpec(spec) {
   const warnings = [];
   const E = (m) => errors.push(m);
   const W = (m) => warnings.push(m);
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
+    return { ok: false, errors: ['spec is not an object'], warnings };
+  }
   const lc = (s) => String(s || '').toLowerCase();
   // Lint runs on WORK-IN-PROGRESS specs (it is the gate the author hits before plan mode), so a
   // half-typed collection must produce findings, not a crash that kills the authoring flow.
-  // validateAppSpec is what reports the shape error itself.
+  // Shared with validateAppSpec so the two gates can never disagree about what a malformed spec is.
   const arrOf = (v) => (Array.isArray(v) ? v : []);
+  const shape = normalizeSpecShape(spec);
+  for (const m of shape.errors) E(m);
+  spec = shape.spec;
 
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();
@@ -383,6 +391,11 @@ function lintAppSpec(spec) {
       W(`persona "${persona}" job "${job.name}" is not mapped to a surface (jobs[].surfaces[]) — nothing in this app demonstrably lets that persona do the job.`);
     }
   }
+  // A surface that names nothing this spec builds is the NEXT failure after "no surfaces at all":
+  // the job claims coverage that does not exist. Only a warning, because a surface may legitimately
+  // name an out-of-the-box artifact this spec never authors (the same reason app-spec.js validates
+  // surfaces as shape-only) — see lib/surface-resolver.js.
+  for (const u of resolveSurfaces(spec).unresolved) W(unresolvedSurfaceMessage(u));
   if (!(Array.isArray(spec.pages) && spec.pages.length)) {
     W('no pages[] — per the genpage-first policy, non-record surfaces (overview/landing, dashboard, analytics, guided or wizard flows) should be generative pages. If this app is genuinely record-CRUD only, ignore this.');
   }

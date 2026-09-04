@@ -1,6 +1,6 @@
 ---
 name: genpage
-version: 2.3.0
+version: 2.3.1
 description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux". This skill stands alone and does not require /app-builder — but if the user wants a whole app built (tables, forms, views, sitemap) rather than pages for an app that already exists, use /app-builder instead.
 author: Microsoft Corporation
 argument-hint: "<page description> | edit"
@@ -8,6 +8,8 @@ user-invocable: true
 model: sonnet
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Power Apps Generative Pages Builder
 
@@ -105,7 +107,7 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 > NOT inline the planner's questions yourself with `AskUserQuestion`.**
 >
 > The planner is not optional or skippable. It runs:
-> 1. Prerequisite validation (`node --version`, `pac help` version >= 2.7.0)
+> 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
 > 3. The structured "Create new / Edit existing" question (via `AskUserQuestion`
 >    inside the planner subagent, not here)
@@ -372,6 +374,55 @@ deployed page `config.json` shape that `pac` writes):
 
 Do **not** write connection IDs into `connectors.json` — the importing maker/admin
 fills env-specific `ConnectionId` values through solution deployment settings.
+
+### Phase 4.6: Custom API Bindings (Conditional)
+
+**Re-probe the feature gate here — do not rely on the plan content alone.** A plan
+authored while the flag was ON must not deploy Custom API bindings after it is turned OFF:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" custom-api
+```
+
+**If it prints `disabled`:** Custom API support is OFF. Skip this phase entirely — do not
+create or pass `actions.json`, and never add `--actions` on upload — **regardless of what the
+plan's `## Custom API Bindings` section says**. (Backstop: `list-custom-apis.js` also fails
+closed with exit 3 if invoked while OFF.)
+
+**If it prints `enabled`:** read the plan's `## Custom API Bindings` section and treat it as
+bindings **only when it contains an actual binding table** (a `| Name | Kind | …` header with
+at least one data row). If the section is `No custom API bindings.`, empty, missing, or
+malformed, treat the page as having no Custom APIs and skip this phase.
+
+When there are real bindings, the `genpage-customapi-builder` agent already wrote
+`<working-dir>/actions.json` during planning — verify it exists and matches the plan table. If
+it is missing, derive it as a **bare JSON array** of
+`{ name, isFunction, boundEntityLogicalName?, displayName, parameterKinds }` entries (Action row
+`isFunction:false`, Function `true`; `boundEntityLogicalName` only for an entity-bound, non-
+`(Global)`, row) — see `${PLUGIN_ROOT}/references/custom-api.md`. Never the
+`{ "actionBindings": [...] }` object wrapper (the deployed `config.json` shape `pac` writes).
+
+### Phase 4.7: Page Telemetry (Conditional)
+
+**Re-probe the feature gate here — do not rely on the plan content alone.**
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" custom-telemetry
+```
+
+This phase has no bindings and no artifacts; it only decides whether page-builder is
+permitted to instrument. **If it prints `disabled`**, generated pages contain no
+telemetry calls at all — identical to before the feature existed.
+
+**Carry this decision into code generation.** The probe result is `Telemetry:
+disabled` / `Telemetry: enabled` for the rest of the run, and Phase 5 **must** pass it
+verbatim in every page-builder dispatch.
+
+`enabled` is permission, not instruction. Even when it is on, page-builder emits
+telemetry **only** when the maker asked to measure or track something in their own
+words; the default output is still a page with zero telemetry. See
+`${PLUGIN_ROOT}/references/page-telemetry.md`.
+
 ### Phase 5: Build Pages (Parallel)
 
 Read `genpage-plan.md` and extract the pages table.
@@ -400,10 +451,19 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    `${PLUGIN_ROOT}/references/connectors.md`. Treat a `No connector bindings.`
    sentinel, an empty/missing/malformed section, **or a `disabled` probe** as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
+3b. Only when the plan's `## Custom API Bindings` section contains an **actual
+   binding table** (a `| Name | Kind | …` header with at least one data row),
+   also read `${PLUGIN_ROOT}/references/custom-api.md`. Treat a
+   `No custom API bindings.` sentinel, or an empty/missing/malformed section, as
+   having no Custom APIs (same contract as Phase 4.6 and genpage-page-builder).
 4. If the plan's Per-Page Specification has `Needs caching: true`, also read
    `${PLUGIN_ROOT}/references/data-caching.md`
 5. If the plan's `## Environment` indicates non-English languages, also read
    `${PLUGIN_ROOT}/references/localization.md`
+5b. Only when the Phase 4.7 probe printed `enabled` **and** the maker's own request
+   asks to measure, track, monitor, or diagnose something, also read
+   `${PLUGIN_ROOT}/references/page-telemetry.md`. In every other case the page
+   contains no telemetry calls — do not read it.
 6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
 7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
@@ -429,6 +489,7 @@ For each page, pass a prompt that includes:
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
 - **Connectors: `enabled` or `disabled`** — the Phase 4.5 probe result, verbatim
+- **Telemetry: `enabled` or `disabled`** — the Phase 4.7 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
 
@@ -440,6 +501,7 @@ For each page, pass a prompt that includes:
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
 > - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
@@ -455,6 +517,7 @@ For each page, pass a prompt that includes:
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
 > - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
 >
@@ -490,6 +553,15 @@ Connector deployment matrix:
 - **Delete all connectors:** write `[]` to `connectors.json` and pass
   `--connectors` so pac clears the page's `connectorBindings`.
 
+If Phase 4.6 wrote `<working-dir>/actions.json`, pre-flight the same way — the upload `--help`
+must contain `--actions`; if not, stop and surface "Custom API deploy requires a pac build with
+`pac model genpage upload --actions` (PowerPlatform-Scale-AdminTools)." Don't silently drop bindings.
+
+Custom API deployment follows the **identical matrix** as connectors, substituting
+`--actions "<working-dir>/actions.json"` for `--connectors`: pass it on create; on an edit only
+when bindings changed/added/removed (full replace); omit it on an unrelated edit (pac preserves
+existing); write `[]` and pass it to clear all `actionBindings`.
+
 **Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
 
 **Log the full command verbatim into `workflow-log.md` under a `## Phase 6 — Deploy` section before invoking it.** Including `--prompt` and all other flags. The eval harness greps the log for these tokens — a terse summary like `Command: pac model genpage upload --add-to-sitemap` will fail the `--prompt scoping` assertion. Format:
@@ -500,8 +572,8 @@ Connector deployment matrix:
 - Result: page-id = <returned-id>, status = success
 ```
 
-When connector bindings are present, the logged command must also include
-`--connectors "<working-dir>/connectors.json"`.
+When present, the logged command must also include `--connectors "<working-dir>/connectors.json"`
+and/or `--actions "<working-dir>/actions.json"`.
 
 #### `--prompt` semantics
 
@@ -523,13 +595,15 @@ pac model genpage upload `
   --name "Page Display Name" `
   --data-sources "entity1,entity2" `
   --connectors "<working-dir>/connectors.json" `
+  --actions "<working-dir>/actions.json" `
   --prompt "<Full page description from plan's ## User Requirements>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was built and any relevant details" `
   --add-to-sitemap
 ```
 
-Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`.
+Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`, and the
+`--actions` line when Phase 4.6 did not write `actions.json`.
 
 **For mock data pages:** Same but omit `--data-sources`.
 
@@ -544,6 +618,7 @@ pac model genpage upload `
   --code-file <working-dir>/<file>.tsx `
   --data-sources "entity1,entity2" `
   --connectors "<working-dir>/connectors.json" `
+  --actions "<working-dir>/actions.json" `
   --prompt "<Only the changes in this upload, e.g. 'Add a search box and sort by company name'>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was changed in this upload"
@@ -551,7 +626,8 @@ pac model genpage upload `
 
 For updates, include the `--connectors` line only when this upload intentionally
 replaces or clears connector bindings; otherwise omit it to preserve the
-deployed page's current bindings.
+deployed page's current bindings. The same rule applies to `--actions` for Custom
+API bindings: include it only when this upload intentionally replaces or clears them.
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 
@@ -611,6 +687,10 @@ GenPage `uxagentproject` (10372) is added explicitly and pulls its
 each `connectionreference` (10158) is added so bindings resolve. At import the
 deployer supplies env-specific `ConnectionId` per connection reference via
 `pac solution create-settings` + `pac solution import --settings-file`.
+
+Custom API bindings need **no** extra ALM step: `config.json`'s `actionBindings` travels
+automatically in the `uxagentprojectfile` (10373) rows already pulled with the GenPage. The
+referenced Custom APIs are a separate deployment prerequisite (bound by `name`), not added here.
 
 ### Phase 7: Verify in Browser (Optional)
 

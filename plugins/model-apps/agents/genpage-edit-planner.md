@@ -142,6 +142,12 @@ Ask questions via `AskUserQuestion`, one at a time:
 >   deployed binding**. The orchestrator will run discovery and re-invoke you with a
 >   real connector contract and upload-file status.
 
+> **Custom API changes** (Dataverse Action/Function / plug-in logic): if the edit adds,
+> replaces, or removes a server-side Custom API call, capture it in the plan's `### Custom
+> API Changes` below. Do **not** run Custom API discovery here — the orchestrator delegates
+> that to the `genpage-customapi-builder` agent (which owns the `custom-api` feature gate).
+> Preserving or clearing existing Custom API bindings needs no discovery.
+
 Mark "Analyze existing page" task complete.
 
 ## Step 3 — Present Edit Plan for Approval
@@ -165,6 +171,10 @@ Enter plan mode (`EnterPlanMode`) with:
 ### Connector Changes
 - [none | add <source> | replace <logicalName> with <source> | remove <logicalName>]
   (the orchestrator delegates any add/replace/remove to genpage-connector-builder)
+
+### Custom API Changes
+- [none | add <operation> | replace <name> with <operation> | remove <name>]
+  (the orchestrator delegates any add/replace/remove to genpage-customapi-builder)
 
 ### Preservation Constraints
 - [What must remain unchanged — feature preservation, specific behaviors]

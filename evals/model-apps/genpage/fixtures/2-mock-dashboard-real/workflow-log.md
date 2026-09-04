@@ -8,14 +8,14 @@
 v20.18.2
 
 `pac help`
-Microsoft PowerPlatform CLI Version: 2.7.4+g06bb2eb (.NET 10.0.8) — PAC CLI Version 2.7.4 (>= 2.7.0 required) — OK.
+Microsoft PowerPlatform CLI Version: 2.11.0+g06bb2eb (.NET 10.0.8) — PAC CLI Version 2.11.0 (> 2.10.0 required) — OK.
 
 ### Authentication
 
 `pac auth list`
-Three profiles found. Profile [3] (`Aurora365-User1@auroratstgeo.onmicrosoft.com`, env `AuroraBAPEnv610b3`, URL `https://aurorabapenv610b3.crmtest.dynamics.com/`) is active (marked `*`). No re-selection needed.
+Three profiles found. Profile [3] (`Contoso-User001@contosotest1.onmicrosoft.com`, env `ContosoBAPEnv0001`, URL `https://contosobapenv0001.crmtest.dynamics.com/`) is active (marked `*`). No re-selection needed.
 
-Working with environment: AuroraBAPEnv610b3 (https://aurorabapenv610b3.crmtest.dynamics.com/).
+Working with environment: ContosoBAPEnv0001 (https://contosobapenv0001.crmtest.dynamics.com/).
 
 ### Requirements (intent pre-resolved by orchestrator)
 
