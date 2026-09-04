@@ -525,34 +525,6 @@ async function downloadArtifact(options = {}, deps = {}) {
   return { localPath, cached: false };
 }
 
-async function downloadSolutionArtifact(options = {}, deps = {}) {
-  const fsImpl = deps.fs || fs;
-  try {
-    const result = await downloadArtifact(options, deps);
-    const validate = deps.validateZipContainsSolution || ((zipPath) => validateZipContainsSolution(zipPath, deps));
-    if (!validate(result.localPath)) {
-      try { fsImpl.rmSync(result.localPath, { force: true }); } catch { /* best-effort */ }
-      if (result.cached) {
-        const refreshed = await downloadArtifact(options, deps);
-        if (validate(refreshed.localPath)) return { ok: true, ...refreshed };
-        try { fsImpl.rmSync(refreshed.localPath, { force: true }); } catch { /* best-effort */ }
-      }
-      return {
-        ok: false,
-        artifactPath: options.artifactPath,
-        error: `Downloaded template solution is not a valid Dataverse solution zip: ${options.artifactPath}`,
-      };
-    }
-
-    return { ok: true, ...result };
-  } catch (err) {
-    if (options.artifactPath && options.sha) {
-      try { fsImpl.rmSync(artifactCachePath(options), { force: true }); } catch { /* best-effort */ }
-    }
-    return { ok: false, artifactPath: options.artifactPath, error: err.message };
-  }
-}
-
 function validateSpaCodePath(spaCodePath) {
   if (!isNonEmptyString(spaCodePath)) return 'spaCodePath is required';
   if (path.isAbsolute(spaCodePath) || spaCodePath.includes('\\')) {
@@ -598,12 +570,12 @@ function validateSpaCodeDirectory(localPath, deps = {}) {
   return null;
 }
 
-function spaCodeCheckoutRoot({ cacheRoot = getDefaultCacheRoot(), sha, spaCodePath }) {
+function repositoryDirectoryCheckoutRoot({ cacheRoot = getDefaultCacheRoot(), sha, directoryPath }) {
   assertValidSha(sha);
-  const pathError = validateSpaCodePath(spaCodePath);
+  const pathError = validateSpaCodePath(directoryPath);
   if (pathError) throw new Error(pathError);
-  const key = crypto.createHash('sha256').update(spaCodePath).digest('hex').slice(0, 16);
-  return path.join(cacheDirForSha(cacheRoot, sha), '.spa-code-checkouts', key);
+  const key = crypto.createHash('sha256').update(directoryPath).digest('hex').slice(0, 16);
+  return path.join(cacheDirForSha(cacheRoot, sha), '.directory-checkouts', key);
 }
 
 function runGitCheckoutCommand(args, deps = {}) {
@@ -615,48 +587,99 @@ function runGitCheckoutCommand(args, deps = {}) {
   });
 }
 
-function downloadSpaCodeDirectory(options = {}, deps = {}) {
+function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {}) {
   const {
     owner = DEFAULT_OWNER,
     repo = DEFAULT_REPO,
     sha,
-    spaCodePath,
+    directoryPath,
     cacheRoot = getDefaultCacheRoot(),
   } = options;
   const fsImpl = deps.fs || fs;
-  try {
-    assertValidSha(sha);
-    const pathError = validateSpaCodePath(spaCodePath);
-    if (pathError) throw new Error(pathError);
-    const checkoutRoot = spaCodeCheckoutRoot({ cacheRoot, sha, spaCodePath });
-    const localPath = path.join(checkoutRoot, ...spaCodePath.split('/'));
-    if (fsImpl.existsSync(checkoutRoot)) {
-      const cachedError = validateSpaCodeDirectory(localPath, deps);
-      if (!cachedError) return { ok: true, localPath, cached: true };
-      fsImpl.rmSync(checkoutRoot, { recursive: true, force: true });
-    }
+  assertValidSha(sha);
+  const pathError = validateSpaCodePath(directoryPath);
+  if (pathError) throw new Error(pathError);
+  const checkoutRoot = repositoryDirectoryCheckoutRoot({ cacheRoot, sha, directoryPath });
+  const localPath = path.join(checkoutRoot, ...directoryPath.split('/'));
+  if (fsImpl.existsSync(checkoutRoot)) {
+    const cachedError = validateDirectory(localPath);
+    if (!cachedError) return { localPath, cached: true };
+    fsImpl.rmSync(checkoutRoot, { recursive: true, force: true });
+  }
 
-    const parentDir = path.dirname(checkoutRoot);
-    fsImpl.mkdirSync(parentDir, { recursive: true });
-    const partialRoot = `${checkoutRoot}.partial-${process.pid}-${Date.now()}`;
-    fsImpl.rmSync(partialRoot, { recursive: true, force: true });
-    try {
-      runGitCheckoutCommand(['init', '--quiet', partialRoot], deps);
-      runGitCheckoutCommand(['-C', partialRoot, 'remote', 'add', 'origin', buildGitRemoteUrl({ owner, repo })], deps);
-      runGitCheckoutCommand(['-C', partialRoot, 'sparse-checkout', 'set', '--cone', '--', spaCodePath], deps);
-      runGitCheckoutCommand(['-C', partialRoot, 'fetch', '--quiet', '--depth', '1', 'origin', sha], deps);
-      runGitCheckoutCommand(['-C', partialRoot, 'checkout', '--quiet', '--detach', 'FETCH_HEAD'], deps);
-      const partialPath = path.join(partialRoot, ...spaCodePath.split('/'));
-      const validationError = validateSpaCodeDirectory(partialPath, deps);
-      if (validationError) throw new Error(validationError);
-      fsImpl.renameSync(partialRoot, checkoutRoot);
-    } catch (err) {
-      fsImpl.rmSync(partialRoot, { recursive: true, force: true });
-      throw err;
-    }
-    return { ok: true, localPath, cached: false };
+  fsImpl.mkdirSync(path.dirname(checkoutRoot), { recursive: true });
+  const partialRoot = `${checkoutRoot}.partial-${process.pid}-${Date.now()}`;
+  fsImpl.rmSync(partialRoot, { recursive: true, force: true });
+  try {
+    runGitCheckoutCommand(['init', '--quiet', partialRoot], deps);
+    runGitCheckoutCommand(['-C', partialRoot, 'remote', 'add', 'origin', buildGitRemoteUrl({ owner, repo })], deps);
+    runGitCheckoutCommand(['-C', partialRoot, 'sparse-checkout', 'set', '--cone', '--', directoryPath], deps);
+    runGitCheckoutCommand(['-C', partialRoot, 'fetch', '--quiet', '--depth', '1', 'origin', sha], deps);
+    runGitCheckoutCommand(['-C', partialRoot, 'checkout', '--quiet', '--detach', 'FETCH_HEAD'], deps);
+    const partialPath = path.join(partialRoot, ...directoryPath.split('/'));
+    const validationError = validateDirectory(partialPath);
+    if (validationError) throw new Error(validationError);
+    fsImpl.renameSync(partialRoot, checkoutRoot);
   } catch (err) {
-    return { ok: false, spaCodePath, error: err.message };
+    fsImpl.rmSync(partialRoot, { recursive: true, force: true });
+    throw err;
+  }
+  return { localPath, cached: false };
+}
+
+function templateVariantRoot(solutionPath, spaCodePath) {
+  const solutionPathError = validateSpaCodePath(solutionPath);
+  if (solutionPathError) throw new Error(`Invalid solutionPath: ${solutionPathError}`);
+  const spaCodePathError = validateSpaCodePath(spaCodePath);
+  if (spaCodePathError) throw new Error(`Invalid spaCodePath: ${spaCodePathError}`);
+  const solutionDir = path.posix.dirname(solutionPath);
+  const variantRoot = path.posix.dirname(spaCodePath);
+  if (
+    path.posix.basename(solutionDir) !== 'solution' ||
+    path.posix.basename(spaCodePath) !== 'spa-code' ||
+    path.posix.dirname(solutionDir) !== variantRoot
+  ) {
+    throw new Error('solutionPath and spaCodePath must use sibling solution/ and spa-code/ folders');
+  }
+  return variantRoot;
+}
+
+function validateTemplateVariantDirectory(localVariantPath, solutionPath, spaCodePath, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  const variantRoot = templateVariantRoot(solutionPath, spaCodePath);
+  const relativeSolutionPath = path.posix.relative(variantRoot, solutionPath);
+  const relativeSpaCodePath = path.posix.relative(variantRoot, spaCodePath);
+  const localSolutionPath = path.join(localVariantPath, ...relativeSolutionPath.split('/'));
+  const localSpaCodePath = path.join(localVariantPath, ...relativeSpaCodePath.split('/'));
+  if (!fsImpl.existsSync(localSolutionPath) || !fsImpl.statSync(localSolutionPath).isFile()) {
+    return `Template variant is missing solution artifact: ${relativeSolutionPath}`;
+  }
+  if (!validateZipContainsSolution(localSolutionPath, deps)) {
+    return `Template solution is not a valid Dataverse solution zip: ${relativeSolutionPath}`;
+  }
+  return validateSpaCodeDirectory(localSpaCodePath, deps);
+}
+
+function downloadTemplateVariant(options = {}, deps = {}) {
+  const { solutionPath, spaCodePath } = options;
+  try {
+    const variantRoot = templateVariantRoot(solutionPath, spaCodePath);
+    const result = downloadRepositoryDirectory(
+      { ...options, directoryPath: variantRoot },
+      (localPath) => validateTemplateVariantDirectory(localPath, solutionPath, spaCodePath, deps),
+      deps
+    );
+    const relativeSolutionPath = path.posix.relative(variantRoot, solutionPath);
+    const relativeSpaCodePath = path.posix.relative(variantRoot, spaCodePath);
+    return {
+      ok: true,
+      variantPath: result.localPath,
+      solutionPath: path.join(result.localPath, ...relativeSolutionPath.split('/')),
+      spaCodePath: path.join(result.localPath, ...relativeSpaCodePath.split('/')),
+      cached: result.cached,
+    };
+  } catch (err) {
+    return { ok: false, solutionPath, spaCodePath, error: err.message };
   }
 }
 
@@ -735,12 +758,13 @@ module.exports = {
   fetchCatalog,
   validateZipContainsSolution,
   downloadArtifact,
-  downloadSolutionArtifact,
-  downloadSpaCodeDirectory,
+  downloadTemplateVariant,
   downloadSeedDataDirectory,
   validateSpaCodePath,
   validateSpaCodeDirectory,
-  spaCodeCheckoutRoot,
+  repositoryDirectoryCheckoutRoot,
+  templateVariantRoot,
+  validateTemplateVariantDirectory,
   validateCatalogShape,
   normalizeCatalogFamilies,
   zipFileNames,

@@ -17,12 +17,12 @@ const {
   downloadFile,
   fetchCatalog,
   downloadArtifact,
-  downloadSolutionArtifact,
-  downloadSpaCodeDirectory,
+  downloadTemplateVariant,
   downloadSeedDataDirectory,
   validateZipContainsSolution,
   validateSpaCodeDirectory,
   validateSpaCodePath,
+  templateVariantRoot,
   zipFileNames,
   validateCatalogShape,
   assertValidSha,
@@ -30,8 +30,7 @@ const {
   normalizeCatalogFamilies,
 } = require('../lib/template-catalog');
 const { parseArgs: parseCatalogArgs } = require('../fetch-template-catalog');
-const { parseArgs: parseSolutionArgs } = require('../fetch-template-solution');
-const { parseArgs: parseSpaCodeArgs } = require('../fetch-template-spa-code');
+const { parseArgs: parseVariantArgs } = require('../fetch-template-variant');
 const { parseArgs: parseArtifactArgs } = require('../fetch-template-artifact');
 const { parseArgs: parseSeedArgs } = require('../fetch-template-seed-data');
 const { parseTemplateRepoArgs, formatJsonResult, runBestEffortJsonCli } = require('../lib/template-cli-args');
@@ -557,106 +556,76 @@ test('artifactCachePath rejects paths that escape the sha cache directory', () =
   );
 });
 
-test('downloadSolutionArtifact fails open and removes invalid zips instead of leaving corrupt cache entries', async (t) => {
+test('downloadTemplateVariant fetches the shared variant folder once and returns both artifacts', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const artifactPath = 'templates/spa/company/solution/Company_1_0_0_0.zip';
-  const expectedPath = artifactCachePath({ cacheRoot: dir, sha: SHA, artifactPath });
-
-  const result = await downloadSolutionArtifact({ owner: 'o', repo: 'r', sha: SHA, artifactPath, cacheRoot: dir }, {
-    downloadFile: async (_url, dest) => {
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, 'not a solution');
-    },
-    validateZipContainsSolution: () => false,
-  });
-
-  assert.equal(result.ok, false);
-  assert.match(result.error, /not a valid Dataverse solution zip/);
-  assert.equal(fs.existsSync(expectedPath), false);
-});
-
-test('downloadSolutionArtifact redownloads once when a cached zip is corrupt', async (t) => {
-  const dir = tempDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const artifactPath = 'templates/spa/company/solution/Company_1_0_0_0.zip';
-  const expectedPath = artifactCachePath({ cacheRoot: dir, sha: SHA, artifactPath });
-  fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
-  fs.writeFileSync(expectedPath, 'stale corrupt cache');
-  let downloads = 0;
-
-  const result = await downloadSolutionArtifact({ owner: 'o', repo: 'r', sha: SHA, artifactPath, cacheRoot: dir }, {
-    downloadFile: async (_url, dest) => {
-      downloads++;
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, 'fresh solution zip');
-    },
-    validateZipContainsSolution: (zipPath) => fs.readFileSync(zipPath, 'utf8') === 'fresh solution zip',
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.cached, false);
-  assert.equal(downloads, 1);
-  assert.equal(fs.readFileSync(expectedPath, 'utf8'), 'fresh solution zip');
-});
-
-test('downloadSolutionArtifact reports download failures as ok:false for from-scratch fallback', async () => {
-  const result = await downloadSolutionArtifact({ owner: 'o', repo: 'r', sha: SHA, artifactPath: 'missing.zip' }, {
-    downloadFile: async () => { throw new Error('404'); },
-  });
-
-  assert.deepEqual(result, { ok: false, artifactPath: 'missing.zip', error: '404' });
-});
-
-test('downloadSpaCodeDirectory sparse-checks out a validated directory at the pinned sha and caches it', (t) => {
-  const dir = tempDir();
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const spaCodePath = 'templates/spa/company/variants/react/spa-code';
+  const variantPath = 'templates/spa/company/variants/react';
+  const solutionPath = `${variantPath}/solution/Company_1_0_0_0.zip`;
+  const spaCodePath = `${variantPath}/spa-code`;
   const calls = [];
   let partialRoot;
 
-  const deps = {
+  const result = downloadTemplateVariant({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    solutionPath,
+    spaCodePath,
+    cacheRoot: dir,
+  }, {
     execFileSync(command, args) {
       calls.push([command, args]);
       if (args[0] === 'init') partialRoot = args[2];
       if (args.includes('checkout')) {
-        const source = path.join(partialRoot, ...spaCodePath.split('/'));
-        fs.mkdirSync(path.join(source, '.powerpages-site'), { recursive: true });
-        fs.writeFileSync(path.join(source, 'powerpages.config.json'), '{}');
-        fs.writeFileSync(path.join(source, 'package.json'), '{}');
-        fs.mkdirSync(path.join(source, 'src'), { recursive: true });
-        fs.writeFileSync(path.join(source, 'src', 'main.tsx'), 'export {};');
+        const localVariant = path.join(partialRoot, ...variantPath.split('/'));
+        const localSpaCode = path.join(localVariant, 'spa-code');
+        fs.mkdirSync(path.join(localSpaCode, '.powerpages-site'), { recursive: true });
+        fs.writeFileSync(path.join(localSpaCode, 'powerpages.config.json'), '{}');
+        fs.writeFileSync(path.join(localSpaCode, 'package.json'), '{}');
+        fs.mkdirSync(path.join(localVariant, 'solution'), { recursive: true });
+        fs.writeFileSync(path.join(localVariant, 'solution', 'Company_1_0_0_0.zip'), fakeZipWithLocalFile('solution.xml'));
       }
       return '';
     },
-  };
-
-  const first = downloadSpaCodeDirectory({
+  });
+  const cached = downloadTemplateVariant({
     owner: 'o',
     repo: 'r',
     sha: SHA,
-    spaCodePath,
-    cacheRoot: dir,
-  }, deps);
-  const second = downloadSpaCodeDirectory({
-    owner: 'o',
-    repo: 'r',
-    sha: SHA,
+    solutionPath,
     spaCodePath,
     cacheRoot: dir,
   }, {
     execFileSync() {
-      throw new Error('cached SPA code must not run git');
+      throw new Error('cached variant must not run git');
     },
   });
 
-  assert.equal(first.ok, true);
-  assert.equal(first.cached, false);
-  assert.equal(fs.existsSync(path.join(first.localPath, 'src', 'main.tsx')), true);
-  assert.deepEqual(second, { ok: true, localPath: first.localPath, cached: true });
-  assert.equal(calls.every(([command]) => command === 'git'), true);
-  assert.equal(calls.some(([, args]) => args.join(' ').includes(`fetch --quiet --depth 1 origin ${SHA}`)), true);
-  assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${spaCodePath}`)), true);
+  assert.equal(result.ok, true);
+  assert.equal(result.cached, false);
+  assert.equal(result.variantPath.endsWith(path.join('templates', 'spa', 'company', 'variants', 'react')), true);
+  assert.equal(result.solutionPath, path.join(result.variantPath, 'solution', 'Company_1_0_0_0.zip'));
+  assert.equal(result.spaCodePath, path.join(result.variantPath, 'spa-code'));
+  assert.deepEqual(cached, { ...result, cached: true });
+  assert.equal(calls.filter(([, args]) => args.includes('sparse-checkout')).length, 1);
+  assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${variantPath}`)), true);
+});
+
+test('templateVariantRoot requires sibling solution and spa-code folders', () => {
+  assert.equal(
+    templateVariantRoot(
+      'templates/spa/company/variants/react/solution/Company.zip',
+      'templates/spa/company/variants/react/spa-code'
+    ),
+    'templates/spa/company/variants/react'
+  );
+  assert.throws(
+    () => templateVariantRoot(
+      'templates/spa/company/solution/Company.zip',
+      'templates/spa/company/variants/react/spa-code'
+    ),
+    /sibling solution\/ and spa-code\//
+  );
 });
 
 test('SPA code validation rejects escaping paths and generated content', (t) => {
@@ -783,33 +752,19 @@ test('fetch-template-catalog CLI parser defaults ref to latest-release', () => {
   assert.equal(parseCatalogArgs([]).ref, 'latest-release');
 });
 
-test('fetch-template-solution CLI parser maps solutionPath to artifactPath', () => {
-  assert.deepEqual(parseSolutionArgs([
+test('fetch-template-variant CLI parser accepts both sibling artifact paths', () => {
+  assert.deepEqual(parseVariantArgs([
     '--owner', 'contoso',
     '--repo', 'samples',
     '--sha', SHA,
-    '--solutionPath', 'templates/spa/company/solution/Company_1_0_0_0.zip',
-    '--cacheRoot', '/tmp/cache',
-  ]), {
-    owner: 'contoso',
-    repo: 'samples',
-    sha: SHA,
-    artifactPath: 'templates/spa/company/solution/Company_1_0_0_0.zip',
-    cacheRoot: '/tmp/cache',
-  });
-});
-
-test('fetch-template-spa-code CLI parser maps spaCodePath to the directory option', () => {
-  assert.deepEqual(parseSpaCodeArgs([
-    '--owner', 'contoso',
-    '--repo', 'samples',
-    '--sha', SHA,
+    '--solutionPath', 'templates/spa/company/variants/react/solution/Company_1_0_0_0.zip',
     '--spaCodePath', 'templates/spa/company/variants/react/spa-code',
     '--cacheRoot', '/tmp/cache',
   ]), {
     owner: 'contoso',
     repo: 'samples',
     sha: SHA,
+    solutionPath: 'templates/spa/company/variants/react/solution/Company_1_0_0_0.zip',
     spaCodePath: 'templates/spa/company/variants/react/spa-code',
     cacheRoot: '/tmp/cache',
   });

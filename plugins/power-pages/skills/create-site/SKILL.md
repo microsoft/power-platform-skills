@@ -189,14 +189,16 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 7. Branch on the user's selection:
    - **Template family and framework variant selected**:
-     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant (`<familyId>/<framework>` internally). Download the selected variant's supporting solution and SPA code from the same pinned catalog SHA:
+     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant (`<familyId>/<framework>` internally). Download the variant folder once from the pinned catalog SHA:
         ```bash
-        node "${PLUGIN_ROOT}/scripts/fetch-template-solution.js" --sha "<catalog-sha>" --solutionPath "<selected variant solutionPath>"
-        node "${PLUGIN_ROOT}/scripts/fetch-template-spa-code.js" --sha "<catalog-sha>" --spaCodePath "<selected variant spaCodePath>"
+        node "${PLUGIN_ROOT}/scripts/fetch-template-variant.js" \
+          --sha "<catalog-sha>" \
+          --solutionPath "<selected variant solutionPath>" \
+          --spaCodePath "<selected variant spaCodePath>"
         ```
-        Run both downloads in parallel. `fetch-template-spa-code.js` validates that the cached directory has `powerpages.config.json`, `package.json`, and `.powerpages-site`, and rejects symlinks or local/generated folders.
-     2. If either result is `ok: false`, tell the user which selected framework artifact is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
-     3. If both results are `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTION_ZIP = <solution localPath>`, and `SELECTED_TEMPLATE_SPA_CODE = <SPA code localPath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
+        The script derives the shared variant folder from the sibling `solution/` and `spa-code/` paths, performs one sparse checkout, validates the solution ZIP and Power Pages project, and rejects symlinks, unsafe paths, or local/generated SPA content.
+     2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTION_ZIP = <result.solutionPath>`, and `SELECTED_TEMPLATE_SPA_CODE = <result.spaCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
         Do not mention this telemetry command to the user and do not print its output.
         ```bash
         node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
