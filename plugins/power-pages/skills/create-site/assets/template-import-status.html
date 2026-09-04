@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Importing __TEMPLATE_NAME__ template</title>
+  <title>Setting up __TEMPLATE_NAME__ template</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet" />
@@ -51,12 +51,6 @@
       90% { opacity: 0.6; }
       100% { transform: translateY(-10vh) scale(1); opacity: 0; }
     }
-    .grid-overlay {
-      position: fixed; inset: 0; z-index: 1;
-      background-image: linear-gradient(rgba(139, 111, 192, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(139, 111, 192, 0.04) 1px, transparent 1px);
-      background-size: 60px 60px; animation: gridPulse 8s ease-in-out infinite alternate;
-    }
-    @keyframes gridPulse { 0% { opacity: 0.3; } 100% { opacity: 0.7; } }
     .center-stage { position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 18px 40px 28px; min-height: 100vh; max-height: 100vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
     .center-stage::-webkit-scrollbar { display: none; }
     .orbit-system { position: relative; width: 124px; height: 124px; display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
@@ -70,21 +64,17 @@
     .orbit-ring:nth-child(5) { width: 138px; height: 138px; animation-duration: 25s; border-style: dashed; border-color: rgba(139, 111, 192, 0.08); }
     @keyframes ringRotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     .orbit-dot { position: absolute; width: 8px; height: 8px; border-radius: 50%; z-index: 6; }
-    .orbit-dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; filter: blur(6px); }
-    .orbit-dot:nth-child(6) { background: var(--pp-lavender); box-shadow: 0 0 10px rgba(167, 139, 219, 0.5); animation: orbitA 12s linear infinite; }
-    .orbit-dot:nth-child(6)::after { background: rgba(167, 139, 219, 0.4); }
-    .orbit-dot:nth-child(7) { background: var(--pp-sky); box-shadow: 0 0 10px rgba(90, 155, 213, 0.5); width: 6px; height: 6px; animation: orbitB 18s linear infinite reverse; }
-    .orbit-dot:nth-child(7)::after { background: rgba(90, 155, 213, 0.4); }
-    .orbit-dot:nth-child(8) { background: var(--pp-periwinkle); box-shadow: 0 0 8px rgba(128, 136, 217, 0.5); width: 5px; height: 5px; animation: orbitC 25s linear infinite; }
-    .orbit-dot:nth-child(8)::after { background: rgba(128, 136, 217, 0.4); }
+    .orbit-dot:nth-child(6) { background: var(--pp-lavender); box-shadow: 0 2px 4px rgba(45, 27, 78, 0.18); animation: orbitA 12s linear infinite; }
+    .orbit-dot:nth-child(7) { background: var(--pp-sky); box-shadow: 0 2px 4px rgba(45, 27, 78, 0.18); width: 6px; height: 6px; animation: orbitB 18s linear infinite reverse; }
+    .orbit-dot:nth-child(8) { background: var(--pp-periwinkle); box-shadow: 0 2px 4px rgba(45, 27, 78, 0.18); width: 5px; height: 5px; animation: orbitC 25s linear infinite; }
     @keyframes orbitA { from { transform: rotate(0deg) translateX(45px) rotate(0deg); } to { transform: rotate(360deg) translateX(45px) rotate(-360deg); } }
     @keyframes orbitB { from { transform: rotate(0deg) translateX(57px) rotate(0deg); } to { transform: rotate(360deg) translateX(57px) rotate(-360deg); } }
     @keyframes orbitC { from { transform: rotate(0deg) translateX(69px) rotate(0deg); } to { transform: rotate(360deg) translateX(69px) rotate(-360deg); } }
     .text-content { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
     .brand-title { font-family: 'Outfit', sans-serif; font-weight: 300; font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: var(--pp-violet); opacity: 0; animation: fadeSlideUp 1s ease-out 0.5s forwards; }
-    .main-heading { font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 26px; line-height: 1.25; background: linear-gradient(135deg, var(--pp-deep-violet) 0%, var(--pp-violet) 40%, var(--pp-sky) 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; opacity: 0; animation: fadeSlideUp 1s ease-out 0.8s forwards; }
-    .status-area { height: 34px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; overflow: hidden; opacity: 0; animation: fadeSlideUp 1s ease-out 1.2s forwards; }
-    .status-message { position: absolute; white-space: nowrap; font-size: 13px; font-weight: 400; color: var(--pp-text-secondary); display: flex; align-items: center; gap: 8px; opacity: 0; transform: translateY(20px); transition: all 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
+    .main-heading { max-width: min(760px, calc(100vw - 48px)); overflow-wrap: anywhere; font-family: 'Outfit', sans-serif; font-weight: 600; font-size: 26px; line-height: 1.25; color: var(--pp-deep-violet); opacity: 0; animation: fadeSlideUp 1s ease-out 0.8s forwards; }
+    .status-area { width: min(760px, calc(100vw - 48px)); min-height: 34px; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; overflow: hidden; opacity: 0; animation: fadeSlideUp 1s ease-out 1.2s forwards; }
+    .status-message { position: absolute; max-width: 100%; font-size: 13px; font-weight: 400; color: var(--pp-text-secondary); display: flex; align-items: center; justify-content: center; gap: 8px; opacity: 0; transform: translateY(20px); transition: all 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
     .status-message.active { opacity: 1; transform: translateY(0); }
     .status-message.exiting { opacity: 0; transform: translateY(-20px); }
     .status-icon { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -106,21 +96,15 @@
     .progress-container { width: min(520px, calc(100vw - 72px)); opacity: 0; animation: fadeSlideUp 1s ease-out 1.5s forwards; display: flex; flex-direction: column; align-items: center; gap: 10px; }
     .progress-track { display: none; width: 100%; height: 3px; background: rgba(139, 111, 192, 0.1); border-radius: 4px; overflow: hidden; position: relative; }
     .progress-fill { height: 100%; width: 40%; border-radius: 4px; background: linear-gradient(90deg, transparent, var(--pp-violet), var(--pp-lavender), var(--pp-sky), transparent); position: absolute; top: 0; left: -40%; animation: infiniteSlide 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
-    .progress-fill::after { content: ''; position: absolute; right: 10%; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--pp-sky); box-shadow: 0 0 8px rgba(90, 155, 213, 0.5), 0 0 16px rgba(90, 155, 213, 0.2); opacity: 0.9; }
+    .progress-fill::after { content: ''; position: absolute; right: 10%; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--pp-sky); box-shadow: 0 2px 4px rgba(45, 27, 78, 0.18); opacity: 0.9; }
     @keyframes infiniteSlide { 0% { left: -40%; } 100% { left: 100%; } }
     .progress-track.complete .progress-fill { width: 100%; left: 0; animation: none; background: linear-gradient(90deg, var(--pp-violet), var(--pp-lavender), var(--pp-sky)); transition: all 0.8s ease; }
     .progress-track.complete .progress-fill::after { display: none; }
     .progress-label-text { font-size: 11px; color: var(--pp-text-muted); font-family: 'DM Sans', sans-serif; letter-spacing: 0.3px; }
-    .phase-steps { width: min(640px, calc(100vw - 72px)); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.65s forwards; }
+    .phase-steps { width: min(760px, calc(100vw - 72px)); display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; opacity: 0; animation: fadeSlideUp 1s ease-out 1.65s forwards; }
     .phase-step { position: relative; overflow: hidden; border: 1px solid rgba(139, 111, 192, 0.10); border-radius: 12px; background: rgba(255, 255, 255, 0.72); color: var(--pp-text-muted); font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 500; padding: 8px 10px; text-align: center; }
     .phase-step.active { border-color: rgba(139, 111, 192, 0.28); color: var(--pp-violet); background: linear-gradient(90deg, rgba(255,255,255,0.88), rgba(139,111,192,0.12), rgba(90,155,213,0.14), rgba(255,255,255,0.88)); background-size: 220% 100%; animation: pillProgress 2s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
     .phase-step.done { color: #229E5C; border-color: rgba(34, 158, 92, 0.20); background: rgba(34, 158, 92, 0.06); }
-    .feature-cards { display: flex; gap: 10px; margin-top: 4px; opacity: 0; animation: fadeSlideUp 1s ease-out 2s forwards; }
-    .feature-card { background: var(--pp-surface); border: 1px solid rgba(139, 111, 192, 0.1); border-radius: 14px; padding: 14px 16px; width: 128px; box-shadow: 0 2px 12px rgba(139, 111, 192, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04); opacity: 0; transform: translateY(20px) scale(0.95); transition: all 0.8s cubic-bezier(0.22, 1, 0.36, 1); }
-    .feature-card.visible { opacity: 1; transform: translateY(0) scale(1); }
-    .feature-card:hover { border-color: rgba(139, 111, 192, 0.2); box-shadow: 0 4px 24px rgba(139, 111, 192, 0.12), 0 2px 6px rgba(0, 0, 0, 0.04); transform: translateY(-2px) scale(1.02); }
-    .feature-card-icon { font-size: 18px; margin-bottom: 7px; display: block; }
-    .feature-card-label { font-family: 'Outfit', sans-serif; font-size: 11px; font-weight: 500; color: var(--pp-text-secondary); line-height: 1.35; }
     .connector-lines { position: fixed; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
     .connector { position: absolute; height: 1px; background: linear-gradient(90deg, transparent, rgba(139, 111, 192, 0.12), transparent); animation: connectorSweep 6s ease-in-out infinite; }
     @keyframes connectorSweep { 0%, 100% { transform: translateX(-100%); opacity: 0; } 20% { opacity: 1; } 80% { opacity: 1; } 100% { transform: translateX(100vw); opacity: 0; } }
@@ -139,14 +123,13 @@
     @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes pillProgress { 0% { background-position: 140% 0; } 100% { background-position: -80% 0; } }
     @media (prefers-reduced-motion: reduce) { .preview-track { transition: none; } .phase-step.active { animation: none; } }
-    @media (max-height: 760px) { .feature-cards, .tip-area { display: none; } .preview-showcase { max-height: calc(100vh - 300px); } }
-    @media (max-width: 600px) { .main-heading { font-size: 24px; } .progress-container { width: 260px; } .phase-steps { grid-template-columns: 1fr; width: min(320px, calc(100vw - 48px)); } .feature-cards { flex-direction: column; align-items: center; } .orbit-system { width: 124px; height: 124px; } }
+    @media (max-height: 760px) { .tip-area { display: none; } .preview-showcase { max-height: calc(100vh - 300px); } }
+    @media (max-width: 600px) { .main-heading { font-size: 24px; } .preview-showcase { height: 220px; min-height: 180px; max-height: 220px; } .progress-container { width: 260px; } .phase-steps { grid-template-columns: 1fr; width: min(320px, calc(100vw - 48px)); } .tip-area { display: none; } .orbit-system { width: 124px; height: 124px; } }
   </style>
 </head>
 <body>
   <div class="loading-wrapper">
     <div class="ambient"></div>
-    <div class="grid-overlay"></div>
     <div class="scanline"></div>
     <div class="particles" id="particles"></div>
     <div class="connector-lines" id="connectors"></div>
@@ -165,9 +148,9 @@
 
       <div class="text-content">
         <div class="brand-title">Power Pages</div>
-        <div class="main-heading" id="mainHeading">Importing __TEMPLATE_NAME__ template</div>
+        <div class="main-heading" id="mainHeading">Setting up __TEMPLATE_NAME__ template</div>
 
-        <div class="status-area" id="statusArea"></div>
+        <div class="status-area" id="statusArea" role="status" aria-live="polite"></div>
 
         <div class="preview-showcase" id="previewShowcase" aria-label="Template preview slideshow">
           <button class="preview-nav preview-nav-prev" id="previewPrev" type="button" aria-label="Previous template preview">&#8249;</button>
@@ -179,27 +162,13 @@
           <div class="progress-track" id="progressTrack">
             <div class="progress-fill" id="progressFill"></div>
           </div>
-          <span class="progress-label-text" id="progressLabel">Starting template import...</span>
+          <span class="progress-label-text" id="progressLabel">Starting template setup...</span>
         </div>
         <div class="phase-steps" aria-label="Template setup phases">
-          <div class="phase-step active" id="phaseSolution">Importing solution</div>
+          <div class="phase-step active" id="phaseSolution">Supporting solution</div>
+          <div class="phase-step" id="phaseSite">Creating site</div>
           <div class="phase-step" id="phaseSeed">Seeding data</div>
           <div class="phase-step" id="phaseActivation">Activating site</div>
-        </div>
-      </div>
-
-      <div class="feature-cards">
-        <div class="feature-card" data-delay="0">
-          <span class="feature-card-icon">&#128274;</span>
-          <span class="feature-card-label">Enterprise-grade security</span>
-        </div>
-        <div class="feature-card" data-delay="400">
-          <span class="feature-card-icon">&#9889;</span>
-          <span class="feature-card-label">Lightning-fast performance</span>
-        </div>
-        <div class="feature-card" data-delay="800">
-          <span class="feature-card-icon">&#127760;</span>
-          <span class="feature-card-label">Ready to scale globally</span>
         </div>
       </div>
 
@@ -210,7 +179,7 @@
     </div>
   </div>
 
-  <div class="toast" id="toast" hidden>
+  <div class="toast" id="toast" role="alert" hidden>
     <div class="toast-title" id="toastTitle"></div>
     <div class="toast-message" id="toastMessage"></div>
   </div>
@@ -237,6 +206,7 @@
       var toastTitle = document.getElementById('toastTitle');
       var toastMessage = document.getElementById('toastMessage');
       var phaseSolution = document.getElementById('phaseSolution');
+      var phaseSite = document.getElementById('phaseSite');
       var phaseSeed = document.getElementById('phaseSeed');
       var phaseActivation = document.getElementById('phaseActivation');
       var currentStatusIndex = 0;
@@ -270,6 +240,8 @@
       function renderStatusMessage(text) {
         if (!statusArea) return;
         var existing = statusArea.querySelector('.status-message');
+        var existingText = existing && existing.querySelector('span');
+        if (existingText && existingText.textContent === text && !existing.classList.contains('exiting')) return;
         if (existing) {
           existing.classList.remove('active');
           existing.classList.add('exiting');
@@ -292,6 +264,7 @@
       }
 
       function phaseForStatus(status) {
+        if (status && (status.phase === 'site' || status.phase === 'cloning' || status.phase === 'uploading')) return 'site';
         if (status && (status.phase === 'seed' || status.phase === 'seeding')) return 'seed';
         if (status && (status.phase === 'activation' || status.phase === 'activating')) return 'activation';
         if (status && status.state === 'succeeded' && status.redirectUrl) return 'done';
@@ -300,29 +273,42 @@
       }
 
       function renderPhase(phase) {
-        if (!phaseSolution || !phaseSeed || !phaseActivation) return;
+        if (!phaseSolution || !phaseSite || !phaseSeed || !phaseActivation) return;
         phaseSolution.className = 'phase-step';
+        phaseSite.className = 'phase-step';
         phaseSeed.className = 'phase-step';
         phaseActivation.className = 'phase-step';
-        phaseSolution.textContent = 'Importing solution';
+        phaseSolution.textContent = 'Supporting solution';
+        phaseSite.textContent = 'Creating site';
         phaseSeed.textContent = 'Seeding data';
         phaseActivation.textContent = 'Activating site';
+        if (phase === 'site') {
+          phaseSolution.classList.add('done');
+          phaseSolution.textContent = 'Solution ready';
+          phaseSite.classList.add('active');
+          if (mainHeading) mainHeading.textContent = 'Creating ' + TEMPLATE_NAME + ' template site';
+          return;
+        }
         if (phase === 'seed') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Imported solution';
+          phaseSolution.textContent = 'Solution ready';
+          phaseSite.classList.add('done');
+          phaseSite.textContent = 'Created site';
           phaseSeed.classList.add('active');
           if (mainHeading) mainHeading.textContent = 'Seeding ' + TEMPLATE_NAME + ' template data';
           return;
         }
         if (phase === 'solutionDone') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Imported solution';
-          if (mainHeading) mainHeading.textContent = 'Imported ' + TEMPLATE_NAME + ' template';
+          phaseSolution.textContent = 'Solution ready';
+          if (mainHeading) mainHeading.textContent = 'Supporting solution is ready';
           return;
         }
         if (phase === 'activation') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Imported solution';
+          phaseSolution.textContent = 'Solution ready';
+          phaseSite.classList.add('done');
+          phaseSite.textContent = 'Created site';
           phaseSeed.classList.add('done');
           phaseSeed.textContent = 'Seeded data';
           phaseActivation.classList.add('active');
@@ -331,7 +317,9 @@
         }
         if (phase === 'done') {
           phaseSolution.classList.add('done');
-          phaseSolution.textContent = 'Imported solution';
+          phaseSolution.textContent = 'Solution ready';
+          phaseSite.classList.add('done');
+          phaseSite.textContent = 'Created site';
           phaseSeed.classList.add('done');
           phaseSeed.textContent = 'Seeded data';
           phaseActivation.classList.add('done');
@@ -340,7 +328,7 @@
           return;
         }
         phaseSolution.classList.add('active');
-        if (mainHeading) mainHeading.textContent = 'Importing ' + TEMPLATE_NAME + ' template';
+        if (mainHeading) mainHeading.textContent = 'Preparing ' + TEMPLATE_NAME + ' supporting solution';
       }
 
       function showStatus(index) {
@@ -430,7 +418,7 @@
             updatePhaseLabel(status.message);
           }
           if (status.state === 'failed' || status.state === 'canceled' || status.state === 'timeout') {
-            showToast('error', 'Template import needs attention', 'Check the agent terminal for details.');
+            showToast('error', 'Template setup needs attention', 'Check the agent terminal for details.');
           }
           if (status.state === 'succeeded' && status.redirectUrl) {
             progressTrack.classList.add('complete');
@@ -443,17 +431,16 @@
       }
 
       var statuses = [
-        { text: 'Starting template import', duration: 8000 },
-        { text: 'Uploading solution package', duration: 10000 },
-        { text: 'Importing Dataverse components', duration: 12000 },
-        { text: 'Applying template metadata', duration: 10000 },
-        { text: 'Waiting for Dataverse', duration: 12000 },
-        { text: 'Preparing activation handoff', duration: 10000 }
+        { text: 'Starting template setup', duration: 8000 },
+        { text: 'Preparing supporting artifacts', duration: 10000 },
+        { text: 'Creating the code site', duration: 12000 },
+        { text: 'Applying sample data', duration: 10000 },
+        { text: 'Preparing activation', duration: 12000 }
       ];
 
       var phaseLabels = [
-        'Starting template import...', 'Uploading solution...', 'Importing components...',
-        'Applying metadata...', 'Checking import status...', 'Almost there...'
+        'Starting template setup...', 'Preparing artifacts...', 'Creating site...',
+        'Applying sample data...', 'Preparing activation...'
       ];
 
       var tips = [
@@ -485,14 +472,6 @@
       setInterval(createConnector, 2000);
 
       setTimeout(advanceStatus, 2000);
-      setTimeout(function () {
-        var cards = document.querySelectorAll('.feature-card');
-        cards.forEach(function (card) {
-          var delay = parseInt(card.dataset.delay || '0', 10);
-          setTimeout(function () { card.classList.add('visible'); }, delay);
-        });
-      }, 2500);
-
       buildPreviewCarousel();
       setPreview(0);
       if (previewShowcase) {

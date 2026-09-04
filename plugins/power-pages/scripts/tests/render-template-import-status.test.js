@@ -43,12 +43,11 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   const html = fs.readFileSync(outputPath, 'utf8');
 
   assert.deepEqual(result, { status: 'ok', output: outputPath, statusPath });
-  assert.match(html, /Importing Supplier Portal template/);
+  assert.match(html, /Setting up Supplier Portal template/);
   assert.equal(html.includes('file:///tmp/a.png'), true);
   assert.equal(html.includes('const STATUS_URL = "status.json"'), true);
   assert.match(html, /loading-wrapper/);
   assert.match(html, /ambient/);
-  assert.match(html, /grid-overlay/);
   assert.match(html, /orbit-system/);
   assert.match(html, /core-shape/);
   assert.match(html, /preview-showcase/);
@@ -60,20 +59,21 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /previewPaused/);
   assert.match(html, /mouseenter/);
   assert.match(html, /translateX/);
-  assert.match(html, /Enterprise-grade security/);
-  assert.match(html, /Lightning-fast performance/);
-  assert.match(html, /Ready to scale globally/);
+  assert.match(html, /role="status" aria-live="polite"/);
+  assert.match(html, /role="alert"/);
   assert.match(html, /progressFill/);
   assert.match(html, /pillProgress/);
   assert.match(html, /phase-step active/);
-  assert.match(html, /Importing solution/);
+  assert.match(html, /Supporting solution/);
+  assert.match(html, /Creating site/);
   assert.match(html, /Seeding data/);
   assert.match(html, /Activating site/);
   assert.match(html, /phaseForStatus/);
   assert.match(html, /renderPhase/);
   assert.match(html, /status\.phase/);
-  assert.match(html, /phaseSolution\.textContent = 'Imported solution'/);
-  assert.match(html, /'Imported ' \+ TEMPLATE_NAME \+ ' template'/);
+  assert.match(html, /phaseSolution\.textContent = 'Solution ready'/);
+  assert.match(html, /phaseSite\.textContent = 'Created site'/);
+  assert.match(html, /'Creating ' \+ TEMPLATE_NAME \+ ' template site'/);
   assert.match(html, /'Seeding ' \+ TEMPLATE_NAME \+ ' template data'/);
   assert.match(html, /'Activating ' \+ TEMPLATE_NAME \+ ' template site'/);
   assert.match(html, /TEMPLATE_NAME \+ ' template is ready'/);
@@ -89,7 +89,7 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /status\.redirectUrl/);
   assert.match(html, /window\.location\.assign/);
   assert.match(html, /\^https\?:/);
-  assert.match(html, /Template import needs attention/);
+  assert.match(html, /Template setup needs attention/);
 });
 
 test('renderTemplateImportStatus does not print the shared renderTemplate status line', (t) => {

@@ -4,6 +4,7 @@ const fs = require('fs');
 const https = require('https');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const DEFAULT_OWNER = 'microsoft';
@@ -68,6 +69,7 @@ function validateCatalogShape(catalog) {
   //       "requiredDataverseLanguages": [1033],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
   //       "solutionPath": "spa/311-portal/solution/311-portal-unmanaged.zip",
+  //       "spaCodePath": "spa/311-portal/spa-code",
   //       "seedDataPath": "spa/311-portal/seed/data.json",
   //       "templateVersion": "1.0.0.1", "author": "Microsoft" }
   //   ] }
@@ -86,7 +88,7 @@ function validateCatalogShape(catalog) {
     if (!template || typeof template !== 'object') return `template at index ${index} is not an object`;
     const requiredStringFields = isNestedFamilyTemplate(template)
       ? ['id', 'displayName', 'description', 'kind', 'author']
-      : ['id', 'displayName', 'description', 'kind', 'framework', 'solutionPath', 'templateVersion', 'author'];
+      : ['id', 'displayName', 'description', 'kind', 'framework', 'solutionPath', 'spaCodePath', 'templateVersion', 'author'];
     const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
     if (!ID_PATTERN.test(template.id)) return `template ${template.id} id must be kebab-case`;
@@ -114,7 +116,7 @@ function validateCatalogShape(catalog) {
         seenFrameworks.add(normalizedFramework);
         if (!FRAMEWORKS.has(normalizedFramework)) return `template ${template.id} variant ${framework} has unsupported framework`;
         if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return `template ${template.id} variant ${framework} is not an object`;
-        const variantMissing = ['templateVersion', 'solutionPath'].filter((field) => !isNonEmptyString(variant[field]));
+        const variantMissing = ['templateVersion', 'solutionPath', 'spaCodePath'].filter((field) => !isNonEmptyString(variant[field]));
         if (variantMissing.length > 0) return `template ${template.id} variant ${framework} missing string field(s): ${variantMissing.join(', ')}`;
         if (variant.previewImages !== undefined && !Array.isArray(variant.previewImages)) {
           return `template ${template.id} variant ${framework} previewImages must be an array`;
@@ -167,6 +169,9 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
       if (template.solutionPath) {
         materialized.solutionPath = resolveCatalogArtifactPath(catalogPath, template.solutionPath);
       }
+      if (template.spaCodePath) {
+        materialized.spaCodePath = resolveCatalogArtifactPath(catalogPath, template.spaCodePath);
+      }
       if (template.seedDataPath) {
         materialized.seedDataPath = resolveCatalogArtifactPath(catalogPath, template.seedDataPath);
       }
@@ -175,6 +180,7 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
           const materializedVariant = {
             ...variant,
             solutionPath: resolveCatalogArtifactPath(catalogPath, variant.solutionPath),
+            spaCodePath: resolveCatalogArtifactPath(catalogPath, variant.spaCodePath),
           };
           if (Array.isArray(variant.previewImages)) {
             materializedVariant.previewImages = variant.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath));
@@ -220,6 +226,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
           templateVersion: template.templateVersion,
           solutionPath: template.solutionPath,
+          spaCodePath: template.spaCodePath,
           author: template.author,
         }],
       };
@@ -252,6 +259,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           ...(variant.seedDataPath || template.seedDataPath ? { seedDataPath: variant.seedDataPath || template.seedDataPath } : {}),
           templateVersion: variant.templateVersion,
           solutionPath: variant.solutionPath,
+          spaCodePath: variant.spaCodePath,
           author: template.author,
         };
       }),
@@ -545,6 +553,113 @@ async function downloadSolutionArtifact(options = {}, deps = {}) {
   }
 }
 
+function validateSpaCodePath(spaCodePath) {
+  if (!isNonEmptyString(spaCodePath)) return 'spaCodePath is required';
+  if (path.isAbsolute(spaCodePath) || spaCodePath.includes('\\')) {
+    return 'SPA code path must be a repository-relative POSIX directory';
+  }
+  const segments = spaCodePath.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment === '.git')) {
+    return 'SPA code path must stay inside the template repository';
+  }
+  if (segments.some((segment) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))) {
+    return 'SPA code path contains unsupported characters';
+  }
+  return null;
+}
+
+function validateSpaCodeDirectory(localPath, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  const requiredFiles = ['powerpages.config.json', 'package.json'];
+  for (const requiredFile of requiredFiles) {
+    const requiredPath = path.join(localPath, requiredFile);
+    if (!fsImpl.existsSync(requiredPath) || !fsImpl.statSync(requiredPath).isFile()) {
+      return `SPA code directory is missing ${requiredFile}`;
+    }
+  }
+  const metadataPath = path.join(localPath, '.powerpages-site');
+  if (!fsImpl.existsSync(metadataPath) || !fsImpl.statSync(metadataPath).isDirectory()) {
+    return 'SPA code directory is missing .powerpages-site';
+  }
+
+  const queue = [localPath];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    for (const entry of fsImpl.readdirSync(current, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        return `SPA code directory contains a symbolic link: ${path.relative(localPath, path.join(current, entry.name))}`;
+      }
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.DS_Store' || entry.name.endsWith('.tsbuildinfo')) {
+        return `SPA code directory contains generated or local-only content: ${path.relative(localPath, path.join(current, entry.name))}`;
+      }
+      if (entry.isDirectory()) queue.push(path.join(current, entry.name));
+    }
+  }
+  return null;
+}
+
+function spaCodeCheckoutRoot({ cacheRoot = getDefaultCacheRoot(), sha, spaCodePath }) {
+  assertValidSha(sha);
+  const pathError = validateSpaCodePath(spaCodePath);
+  if (pathError) throw new Error(pathError);
+  const key = crypto.createHash('sha256').update(spaCodePath).digest('hex').slice(0, 16);
+  return path.join(cacheDirForSha(cacheRoot, sha), '.spa-code-checkouts', key);
+}
+
+function runGitCheckoutCommand(args, deps = {}) {
+  const execFile = deps.execFileSync || execFileSync;
+  return execFile('git', args, {
+    encoding: 'utf8',
+    timeout: deps.gitTimeoutMs || 120000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function downloadSpaCodeDirectory(options = {}, deps = {}) {
+  const {
+    owner = DEFAULT_OWNER,
+    repo = DEFAULT_REPO,
+    sha,
+    spaCodePath,
+    cacheRoot = getDefaultCacheRoot(),
+  } = options;
+  const fsImpl = deps.fs || fs;
+  try {
+    assertValidSha(sha);
+    const pathError = validateSpaCodePath(spaCodePath);
+    if (pathError) throw new Error(pathError);
+    const checkoutRoot = spaCodeCheckoutRoot({ cacheRoot, sha, spaCodePath });
+    const localPath = path.join(checkoutRoot, ...spaCodePath.split('/'));
+    if (fsImpl.existsSync(checkoutRoot)) {
+      const cachedError = validateSpaCodeDirectory(localPath, deps);
+      if (!cachedError) return { ok: true, localPath, cached: true };
+      fsImpl.rmSync(checkoutRoot, { recursive: true, force: true });
+    }
+
+    const parentDir = path.dirname(checkoutRoot);
+    fsImpl.mkdirSync(parentDir, { recursive: true });
+    const partialRoot = `${checkoutRoot}.partial-${process.pid}-${Date.now()}`;
+    fsImpl.rmSync(partialRoot, { recursive: true, force: true });
+    try {
+      runGitCheckoutCommand(['init', '--quiet', partialRoot], deps);
+      runGitCheckoutCommand(['-C', partialRoot, 'remote', 'add', 'origin', buildGitRemoteUrl({ owner, repo })], deps);
+      runGitCheckoutCommand(['-C', partialRoot, 'sparse-checkout', 'set', '--cone', '--', spaCodePath], deps);
+      runGitCheckoutCommand(['-C', partialRoot, 'fetch', '--quiet', '--depth', '1', 'origin', sha], deps);
+      runGitCheckoutCommand(['-C', partialRoot, 'checkout', '--quiet', '--detach', 'FETCH_HEAD'], deps);
+      const partialPath = path.join(partialRoot, ...spaCodePath.split('/'));
+      const validationError = validateSpaCodeDirectory(partialPath, deps);
+      if (validationError) throw new Error(validationError);
+      fsImpl.renameSync(partialRoot, checkoutRoot);
+    } catch (err) {
+      fsImpl.rmSync(partialRoot, { recursive: true, force: true });
+      throw err;
+    }
+    return { ok: true, localPath, cached: false };
+  } catch (err) {
+    return { ok: false, spaCodePath, error: err.message };
+  }
+}
+
 async function downloadSeedDataDirectory(options = {}, deps = {}) {
   const {
     owner = DEFAULT_OWNER,
@@ -621,7 +736,11 @@ module.exports = {
   validateZipContainsSolution,
   downloadArtifact,
   downloadSolutionArtifact,
+  downloadSpaCodeDirectory,
   downloadSeedDataDirectory,
+  validateSpaCodePath,
+  validateSpaCodeDirectory,
+  spaCodeCheckoutRoot,
   validateCatalogShape,
   normalizeCatalogFamilies,
   zipFileNames,

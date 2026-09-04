@@ -18,8 +18,11 @@ const {
   fetchCatalog,
   downloadArtifact,
   downloadSolutionArtifact,
+  downloadSpaCodeDirectory,
   downloadSeedDataDirectory,
   validateZipContainsSolution,
+  validateSpaCodeDirectory,
+  validateSpaCodePath,
   zipFileNames,
   validateCatalogShape,
   assertValidSha,
@@ -28,6 +31,7 @@ const {
 } = require('../lib/template-catalog');
 const { parseArgs: parseCatalogArgs } = require('../fetch-template-catalog');
 const { parseArgs: parseSolutionArgs } = require('../fetch-template-solution');
+const { parseArgs: parseSpaCodeArgs } = require('../fetch-template-spa-code');
 const { parseArgs: parseArtifactArgs } = require('../fetch-template-artifact');
 const { parseArgs: parseSeedArgs } = require('../fetch-template-seed-data');
 const { parseTemplateRepoArgs, formatJsonResult, runBestEffortJsonCli } = require('../lib/template-cli-args');
@@ -48,6 +52,7 @@ const VALID_TEMPLATE = {
   requiredDataverseLanguages: [1033],
   previewImages: ['templates/spa/company-portal/previews/home.png'],
   solutionPath: 'templates/spa/company-portal/solution/Company_1_0_0_0.zip',
+  spaCodePath: 'templates/spa/company-portal/spa-code',
   templateVersion: '1.0.0',
   author: 'Microsoft',
 };
@@ -67,10 +72,12 @@ const VALID_TEMPLATE_FAMILY = {
     react: {
       templateVersion: '1.0.0',
       solutionPath: 'templates/spa/supplier-portal/variants/react/solution/SupplierReact.zip',
+      spaCodePath: 'templates/spa/supplier-portal/variants/react/spa-code',
     },
     vue: {
       templateVersion: '1.0.1',
       solutionPath: 'templates/spa/supplier-portal/variants/vue/solution/SupplierVue.zip',
+      spaCodePath: 'templates/spa/supplier-portal/variants/vue/spa-code',
       previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
     },
   },
@@ -168,6 +175,7 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
       ...VALID_TEMPLATE,
       previewImages: ['spa/company-portal/previews/home.png', 'templates/spa/company-portal/previews/already-rooted.png'],
       solutionPath: 'spa/company-portal/solution/Company_1_0_0_0.zip',
+      spaCodePath: 'spa/company-portal/spa-code',
       seedDataPath: 'spa/company-portal/seed/data.json',
     }],
   };
@@ -189,6 +197,7 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
     'templates/spa/company-portal/previews/already-rooted.png',
   ]);
   assert.equal(result.catalog.templates[0].solutionPath, 'templates/spa/company-portal/solution/Company_1_0_0_0.zip');
+  assert.equal(result.catalog.templates[0].spaCodePath, 'templates/spa/company-portal/spa-code');
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/company-portal/seed/data.json');
 });
 
@@ -224,10 +233,12 @@ test('fetchCatalog materializes nested family and variant artifact paths', async
         react: {
           templateVersion: '1.0.0',
           solutionPath: 'spa/supplier-portal/variants/react/solution/SupplierReact.zip',
+          spaCodePath: 'spa/supplier-portal/variants/react/spa-code',
         },
         vue: {
           templateVersion: '1.0.1',
           solutionPath: 'spa/supplier-portal/variants/vue/solution/SupplierVue.zip',
+          spaCodePath: 'spa/supplier-portal/variants/vue/spa-code',
           previewImages: ['spa/supplier-portal/variants/vue/previews/home.png'],
           seedDataPath: 'spa/supplier-portal/variants/vue/seed-data/data.json',
         },
@@ -244,6 +255,7 @@ test('fetchCatalog materializes nested family and variant artifact paths', async
   assert.deepEqual(result.catalog.templates[0].previewImages, ['templates/spa/supplier-portal/previews/home.png']);
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/supplier-portal/seed-data/data.json');
   assert.equal(result.catalog.templates[0].variants.react.solutionPath, 'templates/spa/supplier-portal/variants/react/solution/SupplierReact.zip');
+  assert.equal(result.catalog.templates[0].variants.react.spaCodePath, 'templates/spa/supplier-portal/variants/react/spa-code');
   assert.deepEqual(result.catalog.templates[0].variants.vue.previewImages, ['templates/spa/supplier-portal/variants/vue/previews/home.png']);
   assert.equal(result.catalog.templates[0].variants.vue.seedDataPath, 'templates/spa/supplier-portal/variants/vue/seed-data/data.json');
 });
@@ -278,6 +290,7 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
         templateVersion: '1.0.0',
         solutionPath: 'templates/spa/supplier-portal/variants/react/solution/SupplierReact.zip',
+        spaCodePath: 'templates/spa/supplier-portal/variants/react/spa-code',
         author: 'Microsoft',
       },
       {
@@ -295,6 +308,7 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
         templateVersion: '1.0.1',
         solutionPath: 'templates/spa/supplier-portal/variants/vue/solution/SupplierVue.zip',
+        spaCodePath: 'templates/spa/supplier-portal/variants/vue/spa-code',
         author: 'Microsoft',
       },
     ],
@@ -415,6 +429,7 @@ test('validateCatalogShape accepts a complete template entry and rejects broken 
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, keywords: 'portal' }] }), /keywords/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: [] }] }), /requiredDataverseLanguages/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: ['1033'] }] }), /requiredDataverseLanguages/);
+  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, spaCodePath: '' }] }), /spaCodePath/);
 });
 
 // Regression: the published manifest declares `audience` as an array of personas
@@ -431,6 +446,7 @@ test('validateCatalogShape accepts the 311 Portal audience array and rejects non
     audience: ['makers', 'developers'],
     previewImages: ['spa/311-portal/previews/home.png'],
     solutionPath: 'spa/311-portal/solution/311-portal-unmanaged.zip',
+    spaCodePath: 'spa/311-portal/spa-code',
     templateVersion: '1.0.0.1',
   };
 
@@ -592,6 +608,73 @@ test('downloadSolutionArtifact reports download failures as ok:false for from-sc
   assert.deepEqual(result, { ok: false, artifactPath: 'missing.zip', error: '404' });
 });
 
+test('downloadSpaCodeDirectory sparse-checks out a validated directory at the pinned sha and caches it', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const spaCodePath = 'templates/spa/company/variants/react/spa-code';
+  const calls = [];
+  let partialRoot;
+
+  const deps = {
+    execFileSync(command, args) {
+      calls.push([command, args]);
+      if (args[0] === 'init') partialRoot = args[2];
+      if (args.includes('checkout')) {
+        const source = path.join(partialRoot, ...spaCodePath.split('/'));
+        fs.mkdirSync(path.join(source, '.powerpages-site'), { recursive: true });
+        fs.writeFileSync(path.join(source, 'powerpages.config.json'), '{}');
+        fs.writeFileSync(path.join(source, 'package.json'), '{}');
+        fs.mkdirSync(path.join(source, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(source, 'src', 'main.tsx'), 'export {};');
+      }
+      return '';
+    },
+  };
+
+  const first = downloadSpaCodeDirectory({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    spaCodePath,
+    cacheRoot: dir,
+  }, deps);
+  const second = downloadSpaCodeDirectory({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    spaCodePath,
+    cacheRoot: dir,
+  }, {
+    execFileSync() {
+      throw new Error('cached SPA code must not run git');
+    },
+  });
+
+  assert.equal(first.ok, true);
+  assert.equal(first.cached, false);
+  assert.equal(fs.existsSync(path.join(first.localPath, 'src', 'main.tsx')), true);
+  assert.deepEqual(second, { ok: true, localPath: first.localPath, cached: true });
+  assert.equal(calls.every(([command]) => command === 'git'), true);
+  assert.equal(calls.some(([, args]) => args.join(' ').includes(`fetch --quiet --depth 1 origin ${SHA}`)), true);
+  assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${spaCodePath}`)), true);
+});
+
+test('SPA code validation rejects escaping paths and generated content', (t) => {
+  assert.match(validateSpaCodePath('../outside'), /stay inside/);
+  assert.match(validateSpaCodePath('/absolute/path'), /repository-relative/);
+  assert.match(validateSpaCodePath('templates\\spa\\site'), /repository-relative/);
+  assert.match(validateSpaCodePath('templates/spa/--upload-pack=evil/site'), /unsupported characters/);
+  assert.match(validateSpaCodePath('templates/spa/site name'), /unsupported characters/);
+
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, '.powerpages-site'));
+  fs.writeFileSync(path.join(dir, 'powerpages.config.json'), '{}');
+  fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+  fs.mkdirSync(path.join(dir, 'node_modules'));
+  assert.match(validateSpaCodeDirectory(dir), /generated or local-only/);
+});
+
 test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __files attachments without tree API', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -712,6 +795,22 @@ test('fetch-template-solution CLI parser maps solutionPath to artifactPath', () 
     repo: 'samples',
     sha: SHA,
     artifactPath: 'templates/spa/company/solution/Company_1_0_0_0.zip',
+    cacheRoot: '/tmp/cache',
+  });
+});
+
+test('fetch-template-spa-code CLI parser maps spaCodePath to the directory option', () => {
+  assert.deepEqual(parseSpaCodeArgs([
+    '--owner', 'contoso',
+    '--repo', 'samples',
+    '--sha', SHA,
+    '--spaCodePath', 'templates/spa/company/variants/react/spa-code',
+    '--cacheRoot', '/tmp/cache',
+  ]), {
+    owner: 'contoso',
+    repo: 'samples',
+    sha: SHA,
+    spaCodePath: 'templates/spa/company/variants/react/spa-code',
     cacheRoot: '/tmp/cache',
   });
 });

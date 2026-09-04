@@ -477,15 +477,14 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
 | `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
-| `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before template import | attachment-block-modified |
+| `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading packaged SPA code | attachment-block-modified |
 | `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
-| `create-site:1.5.template-import` | gate | consent | 1.5 | Selected template zip downloaded and target env resolved — confirm importing unmanaged solution into the org | template-cache |
+| `create-site:1.5.template-import` | gate | consent | 1.5 | Selected solution and SPA code downloaded and target env resolved — confirm importing supporting artifacts and creating the code site | template-cache |
 | `create-site:1.5.update-installed` | gate | consent | 1.5 | Selected template solution is installed but zip is newer — confirm unmanaged update import | template-cache |
-| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Selected template solution is same/older — confirm cloning an existing website instead of re-importing | template-cache |
-| `create-site:1.5.clone-source-site` | not-a-gate | — | 1.5 | Disambiguate which existing Website Record ID to clone after clone path is already approved | — |
-| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live route choice to download the imported template source for local customization | — |
+| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Supporting solution is same/newer — confirm skipping its import and creating a new site from packaged SPA code | template-cache |
+| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live route choice to download the cloned template source for local customization | — |
 | `create-site:1.5.template-download-location` | not-a-gate | — | 1.5 | Download folder selection before running `pac pages download-code-site`; no download runs until a path is selected | — |
-| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Clone/download/upload failed — choose retry, from-scratch fallback, or stop | partial-template-clone |
+| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone or code-site upload failed — choose retry, from-scratch fallback, or stop | partial-template-clone |
 | `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-solution detection failed — confirm whether to import anyway, start from scratch, or stop | template-cache |
 | `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop | partial-unmanaged-template-import |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
