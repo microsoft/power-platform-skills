@@ -2,9 +2,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const zlib = require('zlib');
 
-const { decideReinstall, inspectSolutionZip } = require('../lib/template-reinstall-policy');
+const {
+  decideReinstall,
+  inspectSolutionDirectory,
+  inspectSolutionZip,
+} = require('../lib/template-reinstall-policy');
 const { compareVersions } = require('../lib/bump-solution-version');
 const { parseArgs, run } = require('../inspect-template-solution');
 
@@ -36,15 +43,47 @@ test('compareVersions orders dotted Dataverse solution versions numerically', ()
 
 test('decideReinstall covers import, update, clone, and ask cases', () => {
   const cases = [
-    [{ installed: false, zipVersion: '1.0.0.0' }, 'import'],
-    [{ installed: true, installedVersion: '1.0.0.0', zipVersion: '1.0.1.0' }, 'confirm-update'],
-    [{ installed: true, installedVersion: '1.0.1.0', zipVersion: '1.0.0.0' }, 'offer-clone'],
-    [{ installed: true, installedVersion: null, zipVersion: '1.0.0.0' }, 'ask'],
+    [{ installed: false, availableVersion: '1.0.0.0' }, 'import'],
+    [{ installed: true, installedVersion: '1.0.0.0', availableVersion: '1.0.1.0' }, 'confirm-update'],
+    [{ installed: true, installedVersion: '1.0.1.0', availableVersion: '1.0.0.0' }, 'offer-clone'],
+    [{ installed: true, installedVersion: null, availableVersion: '1.0.0.0' }, 'ask'],
     [{ detectionFailed: true }, 'ask'],
   ];
   for (const [input, expected] of cases) {
     assert.equal(decideReinstall(input), expected);
   }
+});
+
+test('inspectSolutionDirectory reads unpacked Other/Solution.xml metadata', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'inspect-template-solution-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'Other'));
+  fs.writeFileSync(path.join(root, 'Other', 'Solution.xml'), `
+<ImportExportXml>
+  <SolutionManifest>
+    <UniqueName>contoso_template</UniqueName>
+    <Version>2.0.0.0</Version>
+    <Managed>0</Managed>
+  </SolutionManifest>
+</ImportExportXml>`);
+
+  assert.deepEqual(inspectSolutionDirectory(root), {
+    ok: true,
+    uniqueName: 'contoso_template',
+    version: '2.0.0.0',
+    managed: false,
+  });
+  assert.deepEqual(run([
+    '--solutionPath', root,
+    '--installed', 'true',
+    '--installedVersion', '1.0.0.0',
+  ]), {
+    ok: true,
+    uniqueName: 'contoso_template',
+    version: '2.0.0.0',
+    managed: false,
+    decision: 'confirm-update',
+  });
 });
 
 test('inspectSolutionZip extracts unique name, version, and managed flag from solution.xml', () => {
@@ -95,9 +134,9 @@ test('inspectSolutionZip reports corrupt or unreadable solution.xml as ok:false'
   }), { ok: false, error: 'solution.xml did not include UniqueName and Version' });
 });
 
-test('inspect-template-solution CLI parser and runner return decision when installed state is supplied', () => {
-  assert.deepEqual(parseArgs(['--zipPath', '/tmp/template.zip', '--installed', 'true', '--installedVersion', '1.0.0.0']), {
-    zipPath: '/tmp/template.zip',
+test('inspect-template-solution CLI parser and runner accept unpacked solution source', () => {
+  assert.deepEqual(parseArgs(['--solutionPath', '/tmp/solution', '--installed', 'true', '--installedVersion', '1.0.0.0']), {
+    solutionPath: '/tmp/solution',
     installed: true,
     installedVersion: '1.0.0.0',
   });

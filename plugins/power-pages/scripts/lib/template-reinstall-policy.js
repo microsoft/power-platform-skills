@@ -1,14 +1,15 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const zlib = require('zlib');
 const { compareVersions } = require('./bump-solution-version');
 
-function decideReinstall({ installed, installedVersion, zipVersion, detectionFailed } = {}) {
+function decideReinstall({ installed, installedVersion, availableVersion, detectionFailed } = {}) {
   if (detectionFailed) return 'ask';
   if (!installed) return 'import';
-  if (!installedVersion || !zipVersion) return 'ask';
-  if (compareVersions(zipVersion, installedVersion) > 0) return 'confirm-update';
+  if (!installedVersion || !availableVersion) return 'ask';
+  if (compareVersions(availableVersion, installedVersion) > 0) return 'confirm-update';
   return 'offer-clone';
 }
 
@@ -89,19 +90,46 @@ function getTag(xml, tagName) {
   return match ? match[1].trim() : null;
 }
 
+function inspectSolutionXml(xml) {
+  const uniqueName = getTag(xml, 'UniqueName');
+  const version = getTag(xml, 'Version');
+  const managed = getTag(xml, 'Managed');
+  if (!uniqueName || !version) {
+    return { ok: false, error: 'solution.xml did not include UniqueName and Version' };
+  }
+  return { ok: true, uniqueName, version, managed: managed === '1' };
+}
+
 function inspectSolutionZip(zipPath, deps = {}) {
   try {
-    const xml = deps.solutionXml || readSolutionXml(zipPath, deps);
-    const uniqueName = getTag(xml, 'UniqueName');
-    const version = getTag(xml, 'Version');
-    const managed = getTag(xml, 'Managed');
-    if (!uniqueName || !version) {
-      return { ok: false, error: 'solution.xml did not include UniqueName and Version' };
-    }
-    return { ok: true, uniqueName, version, managed: managed === '1' };
+    return inspectSolutionXml(deps.solutionXml || readSolutionXml(zipPath, deps));
   } catch (err) {
     return { ok: false, error: err.message };
   }
 }
 
-module.exports = { decideReinstall, readSolutionXml, inspectSolutionZip };
+function inspectSolutionDirectory(solutionPath, deps = {}) {
+  try {
+    const fsImpl = deps.fs || fs;
+    const rootStat = fsImpl.lstatSync(solutionPath);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      return { ok: false, error: 'Template solution source must be a directory and not a symbolic link' };
+    }
+    const solutionXmlPath = path.join(solutionPath, 'Other', 'Solution.xml');
+    const xmlStat = fsImpl.lstatSync(solutionXmlPath);
+    if (!xmlStat.isFile() || xmlStat.isSymbolicLink()) {
+      return { ok: false, error: 'Template solution source is missing Other/Solution.xml' };
+    }
+    return inspectSolutionXml(fsImpl.readFileSync(solutionXmlPath, 'utf8'));
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+module.exports = {
+  decideReinstall,
+  inspectSolutionDirectory,
+  inspectSolutionXml,
+  inspectSolutionZip,
+  readSolutionXml,
+};

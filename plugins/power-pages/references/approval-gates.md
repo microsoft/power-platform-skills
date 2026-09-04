@@ -480,8 +480,9 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading packaged SPA code | attachment-block-modified |
 | `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
 | `create-site:1.5.template-import` | gate | consent | 1.5 | Selected solution and SPA code downloaded and target env resolved — confirm importing supporting artifacts and creating the code site | template-cache |
-| `create-site:1.5.update-installed` | gate | consent | 1.5 | Selected template solution is installed but zip is newer — confirm unmanaged update import | template-cache |
+| `create-site:1.5.update-installed` | gate | consent | 1.5 | Selected template solution is installed but the downloaded source is newer — confirm unmanaged update import | template-cache |
 | `create-site:1.5.clone-existing` | gate | consent | 1.5 | Supporting solution is same/newer — confirm skipping its import and creating a new site from packaged SPA code | template-cache |
+| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Local validation or `pac solution pack` failed before any Dataverse import attempt — retry, fall back, or stop | template-cache |
 | `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live route choice to download the cloned template source for local customization | — |
 | `create-site:1.5.template-download-location` | not-a-gate | — | 1.5 | Download folder selection before running `pac pages download-code-site`; no download runs until a path is selected | — |
 | `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone or code-site upload failed — choose retry, from-scratch fallback, or stop | partial-template-clone |

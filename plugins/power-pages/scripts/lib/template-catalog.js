@@ -67,7 +67,7 @@ function validateCatalogShape(catalog) {
   //       "audience": ["makers", "developers"],
   //       "requiredDataverseLanguages": [1033],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
-  //       "solutionPath": "spa/311-portal/solution/311-portal-unmanaged.zip",
+  //       "solutionPath": "spa/311-portal/solution",
   //       "spaCodePath": "spa/311-portal/spa-code",
   //       "seedDataPath": "spa/311-portal/seed/data.json",
   //       "templateVersion": "1.0.0.1", "author": "Microsoft" }
@@ -90,6 +90,13 @@ function validateCatalogShape(catalog) {
       : ['id', 'displayName', 'description', 'kind', 'framework', 'solutionPath', 'spaCodePath', 'templateVersion', 'author'];
     const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
+    if (!isNestedFamilyTemplate(template)) {
+      try {
+        templateVariantRoot(template.solutionPath, template.spaCodePath);
+      } catch (err) {
+        return `template ${template.id || index} has invalid variant paths: ${err.message}`;
+      }
+    }
     if (!ID_PATTERN.test(template.id)) return `template ${template.id} id must be kebab-case`;
     if (!Array.isArray(template.audience) || template.audience.length === 0 || !template.audience.every(isNonEmptyString)) {
       return `template ${template.id} audience must be a non-empty array of strings`;
@@ -117,6 +124,11 @@ function validateCatalogShape(catalog) {
         if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return `template ${template.id} variant ${framework} is not an object`;
         const variantMissing = ['templateVersion', 'solutionPath', 'spaCodePath'].filter((field) => !isNonEmptyString(variant[field]));
         if (variantMissing.length > 0) return `template ${template.id} variant ${framework} missing string field(s): ${variantMissing.join(', ')}`;
+        try {
+          templateVariantRoot(variant.solutionPath, variant.spaCodePath);
+        } catch (err) {
+          return `template ${template.id} variant ${framework} has invalid paths: ${err.message}`;
+        }
         if (variant.previewImages !== undefined && !Array.isArray(variant.previewImages)) {
           return `template ${template.id} variant ${framework} previewImages must be an array`;
         }
@@ -569,6 +581,63 @@ function validateSpaCodeDirectory(localPath, deps = {}) {
   return null;
 }
 
+function validateUnpackedSolutionDirectory(localPath, deps = {}) {
+  const fsImpl = deps.fs || fs;
+  if (!fsImpl.existsSync(localPath)) {
+    return 'Template solution source is not a directory';
+  }
+  const rootStat = fsImpl.lstatSync(localPath);
+  if (rootStat.isSymbolicLink()) {
+    return 'Template solution source must not be a symbolic link';
+  }
+  if (!rootStat.isDirectory()) return 'Template solution source is not a directory';
+
+  // `pac solution unpack` uses the SolutionPackager source layout and places
+  // solution metadata under `Other/`.
+  // See: https://learn.microsoft.com/power-platform/developer/cli/reference/solution#pac-solution-unpack
+  const solutionXmlPath = path.join(localPath, 'Other', 'Solution.xml');
+  const customizationsXmlPath = path.join(localPath, 'Other', 'Customizations.xml');
+  const queue = [localPath];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    for (const entry of fsImpl.readdirSync(current, { withFileTypes: true })) {
+      const entryPath = path.join(current, entry.name);
+      const relativePath = path.relative(localPath, entryPath);
+      if (entry.isSymbolicLink()) {
+        return `Template solution source contains a symbolic link: ${relativePath}`;
+      }
+      if (
+        entry.name === '.git' ||
+        entry.name === 'node_modules' ||
+        entry.name === '.DS_Store' ||
+        entry.name.endsWith('.tsbuildinfo')
+      ) {
+        return `Template solution source contains generated or local-only content: ${relativePath}`;
+      }
+      if (entry.isFile() && path.extname(entry.name).toLowerCase() === '.zip') {
+        return `Template solution source must not contain committed zip files: ${relativePath}`;
+      }
+      if (entry.isDirectory()) queue.push(entryPath);
+    }
+  }
+
+  for (const requiredPath of [solutionXmlPath, customizationsXmlPath]) {
+    if (!fsImpl.existsSync(requiredPath) || !fsImpl.lstatSync(requiredPath).isFile()) {
+      return `Template solution source is missing ${path.relative(localPath, requiredPath)}`;
+    }
+  }
+
+  const solutionXml = fsImpl.readFileSync(solutionXmlPath, 'utf8');
+  if (!/<Managed>\s*0\s*<\/Managed>/i.test(solutionXml)) {
+    return 'Template solution source must describe an unmanaged solution';
+  }
+  const customizationsXml = fsImpl.readFileSync(customizationsXmlPath, 'utf8');
+  if (/<powerpagecomponents(?:\s|>)/i.test(customizationsXml)) {
+    return 'Template supporting solution must not contain Power Pages website components';
+  }
+  return null;
+}
+
 function repositoryDirectoryCheckoutRoot({ cacheRoot = getDefaultCacheRoot(), sha, directoryPath }) {
   assertValidSha(sha);
   const pathError = validateSpaCodePath(directoryPath);
@@ -638,12 +707,12 @@ function templateVariantRoot(solutionPath, spaCodePath) {
   if (solutionPathError) throw new Error(`Invalid solutionPath: ${solutionPathError}`);
   const spaCodePathError = validateSpaCodePath(spaCodePath);
   if (spaCodePathError) throw new Error(`Invalid spaCodePath: ${spaCodePathError}`);
-  const solutionDir = path.posix.dirname(solutionPath);
+  const solutionRoot = path.posix.dirname(solutionPath);
   const variantRoot = path.posix.dirname(spaCodePath);
   if (
-    path.posix.basename(solutionDir) !== 'solution' ||
+    path.posix.basename(solutionPath) !== 'solution' ||
     path.posix.basename(spaCodePath) !== 'spa-code' ||
-    path.posix.dirname(solutionDir) !== variantRoot
+    solutionRoot !== variantRoot
   ) {
     throw new Error('solutionPath and spaCodePath must use sibling solution/ and spa-code/ folders');
   }
@@ -657,12 +726,8 @@ function validateTemplateVariantDirectory(localVariantPath, solutionPath, spaCod
   const relativeSpaCodePath = path.posix.relative(variantRoot, spaCodePath);
   const localSolutionPath = path.join(localVariantPath, ...relativeSolutionPath.split('/'));
   const localSpaCodePath = path.join(localVariantPath, ...relativeSpaCodePath.split('/'));
-  if (!fsImpl.existsSync(localSolutionPath) || !fsImpl.statSync(localSolutionPath).isFile()) {
-    return `Template variant is missing solution artifact: ${relativeSolutionPath}`;
-  }
-  if (!validateZipContainsSolution(localSolutionPath, deps)) {
-    return `Template solution is not a valid Dataverse solution zip: ${relativeSolutionPath}`;
-  }
+  const solutionError = validateUnpackedSolutionDirectory(localSolutionPath, { ...deps, fs: fsImpl });
+  if (solutionError) return solutionError;
   return validateSpaCodeDirectory(localSpaCodePath, deps);
 }
 
@@ -768,6 +833,7 @@ module.exports = {
   downloadSeedDataDirectory,
   validateSpaCodePath,
   validateSpaCodeDirectory,
+  validateUnpackedSolutionDirectory,
   repositoryDirectoryCheckoutRoot,
   templateVariantRoot,
   validateTemplateVariantDirectory,

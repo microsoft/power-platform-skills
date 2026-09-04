@@ -4,7 +4,7 @@ function parseTemplateRepoArgs(argv, pathFlagName) {
   // Shared parser for argv arrays shaped like:
   //   ['--owner','microsoft','--repo','power-pages-samples','--ref','main',
   //    '--sha','<40-char sha>','--cacheRoot','/tmp/cache',
-  //    '--solutionPath','templates/spa/<id>/solution/<zip>']
+  //    '--solutionPath','templates/spa/<id>/solution']
   // `pathFlagName` lets callers map a domain-specific path flag (for example
   // `--solutionPath`) to the shared `artifactPath` option used by the cache.
   const args = {};
