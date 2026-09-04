@@ -430,6 +430,108 @@ function provisionWithRules(rows) {
   };
 }
 
+// --- the designer's own completeness validator, run BEFORE the push -----------------------------
+//
+// The trap it closes is pinned in sdk-uptake-contract.test.js: a condition tree in the wrong shape is
+// MERGED onto the node, ignored by the serializer, and written as a rule with no clauses and no
+// actions — 204, activated, and it never fires. Nothing on the push path detects that, and nothing
+// afterwards can either. This SDK exposes the validator the designer gates Save on; the build runs it.
+
+test('a rule the designer calls incomplete HALTS before anything is written', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionWithRules([]);
+  const pushes = [];
+  // `provisionWithRules` does not record pushes, and an assertion against a call list that can never
+  // contain the value is vacuous — so record it here rather than assert on nothing.
+  provision.pushArtifact = async (...a) => { pushes.push(a); return { id: 'br-new', saved: true, publish: { kind: 'notRequested' } }; };
+  provision.validateBusinessRule = () => ([
+    { pointer: '/rootCondition (root)', rule: 'business-rule-NO_ACTION', message: 'A business rule must include at least one action step.' },
+  ]);
+
+  const err = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
+  }).then(() => null, (e) => e);
+
+  assert.ok(err, 'an incomplete rule must not be pushed');
+  assert.match(err.message, /never fires/, `the halt must say what the rule would do; got: ${err && err.message}`);
+  assert.match(err.message, /NO_ACTION/, "the designer's own finding is the actionable part");
+  assert.deepStrictEqual(pushes, [], 'the refusal must come BEFORE the write, not after it');
+});
+
+test('the validator is best-effort: an older bundle without it, or one that throws, still builds', async () => {
+  // A DIAGNOSTIC must never be the thing that breaks a build. The bundle is re-vendored routinely and
+  // the plugin supports the generation before this method existed, so absence is a normal state —
+  // and a validator that itself faults tells us nothing about the rule.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  for (const [label, mutate] of [
+    ['absent', (p) => { delete p.validateBusinessRule; }],
+    ['throws', (p) => { p.validateBusinessRule = () => { throw new Error('validator exploded'); }; }],
+    ['returns a non-array', (p) => { p.validateBusinessRule = () => undefined; }],
+  ]) {
+    const { provision } = provisionWithRules([]);
+    mutate(provision);
+    const res = await runBuild(ruleOnlySpec(), {
+      sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
+    });
+    assert.strictEqual(res.ok, true, `validator ${label} must not fail the build`);
+    const only = ruleOnlySpec().businessRules[0];
+    assert.strictEqual(res.created.businessRules[`${only.entity.toLowerCase()}|${only.name}`], 'br-new',
+      `validator ${label}: the rule must still be authored`);
+    assert.deepStrictEqual(res.skipped.businessRules, [], `validator ${label}: and not recorded as skipped`);
+  }
+});
+
+test('REAL BUNDLE: the validator accepts EVERY shape this spec surface can author', () => {
+  // The one way wiring the validator could regress a working build is if it rejected something the
+  // App Spec already allows. So the assertion is over the spec surface's OWN declared sets rather
+  // than a hand-picked sample — a future operator or action type added to app-spec.js is covered the
+  // day it is added, without anyone remembering to extend this test.
+  const { BUSINESS_RULE_OPERATORS, BUSINESS_RULE_VALUELESS_OPERATORS, BUSINESS_RULE_ACTION_TYPES, BUSINESS_RULE_SCOPES } = require('../lib/app-spec.js');
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brval-'));
+  dirs.push(dir);
+  const noop = async () => ({ status: 200, headers: {}, body: { value: [] } });
+  const sdk = createMakerSdk({
+    workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: { get: noop, post: noop, patch: noop, put: noop, delete: noop },
+  });
+  sdk.initWorkspace();
+
+  // The payload each action type carries — mirrors BUSINESS_RULE_ACTIONS in app-spec.js.
+  const ACTION_PAYLOAD = { SetVisibility: { visible: false }, LockUnlock: { lock: true }, SetBusinessRequired: { required: true }, SetFieldValue: { value: 'x', dataType: 'String' } };
+  const shapes = [];
+  for (const op of BUSINESS_RULE_OPERATORS) {
+    const valueless = BUSINESS_RULE_VALUELESS_OPERATORS.has(op);
+    shapes.push([`operator ${op}`, { entity: 'new_ticket', name: `Op ${op}`, conditions: [Object.assign({ field: 'new_owner', operator: op }, valueless ? {} : { value: 'x', dataType: 'String' })], actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }] }]);
+  }
+  for (const type of BUSINESS_RULE_ACTION_TYPES) {
+    assert.ok(ACTION_PAYLOAD[type], `this test must be taught the payload for a new action type '${type}'`);
+    shapes.push([`action ${type}`, { entity: 'new_ticket', name: `Act ${type}`, conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }], actions: [Object.assign({ type, field: 'new_notes' }, ACTION_PAYLOAD[type])] }]);
+  }
+  for (const scope of BUSINESS_RULE_SCOPES) {
+    shapes.push([`scope ${scope}`, { entity: 'new_ticket', name: `Sc ${scope}`, scope, conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }], actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }] }]);
+  }
+  shapes.push(['multi-condition + multi-action', { entity: 'new_ticket', name: 'Multi', conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }, { field: 'new_notes', operator: 'ContainsData' }], actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }, { type: 'LockUnlock', field: 'new_owner', lock: true }] }]);
+
+  const rejected = [];
+  for (const [label, rule] of shapes) {
+    const def = businessRuleDef(rule);
+    const art = sdk.createArtifact('businessRule', def);
+    const issues = sdk.validateBusinessRule(Object.assign({}, art, { rootCondition: def.rootCondition }));
+    if (issues && issues.length) rejected.push(`${label}: ${JSON.stringify(issues)}`);
+  }
+  assert.deepStrictEqual(rejected, [],
+    `the build HALTS on findings, so a rejected authorable shape is a build the spec gate said was fine:\n${rejected.join('\n')}`);
+  assert.ok(shapes.length >= 20, `the matrix must be broad enough to mean something; got ${shapes.length}`);
+
+  // Negative control: without this the assertion above is satisfied by a validator that finds
+  // nothing at all, and the gate would be inert while looking healthy.
+  const empty = sdk.createArtifact('businessRule', { name: 'Empty', entityLogicalName: 'new_ticket', scope: 'Entity', status: 'Draft' });
+  const control = sdk.validateBusinessRule(empty);
+  assert.ok(control && control.length > 0, 'the validator must actually report on a rule with no clauses and no actions');
+  assert.match(JSON.stringify(control), /NO_ACTION/, 'and name the missing action step');
+});
+
 test('a rebuild REMOVES duplicates an earlier build left behind', async () => {
   const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
   const { provision, calls } = provisionWithRules([
@@ -681,6 +783,106 @@ test('any OTHER business-rule failure still HALTS — the skip is not a blanket 
       () => runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {} }),
       `code ${String(code)} must still halt the build`);
   }
+});
+
+// --- the SDK moved this signal from a THROW to a RETURN (SDK uptake) -----------------------------
+//
+// The bundle used to throw `BUSINESS_RULE_API_UNAVAILABLE` out of `pushArtifact`. It now treats the
+// preview rollout as a reported no-op and RESOLVES with `{ saved: false, error }` instead — measured
+// against the vendored bundle, a 404 on the bound member resolves while 400/401/403/429/500 still
+// throw.
+//
+// That is invisible to a mock that keeps throwing, which is exactly why the whole plugin suite
+// stayed green through the uptake while the real bundle would have HALTED every build on an
+// environment without the member — i.e. most of them. `requireSuccessfulPush` turns any by-value
+// failure into a BuildHalt, so the error the skip predicate sees is the halt, not the SdkError.
+//
+// These two tests pin the RESULT-shaped contract so it cannot regress back.
+function byValuePushFailure(code, message) {
+  const { provision, calls } = provisionThatCannotAuthorRules();
+  provision.pushArtifact = async () => {
+    calls.push(['pushArtifact']);
+    // The exact shape the bundle returns: a PushResult carrying the SdkError, not a throw.
+    return { type: 'businessRule', id: 'br-new', saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error(message), { code }) };
+  };
+  return { provision, calls };
+}
+
+test('an unavailable bound member reported BY VALUE still skips, and does not halt the build', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = byValuePushFailure('BUSINESS_RULE_API_UNAVAILABLE',
+    "Business-rule authoring (preview) is not enabled on this environment yet: it does not expose 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson'.");
+  const warnings = [];
+  const events = [];
+  const res = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true,
+    phases: ['business-rules'], warn: (m) => warnings.push(m), emit: (e) => events.push(e),
+  });
+
+  assert.strictEqual(res.ok, true, 'the build must complete, exactly as it does for the thrown form');
+  const only = ruleOnlySpec().businessRules[0];
+  assert.deepStrictEqual(res.skipped.businessRules, [`${only.entity.toLowerCase()}|${only.name}`]);
+  assert.strictEqual(Object.keys(res.created.businessRules).length, 0);
+  assert.strictEqual(calls.some((c) => c[0] === 'addSolutionComponent'), false,
+    'a rule that was never created must not be added to the solution');
+
+  assert.strictEqual(warnings.length, 1, `expected exactly one warning, got ${JSON.stringify(warnings)}`);
+  assert.match(warnings[0], /business rules were NOT created/);
+  const skip = events.find((e) => e.phase === 'business-rules' && e.status === 'skip');
+  assert.ok(skip, `expected a skip event; got ${JSON.stringify(events.map((e) => [e.phase, e.status, e.label]))}`);
+  assert.match(skip.label, /unsupported in this environment/);
+});
+
+test('BUSINESS_RULE_LEFT_DEACTIVATED is NOT swallowed by the preview skip — it halts and says why', async () => {
+  // The SDK raises this DISTINCT code when a write failed AND it could not put the rule back into
+  // the Activated state it found it in, so a live rule is sitting Draft on the server. Collapsing it
+  // into the preview no-op would tell the operator "not enabled here" while their rule is disabled —
+  // the SDK's own comment says it must not collapse, so the plugin must not collapse it either.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = byValuePushFailure('BUSINESS_RULE_LEFT_DEACTIVATED',
+    "The business-rule write failed AND the rule could not be re-activated, so 'br-9' is left DEACTIVATED (Draft) on the server.");
+  const err = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
+  }).then(() => null, (e) => e);
+
+  assert.ok(err, 'a rule left deactivated must not be reported as a benign skip');
+  assert.match(err.message, /DEACTIVATED/,
+    `the halt must carry the SDK's own diagnosis; got: ${err && err.message}`);
+  assert.doesNotMatch(err.message, /changed in Maker since it was fetched/,
+    'reporting this as a concurrent Maker edit sends the operator to re-download over an unrelated cause');
+});
+
+test('a LEFT_DEACTIVATED that WRAPS the preview failure still halts — broad matching must not swallow it', async () => {
+  // This is the shape the exclusion actually defends, and it exists BECAUSE the predicate matches on
+  // the whole cause chain rather than the top-level code.
+  //
+  // The two conditions are causally linked in the SDK: the rule is deactivated, the write fails, and
+  // the re-activation fails — so the write failure is the natural `cause` of the LEFT_DEACTIVATED
+  // error, and the SDK already embeds its text in the message. If that write failure is the preview
+  // gate, a chain walk sees BOTH codes. Taking the first match it recognises would report "this
+  // environment cannot host business rules" for a rule that is sitting DISABLED on a server that
+  // plainly can — the operator is told to stop worrying about the exact thing they must go fix.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const preview = Object.assign(new Error("does not expose 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson'"), { code: 'BUSINESS_RULE_API_UNAVAILABLE' });
+  const { provision } = byValuePushFailure('BUSINESS_RULE_LEFT_DEACTIVATED',
+    "The business-rule write failed AND the rule could not be re-activated, so 'br-9' is left DEACTIVATED (Draft) on the server.");
+  const inner = provision.pushArtifact;
+  provision.pushArtifact = async (...args) => {
+    const res = await inner(...args);
+    res.error.cause = preview;   // the linkage the SDK's own message already describes
+    return res;
+  };
+
+  const events = [];
+  const err = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {}, emit: (e) => events.push(e),
+  }).then(() => null, (e) => e);
+
+  assert.ok(err, 'the deactivated rule outranks the preview code anywhere else in the chain');
+  assert.match(err.message, /DEACTIVATED/);
+  const skip = events.find((e) => e.phase === 'business-rules' && e.status === 'skip');
+  assert.strictEqual(skip, undefined,
+    `this must not be recorded as a skip; got ${JSON.stringify(skip && skip.label)}`);
 });
 
 // --- the operator table, and why it must mirror the SDK exactly ---------------------------------
