@@ -53,7 +53,8 @@
       .layout{flex-direction:column;}
       .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);padding:8px;}
       .nav-group-label{padding:8px 14px 4px;}
-      .nav-btn{border-left:none;border-bottom:2px solid var(--accent);width:auto;padding:10px 14px;}
+      .nav-btn{border-left:none;border-bottom:2px solid transparent;width:auto;padding:10px 14px;}
+      .nav-btn.active{border-bottom-color:var(--accent);}
       .content{padding:20px 16px 72px;}
     }
   </style>

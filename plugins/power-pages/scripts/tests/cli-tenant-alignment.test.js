@@ -106,5 +106,6 @@ test('run requires either an environment URL or token and passes CLI args throug
     token: 't',
   });
   assert.equal(run([]).ok, false);
+  assert.match(run([]).error, /\[--envUrl <url>\] \[--token <bearer-token>\] \(at least one required\)/);
   assert.equal(run(['--token', fakeJwt(TENANT_A)], { execFile: fakeExecFile(), platform: 'linux' }).ok, true);
 });

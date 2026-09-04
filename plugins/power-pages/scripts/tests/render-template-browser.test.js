@@ -44,6 +44,7 @@ test('renderTemplateBrowser renders static template details and preview images',
         previewImages: [
           'https://raw.githubusercontent.com/o/r/sha/templates/spa/company/previews/home.png',
           'https://raw.githubusercontent.com/o/r/sha/templates/spa/company/previews/detail.png',
+          'https://example.test/image.png" onerror="globalThis.pwned=1',
         ],
       },
       {
@@ -75,7 +76,11 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.match(html, /class="preview-boundary"/);
   assert.match(html, /<figcaption>Preview 2<\/figcaption>/);
   assert.match(html, /class="preview-image"/);
-  assert.match(html, /Preview 2 of Company "Portal"/);
+  assert.match(html, /Preview 2 of Company &quot;Portal&quot;/);
+  assert.match(html, /src="https:\/\/example\.test\/image\.png&quot; onerror=&quot;globalThis\.pwned=1"/);
+  assert.doesNotMatch(html, /src="https:\/\/example\.test\/image\.png" onerror=/);
+  assert.match(html, /border-bottom:2px solid transparent/);
+  assert.match(html, /\.nav-btn\.active\{border-bottom-color:var\(--accent\);\}/);
   assert.match(html, /Citizen service request portal/);
   assert.doesNotMatch(html, /data-carousel/);
   assert.doesNotMatch(html, /carousel/);

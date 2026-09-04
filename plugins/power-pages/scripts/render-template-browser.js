@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { renderTemplate, escapeHtml } = require('./lib/render-template');
+const { renderTemplate, escapeHtml, escapeHtmlAttribute } = require('./lib/render-template');
 const { openInDefaultBrowser } = require('./lib/default-browser');
 
 // Accepted argv shape:
@@ -39,7 +39,7 @@ function renderPreviewImages(template) {
   return images.map((image, imageIndex) => `
     <figure class="preview-boundary">
       <figcaption>Preview ${imageIndex + 1}</figcaption>
-      <img class="preview-image" src="${escapeHtml(image)}" alt="Preview ${imageIndex + 1} of ${escapeHtml(template.displayName)}" loading="lazy" />
+      <img class="preview-image" src="${escapeHtmlAttribute(image)}" alt="Preview ${imageIndex + 1} of ${escapeHtmlAttribute(template.displayName)}" loading="lazy" />
     </figure>
   `).join('');
 }

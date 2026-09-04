@@ -17,7 +17,10 @@ function parseArgs(argv) {
 function run(argv = process.argv.slice(2), deps = {}) {
   const args = parseArgs(argv);
   if (!args.envUrl && !args.token) {
-    return { ok: false, error: 'Usage: validate-cli-tenant-alignment.js --envUrl <url> [--token <bearer-token>]' };
+    return {
+      ok: false,
+      error: 'Usage: validate-cli-tenant-alignment.js [--envUrl <url>] [--token <bearer-token>] (at least one required)',
+    };
   }
   return validateCliTenantAlignment(args, deps);
 }
