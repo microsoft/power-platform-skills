@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.7
+version: 3.0.8
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.7`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.8`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -208,6 +208,11 @@ report the loaded guide path and highest defined check.
   destination items, same order, no extra brand/label injected into one screen's nav,
   and width formulas that fit the narrowest target. This is an app-wide check builders
   cannot perform because each sees only one screen.
+- In CREATE mode, inspect every planned screen file and reject a root-only screen. Each
+  screen must contain at least one meaningful visible leaf control beneath its screen root;
+  the screen root and layout containers do not count. Repair any missing screen content
+  before entering final validation. A clean compile alone does not prove that the generated
+  controls reached the coauthoring session.
 - Verify each `## Action Contracts` row end to end against the generated files: the entry
   point is reachable, the named event is wired, and the observable result is visible
   immediately after the action. For mutations, require an in-viewport receipt bound to the

@@ -292,14 +292,40 @@ Never report an unqualified percentage such as `100% functional` or `18/18 (100%
 Always include `static conformance` in the same sentence and immediately state the runtime
 evaluation status.
 
+
+### Verify the coauthoring round trip
+
+Before crossing the finalization barrier, prove that the coauthoring session returns the
+authored app rather than the original blank shell:
+
+1. Use `Bash` to create a fresh empty temporary directory outside `[working directory]`.
+   Do not place planning, acceptance, or other non-YAML files in it.
+2. Call `sync_canvas` with that temporary directory.
+3. Inspect the synchronized `App.pa.yaml` and every screen named by the plan's dispatch
+   table. Every expected file must exist. In CREATE mode, every screen must contain at
+   least one meaningful visible leaf control beneath its screen root; the root Screen and
+   layout-only containers do not count.
+4. If a screen is missing, root-only, or does not contain the controls present in the
+   authored working copy, delete the temporary directory, call `compile_canvas` again,
+   wait for it to succeed, and repeat the synchronization once with a new empty directory.
+   If the second server snapshot is still missing or stale, stop with
+   `Status: Coauthoring Sync Blocked`; do not claim generation succeeded.
+5. Delete the temporary verification directory before crossing the finalization barrier.
+   Never copy the synchronized snapshot over `[working directory]`.
+
+This round trip is server-state evidence. `compile_canvas` success alone proves validation,
+not that a nonblank app is observable when the browser joins the coauthoring session.
+
+
 ### Final generation-proof gate
 
 Immediately before the summary:
 
 1. Confirm `[working directory]/canvas-app-acceptance.md` has one evidence row for every Action Contract,
    no failed row, and has passed its required validation.
-2. Confirm no delegated agent remains running or queued and every app, planning, and
-   acceptance-artifact write is complete.
+2. Confirm no delegated agent remains running or queued, every app, planning, and
+   acceptance-artifact write is complete, and the coauthoring round-trip check above has
+   passed when that check is available.
 3. Cross the finalization barrier: from this point onward, do not invoke `Task`, resume an
    agent, request another QA pass, or perform another inspection. If any of those are still
    needed, remain before the barrier and complete them first.

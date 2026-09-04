@@ -153,24 +153,26 @@ ItemDisplayText: =ThisItem.Value
 A dropdown whose options all appear empty is almost always this mistake. When `Items` is
 already a single-column table you can omit `ItemDisplayText` entirely.
 
-`Default` is not evaluated in the dropdown's per-item scope. Do not use
-`Default: =First(Self.Items)`, which can fail because `Self.Items` is unavailable there.
-Use an explicit record compatible with `Items`, or a record from the same source:
+For Dropdown, ComboBox, and other controls with a `Default` property, `Items` is not an
+output property and cannot be referenced as `Self.Items` from the default formula. Use an
+explicit value or record compatible with `Items`, or derive it directly from the same
+source expression:
 
 ```yaml
 Items: '=[{Value:"All"},{Value:"Open"},{Value:"Closed"}]'
 Default: '=First([{Value:"All"},{Value:"Open"},{Value:"Closed"}])'
 ```
 
-For a bounded Gallery, calculate its height with `Self.TemplateHeight`.
-`Self.TemplateSize` is not a supported runtime property even when `TemplateSize` is the
-authored YAML property:
+When a Gallery should shrink to fit its rendered rows instead of filling its parent and
+scrolling, calculate its height with `Self.TemplateHeight`. `Self.TemplateSize` is not a
+supported runtime property even when `TemplateSize` is the authored YAML property:
 
 ```yaml
 Height: =CountRows(Self.Items) * Self.TemplateHeight
 ```
 
-For charts, `ItemColorSet` is a color-table literal, not a table of records:
+For charts, `ItemColorSet` expects a single-column table of color values. Supply the
+colors directly instead of wrapping them in records with custom field names:
 
 ```yaml
 ItemColorSet: =[RGBA(0,102,204,1), RGBA(16,124,65,1)]
