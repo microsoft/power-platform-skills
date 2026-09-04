@@ -4,7 +4,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { makeRunner, requireSuccessfulPush, reportPartialPush, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, BuildHalt, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function mockSdk(existing = {}) {
   const calls = [];
@@ -782,6 +782,51 @@ test('requireSuccessfulPush distinguishes an already-exists collision from a ver
     () => requireSuccessfulPush({ type: 'view', id: 'v9', saved: false, error: err }, 'view V9'),
     (e) => e.name === 'BuildHalt' && e.code === 'already-exists' && /adopt it/.test(e.message) && !/re-download the app/.test(e.message)
   );
+});
+
+// The set of by-value push failures is OPEN and it grows: the SDK keeps moving failures from a throw
+// to a return. Every newly-returned one used to land on the "changed in Maker" wording, which named
+// a cause that could not possibly apply and sent the operator to re-download an untouched app.
+test('requireSuccessfulPush reports an UNRECOGNISED SDK code verbatim, and propagates the code', () => {
+  const err = new Error("Business-rule authoring (preview) is not enabled on this environment yet: it does not expose 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson'.");
+  err.code = 'BUSINESS_RULE_API_UNAVAILABLE';
+  assert.throws(
+    () => requireSuccessfulPush({ type: 'businessRule', id: 'br1', saved: false, error: err }, 'business rule R'),
+    (e) => {
+      assert.strictEqual(e.name, 'BuildHalt');
+      // The code is propagated so a phase-level `skipIf` can still match on it after the wrap.
+      assert.strictEqual(e.code, 'BUSINESS_RULE_API_UNAVAILABLE', `got ${e.code}`);
+      assert.strictEqual(e.cause, err, 'the SdkError must remain reachable as the cause');
+      assert.match(e.message, /not enabled on this environment/, 'the SDK\'s own diagnosis is what the operator needs');
+      assert.doesNotMatch(e.message, /changed in Maker since it was fetched/,
+        'a cause the SDK named must not be overwritten with a guess');
+      return true;
+    }
+  );
+});
+
+test('errorCodeChain reads codes through the cause chain, and cannot spin on a cycle', () => {
+  // `skipIf` predicates are handed whatever reached the runner. A failure the SDK reports BY VALUE
+  // arrives wrapped in a BuildHalt, so the SDK's own code is one level down; reading only the top
+  // level silently misses it.
+  const inner = Object.assign(new Error('inner'), { code: 'SDK_CODE' });
+  const outer = new BuildHalt('outer', { code: 'push-failed', cause: inner });
+  assert.deepStrictEqual(errorCodeChain(outer), ['push-failed', 'SDK_CODE']);
+  assert.deepStrictEqual(errorCodeChain(inner), ['SDK_CODE']);
+  assert.deepStrictEqual(errorCodeChain(new Error('no code')), []);
+  assert.deepStrictEqual(errorCodeChain(null), []);
+  assert.deepStrictEqual(errorCodeChain(undefined), []);
+
+  // A self-referential cause is not hypothetical — it happens when an error is re-wrapped with
+  // itself — and an unbounded walk would hang the build rather than fail it.
+  const loop = Object.assign(new Error('loop'), { code: 'A' });
+  loop.cause = loop;
+  assert.deepStrictEqual(errorCodeChain(loop), ['A']);
+
+  // Depth is bounded even for a long, non-cyclic chain.
+  let deep = Object.assign(new Error('d0'), { code: 'C0' });
+  for (let i = 1; i < 10; i += 1) deep = Object.assign(new Error(`d${i}`), { code: `C${i}`, cause: deep });
+  assert.strictEqual(errorCodeChain(deep).length, 5, 'the walk stops at maxDepth');
 });
 
 // #455 wiring: the CLI resolves the authoring LCID BEFORE constructing the SDK (because

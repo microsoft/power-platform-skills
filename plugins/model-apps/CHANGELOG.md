@@ -5,7 +5,29 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.5.1
+## [Unreleased] — 2.5.2
+
+SDK uptake (typed business-rule contract). Fixes a build halt on environments that cannot host
+business rules, and catches a rule that would deploy but never fire.
+
+### Fixed
+
+- **A build no longer halts on an environment that cannot host business rules.** The SDK now reports
+  the preview gate as a returned no-op instead of a thrown error; the build read that as a version
+  conflict and stopped. Such rules are skipped with a warning again, as documented — which matters
+  because those environments are the common case.
+- **A failed push reports the SDK's own reason.** Any push failure the build had no specific remedy
+  for was reported as *"the artifact changed in Maker"*, sending you to re-download an app nobody had
+  touched.
+
+### Changed
+
+- **A business rule is validated before it is written.** A rule the SDK's compiler cannot understand
+  used to deploy as an empty rule that never fires. The build now runs the designer's own
+  completeness validator first and fails with its findings. No rule this spec surface can author is
+  affected — the whole operator/action/scope matrix was measured clean.
+
+## [2.5.1]
 
 SDK uptake. Adds per-form security roles and three column capabilities; **business rules now require
 an environment that supports them**.

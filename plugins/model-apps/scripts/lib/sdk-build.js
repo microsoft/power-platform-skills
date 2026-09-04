@@ -41,6 +41,7 @@ const {
   makeRunner,
   requireSuccessfulPush,
   reportPartialPush,
+  errorCodeChain,
   makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
@@ -1791,9 +1792,26 @@ async function runSdkBuild(spec, opts = {}) {
     // SDK's documented `code`, never on `err.name` — the bundle is minified, so the class name is a
     // rebuild-unstable string (`Xe`, which is really the base SdkError), and matching it would
     // silently disarm this guard the next time the bundle is rebuilt.
-    const businessRuleApiUnavailable = (err) => (err && err.code === 'BUSINESS_RULE_API_UNAVAILABLE'
-      ? 'unsupported in this environment'
-      : false);
+    //
+    // The code is looked for along the whole CAUSE CHAIN, not just on the error handed to us,
+    // because the SDK signals this condition two different ways and both mean the same thing:
+    //   * it THROWS the SdkError (older bundles), which arrives here directly; or
+    //   * `pushArtifact` RESOLVES with `{ saved: false, error }` — the preview rollout is a reported
+    //     no-op rather than a failure — and `requireSuccessfulPush` wraps that into a BuildHalt
+    //     whose `cause` is the SdkError.
+    // Reading only `err.code` matched the first and missed the second, so once the SDK moved this to
+    // a return, every build on an environment without the member HALTED instead of skipping — and
+    // AGENTS.md records that such environments are the common case, not the edge case.
+    const businessRuleApiUnavailable = (err) => {
+      const codes = errorCodeChain(err);
+      // `BUSINESS_RULE_LEFT_DEACTIVATED` must NEVER collapse into this skip. It means a write failed
+      // AND the SDK could not put the rule back into the Activated state it found it in, so a live
+      // rule is sitting Draft on the server — reporting that as "this environment cannot host rules"
+      // tells the operator the opposite of what they need to act on. The SDK raises it as a distinct
+      // code for exactly this reason; honour the distinction here.
+      if (codes.includes('BUSINESS_RULE_LEFT_DEACTIVATED')) return false;
+      return codes.includes('BUSINESS_RULE_API_UNAVAILABLE') ? 'unsupported in this environment' : false;
+    };
     for (const rule of spec.businessRules || []) {
       const entityLogical = String(rule.entity).toLowerCase();
       const existing = await provision.queryRecords('workflow', {
@@ -1875,6 +1893,41 @@ async function runSdkBuild(spec, opts = {}) {
         // The condition tree is a nested object, so it goes on through the generic element surface
         // rather than the create payload — mirroring how the SDK's own workflow test authors one.
         await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+        // The push CANNOT tell you a rule is wrong. A mis-shaped condition tree is MERGED onto the
+        // node, ignored by the serializer, and written as a rule with no clauses and no actions:
+        // HTTP 204, activated, and it never fires. That trap is pinned in sdk-uptake-contract.test.js
+        // ("a wrongly-shaped condition produces an EMPTY rule rather than erroring") and, until this
+        // SDK, the spec gate was the only thing standing in front of it.
+        //
+        // The SDK now exposes the business-rule designer's OWN completeness validator — the same one
+        // the designer gates its Save button on — and states plainly that nothing on the push path
+        // runs it, so run it here, BEFORE the write.
+        //
+        // Strict about FINDINGS, best-effort about the VALIDATOR. Findings halt: a rule that reports
+        // success and never fires is exactly the silent-wrong-artifact class this engine exists to
+        // prevent, and it is invisible afterwards. But a bundle without the method, or a validator
+        // that throws, must not block a build it cannot judge.
+        //
+        // Field metadata is deliberately NOT passed: without it the SDK SUPPRESSES the
+        // metadata-dependent checks (Clear eligibility, value-type compatibility, max length) rather
+        // than failing them, and the structural checks are the ones that close the trap above.
+        // Passing them would cost an attribute read per rule for checks the spec gate already covers.
+        //
+        // MEASURED against this bundle: every shape this spec surface can author — all 16 operators,
+        // all 4 action types, every scope and status, multi-condition and multi-action — reports zero
+        // issues, so this cannot reject a rule that was previously buildable.
+        if (typeof provision.validateBusinessRule === 'function') {
+          let issues = null;
+          try {
+            issues = provision.validateBusinessRule(Object.assign({}, art, { rootCondition: def.rootCondition }));
+          } catch { /* a diagnostic that cannot run must never fail the build */ }
+          if (Array.isArray(issues) && issues.length) {
+            const detail = issues.map((i) => `${(i && i.rule) || 'issue'}: ${(i && i.message) || ''}`.trim()).join('; ');
+            throw new BuildHalt(
+              `business rule "${rule.name}" on ${rule.entity} is incomplete and would deploy as a rule that never fires — ${detail}`,
+              { phase: 'business-rules', code: 'business-rule-incomplete', recoverable: false });
+          }
+        }
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });

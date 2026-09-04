@@ -67,6 +67,16 @@ apart deliberately.
   not recognise to **Equals**, so `GreaterThan` (the natural misspelling of `IsGreaterThan`) would
   deploy, activate and quietly test equality. The spec pins the list against the bundle's own table
   in both directions.
+- **Every rule is checked by the business-rule designer's own completeness validator before it is
+  written.** The push cannot tell you a rule is wrong: a condition tree in an unexpected shape is
+  merged onto the node, ignored by the serializer, and written as a rule with no clauses and no
+  actions — HTTP 204, activated, and it never fires. The SDK exposes the same validator the designer
+  gates its Save button on, and nothing on the push path runs it, so the build does. Findings **halt**
+  the build and are reported verbatim; a bundle without the validator, or one that faults, is skipped
+  rather than allowed to block a build it cannot judge. Measured against the bundle: every shape this
+  spec surface can author — all sixteen operators, all four action types, every scope and status,
+  multi-condition and multi-action — reports zero findings, so this cannot reject a rule that was
+  previously buildable.
 - `dataType` is currently **decorative** — measured across every accepted token, on both the
   condition and the action path, the SDK types every literal as `String`. It is still validated as a
   closed set so a typo is caught.

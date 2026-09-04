@@ -342,23 +342,80 @@ test('REAL BUNDLE: a view accepts /description as an updateElement pointer, and 
   assert.strictEqual(patch.body.description, 'Authored text.');
 });
 
-test('a persona NEVER sends a description — it would break the SDK ownership guard', () => {
-  // The bundle builds its role payload as
-  //     { name, description: SDK_ROLE_MARKER, 'businessunitid@odata.bind': ... }
-  // and gates reuse on
-  //     d.ismanaged !== true && (d.description ?? '') === SDK_ROLE_MARKER
-  // so a role carrying an author's prose is treated as somebody else's role and the SDK THROWS
-  // ("already exists ... and was not created by the SDK; refusing to modify or assign it").
-  // Teardown and verify re-implement the same marker check, so all three would disagree at once.
+const AUTHOR_PROSE = 'Handles field work orders end to end.';
+
+// A real-bundle SDK wired just far enough for `createPersonaRole` to reach its `/roles` write.
+// Two stubs are load-bearing and were both found by measuring:
+//   * the root business unit is resolved with `_parentbusinessunitid_value eq null`;
+//   * each entity's privilege must have a DISTINCT PrivilegeId, or the SDK refuses the role with
+//     "share the Dataverse privilege ... but request different scopes" (the persona's own table is
+//     user-scoped while the injected `appmodule` read is organization-scoped).
+function roleSdk() {
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'role-'));
+  dirs.push(dir);
+  const calls = [];
+  const sdk = createMakerSdk({
+    workspacePath: dir,
+    instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: {
+      get: async (url) => {
+        calls.push({ verb: 'GET', url: String(url) });
+        if (/businessunits/i.test(url)) return { status: 200, headers: {}, body: { value: [{ businessunitid: '00000000-0000-0000-0000-0000000000b1' }] } };
+        // e.g. EntityDefinitions(LogicalName='new_ticket')?$select=LogicalName,Privileges
+        const ed = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(String(url));
+        if (ed) {
+          const logical = ed[1];
+          const pid = logical === 'appmodule' ? '33333333-3333-3333-3333-333333333333' : '11111111-1111-1111-1111-111111111111';
+          return { status: 200, headers: {}, body: { LogicalName: logical, Privileges: [{ PrivilegeId: pid, Name: `prvRead${logical}`, PrivilegeType: 'Read', CanBeBasic: true, CanBeLocal: true, CanBeDeep: true, CanBeGlobal: true }] } };
+        }
+        return { status: 200, headers: {}, body: { value: [] } };  // no existing role -> create path
+      },
+      post: async (url, body) => { calls.push({ verb: 'POST', url: String(url), body }); return { status: 204, headers: { 'odata-entityid': 'https://x/roles(22222222-2222-2222-2222-222222222222)' }, body: {} }; },
+      patch: async (url, body) => { calls.push({ verb: 'PATCH', url: String(url), body }); return { status: 204, headers: {}, body: {} }; },
+      put: async () => ({ status: 204, headers: {}, body: {} }),
+      delete: async () => ({ status: 204, headers: {}, body: {} }),
+    },
+  });
+  sdk.initWorkspace();
+  return { sdk, calls };
+}
+
+test('a persona NEVER sends a description — it would break the SDK ownership guard', async () => {
+  // The bundle builds its role payload with its OWN marker as the description, and gates reuse on
+  // an exact match of that marker, so a role carrying an author's prose is treated as somebody
+  // else's role and the SDK THROWS ("already exists ... and was not created by the SDK; refusing to
+  // modify or assign it"). Teardown and verify re-implement the same marker check, so all three
+  // would disagree at once.
   const spec = personaRoleSpecFor({
-    persona: 'Agent', description: 'should be ignored',
+    persona: 'Field Agent', description: AUTHOR_PROSE,
     jobs: [{ name: 'Job', privileges: [{ entity: 'new_ticket', access: ['read'], scope: 'user' }] }],
   });
   assert.ok(!('description' in spec), 'persona description must not be forwarded to createPersonaRole');
 
-  const bundle = fs.readFileSync(BUNDLE, 'utf8');
-  assert.ok(
-    bundle.includes('description:It.SDK_ROLE_MARKER'),
-    'the bundle still hardcodes the marker as the role description — if this changes, revisit the exclusion'
-  );
+  // Proven against the REAL bundle by observing the wire, not by grepping it. The previous version
+  // of this guard asserted the literal `description:It.SDK_ROLE_MARKER`, where `It` is a namespace
+  // alias the MINIFIER assigns — it became `Pt` on the next re-vendor and the test failed for a
+  // reason that had nothing to do with the behaviour it was protecting. Drive the call instead.
+  const { sdk, calls } = roleSdk();
+  await sdk.createPersonaRole(spec);
+
+  const create = calls.find((c) => c.verb === 'POST' && /\/roles$/.test(String(c.url)));
+  assert.ok(create, `the role create must POST /roles; got ${JSON.stringify(calls.map((c) => `${c.verb} ${c.url}`))}`);
+  assert.strictEqual(typeof create.body.description, 'string');
+  assert.ok(create.body.description.length > 0,
+    'the SDK still stamps a description of its own — if it stops, the exclusion below has no purpose and must be revisited');
+  assert.match(create.body.description, /cds-maker-sdk/,
+    `the description must be the SDK's ownership marker; got ${JSON.stringify(create.body.description)}`);
+
+  // The decisive half: the author's prose reaches NOTHING on the wire.
+  assert.strictEqual(JSON.stringify(calls).includes(AUTHOR_PROSE), false,
+    'an author-supplied persona description must never reach the role write');
+
+  // And the ownership gate really does read `description` back, which is why sending prose would
+  // make the SDK disown its own role.
+  const reuseQuery = calls.find((c) => c.verb === 'GET' && /\/roles\?/.test(String(c.url)));
+  assert.ok(reuseQuery, 'the SDK must look for an existing role before creating one');
+  assert.match(decodeURIComponent(String(reuseQuery.url)), /\$select=[^&]*description/,
+    'the reuse gate selects description — that is the field the marker defends');
 });
