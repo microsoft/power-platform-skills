@@ -17,6 +17,7 @@ const {
   parseCheckpointPayload,
 } = require('../emit-telemetry-checkpoint');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
+const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -27,6 +28,16 @@ const TELEMETRY_CLI = path.join(
 );
 const BUNDLED_TELEMETRY_LIB = path.join(PLUGIN_ROOT, 'scripts', 'lib', 'telemetry', 'lib');
 const SHARED_TELEMETRY_LIB = path.resolve(PLUGIN_ROOT, '..', '..', 'shared', 'telemetry', 'lib');
+const CHECKPOINT_EXEMPT_SKILLS = new Set(['telemetry']);
+const VAGUE_CHECKPOINT_NAMES = new Set([
+  'app_ready',
+  'data_model',
+  'planning',
+  'prerequisites',
+  'scaffold',
+  'screens',
+  'template_gate',
+]);
 
 function tempConfig(config) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-telemetry-'));
@@ -304,7 +315,7 @@ test('checkpoint event carries only static checkpoint enrichment', (t) => {
   }
 });
 
-test('create-mobile-app uses the single direct checkpoint command at seven boundaries', () => {
+test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
   const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
   const workflow = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app', 'SKILL.md'),
@@ -316,8 +327,75 @@ test('create-mobile-app uses the single direct checkpoint command at seven bound
   assert.deepEqual(
     [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
       .map((match) => match[1]),
-    ['template_gate', 'prerequisites', 'planning', 'scaffold', 'data_model', 'screens', 'app_ready'],
+    [
+      'validate_fresh_template',
+      'validate_development_toolchain',
+      'gather_app_requirements',
+      'plan_app_architecture',
+      'select_app_environment',
+      'prepare_template_files',
+      'initialize_power_apps_project',
+      'validate_scaffold_typescript',
+      'configure_native_authentication',
+      'apply_dataverse_data_model',
+      'configure_native_capabilities',
+      'install_approved_javascript_dependencies',
+      'generate_connector_data_sources',
+      'wire_app_navigation',
+      'generate_shared_code_and_screen_skeletons',
+      'build_and_validate_screens',
+      'validate_screen_design_quality',
+      'launch_metro_dev_server',
+    ],
   );
+});
+
+test('every tracked operational skill has precise checkpoint markers', () => {
+  for (const skillName of TRACKED_SKILL_NAMES) {
+    const workflow = fs.readFileSync(
+      path.join(PLUGIN_ROOT, 'skills', skillName, 'SKILL.md'),
+      'utf8',
+    );
+    const matches = [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)];
+
+    if (CHECKPOINT_EXEMPT_SKILLS.has(skillName)) {
+      assert.deepEqual(matches, [], `${skillName} must remain checkpoint-free`);
+      continue;
+    }
+
+    assert.ok(matches.length > 0, `${skillName} must define at least one checkpoint`);
+    const names = matches.map((match) => match[1]);
+    assert.equal(new Set(names).size, names.length, `${skillName} checkpoint names must be unique`);
+
+    for (const match of matches) {
+      const checkpointName = match[1];
+      assert.equal(
+        VAGUE_CHECKPOINT_NAMES.has(checkpointName),
+        false,
+        `${skillName} uses vague checkpoint name ${checkpointName}`,
+      );
+      assert.doesNotMatch(
+        checkpointName,
+        /_(?:started|completed|skipped|failed)$/,
+        `${skillName} checkpoint names must not contain lifecycle state`,
+      );
+      assert.ok(
+        parseCheckpointPayload(`${skillName}|${checkpointName}|started`),
+        `${skillName} uses invalid checkpoint name ${checkpointName}`,
+      );
+
+      const precedingLine = workflow
+        .slice(0, match.index)
+        .trimEnd()
+        .split(/\r?\n/)
+        .at(-1);
+      assert.match(
+        precedingLine,
+        /^#{2,4}\s+\S/,
+        `${skillName}:${checkpointName} must appear directly below a heading`,
+      );
+    }
+  }
 });
 
 test('app instance id is minted once and reused by later skill runs', (t) => {

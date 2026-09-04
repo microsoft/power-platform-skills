@@ -21,6 +21,8 @@ Generates a fully-populated GitHub issue body for the `microsoft/power-platform-
 
 ### Step 1 — Capture user description
 
+**Telemetry checkpoint: `capture_issue_description`**
+
 If `$ARGUMENTS` contains a description, use it. Otherwise prompt:
 
 > "What's the issue? Briefly describe what you expected vs. what happened. (You can paste error output if helpful.)"
@@ -76,6 +78,8 @@ echo "ANDROID_HOME=$ANDROID_HOME"
 
 ### Step 3 — Collect diagnostics
 
+**Telemetry checkpoint: `collect_issue_diagnostics`**
+
 Run `npx expo doctor` and capture the text output verbatim.
 
 If the user pasted an error, capture verbatim. Otherwise look for recent failure signals:
@@ -91,6 +95,8 @@ If the user pasted an error, capture verbatim. Otherwise look for recent failure
 - Anything under `node_modules/`
 
 ### Step 4 — Render issue body
+
+**Telemetry checkpoint: `render_issue_report`**
 
 Print this block — user copies into a new issue:
 
@@ -162,6 +168,8 @@ Not run inside a mobile-app project.
 ```
 
 ### Step 5 — Print URL
+
+**Telemetry checkpoint: `generate_issue_submission_url`**
 
 Tell the user:
 

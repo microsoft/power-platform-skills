@@ -28,6 +28,8 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 
 ### Route to the Right Skill
 
+**Telemetry checkpoint: `route_data_source_request`**
+
 | User's goal | Best approach | Invoke |
 |---|---|---|
 | Store and manage structured business data (custom tables, forms, CRUD) | Dataverse is the platform's native database | `/add-dataverse` |

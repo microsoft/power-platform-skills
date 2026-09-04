@@ -39,6 +39,8 @@ If either is missing, instruct the user to run `/create-mobile-app` first and st
 
 ### Step 2 — Identify Connector
 
+**Telemetry checkpoint: `resolve_connector_request`**
+
 **If `$ARGUMENTS` is provided or the caller already specified the connector**, use it directly and skip the question below.
 
 Otherwise, ask the user which connector they want to add. Browse available connectors: [Connector Reference](https://learn.microsoft.com/en-us/connectors/connector-reference/).
@@ -75,6 +77,8 @@ npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 After `add-flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
 
 ### Step 3 — Add Connector
+
+**Telemetry checkpoint: `generate_connector_data_source`**
 
 **First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
@@ -162,6 +166,8 @@ For each method the user needs:
 Help the user write code using the generated service methods.
 
 ### Step 5 — Build
+
+**Telemetry checkpoint: `validate_connector_integration`**
 
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify the new connector wires in cleanly (~10–20 seconds)."

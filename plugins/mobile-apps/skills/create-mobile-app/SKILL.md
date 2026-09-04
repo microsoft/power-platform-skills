@@ -68,7 +68,7 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 
 ### Step 0 — Resume check + fresh-template gate
 
-**Telemetry checkpoint: `template_gate`**
+**Telemetry checkpoint: `validate_fresh_template`**
 
 If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing directory), check whether `<working_dir>/memory-bank.md` exists.
 
@@ -99,7 +99,7 @@ node "${PLUGIN_ROOT}/scripts/lib/app-identity.js" "<working_dir>"
 
 ### Step 1 — Prerequisites
 
-**Telemetry checkpoint: `prerequisites`**
+**Telemetry checkpoint: `validate_development_toolchain`**
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
 
@@ -205,6 +205,8 @@ Do NOT block on null detection — the user can still proceed; the Power Apps CL
 If the script exits non-zero (rare — should always exit 0 with `prefix: null`), treat it as the null case and continue.
 
 ### Step 2 — Gather requirements
+
+**Telemetry checkpoint: `gather_app_requirements`**
 
 Skip questions the user already answered in `$ARGUMENTS`.
 
@@ -436,7 +438,7 @@ No background scaffold pipeline is used. The template is already present in `<wo
 
 ### Step 3 — Plan (planner agent + 4 approval gates)
 
-**Telemetry checkpoint: `planning`**
+**Telemetry checkpoint: `plan_app_architecture`**
 
 First, create the working and planning-artifact directories:
 
@@ -873,6 +875,8 @@ path.
 
 ### Step 4 — Auth & environment selection
 
+**Telemetry checkpoint: `select_app_environment`**
+
 ```bash
 node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
 ```
@@ -881,7 +885,7 @@ If the resolved environment doesn't match what the planner used in Step 3, ask t
 
 ### Step 5 — Prepare existing template
 
-**Telemetry checkpoint: `scaffold`**
+**Telemetry checkpoint: `prepare_template_files`**
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
 
@@ -1036,6 +1040,8 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 
 ### Step 6 — Initialize
 
+**Telemetry checkpoint: `initialize_power_apps_project`**
+
 **Print before starting:**
 > "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
 
@@ -1074,6 +1080,8 @@ contract element is missing, rerun the Step 5 preparation script and stop if
 it reports an unsupported layout.
 
 ### Step 6.6 — Scaffold TypeScript gate
+
+**Telemetry checkpoint: `validate_scaffold_typescript`**
 
 **Print before starting:**
 > "→ [Step 6.6/13] Running scaffold tsc smoke check (~10–30 seconds)."
@@ -1199,6 +1207,8 @@ If the user picks Yes, invoke `/setup-offline-profile` as a sub-skill. It reads 
 
 ### Step 7 — Auth config
 
+**Telemetry checkpoint: `configure_native_authentication`**
+
 **Print before starting:**
 > "→ [Step 7/13] Configuring app authentication (Entra ID app registration)…"
 
@@ -1310,7 +1320,7 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 
 ### Step 8 — Apply data model
 
-**Telemetry checkpoint: `data_model`**
+**Telemetry checkpoint: `apply_dataverse_data_model`**
 
 If `<dataverse_planning_mode> = connector-only`, verify the approved
 `## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`
@@ -1475,6 +1485,8 @@ If the seeding step fails (network drop, permission error, etc.), surface the fa
 
 ### Step 9 — Apply native capabilities
 
+**Telemetry checkpoint: `configure_native_capabilities`**
+
 **Print before starting:**
 > "→ [Step 9/13] Wiring <N> native capabilities: <list>. Each runs sequentially."
 
@@ -1493,6 +1505,8 @@ Run sequentially. Each writes a single file under `src/native/` and does not tou
 If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
 
 ### Step 9a — Install approved pure-JavaScript dependencies
+
+**Telemetry checkpoint: `install_approved_javascript_dependencies`**
 
 Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
 
@@ -1579,6 +1593,8 @@ statuses. For runtime theme switching, use `useThemeControl()` from
 
 ### Step 10 — Add connectors
 
+**Telemetry checkpoint: `generate_connector_data_sources`**
+
 **Print before starting:**
 > "→ [Step 10/13] Adding <N> connectors: <list>. Each runs sequentially (parallel writes would race)."
 
@@ -1596,6 +1612,8 @@ Run sequentially — each generates files under `src/generated/`. Parallel write
 **Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `npx power-apps add-data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
 
 ### Step 10b — Wire navigation layout
+
+**Telemetry checkpoint: `wire_app_navigation`**
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
 
@@ -1794,6 +1812,8 @@ Write the result into `native-app-plan.md` as a new section **immediately after 
 If the directory is empty (no data sources added yet), still write the section with an empty table and a one-line note: "No generated services yet — builders will emit TODO stubs for any service their spec references."
 
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
+
+**Telemetry checkpoint: `generate_shared_code_and_screen_skeletons`**
 
 **Print before starting:**
 > "→ [Step 10.8/13] Generating app-specific components, hooks, utils, and screen skeletons from the plan…"
@@ -2032,7 +2052,7 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 ### Step 11 — Build screens (parallel)
 
-**Telemetry checkpoint: `screens`**
+**Telemetry checkpoint: `build_and_validate_screens`**
 
 **Build mode is NEVER a user-facing question.** Do not ask "Build mode? parallel/inline" or any variant. The orchestrator decides automatically per the preflight below.
 
@@ -2137,6 +2157,8 @@ This sticky policy controls **how to handle a failed gate**, not whether the gat
 
 ### Step 11.4 — Stylistic fix sweep (parallel)
 
+**Telemetry checkpoint: `validate_screen_design_quality`**
+
 Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview or dev-server launch. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
 
 **Print before starting:**
@@ -2201,7 +2223,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 ### Step 12 — Start dev server (background)
 
-**Telemetry checkpoint: `app_ready`**
+**Telemetry checkpoint: `launch_metro_dev_server`**
 
 **Print before starting:**
 > "→ [Step 12/13] Launching Metro dev server in the background so you can scan the QR."

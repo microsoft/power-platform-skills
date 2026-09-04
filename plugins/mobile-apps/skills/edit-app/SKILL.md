@@ -73,6 +73,8 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 
 ### Step 0 — Locate app + health/drift probe
 
+**Telemetry checkpoint: `assess_app_health_and_drift`**
+
 ```bash
 test -f native-app-plan.md && echo "OK: plan found" || echo "ERROR: no plan"
 test -f package.json && echo "OK: package found" || echo "ERROR: no package"
@@ -219,6 +221,8 @@ If a single PDF/signature request requires multiple plan sections, say so and ru
 
 ### Step 1.5 — Impact preview (cheap abort gate)
 
+**Telemetry checkpoint: `analyze_edit_impact`**
+
 Before spawning architects or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors `/create-mobile-app` Step 2c at edit scale.
 
 Compute:
@@ -278,6 +282,8 @@ Continuing with verification and preview. Rebuilding screens only if component s
 Do not stop after design refresh. Continue to Step 7 verification and Step 8 preview. If the refresh changed component shapes, density, negatives, or a full reskin requires TSX adjustments, include Screens in the affected sections and rebuild those screens.
 
 ### Step 2 — Re-plan affected sections
+
+**Telemetry checkpoint: `revise_affected_app_plan`**
 
 Reuse the same planning primitives as `/create-mobile-app`, but only for the affected surfaces:
 
@@ -341,6 +347,8 @@ For connector/data-source edits, read and execute `/add-datasource` when the sou
 
 ### Step 3 — Gate intent, plan + app mutation preview
 
+**Telemetry checkpoint: `approve_app_mutation_plan`**
+
 Show the user a side-by-side diff (or before/after) for every changed plan section. Also show an app mutation preview:
 
 - Edit brief: intent, target screens/routes, data/native/JavaScript/design dependencies, and assumptions
@@ -377,6 +385,8 @@ diff --git native-app-plan.md native-app-plan.md
 If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print the exact follow-up commands, and stop. Otherwise continue immediately.
 
 ### Step 5 — Apply app mutations
+
+**Telemetry checkpoint: `apply_app_mutations`**
 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
@@ -421,6 +431,8 @@ node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
 
 ### Step 6 — Rebuild affected screens
+
+**Telemetry checkpoint: `rebuild_affected_screens`**
 
 Use the plan diff plus the user's request to build the affected screen set:
 
@@ -503,6 +515,8 @@ Preserve unaffected behavior from the existing screen. Apply the approved plan d
 
 ### Step 7 — Verify
 
+**Telemetry checkpoint: `validate_edited_app`**
+
 Run verification after mutations. Batch-fix root causes, then rerun the failed gate once. Verification is selected by what changed, but TypeScript is always required after an app mutation.
 
 Required gates, selected by what changed:
@@ -546,6 +560,8 @@ If auto-fixable issues remain after retries, record `DONE_WITH_CONCERNS` in `mem
 If verification fails because the edit exposed stale generated services, rerun the relevant data-source regeneration once before changing screens by hand. If failures are unrelated pre-existing issues, report them separately and do not hide them as successful edit results.
 
 ### Step 8 — Preview + memory-bank update
+
+**Telemetry checkpoint: `refresh_app_preview_and_history`**
 
 Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 

@@ -37,6 +37,8 @@ If this fails, stop and tell the user to run `/create-mobile-app` first or open 
 
 ## Step 2 — Resolve environment + tenant
 
+**Telemetry checkpoint: `resolve_registration_environment`**
+
 Use the same environment selected by the generated app. Prefer `.resolved-environment.json`, then `auth.config.json.environment`, then `power.config.json` + resolver:
 
 ```bash
@@ -58,6 +60,8 @@ If `ENV_ID` is empty, stop: `power.config.json` is not initialized.
 If `TENANT_ID` is empty, stop: environment resolution failed. Do not guess the tenant and do not use a stale `msal.tenantId` as the authority source.
 
 ## Step 3 — Open Wrap app-registration page
+
+**Telemetry checkpoint: `open_wrap_app_registration`**
 
 Print the public Power Apps Wrap URL for the active environment:
 
@@ -91,6 +95,8 @@ Paste the Entra ID app registration client ID for tenant <tenant-guid> (GUID for
 
 ## Step 5 — Write `auth.config.json`
 
+**Telemetry checkpoint: `write_native_auth_configuration`**
+
 Update `auth.config.json`:
 - `msal.clientId` = pasted client ID
 - `msal.tenantId` = resolved tenant ID from Step 2
@@ -119,6 +125,8 @@ Example target shape:
 Do not touch `src/playerConfig.ts`; auth identifiers live in `auth.config.json` only.
 
 ## Step 6 — Validate JSON
+
+**Telemetry checkpoint: `validate_native_auth_configuration`**
 
 ```bash
 node -e "JSON.parse(require('fs').readFileSync('auth.config.json','utf8')); console.log('auth.config.json OK')"
