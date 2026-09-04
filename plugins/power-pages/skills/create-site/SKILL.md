@@ -1,10 +1,11 @@
 ---
 name: create-site
 description: >-
-  Creates a new Power Pages code site (SPA) using React, Angular, Vue, or Astro. Guides through
-  the full process from initial concept to deployed site: requirements discovery, scaffolding,
-  component planning, design, implementation, validation, and deployment. Use when the user
-  wants to create, build, or scaffold a new Power Pages website or portal.
+  Creates a new Power Pages code site (SPA) from a curated template or from scratch using React,
+  Angular, Vue, or Astro. Guides through the full process from initial concept to deployed site:
+  requirements discovery, template selection or scaffolding, component planning, design,
+  implementation, validation, and deployment. Use when the user wants to create, build, use a
+  template for, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
 allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
@@ -20,7 +21,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 ## Core Principles
 
 - **Use best judgement for design details**: Once the user picks an aesthetic direction and mood, make confident decisions about specific fonts, colors, page layouts, and component behavior. Do not ask the user to specify every detail — use the design reference and your own taste to make creative, distinctive choices.
-- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the path-agnostic upfront tasks first, then append branch-specific tasks after the creation path is selected.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
 - **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify every significant change. Do NOT take screenshots — only use accessibility snapshots to check page structure and content.
 - **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
@@ -74,27 +75,582 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 <!-- gate: create-site:1.purpose | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:1.purpose):** Multi-question prompt collecting site name, framework, purpose, audience, and target directory. Determines what gets scaffolded. Fires only on the "site purpose unclear" branch (step 3 below).
+> 🚦 **Gate (plan · create-site:1.purpose):** Path-agnostic discovery prompt collecting site name, purpose, and audience. Determines what kind of site the user needs before the skill decides between a template-backed path and the from-scratch scaffold path. Fires only on the "site purpose unclear" branch (step 3 below).
 >
-> **Trigger:** Phase 1 when site purpose was not provided in `$ARGUMENTS`.
-> **Why we ask:** Wrong framework picked → wrong template copied into the wrong directory; cleanup is annoying.
+> **Trigger:** Phase 1 when site name, purpose, or audience was not provided in `$ARGUMENTS`.
+> **Why we ask:** Wrong purpose/audience context → wrong branch decision and wrong generated site plan; cleanup is annoying.
 > **Cancel leaves:** Nothing — no scaffolding has started yet.
 
-1. Create todo list with all 8 phases (see [Progress Tracking](#progress-tracking) table)
-2. If site purpose is clear from arguments:
+1. Create the minimal upfront todo list (see [Progress Tracking](#progress-tracking)):
+   - Discover site requirements
+   - Select template or choose from-scratch
+2. If site name, purpose, and audience are clear from arguments:
    - Summarize understanding
    - Identify site type (portal, dashboard, landing page, blog, etc.)
-3. If site purpose is unclear, use `AskUserQuestion`:
+3. If site name, purpose, or audience is unclear, use `AskUserQuestion`:
 
    | Question | Header | Options |
    |----------|--------|---------|
    | What should the site be called? (e.g., "Contoso Portal", "HR Dashboard") | Site Name | *(free text — use a single generic option so the user types a custom name via "Other")* |
-   | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | What is the site's purpose? | Purpose | Company Portal, Blog/Content, Dashboard, Landing Page |
    | Who is the target audience? | Audience | Internal (employees, partners), External (public-facing customers) |
+
+4. From the user's answers, derive:
+   - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
+   - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
+   - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
+5. Summarize the path-agnostic understanding and confirm with user before proceeding:
+   - Site name
+   - Site purpose/type
+   - Target audience
+
+   Do **not** ask for framework or project location in Phase 1. Those questions only apply to the from-scratch branch and are asked after Phase 1.5 when that branch is selected.
+
+**Audience influences site generation:**
+
+- **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
+- **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
+
+**Output**: Clear statement of site purpose, audience, and derived naming values.
+
+---
+
+## Phase 1.5: Template Branch Decision
+
+**Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
+
+> **Current implementation state:** Template discovery, selection, supporting-solution import, packaged SPA cloning/upload, optional seed data, activation, live-site preview, and terminal telemetry are implemented here. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
+
+**Actions**:
+
+1. Mark **Select template or choose from-scratch** as `in_progress`.
+
+2. Fetch the template catalog:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/fetch-template-catalog.js"
+   ```
+   By default this resolves the latest GitHub Release in `microsoft/power-pages-samples` to its tag, then pins that tag to an immutable commit SHA for the rest of the run. Pass `--ref <tag-or-branch>` only for a deliberate test or rollback.
+
+   Evaluate the JSON result:
+   - **If `ok: false`**: tell the user templates are temporarily unavailable and continue with the from-scratch path. This is additive; a catalog failure must never block `create-site`.
+   - **If `ok: true` but `catalog.templates` is empty or malformed**: tell the user no templates are currently available and continue with the from-scratch path.
+   - **If templates are available**: proceed to semantic matching.
+
+3. Semantically match the template families against the Phase 1 context (`$ARGUMENTS`, site name, purpose, audience, and any framework mentioned by the user):
+   - Use each family template's `displayName`, `description`, `keywords`, `audience`, available variant frameworks, and any variant-specific previews.
+   - Do **not** compute a numeric score or invent a ranking script. Keywords guide agent judgement; they are not counted.
+   - Treat a template family as the user-facing template and a framework variant as the installable package. A family can have multiple variants (`react`, `vue`, `angular`, `astro`).
+
+<!-- not-a-gate: read-only route selection after semantic matching; no project directory, Dataverse write, or durable skill state exists yet -->
+
+4. Ask the user how to proceed after semantic matching:
+
+   | Match situation | Question | Header | Options |
+   |-----------------|----------|--------|---------|
+   | One or more clear matches | I found matching template(s) for your site. What would you like to do? | Creation Path | Show matching templates (Recommended), Browse all templates, Create from scratch |
+   | No clear match | I couldn't find a matching template for your site. What would you like to do? | Creation Path | Browse all templates, Create from scratch (Recommended) |
+
+   Branch on the answer:
+   - **Show matching templates**: set `TEMPLATE_PREVIEW_FAMILIES` to the matched family or families and continue to browser preview.
+   - **Browse all templates**: set `TEMPLATE_PREVIEW_FAMILIES` to the full catalog and continue to browser preview.
+   - **Create from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
+
+5. Render `TEMPLATE_PREVIEW_FAMILIES` for browser preview:
+
+   - Download each `previewImages` artifact into the SHA-keyed cache before rendering:
+     ```bash
+     node "${PLUGIN_ROOT}/scripts/fetch-template-artifact.js" --sha "<catalog-sha>" --artifactPath "<preview-image-path>"
+     ```
+     Replace each preview image path with the returned `localUrl`. If a preview download returns `ok: false`, omit that one image from the gallery and continue; a missing preview should not block using an otherwise-valid template.
+   - Write a temporary JSON file containing a `TEMPLATES_JSON` array with the template families the user should preview and the cached preview image URLs. Include each family's available variants so the browser can show framework badges/tabs, but keep the browser read-only.
+   - Run:
+     ```bash
+     node "${PLUGIN_ROOT}/scripts/render-template-browser.js" --templatesJsonPath "<temp-json>" --outputPath "<temp-html>" --open
+     ```
+     Evaluate the JSON result before telling the user to use the browser:
+     - **`status: "ok"`**: continue; the browser preview was generated and opened.
+     - **`status: "invalid"`**: do not continue with template selection. Surface the validation errors, rebuild the `TEMPLATES_JSON` file from the matched families, and rerun the render. If it is still invalid, fall back to from-scratch rather than showing an empty or incomplete template browser.
+     - **`status: "ok"` with `opened: false`**: the HTML validated but the browser could not be opened automatically. Show the file path and continue with terminal selection only after the user has had a chance to open it manually.
+   - The browser view is read-only and exists to browse template capabilities and available framework variants; the terminal `AskUserQuestion` remains the decision surface.
+
+<!-- not-a-gate: read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state -->
+
+6. Ask one of the following `AskUserQuestion` prompts:
+
+   | Match situation | Prompt options |
+   |-----------------|----------------|
+   | One strong family + framework match | Use `<displayName>` - `<framework>` (Recommended), Choose another framework, See all templates, Start from scratch |
+   | One strong family but no framework match | One option per available framework, See all templates, Start from scratch |
+   | Several plausible family matches | One option per shortlisted family, See all templates, Start from scratch |
+   | Full catalog browse | One option per family, Start from scratch |
+
+   When the user chooses **See all templates** from a matching-template branch, set `TEMPLATE_PREVIEW_FAMILIES` to the full catalog, render the full family-first catalog gallery, and ask again with the **Full catalog browse** options. If the selected family has multiple variants, ask a second terminal question for the framework.
+
+7. Branch on the user's selection:
+   - **Template family and framework variant selected**:
+     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant (`<familyId>/<framework>` internally). Download the variant folder once from the pinned catalog SHA:
+        ```bash
+        node "${PLUGIN_ROOT}/scripts/fetch-template-variant.js" \
+          --sha "<catalog-sha>" \
+          --solutionPath "<selected variant solutionPath>" \
+          --spaCodePath "<selected variant spaCodePath>"
+        ```
+        The script derives the shared variant folder from the sibling `solution/` and `spa-code/` paths, performs one sparse checkout, validates the unpacked unmanaged solution source and Power Pages project, and rejects symlinks, committed ZIPs, unsafe paths, or local/generated content.
+     2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTION_SOURCE = <result.solutionPath>`, and `SELECTED_TEMPLATE_SPA_CODE = <result.spaCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
+        Do not mention this telemetry command to the user and do not print its output.
+        ```bash
+        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+          --eventName template_used \
+          --templateId "<SELECTED_TEMPLATE.id>" \
+          --templateKind "<SELECTED_TEMPLATE.kind>" \
+          --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
+          --audience "<internal|external from Phase 1 discovery>"
+        ```
+        `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
+   - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
+
+8. For the template path only:
+
+   1. Mark **Resolve target environment** as `in_progress`.
+   2. Resolve the target environment and token via the shared auth helpers:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/resolve-template-import-context.js"
+      ```
+      Use the returned `environmentUrl` and `token` for the import request and poller. If `ok: false`, surface the error and stop before import. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+
+<!-- gate: create-site:1.5.confirm-environment | category=consent | cancel-leaves=template-cache -->
+
+> 🚦 **Gate (consent · create-site:1.5.confirm-environment):** Confirm the resolved target environment before running template install preflights.
+>
+> **Trigger:** Phase 1.5 after `resolve-template-import-context.js` returns `environmentUrl` and before any CLI-tenant, `.js` unblock, language, solution import, seed, or activation step.
+> **Why we ask:** PAC auth can point at a different Dataverse environment than the user intended. Even preflights can inspect or modify environment-level settings, so the skill must not continue silently.
+> **Cancel leaves:** `template-cache` — template catalog assets, the selected solution zip, and packaged SPA code may already be cached locally; no org mutation has happened if cancelled here.
+
+   3. Mark **Resolve target environment** as `completed` and **Confirm target environment** as `in_progress`, then ask the user to confirm the resolved target environment before any environment preflight:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | Use **`<environmentUrl>`** as the target environment for this template install? | Confirm Environment | Yes, use this environment (Recommended), No, start from scratch, Cancel |
+
+      - **Yes**: continue to the preflight checks below.
+      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not run environment preflights or import the template.
+      - **Cancel**: stop before environment preflights. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+
+   4. Mark **Confirm target environment** as `completed` and **Validate CLI tenant alignment** as `in_progress`, then confirm PAC CLI and Azure CLI are authenticated to the same tenant before any import preflight that depends on both CLIs:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/validate-cli-tenant-alignment.js" --envUrl "<environmentUrl>" --token "<token>"
+      ```
+      - **`ok: true`**: mark **Validate CLI tenant alignment** as `completed`.
+      - **`ok: false`**: surface the error and the `pacTenantId`, `azTenantId`, and `tokenTenantId` fields when present. Stop before import and tell the user to switch either PAC auth or Azure CLI to the same tenant, then rerun the skill. Do not emit `template_import_failure` because no import was attempted.
+   5. Mark both **Validate JavaScript unblock requirement** and **Validate Dataverse language requirements** as `in_progress`. Run the `.js` blocked-attachment dry run and the Dataverse language check in parallel because both are read-only preflights against the confirmed target environment:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --dry-run --quiet
+      node "${PLUGIN_ROOT}/scripts/check-available-languages.js" --envUrl "<environmentUrl>" --token "<token>" --requiredLocaleIds "<SELECTED_TEMPLATE_VARIANT.requiredDataverseLanguages or SELECTED_TEMPLATE.requiredDataverseLanguages comma-separated>"
+      ```
+      Capture both JSON results before deciding what to do next. Do not mutate `blockedattachments` until the language check has also completed; if the language check blocks import, route to the language-requirement question without changing attachment settings.
+      Evaluate the `.js` result:
+      - **`wasBlocked` does not include `js`**: mark **Validate JavaScript unblock requirement** as `completed`; JavaScript attachments are allowed.
+      - **`wasBlocked` includes `js`**: keep **Validate JavaScript unblock requirement** as `in_progress`; this may need the `.js` unblock consent gate below, but handle language failures first because they block import without any environment mutation.
+      Evaluate the language result:
+      - **`ok: true` and `hasRequiredLanguages: true`**: mark **Validate Dataverse language requirements** as `completed`; the target environment has every LCID required by the selected variant, falling back to the family requirements when the variant does not override them.
+      - **`ok: false`**: tell the user the skill could not verify available Dataverse languages, surface the script error, then ask whether to switch to from-scratch or stop. Do not import the template and do not mutate `blockedattachments`.
+      - **`ok: true` and `hasRequiredLanguages: false`**: explain that the selected template solution requires the missing Dataverse language LCIDs from `missingLocaleIds`. Block before any solution import mutation. Do not provide a "proceed anyway" branch and do not mutate `blockedattachments`.
+
+<!-- gate: create-site:1.5.unblock-js | category=consent | cancel-leaves=attachment-block-modified -->
+
+> 🚦 **Gate (consent · create-site:1.5.unblock-js):** Preflight unblock of `.js` from the target environment's `blockedattachments` setting before uploading packaged SPA code.
+>
+> **Trigger:** Phase 1.5 when `fix-blocked-attachments.js --dry-run --extensions js` reports `.js` is blocked in the target environment.
+> **Why we ask:** The packaged SPA is uploaded with `pac pages upload-code-site` after its supporting solution is ready. That upload includes JavaScript files and fails when `.js` is blocked. Checking before solution import avoids leaving supporting artifacts behind when the site cannot be created.
+> **Cancel leaves:** `attachment-block-modified` is possible only if the user approved and the update partially completed. Pure Cancel here leaves the original `blockedattachments` value untouched and no template installation has started.
+
+      Use `AskUserQuestion`:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | This environment currently blocks `.js` attachments. The template site's code upload will fail unless `.js` is unblocked. Remove only `js` from `blockedattachments` now? | Unblock JavaScript | Yes, unblock `.js` and continue (Recommended), No, start from scratch, Cancel |
+
+      - **Yes**: run the helper without `--dry-run`, preserving every other blocked extension:
+        ```bash
+        node "${PLUGIN_ROOT}/scripts/lib/fix-blocked-attachments.js" --envUrl "<environmentUrl>" --extensions js --quiet
+        ```
+        Confirm the JSON result has `removed` containing `js` or `changed: true`, then rerun the dry-run check and continue only if `.js` is no longer blocked.
+      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
+      - **Cancel**: stop before template installation. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+
+<!-- not-a-gate: route selection after a blocking preflight; no org mutation has happened and there is no option to override missing template language requirements -->
+
+    6. Use `AskUserQuestion` only when the language preflight cannot continue:
+
+       | Question | Header | Options |
+       |----------|--------|---------|
+       | This template requires Dataverse language LCID(s) `<requiredLocaleIds>`, but the target environment is missing `<missingLocaleIds>` or the language check could not be completed. What would you like to do? | Template Language Requirement | Start from scratch (Recommended), Cancel |
+
+       - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not import the template.
+       - **Cancel**: stop before template installation. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+
+<!-- gate: create-site:1.5.template-import | category=consent | cancel-leaves=template-cache -->
+
+> 🚦 **Gate (consent · create-site:1.5.template-import):** Confirm installing the selected template in the current Power Platform environment.
+>
+> **Trigger:** Phase 1.5 after the selected unpacked template solution source is downloaded and the target environment is resolved.
+> **Why we ask:** The install can import an unmanaged supporting solution and create a new code site. Choosing the wrong environment or template is disruptive and cannot be cleanly undone.
+> **Cancel leaves:** `template-cache` — the selected solution source and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
+
+   7. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template install** as `in_progress`, present the template and environment, and ask:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged supporting solution, clones the packaged SPA code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
+
+      - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
+      - **Cancel**: stop; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+   8. Mark **Confirm template install** as `completed`, then inspect the selected unpacked solution source and check whether that solution is already installed:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --solutionPath "<SELECTED_TEMPLATE_SOLUTION_SOURCE>"
+      node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
+      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --solutionPath "<SELECTED_TEMPLATE_SOLUTION_SOURCE>" --installed "<true|false>" --installedVersion "<version-or-empty>"
+      ```
+      The supporting solution must not contain the Power Pages website or code-site files. Do not derive a website name from the solution or expect solution import to add a `pac pages list -v` row.
+      If metadata inspection returns `ok: false` after the downloaded source passed variant validation, treat installed-state detection as unknown (`decision: "ask"`). The source may still pack and import if the user explicitly chooses to continue, but the safer defaults are **Start from scratch** or **Stop**.
+      If `check-solution-installed.js` exits 1, treat detection as unknown (`decision: "ask"`) and do not assume the solution is absent.
+      - **`decision: "import"`**: append the full install-path tasks (**Import template supporting solution**, **Clone and upload template site**, **Show inactive template site**, optional **Apply template seed data**, **Activate template site**, **Show live template site**) and continue.
+      - **`decision: "confirm-update"`**: tell the user a newer version of the exact selected family/framework variant is available and confirm before importing in place. Do not compare versions across framework variants.
+
+        <!-- gate: create-site:1.5.update-installed | category=consent | cancel-leaves=template-cache -->
+
+        > 🚦 **Gate (consent · create-site:1.5.update-installed):** Confirm updating an already-installed unmanaged template solution.
+        >
+        > **Trigger:** Phase 1.5 when the selected template solution is already installed and the downloaded source has a newer version.
+        > **Why we ask:** Updating an unmanaged solution merges changes into the environment and cannot be cleanly rolled back.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
+
+        Use `AskUserQuestion`:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | Template `<displayName>` - `<SELECTED_TEMPLATE_VARIANT.framework>` is already installed at version `<installedVersion>`. The selected framework package is newer (`<availableVersion>`). Update the unmanaged solution in this environment? | Update Template | Yes, update this framework variant (Recommended), No, cancel |
+
+        If the user declines or cancels, stop before import; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+        If the user confirms, append the full install-path tasks and continue.
+
+      - **`decision: "offer-clone"`**: do not re-import the same or older supporting solution. Offer to continue with the packaged SPA clone/upload path:
+
+        <!-- gate: create-site:1.5.clone-existing | category=consent | cancel-leaves=template-cache -->
+
+        > 🚦 **Gate (consent · create-site:1.5.clone-existing):** Confirm creating a new site while reusing an already-installed supporting solution.
+        >
+        > **Trigger:** Phase 1.5 when the selected template's supporting solution is already installed at the same or newer version.
+        > **Why we ask:** The skill will skip solution import but still create and upload a new code site from the packaged SPA source.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no site clone/upload happens if cancelled.
+
+        Use `AskUserQuestion`:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | Template `<displayName>` supporting artifacts are already installed at the same or newer version. Skip solution import and create a new `<SELECTED_TEMPLATE_VARIANT.framework>` site from the packaged SPA code? | Create Template Site | Yes, create the site (Recommended), No, cancel |
+
+        If the user confirms, append the install-path tasks without **Import template supporting solution**, set `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, and continue at the common pre-clone snapshot and packaged-site provisioning steps below. If the user declines, stop. Do not emit an import result event because no solution import was attempted; `template_used` was already emitted when the template path was selected.
+      - **`decision: "ask"`** or detection failure: ask whether to import anyway, start from scratch, or stop.
+
+        <!-- gate: create-site:1.5.reinstall-unknown | category=consent | cancel-leaves=template-cache -->
+
+        > 🚦 **Gate (consent · create-site:1.5.reinstall-unknown):** Confirm whether to import when installed-solution detection failed.
+        >
+        > **Trigger:** Phase 1.5 when `check-solution-installed.js` cannot determine whether the selected template solution already exists.
+        > **Why we ask:** Importing an unmanaged solution that may already exist can merge components or create duplicate site state.
+        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
+
+        Use `AskUserQuestion`:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | I couldn't determine whether this template solution is already installed. Importing anyway may merge unmanaged components or create duplicate site state. How would you like to proceed? | Template Install Unknown | Import anyway (advanced), Start from scratch (Recommended), Stop |
+
+        Branch on the answer:
+        - **Import anyway**: append the full install-path tasks and continue to the site snapshot and import flow below.
+        - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
+        - **Stop**: stop before import; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+
+   6. Capture a site list snapshot before either solution import or site upload:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
+      ```
+      If the result is `ok: false`, surface the error and stop before any environment mutation. This snapshot is later compared with the list after `upload-code-site`; supporting-solution import is not expected to create a site.
+   7. Render and open a read-only status page:
+      ```bash
+      # Create <temp-import-status-dir>/ and write this initial status JSON to <temp-import-status-dir>/status.json:
+      # Import path:
+      # { "state": "running", "phase": "solution", "message": "Importing supporting solution" }
+      # SKIP_TEMPLATE_SOLUTION_IMPORT path:
+      # { "state": "running", "phase": "site", "message": "Preparing template site" }
+      node "${PLUGIN_ROOT}/scripts/render-template-import-status.js" \
+        --templateName "<SELECTED_TEMPLATE.displayName>" \
+        --statusPath "<temp-import-status-dir>/status.json" \
+        --previewImagesJson '<JSON array of SELECTED_TEMPLATE.previewImages localUrl values from the template browser step>' \
+        --outputPath "<temp-import-status-dir>/index.html"
+      node "${PLUGIN_ROOT}/scripts/serve-static-dir.js" --root "<temp-import-status-dir>" --urlFile "<temp-import-status-dir>/url.txt"
+      node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
+      ```
+      Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
+   8. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solution** as `in_progress` and prepare the unmanaged solution for import:
+      ```bash
+      # Update the status JSON:
+      # { "state": "running", "phase": "solution", "message": "Preparing supporting solution" }
+      node "${PLUGIN_ROOT}/scripts/pack-template-solution.js" \
+        --solutionPath "<SELECTED_TEMPLATE_SOLUTION_SOURCE>"
+      ```
+      Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>` and `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>`. The packer creates the ZIP only in an owned OS temporary directory. Never write a packed ZIP into the downloaded variant or another repository path.
+
+      If packing fails, do not call Dataverse and do not emit `template_import_failure` because no import was attempted. The packer removes partial output automatically.
+
+      <!-- gate: create-site:1.5.pack-failed | category=progress | cancel-leaves=template-cache -->
+
+      > 🚦 **Gate (progress · create-site:1.5.pack-failed):** Choose how to proceed after preparing the local solution package fails.
+      >
+      > **Trigger:** Phase 1.5 when local solution validation or `pac solution pack` fails.
+      > **Why we ask:** No environment mutation has happened, but template installation cannot continue without a valid temporary solution ZIP.
+      > **Cancel leaves:** `template-cache` — downloaded template source remains in the SHA-keyed temp cache; partial pack output has been removed.
+
+      Use `AskUserQuestion`:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | The supporting solution could not be prepared for import. How would you like to proceed? | Template Pack Failed | Retry packing, Fall back to from-scratch (Recommended), Stop |
+
+      - **Retry packing**: return to the pack command above.
+      - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
+      - **Stop**: stop after showing the local pack error. Do not mark **Import template supporting solution** as completed.
+
+      After packing succeeds, import the temporary ZIP inline. Do not invoke `/import-solution` or write ALM artifacts. After `ImportSolutionAsync` returns the async operation id, immediately clean the packer's work directory, then launch a Task subagent to run `poll-async-operation.js` and write `<temp-import-status-dir>/status.json`:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/encode-solution-file.js" --zipPath "<PACKED_TEMPLATE_SOLUTION_ZIP>"
+      # Write a temp JSON body file containing:
+      # {
+      #   "CustomizationFile": "<encoded>",
+      #   "OverwriteUnmanagedCustomizations": true,
+      #   "PublishWorkflows": true,
+      #   "ConvertToManaged": false
+      # }
+      node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<environmentUrl>" POST "ImportSolutionAsync" \
+        --bodyFile "<temp-import-body.json>" \
+        --include-headers
+      node "${PLUGIN_ROOT}/scripts/pack-template-solution.js" \
+        --cleanup \
+        --workDirectory "<PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY>"
+      # Run this poll command in a Task subagent, not in the main conversation:
+      node "${PLUGIN_ROOT}/scripts/poll-async-operation.js" \
+        --asyncJobId "<AsyncOperationId from ImportSolutionAsync>" \
+        --envUrl "<environmentUrl>" \
+        --token "<token>" \
+        --intervalMs 30000 \
+        --maxAttempts 75 \
+        --statusFile "<temp-import-status-dir>/status.json"
+      ```
+      If encoding or `ImportSolutionAsync` fails before returning an async operation id, clean `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY` before retrying, falling back, or stopping. Treat a cleanup failure as a local warning and show the work-directory path so the user can remove it manually; do not hide the original failure.
+
+      The subagent must return the poller's final JSON when the command exits. Do not rely only on that notification: read `<temp-import-status-dir>/status.json` every 30 seconds until `state` is `succeeded`, `failed`, `canceled`, or `timeout`. Do not start site cloning until either the subagent reports `Succeeded` or the status JSON has `state: "succeeded"`.
+      If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import. Run the `template_import_failure` telemetry command silently before asking the recovery question. Do not mention this telemetry command to the user and do not print its output:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+        --eventName template_import_failure \
+        --templateId "<SELECTED_TEMPLATE.id>" \
+        --templateKind "<SELECTED_TEMPLATE.kind>" \
+        --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
+        --audience "<internal|external from Phase 1 discovery>" \
+        --outcome failure \
+        --errorClass "ImportSolutionAsync" \
+        --errorDescription "<short non-PII failure category or poll status>"
+      ```
+      `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, component names, or any other user-identifying value in `errorDescription`.
+
+      <!-- gate: create-site:1.5.import-failed | category=progress | cancel-leaves=partial-unmanaged-template-import -->
+
+      > 🚦 **Gate (progress · create-site:1.5.import-failed):** Choose how to proceed after template solution import fails.
+      >
+      > **Trigger:** Phase 1.5 when `ImportSolutionAsync` fails, times out, or reports component-level failures.
+      > **Why we ask:** The environment may contain a partial unmanaged import; retrying or switching paths should be an explicit choice.
+      > **Cancel leaves:** `partial-unmanaged-template-import` — downloaded template artifacts remain in the SHA-keyed temp cache; any unmanaged partial import remains in Dataverse and is explained in the error summary.
+
+      Use `AskUserQuestion`:
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | Supporting-solution import failed or partially completed. How would you like to proceed? | Template Import Failed | Retry import, Fall back to from-scratch (Recommended), Stop |
+
+      Branch on the answer:
+      - **Retry import**: return to the pack-and-import command sequence above and poll again.
+      - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Tell the user the unmanaged partial import may remain in Dataverse. The eventual from-scratch branch emits the single terminal telemetry event.
+      - **Stop**: stop after showing the error summary. Do not mark **Import template supporting solution** as completed and do not clone or upload the site. The `template_import_failure` event was already emitted when the import failure was detected.
+
+      If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
+      Only continue to the next step when the import poll result is `Succeeded`.
+   9. When import succeeds, mark **Import template supporting solution** as `completed`, then run the `template_import_success` telemetry command silently. If solution import was skipped, mark the task as skipped and do not emit an import event:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+        --eventName template_import_success \
+        --templateId "<SELECTED_TEMPLATE.id>" \
+        --templateKind "<SELECTED_TEMPLATE.kind>" \
+        --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
+        --audience "<internal|external from Phase 1 discovery>" \
+        --seedApplied "false"
+      ```
+      `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
+   10. Mark **Clone and upload template site** as `in_progress`. Update the status page:
+      ```json
+      { "state": "running", "phase": "site", "message": "Cloning and uploading template site" }
+      ```
+      Create a fresh temporary output directory, then clone the packaged SPA source and upload the clone:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/provision-template-site.js" \
+        --sourcePath "<SELECTED_TEMPLATE_SPA_CODE>" \
+        --outputDirectory "<fresh temp clone directory>" \
+        --siteName "<SELECTED_TEMPLATE.displayName>"
+      ```
+      This wrapper runs the two required PAC operations in order:
+      ```bash
+      pac pages clone --path "<SELECTED_TEMPLATE_SPA_CODE>" --outputDirectory "<fresh temp clone directory>" --name "<SELECTED_TEMPLATE.displayName>" --overwrite
+      pac pages upload-code-site --rootPath "<cloned code-site root>" --siteName "<SELECTED_TEMPLATE.displayName>"
+      ```
+      Save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`. Never upload `SELECTED_TEMPLATE_SPA_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
+   11. If clone or upload fails, run `template_clone_failure` telemetry silently with `errorClass` set to `PacPagesClone` or `PacPagesUploadCodeSite` from the returned `step`, and a short non-PII `errorDescription`:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+         --eventName template_clone_failure \
+         --templateId "<SELECTED_TEMPLATE.id>" \
+         --templateKind "<SELECTED_TEMPLATE.kind>" \
+         --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
+         --audience "<internal|external from Phase 1 discovery>" \
+         --outcome failure \
+         --errorClass "<PacPagesClone|PacPagesUploadCodeSite>" \
+         --errorDescription "<short non-PII failure category>"
+       ```
+       Then fire this gate:
+
+      <!-- gate: create-site:1.5.clone-failed | category=progress | cancel-leaves=partial-template-clone -->
+
+      > 🚦 **Gate (progress · create-site:1.5.clone-failed):** Choose how to proceed after cloning or uploading the packaged template site fails.
+      >
+      > **Trigger:** Phase 1.5 when `pac pages clone` or `pac pages upload-code-site` fails.
+      > **Why we ask:** The temp directory can contain clone output, the environment can contain a partial code-site upload, and the supporting solution may already be installed.
+      > **Cancel leaves:** `partial-template-clone` — cached template artifacts and local clone files remain; a supporting solution or partial site upload may also remain in Dataverse.
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | The template site could not be cloned or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
+
+      Do not retry automatically. A retry must use a new temporary output directory. If the user falls back to from-scratch, explain that the supporting solution or partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
+   12. When clone and upload succeed, mark **Clone and upload template site** as `completed` and run `template_clone_success` telemetry silently:
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+         --eventName template_clone_success \
+         --templateId "<SELECTED_TEMPLATE.id>" \
+         --templateKind "<SELECTED_TEMPLATE.kind>" \
+         --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
+         --audience "<internal|external from Phase 1 discovery>"
+       ```
+       Do not include the site name, clone path, URL, or Website Record ID in telemetry.
+   13. Mark **Show inactive template site** as `in_progress`. Capture the post-upload site list and identify the new site:
+      ```bash
+      node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-after-pages-list.txt>"
+      node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>" --expectedSiteName "<SELECTED_TEMPLATE.displayName>"
+      ```
+      - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was created as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state: `<IMPORTED_SITE_STATE>`. Seed data and activation are next."
+      - **Any other result**: show the diff result and stop before seeding or activation. The upload may have completed, but the new inactive site was not identified safely. Tell the user to run `pac pages list -v` and then `/activate-site` with the correct Website Record ID.
+   14. Mark **Show inactive template site** as `completed`.
+   15. If `SELECTED_TEMPLATE_VARIANT.seedDataPath` or `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and update the status page:
+      ```json
+      { "state": "running", "phase": "seed", "message": "Seeding template data" }
+      ```
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/fetch-template-seed-data.js" --sha "<catalog-sha>" --seedDataPath "<SELECTED_TEMPLATE_VARIANT.seedDataPath or SELECTED_TEMPLATE.seedDataPath>"
+       ```
+       If the result is `ok: true`, use `localDir` as the seed directory. If the result is `ok: false`, surface the error and continue to activation; seed-data fetch is best-effort.
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" --seedDir "<localDir>" --envUrl "<environmentUrl>"
+       ```
+       Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
+       Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`. If both are absent, skip this task.
+   16. Mark **Apply template seed data** as `completed` or skipped.
+   17. Mark **Activate template site** as `in_progress`. Before invoking `/activate-site`, update the status page:
+       ```json
+       { "state": "running", "phase": "activation", "message": "Activating template site" }
+       ```
+       Then invoke `/activate-site`, passing the resolved identity in the request so it skips local-project discovery:
+       ```text
+       Activate cloned template site:
+       - siteName: <IMPORTED_SITE_NAME>
+       - websiteRecordId: <IMPORTED_WEBSITE_RECORD_ID>
+       - environmentUrl: <environmentUrl>
+       - source: create-site template path
+       ```
+       The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
+       If activation fails, tell the user the cloned site exists but is not live and can be activated later by rerunning `/activate-site` with this identity. Do not treat activation failure as a failed supporting-solution import or site upload.
+   18. When `/activate-site` returns a `siteUrl`, mark **Activate template site** as `completed` and **Show live template site** as `in_progress`.
+   19. Redirect the already-open status page to the live site:
+       ```json
+       {
+         "state": "succeeded",
+         "message": "Template site is live. Opening it now...",
+         "redirectUrl": "<siteUrl>"
+       }
+       ```
+       Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. If the user closed the status page, show the `siteUrl` for manual opening.
+
+       Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
+   20. Mark **Show live template site** as `completed`, then present the template-path summary:
+       - Template name and framework
+       - Cloned site name and Website Record ID
+       - Live site URL
+       - DNS propagation note: the site may take a few minutes to load everywhere
+       - "Your site is live. Want to keep customizing it from here?"
+
+<!-- not-a-gate: optional post-live template customization branch; the template site is already imported and activated, so this prompt only chooses whether to download editable source files for further local changes -->
+
+   21. Use `AskUserQuestion`:
+
+       | Question | Header | Options |
+       |----------|--------|---------|
+       | Your template site is live. Do you want to download the site source and customize it now? | Customize Template Site | Yes, download and customize (Recommended), No, finish here |
+
+       - **No, finish here**: mark **Select template or choose from-scratch** as `completed`, then stop.
+       - **Yes, download and customize**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
+
+   22. Mark **Download template site source** as `in_progress` and ask where to download the code site:
+
+       | Question | Header | Options |
+       |----------|--------|---------|
+       | Where should I download the template site's source files? | Download Location | New folder in current directory (Recommended), Current directory, Any other directory |
+
+       Resolve the path using the same location rules as from-scratch:
+       - **New folder in current directory**: create `<cwd>/<IMPORTED_SITE_NAME>/`.
+       - **Current directory**: use `<cwd>`.
+       - **Any other directory**: ask for a full path, then verify/create it.
+
+       Confirm the resolved path, then run:
+       ```bash
+       pac pages download-code-site -id "<IMPORTED_WEBSITE_RECORD_ID>" -p "<resolved path>"
+       ```
+
+       If download fails, surface the command output and ask whether to retry, choose another folder, or stop. If it succeeds, set `PROJECT_ROOT = "<resolved path>"`, mark **Download template site source** as `completed`, and continue into the planning/customization phases below.
+   23. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in the downloaded template site. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against `PROJECT_ROOT`; do **not** run Phase 2 scaffold/copy-template.
+   24. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes.
+   25. Run the existing validation/review flow. Do not automatically deploy unless the user explicitly asks to run `/deploy-site`.
+
+8. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
+
+<!-- not-a-gate: deferred data-gathering prompt for framework and directory before any scaffold files are written -->
+
+9. Ask the from-scratch-only questions that were deferred from Phase 1:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
-4. Resolve the project location:
+10. Resolve the project location:
    - **If "Current directory"**: Project root = `<cwd>`.
    - **If "New folder in current directory"**: Create a folder named `__SITE_NAME__` inside the cwd. Project root = `<cwd>/__SITE_NAME__/`.
    - **If "Any other directory"**: Ask for the full path. Verify/create it. Project root = provided path.
@@ -102,19 +658,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    After resolving, confirm: "The site will be created at `<resolved path>`."
 
    Store this as `PROJECT_ROOT`.
+11. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
 
-5. From the user's answers, derive:
-   - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
-   - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
-   - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
-6. Summarize understanding and confirm with user before proceeding
-
-**Audience influences site generation:**
-
-- **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
-- **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
-
-**Output**: Clear statement of site purpose, framework, audience, derived naming values, and project location
+**Output**: cloned template site identity (`IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`) and either a completed live template flow or a downloaded template code site ready for customization; or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
 
 ---
 
@@ -692,6 +1238,13 @@ Present a summary table to the user:
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
+7. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
+    --eventName create_site_from_scratch \
+    --framework "<framework>" \
+    --audience "<audience>"
+   ```
 
 **Output**: Deployed (or deployment-ready) site with clear next steps
 
@@ -711,18 +1264,25 @@ Present a summary table to the user:
 
 ### Key Decision Points (Wait for User)
 
-1. After Phase 1: Confirm site purpose, framework, and project location
-2. After Phase 4: Approve implementation plan
-3. After Phase 7: Accept site or request changes
-4. At Phase 8: Deploy or skip
+1. After Phase 1: Confirm site purpose and audience
+2. During Phase 1.5: Choose framework and project location for the from-scratch path
+3. After Phase 4: Approve implementation plan
+4. After Phase 7: Accept site or request changes
+5. At Phase 8: Deploy or skip
 
 ### Progress Tracking
 
-Before starting Phase 1, create a task list with all phases using `TaskCreate`:
+Before starting Phase 1, create only the path-agnostic upfront tasks using `TaskCreate`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Discover site requirements | Discovering requirements | Collect site name, framework, purpose, audience, and project location |
+| Discover site requirements | Discovering requirements | Collect site name, purpose, audience, and derived naming values |
+| Select template or choose from-scratch | Selecting creation path | Offer matching templates, or route the user into the from-scratch path |
+
+After Phase 1.5 selects the from-scratch path, append the existing from-scratch phase tasks:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
 | Scaffold and launch dev server | Scaffolding project | Copy template, replace placeholders with defaults, git init, npm install, start dev server, share URL |
 | Plan site components | Planning components | Determine pages, components, design direction, and routes while user previews scaffold |
 | Approve implementation plan | Getting plan approval | Present implementation plan covering design and pages, get user approval |
@@ -731,7 +1291,38 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
 
-Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic.
+After Phase 1.5 selects the template path, append the pre-install tasks immediately so the user can see each environment check:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Resolve target environment | Resolving environment | Resolve the active PAC/Azure target environment and token before any environment preflight |
+| Confirm target environment | Confirming environment | Ask whether the resolved environment is the one the user wants for the template install |
+| Validate CLI tenant alignment | Checking CLI tenants | Verify PAC CLI and Azure CLI are authenticated to the same tenant before installation |
+| Validate JavaScript unblock requirement | Checking JavaScript setting | Check `blockedattachments` for `.js` and, with consent, remove only `js` before site upload |
+| Validate Dataverse language requirements | Checking language availability | Call `RetrieveAvailableLanguages` and require every LCID listed in the selected template's `requiredDataverseLanguages` |
+| Confirm template install | Confirming template install | Show the selected template and target environment, then ask for final install consent |
+
+After the reinstall policy chooses a normal import, update, or import-anyway path, append:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Import template supporting solution | Importing supporting solution | Import the selected unmanaged supporting solution and poll the async job to completion |
+| Clone and upload template site | Creating template site | Clone the packaged SPA source and upload the resulting code site |
+| Show inactive template site | Showing template site | Diff `pac pages list -v` output to identify the cloned site record and tell the user it is not live yet |
+| Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
+| Activate template site | Activating template site | Invoke activate-site with the resolved site name and Website Record ID |
+| Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |
+
+If the user chooses to customize the live template, append:
+
+| Task subject | activeForm | Description |
+|-------------|------------|-------------|
+| Download template site source | Downloading template source | Ask for a local folder and run `pac pages download-code-site -id <Website Record ID> -p <path>` |
+| Plan template customizations | Planning customizations | Ask what the user wants changed and plan edits against the downloaded code site |
+
+When the supporting solution is already installed at the same or newer version, append the same list without **Import template supporting solution**. The packaged SPA clone/upload, site discovery, seed, activation, and live-preview tasks still run.
+
+Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic while avoiding permanently skipped tasks on future non-from-scratch branches.
 
 ### Quality Standards
 
@@ -759,9 +1350,13 @@ Every site must meet these standards before completion:
 ### Phase 1: Discovery
 
 - Name: Partner Portal
-- Framework: React
 - Purpose: Company Portal
 - Audience: Internal (partners, consultants)
+
+### Phase 1.5: Template Branch Decision
+
+- Creation path: From-scratch
+- Framework: React
 - Location: New folder `partner-portal` in current directory
 
 ### Phase 2: Scaffold & Launch
