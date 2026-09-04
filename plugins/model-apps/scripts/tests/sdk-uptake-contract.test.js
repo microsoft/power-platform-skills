@@ -211,7 +211,7 @@ test('REAL BUNDLE: a NON-qualifying failure must NOT fall back (a second write c
 test('REAL BUNDLE: a 404 on the bound member is refused with a STABLE, matchable code', async () => {
   // The plugin degrades gracefully on an environment that does not declare the member (it skips the
   // rules and builds the rest of the app rather than halting 90% of the way through). That branch is
-  // selected by `err.code`, so the code is a contract, not an implementation detail.
+  // selected by the error's `code`, so the code is a contract, not an implementation detail.
   //
   // It must NOT be selected by `err.name`: the bundle is minified, so the class name is a
   // rebuild-unstable two-letter string that also happens to be the shared base error. Matching it
@@ -219,17 +219,32 @@ test('REAL BUNDLE: a 404 on the bound member is refused with a STABLE, matchable
   //
   // MEASURED live: `$metadata` on a real environment (16.5 MB) does not mention the member, and every
   // POST to it answers 404. The SDK's own message reports 18 of 20 environments in the same state.
+  //
+  // ⚠ HOW it is refused CHANGED, and the change was invisible to every mock-based test in the suite.
+  // The SDK used to THROW here; it now treats the preview rollout as a reported no-op and RESOLVES
+  // with `saved: false` carrying the same code, so a `pushAll` can carry on with the other artifacts.
+  // `saved` staying FALSE is the load-bearing half — "skipped" must never read as "written". The
+  // plugin reads the code off the CAUSE CHAIN so both shapes reach the same skip; asserting only
+  // one of them here is what let the by-value form turn into a build halt on most environments.
   const { sdk, calls } = sdkWith({
     post: (url) => (/WithWfomJson/i.test(url) ? { status: 404, headers: {}, body: {} } : undefined),
   });
   const art = authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
 
-  const err = await sdk.pushArtifact('businessRule', art.id).then(() => null, (e) => e);
-  assert.ok(err, 'an undeclared member must be refused, not silently substituted');
+  const res = await sdk.pushArtifact('businessRule', art.id).then((r) => r, (e) => ({ threw: e }));
+  // Accept EITHER shape deliberately: a bundle that goes back to throwing must not fail this guard,
+  // because the plugin still handles it. What may never happen is a reported SUCCESS.
+  const err = res.threw || res.error;
+  assert.ok(err, `an undeclared member must be refused, not silently substituted; got ${JSON.stringify(res)}`);
+  if (!res.threw) {
+    assert.strictEqual(res.saved, false, 'a no-op must never be reported as a write that committed');
+    assert.strictEqual(res.shipped, false, 'nor as live');
+  }
   assert.strictEqual(err.code, 'BUSINESS_RULE_API_UNAVAILABLE',
     `the plugin branches on this exact code; got ${JSON.stringify(err.code)}`);
-  assert.match(err.message, /does not expose/i, 'the message must name the cause for the operator');
+  assert.match(err.message, /not enabled on this environment|does not expose/i,
+    'the message must name the cause for the operator');
   assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
     'and nothing else may be written in its place');
 });
@@ -338,9 +353,15 @@ test('REAL BUNDLE: no failure of the bound member produces a second write', asyn
   // fallback, so they are the two that would resurrect the duplicate. The rest are included because
   // "nothing else writes twice either" is the actual invariant, and a partial check would let a
   // narrower fallback back in unnoticed.
+  //
+  // The invariant is NO SECOND WRITE — deliberately not "throws". How each failure is SURFACED is a
+  // separate contract (pinned above) and it is not uniform: the 404 preview gate is reported by
+  // value, everything else throws. Conflating the two is what made this test fail on an uptake that
+  // changed only the reporting shape, while the duplicate-write invariant it exists to protect was
+  // never at risk.
   const FAILURES = [
     [400, '0x80040216'],  // committed-then-faulted: the exact #482 trigger
-    [404, null],          // member not declared on this environment
+    [404, null],          // member not declared on this environment -> reported BY VALUE
     [400, '0x80040265'],  // an unrelated 400
     [401, null],
     [403, null],
@@ -353,7 +374,13 @@ test('REAL BUNDLE: no failure of the bound member produces a second write', asyn
         ? { status, headers: {}, body: code ? { error: { code, message: 'fault' } } : {} }
         : undefined),
     });
-    await assert.rejects(() => authorDupGuard(sdk), `HTTP ${status} ${code || ''} must surface, not be absorbed`);
+    const outcome = await authorDupGuard(sdk).then((r) => r, (e) => ({ threw: e }));
+    // Whichever way it is surfaced, it must NOT be a success.
+    const failed = Boolean(outcome.threw) || outcome.saved === false;
+    assert.ok(failed,
+      `HTTP ${status} ${code || ''} must surface, not be absorbed; got ${JSON.stringify(outcome)}`);
+    assert.ok(outcome.threw || outcome.error,
+      `HTTP ${status} ${code || ''} must carry the cause either way`);
 
     // The decisive assertion: no classic row, and no retry of the member either. Either one would be
     // a second rule on the table for a single authored rule.
