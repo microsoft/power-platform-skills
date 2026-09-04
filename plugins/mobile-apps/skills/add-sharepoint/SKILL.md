@@ -37,6 +37,8 @@ test -f power.config.json && test -f app.config.js && echo "OK" || echo "ERROR: 
 
 ### Step 2: Plan
 
+**Telemetry checkpoint: `plan_sharepoint_data_source`**
+
 Ask the user:
 
 1. Which SharePoint list(s) do they need?
@@ -82,6 +84,8 @@ Present findings to user with `AskUserQuestion`:
 - Lists that must be **created** (no match found)
 
 ### Step 5: Create Lists (if creating lists)
+
+**Telemetry checkpoint: `create_sharepoint_lists`**
 
 **Print before starting:**
 > "→ Creating SharePoint lists via Graph API (sequential per list, columns added after list exists)…"
@@ -136,6 +140,8 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 
 ### Step 9: Add Connector
 
+**Telemetry checkpoint: `generate_sharepoint_data_source`**
+
 **Print before starting:**
 > "→ Running `npx power-apps add-data-source` per list (sequential, ~10–20 seconds each)."
 
@@ -182,6 +188,8 @@ await SharePointOnlineService.PatchItem({
 ```
 
 ### Step 11: Type-check
+
+**Telemetry checkpoint: `validate_sharepoint_integration`**
 
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify SharePoint services compile (~15–30 seconds)."

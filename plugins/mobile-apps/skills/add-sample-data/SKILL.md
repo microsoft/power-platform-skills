@@ -66,6 +66,8 @@ If empty, instruct `az login` and stop.
 
 ### Step 2 — Discover tables
 
+**Telemetry checkpoint: `discover_dataverse_tables`**
+
 #### Step 2a — Path A: read `.datamodel-manifest.json` (preferred)
 
 ```bash
@@ -150,6 +152,8 @@ For the selected tables, build a dependency graph from lookup columns:
 If a selected table references an UNSELECTED parent, ask the user whether to add the parent to the selection or skip the lookup field. Don't silently insert null lookups.
 
 ### Step 4 — Generate sample data + preview
+
+**Telemetry checkpoint: `generate_and_review_sample_records`**
 
 #### Step 4a — Generate contextual rows
 
@@ -255,6 +259,8 @@ For tables with lookups, also show which parent record each child references:
 After the preview is shown, proceed directly to Step 5. No confirmation prompt — the row-count pre-check (Step 3) already ensures no existing data is overwritten.
 
 ### Step 5 — Insert sample data
+
+**Telemetry checkpoint: `insert_sample_records`**
 
 **Print before starting:**
 > "→ Inserting <total> records across <N> tables in dependency-tier order (parallel within each tier, cap 5 concurrent)…"

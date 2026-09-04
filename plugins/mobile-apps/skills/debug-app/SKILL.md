@@ -94,6 +94,8 @@ If `fixes.md` is empty, write a session header:
 
 ### 0.2 Verify Metro bundled and the app is running
 
+**Telemetry checkpoint: `validate_metro_session`**
+
 Branch on the source resolved in 0.0.
 
 **If `$METRO_TERMINAL_ID` is set (primary path):**
@@ -117,6 +119,8 @@ Ask the user:
 Wait for the user to reply. Set `$METRO_TERMINAL_ID` to the provided ID, call `BashOutput($METRO_TERMINAL_ID)` once, and continue with the checks above.
 
 ### 0.3 Capture baseline
+
+**Telemetry checkpoint: `capture_runtime_baseline`**
 
 Read the latest output from `BashOutput($METRO_TERMINAL_ID)`. Note the most recently bundled native platform (iOS / Android) and any recent runtime log lines. Append to `fixes.md`:
 ```
@@ -273,6 +277,8 @@ Repeat until **3 consecutive clean cycles**, OR the user types `stop`, OR the es
 
 ### Step A — Collect logs
 
+**Telemetry checkpoint: `collect_runtime_logs`**
+
 ```
 BashOutput(bash_id=$METRO_TERMINAL_ID)
 ```
@@ -312,6 +318,8 @@ Interpretation rule for host diagnostic lines:
 - Treat as informational when lines are lifecycle/status-only, such as bridge setup/ready, token acquisition start/success, bridge registration, and connection-setup screen visibility.
 
 ### Step B — Classify each new log entry
+
+**Telemetry checkpoint: `classify_runtime_failures`**
 
 Apply the 8-category table. Treat each unique stack trace / error message as one issue.
 
@@ -353,6 +361,8 @@ Take `app/(tabs)/todos.tsx:47:12` as the fix site. The recipes in D3.1 below ope
 - Host lifecycle/info lines with no failure indicator, for example `[bridge] setupNativeHost: bridge ready`, `[PAHost] bridge registered`, `[PAHost] render: waiting for connection resolution (spinner)`
 
 ### Step C — If NO issues found
+
+**Telemetry checkpoint: `confirm_runtime_health`**
 
 Increment the consecutive-clean-cycle counter.
 
@@ -398,6 +408,8 @@ Exit the loop. Do NOT auto-resume.
 If counter is < 3 AND the cap hasn't tripped, pause 5 seconds (`sleep 5` via Bash; on Windows without bash, `Start-Sleep -Seconds 5` via `pwsh -NoProfile -Command`), then return to Step A.
 
 ### Step D — If issues ARE found
+
+**Telemetry checkpoint: `repair_and_verify_runtime_issue`**
 
 Reset the consecutive-clean counter to 0. For each issue, work through the sequence below **one at a time** before moving to the next.
 

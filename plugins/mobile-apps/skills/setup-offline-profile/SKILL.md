@@ -119,6 +119,8 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 
 ### Step 2 — Resolve mode (create vs extend vs reconcile)
 
+**Telemetry checkpoint: `resolve_offline_profile_mode`**
+
 **Print before starting:**
 > "→ Checking for existing offline profiles in the environment…"
 
@@ -144,6 +146,8 @@ Decision tree — evaluate in order:
 
 ### Step 3 — Spawn architect agent
 
+**Telemetry checkpoint: `design_offline_profile_scope`**
+
 **Print before starting:**
 > "→ Spawning mobile-app:offline-profile-architect agent (read-only) to design the profile…"
 
@@ -167,6 +171,8 @@ The agent returns `_offline_section.md` in the working directory. Read it. Parse
 - `BLOCKED: <reason>` → STOP, surface to user, do not silently retry.
 
 ### Step 3.5 — Configuration review (interactive AskUserQuestion flow)
+
+**Telemetry checkpoint: `review_offline_profile_configuration`**
 
 **Print before starting:**
 > "→ Presenting the proposed offline profile configuration. You'll tap an option to accept, adjust, or cancel — no need to type."
@@ -318,6 +324,8 @@ configReview: accepted
 
 ### Step 4 — Run the internal `enable-tables-offline` workflow if needed
 
+**Telemetry checkpoint: `enable_dataverse_tables_offline`**
+
 If Gate 1 identified any table needing change, read and execute `${PLUGIN_ROOT}/skills/enable-tables-offline/SKILL.md` with the table list as its `$ARGUMENTS`:
 
 ```text
@@ -331,6 +339,8 @@ If `BLOCKED`, propagate the block up — STOP.
 If all tables were already enabled, skip this step.
 
 ### Step 5 — POST profile shell
+
+**Telemetry checkpoint: `create_offline_profile_shell`**
 
 **Print before starting:**
 > "→ Creating MobileOfflineProfile record (Name + Description only)…"
@@ -366,6 +376,8 @@ gate1: approved
 
 ### Step 6 — POST profile items
 
+**Telemetry checkpoint: `add_tables_to_offline_profile`**
+
 **Print before starting:**
 > "→ Creating <N> MobileOfflineProfileItem records (one per table, sequential)…"
 
@@ -399,6 +411,8 @@ Print `✓ <table>` after each 2xx.
 ### (Gate 3 — REMOVED, consolidated into Step 3.5)
 
 ### Step 7 — POST associations + PATCH selectedcolumns
+
+**Telemetry checkpoint: `configure_offline_profile_associations`**
 
 **Print before starting:**
 > "→ Creating association rows + PATCHing selectedcolumns on each profile item…"
@@ -459,6 +473,8 @@ If syncintervalinminutes was edited at Gate 3, include it in the same PATCH.
 
 ### Step 8 — Publish
 
+**Telemetry checkpoint: `publish_offline_profile`**
+
 **Print before starting:**
 > "→ Publishing profile (targeted PublishXml)…"
 
@@ -510,6 +526,8 @@ Protocol after the POST call returns:
 After confirmed success, re-GET the profile and check `publishedon` for the artifacts step.
 
 ### Step 9 — Persist artifacts
+
+**Telemetry checkpoint: `persist_offline_profile_snapshot`**
 
 **Print before starting:**
 > "→ Writing offline-profile.json + memory-bank.md…"
@@ -629,6 +647,8 @@ associationsCount: <M>
 9d — Append a `## Offline Profile` section to `native-app-plan.md` summarizing the final state (mirrors the data-model section pattern).
 
 ### Step 9.5 — Verify
+
+**Telemetry checkpoint: `verify_published_offline_profile`**
 
 **Print before starting:**
 > "→ Verifying the on-server profile matches offline-profile.json…"

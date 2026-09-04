@@ -75,6 +75,8 @@ Then read the next user message and parse.
 
 ### Step 3 — Discover existing memberships
 
+**Telemetry checkpoint: `discover_offline_profile_memberships`**
+
 For idempotency:
 
 ```bash
@@ -109,6 +111,8 @@ Construct three lists:
 
 ### Step 4 — Confirm diff (single gate)
 
+**Telemetry checkpoint: `confirm_offline_profile_assignment_diff`**
+
 `AskUserQuestion`:
 
 > **Question header**: `Confirm membership changes`
@@ -140,6 +144,8 @@ Construct three lists:
 > - `Cancel`
 
 ### Step 5 — POST memberships
+
+**Telemetry checkpoint: `assign_offline_profile_memberships`**
 
 For each in `to_add`, POST sequentially (parallel POSTs occasionally return 429):
 
@@ -179,6 +185,8 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> DELETE \
 > **⚠️ Duplicate handling:** POSTing a membership that already exists returns `409 Conflict`. The `dataverse-request.js` wrapper's `looksLikeDuplicate` rescue treats this as silent success (the Step 3 dedup should catch most cases first). Re-runs are safe.
 
 ### Step 6 — Verify
+
+**Telemetry checkpoint: `verify_offline_profile_memberships`**
 
 Re-query memberships from Step 3 and assert the diff applied:
 - Every `to_add` now appears in the GET response

@@ -86,6 +86,8 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 
 ## Sub-step 1 — Brand inputs
 
+**Telemetry checkpoint: `collect_brand_inputs`**
+
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
@@ -142,6 +144,8 @@ If flag was passed on invocation, skip asking — process directly.
 ---
 
 ## Sub-step 2 — Cost picker
+
+**Telemetry checkpoint: `select_design_depth`**
 
 **Print:**
 > "→ [design-system] How much design depth do you want?"
@@ -248,6 +252,8 @@ Store result as `picked_direction` with all resolved dimensions.
 ---
 
 ## Sub-step 4 — Write brand/design-system.md + brand/tokens.ts
+
+**Telemetry checkpoint: `generate_design_system_artifacts`**
 
 **Print:**
 > "→ [design-system] Writing brand/design-system.md…"
@@ -372,6 +378,8 @@ cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial
 
 ## Sub-step 5 — Render brand/design-system.html (paths (a) and (b))
 
+**Telemetry checkpoint: `render_design_system_gallery`**
+
 **Print:**
 > "→ [design-system] Rendering design system gallery (deterministic, 0 tokens)…"
 
@@ -404,6 +412,8 @@ open "brand/design-system.html" 2>/dev/null \
 ---
 
 ## Sub-step 6 — Confirmation gate
+
+**Telemetry checkpoint: `approve_design_system`**
 
 **Print:**
 > "→ [design-system] Design system ready for review."
@@ -451,6 +461,8 @@ Go back to Sub-step 3 (counts against retry cap of 2).
 
 ## Sub-step 6.5 — Re-render screen previews with brand tokens (paths (a), (b), (c))
 
+**Telemetry checkpoint: `render_branded_screen_previews`**
+
 **Print:**
 > "→ [design-system] Design system locked."
 
@@ -480,6 +492,8 @@ Overwrites `_plan_preview.html` with branded versions. Opens browser.
 ---
 
 ## Sub-step 7 — Persist + return
+
+**Telemetry checkpoint: `persist_design_system`**
 
 **Print:**
 > "→ [design-system] Done. Design system locked."

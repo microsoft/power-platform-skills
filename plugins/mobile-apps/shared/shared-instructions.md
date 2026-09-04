@@ -32,6 +32,8 @@ Use `started` immediately before the work, then `completed` after success or `fa
 
 Checkpoint names and optional info must be fixed, author-written `snake_case` values of at most 64 characters. Optional info is for low-cardinality classifications such as `dependency_missing`; never interpolate prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data. Do not emit checkpoints for unmarked steps. Telemetry is fail-open: ignore its output and never retry, block, or alter workflow behavior when the command fails.
 
+Name checkpoints with a precise verb-object phrase that identifies the work being measured, such as `validate_fresh_template` or `generate_connector_data_source`. Do not use broad phase labels such as `planning`, `scaffold`, `screens`, or `app_ready`, and do not include a lifecycle suffix such as `_started`, `_completed`, `_skipped`, or `_failed`; the emitter appends that state.
+
 ---
 
 ## Memory Bank

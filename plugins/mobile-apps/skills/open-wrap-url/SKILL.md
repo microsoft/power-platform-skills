@@ -26,6 +26,8 @@ This skill delegates URL construction and browser open behavior to `scripts/open
 
 ### Step 1 — Resolve app ID + env ID
 
+**Telemetry checkpoint: `resolve_wrap_target`**
+
 Both arguments are required:
 
 - `--app-id <app-id>`
@@ -38,6 +40,8 @@ Optional host selector:
 If either value is missing in `$ARGUMENTS`, ask once for the missing value(s). If still missing, STOP.
 
 ### Step 2 — Open Wrap URL
+
+**Telemetry checkpoint: `open_power_apps_wrap`**
 
 Run from the plugin root (or any app root):
 
