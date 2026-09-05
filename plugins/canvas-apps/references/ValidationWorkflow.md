@@ -210,7 +210,6 @@ Runtime evaluation: NOT RUN
 
 
 Plugin root: [exact plugin root]
-Skill contract version: [version read from SKILL.md]
 Source revision: [git revision, package version, or "unavailable"]
 
 
@@ -234,9 +233,9 @@ Source revision: [git revision, package version, or "unavailable"]
 ```
 
 
-Record the exact `${PLUGIN_ROOT}`, the verified skill version, and the plugin repository's
-short Git revision. If the installed plugin is not in a Git worktree, record source
-revision `unavailable`; never substitute the app workspace revision.
+Record the exact `${PLUGIN_ROOT}` and the plugin repository's short Git revision. If the
+installed plugin is not in a Git worktree, record source revision `unavailable`; never
+substitute the app workspace revision.
 
 
 The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN` is

@@ -57,7 +57,6 @@ Your invocation includes:
 - Plan index: `[working directory]/canvas-app-plan.md`
 - Shared plan: `[working directory]/canvas-app-shared.md`
 - Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
-- Skill contract version read by the orchestrator from that root's `SKILL.md`
 - User requirements and approved plan
 - CREATE context: target users and device
 - EDIT context: current app state and synced files
@@ -69,11 +68,10 @@ exactly, record an explicit approximation and reason; never silently rename butt
 the controls do not provide.
 
 
-Before discovery, read the supplied plugin root's `skills/canvas-app/SKILL.md` and
-`references/QAChecks.md`. Stop with `Status: Provenance Blocked` unless the observed skill
-version equals the supplied contract version and the QA guide defines
-`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the working
-directory.
+Before discovery, read the supplied plugin root's `references/QAChecks.md`. Stop with
+`Status: Provenance Blocked` unless the QA guide defines
+`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the
+working directory.
 
 Complete discovery and compose every artifact before attempting the first write. Use
 `apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. If the tool is

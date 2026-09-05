@@ -23,9 +23,8 @@ tools:
 You own exactly one screen file.
 
 
-Read the supplied plugin root's `skills/canvas-app/SKILL.md` and
-`references/QAChecks.md`. Stop with `Status: Provenance Blocked` unless the observed skill
-version equals the supplied contract version and the QA guide defines
+Read the supplied plugin root's `references/QAChecks.md`. Stop with
+`Status: Provenance Blocked` unless the QA guide defines
 `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the target
 file or working directory.
 
@@ -44,7 +43,6 @@ Your invocation includes:
 - Shared plan: `[working directory]/canvas-app-shared.md`
 - Screen brief: an absolute `[working directory]/*.screen-plan.md` path
 - Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
-- Skill contract version read by the orchestrator from that root's `SKILL.md`
 
 ## 1. Read Only Assigned Context
 

@@ -22,10 +22,9 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.8`.
-   Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
-   `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
-   observed paths and versions; do not mix prompt generations.
+2. Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
+   `QACHK-SHARED-SOURCE-DERIVATION`. If the check fails, stop with the observed path; do
+   not mix prompt generations.
 3. Reuse the current directory when it already contains `App.pa.yaml` and every existing
    file in that directory is a `.pa.yaml` file.
 4. Otherwise, reuse the single immediate child directory containing `App.pa.yaml`, when
@@ -149,7 +148,6 @@ Control name prefix: [prefix from dispatch row]
 Shared plan: `[working directory]/canvas-app-shared.md`
 Screen brief: `[working directory]/[file-base].screen-plan.md`
 Plugin root: ${PLUGIN_ROOT}
-Skill contract version: [version read from ${PLUGIN_ROOT}/skills/canvas-app/SKILL.md]
 ```
 
 The target file, YAML key, and name prefix are authoritative. Modify actions preserve the

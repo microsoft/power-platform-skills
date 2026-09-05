@@ -163,13 +163,15 @@ Items: '=[{Value:"All"},{Value:"Open"},{Value:"Closed"}]'
 Default: '=First([{Value:"All"},{Value:"Open"},{Value:"Closed"}])'
 ```
 
-When a Gallery should shrink to fit its rendered rows instead of filling its parent and
-scrolling, calculate its height with `Self.TemplateHeight`. `Self.TemplateSize` is not a
-supported runtime property even when `TemplateSize` is the authored YAML property:
+`TemplateSize` is an input property used in authored YAML to configure each Gallery
+item's size. It cannot be referenced in formulas as `Self.TemplateSize`. To size a
+vertical Gallery to its rendered rows, use the output property `Self.TemplateHeight`:
 
 ```yaml
-Height: =CountRows(Self.Items) * Self.TemplateHeight
+Height: =CountRows(Self.AllItems) * Self.TemplateHeight
 ```
+
+For a horizontal Gallery, use the output property `Self.TemplateWidth`.
 
 For charts, `ItemColorSet` expects a single-column table of color values. Supply the
 colors directly instead of wrapping them in records with custom field names:

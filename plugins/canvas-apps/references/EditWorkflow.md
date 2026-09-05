@@ -84,7 +84,6 @@ Working directory: `[working directory]`
 Plan index: `[working directory]/canvas-app-plan.md`
 Shared plan: `[working directory]/canvas-app-shared.md`
 Plugin root: `${PLUGIN_ROOT}`
-Skill contract version: [version read from `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md`]
 Edit requirements: [user requirements]
 Approved plan: [full approved plan]
 Current app state: [palette, variables, layout, screens, controls]
