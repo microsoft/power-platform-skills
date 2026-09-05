@@ -1,33 +1,49 @@
 ---
 name: canvas-app-planner
 description: >-
-  Produces implementation plans for approved Canvas App creation and complex edits.
-  Discovers controls, APIs, and data sources, then writes a compact dispatch index,
-  shared conventions, and one screen-specific brief per target file. In CREATE mode it
-  also writes App.pa.yaml. Called by the orchestrator, not directly by users.
+    Produces implementation plans for approved Canvas App creation and complex edits.
+    Discovers controls, APIs, and data sources, then writes a compact dispatch index,
+    shared conventions, and one screen-specific brief per target file. In CREATE mode it
+    also writes App.pa.yaml. Called by the orchestrator, not directly by users.
 color: cyan
 user-invocable: false
 tools:
-  - Read
-  - Write
-  - Edit
-  - view
-  - create
-  - edit
-  - mcp__canvas-authoring__compile_canvas
-  - mcp__canvas-authoring__list_controls
-  - mcp__canvas-authoring__describe_control
-  - mcp__canvas-authoring__list_apis
-  - mcp__canvas-authoring__describe_api
-  - mcp__canvas-authoring__list_data_sources
-  - mcp__canvas-authoring__get_data_source_schema
-  - canvas-authoring/compile_canvas
-  - canvas-authoring/list_controls
-  - canvas-authoring/describe_control
-  - canvas-authoring/list_apis
-  - canvas-authoring/describe_api
-  - canvas-authoring/list_data_sources
-  - canvas-authoring/get_data_source_schema
+    # #if( CanvasPlugin )
+    - Read
+    - Write
+    - Edit
+    - apply_patch
+    # #endif
+    - view
+    - create
+    - edit
+    # #if( StudioAgent )
+    - compile_canvas
+    - list_controls
+    - describe_control
+    - list_apis
+    - describe_api
+    - list_data_sources
+    - get_data_source_schema
+    # #elseif( CanvasPlugin )
+    - mcp__canvas-authoring__compile_canvas
+    - mcp__canvas-authoring__list_controls
+    - mcp__canvas-authoring__describe_control
+    - mcp__canvas-authoring__list_apis
+    - mcp__canvas-authoring__describe_api
+    - mcp__canvas-authoring__list_data_sources
+    - mcp__canvas-authoring__get_data_source_schema
+    - canvas-authoring/compile_canvas
+    - canvas-authoring/list_controls
+    - canvas-authoring/describe_control
+    - canvas-authoring/list_apis
+    - canvas-authoring/describe_api
+    - canvas-authoring/list_data_sources
+    - canvas-authoring/get_data_source_schema
+    # #endif
+    # #if( StockImageSearch )
+    - search_stock_images
+    # #endif
 ---
 
 # Canvas App Plan Writer
@@ -40,6 +56,7 @@ Your invocation includes:
 - Working directory: an absolute path supplied by the orchestrator
 - Plan index: `[working directory]/canvas-app-plan.md`
 - Shared plan: `[working directory]/canvas-app-shared.md`
+- Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
 - User requirements and approved plan
 - CREATE context: target users and device
 - EDIT context: current app state and synced files
@@ -49,6 +66,21 @@ exact visible affordance in the plan index. If discovery cannot support an inter
 exactly, record an explicit approximation and reason; never silently rename buttons as
 "drag-style", call buttons "handles", or put copy in the app that promises an interaction
 the controls do not provide.
+
+
+Before discovery, read the supplied plugin root's `references/QAChecks.md`. Stop with
+`Status: Provenance Blocked` unless the QA guide defines
+`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the
+working directory.
+
+Complete discovery and compose every artifact before attempting the first write. Use
+`apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. If the tool is
+unavailable or the call is denied, return `Status: Tooling Blocked`, the exact tool
+failure, and the complete intended contents of the plan index, shared plan, every screen
+brief, and CREATE-mode `App.pa.yaml` as labeled inline payloads. The orchestrator writes
+those payloads verbatim. Do not return a successful-looking handoff or claim that no write
+tool exists without attempting `apply_patch`.
+
 
 Plan in functional-first order: shared state and stable identity, complete executable
 workflows, observable evidence, responsive/accessibility behavior, then visual polish.
@@ -121,13 +153,13 @@ Before writing plans:
    `Gallery` needs `Vertical`, `Horizontal` or `VariableHeight`. Omitting it fails the
    compile with a message that names no control.
 6. Audit state-changing formulas before placing them in a brief:
-   - Compute a toggle's next value once before `Patch` or `UpdateIf`, then reuse that value
-     for both the write and its confirmation text. Do not inspect the mutated `ThisItem`
-     afterward to decide what action occurred.
-   - Derive validation visibility and submit availability from the current input values.
-     If validation must wait for a submit attempt, combine one attempt flag with the
-     current invalid expression; do not maintain or clear separate validity flags in each
-     input's `OnChange`.
+    - Compute a toggle's next value once before `Patch` or `UpdateIf`, then reuse that value
+      for both the write and its confirmation text. Do not inspect the mutated `ThisItem`
+      afterward to decide what action occurred.
+    - Derive validation visibility and submit availability from the current input values.
+      If validation must wait for a submit attempt, combine one attempt flag with the
+      current invalid expression; do not maintain or clear separate validity flags in each
+      input's `OnChange`.
 7. Define data-field semantics once and reuse them. If a task has `ScheduledDate`,
    `DueDate` and `CompletedDate`, state which field drives calendar placement, which date
    the task list displays, and which field the monthly report groups by. Seed data,
@@ -269,6 +301,7 @@ For every screen brief, state explicitly:
   height is valid, but derive it from `CountRows(<the same source/filter used by Items>)`,
   never from rendered-item state such as `Self.AllItemsCount`.
 
+
 ## 6. Assign the Control Name Space
 
 Control names must be unique across the **entire app**, not per screen. Builders cannot
@@ -285,7 +318,7 @@ can prevent one.
    once in the shared plan as a **pattern**, and state explicitly that each screen
    instantiates it under its own prefix. Never hand builders a literal block of shared
    control names to copy verbatim.
-5. A pattern still has to pin its **values**. Control *names* vary by prefix; everything a
+5. A pattern still has to pin its **values**. Control _names_ vary by prefix; everything a
    user perceives as "the same nav bar on every screen" must not. Give the pattern exact,
    copyable values for: the wordmark or brand string, the breakpoint and
    `LayoutDirection` formula, `LayoutAlignItems`, each item's `LayoutMinWidth`, and the
@@ -349,7 +382,7 @@ Write only orchestration information:
 The dispatch table columns are:
 
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
-|--------|--------|-------------|----------|-------------|--------------|
+| ------ | ------ | ----------- | -------- | ----------- | ------------ |
 
 Use `Create` or `Modify` exactly. In CREATE mode, the first row must target
 `[working directory]/Screen1.pa.yaml`, use key `Screen1`, and point to
@@ -365,8 +398,10 @@ Write only information shared by multiple screens:
 - Cross-screen navigation/state contracts
 - Critical YAML conventions
 
+
 Do not put control definitions, full schemas, API output, or per-screen specifications in
 the shared plan.
+
 
 ### One screen brief per dispatch row
 
@@ -380,6 +415,9 @@ Each brief contains only what that builder needs:
 - Action, logical screen, target file, YAML key, and control name prefix
 - Screen specification or exact edit list
 - Relevant portions of data source schemas and API details
+- The exact imagery assignments for that screen, copied from the shared plan: target
+control or purpose, selected title, concrete URL or media asset name, fit/crop intent,
+and accessible label
 - For every control type used on that screen: the complete list of valid input
   property names, plus the full `Enum name:` and the **compile-ready enum literal** for
   each enum property the screen actually sets
@@ -429,9 +467,9 @@ Return:
 ```markdown
 Planning complete.
 
-| Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
-|--------|--------|-------------|----------|-------------|--------------|
-| [Create / Modify] | [Screen] | `[working directory]/[file].pa.yaml` | [key] | [prefix] | `[working directory]/[file-base].screen-plan.md` |
+| Action            | Screen   | Target File           | YAML Key | Name Prefix | Screen Brief                      |
+| ----------------- | -------- | --------------------- | -------- | ----------- | --------------------------------- |
+| [Create / Modify] | [Screen] | `[working directory]/[file].pa.yaml` | [key]    | [prefix]    | `[working directory]/[file-base].screen-plan.md` |
 
 Plan index: `[working directory]/canvas-app-plan.md`
 Shared plan: `[working directory]/canvas-app-shared.md`
@@ -448,6 +486,10 @@ Functional scenarios: [N total; all assigned to screen briefs / defects]
   chase screen-file diagnostics; the orchestrator owns full-app validation.
 - Do not edit `[working directory]/_EditorState.pa.yaml`; record ordering work in `## Editor State Changes` for the top-level orchestrator.
 - Do not embed all discovery output in the index or shared plan.
+- Never write image-bearing component specifications before stock-image discovery.
+- For multi-section or card-based interfaces, collect 8-10 viable image results, never fewer than 8,
+and assign concrete selected assets; do not replace imagery with blanket `Blank()`
+formulas.
 - Every screen brief must be self-sufficient when read with the shared plan.
 - Never assign two screens the same control name prefix.
 - Never derive or normalize control creation keywords from `list_controls`; copy them

@@ -20,20 +20,24 @@ The planner writes three artifact types:
 # Canvas App Plan
 
 ## Mode
+
 CREATE
 
 ## Requirements
+
 [Original requirements]
 
 ## Requirement Coverage
-| Requirement | Planned affordance | Fidelity |
-|-------------|--------------------|----------|
+
+| Requirement                                     | Planned affordance                   | Fidelity                        |
+| ----------------------------------------------- | ------------------------------------ | ------------------------------- |
 | [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
 
 ## Action Contracts
-| Requested action | Preconditions | Entry point | Owner screen | Control and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
-|------------------|---------------|-------------|--------------|-------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
-| [Concrete requested action] | [Eligible state and enabled/visible rule] | [Visible control the user starts from] | [Screen] | [PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact operation and resulting source state] | [Every changed field/status, or N/A] | [Identity plus every value rendered after success, or N/A] | [Formula/control reading the post-state plus in-viewport evidence] |
+
+| Requested action            | Preconditions                             | Entry point                            | Owner screen | Control and event                     | Source and stable ID                          | Transition and postcondition                 | Mutation write set                   | Receipt proof set                                          | Observer and evidence                                              |
+| --------------------------- | ----------------------------------------- | -------------------------------------- | ------------ | ------------------------------------- | --------------------------------------------- | -------------------------------------------- | ------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| [Concrete requested action] | [Eligible state and enabled/visible rule] | [Visible control the user starts from] | [Screen]     | [PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact operation and resulting source state] | [Every changed field/status, or N/A] | [Identity plus every value rendered after success, or N/A] | [Formula/control reading the post-state plus in-viewport evidence] |
 
 [Include only actions stated by the request or approved plan and apply the relevant
 acceptance paths from `${PLUGIN_ROOT}/references/BehaviorGuide.md`. Do not infer universal CRUD for
@@ -49,8 +53,9 @@ each proof-set field. Do not use navigation, a notification, or a row somewhere 
 list as the Observable result.]
 
 ## Functional Test Matrix
-| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
-|----------|-------|------|------|------------------|---------------------------|
+
+| Scenario                 | Given                                   | When                                | Then                         | Evidence surface                              | Boundary or negative case                                     |
+| ------------------------ | --------------------------------------- | ----------------------------------- | ---------------------------- | --------------------------------------------- | ------------------------------------------------------------- |
 | [Action-path identifier] | [Deterministic seed and eligible state] | [Exact visible control interaction] | [Exact source postcondition] | [Observer formula/control and receipt fields] | [Blocked, empty, invalid, clear, or failure behavior, or N/A] |
 
 [Include at least one success scenario for every Action Contract and one row for every
@@ -59,20 +64,24 @@ local/mock data. Every Then clause must be provable from the named source throug
 Evidence surface; do not use appearance, navigation, or notification as proof.]
 
 ## Working Directory
+
 [absolute working directory]
 
 ## Discovery Summary
+
 - Controls: [relevant controls]
 - Data sources: [used sources or none]
 - Connectors: [used connectors or none]
 
 ## Dispatch
-| Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
-|--------|--------|-------------|----------|-------------|--------------|
-| Create | [Landing] | `[working directory]/Screen1.pa.yaml` | Screen1 | [Prefix] | `[working directory]/Screen1.screen-plan.md` |
-| Create | [Additional] | `[working directory]/[Name].pa.yaml` | [Name] | [Prefix] | `[working directory]/[Name].screen-plan.md` |
+
+| Action | Screen       | Target File            | YAML Key | Name Prefix | Screen Brief                  |
+| ------ | ------------ | ---------------------- | -------- | ----------- | ----------------------------- |
+| Create | [Landing]    | `[working directory]/Screen1.pa.yaml` | Screen1  | [Prefix]    | `[working directory]/Screen1.screen-plan.md` |
+| Create | [Additional] | `[working directory]/[Name].pa.yaml`  | [Name]   | [Prefix]    | `[working directory]/[Name].screen-plan.md`  |
 
 ## Editor State Changes
+
 [Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
@@ -82,20 +91,24 @@ Evidence surface; do not use appearance, navigation, or notification as proof.]
 # Canvas App Plan
 
 ## Mode
+
 EDIT
 
 ## Requirements
+
 [Original edit requirements]
 
 ## Requirement Coverage
-| Requirement | Planned affordance | Fidelity |
-|-------------|--------------------|----------|
+
+| Requirement                                     | Planned affordance                   | Fidelity                        |
+| ----------------------------------------------- | ------------------------------------ | ------------------------------- |
 | [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
 
 ## Action Contracts
-| Requested action | Preconditions | Entry point | Owner screen | Control and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
-|------------------|---------------|-------------|--------------|-------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
-| [Concrete requested action] | [Eligible state and enabled/visible rule] | [Visible control the user starts from] | [Screen] | [PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact operation and resulting source state] | [Every changed field/status, or N/A] | [Identity plus every value rendered after success, or N/A] | [Formula/control reading the post-state plus in-viewport evidence] |
+
+| Requested action            | Preconditions                             | Entry point                            | Owner screen | Control and event                     | Source and stable ID                          | Transition and postcondition                 | Mutation write set                   | Receipt proof set                                          | Observer and evidence                                              |
+| --------------------------- | ----------------------------------------- | -------------------------------------- | ------------ | ------------------------------------- | --------------------------------------------- | -------------------------------------------- | ------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------ |
+| [Concrete requested action] | [Eligible state and enabled/visible rule] | [Visible control the user starts from] | [Screen]     | [PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact operation and resulting source state] | [Every changed field/status, or N/A] | [Identity plus every value rendered after success, or N/A] | [Formula/control reading the post-state plus in-viewport evidence] |
 
 [Include only actions stated by the request or approved plan. Preserve unaffected existing
 actions, and do not expand the edit into universal CRUD. Preserve the semantic contracts
@@ -103,35 +116,44 @@ for role-scoped primary-record management, paired review decisions, requested pe
 cycles, and requested export/report output.]
 
 ## Functional Test Matrix
-| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
-|----------|-------|------|------|------------------|---------------------------|
+
+| Scenario                     | Given                     | When                        | Then                                       | Evidence surface                      | Boundary or negative case                    |
+| ---------------------------- | ------------------------- | --------------------------- | ------------------------------------------ | ------------------------------------- | -------------------------------------------- |
 | [Changed or regression path] | [Current or seeded state] | [Exact visible interaction] | [Exact preserved or changed postcondition] | [Observer/control reading the source] | [Required failure/boundary behavior, or N/A] |
 
 [Cover every changed Action Contract and every existing action whose source, fields,
 controls, or observer are touched by this edit. This is the regression contract.]
 
 ## Working Directory
+
 [absolute working directory]
 
 ## Discovery Summary
+
 - Existing screens: [names]
 - Layout: [ManualLayout / AutoLayout / mixed]
 - Data sources: [used sources or none]
 
 ## Dispatch
-| Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
-|--------|--------|-------------|----------|-------------|--------------|
-| Modify | [Existing] | `[working directory]/[File].pa.yaml` | [existing key] | [Prefix] | `[working directory]/[File].screen-plan.md` |
-| Create | [New] | `[working directory]/[File].pa.yaml` | [new key] | [Prefix] | `[working directory]/[File].screen-plan.md` |
+
+| Action | Screen     | Target File           | YAML Key       | Name Prefix | Screen Brief                 |
+| ------ | ---------- | --------------------- | -------------- | ----------- | ---------------------------- |
+| Modify | [Existing] | `[working directory]/[File].pa.yaml` | [existing key] | [Prefix]    | `[working directory]/[File].screen-plan.md` |
+| Create | [New]      | `[working directory]/[File].pa.yaml` | [new key]      | [Prefix]    | `[working directory]/[File].screen-plan.md` |
 
 ## App Changes
+
 ### Before builders
+
 [Shared definitions screens bind to — collections, named formulas, app variables, OnStart
 seed data — or "None"]
+
 ### After builders
+
 [Changes referencing screens that do not exist yet, such as StartScreen — or "None"]
 
 ## Editor State Changes
+
 [Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
@@ -141,6 +163,7 @@ seed data — or "None"]
 # Canvas App Shared Plan
 
 ## Aesthetic Direction
+
 - Palette: [description]
 - Primary background: RGBA([...])
 - Accent: RGBA([...])
@@ -149,6 +172,7 @@ seed data — or "None"]
 - Typography: [scale and weights]
 
 ## Visual Contract
+
 - Type roles: [exact title, section-heading, body, caption sizes and weights]
 - Spacing scale: [approved gap and padding values]
 - Surfaces: [page, panel, card, border, and shadow treatment]
@@ -156,24 +180,30 @@ seed data — or "None"]
 - Density: [desktop, tablet, and phone composition rules]
 
 ## Layout Strategy
+
 [Shared layout rules and target-device rationale. Record the breakpoint formulas and the
 rule that responsive properties derive from current width rather than `OnVisible`
 variables.]
 
+
 ## Named State
+
 [Variables, named formulas, collections, and ownership]
 
 ## Control Naming
+
 [Standard control-type abbreviations followed by the per-screen namespace, such as
 `conDiscNavBar` and `btnDetailBack`, plus the rule that repeated UI blocks are
 instantiated under each screen's own namespace]
 
 ## Cross-Screen Contracts
+
 [Navigation targets and shared state expectations. For repeated navigation blocks, list
 the exact items in order and prohibit extra screen-specific children. Use ModernButtons
 for cross-screen navigation; reserve ModernTabList for panels within one screen.]
 
 ## YAML Conventions
+
 - Formula prefix
 - Multi-line formula syntax
 - String and record-literal quoting
@@ -187,12 +217,14 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
 # Screen Plan: [Logical Screen]
 
 ## Assignment
+
 - Action: Create
 - Target file: `[working directory]/[File].pa.yaml`
 - YAML key: [key]
 - Control name prefix: [Prefix]
 
 ## Specification
+
 - Purpose: [description]
 - Layout: [root and child structure. For each fixed-height section and horizontal row
   with four or more substantive children, include a desktop/narrow/phone budget with
@@ -228,8 +260,9 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
 - State: [OnVisible initialization]
 
 ## Required Actions
-| Action | Preconditions | Entry point and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
-|--------|---------------|-----------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
+
+| Action                              | Preconditions    | Entry point and event                                   | Source and stable ID                          | Transition and postcondition                  | Mutation write set                   | Receipt proof set                                 | Observer and evidence                                    |
+| ----------------------------------- | ---------------- | ------------------------------------------------------- | --------------------------------------------- | --------------------------------------------- | ------------------------------------ | ------------------------------------------------- | -------------------------------------------------------- |
 | [Action copied from the plan index] | [Eligible state] | [Visible entry and PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact formula operation and resulting state] | [Every changed field/status, or N/A] | [Identity plus every labeled bound value, or N/A] | [Formula/control reading the source plus visible result] |
 
 [Copy every Action Contract owned by this screen. Include the exact input, binding, event,
@@ -242,24 +275,30 @@ and recalculation path assigned by the plan. Keep paired review decisions as sep
 but require both controls on the same eligible record surface.]
 
 ## Functional Test Scenarios
-| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
-|----------|-------|------|------|------------------|---------------------------|
+
+| Scenario                              | Given            | When                      | Then                   | Evidence surface                           | Boundary or negative case            |
+| ------------------------------------- | ---------------- | ------------------------- | ---------------------- | ------------------------------------------ | ------------------------------------ |
 | [Scenario copied from the plan index] | [Concrete state] | [Exact local interaction] | [Source postcondition] | [Local or downstream observer and receipt] | [Required boundary behavior, or N/A] |
 
 [Copy every Functional Test Matrix row exercised by this screen. The builder must be able
 to trace each row through concrete formulas without reading another brief.]
 
+
 ## Relevant Data Source Schemas
+
 [Only the fields this screen reads or writes; omit if none]
 
 ## Relevant API Details
+
 [Only the operations and parameters this screen calls; omit if none]
 
 ## Required Variants
+
 [Control type -> exact variant to use, for every control type whose definition includes a
 Variants section; omit if none]
 
 ## Control Definitions
+
 [For each control type used on this screen: the complete list of valid input property
 names, plus the full enum name for each enum property this screen sets. Not the whole
 describe_control response.
@@ -276,18 +315,22 @@ then fails to compile.]
 # Screen Plan: [Logical Screen]
 
 ## Assignment
+
 - Action: Modify
 - Target file: `[working directory]/[File].pa.yaml`
 - YAML key: [existing key]
 - Control name prefix: [Prefix]
 
 ## Current State
+
 [Concise summary of relevant existing controls and layout]
 
 ## Changes
+
 1. [Exact required change]
 
 ## Layout and Visual Impact
+
 - Responsive bounds: [desktop, tablet, and phone width/height budgets for changed regions]
 - Text fit: [longest-value budget for changed text-bearing controls]
 - Visual contract: [shared type, spacing, surface, and action roles that changed controls
@@ -296,17 +339,21 @@ then fails to compile.]
   of paired review decisions on each eligible record, or N/A]
 
 ## Controls to Add
+
 [Name, type, placement, properties; or "None"]
 
 ## Controls to Remove
+
 [Names; or "None"]
 
 ## Properties to Update
+
 [Control -> property -> exact value; or "None"]
 
 ## Required Actions
-| Action | Preconditions | Entry point and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
-|--------|---------------|-----------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
+
+| Action                              | Preconditions    | Entry point and event                           | Source and stable ID                          | Transition and postcondition                  | Mutation write set                   | Receipt proof set                                 | Observer and evidence                                    |
+| ----------------------------------- | ---------------- | ----------------------------------------------- | --------------------------------------------- | --------------------------------------------- | ------------------------------------ | ------------------------------------------------- | -------------------------------------------------------- |
 | [Action copied from the plan index] | [Eligible state] | [Visible entry and Control.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact formula operation and resulting state] | [Every changed field/status, or N/A] | [Identity plus every labeled bound value, or N/A] | [Formula/control reading the source plus visible result] |
 
 [Copy every affected Action Contract and preserve unaffected behavior. Include the target
@@ -318,24 +365,30 @@ control, visibility state, and one labeled binding per proof-set field. Keep cha
 success, boundary, rejection, persistence, and recalculation paths separate.]
 
 ## Functional Test Scenarios
-| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
-|----------|-------|------|------|------------------|---------------------------|
+
+| Scenario                                                    | Given            | When                      | Then                   | Evidence surface                      | Boundary or negative case            |
+| ----------------------------------------------------------- | ---------------- | ------------------------- | ---------------------- | ------------------------------------- | ------------------------------------ |
 | [Changed or regression scenario copied from the plan index] | [Concrete state] | [Exact local interaction] | [Source postcondition] | [Observer/control reading the source] | [Required boundary behavior, or N/A] |
 
 [Copy every affected scenario, including preservation checks for behavior sharing a
 changed source, field, control, or observer.]
 
+
 ## Relevant Data Source Schemas
+
 [Only the fields this edit reads or writes; omit if none]
 
 ## Relevant API Details
+
 [Only the operations this edit calls; omit if none]
 
 ## Required Variants
+
 [Control type -> exact variant, for any control this edit adds whose definition includes a
 Variants section; omit if none]
 
 ## Changed or Added Control Definitions
+
 [For each control type receiving a new property, enum, or variant — including types
 already present in the app: valid input property names, plus the full enum name and
 compile-ready literal for each enum property this edit sets. Write

@@ -1,23 +1,37 @@
 ---
 name: canvas-screen-builder
 description: >-
-  Implements or modifies one Canvas App screen from a shared plan and a screen-specific
-  brief. Writes exactly one .pa.yaml file and performs self-QA without compiling. Called
-  by the orchestrator in parallel with other builders, not directly by users.
+    Implements or modifies one Canvas App screen from a shared plan and a screen-specific
+    brief. Writes exactly one .pa.yaml file and performs self-QA without compiling. Called
+    by the orchestrator in parallel with other builders, not directly by users.
 color: green
 user-invocable: false
 tools:
-  - Read
-  - Write
-  - Edit
-  - view
-  - create
-  - edit
+    # #if( CanvasPlugin )
+    - Read
+    - Write
+    - Edit
+    - apply_patch
+    # #endif
+    - view
+    - create
+    - edit
 ---
 
 # Canvas Screen Builder
 
 You own exactly one screen file.
+
+
+Read the supplied plugin root's `references/QAChecks.md`. Stop with
+`Status: Provenance Blocked` unless the QA guide defines
+`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the target
+file or working directory.
+
+Use `apply_patch` for the assigned disk-backed screen file. Attempt the write once. If the
+tool is unavailable or the call is denied, return `Status: Tooling Blocked` with the exact
+tool failure; do not return `Status: Blocked`, which is reserved for missing brief context.
+
 
 Your invocation includes:
 
@@ -28,6 +42,7 @@ Your invocation includes:
 - Control name prefix
 - Shared plan: `[working directory]/canvas-app-shared.md`
 - Screen brief: an absolute `[working directory]/*.screen-plan.md` path
+- Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
 
 ## 1. Read Only Assigned Context
 
@@ -64,7 +79,7 @@ Example:
 
 ```yaml
 Screens:
-  Screen1:
+    Screen1:
 ```
 
 `[working directory]/Screen1.pa.yaml` always exists in a new app. When your target file already exists,
@@ -88,6 +103,15 @@ Do not fix unrelated pre-existing issues.
 
 ### Both
 
+- Treat stable record identity as part of every lifecycle action. Edit and delete must
+  operate on the selected record's stable ID or selected record object, never on display
+  text, gallery position, or a newly constructed partial record.
+- Keep one mutable source of truth per domain entity. Search, filters, ordering, alerts,
+  KPIs, dashboards, and reports must derive from that same source rather than a copied
+  counter, seed-only collection, or screen-local duplicate.
+- Give every required primary action a concrete initial-task path. Its control must remain
+  visible, enabled when preconditions hold, at least 44px in each interactive dimension,
+  inside its parent bounds, and unobscured by overlays or sibling panels.
 - Every control you **add** carries your assigned control name prefix. Control names are
   unique across the whole app, and you cannot see the other screens — the prefix is the
   only thing preventing a collision. This applies to repeated UI blocks such as nav bars
@@ -151,8 +175,8 @@ Do not fix unrelated pre-existing issues.
   `CountRows(<the same source/filter used by Items>)`. Never use `Self.AllItemsCount` or
   another rendered-item count to determine the gallery's own height.
 - The sole responsive root uses exact `Width: =Parent.Width`,
-  `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`; put
-  breakpoint sizing on descendants.
+`Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`; put
+breakpoint sizing on descendants.
 - Prefix every property value with `=`. A value without it fails the whole file at parse
   time and suppresses every other diagnostic in the screen.
 - Quote any value containing a colon followed by a space — `Text: '="Votes: " & n'`, not
@@ -167,17 +191,22 @@ Do not fix unrelated pre-existing issues.
   file you keep re-reading is the dominant cost in this workflow and does not improve the
   result.
 - Before the first `create` or whole-file `edit`, inspect the composed YAML text itself:
-  - Every control creation keyword exactly matches the screen brief. Do not alter a
-    `Control:` value or omit a required `ComponentName`, `ComponentLibraryUniqueName`,
-    `Variant`, or `Layout`.
-  - Every enum qualifier exactly matches the brief's `Enum name:`. In particular, Badge
-    formulas use `='BadgeCanvas.Appearance'.Filled` and
-    `='BadgeCanvas.ThemeColor'.Warning`, never `BadgeAppearance.Filled` or
-    `BadgeColor.Warning`.
-  - Every property used appears in that control's definition and every property value
-    starts with `=`.
-  These are pre-save checks, not only self-QA checks: invalid whole-screen YAML may make
-  the document server reject the write before the file exists to inspect.
+    - Every control creation keyword exactly matches the screen brief. Do not alter a
+      `Control:` value or omit a required `ComponentName`, `ComponentLibraryUniqueName`,
+      `Variant`, or `Layout`.
+    - Every enum qualifier exactly matches the brief's `Enum name:`. In particular, Badge
+      formulas use `='BadgeCanvas.Appearance'.Filled` and
+      `='BadgeCanvas.ThemeColor'.Warning`, never `BadgeAppearance.Filled` or
+      `BadgeColor.Warning`.
+    - Every property used appears in that control's definition and every property value
+      starts with `=`.
+    - A `ModernDropdown` default is an explicit record compatible with `Items`, never
+      `First(Self.Items)`.
+    - A Gallery height formula uses `Self.TemplateHeight`, not `Self.TemplateSize`.
+    - A chart `ItemColorSet` uses a color-table literal such as `[RGBA(...), RGBA(...)]`,
+      not `Table(Color, ...)`.
+      These are pre-save checks, not only self-QA checks: invalid whole-screen YAML may make
+      the document server reject the write before the file exists to inspect.
 - If a whole-file write returns `failedToSave` or `ServerException`, do not submit the
   identical content again. Re-run the pre-save checks against the composed text, correct
   every creation-keyword mismatch, enum qualifier, unsupported property, missing formula
@@ -202,12 +231,11 @@ Do not fix unrelated pre-existing issues.
    sampled: a check you skipped is a defect you shipped, and most of them have no compile
    diagnostic behind them, so nothing downstream will catch it.
 4. For Modify, scope checks to changed or added content.
-5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as
-   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting" describes. You report the line; do not
-   summarize it as a total.
+5. Record complete check coverage and list only repairs and non-applicable checks, using
+   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting". Do not emit 44 unsupported `PASS` claims.
 6. For each Required Action, record a compact transition trace:
    `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
-   observer -> evidence`. Mark `PASS` only when every link is present in the generated
+observer -> evidence`. Mark `PASS` only when every link is present in the generated
    formulas. Mark `BLOCKED: [missing link]` otherwise and repair it before returning.
 
 Do not call `compile_canvas`; the orchestrator owns compilation. It compiles as soon as
@@ -219,15 +247,24 @@ the first builder returns, so return promptly rather than polishing indefinitely
 Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
-QA: 1 [outcome] · 2 [outcome] · …
-Fixes: [fix summary, or "clean"]
+QA coverage: 1-44 COMPLETE
+QA repairs: [QACHK-NAME FIXED(n), or "none"]
+QA N/A: [QACHK identifiers, or "none"]
 Functional:
+
 - [Action]: PASS — [precondition] -> [control.event] -> [source and stable ID operation] -> [postcondition] -> [observer and visible evidence]
-Status: Done
+  Status: Done
 ```
 
-The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return without it is
-incomplete, and the orchestrator will send the screen back.
+The QA coverage, repairs, and N/A lines are required. Coverage means the persisted YAML
+was inspected; it is not evidence that a functional transition works. Do not append the
+legacy numbered `QA:` checklist or claim complete coverage when the supplied guide does
+not define all 44 checks.
+
+The `Functional:` section must contain exactly one trace per Required Action. A trace that
+omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
+34, 35, 42, 43, or 44 says `PASS`. Never return `Status: Done` when lifecycle identity,
+shared-source derivation, or initial-task-path reachability is unresolved.
 
 The `Functional:` section must contain exactly one trace per Required Action. A trace that
 omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
@@ -241,9 +278,9 @@ omits the source/ID, postcondition, or observer/evidence is incomplete even when
 - Never use a property absent from that control's definition.
 - Never normalize a `Control:` value supplied by the brief.
 - Never invent an enum type name, and never write an enum member that starts with a digit
-  unquoted — `DecimalPrecision.'1'`, not `DecimalPrecision.1`.
+unquoted — `DecimalPrecision.'1'`, not `DecimalPrecision.1`.
 - Never leave a `ModernCard` slot unset. For text-only cards set `Image: =Blank()` and,
-  when supported by the control definition, `HeaderImage: =Blank()`.
+when supported by the control definition, `HeaderImage: =Blank()`.
 - Every multiword ModernButton or link that is a direct child of a vertical AutoLayout
   container sets `Width: =Parent.Width`; `LayoutMinWidth` and stretch alignment alone do
   not make the rendered control fill the row.

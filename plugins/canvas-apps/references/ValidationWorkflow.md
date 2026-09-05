@@ -1,6 +1,8 @@
 # Validation Workflow
 
-The orchestrator owns compilation of the finished workspace and the final summary.
+The orchestrator owns compilation, evidence-based functional acceptance, and the final
+summary. Completion is fail-closed: the final successful compile must occur after the last
+app-YAML mutation.
 
 ## Contents
 
@@ -13,12 +15,14 @@ The orchestrator owns compilation of the finished workspace and the final summar
 
 ## 0. Compile Gates
 
-Compilation is not a final step. Three gates precede this workflow:
+Compilation is not a final step. Four gates precede completion:
 
 1. The planner compiles `[working directory]/App.pa.yaml` immediately after writing it.
 2. The orchestrator confirms that result before dispatching builders.
 3. The orchestrator compiles after each **wave** of builders returns, before dispatching
    the next wave.
+4. After functional and layout repairs, the orchestrator compiles once more and makes no
+   further app-YAML mutation before the summary.
 
 Gate 3 exists because builders work from a shared plan. A defect in the first wave is
 almost certainly repeated in every later screen. Catching it after three files is cheap;
@@ -46,8 +50,8 @@ If compilation fails, fix diagnostics in this order:
 
 1. `YamlInvalidSyntax` parse errors
 2. Control template version conflicts — `Control type '...@X' has a version that is newer
-   than the current version of 'Y'` and `Another instance of control type '...' has
-   already been referenced using a different version`
+than the current version of 'Y'` and `Another instance of control type '...' has
+already been referenced using a different version`
 3. `An entity with name '...' already exists` duplicate-name errors
 4. `Unknown property ...` errors
 5. `[Control 'App', Property '...']` errors
@@ -73,7 +77,7 @@ whole file instead of jumping to the reported line is the slowest possible respo
 `${PLUGIN_ROOT}/references/YamlSyntax.md` maps every reason string to its cause.
 
 **Sweep the file before you re-compile.** A parse error aborts the file, so the compiler
-reports only the *first* one it meets — the second instance of the identical mistake is
+reports only the _first_ one it meets — the second instance of the identical mistake is
 invisible until you fix the first. After correcting an unquoted `: ` in a formula, a
 mis-indented `Children:` entry, or a duplicate property key, read the rest of that file and
 fix every other occurrence of the same pattern in the same pass. Otherwise each one costs a
@@ -126,10 +130,12 @@ report in section 2. Do not spend a third. A repair phase that has stopped writi
 stopped compiling is not thinking — it is searching for a capability that does not exist,
 and it will not recover on its own.
 
+
 Reading a file, planning an approach, or delegating is not progress on its own. If you find
 yourself unable to express a fix with `edit`, return to the named file and diagnostic
 location. Repeated identical lines need separate targeted edits with enough surrounding
 context to make each match unique.
+
 
 ### Convergence budget
 
@@ -143,7 +149,7 @@ Track the count of **distinct** diagnostics after every compile.
   cleared.
 - Within one tier, if the distinct count does not strictly decrease across two consecutive
   cycles, stop. You are guessing, not converging.
-- If two consecutive compiles return the *same* distinct diagnostic set, your last edit
+- If two consecutive compiles return the _same_ distinct diagnostic set, your last edit
   changed nothing that mattered. Do not compile a third time hoping for a different
   answer. Re-read the exact file and line the diagnostic names, and fix that text.
 - On stopping, report the remaining diagnostics explicitly as described in section 2.
@@ -169,16 +175,17 @@ diagnostic history, and a fresh agent would have to rediscover all of it.
   screen or component-definition order requires correction. Preserve valid names and
   repair only the affected order entries.
 
-### Verify before you summarize
+### Establish a clean candidate
 
-The summary must describe a compile you actually observed. Before writing it, confirm that
-**no `.pa.yaml` file has been edited since the last successful `compile_canvas`.** If one
-has, compile again — a clean result from before your last edit says nothing about what you
-shipped.
+Before functional conformance:
 
-Edits to non-compiled artifacts do not invalidate the result: `[working directory]/canvas-app-plan.md`,
-`[working directory]/canvas-app-shared.md` and `[working directory]/*.screen-plan.md` are planning documents, and
-updating one after the final compile is fine.
+1. Confirm every delegated builder and self-QA follow-up has returned. Do not begin
+   completion checks while a worker can still write to the workspace.
+2. Call `compile_canvas`, even when an earlier compile was clean.
+3. If the compile fails or another repair is necessary, repair and repeat this gate.
+
+This compile establishes a clean candidate. It is not the final generation-proof compile
+because functional conformance still writes the acceptance artifact.
 
 ## 2. Functional Conformance
 
@@ -195,6 +202,70 @@ For each scenario, record one result:
 - `FAIL` when any link is missing, contradictory, stale, bound to another source or field,
   dependent on an unstated runtime assumption, or supported only by navigation,
   notification, input text, or static copy.
+
+Write the result to `[working directory]/canvas-app-acceptance.md`:
+
+```markdown
+Runtime evaluation: NOT RUN
+
+
+Plugin root: [exact plugin root]
+Source revision: [git revision, package version, or "unavailable"]
+
+
+## Action Contract Acceptance
+
+| Action   | Entry control | Event formula   | Source / stable ID    | Observer formula | Reachability      | Result |
+| -------- | ------------- | --------------- | --------------------- | ---------------- | ----------------- | ------ |
+| [action] | [control]     | [exact formula] | [source and identity] | [exact formula]  | [path and bounds] | PASS   |
+
+## Functional Test Matrix Results
+
+| Scenario   | Static trace result | Evidence                       |
+| ---------- | ------------------- | ------------------------------ |
+| [scenario] | PASS                | [Action Contract and observer] |
+
+## Screen QA Evidence
+
+| Screen   | Coverage      | Repairs                        | N/A                    |
+| -------- | ------------- | ------------------------------ | ---------------------- |
+| [screen] | 1-44 COMPLETE | [QACHK-NAME FIXED(n), or none] | [QACHK names, or none] |
+```
+
+
+Record the exact `${PLUGIN_ROOT}` and the plugin repository's short Git revision. If the
+installed plugin is not in a Git worktree, record source revision `unavailable`; never
+substitute the app workspace revision.
+
+
+The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN` is
+required because symbolic inspection is not browser execution. Replace it only when a
+fresh runtime evaluator returns a recorded result for this generated app.
+
+The first line of the file must be exactly `Runtime evaluation: NOT RUN`; do not place a
+heading before it. The Action Contract table has exactly one row per Action Contract. The
+scenario table separately records every Functional Test Matrix row. The Screen QA table
+has one row per dispatch screen and preserves each worker's coverage, repairs, and N/A
+results. Copy event and observer formulas verbatim from final YAML. In the table, replace
+formula newlines with `<br>` and escape `|` as `\|`; do not paraphrase an exact formula
+into an action summary.
+
+Do not replace `NOT RUN` with another value unless a runtime evaluator actually executed
+against this app and the artifact records its run ID or result URL and score.
+
+
+After writing the artifact, run:
+
+```text
+dotnet run --file "${PLUGIN_ROOT}/scripts/validate-canvas-acceptance.cs" -- \
+  "/app" "${PLUGIN_ROOT}"
+```
+
+The validator compares the acceptance rows with the plan's Action Contracts, Functional
+Test Matrix, and dispatch screens. A nonzero exit blocks completion. Repair the artifact
+and rerun the validator until it passes; never summarize success without its `PASS`
+result.
+
 
 For mutations, also compare the handler, write set, proof set, receipt bindings, and
 downstream observer one-for-one. For filters, verify the concrete selector value is
@@ -216,6 +287,59 @@ runtime interaction tool. Report it as functional readiness, not as proof of run
 execution. A fresh browser evaluation remains the authority for the external functional
 grade.
 
+Never report an unqualified percentage such as `100% functional` or `18/18 (100%)`.
+Always include `static conformance` in the same sentence and immediately state the runtime
+evaluation status.
+
+
+### Verify the coauthoring round trip
+
+Before crossing the finalization barrier, prove that the coauthoring session returns the
+authored app rather than the original blank shell:
+
+1. Use `Bash` to create a fresh empty temporary directory outside `[working directory]`.
+   Do not place planning, acceptance, or other non-YAML files in it.
+2. Call `sync_canvas` with that temporary directory.
+3. Inspect the synchronized `App.pa.yaml` and every screen named by the plan's dispatch
+   table. Every expected file must exist. In CREATE mode, every screen must contain at
+   least one meaningful visible leaf control beneath its screen root; the root Screen and
+   layout-only containers do not count.
+4. If a screen is missing, root-only, or does not contain the controls present in the
+   authored working copy, delete the temporary directory, call `compile_canvas` again,
+   wait for it to succeed, and repeat the synchronization once with a new empty directory.
+   If the second server snapshot is still missing or stale, stop with
+   `Status: Coauthoring Sync Blocked`; do not claim generation succeeded.
+5. Delete the temporary verification directory before crossing the finalization barrier.
+   Never copy the synchronized snapshot over `[working directory]`.
+
+This round trip is server-state evidence. `compile_canvas` success alone proves validation,
+not that a nonblank app is observable when the browser joins the coauthoring session.
+
+
+### Final generation-proof gate
+
+Immediately before the summary:
+
+1. Confirm `[working directory]/canvas-app-acceptance.md` has one evidence row for every Action Contract,
+   no failed row, and has passed its required validation.
+2. Confirm no delegated agent remains running or queued, every app, planning, and
+   acceptance-artifact write is complete, and the coauthoring round-trip check above has
+   passed when that check is available.
+3. Cross the finalization barrier: from this point onward, do not invoke `Task`, resume an
+   agent, request another QA pass, or perform another inspection. If any of those are still
+   needed, remain before the barrier and complete them first.
+4. Call `compile_canvas`, even when the clean-candidate compile succeeded.
+5. After it succeeds, make no further tool call. Return the summary immediately. In
+   particular, do not call `Task`, `read_agent`, `edit`, `create`, `apply_patch`,
+   `sync_canvas`, `view`, `glob`, `rg`, `Bash`, or another MCP tool.
+6. If any later tool call, delegation, write, inspection, or repair occurs, the compile is
+   no longer final. Finish that work, confirm every agent has returned, and repeat this
+   entire gate. A compile predating later activity is not final proof.
+
+The final successful `compile_canvas` must be the final tool call. This ordering prevents
+late agent waves from changing the workspace and lets external generation proof
+distinguish a completed app from an app changed after validation.
+
 ## 3. Summary
 
 For CREATE:
@@ -223,12 +347,18 @@ For CREATE:
 ```markdown
 **App generation complete.**
 
-| Screen | File | Status |
-|--------|------|--------|
+| Screen   | File           | Status  |
+| -------- | -------------- | ------- |
 | [Screen] | [file].pa.yaml | Created |
 
 **Compiled clean** after [N] pass(es).
 **Functional readiness:** [passed]/[total] scenarios passed static conformance.
+**Acceptance evidence:** `[working directory]/canvas-app-acceptance.md`.
+**Runtime evaluation:** NOT RUN.
+
+
+**Plugin provenance:** [exact plugin root] · version [version] · revision [revision or unavailable].
+
 ```
 
 For EDIT:
@@ -236,12 +366,18 @@ For EDIT:
 ```markdown
 **Edit complete.**
 
-| Action | Screen | File | Status |
-|--------|--------|------|--------|
-| [Create / Modify] | [Screen] | [file].pa.yaml | Done |
+| Action            | Screen   | File           | Status |
+| ----------------- | -------- | -------------- | ------ |
+| [Create / Modify] | [Screen] | [file].pa.yaml | Done   |
 
 **Compiled clean** after [N] pass(es).
 **Functional readiness:** [passed]/[total] scenarios passed static conformance.
+**Acceptance evidence:** `[working directory]/canvas-app-acceptance.md`.
+**Runtime evaluation:** NOT RUN.
+
+
+**Plugin provenance:** [exact plugin root] · version [version] · revision [revision or unavailable].
+
 ```
 
 If diagnostics remain after the convergence budget is exhausted, report them explicitly
@@ -250,15 +386,15 @@ instead of claiming completion:
 ```markdown
 **App generated with unresolved diagnostics.**
 
-| Screen | File | Status |
-|--------|------|--------|
+| Screen   | File           | Status  |
+| -------- | -------------- | ------- |
 | [Screen] | [file].pa.yaml | Created |
 
 **Compile status:** [N] distinct diagnostics remain after [M] pass(es).
 
-| Diagnostic | Occurrences | File |
-|------------|-------------|------|
-| [message] | [count] | [file] |
+| Diagnostic | Occurrences | File   |
+| ---------- | ----------- | ------ |
+| [message]  | [count]     | [file] |
 
 [One line on what was tried and what is likely blocking.]
 ```
@@ -271,7 +407,7 @@ of claiming completion:
 
 **Functional readiness:** [passed]/[total] scenarios passed static conformance.
 
-| Scenario | Failed link | Owner file |
-|----------|-------------|------------|
-| [scenario] | [eligibility / event / source-ID / postcondition / observer-evidence] | [file] |
+| Scenario   | Failed link                                                           | Owner file |
+| ---------- | --------------------------------------------------------------------- | ---------- |
+| [scenario] | [eligibility / event / source-ID / postcondition / observer-evidence] | [file]     |
 ```
