@@ -230,7 +230,7 @@ Tier the result:
 
 | Score | Tier | What to do |
 |---|---|---|
-| **4 / 4** | `auto-plan` | **Skip both questions.** Extract the brief silently from `<description>`, write `native-app-plan.md` placeholder, fall through to Step 2c. The user's next interaction is the cost-estimate gate. |
+| **4 / 4** | `auto-plan` | **Skip both questions.** Extract and retain the brief in memory, then fall through to Step 2c without writing project files. The user's next interaction is the cost-estimate gate. |
 | **3 / 4** | `one-tap` | **Skip the multi-select.** Extract the brief, show it once, ask only "Look right? (yes / adjust)". On `yes` → Step 2c. On `adjust` → fall through to walk-through. |
 | **≤ 2 / 4** | `walk-through` | **Current behaviour.** Run the multi-select feature picker described in Step 2b.1, then the brief confirmation. |
 

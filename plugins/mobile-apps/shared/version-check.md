@@ -69,8 +69,8 @@ If the user asks how to run on a real device or simulator: point them at the Exp
 
 | Package | Pinned version | Notes |
 |---|---|---|
-| `expo` | `55.0.29` | SDK 55 |
-| `react-native` | `0.83.6` | matched to Expo SDK 55 |
+| `expo` | `55.0.30` | SDK 55 |
+| `react-native` | `0.83.10` | matched to Expo SDK 55 |
 | All `expo-*` packages | `55.x.y` | router, auth-session, secure-store, dev-client, etc. — version line tied to SDK |
 | `@microsoft/power-apps` | `1.2.13` | Power Apps code app SDK |
 | `@microsoft/power-apps-native-host` | `^0.3.3` | native runtime host and shared config factories |

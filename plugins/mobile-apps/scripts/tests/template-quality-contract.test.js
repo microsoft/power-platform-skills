@@ -89,7 +89,9 @@ test('bundled dependencies match the current host-factory template boundary', ()
   assert.strictEqual(packageJson.dependencies['@microsoft/power-apps-native-host'], '^0.3.3');
   assert.strictEqual(packageJson.dependencies['expo-media-library'], undefined);
   assert.strictEqual(packageJson.dependencies['expo-modules-core'], undefined);
+  assert.strictEqual(packageJson.dependencies.burnt, '0.13.0');
   assert.strictEqual(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.15.3');
+  assert.strictEqual(packageJson.overrides['expo-modules-core'], '55.0.25');
   assert.strictEqual(packageJson.overrides.metro, '0.83.8');
   assert.strictEqual(packageJson.scripts['bundle:android'], 'build-codegen-package android');
   assert.strictEqual(packageJson.scripts['bundle:ios'], 'build-codegen-package ios');

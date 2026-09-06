@@ -100,6 +100,11 @@ test('environment discovery is non-persisting before the rough plan gate', () =>
   );
   assert.doesNotMatch(beforePreview, /printf '%s\\n' "\$ENV_JSON" > \.resolved-environment\.json/);
   assert.doesNotMatch(beforePreview, /scripts\/lib\/app-identity\.js/);
+  assert.doesNotMatch(
+    beforePreview,
+    /write `native-app-plan\.md` placeholder/,
+    'requirements discovery must not write planning artifacts before Step 2c approval',
+  );
 
   const commonStart = setupWorkflow.indexOf('#### Step 2b.4 — Common to all paths');
   const commonEnd = setupWorkflow.indexOf('### Step 2c — Plan preview', commonStart);

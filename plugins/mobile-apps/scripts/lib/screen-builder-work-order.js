@@ -129,6 +129,20 @@ function normalizeWorkOrder(value, {
     || canonicalJson(value.pack) !== canonicalJson(compiledScreen)) {
     throw new Error('pack must be the assigned screen build-pack entry');
   }
+  if (route !== compiledScreen.route) {
+    throw new Error('route does not match the assigned screen build-pack entry');
+  }
+  const expectedRouteContract = {
+    route: compiledScreen.route,
+    params: compiledScreen.implementationContract?.routeParams,
+  };
+  if (!Array.isArray(expectedRouteContract.params)) {
+    throw new Error('assigned screen build-pack entry is missing route parameters');
+  }
+  if (!isPlainObject(value.routeContract)
+    || canonicalJson(value.routeContract) !== canonicalJson(expectedRouteContract)) {
+    throw new Error('routeContract does not match the assigned screen build-pack entry');
+  }
   if (!isPlainObject(compiledScenarioFacts)
     || compiledScenarioFacts.contractType !== 'scenario-facts'
     || compiledScenarioFacts.screenPackRevision !== compiledScreenBuildPack.compiledRevision) {
@@ -145,7 +159,6 @@ function normalizeWorkOrder(value, {
     || canonicalJson(value.scenarioFacts) !== canonicalJson(expectedScenarioFacts)) {
     throw new Error('scenarioFacts must be the assigned canonical screen projection');
   }
-  if (!isPlainObject(value.routeContract)) throw new Error('routeContract must be an object');
   const targetPath = safeTarget(projectRoot, requiredString(value.targetPath, 'targetPath'), fileSystem);
   const normalized = {
     schemaVersion: SCHEMA_VERSION,

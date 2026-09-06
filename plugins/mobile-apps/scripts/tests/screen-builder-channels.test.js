@@ -99,7 +99,12 @@ function sharedDesignInputs(experienceDirective = EXPERIENCE_DIRECTIVE, tokensPa
 }
 
 function canonicalPackEntry(screenId) {
-  return { screenId, pack: { screenId, purpose: `Implement ${screenId}` } };
+  return {
+    screenId,
+    route: `/${screenId}`,
+    implementationContract: { routeParams: [] },
+    pack: { screenId, purpose: `Implement ${screenId}` },
+  };
 }
 
 function compiledPack(
@@ -275,6 +280,20 @@ test('Product Experience directive reaches the sealed return-only builder input 
       pack: { ...order.pack, title: 'Tampered title' },
     }, options),
     /pack must be the assigned screen build-pack entry/,
+  );
+  assert.throws(
+    () => sealWorkOrder({
+      ...order,
+      route: '/stale-route',
+    }, options),
+    /route does not match the assigned screen build-pack entry/,
+  );
+  assert.throws(
+    () => sealWorkOrder({
+      ...order,
+      routeContract: { route: '/stale-route', params: ['unexpected'] },
+    }, options),
+    /routeContract does not match the assigned screen build-pack entry/,
   );
   assert.throws(
     () => sealWorkOrder({

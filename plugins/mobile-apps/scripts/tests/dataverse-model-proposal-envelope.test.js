@@ -76,9 +76,21 @@ test('requires concerns to agree with success status', () => {
   assert.throws(() => parseEnvelope(envelope({
     status: 'DONE_WITH_CONCERNS',
   }), RUN_ID), /requires at least one concern/);
-  assert.equal(parseEnvelope(envelope({
+  assert.throws(() => parseEnvelope(envelope({
     status: 'DONE_WITH_CONCERNS',
     concerns: ['One table is deferred.'],
+  }), RUN_ID), /only valid when the proposal contains adapt or defer/);
+
+  const deferredProposal = structuredClone(proposal);
+  deferredProposal.tables[0].decision = 'defer';
+  assert.throws(
+    () => parseEnvelope(envelope({ content: deferredProposal }), RUN_ID),
+    /requires DONE_WITH_CONCERNS/,
+  );
+  assert.equal(parseEnvelope(envelope({
+    status: 'DONE_WITH_CONCERNS',
+    concerns: ['The asset table is deferred.'],
+    content: deferredProposal,
   }), RUN_ID).status, 'DONE_WITH_CONCERNS');
 });
 

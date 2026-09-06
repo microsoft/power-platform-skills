@@ -24,6 +24,15 @@ function parseJsonLine(line, prefix, label) {
   }
 }
 
+function proposalRequiresConcerns(proposal) {
+  return (proposal.tables || []).some((table) => [
+    table.decision,
+    ...(table.columns || []).map((column) => column.decision),
+    ...(table.relationships || []).map((relationship) => relationship.decision),
+    ...(table.alternateKeys || []).map((key) => key.decision),
+  ].some((decision) => decision === 'adapt' || decision === 'defer'));
+}
+
 function parseEnvelope(source, expectedRunId) {
   const runId = String(expectedRunId || '').trim();
   if (!runId || /[\r\n:<>]/.test(runId)) throw new Error('run ID is invalid');
@@ -80,6 +89,13 @@ function parseEnvelope(source, expectedRunId) {
     const validation = validateProposal(proposal);
     if (!validation.valid) {
       throw new Error(`proposal content is invalid: ${validation.errors.join('; ')}`);
+    }
+    const requiresConcerns = proposalRequiresConcerns(proposal);
+    if (status === 'DONE' && requiresConcerns) {
+      throw new Error('a proposal containing adapt or defer requires DONE_WITH_CONCERNS');
+    }
+    if (status === 'DONE_WITH_CONCERNS' && !requiresConcerns) {
+      throw new Error('DONE_WITH_CONCERNS is only valid when the proposal contains adapt or defer');
     }
     return { status, concerns, proposal };
   }
