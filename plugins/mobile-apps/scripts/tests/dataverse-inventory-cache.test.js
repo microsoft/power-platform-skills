@@ -9,6 +9,7 @@ const test = require('node:test');
 const {
   DEFAULT_TTL_MS,
   invalidateInventoryCache,
+  main,
   readInventoryCache,
   writeInventoryCache,
 } = require('../dataverse-inventory-cache');
@@ -75,6 +76,24 @@ test('cache invalidation is idempotent', (testContext) => {
   assert.equal(invalidateInventoryCache(file), true);
 });
 
+test('cache invalidation CLI fails when the cache file survives', () => {
+  const errors = [];
+  const fileSystem = {
+    rmSync: () => {},
+    existsSync: () => true,
+  };
+  const exitCode = main(
+    ['node', 'dataverse-inventory-cache.js', '--file', '/tmp/cache.json', '--invalidate'],
+    {
+      fileSystem,
+      stdout: { write: () => {} },
+      stderr: { write: (value) => errors.push(value) },
+    },
+  );
+  assert.equal(exitCode, 2);
+  assert.match(errors.join(''), /failed to invalidate/);
+});
+
 test('a corrupt cache is replaced atomically without temporary siblings', (testContext) => {
   const file = tempFile(testContext);
   fs.writeFileSync(file, '{invalid');
@@ -84,7 +103,7 @@ test('a corrupt cache is replaced atomically without temporary siblings', (testC
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['inventory.json']);
 });
 
-test('cached inventory skips broad discovery but exact name checks stay live', async () => {
+test('cached inventory skips broad discovery and refreshes every exact name live', async () => {
   const calls = [];
   const inventory = [{
     logicalName: 'new_item',
@@ -107,7 +126,7 @@ test('cached inventory skips broad discovery but exact name checks stay live', a
     inventory,
     inventorySource: 'cache',
     inventoryCacheAgeMs: 20,
-    proposedTableNames: ['new_missing'],
+    proposedTableNames: ['new_item', 'new_missing'],
     request: async (_method, apiPath) => {
       calls.push(apiPath);
       return { status: 200, data: { value: [] } };
@@ -117,6 +136,50 @@ test('cached inventory skips broad discovery but exact name checks stay live', a
   assert.equal(snapshot.inventoryCacheAgeMs, 20);
   assert.equal(calls.some((apiPath) => apiPath.includes('IsCustomizable/Value eq true')), false);
   assert.equal(calls.filter((apiPath) => apiPath.startsWith('EntityDefinitions?')).length, 1);
+  assert.match(calls[0], /LogicalName eq 'new_item'/);
+  assert.match(calls[0], /LogicalName eq 'new_missing'/);
+  assert.deepEqual(snapshot.proposedNameChecks.missing, ['new_item', 'new_missing']);
+  assert.equal(snapshot.inventory.some((item) => item.logicalName === 'new_item'), false);
+  assert.equal(snapshot.inventoryFacts.customizableTables, 0);
+  assert.equal(snapshot.inventoryFacts.exactNameTables, 0);
+  assert.equal(snapshot.inventoryFacts.proposedCollisionTables, 0);
+});
+
+test('cached exact-name refresh chunks more than fifty requested names', async () => {
+  const rawInventory = Array.from({ length: 55 }, (_, index) => ({
+    LogicalName: `new_item${index}`,
+    SchemaName: `new_Item${index}`,
+    DisplayName: { UserLocalizedLabel: { Label: `Item ${index}` } },
+    DisplayCollectionName: { UserLocalizedLabel: { Label: `Items ${index}` } },
+    Description: { UserLocalizedLabel: { Label: `Item ${index} records` } },
+    EntitySetName: `new_item${index}s`,
+    PrimaryIdAttribute: `new_item${index}id`,
+    PrimaryNameAttribute: 'new_name',
+    OwnershipType: 'UserOwned',
+    IsCustomEntity: true,
+    IsManaged: false,
+    IsCustomizable: { Value: true },
+    CanCreateAttributes: { Value: true },
+  }));
+  const calls = [];
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    inventory: rawInventory,
+    inventorySource: 'cache',
+    proposedTableNames: rawInventory.map((item) => item.LogicalName),
+    request: async (_method, apiPath) => {
+      calls.push(apiPath);
+      const requested = rawInventory.filter((item) => apiPath.includes(
+        `LogicalName eq '${item.LogicalName}'`,
+      ));
+      return { status: 200, data: { value: requested } };
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(snapshot.proposedNameChecks.collisions.length, 55);
+  assert.equal(snapshot.inventoryFacts.exactNameTables, 0);
 });
 
 test('live and cached inventory produce identical ranking and selected table evidence', async () => {

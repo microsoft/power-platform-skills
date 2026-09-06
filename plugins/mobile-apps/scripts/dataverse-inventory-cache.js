@@ -95,20 +95,29 @@ function parseArgs(argv) {
   return args;
 }
 
-function main(argv = process.argv) {
+function main(argv = process.argv, {
+  fileSystem = fs,
+  stdout = process.stdout,
+  stderr = process.stderr,
+} = {}) {
   const args = parseArgs(argv);
   if (!args.file || !args.invalidate) {
-    process.stderr.write(
+    stderr.write(
       'Usage: node dataverse-inventory-cache.js --file <json> --invalidate\n',
     );
     return 2;
   }
   try {
-    invalidateInventoryCache(args.file);
-    process.stdout.write(`${JSON.stringify({ status: 'invalidated', file: path.resolve(args.file) })}\n`);
+    if (!invalidateInventoryCache(args.file, fileSystem)) {
+      stderr.write(
+        `dataverse-inventory-cache: failed to invalidate ${path.resolve(args.file)}\n`,
+      );
+      return 2;
+    }
+    stdout.write(`${JSON.stringify({ status: 'invalidated', file: path.resolve(args.file) })}\n`);
     return 0;
   } catch (error) {
-    process.stderr.write(`dataverse-inventory-cache: ${error.message}\n`);
+    stderr.write(`dataverse-inventory-cache: ${error.message}\n`);
     return 2;
   }
 }

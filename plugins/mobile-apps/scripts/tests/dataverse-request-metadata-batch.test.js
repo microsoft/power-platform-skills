@@ -11,6 +11,8 @@ const execFileAsync = promisify(execFile);
 const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
 const fakeAzPreload = path.join(__dirname, 'helpers', 'fake-az-preload.js');
 const {
+  MUTATION_REQUEST_TIMEOUT_MS,
+  READ_REQUEST_TIMEOUT_MS,
   createDataverseRequestExecutor,
   looksLikeDuplicate,
   operationFingerprint,
@@ -21,6 +23,11 @@ const {
   validateManifestExecutionBinding,
   validateJournalOperations,
 } = require('../dataverse-request');
+
+test('metadata mutations allow longer server processing than reads', () => {
+  assert.equal(READ_REQUEST_TIMEOUT_MS, 30000);
+  assert.equal(MUTATION_REQUEST_TIMEOUT_MS, 120000);
+});
 
 function manifestStableJson(value) {
   function clone(item) {
@@ -596,6 +603,49 @@ test('BATCH-METADATA requires fresh reconciliation before uncertain-operation re
   const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
   assert.equal(journal.inFlight, null);
   assert.equal(journal.recoveries.length, 1);
+});
+
+test('uncertain-operation recovery requires both manifest and reconciliation hashes to change', (t) => {
+  const operation = {
+    id: 'create-table:uncertain',
+    index: 0,
+    phase: 'tableCreates',
+    method: 'POST',
+    apiPath: 'EntityDefinitions',
+    body: { SchemaName: 'cr1_uncertain' },
+  };
+  for (const [label, manifestHash, reconciliationHash] of [
+    ['same manifest', '1'.repeat(64), '3'.repeat(64)],
+    ['same reconciliation', '3'.repeat(64), '2'.repeat(64)],
+  ]) {
+    const directory = makeTempDir(t);
+    const journalPath = path.join(directory, `${label.replace(/ /g, '-')}.json`);
+    fs.writeFileSync(journalPath, JSON.stringify({
+      schemaVersion: 1,
+      binding: {
+        environmentUrl: 'https://example.crm.dynamics.com',
+        solution: 'Default',
+      },
+      completed: {},
+      recoveries: [],
+      inFlight: {
+        index: operation.index,
+        operationId: operation.id,
+        fingerprint: operationFingerprint(operation, 'Default'),
+        manifestHash: '1'.repeat(64),
+        reconciliationHash: '2'.repeat(64),
+        startedAt: '2026-08-19T00:00:00.000Z',
+      },
+    }));
+    assert.throws(() => prepareMetadataJournal({
+      journalPath,
+      environmentUrl: 'https://example.crm.dynamics.com',
+      solution: 'Default',
+      manifestHash,
+      reconciliationHash,
+      operations: [operation],
+    }), /UNCERTAIN_METADATA_OPERATION/, label);
+  }
 });
 
 test('collision recovery rejects the old operation array after a rename', (t) => {

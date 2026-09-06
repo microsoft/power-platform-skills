@@ -23,6 +23,7 @@ const {
   revisionOf,
   writeBuildPlan,
 } = require('./mobile-build-plan');
+const { invalidateApprovalReceipt } = require('./mobile-plan-approval');
 
 const MAX_EDITS = 100;
 const STALE_DATA_MODEL_ARTIFACTS = [
@@ -62,6 +63,8 @@ const COLUMN_FIELDS = [
   'precision',
   'precisionSource',
   'maxSizeInKB',
+  'canStoreFullImage',
+  'isPrimaryImage',
   'maxHeight',
   'maxWidth',
   'adaptedLogicalName',
@@ -757,52 +760,6 @@ function analyzeDataModelRemoval(projectRoot, command) {
   };
 }
 
-function invalidateApprovalReceipt(receipt, now) {
-  if (!receipt) return null;
-  const next = structuredClone(receipt);
-  const keys = new Set([
-    'dataModel',
-    'dataModelUsage',
-    'nativeCapabilities',
-    'connectors',
-    'screenPlan',
-  ]);
-  next.approvals = {
-    ...(next.approvals || {}),
-    ...Object.fromEntries([...keys].map((key) => {
-    const record = { ...(next.approvals?.[key] || {}) };
-    delete record.approvedAt;
-    delete record.approvedContractSha256;
-    return [key, {
-      ...record,
-      status: 'pending',
-      invalidatedAt: now,
-      invalidationReason: 'data-model-edited',
-    }];
-    })),
-  };
-  for (const key of ['experience', 'screenPlan', 'implementation']) {
-    if (!next[key] || typeof next[key] !== 'object') continue;
-    next[key] = {
-      ...next[key],
-      status: 'pending',
-      invalidatedAt: now,
-      invalidationReason: 'data-model-edited',
-    };
-    delete next[key].approvedAt;
-  }
-  delete next.approvedPlanSha256;
-  delete next.approvedContractSha256;
-  delete next.approvedContract;
-  delete next.serviceRequiredTables;
-  delete next.architectureSummary;
-  delete next.integritySha256;
-  next.invalidatedAt = now;
-  next.invalidationReason = 'data-model-edited';
-  next.integritySha256 = sha256(stableJson(next));
-  return next;
-}
-
 function transactionalFiles(projectRoot, writes, removals = []) {
   const targets = [...new Set([...Object.keys(writes), ...removals])];
   const originals = new Map();
@@ -921,7 +878,12 @@ function applyDataModelEdit(projectRoot, command, now = new Date().toISOString()
   }
 
   const nextRevision = revisionOf(editableContractContent(normalized));
-  const receipt = invalidateApprovalReceipt(readJson(projectRoot, ARTIFACTS.approvals), now);
+  const reapprovalGate = scopeValidation ? 1 : 2;
+  const receipt = invalidateApprovalReceipt(readJson(projectRoot, ARTIFACTS.approvals), {
+    fromGate: reapprovalGate,
+    reason: scopeValidation ? 'product-scope-and-data-model-edited' : 'data-model-edited',
+    now,
+  });
   const editJournal = readJson(projectRoot, EDIT_JOURNAL_ARTIFACT) || {
     schemaVersion: 1,
     edits: [],
@@ -947,7 +909,7 @@ function applyDataModelEdit(projectRoot, command, now = new Date().toISOString()
   const progress = nextProgressState(readJson(projectRoot, PROGRESS_ARTIFACT), {
     phase: 'data-model',
     status: 'waiting',
-    detail: 'Data model changed; Gate 1 reapproval is required',
+    detail: `Data model changed; Gate ${reapprovalGate} reapproval is required`,
   }, now);
   const writes = {
     [ARTIFACTS.dataModel]: normalized,
@@ -971,6 +933,7 @@ function applyDataModelEdit(projectRoot, command, now = new Date().toISOString()
     previousRevision: currentRevision,
     revision: nextRevision,
     requiresReapproval: true,
+    reapprovalGate,
     affectedItems: edited.affectedItems || [],
     scopeWarnings: scopeValidation?.warnings || [],
   };

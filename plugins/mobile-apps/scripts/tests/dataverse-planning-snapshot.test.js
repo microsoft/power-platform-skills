@@ -466,28 +466,63 @@ test('advisory candidate detail failure is recorded and does not abort the snaps
   });
 });
 
-test('explicit candidate detail failure remains required and throws', async () => {
-  await assert.rejects(
-    createSnapshot({
-      environmentUrl: 'https://example.crm.dynamics.com',
-      tenantId: 'tenant-1',
-      tableNames: ['activitypointer'],
-      concepts: ['activities'],
-      request: async (_method, apiPath) => {
-        if (apiPath.startsWith('EntityDefinitions?')) {
-          return { status: 200, data: { value: [entity('activitypointer', 'Activity')] } };
-        }
-        if (apiPath.includes('/Attributes?$select=')) {
-          return { status: 400, error: 'abstract metadata type is unsupported' };
-        }
-        return { status: 200, data: { value: [] } };
-      },
-    }),
-    /activitypointer attributes failed \(400\): abstract metadata type is unsupported/,
-  );
+test('explicit candidate detail failure is recorded for a Defer decision', async () => {
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['activitypointer'],
+    concepts: ['activities'],
+    request: async (_method, apiPath) => {
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: [entity('activitypointer', 'Activity')] } };
+      }
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 400, error: 'abstract metadata type is unsupported' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(snapshot.tables, []);
+  assert.deepEqual(snapshot.exactNameResolution, {
+    requestedTables: ['activitypointer'],
+    loadedTables: ['activitypointer'],
+    unavailableTables: [],
+  });
+  assert.deepEqual(snapshot.detailLoadFailures, [{
+    logicalName: 'activitypointer',
+    selectionReasons: ['concept:activities:exact-covered', 'explicit-table'],
+    status: 400,
+    error: 'abstract metadata type is unsupported',
+    required: true,
+  }]);
+  assert.equal(validateSnapshot(snapshot).valid, true);
 });
 
-test('lookup sub-metadata failure skips advisory tables and blocks required tables', async () => {
+test('authentication and transport failures during detail loading still require user action', async () => {
+  await assert.rejects(createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    inventory: [entity('new_product', 'Product')],
+    concepts: ['products'],
+    request: async () => {
+      throw new Error('Failed to get Azure CLI token. Run az login first.');
+    },
+  }), /Failed to get Azure CLI token/);
+
+  const timeout = Object.assign(new Error('connect ETIMEDOUT'), { status: 0 });
+  await assert.rejects(createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    inventory: [entity('new_product', 'Product')],
+    concepts: ['products'],
+    request: async () => {
+      throw timeout;
+    },
+  }), /ETIMEDOUT/);
+});
+
+test('lookup sub-metadata failure records both advisory and required tables', async () => {
   const request = async (_method, apiPath) => {
     if (apiPath.startsWith('EntityDefinitions?')) {
       return { status: 200, data: { value: [entity('new_product', 'Product')] } };
@@ -518,15 +553,16 @@ test('lookup sub-metadata failure skips advisory tables and blocks required tabl
   assert.equal(advisory.detailLoadFailures[0].logicalName, 'new_product');
   assert.match(advisory.detailLoadFailures[0].error, /lookup metadata unavailable/);
 
-  await assert.rejects(
-    createSnapshot({
-      environmentUrl: 'https://example.crm.dynamics.com',
-      tenantId: 'tenant-1',
-      tableNames: ['new_product'],
-      request,
-    }),
-    /new_product lookup metadata failed \(404\): lookup metadata unavailable/,
-  );
+  const required = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['new_product'],
+    request,
+  });
+  assert.deepEqual(required.tables, []);
+  assert.equal(required.detailLoadFailures[0].required, true);
+  assert.deepEqual(required.exactNameResolution.loadedTables, ['new_product']);
+  assert.equal(validateSnapshot(required).valid, true);
 });
 
 test('snapshot captures detailed metadata, evidence, and timing shape without network access', async () => {
@@ -872,25 +908,155 @@ test('proposed-name expansion checks collisions without loading details', async 
   });
 });
 
-test('exact-name expansion fails closed when required detail metadata is unreadable', async () => {
+test('cached proposed-name expansion removes a stale deleted collision', async () => {
+  const staleTable = await loadDetailedEntity(
+    async () => ({ status: 200, data: { value: [] } }),
+    entity('new_deleted', 'Deleted'),
+  );
+  const base = validSnapshotBase({
+    inventorySource: 'cache',
+    inputs: {
+      concepts: [],
+      explicitTableNames: [],
+      proposedTableNames: [],
+    },
+    inventory: [normalizeInventoryForTest(entity('new_deleted', 'Deleted'))],
+    tables: [staleTable],
+    detailLoadFailures: [{
+      logicalName: 'new_deleted',
+      selectionReasons: ['concept:deleted'],
+      status: 400,
+      error: 'stale cached failure',
+      required: false,
+    }],
+  });
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    proposedTableNames: ['new_deleted'],
+    request: async (_method, apiPath) => {
+      assert.match(apiPath, /LogicalName eq 'new_deleted'/);
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(expanded.proposedNameChecks.missing, ['new_deleted']);
+  assert.equal(expanded.inventory.some((item) => item.logicalName === 'new_deleted'), false);
+  assert.equal(expanded.tables.some((item) => item.logicalName === 'new_deleted'), false);
+  assert.deepEqual(expanded.detailLoadFailures, []);
+  assert.equal(expanded.detailLoadSummary.failedCandidates, 0);
+  assert.equal(expanded.detailLoadSummary.advisoryCandidates, 0);
+  assert.equal(expanded.inventoryFacts.customizableTables, 0);
+  assert.equal(expanded.inventoryFacts.proposedCollisionTables, 0);
+});
+
+test('cached detailed-name expansion reloads an existing full table live once', async () => {
+  let detailReads = 0;
+  const staleTable = await loadDetailedEntity(
+    async () => ({ status: 200, data: { value: [] } }),
+    entity('new_item', 'Old item'),
+  );
+  const base = validSnapshotBase({
+    inventorySource: 'cache',
+    inputs: {
+      concepts: ['items'],
+      explicitTableNames: [],
+      proposedTableNames: [],
+    },
+    inventory: [normalizeInventoryForTest(entity('new_item', 'Old item'))],
+    candidateRanking: rankCandidatesByConcept(
+      [entity('new_item', 'Old item')],
+      ['items'],
+    ),
+    tables: [staleTable],
+  });
+  const refreshed = entity('new_item', 'Current item');
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    tableNames: ['new_item'],
+    request: async (_method, apiPath) => {
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: [refreshed] } };
+      }
+      detailReads += 1;
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.ok(detailReads > 0);
+  assert.equal(
+    expanded.inventory.find((item) => item.logicalName === 'new_item').displayName,
+    'Current item',
+  );
+  assert.equal(expanded.candidateRanking[0].candidates[0].displayName, 'Current item');
+  assert.deepEqual(expanded.exactNameResolution.loadedTables, ['new_item']);
+  assert.deepEqual(expanded.expansion.newlyLoadedTables, []);
+  assert.deepEqual(expanded.expansion.upgradedTables, []);
+  assert.deepEqual(expanded.expansion.reloadedTables, ['new_item']);
+  assert.equal(expanded.inventoryFacts.exactNameTables, 0);
+  assert.equal(expanded.inventoryFacts.requiredExactNameTables, 0);
+
+  let repeatedReads = 0;
+  const repeated = await expandSnapshot({
+    snapshot: expanded,
+    tableNames: ['new_item'],
+    request: async () => {
+      repeatedReads += 1;
+      return { status: 200, data: { value: [] } };
+    },
+  });
+  assert.equal(repeatedReads, 0);
+  assert.deepEqual(repeated.expansion.reloadedTables, []);
+});
+
+test('exact-name expansion records unreadable detail metadata for Defer', async () => {
   const base = validSnapshotBase({
     inputs: { concepts: ['activities'], explicitTableNames: [], proposedTableNames: [] },
     inventory: [normalizeInventoryForTest(entity('activitypointer', 'Activity'))],
   });
 
-  await assert.rejects(
-    expandSnapshot({
-      snapshot: base,
-      tableNames: ['activitypointer'],
-      request: async (_method, apiPath) => {
-        if (apiPath.includes('/Attributes?$select=')) {
-          return { status: 403, error: 'metadata forbidden' };
-        }
-        return { status: 200, data: { value: [] } };
-      },
-    }),
-    /activitypointer attributes failed \(403\): metadata forbidden/,
-  );
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    tableNames: ['activitypointer'],
+    request: async (_method, apiPath) => {
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 403, error: 'metadata forbidden' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(expanded.expansion.loadedTables, []);
+  assert.deepEqual(expanded.expansion.unavailableTables, ['activitypointer']);
+  assert.equal(expanded.expansion.failedDetailedCandidates, 1);
+  assert.deepEqual(expanded.detailLoadFailures, [{
+    logicalName: 'activitypointer',
+    selectionReasons: ['explicit-expansion'],
+    status: 403,
+    error: 'metadata forbidden',
+    required: true,
+  }]);
+  assert.deepEqual(expanded.exactNameResolution, {
+    requestedTables: ['activitypointer'],
+    loadedTables: ['activitypointer'],
+    unavailableTables: [],
+  });
+  assert.equal(validateSnapshot(expanded).valid, true);
+});
+
+test('exact-name expansion propagates terminal authentication failures', async () => {
+  const base = validSnapshotBase({
+    inputs: { concepts: ['products'], explicitTableNames: [], proposedTableNames: [] },
+    inventory: [normalizeInventoryForTest(entity('new_product', 'Product'))],
+  });
+  const unauthorized = Object.assign(new Error('token refresh failed'), { status: 401 });
+
+  await assert.rejects(expandSnapshot({
+    snapshot: base,
+    tableNames: ['new_product'],
+    request: async () => {
+      throw unauthorized;
+    },
+  }), /token refresh failed/);
 });
 
 test('computed metadata is explicitly unavailable when SourceTypeMask cannot be proven', async () => {
@@ -1068,10 +1234,11 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
     path.join(pluginRoot, 'scripts', 'create-dataverse-snapshot.js'),
     'utf8',
   );
-  assert.match(setup, /The foreground owns the proposal/);
-  assert.match(setup, /full snapshot\s+only through deterministic validators/);
+  assert.match(setup, /Compact data-model proposal/);
+  assert.match(setup, /full\s+snapshot is validator-only/);
+  assert.match(setup, /compile-dataverse-model-proposal\.js/);
   assert.match(setup, /validate-dataverse-planning-decisions\.js/);
-  assert.match(setup, /Missing full metadata for\s+Reuse\/Extend\/Adapt is `NEEDS_CONTEXT`/s);
+  assert.match(setup, /Missing full metadata or unchecked\s+names return bounded context requests/s);
   assert.match(
     planning,
     /### `connector-only` or `local-prototype`[\s\S]+Do not query a publisher prefix[\s\S]+create a snapshot/,
@@ -1090,11 +1257,12 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(planning, /--planning-timings-output "\$PLANNING_TIMINGS_PATH"/);
   assert.match(
     planning,
-    /Require\s+snapshot-bound validation before Reuse, Extend, or Adapt/,
+    /Require snapshot-bound validation before Reuse, Extend, Create, Adapt, or M:N/,
   );
   assert.match(planning, /reuse one\s+bounded, monotonic exact-name expansion/i);
   assert.match(planning, /never\s+rerun broad discovery/i);
-  assert.match(planning, /\/setup-datamodel` in the foreground/);
+  assert.match(planning, /mobile-app:data-model-architect/);
+  assert.match(planning, /compile-dataverse-model-proposal\.js/);
   assert.match(planning, /validate-dataverse-planning-decisions\.js/);
   assert.match(planning, /planning-eta\.js/);
   assert.doesNotMatch(snapshotScript, /execFileSync/);

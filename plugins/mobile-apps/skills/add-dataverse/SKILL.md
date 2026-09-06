@@ -391,7 +391,8 @@ Build and print a reconciliation matrix before Step 5:
 #### Valid operation-manifest execution branch
 
 When `<operation_manifest_mode> = valid`, do not have an agent rebuild request
-bodies. Read `execution.phases` in this fixed order:
+bodies or have the foreground extract operation arrays. The validated manifest
+contains these fixed phases:
 
 1. `tableCreates` — dependency-tier table creates with all ordinary columns
    inline;
@@ -401,36 +402,32 @@ bodies. Read `execution.phases` in this fixed order:
 5. `publish` — one `PublishXml` operation only when earlier phases contain
    writes or a bound publish-pending checkpoint requires retry.
 
-For each non-empty phase, write just that phase's `operations` array to
-`<working_dir>/.tmp/dataverse-operation-phase-<name>.json`. Read
-`integritySha256` and `binding.reconciliationSha256` from the validated
-manifest, then execute every phase with the same project-local atomic journal:
+Execute the complete manifest through one deterministic owner. It revalidates
+integrity, environment, tenant, solution, phase order, and global operation
+indexes before acquiring a token. It then extracts each complete phase in
+process, carries refreshed authentication forward, and uses the same
+project-local atomic journal:
 
 ```bash
 EXECUTION_JOURNAL="<working_dir>/.tmp/dataverse-metadata-execution-journal.json"
-ALL_MANIFEST_OPERATIONS="<working_dir>/.tmp/dataverse-operation-all.json"
-# Write the flattened operations from every manifest phase to ALL_MANIFEST_OPERATIONS once.
-
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> \
-  BATCH-METADATA "manifest-<phase-name>" \
-  --operations "$(cat <working_dir>/.tmp/dataverse-operation-phase-<name>.json)" \
+node "${CLAUDE_SKILL_DIR}/../../scripts/execute-dataverse-operation-manifest.js" \
+  --manifest "$OPERATION_MANIFEST" \
+  --env-url "<envUrl>" \
   --solution "<solution-uniquename>" \
   --tenant-id "<tenantId>" \
   --journal "$EXECUTION_JOURNAL" \
-  --manifest-file "$OPERATION_MANIFEST" \
-  --manifest-hash "<manifest.integritySha256>" \
-  --reconciliation-hash "<manifest.binding.reconciliationSha256>" \
-  --manifest-operations "$(cat "$ALL_MANIFEST_OPERATIONS")"
+  --publish-checkpoint "<working_dir>/.tmp/dataverse-publish-pending.json" \
+  --inventory-cache "<working_dir>/.tmp/dataverse-inventory-cache.json" \
+  --timings "<working_dir>/.tmp/mobile-planning-timings.json"
 ```
 
-Wait for the entire phase to finish before starting the next. This executor is
+The executor waits for the entire phase before starting the next. It is
 not OData `$batch`; it sends one request at a time, reuses one token, preserves
 manifest order, and stops on the first non-2xx response. Never pass
 `--continue-on-error`, never parallelize phases or operations, and never
 execute `service.requiredTables` through BATCH-METADATA.
-The runner verifies the manifest file's integrity hash, requires the supplied
-operation array to equal one complete manifest phase byte-for-byte, and rejects
-that phase until every operation in preceding phases is journal-complete.
+The underlying runner verifies each selected phase equals one complete manifest
+phase byte-for-byte and rejects it until every predecessor is journal-complete.
 
 The runner atomically writes `inFlight` before each request and records each
 successful operation before moving to the next. Completed fingerprints are
@@ -455,19 +452,21 @@ must run that publish retry; it is not a zero-write completion.
 The manifest builder writes
 `<working_dir>/.tmp/dataverse-publish-pending.json` before any schema POST when
 publish will be required. Leave this checkpoint in place after any schema or
-publish failure. Delete it only after the validated `publish` phase returns
-success. The next build validates its environment/solution/plan/contract
+publish failure, or when post-publish inventory-cache invalidation cannot be
+confirmed. Delete it only after the validated `publish` phase and cache cleanup
+both succeed. The next build validates its environment/solution/plan/contract
 binding and integrity, merges its table list into the publish phase, and
 therefore retries `PublishXml` even when every schema create is now
 idempotently skipped.
 
 On a hidden POST-time name collision, stop at the failed operation and discard
-all not-yet-run phase arrays. The execution script must not choose `Adapt` or a
+all not-yet-run phase arrays held by the executor; it never starts a later
+phase. The execution script must not choose `Adapt` or a
 rename. Return to the existing planning revision path so the structured schema
 artifact carries the approved `Adapt` names. Then perform a fresh bounded
 reconciliation and regenerate the complete aliases, downstream relationship
-and key bodies, service-required names, phases, manifest hashes, and phase
-files. Revalidate before resuming through the journal. Never continue an old
+and key bodies, service-required names, phases, and manifest hashes. Revalidate
+before resuming through the journal. Never continue an old
 array after a rename. Any non-collision failure stops the metadata path with
 its exact result.
 
@@ -909,7 +908,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   | Boolean | `Microsoft.Dynamics.CRM.BooleanAttributeMetadata` | `DefaultValue`, `OptionSet` with `TrueOption`/`FalseOption` |
   | Choice (picklist) | `Microsoft.Dynamics.CRM.PicklistAttributeMetadata` | `OptionSet` with `IsGlobal: false`, `OptionSetType: "Picklist"`, `Options[]` — **option integer values start at `100000000` and increment by 1** |
   | Lookup | via `RelationshipDefinitions` — see 1:N skeleton above | — |
-  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxHeight`, `MaxWidth` |
+  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxSizeInKB` (default 10240), `CanStoreFullImage` |
   | File | `Microsoft.Dynamics.CRM.FileAttributeMetadata` | `MaxSizeInKB` |
 
   **Common mistake:** omitting `FormatName` on String columns and `DateTimeBehavior` on DateTime columns. Both are required — Dataverse rejects the POST without them.
@@ -933,7 +932,14 @@ Column shapes that have non-obvious gotchas (handle carefully):
     }
   }
   ```
-- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`, `MaxHeight`/`MaxWidth` required
+- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`,
+  `MaxSizeInKB` and `CanStoreFullImage`. Dataverse always reports
+  `MaxHeight: 144` and `MaxWidth: 144` for the generated thumbnail; those values
+  cannot be changed and must not be used as full-image dimensions. Set
+  `CanStoreFullImage: true` when users must inspect or download the retained
+  full-size image. Updating this setting requires retrieving the complete
+  current `ImageAttributeMetadata`, changing the writable property, sending a
+  full-definition `PUT`, and publishing customizations.
 - **File** — `@odata.type: Microsoft.Dynamics.CRM.FileAttributeMetadata`, `MaxSizeInKB` required
 
 If the column type is not a simple string/int/boolean, surface a one-line confirmation to the user before posting.
@@ -1023,15 +1029,34 @@ When `<operation_manifest_mode> = valid`, set `SERVICE_REQUIRED_TABLES` from
 names and exclude only explicit deferred rows. Service generation remains
 sequential outside BATCH-METADATA.
 
-For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
+Generate the exact manifest-required TS layer from the app root with one
+deterministic sequential runner. Do not derive this list from Creation Order
+because reused tables are intentionally absent from creation tiers:
 
 ```bash
-npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name>
+node "${CLAUDE_SKILL_DIR}/../../scripts/generate-dataverse-services.js" \
+  --project-root "<working_dir>" \
+  --manifest "$OPERATION_MANIFEST" \
+  --env-url "<envUrl>" \
+  --tenant-id "<tenantId>" \
+  --solution "<solution-uniquename>" \
+  --timings "<working_dir>/.tmp/mobile-planning-timings.json"
 ```
 
-Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
+The runner invokes `npx power-apps add-data-source` **one at a time**, in
+manifest order, and stops at the first failure. The Power Apps CLI writes
+`src/generated/connectorSchemas.ts` and other generated files non-atomically;
+concurrent invocations corrupt them.
 
-After generation, verify each required table appears in `power.config.json` `databaseReferences.default.cds.dataSources` and that a matching file exists in `src/generated/services/`. If any reused or custom table is missing, STOP before screen generation:
+The runner then verifies the actual PAC output rather than guessing a JSON path
+or service filename. PAC currently writes Dataverse under the literal
+`databaseReferences["default.cds"].dataSources` key and derives service filenames
+from each entry's `entitySetName`, which may differ from the table logical name.
+The verifier also accepts the legacy nested `databaseReferences.default.cds`
+shape. It records `dataverseServiceGeneration` with the actual required service
+count. If any reused or custom table is missing from config, lacks
+`entitySetName`, or has no matching generated service, STOP before screen
+generation:
 
 ```text
 BLOCKED: required Dataverse service missing for <logical-name>. Schema action=<reuse|extend|create>; app usage=<screens/hooks that require it>.

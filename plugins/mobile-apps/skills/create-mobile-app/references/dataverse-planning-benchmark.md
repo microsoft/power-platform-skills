@@ -22,8 +22,13 @@ The report includes:
 - proposed-name checks and non-entity concept filtering;
 - full snapshot versus compact architect-sidecar bytes;
 - local fixture-processing time.
+- small, medium, and large synthetic workload counts and local stage durations
+  through proposal compilation, manifest preparation, sequential write
+  orchestration, and sequential service orchestration.
 
-Fixture time is neither network time nor model time. The benchmark does not
+Fixture time is neither network time nor model time. The write/service harnesses
+inject successful operations and fixture files, so their durations are local
+orchestration costs rather than Dataverse or Power Apps CLI timings. The benchmark does not
 score model decisions or claim agent timing improvements. Matched live and
 agent A/B runs remain required for those claims.
 
@@ -108,7 +113,9 @@ because unrelated detail-request latency varied between the two runs.
   target evidence before Gate 1.
 - No missing cross-entity projection or risk notes.
 - First factual progress milestone appears within 30 seconds.
-- Gate 2/data-model readiness targets 10–15 minutes, quality first.
+- Gate 2/data-model readiness is reported against tables, columns,
+  relationships, requests, retries, context bytes, and completed stage
+  durations; there is no workload-independent wall-clock target.
 - Any inventory-only or core candidate needed for reuse/extend/adapt triggers
   one bounded full-detail snapshot expansion.
 - Every typed entity concept keeps its primary candidate and at most one

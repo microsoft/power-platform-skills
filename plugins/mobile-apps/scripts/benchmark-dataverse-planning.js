@@ -1,12 +1,41 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
 const { createSnapshot, parseArgs } = require('./create-dataverse-snapshot');
 const { metadataRequestIdentity } = require('./dataverse-request');
 const {
   buildArchitectEvidence,
   sha256,
 } = require('./render-dataverse-architect-evidence');
+const { compileProposal } = require('./compile-dataverse-model-proposal');
+const {
+  bindContractToPlan,
+  buildManifest,
+  contractApprovalContent,
+  normalizedContract,
+  reconciliationScope,
+  stableJson,
+} = require('./build-dataverse-operation-manifest');
+const { executeManifest } = require('./execute-dataverse-operation-manifest');
+const { generateDataverseServices } = require('./generate-dataverse-services');
+
+const BENCHMARK_NOW = '2026-09-04T00:00:00.000Z';
+const BENCHMARK_CONTEXT = {
+  environmentId: '00000000-0000-0000-0000-000000000001',
+  environmentUrl: 'https://fixture.crm.dynamics.com',
+  tenantId: 'fixture-tenant',
+  publisherPrefix: 'syn',
+  solutionUniqueName: 'Default',
+};
+const WORKLOAD_PROFILES = [
+  { id: 'small', tableCount: 3, columnsPerTable: 5 },
+  { id: 'medium', tableCount: 10, columnsPerTable: 10 },
+  { id: 'large', tableCount: 20, columnsPerTable: 20 },
+];
 
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
@@ -475,6 +504,362 @@ function createFixtureRequest(requirementSet, calls) {
   };
 }
 
+function durationMs(startedAt) {
+  return Number((Number(process.hrtime.bigint() - startedAt) / 1e6).toFixed(3));
+}
+
+async function measure(action) {
+  const startedAt = process.hrtime.bigint();
+  const value = await action();
+  return { value, durationMs: durationMs(startedAt) };
+}
+
+function syntheticWorkload(profile) {
+  const entities = [];
+  const tables = [];
+  const concepts = [];
+  const proposedNames = [];
+  const proposalTables = [];
+  for (let index = 0; index < profile.tableCount; index += 1) {
+    const suffix = String(index).padStart(2, '0');
+    const sourceName = `src_workitem${suffix}`;
+    const targetName = `syn_workitem${suffix}`;
+    const displayName = `Work Item ${suffix}`;
+    const sourceColumns = [column(`${sourceName}_name`)];
+    const proposalColumns = [{
+      logicalName: `${targetName}_name`,
+      displayName: `${displayName} name`,
+      type: 'string',
+      primaryName: true,
+      required: true,
+    }, {
+      logicalName: `${targetName}_code`,
+      displayName: `${displayName} code`,
+      type: 'string',
+      required: true,
+    }];
+    sourceColumns.push(column(`${sourceName}_code`));
+    const relationships = [];
+    const sourceRelationships = [];
+    const lookupTargets = {};
+    if (index > 0) {
+      const parentSuffix = String(index - 1).padStart(2, '0');
+      const sourceParent = `src_workitem${parentSuffix}`;
+      const targetParent = `syn_workitem${parentSuffix}`;
+      const sourceLookup = `${sourceName}_parentid`;
+      const targetLookup = `${targetName}_parentid`;
+      sourceColumns.push(column(sourceLookup, 'Lookup'));
+      lookupTargets[sourceLookup] = [sourceParent];
+      sourceRelationships.push({
+        SchemaName: `${sourceParent}_${sourceName}`,
+        ReferencingAttribute: sourceLookup,
+        ReferencedEntity: sourceParent,
+        ReferencedAttribute: `${sourceParent}id`,
+        IsManaged: false,
+      });
+      proposalColumns.push({
+        logicalName: targetLookup,
+        displayName: 'Parent work item',
+        type: 'lookup',
+        lookupTarget: targetParent,
+      });
+      relationships.push({
+        kind: 'many-to-one',
+        schemaName: `${targetParent}_${targetName}`,
+        decision: 'create',
+        parentTable: targetParent,
+        childTable: targetName,
+        lookupColumn: targetLookup,
+        lookupDisplayName: 'Parent work item',
+        deleteBehavior: 'Restrict',
+      });
+    }
+    while (sourceColumns.length < profile.columnsPerTable) {
+      const field = String(sourceColumns.length).padStart(2, '0');
+      sourceColumns.push(column(`${sourceName}_field${field}`));
+    }
+    while (proposalColumns.length < profile.columnsPerTable) {
+      const field = String(proposalColumns.length).padStart(2, '0');
+      proposalColumns.push({
+        logicalName: `${targetName}_field${field}`,
+        displayName: `Field ${field}`,
+        type: 'string',
+      });
+    }
+    entities.push(entity(sourceName, displayName));
+    tables.push(table(sourceName, sourceColumns, {
+      manyToOneRelationships: sourceRelationships,
+      lookupTargets,
+    }));
+    concepts.push(concept(displayName));
+    proposedNames.push(targetName);
+    proposalTables.push({
+      conceptId: `work-item-${suffix}`,
+      logicalName: targetName,
+      displayName,
+      displayCollectionName: `${displayName}s`,
+      decision: 'create',
+      dependencyTier: index,
+      serviceRequired: true,
+      ownershipType: 'UserOwned',
+      reason: `${displayName} has an independent application-owned lifecycle.`,
+      columns: proposalColumns,
+      relationships,
+      alternateKeys: [{
+        schemaName: `${targetName}_code_key`,
+        displayName: `${displayName} code key`,
+        decision: 'create',
+        columns: [`${targetName}_code`],
+      }],
+    });
+  }
+  return {
+    fixture: {
+      entities,
+      tables,
+      concepts,
+      proposedNames,
+    },
+    proposal: {
+      schemaVersion: 1,
+      contractType: 'dataverse-model-proposal',
+      publisherPrefix: 'syn',
+      tables: proposalTables,
+      readPaths: [],
+      risks: [],
+    },
+  };
+}
+
+function executableManifestInputs(contract) {
+  const planBytes = Buffer.from('# Synthetic workload plan\n');
+  const normalized = normalizedContract(contract);
+  const approvedContract = contractApprovalContent(normalized);
+  const serviceRequiredTables = normalized.tables
+    .filter((item) => item.serviceRequired && item.plannedDecision !== 'defer')
+    .map((item) => ({
+      logicalName: item.plannedDecision === 'adapt'
+        ? item.adaptedLogicalName
+        : item.logicalName,
+      consumers: [`benchmark:${item.logicalName}`],
+    }))
+    .sort((left, right) => left.logicalName.localeCompare(right.logicalName));
+  const approvalReceipt = {
+    schemaVersion: 1,
+    workflow: 'create-mobile-app',
+    approvals: {
+      dataModel: {
+        status: 'approved',
+        approvedAt: BENCHMARK_NOW,
+        approvedContractSha256: sha256(stableJson(approvedContract)),
+      },
+      nativeCapabilities: { status: 'approved', approvedAt: BENCHMARK_NOW },
+      connectors: { status: 'approved', approvedAt: BENCHMARK_NOW },
+      screenPlan: { status: 'approved', approvedAt: BENCHMARK_NOW },
+    },
+    approvedPlanSha256: sha256(planBytes),
+    approvedContractSha256: sha256(stableJson(approvedContract)),
+    approvedContract,
+    serviceRequiredTables,
+  };
+  approvalReceipt.integritySha256 = sha256(stableJson(approvalReceipt));
+  const bound = bindContractToPlan(normalized, planBytes, approvalReceipt);
+  const scope = reconciliationScope(bound);
+  const checked = scope.proposedTables.map((logicalName) => ({
+    logicalName,
+    status: 'missing',
+    existing: null,
+  }));
+  const reconciliation = {
+    version: 3,
+    purpose: 'execution-reconciliation',
+    environmentUrl: BENCHMARK_CONTEXT.environmentUrl,
+    tenantId: BENCHMARK_CONTEXT.tenantId,
+    generatedAt: BENCHMARK_NOW,
+    inputs: {
+      concepts: [],
+      explicitTableNames: scope.exactTables,
+      proposedTableNames: scope.proposedTables,
+    },
+    inventory: [],
+    inventoryFacts: {
+      customizableTables: 0,
+      exactNameTables: 0,
+      requiredExactNameTables: 0,
+      proposedCollisionTables: 0,
+      totalTables: 0,
+    },
+    candidateRanking: [],
+    selectedCandidateEvidence: [],
+    tables: [],
+    detailLoadFailures: [],
+    detailLoadSummary: {
+      attemptedCandidates: 0,
+      loadedCandidates: 0,
+      failedCandidates: 0,
+      requiredCandidates: scope.exactTables.length,
+      advisoryCandidates: 0,
+      exactCoveredConcepts: 0,
+      unresolvedConcepts: 0,
+      advisoryLimit: 0,
+    },
+    proposedNameChecks: { checked, collisions: [], missing: scope.proposedTables },
+    missingProposedTables: scope.proposedTables,
+    exactNameResolution: {
+      requestedTables: scope.exactTables,
+      loadedTables: [],
+      unavailableTables: scope.exactTables,
+    },
+    timings: {
+      inventoryRetrievalMs: 0,
+      candidateSelectionMs: 0,
+      detailLoadingMs: 0,
+      totalDurationMs: 0,
+    },
+    reconciliation: {
+      boundedExactNames: true,
+      fullInventoryRead: false,
+      tables: scope.exactTables,
+      proposedNames: scope.proposedTables,
+    },
+  };
+  return {
+    contract: bound,
+    approvalReceipt,
+    reconciliation,
+    planBytes,
+    contractBytes: Buffer.from(stableJson(bound)),
+    reconciliationBytes: Buffer.from(JSON.stringify(reconciliation, null, 2)),
+    context: BENCHMARK_CONTEXT,
+    now: BENCHMARK_NOW,
+  };
+}
+
+function writeSyntheticServiceOutputs(projectRoot, completed) {
+  fs.writeFileSync(path.join(projectRoot, 'power.config.json'), JSON.stringify({
+    databaseReferences: {
+      default: {
+        cds: {
+          dataSources: Object.fromEntries(completed.map((logicalName) => [logicalName, {
+            logicalName,
+            entitySetName: `${logicalName}s`,
+          }])),
+        },
+      },
+    },
+  }));
+  for (const logicalName of completed) {
+    fs.writeFileSync(
+      path.join(projectRoot, 'src', 'generated', 'services', `${logicalName}sService.ts`),
+      'export {};\n',
+    );
+  }
+}
+
+async function evaluateWorkload(profile) {
+  const totalStartedAt = process.hrtime.bigint();
+  const source = syntheticWorkload(profile);
+  const calls = [];
+  const snapshotResult = await measure(() => createSnapshot({
+    environmentUrl: BENCHMARK_CONTEXT.environmentUrl,
+    tenantId: BENCHMARK_CONTEXT.tenantId,
+    tableNames: source.fixture.entities.map((item) => item.LogicalName),
+    proposedTableNames: source.fixture.proposedNames,
+    concepts: source.fixture.concepts,
+    progressiveDetail: true,
+    combinedBaseRead: true,
+    request: createFixtureRequest(source.fixture, calls),
+    nowIso: () => BENCHMARK_NOW,
+  }));
+  const snapshotBytes = Buffer.from(JSON.stringify(snapshotResult.value));
+  const evidenceResult = await measure(() => Promise.resolve(
+    buildArchitectEvidence(snapshotResult.value, sha256(snapshotBytes)),
+  ));
+  const compileResult = await measure(() => Promise.resolve(
+    compileProposal(source.proposal, evidenceResult.value),
+  ));
+  const manifestResult = await measure(() => Promise.resolve(
+    buildManifest(executableManifestInputs(compileResult.value)),
+  ));
+  const executionResult = await measure(() => executeManifest({
+    manifest: manifestResult.value,
+    environmentUrl: BENCHMARK_CONTEXT.environmentUrl,
+    tenantId: BENCHMARK_CONTEXT.tenantId,
+    solution: BENCHMARK_CONTEXT.solutionUniqueName,
+    getToken: async () => 'fixture-token',
+    runPhase: async (_url, operations, token) => ({
+      failed: false,
+      token,
+      results: operations.map((operation) => ({
+        index: operation.index,
+        operationId: operation.id,
+        status: 204,
+      })),
+    }),
+  }));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-benchmark-'));
+  fs.mkdirSync(path.join(projectRoot, 'src', 'generated', 'services'), { recursive: true });
+  let serviceResult;
+  try {
+    const completed = [];
+    serviceResult = await measure(() => Promise.resolve(generateDataverseServices({
+      projectRoot,
+      manifest: manifestResult.value,
+      environmentUrl: BENCHMARK_CONTEXT.environmentUrl,
+      tenantId: BENCHMARK_CONTEXT.tenantId,
+      solution: BENCHMARK_CONTEXT.solutionUniqueName,
+      runCommand: (_command, args) => {
+        completed.push(args.at(-1));
+        writeSyntheticServiceOutputs(projectRoot, completed);
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    })));
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+  const contract = compileResult.value;
+  const manifest = manifestResult.value;
+  return {
+    id: profile.id,
+    workload: {
+      tables: contract.tables.length,
+      columns: contract.tables.reduce((sum, item) => sum + item.columns.length, 0),
+      relationships: contract.tables.reduce(
+        (sum, item) => sum + item.relationships.length,
+        0,
+      ),
+      alternateKeys: contract.tables.reduce(
+        (sum, item) => sum + item.alternateKeys.length,
+        0,
+      ),
+      metadataRequests: calls.length,
+      metadataOperations: manifest.summary.metadataOperationCount,
+      services: manifest.service.requiredTables.length,
+    },
+    stagesMs: {
+      snapshot: snapshotResult.durationMs,
+      compactEvidence: evidenceResult.durationMs,
+      proposalCompilation: compileResult.durationMs,
+      manifestPreparation: manifestResult.durationMs,
+      metadataExecutionHarness: executionResult.durationMs,
+      serviceGenerationHarness: serviceResult.durationMs,
+      totalLocal: durationMs(totalStartedAt),
+    },
+    bytes: {
+      snapshot: snapshotBytes.length,
+      compactEvidence: Buffer.byteLength(JSON.stringify(evidenceResult.value)),
+      contract: Buffer.byteLength(stableJson(contract)),
+      manifest: Buffer.byteLength(stableJson(manifest)),
+    },
+  };
+}
+
+async function runWorkloadMatrix(profiles = WORKLOAD_PROFILES) {
+  const workloads = [];
+  for (const profile of profiles) workloads.push(await evaluateWorkload(profile));
+  return workloads;
+}
+
 function normalizeEvidence(evidence) {
   return JSON.stringify(evidence);
 }
@@ -586,10 +971,11 @@ async function evaluateRequirementSet(requirementSet) {
 
 async function runBenchmark(requirementSets = REQUIREMENT_SETS) {
   return {
-    version: 2,
+    version: 3,
     methodology: 'Fixture-backed execution through typed createSnapshot and compact architect evidence',
-    limitation: 'Matched agent A/B runs are still required for model decision and timing claims.',
+    limitation: 'Matched agent A/B runs are still required for model decisions and timing claims; synthetic local timings exclude Dataverse, CLI, and model latency.',
     scenarios: await Promise.all(requirementSets.map(evaluateRequirementSet)),
+    workloads: await runWorkloadMatrix(),
   };
 }
 
@@ -631,6 +1017,22 @@ function renderBenchmarkMarkdown(result) {
     '',
     'The request count is the actual fixture executor call count. It does not measure network latency or agent behavior, and it does not substitute for matched agent A/B decision and timing runs.',
     '',
+    '## Synthetic workload scaling',
+    '',
+    '| Size | Tables | Columns | Relationships | Keys | Metadata requests | Metadata operations | Services | Snapshot / evidence / compile / manifest / write harness / service harness / total local (ms) |',
+    '|---|---:|---:|---:|---:|---:|---:|---:|---|',
+    ...result.workloads.map((item) => (
+      `| ${item.id} | ${item.workload.tables} | ${item.workload.columns} | `
+      + `${item.workload.relationships} | ${item.workload.alternateKeys} | `
+      + `${item.workload.metadataRequests} | ${item.workload.metadataOperations} | `
+      + `${item.workload.services} | ${item.stagesMs.snapshot} / `
+      + `${item.stagesMs.compactEvidence} / ${item.stagesMs.proposalCompilation} / `
+      + `${item.stagesMs.manifestPreparation} / ${item.stagesMs.metadataExecutionHarness} / `
+      + `${item.stagesMs.serviceGenerationHarness} / ${item.stagesMs.totalLocal} |`
+    )),
+    '',
+    'The write and service columns run the real sequential orchestrators against injected successful operations and generated fixture files. They measure local orchestration only, not Dataverse writes, Power Apps CLI work, authentication, network latency, or model inference.',
+    '',
   );
   return lines.join('\n');
 }
@@ -654,9 +1056,13 @@ if (require.main === module) {
 
 module.exports = {
   REQUIREMENT_SETS,
+  WORKLOAD_PROFILES,
   createFixtureRequest,
   evaluateRequirementSet,
+  evaluateWorkload,
   normalizeEvidence,
   renderBenchmarkMarkdown,
   runBenchmark,
+  runWorkloadMatrix,
+  syntheticWorkload,
 };

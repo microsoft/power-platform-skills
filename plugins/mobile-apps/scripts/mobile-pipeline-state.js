@@ -9,7 +9,7 @@ const SCHEMA_VERSION = 2;
 const DEFAULT_FILE = '.tmp/pipeline-state.json';
 
 function parseArgs(argv) {
-  const args = { artifacts: [], artifactTrees: [] };
+  const args = { artifacts: [], artifactTrees: [], mutableArtifacts: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--project-root') args.projectRoot = argv[++index];
@@ -18,6 +18,7 @@ function parseArgs(argv) {
     else if (arg === '--verify') args.verify = true;
     else if (arg === '--step') args.step = argv[++index];
     else if (arg === '--artifact') args.artifacts.push(argv[++index]);
+    else if (arg === '--mutable-artifact') args.mutableArtifacts.push(argv[++index]);
     else if (arg === '--artifact-tree') args.artifactTrees.push(argv[++index]);
     else if (arg === '--help' || arg === '-h') args.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -28,7 +29,7 @@ function parseArgs(argv) {
 function usage() {
   return [
     'Usage:',
-    '  node mobile-pipeline-state.js --project-root <dir> --record --step <id> [--artifact <name>=<file> ...] [--artifact-tree <name>=<dir> ...]',
+    '  node mobile-pipeline-state.js --project-root <dir> --record --step <id> [--artifact <name>=<file> ...] [--mutable-artifact <name>=<file> ...] [--artifact-tree <name>=<dir> ...]',
     '  node mobile-pipeline-state.js --project-root <dir> --verify',
   ].join('\n');
 }
@@ -105,61 +106,93 @@ function recordState({
   stateFile,
   step,
   artifacts = [],
+  mutableArtifacts = [],
   artifactTrees = [],
   now = () => new Date().toISOString(),
 }) {
   if (!step) throw new Error('--step is required with --record');
   const entries = [
     ...artifacts.map((value) => parseArtifact(value, projectRoot, 'file')),
+    ...mutableArtifacts.map((value) => ({
+      ...parseArtifact(value, projectRoot, 'file'),
+      mutable: true,
+    })),
     ...artifactTrees.map((value) => parseArtifact(value, projectRoot, 'tree')),
   ];
   let previousArtifacts = {};
+  let previousState = null;
   if (fs.existsSync(stateFile)) {
     try {
-      const previous = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-      if (previous.schemaVersion === SCHEMA_VERSION && previous.artifacts) {
-        previousArtifacts = previous.artifacts;
+      previousState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      if (previousState.schemaVersion === SCHEMA_VERSION && previousState.artifacts) {
+        previousArtifacts = previousState.artifacts;
       }
     } catch {
       previousArtifacts = {};
     }
   }
+  const suppliedNames = new Set(entries.map((entry) => entry.name));
   for (const [name, previous] of Object.entries(previousArtifacts)) {
     if ((previous.kind || 'file') !== 'file') continue;
     const absolute = path.resolve(projectRoot, previous.path);
     if (!fs.existsSync(absolute) || !fs.lstatSync(absolute).isFile()) {
-      throw new Error(`immutable artifact is missing before checkpoint: ${name}`);
+      throw new Error(
+        `${previous.mutable === true ? 'mutable' : 'immutable'} artifact is missing before checkpoint: ${name}`,
+      );
     }
-    if (hashFile(absolute) !== previous.sha256) {
+    const currentHash = hashFile(absolute);
+    if (previous.mutable === true && currentHash !== previous.sha256 && !suppliedNames.has(name)) {
+      throw new Error(`changed mutable artifact must be resupplied at checkpoint: ${name}`);
+    }
+    if (previous.mutable !== true && currentHash !== previous.sha256) {
       throw new Error(`immutable artifact changed since its first checkpoint: ${name}`);
     }
   }
   for (const entry of entries) {
     const previous = previousArtifacts[entry.name];
+    if (previous && Boolean(previous.mutable) !== Boolean(entry.mutable)) {
+      throw new Error(`artifact mutability cannot change after first checkpoint: ${entry.name}`);
+    }
     if (
       previous
       && entry.kind === 'file'
       && (previous.kind || 'file') === 'file'
       && previous.sha256 !== entry.sha256
+      && previous.mutable !== true
     ) {
       throw new Error(`immutable artifact changed since its first checkpoint: ${entry.name}`);
     }
   }
+  const recordedAt = now();
   const state = {
     schemaVersion: SCHEMA_VERSION,
     completedStep: String(step),
-    recordedAt: now(),
+    recordedAt,
     artifacts: {
       ...previousArtifacts,
-      ...Object.fromEntries(entries.map((entry) => [
-        entry.name,
-        {
+      ...Object.fromEntries(entries.map((entry) => {
+        const previous = previousArtifacts[entry.name];
+        const previousRevisions = previous?.mutable === true
+          ? previous.revisions || [{
+            step: previousState?.completedStep || 'unknown',
+            recordedAt: previousState?.recordedAt || null,
+            sha256: previous.sha256,
+          }]
+          : [];
+        return [entry.name, {
           kind: entry.kind,
           path: entry.path,
           sha256: entry.sha256,
+          ...(entry.mutable ? {
+            mutable: true,
+            revisions: [
+              ...previousRevisions,
+              { step: String(step), recordedAt, sha256: entry.sha256 },
+            ],
+          } : {}),
           ...(entry.kind === 'tree' ? { fileCount: entry.fileCount } : {}),
-        },
-      ])),
+        }];
+      })),
     },
   };
   atomicWriteJson(stateFile, state);
@@ -243,6 +276,7 @@ function main(argv = process.argv.slice(2)) {
         stateFile,
         step: args.step,
         artifacts: args.artifacts,
+        mutableArtifacts: args.mutableArtifacts,
         artifactTrees: args.artifactTrees,
       })
       : verifyState({ projectRoot, stateFile });

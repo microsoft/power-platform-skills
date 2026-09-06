@@ -9,6 +9,7 @@ const {
   mapWithConcurrency,
   parseReadConcurrency,
 } = require('../create-dataverse-snapshot');
+const { createDataverseRequestExecutor } = require('../dataverse-request');
 
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
@@ -81,6 +82,34 @@ test('adaptive reads halve the cap after rate limiting', async () => {
   assert.equal(adaptive.currentConcurrency(), 1);
   await adaptive.request('GET', 'three');
   assert.equal(adaptive.currentConcurrency(), 1);
+});
+
+test('adaptive reads reduce the cap before a throttled retry sleeps', async () => {
+  let requestCount = 0;
+  let releaseSleep;
+  const sleeping = new Promise((resolve) => {
+    releaseSleep = resolve;
+  });
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => 'token',
+    sendRequest: async () => {
+      requestCount += 1;
+      return requestCount === 1
+        ? { statusCode: 429, body: '', headers: { 'retry-after': '1' } }
+        : { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+    sleep: () => sleeping,
+  });
+  const adaptive = adaptiveReadRequest(request, 4);
+  const pending = adaptive.request('GET', 'EntityDefinitions');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(adaptive.currentConcurrency(), 2);
+  releaseSleep();
+  await pending;
+  assert.equal(adaptive.currentConcurrency(), 2);
+  adaptive.dispose();
 });
 
 test('read concurrency rejects invalid values and defaults to one', () => {
@@ -159,25 +188,32 @@ test('concurrent advisory failures are recorded and all pooled requests are GET-
   assert.deepEqual(new Set(methods), new Set(['GET']));
 });
 
-test('concurrent required detail failures remain fail-closed', async () => {
+test('concurrent required detail failures remain explicit and non-executable', async () => {
   const entities = ['new_alpha', 'new_beta'].map(entity);
-  await assert.rejects(
-    createSnapshot({
-      environmentUrl: 'https://example.crm.dynamics.com',
-      tenantId: 'tenant-1',
-      tableNames: ['new_beta'],
-      readConcurrency: 2,
-      request: async (method, apiPath) => {
-        assert.equal(method, 'GET');
-        if (apiPath.startsWith('EntityDefinitions?')) {
-          return { status: 200, data: { value: entities } };
-        }
-        if (apiPath.includes("LogicalName='new_beta'") && apiPath.includes('/Attributes?')) {
-          return { status: 500, error: 'planned required failure' };
-        }
-        return { status: 200, data: { value: [] } };
-      },
-    }),
-    /planned required failure/,
-  );
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['new_beta'],
+    readConcurrency: 2,
+    request: async (method, apiPath) => {
+      assert.equal(method, 'GET');
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: entities } };
+      }
+      if (apiPath.includes("LogicalName='new_beta'") && apiPath.includes('/Attributes?')) {
+        return { status: 500, error: 'planned required failure' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(snapshot.tables, []);
+  assert.deepEqual(snapshot.detailLoadFailures, [{
+    logicalName: 'new_beta',
+    selectionReasons: ['explicit-table'],
+    status: 500,
+    error: 'planned required failure',
+    required: true,
+  }]);
+  assert.deepEqual(snapshot.exactNameResolution.loadedTables, ['new_beta']);
 });

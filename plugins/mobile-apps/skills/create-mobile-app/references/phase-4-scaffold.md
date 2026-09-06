@@ -381,11 +381,17 @@ On rejection, revise only the owning layer and regenerate deterministically:
 - capabilities/connectors → reopen Gate 2
 
 Return to `/design-system` to reauthor and revalidate `_plan_preview.html`
-before re-entering Gate 3. On approval, mark Gate 3 approved in
-`native-app-plan.md` and set
-`screenPlan.status` plus `experience.status` to `approved` in
-`.tmp/mobile-plan-status.json`, recording current plan, contract, build-pack,
-and preview hashes.
+before re-entering Gate 3. Start `userApproval` immediately before the question
+and finish it immediately after the response. On approval, record the current
+plan sections, build pack, and preview through the atomic approval owner:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" approve \
+  --project-root "<working_dir>" --gate 3
+```
+
+Do not patch `screenPlan.status`, `experience.status`, hashes, or integrity by
+hand.
 
 #### Gate 4 — Final implementation confirmation
 
@@ -408,10 +414,21 @@ Use `EnterPlanMode` once more with the exact implementation summary:
 Start implementation from these approved contracts?
 ```
 
-If rejected, stop before Dataverse mutation, dependency installation, or
-screen/source generation. If approved, mark Gate 4 and
-`implementation.status` approved, refresh the receipt integrity hash, and
-continue to Step 7.
+Start `userApproval` immediately before the question and finish it immediately
+after the response. If rejected, stop before Dataverse mutation, dependency
+installation, or screen/source generation. If approved, run the final receipt
+seal and continue only when it validates:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" approve \
+  --project-root "<working_dir>" --gate 4
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" validate \
+  --project-root "<working_dir>"
+```
+
+Gate 4 binds the exact plan, normalized Dataverse contract when applicable,
+compiled service consumers, prior gate section hashes, and implementation
+approval. Never self-mint or restamp these fields in Step 8.
 
 Immediately after Gate 4 approval, finish the `foregroundPlanning` timing wall.
 Every Gate 1-4 wait must have been recorded through `userApproval`; the summary
@@ -422,8 +439,8 @@ After approval, record the materialized experience checkpoint:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
   --project-root "<working_dir>" --record --step "6.75" \
-  --artifact "plan=native-app-plan.md" \
-  --artifact "approval=.tmp/mobile-plan-status.json" \
+  --mutable-artifact "plan=native-app-plan.md" \
+  --mutable-artifact "approval=.tmp/mobile-plan-status.json" \
   --artifact "build-pack=.tmp/compiled-screen-build-pack.json" \
   --artifact "scenario-facts=.tmp/scenario-facts.json" \
   --artifact "preview=_plan_preview.html"

@@ -54,6 +54,9 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const READ_REQUEST_TIMEOUT_MS = 30000;
+const MUTATION_REQUEST_TIMEOUT_MS = 120000;
+
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
 
 function retryAfterDelayMs(retryAfter, fallbackMs, nowMs = Date.now()) {
@@ -200,7 +203,9 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
     headers,
     body,
     includeHeaders,
-    timeout: 30000,
+    timeout: isMutationMethod(method)
+      ? MUTATION_REQUEST_TIMEOUT_MS
+      : READ_REQUEST_TIMEOUT_MS,
   });
 
   return res;
@@ -213,6 +218,7 @@ function createDataverseRequestExecutor({
   getToken = getAuthToken,
   sendRequest = doRequest,
   onTelemetry = null,
+  sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   nowMs = () => Date.now(),
 }) {
   const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
@@ -221,6 +227,7 @@ function createDataverseRequestExecutor({
   let token = null;
   let tokenPromise = null;
   let refreshPromise = null;
+  const rateLimitListeners = new Set();
   const authStats = { tokenAcquisitionCount: 0, tokenRefreshCount: 0 };
   async function ensureToken() {
     if (token) return { token, acquired: false };
@@ -230,26 +237,36 @@ function createDataverseRequestExecutor({
       acquired = true;
       tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
     }
-    token = await tokenPromise;
-    tokenPromise = null;
+    const pendingToken = tokenPromise;
+    try {
+      token = await pendingToken;
+    } finally {
+      if (tokenPromise === pendingToken) tokenPromise = null;
+    }
     if (!token) {
       throw new Error('Failed to get Azure CLI token. Run `az login` first.');
     }
     return { token, acquired };
   }
 
-  async function refreshToken() {
+  async function refreshToken(staleToken) {
+    if (token && staleToken && token !== staleToken) {
+      return { token, refreshedByCaller: false };
+    }
     let refreshedByCaller = false;
     if (!refreshPromise) {
       authStats.tokenRefreshCount += 1;
       refreshedByCaller = true;
       refreshPromise = Promise.resolve(getToken(envUrl, tenantId))
+        .then((refreshed) => {
+          if (refreshed) token = refreshed;
+          return refreshed;
+        })
         .finally(() => {
           refreshPromise = null;
         });
     }
     const refreshed = await refreshPromise;
-    if (refreshed) token = refreshed;
     return { token: refreshed, refreshedByCaller };
   }
 
@@ -270,15 +287,26 @@ function createDataverseRequestExecutor({
       includeHeaders,
       solution,
       tenantId,
-      async () => {
-        const refreshed = await refreshToken();
+      async (_environmentUrl, _tenantId, staleToken) => {
+        const refreshed = await refreshToken(staleToken);
         if (refreshed.refreshedByCaller) requestRefreshCount += 1;
         return refreshed.token;
       },
       sendRequest,
-      { nowMs },
+      {
+        nowMs,
+        sleep,
+        onRateLimited: (event) => {
+          for (const listener of rateLimitListeners) {
+            try {
+              listener(event);
+            } catch {
+              // Backpressure observers must not change request behavior.
+            }
+          }
+        },
+      },
     );
-    token = executed.token;
     if (typeof onTelemetry === 'function') {
       const identity = metadataRequestIdentity(apiPath);
       try {
@@ -307,6 +335,11 @@ function createDataverseRequestExecutor({
     };
   };
   execute.getAuthStats = () => ({ ...authStats });
+  execute.onRateLimited = (listener) => {
+    if (typeof listener !== 'function') throw new Error('rate-limit listener must be a function');
+    rateLimitListeners.add(listener);
+    return () => rateLimitListeners.delete(listener);
+  };
   return execute;
 }
 
@@ -938,6 +971,7 @@ async function runMetadataBatch(
     return {
       results: [{ index: -1, status: 0, error: error.message }],
       failed: true,
+      token: initialToken,
     };
   }
   const journal = preparedJournal.journal;
@@ -1047,7 +1081,7 @@ async function runMetadataBatch(
     }
   }
 
-  return { results, failed };
+  return { results, failed, token };
 }
 
 async function runOneMetadataOperation(
@@ -1061,7 +1095,11 @@ async function runOneMetadataOperation(
   tenantId,
   getToken = getAuthToken,
   sendRequest = doRequest,
-  { nowMs = () => Date.now() } = {},
+  {
+    nowMs = () => Date.now(),
+    sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+    onRateLimited = () => {},
+  } = {},
 ) {
   let token = initialToken;
   let rateLimited = false;
@@ -1105,7 +1143,7 @@ async function runOneMetadataOperation(
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getToken(envUrl, tenantId);
+      const refreshed = await getToken(envUrl, tenantId, token);
       if (!refreshed) {
         return finish({ status: 401, error: 'Token refresh failed', token, rateLimited });
       }
@@ -1116,15 +1154,16 @@ async function runOneMetadataOperation(
 
     if (res.statusCode === 429 && attempt < maxRetries) {
       const delayMs = retryAfterDelayMs(res.headers?.['retry-after'], 30000);
+      if (!rateLimited) onRateLimited({ delayMs, attempt: attempt + 1 });
       rateLimited = true;
       retryCount += 1;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await sleep(delayMs);
       continue;
     }
 
     if ([500, 502, 503].includes(res.statusCode) && attempt < maxRetries) {
       retryCount += 1;
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await sleep(5000);
       continue;
     }
 
@@ -1160,6 +1199,8 @@ function extractGuid(headerValue) {
 if (require.main === module) main();
 
 module.exports = {
+  MUTATION_REQUEST_TIMEOUT_MS,
+  READ_REQUEST_TIMEOUT_MS,
   createDataverseRequestExecutor,
   doRequest,
   extractGuid,

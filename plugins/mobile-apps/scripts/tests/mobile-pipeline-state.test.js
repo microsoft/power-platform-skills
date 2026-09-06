@@ -103,6 +103,84 @@ test('later checkpoints cannot restamp an approved file artifact', (testContext)
   }), /immutable artifact changed/);
 });
 
+test('explicit mutable artifacts record gate revisions and verify only the latest', (testContext) => {
+  const root = project(testContext);
+  const approval = path.join(root, 'approval.json');
+  fs.writeFileSync(approval, '{"gate":1}\n');
+  const stateFile = path.join(root, '.tmp', 'pipeline-state.json');
+  recordState({
+    projectRoot: root,
+    stateFile,
+    step: '3.2',
+    mutableArtifacts: ['approval=approval.json'],
+    now: () => '2026-09-04T00:00:00.000Z',
+  });
+
+  fs.writeFileSync(approval, '{"gate":2}\n');
+  const state = recordState({
+    projectRoot: root,
+    stateFile,
+    step: '3.9',
+    mutableArtifacts: ['approval=approval.json'],
+    now: () => '2026-09-04T00:01:00.000Z',
+  });
+
+  assert.equal(state.artifacts.approval.mutable, true);
+  assert.deepEqual(
+    state.artifacts.approval.revisions.map((revision) => revision.step),
+    ['3.2', '3.9'],
+  );
+  assert.equal(verifyState({ projectRoot: root, stateFile }).valid, true);
+});
+
+test('changed mutable artifacts must be resupplied at later checkpoints', (testContext) => {
+  const root = project(testContext);
+  const approval = path.join(root, 'approval.json');
+  fs.writeFileSync(approval, '{"gate":1}\n');
+  fs.writeFileSync(path.join(root, 'package.json'), '{}\n');
+  const stateFile = path.join(root, '.tmp', 'pipeline-state.json');
+  recordState({
+    projectRoot: root,
+    stateFile,
+    step: '3.2',
+    mutableArtifacts: ['approval=approval.json'],
+  });
+
+  fs.writeFileSync(approval, '{"gate":2}\n');
+  assert.throws(() => recordState({
+    projectRoot: root,
+    stateFile,
+    step: '3.9',
+    artifacts: ['package=package.json'],
+  }), /changed mutable artifact must be resupplied/);
+
+  assert.doesNotThrow(() => recordState({
+    projectRoot: root,
+    stateFile,
+    step: '3.9',
+    artifacts: ['package=package.json'],
+    mutableArtifacts: ['approval=approval.json'],
+  }));
+});
+
+test('artifact mutability cannot be introduced after immutable approval', (testContext) => {
+  const root = project(testContext);
+  fs.writeFileSync(path.join(root, 'approval.json'), '{}\n');
+  const stateFile = path.join(root, '.tmp', 'pipeline-state.json');
+  recordState({
+    projectRoot: root,
+    stateFile,
+    step: '3.2',
+    artifacts: ['approval=approval.json'],
+  });
+  assert.throws(() => recordState({
+    projectRoot: root,
+    stateFile,
+    step: '3.9',
+    mutableArtifacts: ['approval=approval.json'],
+  }), /artifact mutability cannot change/);
+});
+
 test('later checkpoints validate retained immutable artifacts even when omitted', (testContext) => {
   const root = project(testContext);
   fs.writeFileSync(path.join(root, 'native-app-plan.md'), '# Approved plan\n');

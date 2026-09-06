@@ -82,12 +82,15 @@ PDF content must never be modeled as long text/base64 text. Use Dataverse File c
 
 Accept PNG/JPG (use `Read` to view), Mermaid syntax (paste in chat), or text description. Parse into tables + columns + relationships. Query existing Dataverse tables to mark each as new / extend / reuse. Generate a Mermaid ER diagram for confirmation. Enter `EnterPlanMode` for data model approval. On `ExitPlanMode` approval, write the data model into `native-app-plan.md` `## Data Model` section (creating the file if absent).
 
-#### Path B — Foreground data-model proposal
+#### Path B — Compact data-model proposal
 
-The foreground owns the proposal. Read the requirements, approved Product Scope
-when supplied, publisher prefix, compact planning evidence, and full snapshot
-only through deterministic validators. Build one canonical in-memory model and
-derive both `_dm_section.md` and `.tmp/dataverse-schema-contract.json` from it.
+The foreground owns standalone inference. During `/create-mobile-app`, the
+tool-free `mobile-app:data-model-architect` may infer the same compact proposal
+before this skill is entered. In both cases write
+`.tmp/dataverse-model-proposal.json` against the exact
+`schema-dataverse-model-proposal.json` contract. Read requirements, approved
+Product Scope, publisher prefix, and compact architect evidence. The full
+snapshot is validator-only and must never be loaded into model context.
 
 Apply these decision rules:
 
@@ -116,14 +119,22 @@ PDFs use File, never long text/base64. Barcode identity may justify an alternate
 key. Retained location needs explicit schema fields. Offline schema is added only
 when the approved operating context selects offline.
 
-The Markdown section includes target reconciliation, evidence, decisions,
-Mermaid ER diagram, dependency tiers, service-required tables, cross-entity read
-paths, risks, and scope boundaries. The structured contract is the executable
-authority and must distinguish verified existing identities from proposed ones.
-Normalize it with `build-dataverse-operation-manifest.js --normalize-contract`,
-then validate it against the full supplied snapshot with
-`validate-dataverse-planning-decisions.js`. Missing full metadata for
-Reuse/Extend/Adapt is `NEEDS_CONTEXT`, never a guessed decision.
+Compile both outputs instead of hand-authoring Dataverse boilerplate:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/compile-dataverse-model-proposal.js" \
+  --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/compile-dataverse-model-proposal.js" \
+  --project-root "<working_dir>" --check
+```
+
+The compiler writes `_dm_section.md` plus the normalized
+`.tmp/dataverse-schema-contract.json`, copies verified constraints for reused
+columns, expands defaults for new columns, and enforces lookup/relationship
+identity. Validate that contract against the full supplied snapshot with
+`validate-dataverse-planning-decisions.js`. Missing full metadata or unchecked
+names return bounded context requests; known collisions return an automatic
+proposal revision. Never guess or fall back to Markdown-first schema authoring.
 
 In normal standalone mode, present the resulting section through the existing
 approval flow. In `--plan-only`, return the two validated artifact paths and any

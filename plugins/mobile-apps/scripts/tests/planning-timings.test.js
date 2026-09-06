@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  interruptOpenStages,
   summarizePlanningTimings,
   updatePlanningTiming,
 } = require('../planning-timings');
@@ -34,6 +35,47 @@ test('planning timing records completed attempts and duration', () => {
   assert.equal(artifact.stages.metadataInventory.durationMs, 1250);
   assert.equal(artifact.stages.metadataInventory.status, 'done');
   assert.equal(artifact.stages.metadataInventory.history.length, 1);
+});
+
+test('interrupted attempts are preserved but excluded from measured duration', () => {
+  const artifact = { schemaVersion: 1, stages: {} };
+  updatePlanningTiming(artifact, {
+    stage: 'dataModelArchitect',
+    action: 'start',
+    ...clock(['2026-09-04T00:00:00.000Z'], [100]),
+  });
+  interruptOpenStages(artifact, {
+    reason: 'session-resumed',
+    ...clock(['2026-09-04T00:10:00.000Z'], [600100]),
+  });
+  const summary = summarizePlanningTimings(artifact);
+  assert.equal(artifact.stages.dataModelArchitect.status, 'interrupted');
+  assert.equal(artifact.stages.dataModelArchitect.durationMs, 600000);
+  assert.equal(summary.dataModelPlanningMs, 0);
+  assert.deepEqual(summary.interruptions, { dataModelArchitect: 1 });
+});
+
+test('starting over excludes a stale wall and reports completed workload', () => {
+  const artifact = { schemaVersion: 1, stages: {} };
+  updatePlanningTiming(artifact, {
+    stage: 'dataModelCompilation', action: 'start', ...clock(['start-1'], [10]),
+  });
+  updatePlanningTiming(artifact, {
+    stage: 'dataModelCompilation', action: 'start', ...clock(['start-2'], [1010]),
+  });
+  updatePlanningTiming(artifact, {
+    stage: 'dataModelCompilation',
+    action: 'finish',
+    counts: { tables: 4, columns: 30 },
+    ...clock(['end-2'], [1060]),
+  });
+  const summary = summarizePlanningTimings(artifact);
+  assert.deepEqual(
+    artifact.stages.dataModelCompilation.history.map((item) => item.status),
+    ['interrupted', 'done'],
+  );
+  assert.deepEqual(summary.dataModelBreakdown, { dataModelCompilation: 50 });
+  assert.deepEqual(summary.workload.dataModelCompilation, { tables: 4, columns: 30 });
 });
 
 test('planning timing preserves failed attempt history across retry', () => {
@@ -198,6 +240,41 @@ test('timing summary falls back to additive foreground stages when no wall is re
   assert.equal(summary.totalExecutionMs, 44);
 });
 
+test('timing summary includes Dataverse execution stages once and keeps their workload separate', () => {
+  const artifact = {
+    schemaVersion: 1,
+    stages: {
+      foregroundPlanning: { history: [{ durationMs: 100 }] },
+      dataverseExecutionReconciliation: {
+        history: [{ durationMs: 10, counts: { exactTables: 3 } }],
+      },
+      dataverseManifestPreparation: {
+        history: [{ durationMs: 5, counts: { operations: 9 } }],
+      },
+      dataverseMetadataWrites: {
+        history: [{ durationMs: 40, counts: { operations: 9 } }],
+      },
+      dataverseServiceGeneration: {
+        history: [{ durationMs: 20, counts: { services: 3 } }],
+      },
+      screenBuildDirectWrite: { history: [{ durationMs: 30 }] },
+      screenValidation: { history: [{ durationMs: 5 }] },
+    },
+  };
+
+  const summary = summarizePlanningTimings(artifact);
+  assert.equal(summary.dataverseExecutionMs, 75);
+  assert.deepEqual(summary.dataverseExecutionBreakdown, {
+    dataverseExecutionReconciliation: 10,
+    dataverseManifestPreparation: 5,
+    dataverseMetadataWrites: 40,
+    dataverseServiceGeneration: 20,
+  });
+  assert.equal(summary.totalExecutionMs, 210);
+  assert.deepEqual(summary.workload.dataverseMetadataWrites, { operations: 9 });
+  assert.deepEqual(summary.workload.dataverseServiceGeneration, { services: 3 });
+});
+
 test('snapshot timings record initial stages and bounded expansion separately', () => {
   const writes = new Map();
   const fileSystem = {
@@ -224,6 +301,15 @@ test('snapshot timings record initial stages and bounded expansion separately', 
   assert.equal(initial.stages.metadataInventory.durationMs, 20);
   assert.equal(initial.stages.metadataCandidateSelection.durationMs, 3);
   assert.equal(initial.stages.metadataDetailLoading.durationMs, 40);
+  assert.deepEqual(initial.stages.metadataInventory.counts, { inventoryTables: 0 });
+  assert.deepEqual(initial.stages.metadataCandidateSelection.counts, {
+    entityConcepts: 0,
+    selectedCandidates: 0,
+  });
+  assert.deepEqual(initial.stages.metadataDetailLoading.counts, {
+    detailedTables: 0,
+    failedTables: 0,
+  });
 
   appendSnapshotPlanningTimings(file, {
     expansion: { requestedTables: ['new_item'] },
@@ -236,6 +322,10 @@ test('snapshot timings record initial stages and bounded expansion separately', 
   }, fileSystem);
   const expanded = JSON.parse(writes.get(file));
   assert.equal(expanded.stages.metadataExpansion.durationMs, 10);
+  assert.deepEqual(expanded.stages.metadataExpansion.counts, {
+    requestedTables: 1,
+    requestedProposedNames: 0,
+  });
   assert.equal(expanded.stages.metadataInventory.history.length, 1);
 });
 

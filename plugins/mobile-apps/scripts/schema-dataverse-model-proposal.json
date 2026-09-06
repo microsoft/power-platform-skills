@@ -1,0 +1,214 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Dataverse Model Proposal",
+  "description": "Compact semantic proposal expanded deterministically into the executable Dataverse schema contract.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "contractType",
+    "publisherPrefix",
+    "tables",
+    "readPaths",
+    "risks"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "contractType": { "const": "dataverse-model-proposal" },
+    "publisherPrefix": { "type": "string", "pattern": "^[a-z][a-z0-9]*$" },
+    "tables": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 40,
+      "items": { "$ref": "#/definitions/table" }
+    },
+    "readPaths": {
+      "type": "array",
+      "maxItems": 80,
+      "items": {
+        "type": "object",
+        "required": ["jobId", "path", "strategy"],
+        "properties": {
+          "jobId": { "$ref": "#/definitions/slug" },
+          "path": { "type": "string", "minLength": 3, "maxLength": 240 },
+          "strategy": {
+            "enum": ["direct", "formatted-lookup", "bounded-chained-fetch", "external-projection-required"]
+          },
+          "note": { "type": "string", "maxLength": 300 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "risks": {
+      "type": "array",
+      "maxItems": 30,
+      "items": { "type": "string", "minLength": 10, "maxLength": 400 }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "minLength": 2,
+      "maxLength": 80
+    },
+    "logicalName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "minLength": 2,
+      "maxLength": 128
+    },
+    "decision": {
+      "enum": ["reuse", "extend", "create", "adapt", "defer"]
+    },
+    "columnDecision": {
+      "enum": ["reuse", "create", "adapt", "defer"]
+    },
+    "option": {
+      "type": "object",
+      "required": ["value", "label"],
+      "properties": {
+        "value": { "type": "integer" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 }
+      },
+      "additionalProperties": false
+    },
+    "column": {
+      "type": "object",
+      "required": ["logicalName", "displayName", "type"],
+      "properties": {
+        "logicalName": { "$ref": "#/definitions/logicalName" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "type": {
+          "enum": [
+            "string",
+            "memo",
+            "integer",
+            "bigint",
+            "decimal",
+            "double",
+            "money",
+            "datetime",
+            "date",
+            "boolean",
+            "choice",
+            "multiselectchoice",
+            "lookup",
+            "image",
+            "file",
+            "computed"
+          ]
+        },
+        "decision": { "$ref": "#/definitions/columnDecision" },
+        "adaptedLogicalName": { "$ref": "#/definitions/logicalName" },
+        "required": { "type": "boolean" },
+        "primaryName": { "type": "boolean" },
+        "maxLength": { "type": "integer", "minimum": 1 },
+        "minValue": { "type": "number" },
+        "maxValue": { "type": "number" },
+        "precision": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "precisionSource": { "type": "integer", "minimum": 0, "maximum": 4 },
+        "maxSizeInKB": { "type": "integer", "minimum": 1, "maximum": 30720 },
+        "canStoreFullImage": { "type": "boolean" },
+        "isPrimaryImage": { "type": "boolean" },
+        "format": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "behavior": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "defaultValue": { "type": "boolean" },
+        "lookupTarget": { "$ref": "#/definitions/logicalName" },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/option" }
+        },
+        "attributeType": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "sourceType": { "type": "integer", "minimum": 0 },
+        "sourceTypeMask": { "type": "integer", "minimum": 0 },
+        "formulaDefinition": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      },
+      "additionalProperties": false
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["kind", "schemaName", "decision"],
+      "properties": {
+        "kind": { "enum": ["many-to-one", "many-to-many"] },
+        "schemaName": { "$ref": "#/definitions/logicalName" },
+        "decision": { "$ref": "#/definitions/columnDecision" },
+        "adaptedSchemaName": { "$ref": "#/definitions/logicalName" },
+        "parentTable": { "$ref": "#/definitions/logicalName" },
+        "childTable": { "$ref": "#/definitions/logicalName" },
+        "lookupColumn": { "$ref": "#/definitions/logicalName" },
+        "lookupDisplayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "deleteBehavior": { "enum": ["RemoveLink", "Restrict", "Cascade"] },
+        "entity1": { "$ref": "#/definitions/logicalName" },
+        "entity2": { "$ref": "#/definitions/logicalName" },
+        "intersectTable": { "$ref": "#/definitions/logicalName" },
+        "adaptedIntersectTable": { "$ref": "#/definitions/logicalName" },
+        "serviceRequired": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "alternateKey": {
+      "type": "object",
+      "required": ["schemaName", "displayName", "decision", "columns"],
+      "properties": {
+        "schemaName": { "$ref": "#/definitions/logicalName" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "decision": { "$ref": "#/definitions/columnDecision" },
+        "adaptedSchemaName": { "$ref": "#/definitions/logicalName" },
+        "columns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/definitions/logicalName" },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "table": {
+      "type": "object",
+      "required": [
+        "conceptId",
+        "logicalName",
+        "displayName",
+        "decision",
+        "dependencyTier",
+        "serviceRequired",
+        "reason",
+        "columns",
+        "relationships",
+        "alternateKeys"
+      ],
+      "properties": {
+        "conceptId": { "$ref": "#/definitions/slug" },
+        "logicalName": { "$ref": "#/definitions/logicalName" },
+        "adaptedLogicalName": { "$ref": "#/definitions/logicalName" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "displayCollectionName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "decision": { "$ref": "#/definitions/decision" },
+        "dependencyTier": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "serviceRequired": { "type": "boolean" },
+        "ownershipType": { "enum": ["UserOwned", "OrganizationOwned", "BusinessOwned"] },
+        "reason": { "type": "string", "minLength": 10, "maxLength": 400 },
+        "columns": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/column" }
+        },
+        "relationships": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/relationship" }
+        },
+        "alternateKeys": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "$ref": "#/definitions/alternateKey" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

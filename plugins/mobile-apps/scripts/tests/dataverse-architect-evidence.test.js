@@ -17,8 +17,16 @@ function snapshot() {
   const table = {
     logicalName: 'new_goodsreception',
     schemaName: 'new_GoodsReception',
-    columns: [{ logicalName: 'new_name', type: 'String' }],
-    manyToOneRelationships: [],
+    columns: [
+      { logicalName: 'createdby', type: 'Lookup', customAttribute: false },
+      { logicalName: 'new_name', type: 'String', customAttribute: true, primaryName: true },
+      { logicalName: 'new_status', type: 'Picklist', customAttribute: true },
+      { logicalName: 'new_statusname', type: 'Virtual', customAttribute: true, logical: true, attributeOf: 'new_status' },
+    ],
+    manyToOneRelationships: [
+      { schemaName: 'lk_new_goodsreception_createdby', lookupColumn: 'createdby', targetTable: 'systemuser' },
+      { schemaName: 'new_Site_GoodsReception', lookupColumn: 'new_siteid', targetTable: 'new_site' },
+    ],
     oneToManyRelationships: [],
     manyToManyRelationships: [],
     alternateKeys: [],
@@ -74,6 +82,17 @@ test('architect evidence excludes unselected inventory and caps candidate summar
   ]);
   assert.equal(evidence.concepts[0].topCandidates.length, 3);
   assert.doesNotMatch(JSON.stringify(evidence), /new_unselected.*customizable/);
+  assert.equal(evidence.environment, undefined);
+  assert.deepEqual(
+    evidence.selectedTables[0].columns.map((column) => column.logicalName),
+    ['new_name', 'new_status'],
+  );
+  assert.deepEqual(
+    evidence.selectedTables[0].manyToOneRelationships.map((relationship) => (
+      relationship.schemaName
+    )),
+    ['new_Site_GoodsReception'],
+  );
   assert.deepEqual(validateArchitectEvidence(evidence, source, hash), {
     valid: true,
     errors: [],
@@ -137,7 +156,7 @@ test('file validation detects a sidecar stale against the full snapshot', (conte
 
   assert.equal(
     loadAndValidateArchitectEvidence(snapshotFile, evidenceFile).evidence.schemaVersion,
-    1,
+    2,
   );
   fs.writeFileSync(
     snapshotFile,

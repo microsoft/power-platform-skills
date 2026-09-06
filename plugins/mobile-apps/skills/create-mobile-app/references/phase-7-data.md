@@ -223,6 +223,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
 EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
 PROPOSED_TABLES=$(node -e "console.log(require(process.argv[1]).proposedTables.join(','))" "$RECONCILIATION_SCOPE")
 
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage dataverseExecutionReconciliation --action start
 node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -231,7 +233,13 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --proposed-tables "$PROPOSED_TABLES" \
   --reconcile-exact \
   --output "$EXECUTION_RECONCILIATION"
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage dataverseExecutionReconciliation --action finish \
+  --count "exactTables=<EXACT_TABLES_COUNT>" \
+  --count "proposedNames=<PROPOSED_TABLES_COUNT>"
 
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage dataverseManifestPreparation --action start
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
@@ -244,6 +252,12 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
   --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
   --publish-checkpoint "$PUBLISH_CHECKPOINT"
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage dataverseManifestPreparation --action finish \
+  --count "tables=<CONTRACT_TABLE_COUNT>" \
+  --count "columns=<CONTRACT_COLUMN_COUNT>" \
+  --count "relationships=<CONTRACT_RELATIONSHIP_COUNT>" \
+  --count "operations=<MANIFEST_OPERATION_COUNT>"
 ```
 
 The manifest builder mechanically verifies the approved `Reuse`, `Extend`,
@@ -289,15 +303,24 @@ Arguments:
 Any supplied artifact/binding failure returns to this orchestrator; it must
 not silently enter standalone reconciliation. A non-executable manifest
 authorizes no metadata writes.
-The publish checkpoint is retained across schema/PublishXml failure and
-deleted only after successful publish, so a rerun retries pending publication
+The publish checkpoint is retained across schema/PublishXml failure and until
+post-publish inventory-cache invalidation succeeds. It is deleted only after
+that complete boundary, so a rerun can safely retry publication and cleanup
 even when schema writes are already idempotent.
-It creates Tier 0 → N tables, applies extensions, runs
-`npx power-apps add-data-source --api-id dataverse --org-url <envUrl>
---resource-name <name>` per service-required table from the app root,
-type-checks, and returns. Real matched A/B runs are still required to quantify
+It creates Tier 0 → N tables, applies extensions, then runs
+`generate-dataverse-services.js` once from the app root. That script consumes
+the signed manifest's exact service-required list, invokes
+`npx power-apps add-data-source` sequentially, verifies config/service output,
+records service workload timing, and returns. Real matched A/B runs are still required to quantify
 the end-to-end time saved; do not present local manifest timing as a guaranteed
 1–3 minute Dataverse result.
+
+The manifest executor records `dataverseMetadataWrites` with actual phase
+operation counts and duration. The deterministic service runner records
+`dataverseServiceGeneration` with `services=<required table count>`. Report
+these measurements separately; table count alone is not a
+duration estimate because extension columns, relationships, keys, publish, and
+service generation are separate serialized operations.
 
 After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
 

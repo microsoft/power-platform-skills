@@ -112,10 +112,13 @@ test('every create phase is referenced and contains executable step guidance', (
   }
 });
 
-test('approval artifacts are sealed only after Gate 4', () => {
+test('intermediate approvals are checkpointed as mutable and sealed after Gate 4', () => {
   const planning = read('skills/create-mobile-app/references/phase-3-planning.md');
   const scaffold = read('skills/create-mobile-app/references/phase-4-scaffold.md');
-  assert.doesNotMatch(planning, /--record --step "3\.9"/);
+  assert.match(
+    planning,
+    /--record --step "3\.9"[\s\S]*--mutable-artifact "plan=native-app-plan\.md"[\s\S]*--mutable-artifact "approval=\.tmp\/mobile-plan-status\.json"/,
+  );
   assert.match(scaffold, /--record --step "6\.75"[\s\S]*plan=native-app-plan\.md/);
 });
 

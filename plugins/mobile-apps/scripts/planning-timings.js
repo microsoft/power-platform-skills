@@ -15,7 +15,11 @@ const STAGES = new Set([
   'foregroundPlanning',
   'requirementsPlanning',
   'experienceScopePlanning',
+  'persistenceContractPlanning',
   'dataModelPlanning',
+  'dataModelArchitect',
+  'dataModelCompilation',
+  'dataModelValidation',
   'capabilityConnectorPlanning',
   'journeyPackPlanning',
   'planRendering',
@@ -27,11 +31,16 @@ const STAGES = new Set([
   'screenBuildReturnOnly',
   'screenBuildForeground',
   'screenValidation',
+  'dataverseExecutionReconciliation',
+  'dataverseManifestPreparation',
+  'dataverseMetadataWrites',
+  'dataverseServiceGeneration',
 ]);
 
 const FOREGROUND_DETAIL_STAGES = [
   'requirementsPlanning',
   'experienceScopePlanning',
+  'persistenceContractPlanning',
   'dataModelPlanning',
   'capabilityConnectorPlanning',
   'journeyPackPlanning',
@@ -41,7 +50,7 @@ const FOREGROUND_DETAIL_STAGES = [
 ];
 
 function parseArgs(argv) {
-  const args = {};
+  const args = { counts: {} };
   for (let index = 2; index < argv.length; index += 1) {
     if (argv[index] === '--project-root') args.projectRoot = argv[++index];
     else if (argv[index] === '--output') args.output = argv[++index];
@@ -52,10 +61,32 @@ function parseArgs(argv) {
     else if (argv[index] === '--token-count') args.tokenCount = argv[++index];
     else if (argv[index] === '--cost-usd') args.costUsd = argv[++index];
     else if (argv[index] === '--retry') args.retry = true;
+    else if (argv[index] === '--interrupt-open') args.interruptOpen = true;
+    else if (argv[index] === '--count') {
+      const raw = String(argv[++index] || '');
+      const separator = raw.indexOf('=');
+      if (separator <= 0) throw new Error(`Invalid --count value: ${raw || '<missing>'}`);
+      args.counts[raw.slice(0, separator)] = raw.slice(separator + 1);
+    }
     else if (argv[index] === '--summary') args.summary = true;
     else if (argv[index] === '--json') args.json = true;
   }
   return args;
+}
+
+function normalizeCounts(counts) {
+  const normalized = {};
+  for (const [name, value] of Object.entries(counts || {})) {
+    if (!/^[a-z][A-Za-z0-9]*$/.test(name)) {
+      throw new Error(`Invalid workload count name: ${name}`);
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw new Error(`Workload count ${name} must be a non-negative number`);
+    }
+    normalized[name] = parsed;
+  }
+  return normalized;
 }
 
 function readArtifact(file, fileSystem = fs) {
@@ -75,11 +106,12 @@ function updatePlanningTiming(artifact, {
   tokenCount = null,
   costUsd = null,
   retry = false,
+  counts = {},
   nowIso = () => new Date().toISOString(),
   nowMs = () => Date.now(),
 }) {
   if (!STAGES.has(stage)) throw new Error(`Unknown planning stage: ${stage}`);
-  if (!['start', 'finish', 'fail', 'needs-context', 'record'].includes(action)) {
+  if (!['start', 'finish', 'fail', 'needs-context', 'record', 'interrupt'].includes(action)) {
     throw new Error(`Unknown planning timing action: ${action}`);
   }
   const current = artifact.stages[stage] || {
@@ -94,11 +126,28 @@ function updatePlanningTiming(artifact, {
   current.needsContextCount = Number.isInteger(current.needsContextCount)
     ? current.needsContextCount
     : 0;
+  current.interruptionCount = Number.isInteger(current.interruptionCount)
+    ? current.interruptionCount
+    : 0;
+  const normalizedCounts = normalizeCounts(counts);
   if (action === 'start') {
+    const startedAt = nowIso();
+    const startedAtMs = nowMs();
+    if (current.status === 'in-progress' && Number.isFinite(current.startedAtMs)) {
+      current.history.push({
+        attempt: current.attempts,
+        startedAt: current.startedAt,
+        completedAt: startedAt,
+        durationMs: Math.max(0, startedAtMs - current.startedAtMs),
+        status: 'interrupted',
+        reason: 'superseded-open-attempt',
+      });
+      current.interruptionCount += 1;
+    }
     current.attempts += 1;
     if (retry) current.retryCount += 1;
-    current.startedAt = nowIso();
-    current.startedAtMs = nowMs();
+    current.startedAt = startedAt;
+    current.startedAtMs = startedAtMs;
     current.completedAt = null;
     current.durationMs = null;
     current.status = 'in-progress';
@@ -122,6 +171,7 @@ function updatePlanningTiming(artifact, {
       status: 'done',
       reason: null,
     };
+    if (Object.keys(normalizedCounts).length > 0) result.counts = normalizedCounts;
     current.history.push(result);
     Object.assign(current, result);
   } else {
@@ -136,10 +186,14 @@ function updatePlanningTiming(artifact, {
       completedAt,
       durationMs: Math.max(0, completedAtMs - current.startedAtMs),
       status: action === 'finish' ? 'done' : action === 'needs-context'
-        ? 'needs-context' : 'failed',
-      reason: action === 'finish' ? null : String(reason || 'unspecified failure'),
+        ? 'needs-context' : action === 'interrupt' ? 'interrupted' : 'failed',
+      reason: action === 'finish' ? null : String(
+        reason || (action === 'interrupt' ? 'workflow-interrupted' : 'unspecified failure'),
+      ),
     };
     if (action === 'needs-context') current.needsContextCount += 1;
+    if (action === 'interrupt') current.interruptionCount += 1;
+    if (Object.keys(normalizedCounts).length > 0) result.counts = normalizedCounts;
     const parsedTokenCount = tokenCount == null ? null : Number(tokenCount);
     const parsedCostUsd = costUsd == null ? null : Number(costUsd);
     if (parsedTokenCount != null || parsedCostUsd != null) {
@@ -163,9 +217,38 @@ function updatePlanningTiming(artifact, {
 function stageDuration(artifact, stage) {
   const history = artifact.stages?.[stage]?.history || [];
   return history.reduce(
-    (total, attempt) => total + (Number.isFinite(attempt.durationMs) ? attempt.durationMs : 0),
+    (total, attempt) => total + (
+      attempt.status !== 'interrupted' && Number.isFinite(attempt.durationMs)
+        ? attempt.durationMs
+        : 0
+    ),
     0,
   );
+}
+
+function stageCounts(artifact, stage) {
+  const counts = {};
+  for (const attempt of artifact.stages?.[stage]?.history || []) {
+    if (attempt.status === 'interrupted') continue;
+    for (const [name, value] of Object.entries(attempt.counts || {})) {
+      counts[name] = (counts[name] || 0) + Number(value || 0);
+    }
+  }
+  return counts;
+}
+
+function interruptOpenStages(artifact, options = {}) {
+  for (const [stage, current] of Object.entries(artifact.stages || {})) {
+    if (current.status !== 'in-progress') continue;
+    updatePlanningTiming(artifact, {
+      stage,
+      action: 'interrupt',
+      reason: options.reason || 'workflow-resumed-after-interruption',
+      nowIso: options.nowIso,
+      nowMs: options.nowMs,
+    });
+  }
+  return artifact;
 }
 
 function parsedInterval(attempt) {
@@ -227,8 +310,15 @@ function summarizePlanningTimings(artifact) {
     + screenBuildForegroundMs;
   const screenValidationMs = stageDuration(artifact, 'screenValidation');
   const userApprovalWaitingMs = stageDuration(artifact, 'userApproval');
-  const totalExecutionMs = foregroundPlanningMs + screenBuildMs + screenValidationMs;
-  return {
+  const dataverseExecutionMs = totalStageDuration(artifact, [
+    'dataverseExecutionReconciliation',
+    'dataverseManifestPreparation',
+    'dataverseMetadataWrites',
+    'dataverseServiceGeneration',
+  ]);
+  const totalExecutionMs = foregroundPlanningMs + dataverseExecutionMs
+    + screenBuildMs + screenValidationMs;
+  const summary = {
     environmentResolutionMs,
     publisherPrefixDetectionMs,
     dataverseMetadataNetworkMs,
@@ -265,6 +355,38 @@ function summarizePlanningTimings(artifact) {
       .filter(([, value]) => Number(value.needsContextCount || 0) > 0)
       .map(([stage, value]) => [stage, value.needsContextCount])),
   };
+  const interruptions = Object.fromEntries(Object.entries(artifact.stages || {})
+    .filter(([, value]) => Number(value.interruptionCount || 0) > 0)
+    .map(([stage, value]) => [stage, value.interruptionCount]));
+  if (Object.keys(interruptions).length > 0) summary.interruptions = interruptions;
+
+  const workload = Object.fromEntries([...STAGES]
+    .map((stage) => [stage, stageCounts(artifact, stage)])
+    .filter(([, counts]) => Object.keys(counts).length > 0));
+  if (Object.keys(workload).length > 0) summary.workload = workload;
+
+  const dataModelBreakdown = Object.fromEntries([
+    'dataModelArchitect',
+    'dataModelCompilation',
+    'dataModelValidation',
+  ].map((stage) => [stage, stageDuration(artifact, stage)])
+    .filter(([, duration]) => duration > 0));
+  if (Object.keys(dataModelBreakdown).length > 0) {
+    summary.dataModelBreakdown = dataModelBreakdown;
+  }
+
+  const dataverseExecutionBreakdown = Object.fromEntries([
+    'dataverseExecutionReconciliation',
+    'dataverseManifestPreparation',
+    'dataverseMetadataWrites',
+    'dataverseServiceGeneration',
+  ].map((stage) => [stage, stageDuration(artifact, stage)])
+    .filter(([, duration]) => duration > 0));
+  if (Object.keys(dataverseExecutionBreakdown).length > 0) {
+    summary.dataverseExecutionBreakdown = dataverseExecutionBreakdown;
+    summary.dataverseExecutionMs = dataverseExecutionMs;
+  }
+  return summary;
 }
 
 function main(argv = process.argv) {
@@ -280,12 +402,26 @@ function main(argv = process.argv) {
       return 2;
     }
   }
+  if (args.projectRoot && args.interruptOpen) {
+    try {
+      const root = path.resolve(args.projectRoot);
+      const output = path.resolve(root, args.output || '.tmp/mobile-planning-timings.json');
+      const artifact = interruptOpenStages(readArtifact(output), { reason: args.reason });
+      atomicWriteJson(output, artifact);
+      if (args.json) process.stdout.write(`${JSON.stringify(artifact, null, 2)}\n`);
+      return 0;
+    } catch (error) {
+      process.stderr.write(`planning-timings: ${error.message}\n`);
+      return 2;
+    }
+  }
   if (!args.projectRoot || !args.stage || !args.action) {
     process.stderr.write(
       'Usage: node planning-timings.js --project-root <dir> --stage <name> '
-      + '--action <start|finish|fail|needs-context|record> [--reason <text>] '
+      + '--action <start|finish|fail|needs-context|record|interrupt> [--reason <text>] '
       + '[--duration-ms <number>] [--token-count <number>] [--cost-usd <number>] '
-      + '[--retry] [--output <path>] [--json]\n'
+      + '[--count <name>=<number> ...] [--retry] [--output <path>] [--json]\n'
+      + '       node planning-timings.js --project-root <dir> --interrupt-open [--reason <text>]\n'
       + '       node planning-timings.js --project-root <dir> --summary [--output <path>]\n',
     );
     return 2;
@@ -308,9 +444,11 @@ if (require.main === module) process.exitCode = main();
 module.exports = {
   FOREGROUND_DETAIL_STAGES,
   STAGES,
+  interruptOpenStages,
   main,
   parseArgs,
   readArtifact,
+  stageCounts,
   stageDuration,
   summarizePlanningTimings,
   updatePlanningTiming,

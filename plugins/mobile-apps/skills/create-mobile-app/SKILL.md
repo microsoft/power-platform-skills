@@ -115,7 +115,7 @@ design workflow continues to own the separate `_plan_preview.html`.
 At each phase boundary:
 
 1. Run the phase's required validators.
-2. Update `.tmp/mobile-pipeline-state.json` with the completed step and current
+2. Update `.tmp/pipeline-state.json` with the completed step and current
    artifact revisions using `scripts/mobile-pipeline-state.js`.
 3. Append user-visible concerns/blocks to `memory-bank.md`.
 4. Read the next phase file only after the current phase is complete.

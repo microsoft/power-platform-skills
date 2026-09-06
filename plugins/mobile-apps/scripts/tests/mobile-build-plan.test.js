@@ -813,6 +813,7 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
 
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.requiresReapproval, true);
+    assert.strictEqual(result.reapprovalGate, 2);
     const edited = JSON.parse(fs.readFileSync(
       path.join(projectRoot, '.tmp/dataverse-schema-contract.json'),
       'utf8',
@@ -827,6 +828,7 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
     assert.strictEqual(receipt.approvals.dataModel.status, 'pending');
     assert.strictEqual(receipt.approvals.dataModelUsage.status, 'pending');
     assert.strictEqual(receipt.approvals.screenPlan.status, 'pending');
+    assert.strictEqual(receipt.gates.gate1.status, 'pending');
     assert.strictEqual(receipt.approvedContract, undefined);
     assert.match(receipt.integritySha256, /^[a-f0-9]{64}$/);
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/pipeline-state.json')), false);
@@ -876,6 +878,7 @@ test('many-to-one relationship edits create a matching lookup atomically', () =>
       },
     });
     assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.reapprovalGate, 2);
     const edited = JSON.parse(fs.readFileSync(
       path.join(projectRoot, '.tmp/dataverse-schema-contract.json'),
       'utf8',
@@ -999,6 +1002,7 @@ test('adding a table updates and validates its explicit Product Scope mapping', 
     });
 
     assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.reapprovalGate, 1);
     const scope = JSON.parse(fs.readFileSync(
       path.join(projectRoot, '.tmp/product-scope-contract.json'),
       'utf8',

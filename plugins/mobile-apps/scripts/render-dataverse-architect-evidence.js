@@ -9,6 +9,31 @@ const {
   validateSnapshot,
 } = require('./create-dataverse-snapshot');
 
+const EVIDENCE_SCHEMA_VERSION = 2;
+const GENERIC_TOKENS = new Set([
+  'and',
+  'data',
+  'field',
+  'item',
+  'record',
+  'records',
+  'table',
+  'tables',
+]);
+const ESSENTIAL_STANDARD_COLUMNS = new Set([
+  'azureactivedirectoryobjectid',
+  'emailaddress1',
+  'fullname',
+  'internalemailaddress',
+  'isdisabled',
+  'name',
+  'statecode',
+  'statuscode',
+  'systemuserid',
+]);
+const SYSTEM_PLUMBING_COLUMN = /^(?:created|modified|owner|owning|importsequence|overriddencreatedon|processid|stageid|timezonerule|traversedpath|utcconversion|versionnumber)/;
+const SYSTEM_RELATIONSHIP = /^(?:business_unit_|lk_|owner_|team_|user_)/;
+
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -23,10 +48,191 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-function clone(value) {
-  if (Array.isArray(value)) return value.map(clone);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, clone(child)]));
+function compactObject(source, fields) {
+  return Object.fromEntries(fields
+    .filter((field) => source?.[field] !== undefined)
+    .map((field) => [field, source[field]]));
+}
+
+function normalizedNeedles(value) {
+  const tokens = String(value || '')
+    .toLowerCase()
+    .match(/[a-z0-9]+/g) || [];
+  const meaningful = tokens.filter((token) => token.length >= 3 && !GENERIC_TOKENS.has(token));
+  return [...new Set([...meaningful, meaningful.join('')].filter(Boolean))];
+}
+
+function relevantConceptNeedles(snapshot) {
+  return [...new Set((snapshot.candidateRanking || [])
+    .flatMap((ranking) => normalizedNeedles(ranking.concept)))];
+}
+
+function compactColumn(column, conceptNeedles) {
+  const logicalName = String(column.logicalName || '').toLowerCase();
+  const normalizedName = logicalName.replace(/[^a-z0-9]/g, '');
+  const conceptMatch = conceptNeedles.some((needle) => normalizedName.includes(needle));
+  const keep = column.primaryName
+    || ESSENTIAL_STANDARD_COLUMNS.has(logicalName)
+    || (column.customAttribute !== false && !column.logical && !column.attributeOf)
+    || (conceptMatch && !SYSTEM_PLUMBING_COLUMN.test(logicalName));
+  if (!keep || column.primaryId || column.logical || column.attributeOf) return null;
+  return compactObject(column, [
+    'logicalName',
+    'schemaName',
+    'type',
+    'typeName',
+    'maxLength',
+    'minValue',
+    'maxValue',
+    'precision',
+    'precisionSource',
+    'maxSizeInKB',
+    'canStoreFullImage',
+    'isPrimaryImage',
+    'format',
+    'formatName',
+    'dateTimeBehavior',
+    'defaultValue',
+    'requiredLevel',
+    'customAttribute',
+    'managed',
+    'customizable',
+    'primaryName',
+    'validForCreate',
+    'validForRead',
+    'validForUpdate',
+    'sourceType',
+    'sourceTypeMask',
+    'lookupTargets',
+    'choices',
+    'formulaDefinition',
+  ]);
+}
+
+function compactRelationship(relationship, selectedNames, retainedColumns) {
+  const schemaName = String(relationship.schemaName || '');
+  const lookupColumn = String(
+    relationship.lookupColumn || relationship.referencingAttribute || '',
+  ).toLowerCase();
+  const endpoints = [
+    relationship.targetTable,
+    relationship.sourceTable,
+    relationship.entity1,
+    relationship.entity2,
+    relationship.referencingEntity,
+    relationship.referencedEntity,
+  ].filter(Boolean).map((value) => String(value).toLowerCase());
+  const selectedEndpoints = new Set(endpoints.filter((name) => selectedNames.has(name)));
+  const relevant = retainedColumns.has(lookupColumn)
+    || selectedEndpoints.size > 1
+    || (Boolean(lookupColumn)
+      && !SYSTEM_RELATIONSHIP.test(schemaName.toLowerCase())
+      && !SYSTEM_PLUMBING_COLUMN.test(lookupColumn));
+  if (!relevant) return null;
+  return compactObject(relationship, [
+    'schemaName',
+    'lookupColumn',
+    'sourceTable',
+    'targetTable',
+    'targetColumn',
+    'entity1',
+    'entity2',
+    'intersectTable',
+    'managed',
+    'cascadeConfiguration',
+  ]);
+}
+
+function compactTable(table, snapshot) {
+  const conceptNeedles = relevantConceptNeedles(snapshot);
+  const selectedNames = new Set(
+    snapshot.tables.map((candidate) => String(candidate.logicalName || '').toLowerCase()),
+  );
+  const columns = (table.columns || [])
+    .map((column) => compactColumn(column, conceptNeedles))
+    .filter(Boolean);
+  const retainedColumns = new Set(columns.map((column) => column.logicalName.toLowerCase()));
+  const compactRelationships = (relationships) => (relationships || [])
+    .map((relationship) => compactRelationship(
+      relationship,
+      selectedNames,
+      retainedColumns,
+    ))
+    .filter(Boolean);
+  const manyToOneRelationships = compactRelationships(table.manyToOneRelationships);
+  const oneToManyRelationships = compactRelationships(table.oneToManyRelationships);
+  const manyToManyRelationships = compactRelationships(table.manyToManyRelationships);
+  return {
+    ...compactObject(table, [
+      'logicalName',
+      'schemaName',
+      'displayName',
+      'displayCollectionName',
+      'description',
+      'entitySetName',
+      'primaryIdAttribute',
+      'primaryNameAttribute',
+      'ownershipType',
+      'hasActivities',
+      'hasNotes',
+      'isAvailableOffline',
+      'changeTrackingEnabled',
+      'customEntity',
+      'managed',
+      'customizable',
+      'canCreateAttributes',
+      'canBePrimaryEntityInRelationship',
+      'canBeRelatedEntityInRelationship',
+      'canBeInManyToMany',
+      'detailLevel',
+      'missingDetailClasses',
+    ]),
+    detailLevel: table.detailLevel || 'full',
+    missingDetailClasses: table.missingDetailClasses || [],
+    columns,
+    manyToOneRelationships,
+    oneToManyRelationships,
+    manyToManyRelationships,
+    alternateKeys: table.alternateKeys || [],
+    evidenceCounts: {
+      totalColumns: (table.columns || []).length,
+      retainedColumns: columns.length,
+      totalRelationships: (table.manyToOneRelationships || []).length
+        + (table.oneToManyRelationships || []).length
+        + (table.manyToManyRelationships || []).length,
+      retainedRelationships: manyToOneRelationships.length
+        + oneToManyRelationships.length
+        + manyToManyRelationships.length,
+      keys: (table.alternateKeys || []).length,
+    },
+  };
+}
+
+function compactNameChecks(checks) {
+  const compactExisting = (existing) => existing ? compactObject(existing, [
+    'logicalName',
+    'schemaName',
+    'displayName',
+    'displayCollectionName',
+    'primaryIdAttribute',
+    'primaryNameAttribute',
+    'ownershipType',
+    'customEntity',
+    'managed',
+    'customizable',
+    'canCreateAttributes',
+  ]) : null;
+  const checked = (checks?.checked || []).map((item) => ({
+    logicalName: item.logicalName,
+    status: item.status,
+    existing: compactExisting(item.existing),
+  }));
+  return {
+    checked,
+    collisions: checked.filter((item) => item.status === 'collision'),
+    missing: checked.filter((item) => item.status === 'missing')
+      .map((item) => item.logicalName),
+  };
 }
 
 function architectCandidate(candidate) {
@@ -54,12 +260,8 @@ function buildArchitectEvidence(snapshot, sourceSnapshotSha256) {
     throw new Error('sourceSnapshotSha256 must be a SHA-256 value');
   }
   const evidence = {
-    schemaVersion: 1,
+    schemaVersion: EVIDENCE_SCHEMA_VERSION,
     sourceSnapshotSha256,
-    environment: {
-      url: snapshot.environmentUrl,
-      tenantId: snapshot.tenantId,
-    },
     generatedAt: snapshot.generatedAt,
     concepts: snapshot.candidateRanking.map((ranking) => ({
       concept: ranking.concept,
@@ -69,18 +271,15 @@ function buildArchitectEvidence(snapshot, sourceSnapshotSha256) {
       preferredPublisherFamily: ranking.preferredPublisherFamily || '',
       topCandidates: (ranking.candidates || []).slice(0, 3).map(architectCandidate),
     })),
-    selectedTables: snapshot.tables.map((table) => {
-      const selected = clone(table);
-      selected.detailLevel = table.detailLevel || 'full';
-      selected.missingDetailClasses = clone(table.missingDetailClasses || []);
-      return selected;
-    }),
+    selectedTables: snapshot.tables.map((table) => compactTable(table, snapshot)),
     selectedCandidateEvidence: snapshot.selectedCandidateEvidence || [],
-    proposedNameChecks: snapshot.proposedNameChecks,
+    proposedNameChecks: compactNameChecks(snapshot.proposedNameChecks),
     exactNameResolution: snapshot.exactNameResolution,
-    detailLoadFailures: snapshot.detailLoadFailures || [],
+    detailLoadFailures: (snapshot.detailLoadFailures || []).map((failure) => compactObject(
+      failure,
+      ['logicalName', 'selectionReasons', 'status', 'required'],
+    )),
     detailLoadSummary: snapshot.detailLoadSummary,
-    timings: snapshot.timings,
   };
   return JSON.parse(JSON.stringify(evidence));
 }
@@ -90,13 +289,11 @@ function validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
     return { valid: false, errors: ['architect evidence must be an object'] };
   }
-  if (evidence.schemaVersion !== 1) errors.push('architect evidence schemaVersion must be 1');
+  if (evidence.schemaVersion !== EVIDENCE_SCHEMA_VERSION) {
+    errors.push(`architect evidence schemaVersion must be ${EVIDENCE_SCHEMA_VERSION}`);
+  }
   if (evidence.sourceSnapshotSha256 !== sourceSnapshotSha256) {
     errors.push('architect evidence source snapshot hash is stale');
-  }
-  if (evidence.environment?.url !== snapshot.environmentUrl
-    || evidence.environment?.tenantId !== snapshot.tenantId) {
-    errors.push('architect evidence environment does not match the snapshot');
   }
   const expectedTables = new Map(snapshot.tables.map((table) => [table.logicalName, table]));
   const actualTables = Array.isArray(evidence.selectedTables) ? evidence.selectedTables : [];
@@ -112,14 +309,7 @@ function validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256) {
       errors.push(`architect evidence contains unknown table ${table.logicalName}`);
       continue;
     }
-    const normalized = { ...table };
-    if (!Object.prototype.hasOwnProperty.call(expected, 'detailLevel')) {
-      delete normalized.detailLevel;
-    }
-    if (!Object.prototype.hasOwnProperty.call(expected, 'missingDetailClasses')) {
-      delete normalized.missingDetailClasses;
-    }
-    if (stableJson(normalized) !== stableJson(expected)) {
+    if (stableJson(table) !== stableJson(compactTable(expected, snapshot))) {
       errors.push(`architect evidence table ${table.logicalName} differs from the snapshot`);
     }
   }
@@ -218,8 +408,11 @@ function main(argv = process.argv) {
 if (require.main === module) process.exitCode = main();
 
 module.exports = {
+  EVIDENCE_SCHEMA_VERSION,
   architectCandidate,
   buildArchitectEvidence,
+  compactColumn,
+  compactTable,
   loadAndValidateArchitectEvidence,
   main,
   sha256,

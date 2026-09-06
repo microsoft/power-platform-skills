@@ -47,6 +47,19 @@ test('fixture benchmark covers typed domain and adversarial receiving workflows'
     assert.ok(scenario.elapsedLocalProcessingMs >= 0);
   }
 
+  assert.deepEqual(result.workloads.map((item) => item.id), ['small', 'medium', 'large']);
+  assert.deepEqual(result.workloads.map((item) => item.workload.tables), [3, 10, 20]);
+  assert.deepEqual(result.workloads.map((item) => item.workload.columns), [15, 100, 400]);
+  assert.deepEqual(result.workloads.map((item) => item.workload.relationships), [2, 9, 19]);
+  assert.deepEqual(result.workloads.map((item) => item.workload.alternateKeys), [3, 10, 20]);
+  assert.deepEqual(result.workloads.map((item) => item.workload.metadataOperations), [9, 30, 60]);
+  assert.deepEqual(result.workloads.map((item) => item.workload.services), [3, 10, 20]);
+  for (const workload of result.workloads) {
+    assert.ok(workload.workload.metadataRequests > 0);
+    assert.ok(Object.values(workload.stagesMs).every((duration) => duration >= 0));
+    assert.ok(workload.bytes.compactEvidence < workload.bytes.snapshot);
+  }
+
   const receiving = result.scenarios[2];
   assert.equal(receiving.requiredConceptCount, 6);
   assert.equal(receiving.selectedCandidateCount, 8);
@@ -78,6 +91,9 @@ test('benchmark report is explicit about real fixture execution and A/B limitati
   assert.match(markdown, /## Request categories/);
   assert.match(markdown, /typed candidate selection/);
   assert.match(markdown, /compact architect evidence/);
+  assert.match(markdown, /## Synthetic workload scaling/);
+  assert.match(markdown, /Metadata operations/);
+  assert.match(markdown, /local orchestration only/);
   assert.match(markdown, /Matched agent A\/B runs are still required/);
   assert.match(markdown, /matched agent A\/B decision and timing runs/);
 });

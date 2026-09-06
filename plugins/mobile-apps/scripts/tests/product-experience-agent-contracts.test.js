@@ -10,7 +10,6 @@ const agentRoot = path.join(pluginRoot, 'agents');
 const skillRoot = path.join(pluginRoot, 'skills');
 const removedPlanningAgents = [
   'native-app-planner',
-  'data-model-architect',
   'screen-planner',
   'offline-profile-architect',
 ];
@@ -26,11 +25,22 @@ function markdownFiles(root) {
   });
 }
 
-test('screen builder is the only runtime agent', () => {
+test('data model architect and screen builder are the only runtime agents', () => {
   assert.deepStrictEqual(
     fs.readdirSync(agentRoot).filter((entry) => entry.endsWith('.md')).sort(),
-    ['screen-builder.md'],
+    ['data-model-architect.md', 'screen-builder.md'],
   );
+});
+
+test('data model architect is tool-free and return-only', () => {
+  const source = fs.readFileSync(path.join(agentRoot, 'data-model-architect.md'), 'utf8');
+  assert.match(source, /^tools:\s*\[\]\s*$/m);
+  assert.match(source, /Make no tool calls/);
+  assert.match(source, /compact `dataverse-architect-evidence` schema version 2/);
+  assert.match(source, /schema-dataverse-model-proposal\.json/);
+  assert.match(source, /MOBILE_DATAVERSE_PROPOSAL_CONTENT/);
+  assert.match(source, /proposed-dataverse-names/);
+  assert.doesNotMatch(source, /\bBash\b|\bWrite\b|\bRead\b|\bGrep\b|\bGlob\b/);
 });
 
 test('screen builder defers model selection to the host', () => {
@@ -72,11 +82,11 @@ test('setup-datamodel owns foreground plan-only decisions', () => {
   const add = fs.readFileSync(path.join(skillRoot, 'add-dataverse', 'SKILL.md'), 'utf8');
   assert.match(setup, /`--plan-only` is the foreground planning API/);
   assert.match(setup, /Never replace a column in place/);
+  assert.match(setup, /compile-dataverse-model-proposal\.js/);
   assert.match(setup, /validate-dataverse-planning-decisions\.js/);
   assert.match(add, /\/setup-datamodel` with `--plan-only`/);
   for (const source of [setup, add]) {
-    assert.doesNotMatch(source, /mobile-app:(?:native-app-planner|data-model-architect)/);
-    assert.doesNotMatch(source, /Spawn (?:the )?`?data-model-architect/i);
+    assert.doesNotMatch(source, /mobile-app:native-app-planner/);
   }
 });
 
@@ -89,27 +99,30 @@ test('setup-offline-profile owns architecture and never dispatches a planner', (
   assert.doesNotMatch(source, /mobile-app:offline-profile-architect/);
 });
 
-test('create planning is one foreground path over the existing contracts', () => {
+test('create planning owns one compiled path with one bounded architect', () => {
   const phase = fs.readFileSync(
     path.join(skillRoot, 'create-mobile-app', 'references', 'phase-3-planning.md'),
     'utf8',
   );
-  assert.match(phase, /Planning uses one path on every host/);
-  assert.match(phase, /\/setup-datamodel` in the foreground/);
+  assert.match(phase, /Planning uses one canonical artifact path on every host/);
+  assert.match(phase, /mobile-app:data-model-architect/);
+  assert.match(phase, /tool-free return-only/);
+  assert.match(phase, /compile-dataverse-model-proposal\.js/);
+  assert.match(phase, /full snapshot is validator-only/);
   for (const tool of [
     'validate-product-experience.js',
     'validate-product-scope.js',
     'validate-workflow-journey.js',
     'compile-screen-build-pack.js',
-    'mobile-pipeline-state.json',
+    'pipeline-state.json',
   ]) {
     assert.match(phase, new RegExp(tool.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.match(phase, /All questions and approvals use foreground/);
   assert.match(phase, /Prefer one coherent bounded workspace/);
   assert.match(phase, /Never split the same job merely because its facts map to different entities/);
-  assert.doesNotMatch(phase, /\bTask\b/);
-  assert.doesNotMatch(phase, /mobile-app:(?:native-app-planner|data-model-architect|screen-planner)/);
+  assert.match(phase, /If `Task` is unavailable/);
+  assert.doesNotMatch(phase, /mobile-app:(?:native-app-planner|screen-planner)/);
 });
 
 test('screen work orders carry implementation contracts and bounded scenario facts', () => {

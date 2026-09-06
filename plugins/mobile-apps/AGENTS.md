@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 24 skills + 1 agent authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 24 skills + 2 bounded agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -23,7 +23,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
 .claude-plugin/plugin.json     ← Legacy metadata mirror
 AGENTS.md                      ← This file
 README.md                      ← Plugin overview
-agents/                        ← screen-builder (one assigned screen per child)
+agents/                        ← return-only data-model architect + one-screen builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /add-dataverse, /add-connector, /add-native, ...
 scripts/                       ← shared helpers, including validate-mobile-files.js and bundled telemetry
@@ -64,10 +64,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
   Deterministic execution uses Product Experience, Product Scope, persistence,
   Workflow Journey, and compiled screen-build-pack JSON sidecars under `.tmp/`.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions-cli.md`](./shared/shared-instructions-cli.md).
-9. **Single child-agent boundary** — Planning, questions, approvals, files, mutations, validation, and recovery stay in foreground skills. The only child is `mobile-app:screen-builder`, invoked with its fully qualified name for exactly one sealed screen work order.
+9. **Two bounded child-agent boundaries** — Questions, approvals, environment access, files, mutations, deterministic compilation, validation, and recovery stay in foreground skills. `mobile-app:data-model-architect` is a tool-free return-only semantic worker over one sealed compact evidence packet. `mobile-app:screen-builder` implements exactly one sealed screen work order. Neither child may spawn another agent or widen its supplied context.
 10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions-core.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
-11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. The screen builder uses `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
-12. **Screen-builder return protocol** — Direct-write returns use a status code as the **literal first line**. Return-only responses use the run-scoped delimiter envelope in [`agents/screen-builder.md`](agents/screen-builder.md). Foreground orchestrators parse the selected channel and branch:
+11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Both agents use `user-invocable: false`; the data-model architect has an empty tool list, while the screen builder receives only the tools required by its selected channel.
+12. **Child-agent return protocol** — The data-model architect always uses the run-scoped return-only proposal envelope in [`agents/data-model-architect.md`](agents/data-model-architect.md). Screen direct-write returns use a literal first-line status; screen return-only responses use the delimiter envelope in [`agents/screen-builder.md`](agents/screen-builder.md). Foreground orchestrators parse the selected contract and branch:
 
     | Code | Meaning | Orchestrator action |
     |---|---|---|

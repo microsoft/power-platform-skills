@@ -125,6 +125,16 @@ test('app identity and Power Apps initialization respect existing state', () => 
   assert.match(initialize, /existing power\.config\.json targets/);
 });
 
+test('planning checkpoints evolving approvals without weakening immutable contracts', () => {
+  assert.match(planningWorkflow, /--interrupt-open/);
+  assert.match(planningWorkflow, /--record --step "3\.2"/);
+  assert.match(planningWorkflow, /--record --step "3\.9"/);
+  assert.ok((planningWorkflow.match(/--mutable-artifact "approval=/g) || []).length >= 2);
+  assert.match(planningWorkflow, /--mutable-artifact "plan=/);
+  assert.match(skill, /\.tmp\/pipeline-state\.json/);
+  assert.doesNotMatch(skill, /\.tmp\/mobile-pipeline-state\.json/);
+});
+
 test('live Build Plan starts after proceed and remains separate from design preview', () => {
   const previewIndex = setupWorkflow.indexOf('### Step 2c — Plan preview');
   const appIdentityIndex = setupWorkflow.indexOf('scripts/lib/app-identity.js', previewIndex);
@@ -234,8 +244,8 @@ test('persistence ownership compiles before conditional Dataverse planning and j
     'node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js"',
     dataModel,
   );
-  const persistenceArgument = planningWorkflow.indexOf(
-    '--persistence-contract <working_dir>/.tmp/persistence-contract.json',
+  const proposalCompile = planningWorkflow.indexOf(
+    'scripts/compile-dataverse-model-proposal.js',
     dataModel,
   );
 
@@ -246,8 +256,8 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   assert.ok(gateOne < dataModel);
   assert.ok(dataModel < publisherRead);
   assert.ok(publisherRead < snapshotRead);
-  assert.ok(snapshotRead < persistenceArgument);
-  assert.ok(persistenceArgument < journey);
+  assert.ok(snapshotRead < proposalCompile);
+  assert.ok(proposalCompile < journey);
 
   for (const artifact of [
     '.tmp/architecture-decisions.json',
@@ -405,7 +415,7 @@ test('planning compiles the canonical navigation projection before screen packs'
   assert.ok(screenPackCompilation > navigationCompilation);
   assert.match(planningWorkflow, /canonical deterministic navigation[\s\S]*projection of validated Product Scope/);
   assert.match(planningWorkflow, /Product Scope remains the planning[\s\S]*authority/);
-  assert.match(planningWorkflow, /mobile-pipeline-state\.json[\s\S]*navigation-manifest\.json/);
+  assert.match(planningWorkflow, /pipeline-state\.json[\s\S]*navigation-manifest\.json/);
 });
 
 test('Phase 10 generates navigation only from the compiled manifest', () => {
