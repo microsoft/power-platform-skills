@@ -56,6 +56,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
 
+const READ_REQUEST_TIMEOUT_MS = 30000;
+const MUTATION_REQUEST_TIMEOUT_MS = 120000;
+
 function retryAfterDelayMs(retryAfter, fallbackMs, nowMs = Date.now()) {
   const safeFallback = Number.isFinite(fallbackMs) && fallbackMs >= 0
     ? fallbackMs
@@ -200,7 +203,9 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
     headers,
     body,
     includeHeaders,
-    timeout: 30000,
+    timeout: isMutationMethod(method)
+      ? MUTATION_REQUEST_TIMEOUT_MS
+      : READ_REQUEST_TIMEOUT_MS,
   });
 
   return res;
@@ -1193,6 +1198,8 @@ function extractGuid(headerValue) {
 if (require.main === module) main();
 
 module.exports = {
+  MUTATION_REQUEST_TIMEOUT_MS,
+  READ_REQUEST_TIMEOUT_MS,
   createDataverseRequestExecutor,
   doRequest,
   extractGuid,

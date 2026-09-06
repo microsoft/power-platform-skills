@@ -120,7 +120,13 @@ const ORDINARY_METADATA_FIELDS_BY_TYPE = {
   DecimalAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
   DoubleAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
   FileAttributeMetadata: ['MaxSizeInKB'],
-  ImageAttributeMetadata: ['MaxHeight', 'MaxWidth', 'MaxSizeInKB'],
+  ImageAttributeMetadata: [
+    'CanStoreFullImage',
+    'IsPrimaryImage',
+    'MaxHeight',
+    'MaxWidth',
+    'MaxSizeInKB',
+  ],
   IntegerAttributeMetadata: ['MinValue', 'MaxValue', 'Format'],
   MemoAttributeMetadata: ['MaxLength', 'Format'],
   MoneyAttributeMetadata: ['MinValue', 'MaxValue', 'Precision', 'PrecisionSource'],
@@ -1291,13 +1297,16 @@ async function loadDetailedEntity(request, entity, {
   }
 
   const ordinaryConstraints = new Map();
+  const imageUpdateDefinitions = new Map();
   const ordinaryTypes = [...new Set(attributes.map(ordinaryMetadataType).filter(Boolean))];
   if (fullDetail) {
     for (const type of ordinaryTypes) {
       const fields = ORDINARY_METADATA_FIELDS_BY_TYPE[type];
       const metadata = await requestCollection(
         request,
-        `${root}/Attributes/Microsoft.Dynamics.CRM.${type}?$select=LogicalName,${fields.join(',')}`,
+        type === 'ImageAttributeMetadata'
+          ? `${root}/Attributes/Microsoft.Dynamics.CRM.${type}`
+          : `${root}/Attributes/Microsoft.Dynamics.CRM.${type}?$select=LogicalName,${fields.join(',')}`,
         `${logicalName} ${type} ordinary metadata`,
       );
       for (const item of metadata) {
@@ -1308,6 +1317,9 @@ async function loadDetailedEntity(request, entity, {
           }
         }
         ordinaryConstraints.set(item.LogicalName, constraints);
+        if (type === 'ImageAttributeMetadata') {
+          imageUpdateDefinitions.set(item.LogicalName, item);
+        }
       }
     }
   }
@@ -1444,6 +1456,7 @@ async function loadDetailedEntity(request, entity, {
     columns: attributes.map((attribute) => {
       const computed = computedMetadata.get(attribute.LogicalName) || null;
       return {
+        metadataId: attribute.MetadataId || null,
         logicalName: attribute.LogicalName,
         schemaName: attribute.SchemaName,
         type: canonicalAttributeType(
@@ -1476,6 +1489,9 @@ async function loadDetailedEntity(request, entity, {
             attributeOf: attribute.AttributeOf || null,
           }
           : null,
+        ...(imageUpdateDefinitions.has(attribute.LogicalName)
+          ? { imageUpdateDefinition: imageUpdateDefinitions.get(attribute.LogicalName) }
+          : {}),
       };
     }),
     manyToOneRelationships: manyToOneRelationships.map((relationship) => ({
