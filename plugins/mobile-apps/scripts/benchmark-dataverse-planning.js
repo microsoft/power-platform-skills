@@ -2,7 +2,11 @@
 'use strict';
 
 const { createSnapshot, parseArgs } = require('./create-dataverse-snapshot');
-const { renderPlanningEvidence } = require('./render-dataverse-planning-evidence');
+const { metadataRequestIdentity } = require('./dataverse-request');
+const {
+  buildArchitectEvidence,
+  sha256,
+} = require('./render-dataverse-architect-evidence');
 
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
@@ -59,17 +63,21 @@ function table(logicalName, columns, overrides = {}) {
   };
 }
 
+function concept(phrase, kind = 'entity', discoverTable = kind === 'entity') {
+  return { phrase, kind, discoverTable, evidence: `Fixture brief mentions ${phrase}.` };
+}
+
 const REQUIREMENT_SETS = [
   {
     id: 'wildlife-rehabilitation',
     name: 'Wildlife rehabilitation',
     prompt: 'Plan a wildlife rehabilitation app for animal intake, medical assessments, care activities, enclosure assignment, and release events.',
     concepts: [
-      'animals',
-      'medical assessments',
-      'care activities',
-      'enclosures',
-      'release events',
+      concept('animals'),
+      concept('medical assessments'),
+      concept('care activities'),
+      concept('enclosures'),
+      concept('release events'),
     ],
     entities: [
       entity('wr_animal', 'Animal'),
@@ -181,11 +189,11 @@ const REQUIREMENT_SETS = [
     name: 'Laboratory sample chain-of-custody',
     prompt: 'Plan a laboratory sample chain-of-custody app for samples, batches, custody transfers, test results, and evidence attachments.',
     concepts: [
-      'samples',
-      'batches',
-      'custody transfers',
-      'test results',
-      'evidence attachments',
+      concept('samples'),
+      concept('batches'),
+      concept('custody transfers'),
+      concept('test results'),
+      concept('evidence attachments'),
     ],
     entities: [
       entity('lab_sample', 'Sample'),
@@ -292,6 +300,91 @@ const REQUIREMENT_SETS = [
     expectedCollision: 'lab_sample',
     expectedMissing: 'lab_storagecondition',
   },
+  {
+    id: 'warehouse-receiving-adversarial',
+    name: 'Warehouse receiving with typed noise and collision',
+    prompt: 'Plan receiving for field logisticians with shipments, line items, receptions, batch numbers, damage evidence, and limited connectivity.',
+    concepts: [
+      concept('goods items'),
+      concept('expected shipments'),
+      concept('expected shipment lines'),
+      concept('goods receptions'),
+      concept('goods reception lines'),
+      concept('damage evidence attachments'),
+      concept('field logisticians', 'role', false),
+      concept('batch numbers', 'attribute', false),
+      concept('limited connectivity', 'constraint', false),
+    ],
+    entities: [
+      entity('new_goodsitem', 'Goods Item'),
+      entity('new_expectedshipment', 'Expected Shipment'),
+      entity('new_expectedshipmentline', 'Expected Shipment Line'),
+      entity('new_goodsreception', 'Goods Reception'),
+      entity('new_goodsreceptionline', 'Goods Reception Line'),
+      entity('new_checkin', 'Evidence'),
+      entity('new_damagephoto', 'Damage Photo'),
+      entity('new_damageevidence', 'Damage Evidence'),
+      entity('rollupfield', 'Field'),
+      entity('fax', 'Fax'),
+    ],
+    tables: [
+      table('new_goodsitem', [column('new_name')]),
+      table('new_expectedshipment', [column('new_name')]),
+      table('new_expectedshipmentline', [column('new_name')]),
+      table('new_goodsreception', [column('new_name')]),
+      table('new_goodsreceptionline', [
+        column('new_name'),
+        column('new_goodsreceptionid', 'Lookup'),
+        column('new_quantityvariance', 'Decimal', { SourceType: 3, SourceTypeMask: 4 }),
+      ], {
+        manyToOneRelationships: [{
+          SchemaName: 'new_GoodsReceptionLine_GoodsReception',
+          ReferencingAttribute: 'new_goodsreceptionid',
+          ReferencedEntity: 'new_goodsreception',
+          ReferencedAttribute: 'new_goodsreceptionid',
+          IsManaged: false,
+        }],
+        lookupTargets: { new_goodsreceptionid: ['new_goodsreception'] },
+        computed: {
+          new_quantityvariance: {
+            sourceType: 3,
+            sourceTypeMask: 4,
+            formulaDefinition: 'new_receivedquantity - new_expectedquantity',
+          },
+        },
+      }),
+      table('new_checkin', [column('new_name')]),
+      table('new_damagephoto', [column('new_name')]),
+      table('new_damageevidence', [column('new_name')]),
+    ],
+    expectedDetailed: [
+      'new_goodsitem',
+      'new_expectedshipment',
+      'new_expectedshipmentline',
+      'new_goodsreception',
+      'new_goodsreceptionline',
+      'new_checkin',
+      'new_damagephoto',
+      'new_damageevidence',
+    ],
+    expectedRelationship: {
+      table: 'new_goodsreceptionline',
+      lookupColumn: 'new_goodsreceptionid',
+      targetTable: 'new_goodsreception',
+    },
+    expectedComputed: {
+      table: 'new_goodsreceptionline',
+      logicalName: 'new_quantityvariance',
+      sourceType: 3,
+      sourceTypeMask: 4,
+      formulaDefinition: 'new_receivedquantity - new_expectedquantity',
+    },
+    proposedNames: ['new_damageevidence', 'new_receivingexception'],
+    expectedCollision: 'new_damageevidence',
+    expectedMissing: 'new_receivingexception',
+    expectedStrongCollision: 'new_damageevidence',
+    expectedSkippedConcepts: ['field logisticians', 'batch numbers', 'limited connectivity'],
+  },
 ];
 
 function tableNameFromPath(apiPath) {
@@ -320,6 +413,19 @@ function createFixtureRequest(requirementSet, calls) {
     const logicalName = tableNameFromPath(apiPath);
     const fixture = tables.get(logicalName);
     if (!fixture) return { status: 404, error: `Unknown fixture table ${logicalName}` };
+    if (apiPath.includes('$expand=Attributes(')) {
+      return {
+        status: 200,
+        data: {
+          LogicalName: logicalName,
+          Attributes: fixture.columns,
+          ManyToOneRelationships: fixture.manyToOneRelationships,
+          OneToManyRelationships: fixture.oneToManyRelationships,
+          ManyToManyRelationships: fixture.manyToManyRelationships,
+          Keys: fixture.alternateKeys,
+        },
+      };
+    }
     if (apiPath.includes('/Attributes?$select=')) {
       return { status: 200, data: { value: fixture.columns } };
     }
@@ -369,11 +475,8 @@ function createFixtureRequest(requirementSet, calls) {
   };
 }
 
-function normalizeEvidence(markdown) {
-  return markdown
-    .replace(/\d+(?:\.\d+)? ms/g, '<duration>')
-    .replace(/\s+/g, ' ')
-    .trim();
+function normalizeEvidence(evidence) {
+  return JSON.stringify(evidence);
 }
 
 async function evaluateRequirementSet(requirementSet) {
@@ -384,10 +487,13 @@ async function evaluateRequirementSet(requirementSet) {
     tenantId: 'fixture-tenant',
     concepts: requirementSet.concepts,
     proposedTableNames: requirementSet.proposedNames,
+    progressiveDetail: true,
+    combinedBaseRead: true,
     request: createFixtureRequest(requirementSet, calls),
     nowIso: () => '2026-08-18T05:00:00.000Z',
   });
-  const evidence = renderPlanningEvidence(snapshot);
+  const snapshotSource = JSON.stringify(snapshot);
+  const evidence = buildArchitectEvidence(snapshot, sha256(snapshotSource));
   const normalizedEvidenceText = normalizeEvidence(evidence);
   const selectedNames = snapshot.tables.map((item) => item.logicalName).sort();
   const expectedNames = [...requirementSet.expectedDetailed].sort();
@@ -414,11 +520,22 @@ async function evaluateRequirementSet(requirementSet) {
     proposedNameChecks: snapshot.proposedNameChecks.collisions.some(
       (item) => item.logicalName === requirementSet.expectedCollision,
     ) && snapshot.proposedNameChecks.missing.includes(requirementSet.expectedMissing),
-    evidenceOutput: expectedNames.every((name) => normalizedEvidenceText.includes(`\`${name}\``))
-      && normalizedEvidenceText.includes(`\`${requirementSet.expectedCollision}\``)
-      && normalizedEvidenceText.includes(`\`${requirementSet.expectedMissing}\``)
-      && normalizedEvidenceText.includes('Detailed candidate facts')
-      && normalizedEvidenceText.includes('Proposed logical-name checks'),
+    evidenceOutput: expectedNames.every((name) => normalizedEvidenceText.includes(name))
+      && normalizedEvidenceText.includes(requirementSet.expectedCollision)
+      && normalizedEvidenceText.includes(requirementSet.expectedMissing)
+      && evidence.selectedTables.length === snapshot.tables.length
+      && evidence.concepts.every((item) => item.topCandidates.length <= 3),
+    nonEntityConceptFiltering: (requirementSet.expectedSkippedConcepts || []).every(
+      (phrase) => snapshot.candidateRanking.some((ranking) => (
+        ranking.concept === phrase
+        && ranking.discoverTable === false
+        && ranking.candidates.length === 0
+      ))),
+    strongCollisionPromotion: !requirementSet.expectedStrongCollision
+      || snapshot.selectedCandidateEvidence.some((item) => (
+        item.logicalName === requirementSet.expectedStrongCollision
+        && item.reasons.includes('proposed-collision:strong-concept-phrase')
+      )),
   };
   const passedChecks = Object.values(checks).filter(Boolean).length;
   const totalChecks = Object.keys(checks).length;
@@ -428,7 +545,7 @@ async function evaluateRequirementSet(requirementSet) {
     id: requirementSet.id,
     name: requirementSet.name,
     prompt: requirementSet.prompt,
-    requiredConceptCount: requirementSet.concepts.length,
+    requiredConceptCount: requirementSet.concepts.filter((item) => item.discoverTable).length,
     selectedCandidateCount: selectedNames.length,
     selectedCandidates: selectedNames,
     detailedCandidateBreakdown: {
@@ -436,10 +553,23 @@ async function evaluateRequirementSet(requirementSet) {
       advisory: snapshot.detailLoadSummary.advisoryCandidates || 0,
       exactCoveredConcepts: snapshot.detailLoadSummary.exactCoveredConcepts || 0,
       advisoryLimit: snapshot.detailLoadSummary.advisoryLimit || 40,
+      primary: snapshot.detailLoadSummary.primaryCandidates || 0,
+      ambiguity: snapshot.detailLoadSummary.ambiguityCandidates || 0,
+      strongCollisions: snapshot.detailLoadSummary.strongCollisionCandidates || 0,
+      deferred: snapshot.detailLoadSummary.deferredCandidates || 0,
+      core: snapshot.detailLoadSummary.coreCandidates || 0,
+      full: snapshot.detailLoadSummary.fullCandidates || 0,
+      loaded: snapshot.detailLoadSummary.loadedCandidates || 0,
+      failed: snapshot.detailLoadSummary.failedCandidates || 0,
     },
     metadataRequests: {
       snapshotForegroundRequests: calls.length,
       snapshotFirstAgentRequests: 0,
+      byCategory: calls.reduce((counts, apiPath) => {
+        const category = metadataRequestIdentity(apiPath).category;
+        counts[category] = (counts[category] || 0) + 1;
+        return counts;
+      }, {}),
     },
     outputCompleteness: {
       checks,
@@ -447,7 +577,9 @@ async function evaluateRequirementSet(requirementSet) {
       totalChecks,
       percent: Math.round((passedChecks / totalChecks) * 100),
     },
-    evidenceCharacters: evidence.length,
+    snapshotBytes: Buffer.byteLength(snapshotSource),
+    architectEvidenceBytes: Buffer.byteLength(normalizedEvidenceText),
+    evidenceCharacters: normalizedEvidenceText.length,
     elapsedLocalProcessingMs: Number(elapsedLocalProcessingMs.toFixed(3)),
   };
 }
@@ -455,7 +587,7 @@ async function evaluateRequirementSet(requirementSet) {
 async function runBenchmark(requirementSets = REQUIREMENT_SETS) {
   return {
     version: 2,
-    methodology: 'Fixture-backed execution through createSnapshot and renderPlanningEvidence',
+    methodology: 'Fixture-backed execution through typed createSnapshot and compact architect evidence',
     limitation: 'Matched agent A/B runs are still required for model decision and timing claims.',
     scenarios: await Promise.all(requirementSets.map(evaluateRequirementSet)),
   };
@@ -467,25 +599,35 @@ function renderBenchmarkMarkdown(result) {
     '',
     `> ${result.limitation}`,
     '',
-    '| Requirements set | Selected candidates | Required / advisory | Exact-covered concepts | Foreground fixture requests | Snapshot-first agent requests | Completeness | Evidence output | Local processing |',
+    '| Requirements set | Selected | Core / full / failed | Primary / ambiguity / collision | Deferred | Fixture requests | Completeness | Snapshot / sidecar | Local processing |',
     '|---|---:|---:|---:|---:|---:|---:|---:|---:|',
   ];
   for (const scenario of result.scenarios) {
     lines.push(
       `| ${scenario.name} | ${scenario.selectedCandidateCount} | `
-      + `${scenario.detailedCandidateBreakdown.required} / ${scenario.detailedCandidateBreakdown.advisory} | `
-      + `${scenario.detailedCandidateBreakdown.exactCoveredConcepts} | `
+      + `${scenario.detailedCandidateBreakdown.core} / ${scenario.detailedCandidateBreakdown.full} / ${scenario.detailedCandidateBreakdown.failed} | `
+      + `${scenario.detailedCandidateBreakdown.primary} / ${scenario.detailedCandidateBreakdown.ambiguity} / ${scenario.detailedCandidateBreakdown.strongCollisions} | `
+      + `${scenario.detailedCandidateBreakdown.deferred} | `
       + `${scenario.metadataRequests.snapshotForegroundRequests} | `
-      + `${scenario.metadataRequests.snapshotFirstAgentRequests} | `
       + `${scenario.outputCompleteness.passedChecks}/${scenario.outputCompleteness.totalChecks} `
       + `(${scenario.outputCompleteness.percent}%) | `
-      + `${scenario.evidenceCharacters} chars | `
+      + `${scenario.snapshotBytes} / ${scenario.architectEvidenceBytes} bytes | `
       + `${scenario.elapsedLocalProcessingMs.toFixed(3)} ms |`,
     );
   }
   lines.push(
     '',
-    'Each scenario executes the real snapshot candidate selection, detail loading, relationship and computed-column extraction, proposed-name checks, and deterministic evidence renderer against injected Dataverse responses.',
+    '## Request categories',
+    '',
+    ...result.scenarios.map((scenario) => {
+      const categories = Object.entries(scenario.metadataRequests.byCategory)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([category, count]) => `${category}=${count}`)
+        .join(', ');
+      return `- ${scenario.name}: ${categories}`;
+    }),
+    '',
+    'Each scenario executes typed candidate selection, progressive detail loading, relationship and computed-column extraction, proposed-name checks, request classification, and compact architect evidence against injected Dataverse responses.',
     '',
     'The request count is the actual fixture executor call count. It does not measure network latency or agent behavior, and it does not substitute for matched agent A/B decision and timing runs.',
     '',

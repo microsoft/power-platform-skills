@@ -501,9 +501,15 @@ the operation manifest.
 
 The manifest builder never emits calculated/rollup/formula creation. Reused
 computed dependencies have already crossed the exact derived-metadata barrier;
-unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and continue
-to Step 6. When there were zero writes and no checkpoint, continue without
-deleting anything. Skip the
+unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and invalidate the planning-only inventory cache:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
+```
+
+Then continue to Step 6. When there were zero writes and no checkpoint,
+continue without deleting anything. Skip the
 fallback mutation instructions in Steps 5a–5d and skip Step 6b because publish
 was already part of the validated phase order.
 
@@ -897,7 +903,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   | Boolean | `Microsoft.Dynamics.CRM.BooleanAttributeMetadata` | `DefaultValue`, `OptionSet` with `TrueOption`/`FalseOption` |
   | Choice (picklist) | `Microsoft.Dynamics.CRM.PicklistAttributeMetadata` | `OptionSet` with `IsGlobal: false`, `OptionSetType: "Picklist"`, `Options[]` — **option integer values start at `100000000` and increment by 1** |
   | Lookup | via `RelationshipDefinitions` — see 1:N skeleton above | — |
-  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxHeight`, `MaxWidth` |
+  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxSizeInKB` (default 10240), `CanStoreFullImage` |
   | File | `Microsoft.Dynamics.CRM.FileAttributeMetadata` | `MaxSizeInKB` |
 
   **Common mistake:** omitting `FormatName` on String columns and `DateTimeBehavior` on DateTime columns. Both are required — Dataverse rejects the POST without them.
@@ -921,7 +927,14 @@ Column shapes that have non-obvious gotchas (handle carefully):
     }
   }
   ```
-- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`, `MaxHeight`/`MaxWidth` required
+- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`,
+  `MaxSizeInKB` and `CanStoreFullImage`. Dataverse always reports
+  `MaxHeight: 144` and `MaxWidth: 144` for the generated thumbnail; those values
+  cannot be changed and must not be used as full-image dimensions. Set
+  `CanStoreFullImage: true` when users must inspect or download the retained
+  full-size image. Updating this setting requires retrieving the complete
+  current `ImageAttributeMetadata`, changing the writable property, sending a
+  full-definition `PUT`, and publishing customizations.
 - **File** — `@odata.type: Microsoft.Dynamics.CRM.FileAttributeMetadata`, `MaxSizeInKB` required
 
 If the column type is not a simple string/int/boolean, surface a one-line confirmation to the user before posting.
@@ -1019,7 +1032,23 @@ npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
 
-After generation, verify each required table appears in `power.config.json` `databaseReferences.default.cds.dataSources` and that a matching file exists in `src/generated/services/`. If any reused or custom table is missing, STOP before screen generation:
+After generation, verify the actual PAC output rather than guessing a JSON path
+or service filename. PAC currently writes Dataverse under the literal
+`databaseReferences["default.cds"].dataSources` key and derives service filenames
+from each entry's `entitySetName`, which may differ from the table logical name.
+The verifier also accepts the legacy nested `databaseReferences.default.cds`
+shape:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/verify-dataverse-services.js" \
+  --project-root "<working_dir>" \
+  --manifest "$OPERATION_MANIFEST"
+```
+
+For the standalone fallback path without a manifest, pass the resolved service
+list as `--tables "<comma-separated-logical-names>"`. If any reused or custom
+table is missing from config, lacks `entitySetName`, or has no matching generated
+service, STOP before screen generation:
 
 ```text
 BLOCKED: required Dataverse service missing for <logical-name>. Schema action=<reuse|extend|create>; app usage=<screens/hooks that require it>.
@@ -1047,6 +1076,14 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
 Build the entity list from all tables that were **created or extended** in Steps 4–5. Skip reused-as-is tables — they don't need republishing.
 
 If the publish call returns a non-2xx status, report the error and stop — do not proceed. The user must resolve before the tables are usable.
+
+After a 2xx publish, invalidate the planning-only inventory cache before
+verification so a later planning run cannot reuse pre-publication inventory:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
+```
 
 ### Step 6c — Verify tables exist
 

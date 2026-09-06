@@ -465,28 +465,71 @@ test('advisory candidate detail failure is recorded and does not abort the snaps
   });
 });
 
-test('explicit candidate detail failure remains required and throws', async () => {
+test('explicit candidate detail failure is recorded for a Defer decision', async () => {
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['activitypointer'],
+    concepts: ['activities'],
+    request: async (_method, apiPath) => {
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: [entity('activitypointer', 'Activity')] } };
+      }
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 400, error: 'abstract metadata type is unsupported' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(snapshot.tables, []);
+  assert.deepEqual(snapshot.exactNameResolution, {
+    requestedTables: ['activitypointer'],
+    loadedTables: ['activitypointer'],
+    unavailableTables: [],
+  });
+  assert.deepEqual(snapshot.detailLoadFailures, [{
+    logicalName: 'activitypointer',
+    selectionReasons: ['concept:activities:exact-covered', 'explicit-table'],
+    status: 400,
+    error: 'abstract metadata type is unsupported',
+    required: true,
+  }]);
+  assert.equal(validateSnapshot(snapshot).valid, true);
+});
+
+test('authentication failure during detail loading still requires user action', async () => {
   await assert.rejects(
     createSnapshot({
       environmentUrl: 'https://example.crm.dynamics.com',
       tenantId: 'tenant-1',
-      tableNames: ['activitypointer'],
-      concepts: ['activities'],
-      request: async (_method, apiPath) => {
-        if (apiPath.startsWith('EntityDefinitions?')) {
-          return { status: 200, data: { value: [entity('activitypointer', 'Activity')] } };
-        }
-        if (apiPath.includes('/Attributes?$select=')) {
-          return { status: 400, error: 'abstract metadata type is unsupported' };
-        }
-        return { status: 200, data: { value: [] } };
+      inventory: [entity('new_product', 'Product')],
+      concepts: ['products'],
+      request: async () => {
+        throw new Error('Failed to get Azure CLI token. Run az login first.');
       },
     }),
-    /activitypointer attributes failed \(400\): abstract metadata type is unsupported/,
+    /Failed to get Azure CLI token/,
   );
 });
 
-test('lookup sub-metadata failure skips advisory tables and blocks required tables', async () => {
+test('transport failure during detail loading still requires retry or user action', async () => {
+  const timeout = Object.assign(new Error('connect ETIMEDOUT'), { status: 0 });
+  await assert.rejects(
+    createSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com',
+      tenantId: 'tenant-1',
+      inventory: [entity('new_product', 'Product')],
+      concepts: ['products'],
+      request: async () => {
+        throw timeout;
+      },
+    }),
+    /ETIMEDOUT/,
+  );
+});
+
+test('lookup sub-metadata failure records both advisory and required tables', async () => {
   const request = async (_method, apiPath) => {
     if (apiPath.startsWith('EntityDefinitions?')) {
       return { status: 200, data: { value: [entity('new_product', 'Product')] } };
@@ -517,15 +560,16 @@ test('lookup sub-metadata failure skips advisory tables and blocks required tabl
   assert.equal(advisory.detailLoadFailures[0].logicalName, 'new_product');
   assert.match(advisory.detailLoadFailures[0].error, /lookup metadata unavailable/);
 
-  await assert.rejects(
-    createSnapshot({
-      environmentUrl: 'https://example.crm.dynamics.com',
-      tenantId: 'tenant-1',
-      tableNames: ['new_product'],
-      request,
-    }),
-    /new_product lookup metadata failed \(404\): lookup metadata unavailable/,
-  );
+  const required = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['new_product'],
+    request,
+  });
+  assert.deepEqual(required.tables, []);
+  assert.equal(required.detailLoadFailures[0].required, true);
+  assert.deepEqual(required.exactNameResolution.loadedTables, ['new_product']);
+  assert.equal(validateSnapshot(required).valid, true);
 });
 
 test('snapshot captures detailed metadata, evidence, and timing shape without network access', async () => {
@@ -836,7 +880,10 @@ test('exact-name expansion discovers and details a managed dependency absent fro
   assert.deepEqual(expanded.expansion.requestedTables, ['contact']);
   assert.deepEqual(expanded.expansion.loadedTables, ['contact']);
   assert.deepEqual(expanded.expansion.newlyLoadedTables, ['contact']);
+  assert.deepEqual(expanded.expansion.reloadedTables, []);
   assert.deepEqual(expanded.expansion.unavailableTables, []);
+  assert.equal(expanded.inventoryFacts.exactNameTables, 1);
+  assert.equal(expanded.inventoryFacts.requiredExactNameTables, 1);
   assert.equal(expanded.inventory.find((item) => item.logicalName === 'contact').managed, true);
   assert.equal(expanded.inventory.find((item) => item.logicalName === 'contact').customizable, false);
   assert.equal(expanded.tables.find((item) => item.logicalName === 'contact').facts.columnCount, 0);
@@ -871,24 +918,187 @@ test('proposed-name expansion checks collisions without loading details', async 
   });
 });
 
-test('exact-name expansion fails closed when required detail metadata is unreadable', async () => {
+test('cached proposed-name expansion removes a stale deleted collision', async () => {
+  const staleTable = await loadDetailedEntity(
+    async () => ({ status: 200, data: { value: [] } }),
+    entity('new_deleted', 'Deleted'),
+  );
+  const base = validSnapshotBase({
+    inventorySource: 'cache',
+    inputs: {
+      concepts: [],
+      explicitTableNames: [],
+      proposedTableNames: [],
+    },
+    inventory: [normalizeInventoryForTest(entity('new_deleted', 'Deleted'))],
+    tables: [staleTable],
+    detailLoadFailures: [{
+      logicalName: 'new_deleted',
+      selectionReasons: ['concept:deleted'],
+      status: 400,
+      error: 'stale cached failure',
+      required: false,
+    }],
+  });
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    proposedTableNames: ['new_deleted'],
+    request: async (_method, apiPath) => {
+      assert.match(apiPath, /LogicalName eq 'new_deleted'/);
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(expanded.proposedNameChecks.missing, ['new_deleted']);
+  assert.equal(expanded.inventory.some((item) => item.logicalName === 'new_deleted'), false);
+  assert.equal(expanded.tables.some((item) => item.logicalName === 'new_deleted'), false);
+  assert.deepEqual(expanded.detailLoadFailures, []);
+  assert.equal(expanded.detailLoadSummary.failedCandidates, 0);
+  assert.equal(expanded.detailLoadSummary.advisoryCandidates, 0);
+  assert.equal(expanded.inventoryFacts.customizableTables, 0);
+  assert.equal(expanded.inventoryFacts.proposedCollisionTables, 0);
+});
+
+test('cached detailed-name expansion reloads an existing full table live', async () => {
+  let detailReads = 0;
+  const staleTable = await loadDetailedEntity(
+    async () => ({ status: 200, data: { value: [] } }),
+    entity('new_item', 'Old item'),
+  );
+  const base = validSnapshotBase({
+    inventorySource: 'cache',
+    inputs: {
+      concepts: ['items'],
+      explicitTableNames: [],
+      proposedTableNames: [],
+    },
+    inventory: [normalizeInventoryForTest(entity('new_item', 'Old item'))],
+    candidateRanking: rankCandidatesByConcept(
+      [entity('new_item', 'Old item')],
+      ['items'],
+    ),
+    tables: [staleTable],
+  });
+  const refreshed = entity('new_item', 'Current item');
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    tableNames: ['new_item'],
+    request: async (_method, apiPath) => {
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: [refreshed] } };
+      }
+      detailReads += 1;
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.ok(detailReads > 0);
+  assert.equal(
+    expanded.inventory.find((item) => item.logicalName === 'new_item').displayName,
+    'Current item',
+  );
+  assert.equal(
+    expanded.candidateRanking[0].candidates[0].displayName,
+    'Current item',
+  );
+  assert.deepEqual(expanded.exactNameResolution.loadedTables, ['new_item']);
+  assert.deepEqual(expanded.expansion.newlyLoadedTables, []);
+  assert.deepEqual(expanded.expansion.upgradedTables, []);
+  assert.deepEqual(expanded.expansion.reloadedTables, ['new_item']);
+  assert.equal(expanded.inventoryFacts.exactNameTables, 0);
+  assert.equal(expanded.inventoryFacts.requiredExactNameTables, 0);
+
+  let repeatedReads = 0;
+  const repeated = await expandSnapshot({
+    snapshot: expanded,
+    tableNames: ['new_item'],
+    request: async () => {
+      repeatedReads += 1;
+      return { status: 200, data: { value: [] } };
+    },
+  });
+  assert.equal(repeatedReads, 0);
+  assert.deepEqual(repeated.expansion.reloadedTables, []);
+});
+
+test('old snapshots do not fabricate bounded exact discovery names', async () => {
+  const base = validSnapshotBase({
+    inventory: [normalizeInventoryForTest(entity('account', 'Account'))],
+    inventoryFacts: {
+      customizableTables: 1,
+      exactNameTables: 1,
+      requiredExactNameTables: 1,
+      proposedCollisionTables: 0,
+      totalTables: 1,
+    },
+    exactNameResolution: {
+      requestedTables: ['account'],
+      loadedTables: ['account'],
+      unavailableTables: [],
+    },
+  });
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    request: async () => {
+      throw new Error('no metadata request expected');
+    },
+  });
+  assert.deepEqual(expanded.exactNameDiscoveryTables, []);
+  assert.equal(expanded.inventoryFacts.exactNameTables, 0);
+  assert.equal(expanded.inventoryFacts.requiredExactNameTables, 0);
+});
+
+test('exact-name expansion records unreadable detail metadata for Defer', async () => {
   const base = validSnapshotBase({
     inputs: { concepts: ['activities'], explicitTableNames: [], proposedTableNames: [] },
     inventory: [normalizeInventoryForTest(entity('activitypointer', 'Activity'))],
   });
 
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    tableNames: ['activitypointer'],
+    request: async (_method, apiPath) => {
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 403, error: 'metadata forbidden' };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(expanded.expansion.loadedTables, []);
+  assert.deepEqual(expanded.expansion.unavailableTables, ['activitypointer']);
+  assert.equal(expanded.expansion.failedDetailedCandidates, 1);
+  assert.deepEqual(expanded.detailLoadFailures, [{
+    logicalName: 'activitypointer',
+    selectionReasons: ['explicit-expansion'],
+    status: 403,
+    error: 'metadata forbidden',
+    required: true,
+  }]);
+  assert.deepEqual(expanded.exactNameResolution, {
+    requestedTables: ['activitypointer'],
+    loadedTables: ['activitypointer'],
+    unavailableTables: [],
+  });
+  assert.equal(validateSnapshot(expanded).valid, true);
+});
+
+test('exact-name expansion propagates terminal authentication failures', async () => {
+  const base = validSnapshotBase({
+    inputs: { concepts: ['products'], explicitTableNames: [], proposedTableNames: [] },
+    inventory: [normalizeInventoryForTest(entity('new_product', 'Product'))],
+  });
+  const unauthorized = Object.assign(new Error('token refresh failed'), { status: 401 });
+
   await assert.rejects(
     expandSnapshot({
       snapshot: base,
-      tableNames: ['activitypointer'],
-      request: async (_method, apiPath) => {
-        if (apiPath.includes('/Attributes?$select=')) {
-          return { status: 403, error: 'metadata forbidden' };
-        }
-        return { status: 200, data: { value: [] } };
+      tableNames: ['new_product'],
+      request: async () => {
+        throw unauthorized;
       },
     }),
-    /activitypointer attributes failed \(403\): metadata forbidden/,
+    /token refresh failed/,
   );
 });
 
@@ -923,6 +1133,47 @@ test('computed metadata is explicitly unavailable when SourceTypeMask cannot be 
   assert.equal(computed.formulaDefinition, 'new_amount * 2');
   assert.equal(computed.metadataStatus, 'unavailable');
   assert.match(computed.unavailableReason, /SourceTypeMask unavailable or malformed/);
+});
+
+test('image metadata preserves full-image settings and its complete update definition', async () => {
+  const imageDefinition = {
+    MetadataId: 'image-id',
+    LogicalName: 'new_photo',
+    SchemaName: 'new_Photo',
+    AttributeType: 'Virtual',
+    AttributeTypeName: { Value: 'ImageType' },
+    RequiredLevel: { Value: 'None' },
+    MaxHeight: 144,
+    MaxWidth: 144,
+    MaxSizeInKB: 10240,
+    CanStoreFullImage: false,
+    IsPrimaryImage: false,
+  };
+  const table = await loadDetailedEntity(async (_method, apiPath) => {
+    if (apiPath.includes('/Attributes?$select=')) {
+      return { status: 200, data: { value: [{
+        ...imageDefinition,
+        IsCustomAttribute: true,
+        IsManaged: false,
+        IsCustomizable: { Value: true },
+        IsValidForCreate: true,
+        IsValidForRead: true,
+        IsValidForUpdate: true,
+      }] } };
+    }
+    if (apiPath.includes('ImageAttributeMetadata')) {
+      return { status: 200, data: { value: [imageDefinition] } };
+    }
+    return { status: 200, data: { value: [] } };
+  }, entity('new_issue', 'Issue'));
+
+  const image = table.columns[0];
+  assert.equal(image.metadataId, 'image-id');
+  assert.equal(image.canStoreFullImage, false);
+  assert.equal(image.maxSizeInKB, 10240);
+  assert.equal(image.maxHeight, 144);
+  assert.equal(image.maxWidth, 144);
+  assert.deepEqual(image.imageUpdateDefinition, imageDefinition);
 });
 
 test('CLI request creation initializes one long-lived executor for the snapshot phase', async () => {
@@ -1001,7 +1252,7 @@ test('evidence renderer emits compact deterministic planning facts', () => {
   assert.match(markdown, /\*\*Total\*\*.*\*\*78 ms\*\*/);
 });
 
-test('evidence renderer reports skipped advisory detail failures', () => {
+test('evidence renderer reports unavailable detail metadata', () => {
   const snapshot = validSnapshotBase({
     candidateRanking: [{
       concept: 'activities',
@@ -1040,8 +1291,8 @@ test('evidence renderer reports skipped advisory detail failures', () => {
 
   const markdown = renderPlanningEvidence(snapshot);
   assert.match(markdown, /activitypointer.*detail unavailable/);
-  assert.match(markdown, /Skipped advisory detail failures/);
-  assert.match(markdown, /activitypointer.*concept:activities.*400.*abstract metadata type is unsupported/);
+  assert.match(markdown, /Unavailable detail metadata/);
+  assert.match(markdown, /activitypointer.*no.*concept:activities.*400.*abstract metadata type is unsupported/);
 });
 
 test('atomic output replaces the target and leaves no sibling temporary file', (t) => {
@@ -1053,7 +1304,7 @@ test('atomic output replaces the target and leaves no sibling temporary file', (
   assert.deepEqual(fs.readdirSync(directory), ['evidence.md']);
 });
 
-test('planning contracts require the snapshot-only path and bounded expansion', () => {
+test('planning contracts require snapshot-only and monotonic incremental expansion', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const architect = fs.readFileSync(
     path.join(pluginRoot, 'agents', 'data-model-architect.md'),
@@ -1076,16 +1327,60 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(architect, /NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated-logical-names>/);
   assert.match(architect, /NEEDS_CONTEXT: proposed-dataverse-names:<comma-separated-logical-names>/);
   assert.match(architect, /\.tmp\/data-model-planning-status\.json/);
+  assert.match(architect, /--validate-only/);
+  assert.match(architect, /Do not use `Read`, `Grep`, or shell\s+output to load the full snapshot/s);
+  assert.match(architect, /detailLevel: core/);
   assert.match(planner, /Dataverse planning forwarding is verbatim/);
   assert.match(planner, /Do not duplicate raw evidence/);
-  assert.match(createSkill, /render-dataverse-planning-evidence\.js/);
+  assert.match(planner, /validate-dataverse-planning-decisions\.js/);
+  assert.match(planner, /only exit `0` permits\s+embedding and Gate 1/);
+  assert.match(planner, /preserve the validator's exact stderr first line/);
+  assert.match(planner, /NEEDS_REVISION: dataverse-plan-validation/);
+  assert.match(planner, /Do not\s+rewrite one signal as the other/);
+  assert.match(planner, /Timing ownership/);
+  assert.match(planner, /modelArchitect/);
+  assert.match(planner, /screenPlanner/);
+  assert.match(planner, /userApproval/);
+  assert.match(planner, /planRevision/);
+  assert.match(createSkill, /render-dataverse-architect-evidence\.js/);
+  assert.match(createSkill, /--concepts-file "\$CONCEPTS_PATH"/);
+  assert.match(createSkill, /--progressive-detail/);
+  assert.match(createSkill, /--combined-base-read/);
+  assert.match(createSkill, /--read-concurrency 1/);
+  assert.match(createSkill, /--inventory-cache "\$INVENTORY_CACHE_PATH"/);
+  assert.match(createSkill, /--telemetry-output "\$PLANNING_TELEMETRY_PATH"/);
+  assert.match(createSkill, /--planning-timings-output "\$PLANNING_TIMINGS_PATH"/);
+  assert.match(createSkill, /strongCollisionCandidates/);
+  assert.match(createSkill, /coreCandidates/);
+  assert.match(createSkill, /--stage environmentResolution --action start/);
+  assert.match(createSkill, /--stage environmentResolution[\s\S]*--action fail --reason environment-resolution-command-failed/);
+  assert.match(createSkill, /--action fail --reason environment-resolution-incomplete/);
+  assert.match(createSkill, /--stage publisherPrefixDetection/);
+  assert.match(createSkill, /--project-root "<working_dir>" --summary/);
+  assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
   assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
-  assert.match(createSkill, /--proposed-tables "<exact comma-separated logical names>"/);
+  assert.match(createSkill, /DETAIL_ATTEMPTED_NAMES/);
+  assert.match(createSkill, /selectedTables` with `detailLevel: full`/);
+  assert.match(createSkill, /detailLevel: core` is not fully attempted/);
+  assert.match(createSkill, /PROPOSED_CHECKED_NAMES/);
+  assert.match(createSkill, /NEEDS_CONTEXT: dataverse-plan-revision:<short-safe-classification>/);
+  assert.match(createSkill, /do not[\s]+route it through the generic `NEEDS_CONTEXT` retry cap/i);
+  assert.match(createSkill, /NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES/);
+  assert.match(createSkill, /NEW_PROPOSED_NAMES = requested names - PROPOSED_CHECKED_NAMES/);
+  assert.match(createSkill, /--proposed-tables "<NEW_PROPOSED_NAMES as exact comma-separated logical names>"/);
+  assert.match(createSkill, /preserve and branch on the exact stderr first line/);
+  assert.match(createSkill, /On exit `4`[\s\S]*NEEDS_REVISION: dataverse-plan-validation/);
+  assert.match(createSkill, /do not issue another network request/i);
+  assert.match(createSkill, /No-progress fallback/);
+  assert.match(createSkill, /Ask the user only when the remaining choice changes business semantics/);
+  assert.doesNotMatch(createSkill, /A second detailed-metadata signal is `BLOCKED`/);
+  assert.doesNotMatch(createSkill, /A second proposed-name signal is `BLOCKED`/);
   assert.match(createSkill, /connector-only.*skip every command/s);
   assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
   assert.doesNotMatch(createSkill, /legacy-unverified/);
-  assert.match(createSkill, /does not accept an unresolved\s+`Unverified` plan/s);
-  assert.match(createSkill, /BLOCKED: Dataverse planning metadata unavailable for exact target decisions/);
+  assert.match(createSkill, /unresolved\s+metadata never authorizes a write/s);
+  assert.match(createSkill, /ask only for the user action that can resolve\s+the problem/s);
+  assert.match(createSkill, /classify the affected exact or advisory table as `Defer`/);
   assert.match(createSkill, /10–15 minute target/);
   assert.doesNotMatch(snapshotScript, /execFileSync/);
 });

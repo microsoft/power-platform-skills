@@ -56,6 +56,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
 
+const READ_REQUEST_TIMEOUT_MS = 30000;
+const MUTATION_REQUEST_TIMEOUT_MS = 120000;
+
 function retryAfterDelayMs(retryAfter, fallbackMs, nowMs = Date.now()) {
   const safeFallback = Number.isFinite(fallbackMs) && fallbackMs >= 0
     ? fallbackMs
@@ -81,6 +84,29 @@ function isMutationMethod(method) {
 function isMetadataApiPath(apiPath) {
   return /^(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions|PublishXml)(?:\b|\(|\/|\?)/i
     .test(String(apiPath || ''));
+}
+
+function metadataRequestIdentity(apiPath) {
+  const value = String(apiPath || '');
+  const tableMatch = value.match(/EntityDefinitions\(LogicalName='([^']+)'\)/i);
+  const typedMatch = value.match(/Attributes\/Microsoft\.Dynamics\.CRM\.([A-Za-z]+AttributeMetadata)/i);
+  let category = 'other';
+  if (/^EntityDefinitions\(LogicalName='[^']+'\)\?/i.test(value)
+    && /\$expand=Attributes\(/i.test(value)) category = 'combined-base-metadata';
+  else if (/^EntityDefinitions\?/i.test(value)) category = 'table-inventory';
+  else if (/\/ManyToOneRelationships\?/i.test(value)) category = 'many-to-one';
+  else if (/\/OneToManyRelationships\?/i.test(value)) category = 'one-to-many';
+  else if (/\/ManyToManyRelationships\?/i.test(value)) category = 'many-to-many';
+  else if (/\/Keys\?/i.test(value)) category = 'alternate-keys';
+  else if (/LookupAttributeMetadata/i.test(value)) category = 'lookup-metadata';
+  else if (typedMatch) category = 'typed-attribute-metadata';
+  else if (/\/Attributes\?/i.test(value)) category = 'attributes';
+  else if (/\/Attributes\(/i.test(value)) category = 'computed-attribute-metadata';
+  return {
+    category,
+    table: tableMatch?.[1] || null,
+    metadataType: typedMatch?.[1] || null,
+  };
 }
 
 function parseArgs() {
@@ -177,7 +203,9 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
     headers,
     body,
     includeHeaders,
-    timeout: 30000,
+    timeout: isMutationMethod(method)
+      ? MUTATION_REQUEST_TIMEOUT_MS
+      : READ_REQUEST_TIMEOUT_MS,
   });
 
   return res;
@@ -189,25 +217,63 @@ function createDataverseRequestExecutor({
   solution = null,
   getToken = getAuthToken,
   sendRequest = doRequest,
+  onTelemetry = null,
+  sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+  nowMs = () => Date.now(),
 }) {
   const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
   if (!envUrl) throw new Error('environmentUrl is required');
 
   let token = null;
   let tokenPromise = null;
+  let refreshPromise = null;
+  const rateLimitListeners = new Set();
+  const authStats = { tokenAcquisitionCount: 0, tokenRefreshCount: 0 };
   async function ensureToken() {
-    if (token) return token;
-    if (!tokenPromise) tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
-    token = await tokenPromise;
-    tokenPromise = null;
+    if (token) return { token, acquired: false };
+    let acquired = false;
+    if (!tokenPromise) {
+      authStats.tokenAcquisitionCount += 1;
+      acquired = true;
+      tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
+    }
+    const pendingToken = tokenPromise;
+    try {
+      token = await pendingToken;
+    } finally {
+      if (tokenPromise === pendingToken) tokenPromise = null;
+    }
     if (!token) {
       throw new Error('Failed to get Azure CLI token. Run `az login` first.');
     }
-    return token;
+    return { token, acquired };
   }
 
-  return async (method, apiPath, body = null, includeHeaders = false) => {
-    const requestToken = await ensureToken();
+  async function refreshToken(staleToken) {
+    if (token && staleToken && token !== staleToken) {
+      return { token, refreshedByCaller: false };
+    }
+    let refreshedByCaller = false;
+    if (!refreshPromise) {
+      authStats.tokenRefreshCount += 1;
+      refreshedByCaller = true;
+      refreshPromise = Promise.resolve(getToken(envUrl, tenantId))
+        .then((refreshed) => {
+          if (refreshed) token = refreshed;
+          return refreshed;
+        })
+        .finally(() => {
+          refreshPromise = null;
+        });
+    }
+    const refreshed = await refreshPromise;
+    return { token: refreshed, refreshedByCaller };
+  }
+
+  const execute = async (method, apiPath, body = null, includeHeaders = false) => {
+    const startedAt = nowMs();
+    const ensured = await ensureToken();
+    let requestRefreshCount = 0;
     let bodyString = null;
     if (body !== null && body !== undefined) {
       bodyString = typeof body === 'string' ? body : JSON.stringify(body);
@@ -217,14 +283,49 @@ function createDataverseRequestExecutor({
       String(method || '').toUpperCase(),
       apiPath,
       bodyString,
-      requestToken,
+      ensured.token,
       includeHeaders,
       solution,
       tenantId,
-      getToken,
+      async (_environmentUrl, _tenantId, staleToken) => {
+        const refreshed = await refreshToken(staleToken);
+        if (refreshed.refreshedByCaller) requestRefreshCount += 1;
+        return refreshed.token;
+      },
       sendRequest,
+      {
+        nowMs,
+        sleep,
+        onRateLimited: (event) => {
+          for (const listener of rateLimitListeners) {
+            try {
+              listener(event);
+            } catch {
+              // Backpressure observers must not change request behavior.
+            }
+          }
+        },
+      },
     );
-    token = executed.token;
+    if (typeof onTelemetry === 'function') {
+      const identity = metadataRequestIdentity(apiPath);
+      try {
+        onTelemetry({
+          method: String(method || '').toUpperCase(),
+          ...identity,
+          status: executed.status,
+          durationMs: Math.max(0, nowMs() - startedAt),
+          responseBytes: executed.responseBytes || 0,
+          attempts: executed.attempts || 1,
+          retryCount: executed.retryCount || 0,
+          rateLimited: Boolean(executed.rateLimited),
+          tokenAcquisitionCount: ensured.acquired ? 1 : 0,
+          tokenRefreshCount: requestRefreshCount,
+        });
+      } catch {
+        // Telemetry must never change request behavior.
+      }
+    }
     return {
       status: executed.status,
       data: executed.data,
@@ -233,6 +334,13 @@ function createDataverseRequestExecutor({
       rateLimited: executed.rateLimited,
     };
   };
+  execute.getAuthStats = () => ({ ...authStats });
+  execute.onRateLimited = (listener) => {
+    if (typeof listener !== 'function') throw new Error('rate-limit listener must be a function');
+    rateLimitListeners.add(listener);
+    return () => rateLimitListeners.delete(listener);
+  };
+  return execute;
 }
 
 async function main() {
@@ -986,47 +1094,75 @@ async function runOneMetadataOperation(
   tenantId,
   getToken = getAuthToken,
   sendRequest = doRequest,
+  {
+    nowMs = () => Date.now(),
+    sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+    onRateLimited = () => {},
+  } = {},
 ) {
   let token = initialToken;
   let rateLimited = false;
   const maxRetries = 4;
+  let attempts = 0;
+  let retryCount = 0;
+  let responseBytes = 0;
+
+  function finish(result) {
+    return {
+      ...result,
+      attempts,
+      retryCount,
+      responseBytes,
+    };
+  }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     // Response headers are always needed internally for Retry-After handling.
     // The caller-facing result still honors includeHeaders below.
+    const attemptStartedAt = nowMs();
     const res = await sendRequest(envUrl, method, apiPath, body, token, true, solution);
+    attempts += 1;
+    responseBytes += Buffer.byteLength(String(res.body || ''), 'utf8');
+    void attemptStartedAt;
     if (res.error) {
       if (isMutationMethod(method)) {
-        return {
+        return finish({
           status: 0,
           error: res.error,
           token,
           rateLimited,
           uncertain: true,
-        };
+        });
       }
-      if (attempt < maxRetries) continue;
-      return { status: 0, error: res.error, token, rateLimited };
+      if (attempt < maxRetries) {
+        retryCount += 1;
+        continue;
+      }
+      return finish({ status: 0, error: res.error, token, rateLimited });
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getToken(envUrl, tenantId);
+      const refreshed = await getToken(envUrl, tenantId, token);
       if (!refreshed) {
-        return { status: 401, error: 'Token refresh failed', token, rateLimited };
+        return finish({ status: 401, error: 'Token refresh failed', token, rateLimited });
       }
       token = refreshed;
+      retryCount += 1;
       continue;
     }
 
     if (res.statusCode === 429 && attempt < maxRetries) {
       const delayMs = retryAfterDelayMs(res.headers?.['retry-after'], 30000);
+      if (!rateLimited) onRateLimited({ delayMs, attempt: attempt + 1 });
       rateLimited = true;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      retryCount += 1;
+      await sleep(delayMs);
       continue;
     }
 
     if ([500, 502, 503].includes(res.statusCode) && attempt < maxRetries) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      retryCount += 1;
+      await sleep(5000);
       continue;
     }
 
@@ -1039,16 +1175,16 @@ async function runOneMetadataOperation(
       }
     }
 
-    return {
+    return finish({
       status: res.statusCode,
       data,
       headers: includeHeaders ? res.headers : undefined,
       token,
       rateLimited,
-    };
+    });
   }
 
-  return { status: 0, error: 'Exhausted retries', token, rateLimited };
+  return finish({ status: 0, error: 'Exhausted retries', token, rateLimited });
 }
 
 // Extract the GUID from an OData-EntityId header value, e.g.
@@ -1062,10 +1198,13 @@ function extractGuid(headerValue) {
 if (require.main === module) main();
 
 module.exports = {
+  MUTATION_REQUEST_TIMEOUT_MS,
+  READ_REQUEST_TIMEOUT_MS,
   createDataverseRequestExecutor,
   doRequest,
   extractGuid,
   looksLikeDuplicate,
+  metadataRequestIdentity,
   operationFingerprint,
   prepareMetadataJournal,
   retryAfterDelayMs,
