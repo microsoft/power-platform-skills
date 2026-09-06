@@ -21,9 +21,9 @@ Before writing any navigation or skeleton file, verify the all-mode usage
 binding from Phase 3:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -106,7 +106,7 @@ file, so run it after Step 10.8b has materialized the typed skeletons. Step
 10.8d runs this exact command after `check-routes.js`:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+node "${PLUGIN_ROOT}/scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
 ```
 
@@ -413,10 +413,10 @@ After Step 10b layouts, Step 10.7 service snapshot, and Step 10.8 shared code/sk
 
 ```bash
 npx tsc --noEmit
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+node "${PLUGIN_ROOT}/scripts/check-routes.js"
+node "${PLUGIN_ROOT}/scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -425,7 +425,7 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 Record the clean screen-build boundary:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
+node "${PLUGIN_ROOT}/scripts/mobile-pipeline-state.js" \
   --project-root "<working_dir>" --record --step "10.8" \
   --artifact "service-registry=.tmp/generated-services-snapshot.md" \
   --artifact "power-config=power.config.json" \

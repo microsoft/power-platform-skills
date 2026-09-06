@@ -268,13 +268,12 @@ Dark mode is not a raw theme swap. It is a designed inversion.
 
 ```tsx
 // Inside the tamagui.config.ts customization markers
+// Import withPowerAppsSemanticAliases from the native-host Tamagui config.
 const customConfig = {
-  ...defaultConfig,
-  animations,
   themes: {
     ...defaultConfig.themes,
     dark: {
-      ...defaultConfig.themes.dark,
+      ...withPowerAppsSemanticAliases(defaultConfig.themes.dark),
       surface0: '#0E0D0B',           // base background
       surface1: '#14130F',           // lightly differentiated surface
       surface2: '#1E1C18',           // card fill

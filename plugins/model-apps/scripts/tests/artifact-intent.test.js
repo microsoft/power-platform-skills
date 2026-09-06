@@ -653,3 +653,39 @@ test('findFieldCellPointer: skips null-fieldName controls (notes/subgrid)', () =
   // null fieldName must not match anything
   assert.strictEqual(findFieldCellPointer(formJson, ''), null);
 });
+
+// The App Spec has documented `enabled`, `passExecutionContext` and `parameters` on
+// `forms[].events[]` all along, but the intent builder HARDCODED all three and never read the
+// authored values. An author who wrote `"enabled": false` got a handler that ran anyway — the
+// worst shape of bug, because the spec, the docs and the deployed form all disagreed silently.
+test('form event handler honours enabled / passExecutionContext / parameters', () => {
+  const attrsOf = (region) => {
+    const handler = region.c[0].c[0].c[0];
+    return Object.fromEntries(handler.a);
+  };
+
+  // Defaults: both flags true, parameters empty — what an author wiring a handler almost always wants.
+  const def = attrsOf(formEventsRegionIntent([{ event: 'onload', library: 'new_lib.js', function: 'onLoad' }]));
+  assert.strictEqual(def.enabled, 'true');
+  assert.strictEqual(def.passExecutionContext, 'true');
+  assert.strictEqual(def.parameters, '');
+
+  // Authored values must actually reach the FormXML.
+  const set = attrsOf(formEventsRegionIntent([{
+    event: 'onload', library: 'new_lib.js', function: 'onLoad',
+    enabled: false, passExecutionContext: false, parameters: 'a,b',
+  }]));
+  assert.strictEqual(set.enabled, 'false', 'enabled:false must disable the handler, not be discarded');
+  assert.strictEqual(set.passExecutionContext, 'false');
+  assert.strictEqual(set.parameters, 'a,b');
+
+  // FormXML attribute values are strings, so booleans must be rendered rather than passed through.
+  for (const [k, v] of Object.entries(set)) assert.strictEqual(typeof v, 'string', k + ' must serialize as a string');
+});
+
+test('form event parameters accepts an explicit empty string and ignores null', () => {
+  const attrsOf = (ev) => Object.fromEntries(formEventsRegionIntent([ev]).c[0].c[0].c[0].a);
+  assert.strictEqual(attrsOf({ event: 'onsave', library: 'l.js', function: 'f', parameters: '' }).parameters, '');
+  // Dataverse writes parameters="" itself, so an absent value is the empty string, not a dropped attribute.
+  assert.strictEqual(attrsOf({ event: 'onsave', library: 'l.js', function: 'f', parameters: null }).parameters, '');
+});

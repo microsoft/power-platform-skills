@@ -13,10 +13,10 @@ Step 2c `proceed` is the only start point. Never create `_build_plan.html`, its
 answer. Immediately after app identity is initialized:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" progress \
+node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" progress \
   --project-root "<working_dir>" \
   --phase requirements --status complete --detail "Brief confirmed"
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" serve \
+node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" serve \
   --project-root "<working_dir>" --port 0
 ```
 
@@ -94,7 +94,7 @@ content.
 Use the same command shape for every transition:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" progress \
+node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" progress \
   --project-root "<working_dir>" \
   --phase <phase> --status <pending|active|waiting|complete|warning|failed> \
   --detail "<short non-sensitive fact>"
@@ -164,7 +164,7 @@ Never delete execution evidence to re-enable editing.
 After the final usage check and the other final validators pass, record:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" progress \
+node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" progress \
   --project-root "<working_dir>" \
   --phase validation --status complete --overall-status complete \
   --detail "Build and final validation complete"

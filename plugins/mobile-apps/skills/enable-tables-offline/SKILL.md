@@ -7,11 +7,11 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 **References:**
 
-- [offline-profile-schema.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-schema.md) — entity field map (`IsAvailableOffline`, `ChangeTrackingEnabled`)
+- [offline-profile-schema.md](${PLUGIN_ROOT}/shared/references/offline-profile-schema.md) — entity field map (`IsAvailableOffline`, `ChangeTrackingEnabled`)
 
 # Enable Tables Offline
 
@@ -29,7 +29,7 @@ Sequential (Dataverse metadata lock) and idempotent: re-running on an already-en
 
 ```bash
 test -f power.config.json && test -f app.config.js
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture the **Environment URL** from the resolver for `<envUrl>`. STOP if not authenticated.
@@ -54,7 +54,7 @@ If the resolved list is empty, STOP with: "No Dataverse tables found in this pro
 For each table, in sequence:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName,DisplayName,IsAvailableOffline,ChangeTrackingEnabled,IsCustomizable"
 ```
 
@@ -99,7 +99,7 @@ If the user rejects, STOP. If they approve, proceed.
 For each table needing change (skip ones already in target state):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/update-entity-offline-flags.js" <envUrl> \
+node "${PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" <envUrl> \
   --table <table> \
   --offline true \
   --tracking true
@@ -128,7 +128,7 @@ Print `✓ <table>` after each 204; print `↷ <table> (already enabled)` for no
 
 ```bash
 # Build the <entities> XML body from the list of tables modified in Step 4
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" --body '{
     "ParameterXml": "<importexportxml><entities><entity>cr720_fcbflag</entity><entity>cr720_rolloutevent</entity></entities></importexportxml>"
   }'
@@ -143,7 +143,7 @@ Substitute `<entity>...</entity>` lines for every table the helper PUT'd flags o
 **Fallback to `PublishAllXml`** (only when the targeted call returns a non-rate-limit error like `0x80048d19` malformed body):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishAllXml" --body '{}'
 ```
 

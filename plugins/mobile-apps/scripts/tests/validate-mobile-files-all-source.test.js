@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const {
   collectSourceTargets,
+  main,
   parseArgs,
 } = require('../validate-mobile-files');
 
@@ -15,6 +16,29 @@ test('all-source flag is explicit and does not require individual files', () => 
   const parsed = parseArgs(['--project-root', '/tmp/project', '--all-source']);
   assert.strictEqual(parsed.allSource, true);
   assert.deepStrictEqual(parsed.targets, []);
+});
+
+test('all-source rejects explicit validation targets', () => {
+  let stderr = '';
+  const originalWrite = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    stderr += String(chunk);
+    return true;
+  };
+
+  try {
+    assert.strictEqual(main([
+      '--project-root',
+      '/tmp/project',
+      '--all-source',
+      '--file',
+      'app/home.tsx',
+    ]), 1);
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  assert.match(stderr, /Usage: node validate-mobile-files\.js/);
 });
 
 test('all-source discovery includes app and source TypeScript but excludes generated files', () => {

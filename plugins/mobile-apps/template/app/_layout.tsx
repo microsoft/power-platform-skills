@@ -2,12 +2,9 @@ import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import {
-  PowerAppsProvider,
-  darkTheme,
-  lightTheme,
-} from '@microsoft/power-apps-native-host';
+import { PowerAppsProvider } from '@microsoft/power-apps-native-host';
 
+import appConfig from '../app.json';
 import authConfig from '../auth.config.json';
 import tamaguiConfig from '../tamagui.config';
 // @ts-ignore - power.config.json is auto-generated at build time
@@ -23,9 +20,6 @@ function isMissingOfflineProfile(error: unknown): boolean {
   );
 }
 
-// File presence is the Dataverse adapter activation boundary. PowerAppsProvider
-// and the installed offline package own runtime status, queue, sync, retry, and
-// conflict behavior; product screens do not recreate those states.
 let offlineProfile: Record<string, unknown> | undefined;
 try {
   offlineProfile = require('../offline-profile.json') as Record<string, unknown>;
@@ -40,14 +34,13 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <PowerAppsProvider
+        appConfig={appConfig}
         msalConfig={authConfig.msal}
         powerConfig={powerConfig}
         schemaMap={schemaMap}
         tamaguiConfig={tamaguiConfig}
         offlineProfile={offlineProfile}
         defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
-        theme={lightTheme}
-        darkTheme={darkTheme}
       >
         <StatusBar style="auto" />
         <Slot />

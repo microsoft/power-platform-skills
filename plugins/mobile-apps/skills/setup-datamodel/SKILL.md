@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: opus
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 # Set Up Data Model + Connectors
 
@@ -46,7 +46,7 @@ Confirm we're inside a Power Apps mobile app:
 
 ```bash
 test -f power.config.json && echo "OK" || echo "ERROR: not a mobile app — run /create-mobile-app first"
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture the **environment URL**, **environment ID**, **tenant ID**, and **organization ID** for Phase 5.
@@ -146,7 +146,7 @@ Write `## Data Model` as "None — no Dataverse tables needed." Continue to Phas
 
 ### Phase 3 — Plan Connectors
 
-Follow [`shared/references/connector-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/connector-planning.md):
+Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md):
 
 1. **Infer** — if `$ARGUMENTS` describes what the app does, scan for connector keywords. Build a candidate list.
 2. **Confirm** — present via `AskUserQuestion`. Let the user add, remove, or confirm.
@@ -231,10 +231,10 @@ If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Prof
 Run the local, no-network delta check:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
 
 ### Phase 7 — Summary
 
@@ -265,8 +265,8 @@ Next steps:
 
 ## Reference
 
-- [shared/references/connector-planning.md](${CLAUDE_SKILL_DIR}/../../shared/references/connector-planning.md) — connector inference + confirmation logic
-- [shared/references/offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Phase 6.5 offline delta check + reconciliation flow
+- [shared/references/connector-planning.md](${PLUGIN_ROOT}/shared/references/connector-planning.md) — connector inference + confirmation logic
+- [shared/references/offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md) — Phase 6.5 offline delta check + reconciliation flow
 - [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) — full data model execution workflow
 - `build-dataverse-operation-manifest.js` — structured contract normalization
 - `validate-dataverse-planning-decisions.js` — snapshot-bound decision validation

@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 **References:**
 
@@ -27,7 +27,7 @@ Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions-memory.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-memory.md).
+Check for `memory-bank.md` per [shared-instructions-memory.md](${PLUGIN_ROOT}/shared/shared-instructions-memory.md).
 
 Also confirm this is a mobile app:
 
@@ -94,7 +94,7 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 ### Step 6: Get Connection ID
 
-Get the SharePoint Online connection ID (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+Get the SharePoint Online connection ID (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 ```bash
 npx power-apps create-connection --api-id shared_sharepointonline --json
@@ -151,7 +151,7 @@ Run once per list or document library.
 
 **Read [sharepoint-reference.md](./references/sharepoint-reference.md) before writing any SharePoint code** — column encoding, choice fields, and lookups have critical gotchas.
 
-Use `Grep` to find methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large — see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large — see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
 
 Sample usage:
 

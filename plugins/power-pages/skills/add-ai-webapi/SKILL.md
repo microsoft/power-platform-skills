@@ -286,8 +286,8 @@ What the Explore agent reports back (summary — see the reference for the exact
 - **Layer 1/2 status** per Data Summarization target plus every `$expand` target —
   `ready` / `missing` / `n/a (search)`.
 - **Fields-list breadth advisory** — for Layer 1/2 `ready` rows whose existing
-  `Webapi/<table>/fields` is broader than the AI surface needs (primary key included, lookup
-  write forms, unused columns), flagged `fields-broader-than-ai-mode` so Phase 3 can surface
+  `Webapi/<table>/fields` is broader than the AI surface needs (primary key included, relationship
+  Navigation Properties unused by `@odata.bind`, unused columns), flagged `fields-broader-than-ai-mode` so Phase 3 can surface
   it.
 - **Layer 3 status** per Data Summarization target — `Summarization/Data/Enable` and the
   specific `Summarization/prompt/<id>` the code will send.

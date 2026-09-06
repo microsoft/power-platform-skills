@@ -81,14 +81,14 @@ test('template host package owns runtime after explicit offline profile choice',
     '^0.1.32',
   );
   assert.ok(templatePackage.dependencies['@microsoft/power-apps-native-host']);
-  assert.match(templateAppConfig, /'@microsoft\/power-apps-native-offline'/);
-  assert.match(templateAppConfig, /owns connection, queue, sync,[\s\S]*retry, and conflict/);
+  assert.match(templateAppConfig, /createPowerAppsExpoConfig/);
+  assert.doesNotMatch(templateAppConfig, /'@microsoft\/power-apps-native-offline'/);
   assert.match(templateLayout, /offlineProfile=\{offlineProfile\}/);
-  assert.match(templateLayout, /installed offline package own runtime status/);
-  assert.match(templateReadme, /do not add another offline dependency/);
+  assert.match(templateReadme, /native host owns[\s\S]*connection state, queue, synchronization, retry,[\s\S]*conflict handling/);
+  assert.match(templateReadme, /do not add another offline dependency/i);
   assert.match(templateReadme, /not inferred from requirements/);
-  assert.match(templateReadme, /asks whether the user wants offline support/);
-  assert.match(templateReadme, /Connector-only and[\s\S]*skip this Dataverse-only profile question/);
+  assert.match(templateReadme, /asks whether the user wants an[\s\S]*offline profile/);
+  assert.match(templateReadme, /Connector-only and[\s\S]*skip this Dataverse-only profile[\s\S]*question/);
 });
 
 test('environment discovery is non-persisting before the rough plan gate', () => {
@@ -236,12 +236,12 @@ test('persistence ownership compiles before conditional Dataverse planning and j
   const dataModel = planningWorkflow.indexOf('## Step 3.3 — Conditional physical data model');
   const journey = planningWorkflow.indexOf('## Step 3.4 — Workflow Journey and screen build packs');
   const persistenceCompile = planningWorkflow.indexOf(
-    'node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js"',
+    'node "${PLUGIN_ROOT}/scripts/compile-persistence-contract.js"',
     architecture,
   );
   const publisherRead = planningWorkflow.indexOf('PUBLISHER_PREFIX_JSON=$(node', dataModel);
   const snapshotRead = planningWorkflow.indexOf(
-    'node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js"',
+    'node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js"',
     dataModel,
   );
   const proposalCompile = planningWorkflow.indexOf(

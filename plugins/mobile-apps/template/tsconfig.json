@@ -1,29 +1,5 @@
 {
-  "extends": "expo/tsconfig.base",
-  "compilerOptions": {
-    "strict": true,
-    "incremental": true,
-    "tsBuildInfoFile": ".tmp/tsc.tsbuildinfo",
-    "moduleResolution": "bundler",
-    "paths": {
-      "react-native": ["./node_modules/react-native"],
-      "expo-auth-session": ["./node_modules/expo-auth-session"],
-      "expo-secure-store": ["./node_modules/expo-secure-store"],
-      "expo-web-browser": ["./node_modules/expo-web-browser"],
-      "@/components": ["./src/components"],
-      "@/components/*": ["./src/components/*"],
-      "@/hooks": ["./src/hooks"],
-      "@/hooks/*": ["./src/hooks/*"],
-      "@/utils": ["./src/utils"],
-      "@/utils/*": ["./src/utils/*"],
-      "@/tokens": ["./src/tokens"],
-      "@/tokens/*": ["./src/tokens/*"],
-      "@/generated": ["./src/generated"],
-      "@/generated/*": ["./src/generated/*"],
-      "@/native": ["./src/native"],
-      "@/native/*": ["./src/native/*"]
-    }
-  },
+  "extends": "@microsoft/power-apps-native-host/config/tsconfig",
   "include": [
     "**/*.ts",
     "**/*.tsx",

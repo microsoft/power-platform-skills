@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** | **Connector reference: [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)** — read both first.
+**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** | **Connector reference: [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)** — read both first.
 
 # Add Connector (Generic)
 
@@ -27,7 +27,7 @@ The native host runtime (`@microsoft/power-apps-native-host`) handles connector 
 
 ### Step 1 — Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions-memory.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-memory.md).
+Check for `memory-bank.md` per [shared-instructions-memory.md](${PLUGIN_ROOT}/shared/shared-instructions-memory.md).
 
 Also confirm we're inside a Power Apps mobile app:
 
@@ -76,7 +76,7 @@ After `add-flow`, continue at Step 4 and inspect the generated service/model fil
 
 ### Step 3 — Add Connector
 
-**First, get the connection ID or connection reference** (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+**First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
 `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.

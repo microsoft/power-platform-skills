@@ -1,8 +1,4 @@
-/**
- * Dynamic Expo config for the Power Apps standalone template.
- */
-
-const IS_DEV_CLIENT = process.env.DEV_CLIENT === 'true';
+const { createPowerAppsExpoConfig } = require('@microsoft/power-apps-native-host/config/expoConfig');
 
 // CUSTOMER APP SETTINGS START - DO NOT REMOVE OR RENAME THE COMMENT
 // App identity, package names, icon, and version defaults are customer-owned.
@@ -29,74 +25,14 @@ function customizeExpoConfig(config) {
 }
 // CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT
 
-/** @type {import('expo/config').ExpoConfig} */
-module.exports = ({ config }) => customizeExpoConfig({
-  ...config,
+module.exports = ({ config }) => createPowerAppsExpoConfig(config, {
   name: APP_NAME,
   slug: APP_SLUG,
   version: APP_VERSION,
   scheme: APP_SCHEME,
-  // Icon — only set when APP_ICON_PATH is provided (production builds via wrap.js).
-  // Expo generates all required sizes from this single 1024×1024 PNG.
-  ...(APP_ICON_PATH ? { icon: APP_ICON_PATH } : {}),
-  web: {
-    bundler: 'metro',
-    output: 'static',
-  },
-  platforms: ['ios', 'android', 'web'],
-  experiments: {
-    typedRoutes: true,
-  },
-  plugins: [
-    // expo-dev-client is only included in development builds.
-    // Release builds omit it so the Expo launcher screen is not included.
-    ...(IS_DEV_CLIENT ? ['expo-dev-client'] : []),
-    'expo-router',
-    'expo-secure-store',
-    // power-apps-native-host config plugin: injects the Intune MAM Gradle plugin
-    // into android/build.gradle and android/app/build.gradle at prebuild time.
-    // Skipped automatically when DEV_CLIENT=true.
-    // The host package delegates to its pinned auth/MAM plugin internally.
-    '@microsoft/power-apps-native-host',
-    // @microsoft/power-apps-native-offline: injects the RNDataverseOffline pod (iOS)
-    // and DataverseOfflinePackage (Android), and sets newArchEnabled=false
-    // (Podfile.properties.json / gradle.properties) — the offline native module
-    // requires the legacy architecture. Self-deactivates (complete no-op) when no
-    // valid offline-profile.json exists. Activated by offline-profile.json, NOT power.config.json.
-    // Together with the host provider, this package owns connection, queue, sync,
-    // retry, and conflict runtime behavior; app screens must not implement a
-    // parallel offline lifecycle.
-    '@microsoft/power-apps-native-offline',
-    '@react-native-community/datetimepicker'],
-  android: {
-    package: ANDROID_PACKAGE,
-    versionCode: APP_VERSION_CODE,
-    // Adaptive icon — uses the same source image with a white background.
-    // Override adaptiveIcon.backgroundColor in app.config.js if your icon
-    // needs a different background (e.g. a branded colour).
-    ...(APP_ICON_PATH ? {
-      adaptiveIcon: {
-        foregroundImage: APP_ICON_PATH,
-        backgroundColor: '#ffffff',
-      },
-    } : {}),
-  },
-  ios: {
-    supportsTablet: true,
-    bundleIdentifier: IOS_BUNDLE_IDENTIFIER,
-    infoPlist: {
-      // Required so the MAM SDK and MSAL can detect Company Portal /
-      // Microsoft Authenticator. Baked into the binary — present in both
-      // dev client and release base builds.
-      LSApplicationQueriesSchemes: [
-        'intunemam',
-        'ms-acompli',
-        'msauthv2',
-        'msauthv3',
-        // msauth.<bundleId> for broker - downstream packaging can add an
-        // bundle-specific variant to CFBundleURLTypes when needed, while the
-        // generic msauthv2/v3 entries here cover SDK detection.
-      ],
-    },
-  },
-});
+  androidPackage: ANDROID_PACKAGE,
+  iosBundleIdentifier: IOS_BUNDLE_IDENTIFIER,
+  versionCode: APP_VERSION_CODE,
+  iconPath: APP_ICON_PATH,
+  isDevClient: process.env.DEV_CLIENT === 'true',
+}, customizeExpoConfig);

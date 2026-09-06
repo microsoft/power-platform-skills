@@ -7,18 +7,18 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 **References:**
 
-- [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) §4 / §7 — POST item + PATCH selectedcolumns
-- [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — refreshing the `schemaColumns` baseline after a column edit
+- [dataverse-offline-api.md](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md) §4 / §7 — POST item + PATCH selectedcolumns
+- [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md) — refreshing the `schemaColumns` baseline after a column edit
 
 # Edit Offline Profile
 
 Re-run a single piece of an existing profile — change one table's row scope, update the column list, adjust sync frequency, or rename the profile. Avoids the cognitive cost of walking the full /setup-offline-profile wizard for a one-line change.
 
-Scope: existing profile (read from `offline-profile.json` or `--profile-id`); edits at the table-item granularity. To ADD a new table see `/add-table-to-offline-profile`; to delete the entire profile see [dataverse-offline-api.md §11](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md).
+Scope: existing profile (read from `offline-profile.json` or `--profile-id`); edits at the table-item granularity. To ADD a new table see `/add-table-to-offline-profile`; to delete the entire profile see [dataverse-offline-api.md §11](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md).
 
 ## Workflow
 
@@ -30,7 +30,7 @@ Scope: existing profile (read from `offline-profile.json` or `--profile-id`); ed
 
 ```bash
 test -f power.config.json
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Profile ID resolution (same priority as `/assign-offline-profile` Step 1):
@@ -69,7 +69,7 @@ If no flags → interactive picker. `AskUserQuestion` with up-to-4 most likely e
 GET the current item state from Dataverse for any tables being edited:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "mobileofflineprofileitems(<itemId>)?\$select=name,recorddistributioncriteria,recordsownedbyme,recordsownedbymyteam,recordsownedbymybusinessunit,syncintervalinminutes,selectedcolumns"
 ```
 
@@ -94,7 +94,7 @@ If `Apply` → continue. If `Cancel` → STOP.
 Build the PATCH body with only the fields that changed:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
   "mobileofflineprofileitems(<itemId>)" \
   --body '{
     "recorddistributioncriteria": <new>,
@@ -107,17 +107,17 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \
 For profile-level edits (name / description):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
   "mobileofflineprofiles(<profileId>)" \
   --body '{"name": "...", "description": "..."}'
 ```
 
 ### Step 5 — Publish
 
-Use the **targeted `PublishXml`** recipe from [shared/references/dataverse-offline-api.md §9](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md):
+Use the **targeted `PublishXml`** recipe from [shared/references/dataverse-offline-api.md §9](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" --body '{
     "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile>'"$PROFILE_ID"'</mobileofflineprofile></mobileofflineprofiles></publish>"
   }'
@@ -129,7 +129,7 @@ On `400 / 0x80071141` "circular relationship" — same handling as `/setup-offli
 
 ### Step 6 — Update artifacts
 
-Re-read the changed item(s) and rewrite the matching entry in `offline-profile.json`. When the edit changed a table's **columns** (`--columns add:/remove:/reset`), also refresh that table entry's `schemaColumns` to the table's current full column set from `.datamodel-manifest.json` (root or `docs/plan-artifacts/`). This re-baselines the schema-reconciliation marker so a delta that was just reconciled clears on the next `scripts/offline-profile-delta.js` run; leave `schemaColumns` untouched for scope/sync/rename-only edits. See [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md).
+Re-read the changed item(s) and rewrite the matching entry in `offline-profile.json`. When the edit changed a table's **columns** (`--columns add:/remove:/reset`), also refresh that table entry's `schemaColumns` to the table's current full column set from `.datamodel-manifest.json` (root or `docs/plan-artifacts/`). This re-baselines the schema-reconciliation marker so a delta that was just reconciled clears on the next `scripts/offline-profile-delta.js` run; leave `schemaColumns` untouched for scope/sync/rename-only edits. See [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md).
 
 Append a one-line entry to `memory-bank.md` `## Offline profile` block:
 
@@ -162,5 +162,5 @@ offline-profile.json + memory-bank.md updated.
 
 - Add a NEW table to the profile → use `/add-table-to-offline-profile`
 - Add a new association (relationship inclusion) → blocked on v0.2 `selectedrelationshipsschema` work; use maker portal in the meantime
-- Delete the whole profile → manual `DELETE /mobileofflineprofiles(<id>)` (cascade-deletes items + associations); see [dataverse-offline-api.md §11](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md)
+- Delete the whole profile → manual `DELETE /mobileofflineprofiles(<id>)` (cascade-deletes items + associations); see [dataverse-offline-api.md §11](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md)
 - Migrate the profile between environments → use `CloneMobileOfflineProfile` action (v0.5 work)

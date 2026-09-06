@@ -8,12 +8,14 @@ Step 6.75, `waiting` during Gates 3–4, and complete only after Gate 4 approval
 ### Step 4 — Auth & environment selection
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
 ```
 
 If the resolved environment doesn't match what the planner used in Step 3, ask the user for the intended environment ID and re-run `resolve-environment.js`. Capture the **environment ID** for Step 6.
 
 ### Step 5 — Prepare existing template
+
+**Telemetry checkpoint: `scaffold`**
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
 
@@ -40,7 +42,7 @@ If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.dat
 Run the deterministic preparation script once:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
+node "${PLUGIN_ROOT}/scripts/prepare-mobile-template.js" \
   --working-dir "<working_dir>" \
   --display-name "<displayName>" \
   --slug "<slug>"
@@ -48,10 +50,11 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
 
 The script is the only owner of Step 5 mutations. It updates identity, removes
 only recognized legacy example hooks/query-client files, copies shared helpers
-only when missing, merges aliases without `baseUrl`, and structurally verifies
-the root provider/theme/safe-area contract. It preserves custom navigation,
-existing helper bytes, `offlineProfile`, provider props, and the template's
-`@ts-ignore` generation boundaries.
+only when missing, verifies the native-host TypeScript base, and structurally
+verifies the root provider/theme/safe-area contract. It preserves custom
+navigation, existing helper bytes, `offlineProfile`, provider props, every
+artifact under `src/generated/`, and the template's `@ts-ignore` generation
+boundaries.
 
 **Generated ownership boundary:** Step 5 must not create, reset, delete, or
 write anything under `src/generated/`. Only Power Apps schema/data-source
@@ -117,9 +120,14 @@ approved sample helper only when its destination does not exist. Existing
 helpers are byte-for-byte preserved, so reruns cannot overwrite user or
 builder changes.
 
-**Fix 8 — Thread the project's `tamaguiConfig` into the host provider** (required so screens render under brand tokens, not upstream defaults)
+**Fix 8 — Thread the project's `tamaguiConfig` into the host provider**
 
-The template ships `PowerAppsProvider` (composed-tree API, v0.2.0+). Fix 8 adds `tamaguiConfig`, `defaultTheme`, `theme`, and `darkTheme` props so screens render under brand tokens. Do NOT add an outer `<TamaguiProvider>` — `PowerAppsProvider` composes it internally and duplicating triggers "useTheme must be used within a TamaguiProvider" warnings on hot reload.
+The template ships `PowerAppsProvider` (composed-tree API, v0.2.0+). Fix 8 adds
+`tamaguiConfig` and `defaultTheme`. The host owns baseline light/dark themes;
+explicit `theme` and `darkTheme` props are added only after brand-token wiring
+creates project-specific themes. Do NOT add an outer `<TamaguiProvider>` —
+`PowerAppsProvider` composes it internally and duplicating triggers
+"useTheme must be used within a TamaguiProvider" warnings on hot reload.
 
 The preparation script edits the existing root layout structurally. It adds
 missing imports and provider props, then wraps `PowerAppsProvider` with
@@ -134,14 +142,13 @@ Key points:
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
-**Fix 4 — Path aliases in `tsconfig.json` (idempotent JSON merge)**
+**Fix 4 — Native-host TypeScript configuration**
 
-The upstream template's `tsconfig.json` includes runtime polyfill paths but may
-not include the six shared-code aliases. The preparation script merges
-`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and
-`@/native`, preserves unrelated aliases, and deletes deprecated `baseUrl`.
-Modern TypeScript bundler resolution supports these `paths` entries directly,
-so no Babel alias plug-in is required.
+The upstream template's `tsconfig.json` extends
+`@microsoft/power-apps-native-host/config/tsconfig`. The preparation script
+verifies that inheritance instead of duplicating the host's package shims and
+`@/` aliases in the app. Do not reintroduce `baseUrl`, local polyfill paths, or
+a Babel alias plug-in.
 
 `<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If dependency verification later reveals the dep is missing, STOP and surface the template contract failure; do not silently add a different dependency.
 
@@ -186,10 +193,11 @@ If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in t
 ### Step 6.5b — Root runtime contract verification
 
 Step 5 already performs the idempotent structural update and postcondition
-checks. Do not mutate `_layout.tsx` again here. Verify only that the prepared
-layout still contains `SafeAreaProvider`, `tamaguiConfig`, `offlineProfile`,
-and the host light/dark theme props; if any are missing, rerun the Step 5
-preparation script and stop if it reports an unsupported layout.
+checks. Do not mutate `_layout.tsx` again here. Verify that the prepared layout
+contains `SafeAreaProvider`, `tamaguiConfig`, `offlineProfile`, and
+`defaultTheme`. If brand-token wiring has already run, also verify its explicit
+`theme` and `darkTheme` props. If any applicable value is missing, rerun the
+Step 5 preparation script and stop if it reports an unsupported layout.
 
 ### Step 6.6 — Scaffold TypeScript gate
 
@@ -209,7 +217,7 @@ This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capt
 ### Step 6.7 — Seed the memory bank
 
 ```bash
-cp "${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md" "<working_dir>/memory-bank.md"
+cp "${PLUGIN_ROOT}/shared/memory-bank.md" "<working_dir>/memory-bank.md"
 ```
 
 Fill in the Project facts and Power Platform context sections from Steps 2 and 4. From here on, every step appends to the relevant section of `<working_dir>/memory-bank.md` immediately after success — not at the end. This is what enables Step 0's resume on a future run.
@@ -386,7 +394,7 @@ and finish it immediately after the response. On approval, record the current
 plan sections, build pack, and preview through the atomic approval owner:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" approve \
+node "${PLUGIN_ROOT}/scripts/mobile-plan-approval.js" approve \
   --project-root "<working_dir>" --gate 3
 ```
 
@@ -420,9 +428,9 @@ installation, or screen/source generation. If approved, run the final receipt
 seal and continue only when it validates:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" approve \
+node "${PLUGIN_ROOT}/scripts/mobile-plan-approval.js" approve \
   --project-root "<working_dir>" --gate 4
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" validate \
+node "${PLUGIN_ROOT}/scripts/mobile-plan-approval.js" validate \
   --project-root "<working_dir>"
 ```
 
@@ -437,7 +445,7 @@ will subtract overlapping wait time from foreground execution.
 After approval, record the materialized experience checkpoint:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
+node "${PLUGIN_ROOT}/scripts/mobile-pipeline-state.js" \
   --project-root "<working_dir>" --record --step "6.75" \
   --mutable-artifact "plan=native-app-plan.md" \
   --mutable-artifact "approval=.tmp/mobile-plan-status.json" \

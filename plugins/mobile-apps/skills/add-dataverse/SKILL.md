@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: opus
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 # Add Dataverse
 
@@ -27,7 +27,7 @@ Confirm Power Apps mobile app:
 
 ```bash
 test -f power.config.json && test -f app.config.js
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture the **environment URL** (`https://orgXXX.crm.dynamics.com`), **environment ID**, and **tenant ID** from `resolve-environment.js` — needed for Step 3. If only the environment URL is available, pass that URL instead of the ID.
@@ -151,7 +151,7 @@ Required only if creating or extending tables. Skip to Step 5 for read-only `add
 `npx power-apps` and `az` authenticate independently — they can point to different accounts. Verify `power.config.json` resolves and `az` can token for the target tenant before making any Dataverse API calls:
 
 ```bash
-ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")")
+ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")")
 echo "$ENV_JSON"
 az account show --query "{user: user.name, tenant: tenantId}" -o json
 ```
@@ -181,7 +181,7 @@ If empty, instruct `az login` and stop.
 **Script invocation contract — read this once, all subsequent calls in this skill follow it:**
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> <METHOD> <apiPath> \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> <METHOD> <apiPath> \
   [--body '<json>'] [--include-headers] \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
@@ -198,7 +198,7 @@ If the tenant is unknown, omit `--tenant-id` — discovery still works, it is ju
 Acquire a Dataverse access token and verify connectivity:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET WhoAmI \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET WhoAmI \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
@@ -208,7 +208,7 @@ priority over shell environment variables and Azure account discovery.
 `WhoAmI` is the Dataverse identity endpoint — capital W/A/I (case-sensitive). The response gives `UserId`, `BusinessUnitId`, `OrganizationId` but **does NOT include the publisher prefix**. To get the publisher prefix, query the solution's publisher (defaults to `Default`; pass a different solution name if the env uses a custom solution):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" <envUrl> [solutionName] \
+node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" <envUrl> [solutionName] \
   --tenant-id '<tenantId-from-resolve-environment>'
 # solutionName defaults to "Default" if omitted
 ```
@@ -225,7 +225,7 @@ the resolved environment, tenant (when available), publisher, solution, current
 plan bytes, structured-schema bytes, and fresh reconciliation bytes:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --validate "<operation-manifest-path>" \
   --contract "<schema-contract-path>" \
   --approval-receipt "<approval-receipt-path>" \
@@ -278,7 +278,7 @@ summary.
 Do not use the custom-table list as the source of truth, and do not issue one request per table. Fetch **every** plan entry (`Reuse`, `Extend`, or `Create`) — including standard and managed dependencies — in a **single** filtered query that also expands their columns:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=MetadataId,LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName,SourceType,SourceTypeMask)" \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
@@ -330,7 +330,7 @@ semantics. Before classifying any such existing column as compatible:
    `<working_dir>/.tmp/derived-metadata-operations.json`, then run:
 
    ```bash
-   node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> \
+   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> \
      BATCH-METADATA derived-reconciliation \
      --operations "$(cat <working_dir>/.tmp/derived-metadata-operations.json)" \
      --tenant-id '<tenantId-from-resolve-environment>'
@@ -410,7 +410,7 @@ project-local atomic journal:
 
 ```bash
 EXECUTION_JOURNAL="<working_dir>/.tmp/dataverse-metadata-execution-journal.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/execute-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/execute-dataverse-operation-manifest.js" \
   --manifest "$OPERATION_MANIFEST" \
   --env-url "<envUrl>" \
   --solution "<solution-uniquename>" \
@@ -478,7 +478,7 @@ Bind the contract through that pre-existing receipt, then roll the existing
 publish checkpoint forward:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --roll-forward-checkpoint "$PUBLISH_CHECKPOINT" \
   --previous-manifest "$OPERATION_MANIFEST" \
   --journal "$EXECUTION_JOURNAL" \
@@ -509,7 +509,7 @@ unsupported projections are explicit `defer` rows. After the `publish` phase suc
 and invalidate the planning-only inventory cache:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
+node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
   --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
 ```
 
@@ -535,7 +535,7 @@ issues requests strictly one at a time in array order, stopping on the first
 non-2xx response by default.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> \
   BATCH-METADATA schema-writes \
   --operations '<ordered-json-array>' \
   --solution '<solution-uniquename-from-memory-bank>' \
@@ -566,7 +566,7 @@ Before each create, confirm the target name is actually free: name-prefix collis
 Only re-probe a single name when Step 4's batch did not cover it (for example a rename candidate generated later in this step):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<prefix>_<table>')?\$select=MetadataId,LogicalName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes" \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
@@ -700,7 +700,7 @@ For each `Create` decision, in **tier order** (Tier 0 → Tier 1 → Tier 2 → 
 **Scratch files:** When writing request body JSON to disk (e.g. table definitions, column metadata, relationship payloads), always write to `<working_dir>/.tmp/`, never to `/tmp/`. Keeping request bodies project-local prevents cross-project writes and makes cleanup deterministic. Create the folder if it doesn't exist: `mkdir -p <working_dir>/.tmp`.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST EntityDefinitions \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST EntityDefinitions \
   --body '<json-body-with-all-columns-inline>' \
   --solution '<solution-uniquename-from-memory-bank>' \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -780,7 +780,7 @@ For each `Extend` decision, POST a new column to the existing table.
 > **⚠️ Table-level pre-flight (HARD — required for idempotent re-runs).** Reuse the complete attribute snapshot fetched for this table in Step 4. If the table was discovered only during collision recovery, or no current snapshot exists, fetch all attributes exactly once:
 >
 > ```bash
-> node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+> node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 >   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName" \
 >   --tenant-id '<tenantId-from-resolve-environment>'
 > ```
@@ -798,7 +798,7 @@ For each `Extend` decision, POST a new column to the existing table.
 After the complete comparison passes, POST the missing-column queue **one column at a time, sequentially** (no `$batch`; always pass `--solution`):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "EntityDefinitions(LogicalName='<table>')/Attributes" \
   --body '<column-json>' \
   --solution '<solution-uniquename-from-memory-bank>' \
@@ -848,7 +848,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   Invocation (apiPath is `RelationshipDefinitions`, body via `--body`, always pass `--solution`):
 
   ```bash
-  node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+  node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
     RelationshipDefinitions \
     --body '<json-body-from-skeleton-above>' \
     --solution '<solution-uniquename-from-memory-bank>' \
@@ -977,7 +977,7 @@ https://learn.microsoft.com/power-apps/developer/data-platform/specialized-colum
 **Do NOT use the `CreateEntityKey` action route.** In practice it can return 404 depending on route shape / environment. The reliable metadata route is POSTing to the table's `Keys` navigation collection:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "EntityDefinitions(LogicalName='<table>')/Keys" \
   --body '<entity-key-json>' \
   --solution '<solution-uniquename-from-memory-bank>' \
@@ -998,7 +998,7 @@ Body skeleton:
 **Pre-flight each key before POST** so re-runs are idempotent. A key can only pre-exist on a table that already existed at Step 4, so for a table created in this run, skip straight to the POST. Otherwise read `Keys` from that table's Step 4 snapshot. Query it directly only when the snapshot did not cover that table:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName&\$expand=Keys(\$select=SchemaName,KeyAttributes,EntityKeyIndexStatus)" \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
@@ -1034,7 +1034,7 @@ deterministic sequential runner. Do not derive this list from Creation Order
 because reused tables are intentionally absent from creation tiers:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/generate-dataverse-services.js" \
+node "${PLUGIN_ROOT}/scripts/generate-dataverse-services.js" \
   --project-root "<working_dir>" \
   --manifest "$OPERATION_MANIFEST" \
   --env-url "<envUrl>" \
@@ -1075,7 +1075,7 @@ publish retry.
 Only after **every** Step 5 metadata POST and **every** Step 6 `npx power-apps add-data-source` has returned successfully, publish so the new tables and columns are available to the runtime. `PublishXml` takes the same exclusive metadata lock as the create/extend calls — do not run it concurrently with anything from Steps 5 or 6.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" \
   --body "{\"ParameterXml\":\"<importexportxml><entities><entity>cr123_table1</entity><entity>cr123_table2</entity></entities></importexportxml>\"}" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -1089,7 +1089,7 @@ After a 2xx publish, invalidate the planning-only inventory cache before
 verification so a later planning run cannot reuse pre-publication inventory:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
+node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
   --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
 ```
 
@@ -1098,7 +1098,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
 Confirm every created or extended table is queryable after publish with **one** filtered query, not one request per table:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'" \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
@@ -1220,16 +1220,16 @@ A schema change here (new table or new column) can leave an existing Mobile Offl
 Otherwise (manual `/add-dataverse`), run the local, no-network delta check:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md):
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md):
 
 | `status` | Action |
 |---|---|
 | `no-manifest` / `no-profile` / `in-sync` | Continue to Step 9 silently. For `no-profile` (no offline profile exists) do not nag — the app may not use offline. |
 | `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Do NOT treat this as an `/add-dataverse` failure (the tables are already created): surface the `error` string, **skip reconciliation** (never drive the update workflows against a corrupt file), and finish with `DONE_WITH_CONCERNS` telling the user to fix `offline-profile.json`. |
-| `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns. For `missingTables[]`, read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md`; for `tablesWithNewColumns[]`, read and execute `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>`. Re-run the delta check; it should read `in-sync`. Follow the exact prompt + ordering in the reconciliation reference. |
+| `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns. For `missingTables[]`, read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md`; for `tablesWithNewColumns[]`, read and execute `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>`. Re-run the delta check; it should read `in-sync`. Follow the exact prompt + ordering in the reconciliation reference. |
 
 ### Step 9 — Summary
 

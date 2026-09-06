@@ -126,7 +126,10 @@ function hasNavigationTapGuard(content) {
     const refName = match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const earlyReturn = new RegExp(`if\\s*\\(\\s*${refName}\\.current\\s*\\)\\s*return`).test(content);
     const setTrue = new RegExp(`${refName}\\.current\\s*=\\s*true`).test(content);
-    return earlyReturn && setTrue;
+    const setFalse = new RegExp(`${refName}\\.current\\s*=\\s*false`).test(content);
+    const terminalReplaceOnly = /router\.replace\s*\(/.test(content)
+      && !/router\.(?:push|navigate)\s*\(/.test(content);
+    return earlyReturn && setTrue && (setFalse || terminalReplaceOnly);
   });
 }
 
@@ -150,7 +153,7 @@ function buildBlockMessage(filePath, errors, warnings) {
   lines.push('Required fixes:');
   lines.push('  - Singleton routes must use `router.navigate(...)`, not `router.push(...)`.');
   lines.push('  - Async save flows must use a submit lock (`isSubmitting` or `isPending`) and disabled busy CTA.');
-  lines.push('  - Primary navigation actions should use an `isNavigating` lock or one-shot ref guard to prevent iOS duplicate transitions.');
+  lines.push('  - Primary navigation actions should use an `isNavigating` lock or a ref guard that resets on focus/failure; terminal replace-only callbacks may remain one-shot.');
 
   return lines.join('\n');
 }
@@ -198,7 +201,7 @@ if (require.main === module) {
     }
 
     if (hasNavigation(content) && !hasNavigationTapGuard(content)) {
-      warnings.push('Navigation calls found with no clear state lock or one-shot ref guard.');
+      warnings.push('Navigation calls found with no clear state lock, resettable ref guard, or terminal replace-only guard.');
     }
 
     if (errors.length > 0) {

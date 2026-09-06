@@ -6,12 +6,12 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 **References:**
 
-- [offline-profile-schema.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-schema.md) — `usermobileofflineprofilemembership` / `teammobileofflineprofilemembership` entity field map
-- [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) — Web API recipe (§12 — membership POSTs)
+- [offline-profile-schema.md](${PLUGIN_ROOT}/shared/references/offline-profile-schema.md) — `usermobileofflineprofilemembership` / `teammobileofflineprofilemembership` entity field map
+- [dataverse-offline-api.md](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md) — Web API recipe (§12 — membership POSTs)
 
 # Assign Offline Profile
 
@@ -29,7 +29,7 @@ Per the maker portal's UX (the "Assign profile to user" dialog under env setting
 
 ```bash
 test -f power.config.json
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Profile ID resolution (in order):
@@ -79,11 +79,11 @@ For idempotency:
 
 ```bash
 # Existing user memberships for this profile
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "usermobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$select=usermobileofflineprofilemembershipid,_systemuserid_value&\$expand=systemuserid_systemuser(\$select=domainname)"
 
 # Existing team memberships for this profile
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "teammobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$select=teammobileofflineprofilemembershipid,_teamid_value&\$expand=teamid_team(\$select=name)"
 ```
 
@@ -92,10 +92,10 @@ Build the set of `already-bound` UPNs and team names.
 For each candidate user/team from Step 2, look up their `systemuserid` / `teamid` (skip if already in `already-bound`):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "systemusers?\$filter=domainname eq '<upn>'&\$select=systemuserid,fullname,domainname&\$top=1"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "teams?\$filter=name eq '<team-name>' and teamtype eq 0&\$select=teamid,name&\$top=1"
 ```
 
@@ -146,7 +146,7 @@ For each in `to_add`, POST sequentially (parallel POSTs occasionally return 429)
 **User membership:**
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "usermobileofflineprofilememberships" \
   --body '{
     "MobileOfflineProfileId@odata.bind": "/mobileofflineprofiles(<profileId>)",
@@ -160,7 +160,7 @@ Expected 204 with `OData-EntityId` → capture membership GUID.
 **Team membership:**
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "teammobileofflineprofilememberships" \
   --body '{
     "MobileOfflineProfileId@odata.bind": "/mobileofflineprofiles(<profileId>)",
@@ -172,7 +172,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
 For each in `to_remove`, DELETE:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> DELETE \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> DELETE \
   "usermobileofflineprofilememberships(<membershipid>)"
 ```
 

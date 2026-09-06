@@ -7,12 +7,12 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 **References:**
 
-- [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) §4 + §7 — POST item + PATCH selectedcolumns
-- [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline written in Step 7
+- [dataverse-offline-api.md](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md) §4 + §7 — POST item + PATCH selectedcolumns
+- [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline written in Step 7
 
 # Add Table to Offline Profile
 
@@ -30,7 +30,7 @@ Equivalent to running `/setup-offline-profile` and seeing the existing profile (
 
 ```bash
 test -f power.config.json
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Manifest path (dual-location):
@@ -62,7 +62,7 @@ For bulk `--all-new` mode, loop through Steps 3-6 for each missing table; each r
 Query the target table's `EntityMetadata`:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=IsAvailableOffline,ChangeTrackingEnabled,OwnershipType,IsCustomizable"
 ```
 
@@ -94,7 +94,7 @@ Recommendation in the question body must use the foreground priority cascade fro
 #### Step 5a — POST profile item
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitems" \
   --body '{
     "name": "<DisplayName>",
@@ -116,10 +116,10 @@ Capture `itemId` from `OData-EntityId` response header.
 
 After the new item is created, walk the new table's relationships (from the manifest's `lookups[]` + a `EntityDefinitions(LogicalName='<table>')/ManyToOneRelationships` query) and POST one `mobileofflineprofileitemassociation` per relationship whose target is ALREADY in the profile.
 
-Recipe per [shared/references/dataverse-offline-api.md §5–§6](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md):
+Recipe per [shared/references/dataverse-offline-api.md §5–§6](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitemassociations" \
   --body '{
     "name": "<relationshipSchemaName>",
@@ -139,7 +139,7 @@ For new tables that are `recorddistributioncriteria: 0` (Related rows only), at 
 Build `selectedcolumns` using the deterministic union from `/setup-offline-profile` Step 3 (always-include + lookups + approved screen/build-pack fields, then dedupe and sort).
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
   "mobileofflineprofileitems(<itemId>)" \
   --body '{"selectedcolumns":"{\"Columns\":[...]}"}'
 ```
@@ -147,17 +147,17 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \
 ### Step 6 — Publish (targeted PublishXml)
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" --body '{
     "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile>'"$PROFILE_ID"'</mobileofflineprofile></mobileofflineprofiles></publish>"
   }'
 ```
 
-Publishes only this profile, not the entire org's customizations. See [shared/references/dataverse-offline-api.md §9](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) for `0x80071141` circular-relationship handling + `PublishAllXml` fallback.
+Publishes only this profile, not the entire org's customizations. See [shared/references/dataverse-offline-api.md §9](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md) for `0x80071141` circular-relationship handling + `PublishAllXml` fallback.
 
 ### Step 7 — Update artifacts
 
-Append the new table's entry to `offline-profile.json` `tables[]`. The entry MUST include a `schemaColumns` array — the added table's full set of schema column logical names from `.datamodel-manifest.json` at this moment. This is the schema-reconciliation baseline that `scripts/offline-profile-delta.js` diffs future manifest changes against; omitting it makes the lifecycle delta check report this table under `columnBaselineMissing` until it is re-reconciled. It is distinct from `selectedColumns` (the curated sync set) — see [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md). Match the canonical entry shape in [`/setup-offline-profile` Step 9a](../setup-offline-profile/SKILL.md).
+Append the new table's entry to `offline-profile.json` `tables[]`. The entry MUST include a `schemaColumns` array — the added table's full set of schema column logical names from `.datamodel-manifest.json` at this moment. This is the schema-reconciliation baseline that `scripts/offline-profile-delta.js` diffs future manifest changes against; omitting it makes the lifecycle delta check report this table under `columnBaselineMissing` until it is re-reconciled. It is distinct from `selectedColumns` (the curated sync set) — see [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md). Match the canonical entry shape in [`/setup-offline-profile` Step 9a](../setup-offline-profile/SKILL.md).
 
 Append to `memory-bank.md` `## Offline profile` block:
 

@@ -64,6 +64,17 @@ jobs:
               shell: bash
               working-directory: plugins/mobile-apps/template
               run: |
+                  node - <<'NODE'
+                  for (const specifier of [
+                    '@microsoft/power-apps-native-host/config/expoConfig',
+                    '@microsoft/power-apps-native-host/config/babelConfig',
+                    '@microsoft/power-apps-native-host/config/metroConfig',
+                    '@microsoft/power-apps-native-host/config/tamaguiConfig',
+                    '@microsoft/power-apps-native-host/config/tsconfig',
+                  ]) {
+                    require.resolve(specifier);
+                  }
+                  NODE
                   node ../scripts/prepare-mobile-template.js \
                     --working-dir . \
                     --display-name "Template Quality Probe" \

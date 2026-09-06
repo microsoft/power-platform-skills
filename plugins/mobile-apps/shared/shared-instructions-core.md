@@ -52,3 +52,8 @@ needs them.
 - Follow the literal first-line agent status protocol in `AGENTS.md`.
 - On a rerun, verify deterministic state and current artifact revisions before
   skipping work.
+
+## Workflow checkpoint telemetry
+
+At a `Telemetry checkpoint` marker, follow
+[`workflow-checkpoint-telemetry.md`](${PLUGIN_ROOT}/shared/references/workflow-checkpoint-telemetry.md).

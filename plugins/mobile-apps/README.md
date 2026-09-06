@@ -292,9 +292,9 @@ Example edit flows:
 
 ## Telemetry and privacy
 
-The Mobile Apps plugin sends start-only usage telemetry to Microsoft. A start event can include the skill name, plugin version, session and per-start correlation IDs, OS/Node versions, AI-agent name/version, invocation source, and a random per-project app instance ID. It never includes prompts, skill arguments, tool inputs, file paths, cwd, app/site names, URLs, credentials, usernames, hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
+The Mobile Apps plugin sends invocation and explicitly marked workflow-checkpoint telemetry to Microsoft. Events can include the skill name, plugin version, session and per-start correlation IDs, OS/Node versions, AI-agent name/version, invocation source, a static checkpoint name/state, and a random per-project app instance ID. They never include prompts, skill arguments, tool inputs, file paths, cwd, app/site names, URLs, credentials, usernames, hostnames, Dataverse organization or tenant IDs, Entra object IDs, command output, or error text.
 
-Both host surfaces are covered — an explicit slash command and a programmatic Skill-tool call — so some hosts may produce two `skill_started` records for one visible run. The plugin does not emit `skill_completed`, success/failure, error, or duration data because the available hook boundary does not prove that the workflow itself completed.
+Both host surfaces are covered — an explicit slash command and a programmatic Skill-tool call — so some hosts may produce two `skill_started` records for one visible run. Foreground workflows may also emit fail-open checkpoints at authored boundaries. The plugin does not emit a generic `skill_completed`, duration, free-form outcome, or runtime error payload because the available hook boundary does not prove that the workflow itself completed.
 
 Control the per-user transmission preference with:
 

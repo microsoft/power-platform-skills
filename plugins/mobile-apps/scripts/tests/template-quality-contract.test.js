@@ -14,23 +14,12 @@ function read(relativePath) {
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
-test('base Tamagui config exposes the complete generated-screen semantic contract', () => {
+test('base Tamagui config inherits the generated-screen semantic contract from the host', () => {
   const config = read('template/tamagui.config.ts');
-  const tokens = [
-    'surface0', 'surface1', 'surface2', 'surface3', 'mediaSurface',
-    'accentDeep', 'accentBase', 'accentSoft', 'accentOnAccent',
-    'text0', 'text1', 'text2', 'text3',
-    'statusComplete', 'statusCompleteBg',
-    'statusPending', 'statusPendingBg',
-    'statusOverdue', 'statusOverdueBg',
-    'statusInProgress', 'statusInProgressBg',
-    'statusDraft', 'statusDraftBg',
-    'statusCancelled', 'statusCancelledBg',
-  ];
-  for (const token of tokens) assert.match(config, new RegExp(`\\b${token}:`));
-  assert.match(config, /mono:\s*defaultConfig\.fonts\.body/);
-  assert.match(config, /declare module '@tamagui\/core'/);
-  assert.doesNotMatch(config, /declare module 'tamagui'/);
+  assert.match(config, /createPowerAppsTamaguiConfig/);
+  assert.match(config, /const customConfig = \{\}/);
+  assert.match(config, /declare module 'tamagui'/);
+  assert.doesNotMatch(config, /createTamagui|withSemanticAliases|parseColorChannels/);
 });
 
 test('shipped routes own safe-area edges and avoid forbidden icons and raw hex colors', () => {
@@ -41,6 +30,7 @@ test('shipped routes own safe-area edges and avoid forbidden icons and raw hex c
   ]) {
     const source = read(relativePath);
     assert.match(source, /SafeAreaView/);
+    assert.match(source, /backgroundColor:\s*theme\.surface0\.val/);
     assert.doesNotMatch(source, /MaterialCommunityIcons/);
     assert.doesNotMatch(source, /#[0-9a-fA-F]{3,8}\b/);
   }
@@ -49,14 +39,93 @@ test('shipped routes own safe-area edges and avoid forbidden icons and raw hex c
   assert.strictEqual(hasNavigationTapGuard(callback), true);
 });
 
+test('navigation ref guards must reset unless the route performs a terminal replace', () => {
+  const reusableNavigation = `
+    const didNavigate = useRef(false);
+    if (didNavigate.current) return;
+    didNavigate.current = true;
+    router.navigate('/details');
+  `;
+  const resettableNavigation = `
+    const didNavigate = useRef(false);
+    if (didNavigate.current) return;
+    didNavigate.current = true;
+    try {
+      router.navigate('/details');
+    } catch {
+      didNavigate.current = false;
+    }
+  `;
+
+  assert.strictEqual(hasNavigationTapGuard(reusableNavigation), false);
+  assert.strictEqual(hasNavigationTapGuard(resettableNavigation), true);
+});
+
 test('root runtime owns context but not route content edges', () => {
   const layout = read('template/app/_layout.tsx');
   assert.match(layout, /<SafeAreaProvider>/);
+  assert.match(layout, /appConfig=\{appConfig\}/);
   assert.match(layout, /offlineProfile=\{offlineProfile\}/);
   assert.match(layout, /defaultTheme=/);
-  assert.match(layout, /theme=\{lightTheme\}/);
-  assert.match(layout, /darkTheme=\{darkTheme\}/);
+  assert.doesNotMatch(layout, /theme=\{lightTheme\}/);
+  assert.doesNotMatch(layout, /darkTheme=\{darkTheme\}/);
   assert.doesNotMatch(layout, /SafeAreaView/);
+});
+
+test('native configuration follows the system light or dark appearance', () => {
+  const config = read('template/app.config.js');
+  assert.match(config, /createPowerAppsExpoConfig/);
+  assert.doesNotMatch(config, /userInterfaceStyle:\s*'automatic'/);
+});
+
+test('Babel and Metro configuration are delegated to native-host factories', () => {
+  assert.match(read('template/babel.config.js'), /createPowerAppsBabelConfig/);
+  assert.match(read('template/metro.config.js'), /createPowerAppsMetroConfig/);
+  assert.doesNotMatch(read('template/metro.config.js'), /power-apps-native-host\/metro-logger/);
+});
+
+test('bundled dependencies match the current host-factory template boundary', () => {
+  const packageJson = JSON.parse(read('template/package.json'));
+  assert.strictEqual(packageJson.dependencies['@microsoft/power-apps-native-host'], '^0.3.3');
+  assert.strictEqual(packageJson.dependencies['expo-media-library'], undefined);
+  assert.strictEqual(packageJson.dependencies['expo-modules-core'], undefined);
+  assert.strictEqual(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.15.3');
+  assert.strictEqual(packageJson.overrides.metro, '0.83.8');
+  assert.strictEqual(packageJson.scripts['bundle:android'], 'build-codegen-package android');
+  assert.strictEqual(packageJson.scripts['bundle:ios'], 'build-codegen-package ios');
+});
+
+test('template ignores local planning, preview, and server artifacts', () => {
+  const gitignore = read('template/.gitignore');
+  for (const artifact of [
+    '.tmp/',
+    '_build_plan.html',
+    '_plan_preview.html',
+    '_plan_preview.structural.html',
+    '_design_vibe.html',
+  ]) {
+    assert.match(
+      gitignore,
+      new RegExp(`^${artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'),
+    );
+  }
+});
+
+test('create flow keeps host theme foregrounds aligned with Tamagui brand accents', () => {
+  const skill = read('skills/create-mobile-app/references/phase-7-data.md');
+  const integration = read('skills/design-system/references/tamagui-integration.md');
+  assert.match(skill, /appLightTheme/);
+  assert.match(skill, /appDarkTheme/);
+  assert.match(skill, /accentOnAccent:\s*appLightTheme\.accentOnAccent/);
+  assert.match(skill, /accentOnAccent:\s*appDarkTheme\.accentOnAccent/);
+  assert.match(skill, /surface4:\s*appLightTheme\.color6/);
+  assert.match(skill, /surface4:\s*appDarkTheme\.color6/);
+  assert.doesNotMatch(skill, /function parseColorChannels/);
+  assert.match(integration, /createPowerAppsTamaguiConfig/);
+  assert.match(integration, /withPowerAppsSemanticAliases/);
+  assert.match(integration, /export const appLightTheme/);
+  assert.match(integration, /export const appDarkTheme/);
+  assert.doesNotMatch(integration, /function parseColorChannels/);
 });
 
 test('shared components preserve token literals and accessible row selection semantics', () => {
@@ -70,38 +139,8 @@ test('shared components preserve token literals and accessible row selection sem
   assert.doesNotMatch(components, /<Ionicons[^>]*color="\$[A-Za-z]/);
 });
 
-test('template path aliases do not depend on deprecated baseUrl', () => {
+test('template path aliases are inherited from the host tsconfig', () => {
   const tsconfig = JSON.parse(read('template/tsconfig.json'));
-  assert.ok(!Object.hasOwn(tsconfig.compilerOptions, 'baseUrl'));
-  assert.equal(tsconfig.compilerOptions.incremental, true);
-  assert.equal(tsconfig.compilerOptions.tsBuildInfoFile, '.tmp/tsc.tsbuildinfo');
-  for (const alias of [
-    '@/components', '@/components/*',
-    '@/hooks', '@/hooks/*',
-    '@/utils', '@/utils/*',
-    '@/tokens', '@/tokens/*',
-    '@/generated', '@/generated/*',
-    '@/native', '@/native/*',
-  ]) {
-    assert.ok(tsconfig.compilerOptions.paths[alias], alias);
-  }
-});
-
-test('template ignores local planning, preview, and server artifacts', () => {
-  const gitignore = read('template/.gitignore');
-  for (const artifact of [
-    '.tmp/',
-    '_build_plan.html',
-    '_plan_preview.html',
-    '_plan_preview.structural.html',
-    '_design_vibe.html',
-  ]) {
-    assert.match(gitignore, new RegExp(`^${artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'));
-  }
-});
-
-test('template pins the Power Apps CLI version used by npx commands', () => {
-  const packageJson = JSON.parse(read('template/package.json'));
-  assert.equal(packageJson.dependencies['@microsoft/power-apps'], '1.2.7');
-  assert.equal(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.13.0');
+  assert.strictEqual(tsconfig.extends, '@microsoft/power-apps-native-host/config/tsconfig');
+  assert.strictEqual(tsconfig.compilerOptions, undefined);
 });

@@ -120,6 +120,8 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 
 ### Step 8 — Apply data model
 
+**Telemetry checkpoint: `data_model`**
+
 Before any reconciliation, manifest generation, or Dataverse write, check
 `.tmp/mobile-build-plan-edits.json` and the approval receipt as required by the
 Build Plan protocol. A newer schema-only edit blocks Step 8 and returns through
@@ -131,11 +133,11 @@ branching:
 
 ```bash
 PERSISTENCE_CONTRACT="<working_dir>/.tmp/persistence-contract.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
+node "${PLUGIN_ROOT}/scripts/compile-persistence-contract.js" \
   --project-root "<working_dir>" --check-artifacts
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
 PERSISTENCE_MODE=$(node -e \
   "process.stdout.write(require(process.argv[1]).mode)" \
@@ -210,22 +212,22 @@ test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
   -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
   -a -f "<working_dir>/native-app-plan.md"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --bind-plan "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --plan "<working_dir>/native-app-plan.md" \
   --output "$SCHEMA_CONTRACT"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --reconciliation-scope "$SCHEMA_CONTRACT" \
   --output "$RECONCILIATION_SCOPE"
 
 EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
 PROPOSED_TABLES=$(node -e "console.log(require(process.argv[1]).proposedTables.join(','))" "$RECONCILIATION_SCOPE")
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage dataverseExecutionReconciliation --action start
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
@@ -233,14 +235,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --proposed-tables "$PROPOSED_TABLES" \
   --reconcile-exact \
   --output "$EXECUTION_RECONCILIATION"
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage dataverseExecutionReconciliation --action finish \
   --count "exactTables=<EXACT_TABLES_COUNT>" \
   --count "proposedNames=<PROPOSED_TABLES_COUNT>"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage dataverseManifestPreparation --action start
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
@@ -252,7 +254,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
   --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
   --publish-checkpoint "$PUBLISH_CHECKPOINT"
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage dataverseManifestPreparation --action finish \
   --count "tables=<CONTRACT_TABLE_COUNT>" \
   --count "columns=<CONTRACT_COLUMN_COUNT>" \
@@ -267,7 +269,7 @@ conflict and returns to the orchestrator; do not add another opportunistic read
 loop or fall back to agent reconciliation. No operation may execute until:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --validate "$OPERATION_MANIFEST" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
@@ -345,11 +347,11 @@ Before branching, require current `.tmp/scenario-facts.json` and compile its
 canonical data projection:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-sample-data-obligations.js" \
+node "${PLUGIN_ROOT}/scripts/compile-sample-data-obligations.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-sample-data-obligations.js" \
+node "${PLUGIN_ROOT}/scripts/compile-sample-data-obligations.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -455,7 +457,7 @@ If the plan says "None — this app uses only standard React Native components a
 
 ### Step 9a — Install approved pure-JavaScript dependencies
 
-Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
 
 Gate 3 experience approval is consent for exactly the packages and versions in
 the table. Install them into `<working_dir>` only after Gate 4 final
@@ -470,48 +472,77 @@ package and STOP with the exact failed criterion.
 
 `/design-system` owns user-facing brand/design choices. This step owns the internal Tamagui integration that makes those choices usable by generated screens. Even if the user accepts the default design path, run the alias-only integration so screens can rely on the semantic token contract.
 
-Read the `## Design` section from `native-app-plan.md` and follow the execution mapping in [`shared/references/design-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/design-planning.md):
+Read the `## Design` section from `native-app-plan.md` and follow the execution mapping in [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md):
 
 | Condition | Action |
 |---|---|
-| `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../../design-system/references/tamagui-integration.md) in brand-import mode, then wire brand `ThemeTokens` into `app/_layout.tsx` (see below). |
+| `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../../design-system/references/tamagui-integration.md) in brand-import mode, export the resolved app light/dark themes, then wire matching `ThemeTokens` into `app/_layout.tsx`. |
 | `## Design` says `required` | Apply the same reference using the approved `## Design` section. Builds custom token system + aliases. |
-| `## Design` says `add-aliases` | Apply the same reference in alias-only mode. Adds semantic surface/accent aliases over `defaultConfig`. |
-| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx` + `add-aliases` mode. |
+| `## Design` says `add-aliases` | Verify `tamagui.config.ts` uses `createPowerAppsTamaguiConfig`; the host already provides the semantic aliases. |
+| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx`; preserve the host config factory. |
 
-**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+**No unchecked path.** Screen-builders require `$surface0`–`$surface3` and
+`$accent*` aliases. On the default path, verify the host factory rather than
+rewriting the config. Pass the complete `## Design` section verbatim — not a
+summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
 
-**Brand-token wiring** — when `brand/tokens.ts` exists, update `app/_layout.tsx` to spread brand values over the built-in `lightTheme`/`darkTheme` with nullish fallback:
+**Brand-token wiring** — when `brand/tokens.ts` exists, the Tamagui integration
+exports `appLightTheme` and `appDarkTheme`. Map those resolved semantic values
+into the host themes so `useTheme()` and `useThemeTokens()` cannot drift:
 
 ```tsx
-import { tokens as brandTokens } from '../brand/tokens';
-import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from '@microsoft/power-apps-native-host';
+import {
+  PowerAppsProvider,
+  lightTheme as hostLightTheme,
+  darkTheme as hostDarkTheme,
+} from '@microsoft/power-apps-native-host';
 import type { ThemeTokens } from '@microsoft/power-apps-native-host';
+import tamaguiConfig, {
+  appDarkTheme,
+  appLightTheme,
+} from '../tamagui.config';
 
 const brandedLightTheme: ThemeTokens = {
   ...hostLightTheme,
-  accentDeep: brandTokens.color.primary,
-  accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
-  surface0: brandTokens.color.bg,
-  surface1: brandTokens.color.surface,
-  surface2: brandTokens.color.surface,
-  surface3: brandTokens.color.border,
-  text0: brandTokens.color.text,
-  text1: brandTokens.color.textMuted,
+  surface0: appLightTheme.surface0,
+  surface1: appLightTheme.surface1,
+  surface2: appLightTheme.surface2,
+  surface3: appLightTheme.surface3,
+  surface4: appLightTheme.color6,
+  text0: appLightTheme.text0,
+  text1: appLightTheme.text1,
+  text2: appLightTheme.text2,
+  text3: appLightTheme.text3,
+  accentDeep: appLightTheme.accentDeep,
+  accentBase: appLightTheme.accentBase,
+  accentSoft: appLightTheme.accentSoft,
+  accentOnAccent: appLightTheme.accentOnAccent,
 };
 const brandedDarkTheme: ThemeTokens = {
   ...hostDarkTheme,
-  accentDeep: brandTokens.color.primary,
-  accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
+  surface0: appDarkTheme.surface0,
+  surface1: appDarkTheme.surface1,
+  surface2: appDarkTheme.surface2,
+  surface3: appDarkTheme.surface3,
+  surface4: appDarkTheme.color6,
+  text0: appDarkTheme.text0,
+  text1: appDarkTheme.text1,
+  text2: appDarkTheme.text2,
+  text3: appDarkTheme.text3,
+  accentDeep: appDarkTheme.accentDeep,
+  accentBase: appDarkTheme.accentBase,
+  accentSoft: appDarkTheme.accentSoft,
+  accentOnAccent: appDarkTheme.accentOnAccent,
 };
 
 // In RootLayout:
 <PowerAppsProvider ... theme={brandedLightTheme} darkTheme={brandedDarkTheme}>
 ```
 
-The generated schema has one brand palette, so dark surfaces and text retain the host defaults while brand accents carry across modes. For runtime theme switching (in-app theme pickers, per-tenant branding), use `useThemeControl()` from `@microsoft/power-apps-native-host`: `setTheme({ ...hostLightTheme, accentBase: color })` / `resetTheme()`.
+The generated schema has one brand palette, so the exported dark app theme
+retains Config v5 dark surfaces and text while carrying brand accents and
+statuses. For runtime theme switching, use `useThemeControl()` from
+`@microsoft/power-apps-native-host`.
 
 ### Step 10 — Add connectors
 

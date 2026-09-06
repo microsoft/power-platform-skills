@@ -242,7 +242,10 @@ Missing sections → skill surfaces error, asks user to re-run.
 
 ## How Tamagui Integration Uses tokens.ts
 
-`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b imports it into `tamagui.config.ts` using [`tamagui-integration.md`](./tamagui-integration.md) and its `withSemanticAliases` helper:
+`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b
+imports it into `tamagui.config.ts` using
+[`tamagui-integration.md`](./tamagui-integration.md) and the native host's
+`withPowerAppsSemanticAliases` helper:
 
 The file contract is exact. Export `tokens`, not `brandTokens`. These keys are
 required; additional token groups and dark values are allowed:
@@ -261,9 +264,12 @@ export type BrandTokens = typeof tokens;
 ```
 
 ```ts
-// CUSTOMIZATION START - DO NOT REMOVE OR RENAME
 import { createTokens } from '@tamagui/core';
-import { animations } from '@tamagui/config/v5-rn';
+import { defaultConfig } from '@tamagui/config/v5';
+import {
+  createPowerAppsTamaguiConfig,
+  withPowerAppsSemanticAliases,
+} from '@microsoft/power-apps-native-host/config/tamaguiConfig';
 import { tokens as brandTokens } from './brand/tokens';
 
 const tokens = createTokens({
@@ -273,20 +279,31 @@ const tokens = createTokens({
   radius: { ...defaultConfig.tokens.radius, ...brandTokens.radius },
 });
 
-const themes = {
-  ...defaultConfig.themes,
-  light: withSemanticAliases(defaultConfig.themes.light, brandTokens.color),
-  dark: withSemanticAliases(defaultConfig.themes.dark, {
+export const appLightTheme = withPowerAppsSemanticAliases(
+  defaultConfig.themes.light,
+  brandTokens.color,
+);
+
+export const appDarkTheme = withPowerAppsSemanticAliases(
+  defaultConfig.themes.dark,
+  {
     primary: brandTokens.color.primary,
     accent: brandTokens.color.accent,
-  }),
-};
+    statusSuccess: brandTokens.color.statusSuccess,
+    statusWarning: brandTokens.color.statusWarning,
+    statusDanger: brandTokens.color.statusDanger,
+    statusInfo: brandTokens.color.statusInfo,
+  },
+);
 
 const customConfig = {
-  ...defaultConfig,
-  animations,
   tokens,
-  themes,
+  themes: {
+    ...defaultConfig.themes,
+    light: appLightTheme,
+    dark: appDarkTheme,
+  },
 };
-// CUSTOMIZATION END - DO NOT REMOVE OR RENAME
+
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig);
 ```

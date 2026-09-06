@@ -11,13 +11,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { hydrateSpec } = require('./lib/hydrate-spec.js');
+const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode } = require('./lib/app-spec.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -26,7 +26,12 @@ const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7:
 // dashboards[] entries. Each tile is reconstructed with ID PASSTHROUGH — it carries the deployed
 // view/chart ids (+ target entity) directly, so a rebuild recreates the dashboard against the
 // EXISTING views/charts without needing views[]/charts[] declared (which would else duplicate them).
-async function readDashboards(sdk, app) {
+// `warn` is optional and injected so the CLI can report WHY a dashboard could not be reconstructed.
+// Without it this function swallowed every per-dashboard failure (`catch { continue }`) and returned
+// a short list, so the subarea silently dropped and download failed downstream with "could not be
+// round-tripped" and no cause. That is a diagnosis dead-end: live, the real reason was an SDK
+// deserialization bug several layers down, and nothing surfaced it.
+async function readDashboards(sdk, app, warn) {
   const strip = (g) => String(g || '').replace(/[{}]/g, '') || undefined;
   const ids = new Map(); // dashboardId -> subarea title (fallback name)
   for (const a of (app.siteMap && app.siteMap.areas) || []) {
@@ -39,9 +44,19 @@ async function readDashboards(sdk, app) {
   const out = [];
   for (const [id, title] of ids) {
     let art;
-    try { art = await sdk.fetchArtifact('dashboard', id); } catch { continue; }
+    // Keep going on a single unreadable dashboard — one bad artifact must not sink the whole
+    // download — but SAY SO. A dropped subarea with no stated cause is what made this untraceable.
+    try { art = await sdk.fetchArtifact('dashboard', id); } catch (e) {
+      if (typeof warn === 'function') warn(`dashboard '${title || id}' (${id}) could not be read: ${e && e.message}`);
+      continue;
+    }
     let name = title || id;
-    try { const rows = await sdk.queryRecords('systemform', { select: ['name'], filter: `formid eq ${id}`, top: 1 }); if (rows && rows[0] && rows[0].name) name = rows[0].name; } catch { /* keep fallback */ }
+    let description;
+    try {
+      const rows = await sdk.queryRecords('systemform', { select: ['name', 'description'], filter: `formid eq ${id}`, top: 1 });
+      if (rows && rows[0] && rows[0].name) name = rows[0].name;
+      description = rows && rows[0] && rows[0].description;
+    } catch { /* keep fallback */ }
     const tiles = [];
     for (const c of art.components || []) {
       const p = c.parameters || {};
@@ -52,7 +67,13 @@ async function readDashboards(sdk, app) {
       else if (c.type === 'iframe' && p.Url) tiles.push({ type: 'iframe', name: c.name, url: p.Url });
       else if (c.type === 'webresource' && p.WebResourceName) tiles.push({ type: 'webresource', name: c.name, webResource: p.WebResourceName });
     }
-    if (tiles.length) out.push({ id, name, tiles });
+    // A dashboard that read cleanly but yielded no usable tile is ALSO a silent drop — the subarea
+    // disappears with nothing said. Distinguish it from the unreadable case above.
+    if (tiles.length) out.push(withDescription({ id, name, tiles }, description));
+    else if (typeof warn === 'function') {
+      warn(`dashboard '${name}' (${id}) read OK but produced no recognizable tiles `
+        + `(${(art.components || []).length} component(s)); its sitemap subarea will be dropped.`);
+    }
   }
   return out;
 }
@@ -214,6 +235,110 @@ async function appComponentEntities(sdk, appId) {
   }
 }
 
+async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
+  const out = [];
+  const clean = [...new Set((ids || []).map((id) => String(id || '').replace(/[{}]/g, '')).filter(Boolean))];
+  for (let i = 0; i < clean.length; i += 20) {
+    const filter = clean.slice(i, i + 20).map((id) => `${idField} eq ${id}`).join(' or ');
+    const rows = await sdk.queryRecords(set, { select, filter, top: 1000 });
+    for (const r of rows || []) out.push(mapRow(r));
+  }
+  return out;
+}
+
+async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [] };
+  try {
+    const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
+    const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
+    const parent = appUniqueId ? String(appUniqueId).replace(/[{}]/g, '') : null;
+    if (parent) {
+      for (const src of APP_COMPONENT_ENTITY_SOURCES) {
+        const rows = await sdk.queryRecords('appmodulecomponent', {
+          select: ['objectid', 'componenttype'],
+          filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
+          top: COMPONENT_PAGE_CAP,
+        });
+        const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
+        if (src.set === 'savedquery') {
+          inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
+            withDescription({ id: r.savedqueryid, name: r.name, entity: r.returnedtypecode }, r.description)));
+        } else if (src.set === 'savedqueryvisualization') {
+          inventory.charts.push(...await rowsByIds(sdk, 'savedqueryvisualization', 'savedqueryvisualizationid', ids, ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'description'], (r) =>
+            withDescription({ id: r.savedqueryvisualizationid, name: r.name, entity: r.primaryentitytypecode }, r.description)));
+        } else if (src.set === 'systemform') {
+          // `formxml` is pulled ONLY to detect a role restriction — it is never stored. A form's
+          // security roles live inside formxml as `<DisplayConditions>` (there is no
+          // systemform↔role relationship), and `forms[]` is not reconstructed by this download at
+          // all, so a restricted form would come back as one every role can see. That is a silent
+          // WIDENING of access on a cross-environment rebuild, which is why it is worth one extra
+          // column on a query this download already makes.
+          //
+          // The flag is kept OFF the form entries and on a sibling key, because
+          // `sanitizeDescriptionInventory` whitelists exactly five keys — so this reaches the
+          // download CLI for its warning without leaking a new field into `app-spec.json`.
+          const rawForms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description', 'formxml'], (r) => r);
+          for (const r of rawForms) {
+            if (!r || !r.objecttypecode || r.objecttypecode === 'none') continue;
+            inventory.forms.push(withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
+            if (isRoleRestrictedFormXml(r.formxml)) {
+              inventory.roleRestrictedForms.push({ name: r.name, entity: r.objecttypecode });
+            }
+          }
+        }
+      }
+    }
+  } catch { /* inventory is best-effort; structural download still carries the rebuildable app spec */ }
+
+  try {
+    if (solutionUniqueName && !isRestrictedSolution(solutionUniqueName)) {
+      const esc = String(solutionUniqueName).replace(/'/g, "''");
+      const sols = await sdk.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${esc}'`, top: 1 });
+      const solId = sols && sols[0] && sols[0].solutionid;
+      if (solId) {
+        // Solution component type 29 is Workflow — which is EVERY process kind, not just business
+        // rules: classic workflows, actions, business process flows and modern flows all land here.
+        // See component type values: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
+        //
+        // So the rows must be narrowed after the fetch. A business rule is `category 2`, and `type 1`
+        // is the DEFINITION — activating one makes Dataverse create a second `type 2` copy of it, so
+        // without the type filter every active rule would appear twice in the inventory.
+        //
+        // Filtered client-side rather than in the query because `rowsByIds` batches on the id column;
+        // both fields are requested in the select so the decision is made on real values, and a row
+        // that reports NEITHER field is dropped rather than assumed to be a rule — fail closed, since
+        // mislabelling somebody's classic workflow as a business rule is the failure mode here.
+        const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid', 'componenttype'], filter: `_solutionid_value eq ${solId} and componenttype eq 29`, top: 1000 });
+        const ids = (comps || []).map((r) => r && r.objectid).filter(Boolean);
+        const processes = await rowsByIds(sdk, 'workflow', 'workflowid', ids, ['workflowid', 'name', 'primaryentity', 'description', 'category', 'type'], (r) => r);
+        for (const r of processes) {
+          if (Number(r && r.category) !== 2 || Number(r && r.type) !== 1) continue;
+          inventory.businessRules.push(withDescription({ id: r.workflowid, name: r.name, entity: r.primaryentity }, r.description));
+        }
+      }
+    }
+  } catch { /* business-rule descriptions are an inspection aid, not a rebuild prerequisite */ }
+
+  try {
+    // Global option sets are not app components, but their Description is another Dataverse Label. This
+    // is intentionally an inventory, not `globalChoices[]`: without options we cannot safely claim a
+    // rebuildable choice definition.
+    //
+    // Read through the RAW client, NOT `sdk.queryRecords`. `queryRecords` resolves its first argument
+    // to an entity SET name via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`, and
+    // `GlobalOptionSetDefinitions` is a metadata collection rather than a table, so that lookup 404s
+    // and the catch below would swallow it — leaving this inventory permanently empty while the
+    // download still reported success. Same trap, and same fix, as readEntityWithDescriptions.
+    //
+    // `dataverse.get` RESOLVES on a non-2xx instead of throwing, so the status is checked explicitly.
+    const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description');
+    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || [];
+    inventory.globalChoices.push(...rows.map((r) => withDescription({ name: r.Name }, r.Description)));
+  } catch { /* optional inventory */ }
+
+  return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
+}
+
 // Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
 // pages[] entries with codeFile paths relative to `outDir`.
 function parseDownloadedPages(pagesRoot, outDir, nameById) {
@@ -309,15 +434,114 @@ function missingDownloads(a, b) {
 // missing primary name as a hard download failure, which is actionable at the point it happens rather
 // than as a confusing validation error later. Returns `null` for `primaryAttribute` so the caller can
 // detect and report it.
+// Dataverse `AttributeType` -> App Spec column type. Only types the App Spec can actually declare
+// are mapped; anything else (Lookup, Owner, State, Status, Uniqueidentifier, Virtual, ...) is a
+// column the author never wrote — a Lookup comes from `relationships[]`, and the rest are platform
+// plumbing — so it is left out of the hydrated spec entirely.
+// See: https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributetypecode
+const SPEC_TYPE_FROM_ATTRIBUTE_TYPE = {
+  String: 'Text', Memo: 'Memo', Picklist: 'Choice', MultiSelectPicklist: 'MultiChoice',
+  Boolean: 'Boolean', Money: 'Money', DateTime: 'DateTime', Integer: 'Integer',
+  BigInt: 'BigInt', Decimal: 'Decimal', Double: 'Double', File: 'File', Image: 'Image',
+};
+
+// Types whose App Spec declaration REQUIRES a companion field this hydrator cannot supply: a
+// `Choice`/`MultiChoice` column must carry `options[]` or a `globalChoice` reference, and reading
+// those needs a per-column typed-metadata expand the download does not perform. (Verified to be the
+// ONLY such dependency: every other companion rule in `validateAppSpec` / `spec-lint` — AutoNumber's
+// format, Calculated/Rollup's formula, Customer's description — is a warning, not an error.)
+//
+// So the column is emitted WITHOUT a type rather than with one that makes the whole spec fail
+// validation ("column X: Choice needs options[] or a globalChoice reference") — which is what
+// happened the moment types started being carried, live.
+//
+// This is NOT free, and the cost is surfaced rather than described as harmless. On a rebuild into an
+// org that does NOT already have the table, `provisionDataModel` decides create-vs-reuse from org
+// DISCOVERY (not from `existing`) and computes buildable columns as `SDK_COLUMN_TYPE[c.type ||
+// 'Text']` — so a type-less Choice column is created as TEXT. The now-asymmetric result (Memo, Money
+// and DateTime round-trip while Choice quietly degrades) is harder to notice than the old
+// everything-is-Text, so the affected columns are warned about by name.
+const TYPES_NEEDING_COMPANION_DATA = new Set(['Choice', 'MultiChoice']);
+
+// Does this form's `formxml` restrict it to particular security roles?
+//
+// The roles live INSIDE formxml, as a `<DisplayConditions>` child of `<form>` — `systemform` has no
+// role relationship at all — e.g.:
+//
+//   <DisplayConditions Order="2" FallbackForm="false"><Role Id="{GUID}" /></DisplayConditions>
+//
+// The unrestricted default is the sibling shape `<DisplayConditions ...><Everyone /></...>`, or no
+// element at all. Only the `<Role>` form is a restriction, so match on that specifically rather than
+// on the presence of `<DisplayConditions>`, which every form has.
+//
+// Attribute order and casing vary between platform-authored and SDK-authored xml, so this matches
+// the element name case-insensitively and does not assume `Id` is the first attribute.
+function isRoleRestrictedFormXml(formxml) {
+  const xml = String(formxml || '');
+  const block = xml.match(/<DisplayConditions[\s\S]*?<\/DisplayConditions>/i);
+  if (!block) return false;
+  return /<Role\b/i.test(block[0]);
+}
+
+// Columns whose type could not be substantiated, so a `download -> rebuild into a fresh org` round
+// trip does not silently create them as Text. `type` is absent for a Choice/MultiChoice (above), or
+// for an attribute whose metadata carried no `attributeType` at all — an attribute with a type that
+// simply has no App Spec equivalent is filtered out of `columns[]` entirely, so it never gets here.
+function untypedColumnNames(entities) {
+  const out = [];
+  for (const e of entities || []) {
+    for (const c of (e.columns || [])) {
+      if (c && c.schemaName && c.type === undefined) out.push(`${e.schemaName}.${c.schemaName}`);
+    }
+  }
+  return out;
+}
+
 function entityFromMetadata(meta, logical) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
+  const attrs = Array.isArray(meta && meta.attributes) ? meta.attributes : (Array.isArray(meta && meta.Attributes) ? meta.Attributes : []);
+  const primaryLower = String(primary || '').toLowerCase();
+  const columns = attrs.filter((a) => {
+    if (!a) return false;
+    const name = String(a.schemaName || a.SchemaName || a.logicalName || a.LogicalName || '').toLowerCase();
+    // The primary name column is declared separately as `primaryAttribute`, so it must not ALSO
+    // appear in `columns[]`.
+    if (!name || name === primaryLower) return false;
+    // CUSTOM attributes only. `fetchEntityMetadata` returns the FULL attribute list — `createdon`,
+    // `versionnumber`, `importsequencenumber`, `owningbusinessunit` and the rest — and emitting
+    // those as spec columns is not merely noisy, it is destructive: `columns[]` feeds
+    // `defaultViewColumns`, which `enrichDefaultViews` uses to REPLACE the Active/Inactive views'
+    // column set. A downloaded spec that listed system attributes would rewrite a customer's
+    // default views to `Created On` / `Import Sequence Number` on the next rebuild, undoing fix #7
+    // ("drop Created On from enriched default views") whose invariant is stated at
+    // sdk-build.js `defaultViewColumns`: the set only ever contains DECLARED spec columns.
+    const isCustom = a.isCustomAttribute !== undefined ? a.isCustomAttribute : a.IsCustomAttribute;
+    if (isCustom === false) return false;
+    // Keep only attribute types the App Spec can declare (see the map above).
+    const at = a.attributeType || a.AttributeType;
+    return at === undefined || SPEC_TYPE_FROM_ATTRIBUTE_TYPE[at] !== undefined;
+  }).map((a) => {
+    const schemaName = (a && (a.schemaName || a.SchemaName || a.logicalName || a.LogicalName)) || '';
+    // The SDK projects `attributeType`, NOT `type`. Reading `a.type` yielded `undefined` on every
+    // column, which silently disabled every type-based filter downstream (`DEFAULT_VIEW_SKIP_TYPES`
+    // skips Memo/File/Image; `SDK_COLUMN_TYPE` decides what an auto form layout places).
+    const at = a && (a.attributeType || a.AttributeType);
+    const mapped = a && a.type ? a.type : SPEC_TYPE_FROM_ATTRIBUTE_TYPE[at];
+    const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) ? undefined : mapped;
+    return withDescription({
+      schemaName,
+      ...(a && (a.displayName || a.DisplayName) ? { displayName: descriptionFromDataverse(a.displayName || a.DisplayName) || a.displayName || a.DisplayName } : {}),
+      ...(specType ? { type: specType } : {}),
+    }, a && (a.description !== undefined ? a.description : a.Description));
+  }).filter((c) => c.schemaName);
   return {
     schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
     displayName: (meta && meta.displayName) || logical,
+    ...(descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) ? { description: descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) } : {}),
     // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
     // does not have, which is exactly the bug this fixes.
     primaryAttribute: primary ? { schemaName: primary, displayName: 'Name' } : null,
-    columns: [],
+    columns,
     // Flag every recovered table as pre-existing so a teardown of THIS downloaded spec never deletes the
     // table (+ its data). Download cannot prove which tables the app CREATED vs merely REFERENCED, and
     // deleting a customer's table/data is unrecoverable while an orphaned table is not — so fail safe.
@@ -325,6 +549,51 @@ function entityFromMetadata(meta, logical) {
     // forms, so the build's `existing`-gated default-form promotion path is not reached here anyway.)
     existing: true,
   };
+}
+
+function metadataEntityPath(logical) {
+  return `EntityDefinitions(LogicalName='${String(logical).replace(/'/g, "''")}')`;
+}
+
+async function readEntityWithDescriptions(sdk, logical) {
+  const meta = { ...(await sdk.fetchEntityMetadata(logical)) };
+  // The SDK's fetchEntityMetadata projection is enough for identity but carries NO descriptions —
+  // measured against a live org, its entity keys are logicalName/schemaName/displayName/
+  // entitySetName/primaryNameAttribute/primaryIdAttribute/isCustomEntity/attributes/relationships,
+  // and each attribute is {logicalName, displayName, attributeType, isCustomAttribute, targets}.
+  // So descriptions require a second read against the metadata endpoints.
+  //
+  // This deliberately does NOT go through `sdk.queryRecords`. That helper first resolves its
+  // argument to an entity SET name via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`,
+  // so handing it a metadata path produces a nested nonsense URL and a 404:
+  //   .../EntityDefinitions(LogicalName='EntityDefinitions(LogicalName=''contoso_workitem'')')?$select=EntitySetName
+  // Combined with the best-effort catch below, that failed silently for EVERY table — the download
+  // reported success and dropped every table and column description. `sdk.dataverse` is the raw
+  // client and takes an API-relative path verbatim.
+  //
+  // NOTE `dataverse.get` RESOLVES with `{ status, headers, body }` on a non-2xx rather than throwing
+  // (a 404 returns status 404), so the status MUST be checked explicitly. A try/catch alone would
+  // reintroduce exactly the silence this replaces.
+  const entityPath = `/${metadataEntityPath(logical)}`;
+  try {
+    const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description`);
+    if (res && res.status >= 200 && res.status < 300 && res.body) meta.Description = res.body.Description;
+  } catch { /* description best-effort — never sink an otherwise usable download */ }
+  try {
+    // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
+    // `targets` (lookup target tables) and `attributeType`, which this projection does not, and
+    // entityFromMetadata/other callers rely on them.
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description`);
+    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || null;
+    if (Array.isArray(rows)) {
+      const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r.Description]));
+      meta.attributes = (meta.attributes || []).map((a) => {
+        const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
+        return byLogical.has(key) ? { ...a, Description: byLogical.get(key) } : a;
+      });
+    }
+  } catch { /* column descriptions are best-effort */ }
+  return meta;
 }
 
 // Image webresourcetypes (png/jpg/gif/ico/svg) — an icon reference must resolve to one of these to be
@@ -469,10 +738,10 @@ async function recoverAppSolution(sdk, appId) {
     // One OR-batched lookup for all candidate solutions (solutionid is a Guid, so it is unquoted in
     // the OData filter — mirrors the existing `solutionid eq ${id}` usage elsewhere in this file).
     const filter = solIds.map((id) => `solutionid eq ${id}`).join(' or ');
-    const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged'], filter, top: 500 });
+    const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged', 'description'], filter, top: 500 });
     const real = (sols || []).find((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename));
     if (!real) return null;
-    const out = { uniqueName: real.uniquename };
+    const out = withDescription({ uniqueName: real.uniquename }, real.description);
     // Authoritative publisher prefix for anything authored into THIS solution. Guarded on the method
     // existing so an older vendored bundle (pre-getSolution) degrades to the caller's fallback instead
     // of throwing away the solution we just recovered.
@@ -646,7 +915,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // the confusing downstream error the explicit branch below exists to avoid. Bucket it by origin
     // exactly like the no-primary-name case, so the user is told the table AND the reason.
     try {
-      e = entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical);
+      e = entityFromMetadata(await readEntityWithDescriptions(sdk, logical), logical);
     } catch (err) {
       metadataErrors.set(logical, (err && err.message) || String(err));
       (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
@@ -681,6 +950,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   if (droppedComponents.length) {
     process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${withReason(droppedComponents)}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
   }
+  // A column whose App Spec type could not be substantiated — a Choice/MultiChoice (whose options
+  // this download does not read) or an attribute type the spec cannot declare. Rebuilding into an
+  // org that ALREADY has the table reuses the column and this is inert; rebuilding into a FRESH org
+  // creates it as Text, because the data-model phase falls back to `c.type || 'Text'`. That silent
+  // downgrade is the reason this is announced by name rather than left to be discovered later.
+  const untyped = untypedColumnNames(entities);
+  if (untyped.length) {
+    process.stderr.write(`WARNING: ${untyped.length} column(s) were captured WITHOUT a type (${untyped.join(', ')}) — most likely Choice/MultiChoice columns, whose options this download does not read. Rebuilding this spec into an environment that already has the table is unaffected, but rebuilding into a FRESH environment would create them as single-line Text. Add the type and options[] (or a globalChoice reference) by hand before a cross-environment rebuild.\n`);
+  }
 
   // App identity comes from the app's REAL, immutable uniquename (`appUnique`, captured from Dataverse as
   // `appmodule.uniquename`; guaranteed present here because runDownload bails at the sitemap gate above).
@@ -709,6 +987,11 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const trustedPrefix = solutionPrefix || appDerivedPrefix;
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
+  // `recoverAppSolution` already unwraps the solution's description; carry it across. This object is
+  // built fresh (rather than spread from `recovered`) so an unrecovered solution still gets its
+  // required defaults, which is why each field has to be copied deliberately — a field added to
+  // `recoverAppSolution` and not copied here is silently dropped, as this one was.
+  if (recovered && recovered.description) solution.description = recovered.description;
 
   // Icon web resources — looked up by NAME (the sitemap stores the web-resource name, not its id).
   // Bare-name icons are re-declared as-is; a CUSTOM (unmanaged) web resource referenced by a PLATFORM
@@ -730,13 +1013,23 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // Dashboards (declared as DashBoard sitemap subareas) — reconstructed with id-passthrough tiles.
   let dashboards = [];
   let dashboardReconstructionError = null;
+  // Per-dashboard failures are collected rather than swallowed. They are the usual cause of a
+  // "subarea could not be round-tripped" error further down, and without them that error names the
+  // subarea but not the reason, which makes it undiagnosable without a debugger.
+  const dashboardWarnings = [];
   try {
-    dashboards = await readDashboards(sdk, app);
+    dashboards = await readDashboards(sdk, app, (m) => {
+      dashboardWarnings.push(m);
+      process.stderr.write(`WARNING: ${m}\n`);
+    });
   } catch (e) {
     dashboardReconstructionError = e.message;
     process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`);
   }
 
+  // Captured by the descriptionInventory accessor below so the role-restriction warning can read it
+  // without making a second query.
+  let capturedInventory;
   const read = {
     // Ensure the app's REAL uniquename reaches hydrateSpec (→ spec.app.uniqueName) even if the artifact
     // read didn't surface it: `appUnique` is the authoritative value (from the appmodule query) and is
@@ -749,11 +1042,26 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     dashboards: async () => dashboards,
     solution: async () => solution,
     design: async () => (manifest ? manifest.design : undefined),
+    // Captured on the way past so the role-restriction warning below can read it. The accessor stays
+    // a function (hydrateSpec's contract) and is still called exactly once, so this adds no query.
+    descriptionInventory: async () => {
+      capturedInventory = await readDescriptionInventory(sdk, appId, solution.uniqueName);
+      return capturedInventory;
+    },
   };
   const spec = await hydrateSpec(read);
+
+  // A form restricted to particular security roles. `forms[]` is not reconstructed by this download,
+  // so nothing carries the restriction forward: rebuilding into a FRESH environment regenerates the
+  // form with no `<DisplayConditions>`, and a form with none is offered to EVERY role. Every other
+  // download gap loses a customization; this one silently WIDENS access, so it is named explicitly.
+  const restricted = (capturedInventory && capturedInventory.roleRestrictedForms) || [];
+  if (restricted.length) {
+    process.stderr.write(`WARNING: ${restricted.length} form(s) are restricted to specific security roles (${restricted.map((f) => `${f.entity}.${f.name}`).join(', ')}). This download does not reconstruct forms[], so that restriction is NOT carried into the spec — rebuilding into a fresh environment would recreate them visible to EVERY role. Re-declare it with forms[].securityRoles before a cross-environment rebuild.\n`);
+  }
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings };
 }
 
 async function main() {
@@ -789,32 +1097,87 @@ async function main() {
   const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError } = result;
+  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings } = result;
   if (droppedSubareas > 0 || dashboardReconstructionError) {
     const droppedList = (droppedSubareaDetails || [])
       .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
       .join(', ');
     const dashboardMessage = dashboardReconstructionError ? ` Dashboard reconstruction failed: ${dashboardReconstructionError}.` : '';
-    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage} A rebuild from this spec will DROP them from the app nav.`;
+    // Per-dashboard reasons, when there are any. Naming the subarea without saying WHY it dropped
+    // sends the reader looking at their sitemap when the cause is an unreadable artifact.
+    const causeMessage = (dashboardWarnings && dashboardWarnings.length)
+      ? ` Cause: ${dashboardWarnings.join('; ')}.`
+      : '';
+    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage}${causeMessage} A rebuild from this spec will DROP them from the app nav.`;
     if (!allowLossyDownload) {
       process.stderr.write(`ERROR: ${message}\nPass --allow-lossy-download to write the partial spec anyway.\n`);
-      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError });
+      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, ...(dashboardWarnings && dashboardWarnings.length ? { dashboardWarnings } : {}) });
       return;
     }
     process.stderr.write(`WARNING: ${message}\n`);
   }
-  const validation = validateAppSpec(spec, { profile: 'plan' });
+  // `reconstructed: true` — this spec was rebuilt from a DEPLOYED app, not authored. Authoring-only
+  // rules become warnings, because refusing to write a description of an app that already exists
+  // leaves the author with no artifact at all (see the pageInput producer rule).
+  const validation = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
   if (!validation.ok) {
     emitResult(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
     return;
   }
+  for (const w of validation.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
+  // A defaulted `directEntry` must not be silent. hydrateSpec injects a conservative `emptyState` for
+  // pages that predate the field (otherwise this download would have hard-failed above and written no
+  // spec at all), but the author has to know a behaviour was chosen for them so they can change it.
+  const defaulted = spec.directEntryDefaulted || [];
+  if (defaulted.length) {
+    process.stderr.write(
+      `WARNING: ${defaulted.length} page(s) declare pageInput but predate directEntry — defaulted to `
+      + `{ "behavior": "emptyState" }: ${defaulted.join(', ')}.\n`
+      + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
+    );
+  }
   const specPath = path.join(outDir, 'app-spec.json');
+  preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas });
+  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
+}
+
+// Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.
+//
+// Download deliberately does not read `languageCode` from Dataverse. An LCID copied out of the source
+// org would be re-applied verbatim when the spec is rebuilt somewhere else, which is exactly how a
+// spec starts failing in an org that has not provisioned that language (#447) — leaving it absent lets
+// every target org resolve its own base language, which is the right default.
+//
+// But silently dropping a value the author WROTE is its own bug, and a quiet one: the next build
+// resolves the org default, so newly created columns get one language while the ones from the pinned
+// build keep another. A mixed-language app, no error anywhere. So the value is restored from the
+// previous spec at this path — the author's own file — and never synthesized from the environment.
+//
+// Best-effort by design: a missing, unreadable or malformed previous spec just means there is nothing
+// to preserve. Failing the download over it would be worse than the wart this fixes. Only a value that
+// would itself pass validation is restored — carrying a broken one forward would fail the next build
+// for a reason the operator did not cause on this run.
+// Exported for tests.
+function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
+  const readFileSync = deps.readFileSync || fs.readFileSync;
+  const existsSync = deps.existsSync || fs.existsSync;
+  if (!spec || spec.languageCode !== undefined) return spec;
+  try {
+    if (!existsSync(specPath)) return spec;
+    const prior = JSON.parse(readFileSync(specPath, 'utf8'));
+    // Assign the NORMALIZED value, not the raw one. `"1031"` and `" 1031 "` both validate, but a
+    // downloaded spec is a generated artifact and should be canonical — writing the author's
+    // whitespace or string form back out makes the file's diff noisy and its type inconsistent with
+    // every other numeric field the download emits.
+    const lcid = prior ? normalizeLanguageCode(prior.languageCode) : null;
+    if (lcid !== null) spec.languageCode = lcid;
+  } catch { /* no previous spec, or not parseable — nothing to preserve */ }
+  return spec;
 }
 
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

@@ -6,7 +6,10 @@ export default function HomeScreen() {
   const theme = useTheme();
 
   return (
-    <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
+    <SafeAreaView
+      edges={['top', 'bottom']}
+      style={{ flex: 1, backgroundColor: theme.surface0.val }}
+    >
       <YStack
         flex={1}
         items="center"

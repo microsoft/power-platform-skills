@@ -9,6 +9,8 @@ milestone, not missing work.
 
 ### Step 3 — Plan with foreground ownership
 
+**Telemetry checkpoint: `planning`**
+
 Planning uses one canonical artifact path on every host. The foreground skill owns requirement
 resolution, all questions, Product Experience and Product Scope, capability and
 connector decisions, persistence ownership, conditional data-model planning,
@@ -33,10 +35,10 @@ Create the planning directories and timing artifact:
 ```bash
 mkdir -p <working_dir> <working_dir>/.tmp
 PLANNING_TIMINGS_PATH="<working_dir>/.tmp/mobile-planning-timings.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --interrupt-open \
   --reason "planning-session-resumed"
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage foregroundPlanning --action start
 ```
 
@@ -205,11 +207,11 @@ Resolve navigation after the graph exists:
 Write and validate:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-product-experience.js" \
+node "${PLUGIN_ROOT}/scripts/validate-product-experience.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-product-scope.js" \
+node "${PLUGIN_ROOT}/scripts/validate-product-scope.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-navigation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/compile-navigation-manifest.js" \
   --project-root "<working_dir>"
 ```
 
@@ -293,7 +295,7 @@ Compile the sole persistence authority and validate mode-forbidden artifacts
 before continuing:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
+node "${PLUGIN_ROOT}/scripts/compile-persistence-contract.js" \
   --project-root "<working_dir>" --check-artifacts
 ```
 
@@ -322,7 +324,7 @@ Plan edit-journal check, record exact experience, scope, navigation,
 architecture, persistence, section, and plan hashes atomically:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" approve \
+node "${PLUGIN_ROOT}/scripts/mobile-plan-approval.js" approve \
   --project-root "<working_dir>" --gate 1
 ```
 
@@ -335,7 +337,7 @@ Record the resumable Gate 1 boundary. Contracts are immutable authorities;
 the approval receipt is explicitly mutable because later gates add bindings:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
+node "${PLUGIN_ROOT}/scripts/mobile-pipeline-state.js" \
   --project-root "<working_dir>" --record --step "3.2" \
   --artifact "experience=.tmp/product-experience-contract.json" \
   --artifact "scope=.tmp/product-scope-contract.json" \
@@ -376,7 +378,7 @@ Only now detect the publisher prefix, resolve the selected environment for
 planning, and create the bounded Dataverse snapshot:
 
 ```bash
-PUBLISHER_PREFIX_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" \
+PUBLISHER_PREFIX_JSON=$(node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" \
   "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID")
 DETECTED_PUBLISHER_PREFIX=$(node -e \
   "const j=JSON.parse(process.argv[1]); process.stdout.write(j.prefix || '')" \
@@ -389,12 +391,12 @@ ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
 PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
 INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
 
-PLANNING_ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" \
+PLANNING_ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" \
   "$ACTIVE_ENV_ID" --no-cache)
 ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
 ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --output "$SNAPSHOT_PATH" \
@@ -409,7 +411,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
   --planning-timings-output "$PLANNING_TIMINGS_PATH"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
   --output "$ARCHITECT_EVIDENCE_PATH"
 ```
@@ -446,7 +448,7 @@ never writes files or asks the user. Save its return bytes unchanged to
 `.tmp/dataverse-model-architect-response.txt`, then parse them mechanically:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/parse-dataverse-model-proposal-envelope.js" \
+node "${PLUGIN_ROOT}/scripts/parse-dataverse-model-proposal-envelope.js" \
   --project-root "<working_dir>" \
   --run-id "<SEALED_WORK_ORDER_RUN_ID>"
 ```
@@ -465,11 +467,11 @@ schema authoring. The compact proposal compiler remains the sole downstream
 path:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-dataverse-model-proposal.js" \
+node "${PLUGIN_ROOT}/scripts/compile-dataverse-model-proposal.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-dataverse-model-proposal.js" \
+node "${PLUGIN_ROOT}/scripts/compile-dataverse-model-proposal.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-dataverse-planning-decisions.js" \
+node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
   --contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
   --snapshot "$SNAPSHOT_PATH"
 ```
@@ -491,7 +493,7 @@ Handle validator outcomes mechanically:
 The expansion command reuses the current snapshot and never repeats inventory:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --output "$SNAPSHOT_PATH" \
@@ -502,7 +504,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --read-concurrency 1 \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
   --planning-timings-output "$PLANNING_TIMINGS_PATH"
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
   --output "$ARCHITECT_EVIDENCE_PATH"
 ```
@@ -563,11 +565,11 @@ and manual-entry fallback states.
 Validate and compile:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
+node "${PLUGIN_ROOT}/scripts/validate-workflow-journey.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -591,9 +593,9 @@ Compile and check the exact bindings to Product Scope, persistence, navigation,
 Workflow Journey, and compiled screen packs:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -618,9 +620,9 @@ requirement ownership.
 Compile and then check the bound artifact:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -701,7 +703,7 @@ recompile downstream contracts, and rerender affected plan sections. On
 acceptance and the post-response edit-journal check, run:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-approval.js" approve \
+node "${PLUGIN_ROOT}/scripts/mobile-plan-approval.js" approve \
   --project-root "<working_dir>" --gate 2
 ```
 
@@ -720,7 +722,7 @@ receipt and introduce the human plan as mutable because Gate 3 adds design and
 approval status without changing the previously approved canonical contracts:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
+node "${PLUGIN_ROOT}/scripts/mobile-pipeline-state.js" \
   --project-root "<working_dir>" --record --step "3.9" \
   --artifact "journey=.tmp/workflow-journey-contract.json" \
   --artifact "build-pack=.tmp/compiled-screen-build-pack.json" \
@@ -756,11 +758,11 @@ changed.
 Always recompile and check mode-forbidden artifacts first:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-persistence-contract.js" \
+node "${PLUGIN_ROOT}/scripts/compile-persistence-contract.js" \
   --project-root "<working_dir>" --check-artifacts
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -779,10 +781,10 @@ branch on `persistence.mode`:
   table is blocking. Normalize and validate against the Phase 3 snapshot:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
   --output "<working_dir>/.tmp/dataverse-schema-contract.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-dataverse-planning-decisions.js" \
+node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
   --contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
   --snapshot "<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
 ```
@@ -809,6 +811,6 @@ model, Journey, or screen packs merely to restamp bookkeeping.
 Finally record measured planning history:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-eta.js" \
+node "${PLUGIN_ROOT}/scripts/planning-eta.js" \
   --project-root "<working_dir>" --record
 ```

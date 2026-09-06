@@ -7,7 +7,7 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion
 model: haiku
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read this first.
+**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read this first.
 
 # Report Issue — mobile-app
 

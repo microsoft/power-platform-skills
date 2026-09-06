@@ -7,6 +7,8 @@ gate with `validation` active/complete or warning/failed state.
 
 ### Step 11 — Build screens with one parallel builder type
 
+**Telemetry checkpoint: `screens`**
+
 Build mode is not a user-facing question. The foreground owns work orders,
 channel selection, shared files, recovery, validation, and writes for
 return-only results. `mobile-app:screen-builder` is the only child-agent type and
@@ -21,9 +23,9 @@ all-mode usage binding check. A failure returns to Phase 3 and Gate 2; builders
 never repair or reinterpret this contract:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -61,7 +63,7 @@ or fallbacks. It renders the bounded scenario projection and reports a blocking
 contract gap when a required fact is absent.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
+node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
   --project-root "<working_dir>" \
   --seal \
   --input ".tmp/screen-work-orders/<screenId>.unsealed.json" \
@@ -83,7 +85,7 @@ Native builders cannot silently diverge.
 Initialize run-scoped per-screen channel state:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
+node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
   --project-root "<working_dir>" \
   --initialize-run --run-id "<runId>" \
   --work-order ".tmp/screen-work-orders/<screenId>.json" \
@@ -97,7 +99,7 @@ Immediately before dispatching each screen on any channel, record its explicit
 Build Plan state:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-build-plan.js" progress \
+node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" progress \
   --project-root "<working_dir>" \
   --phase screens --status active --detail "Building <screenId>" \
   --screen-id "<screenId>" --screen-status building
@@ -138,7 +140,7 @@ the project surfaces a child could damage. Use a unique run/wave directory and
 repeat `--allowed-path` later for every target assigned in this wave:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
+node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
   --project-root "<working_dir>" \
   --capture-direct-snapshot \
   --snapshot ".tmp/screen-builder-snapshots/<runId>-<wave>.json" \
@@ -161,13 +163,13 @@ target screen.
 Normalize the returned status metadata to JSON and verify it:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
+node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
   --project-root "<working_dir>" \
   --verify-direct \
   --work-order ".tmp/screen-work-orders/<screenId>.json" \
   --result ".tmp/screen-results/<screenId>-direct.json"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
+node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
   --project-root "<working_dir>" \
   --audit-direct-writes \
   --snapshot ".tmp/screen-builder-snapshots/<runId>-<wave>.json" \
@@ -184,7 +186,7 @@ metadata, or invalid generated content, restore only that assigned target before
 switching its channel:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
+node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
   --project-root "<working_dir>" \
   --restore-direct-paths \
   --snapshot ".tmp/screen-builder-snapshots/<runId>-<wave>.json" \
@@ -208,7 +210,7 @@ defined in screen-builder.md. Return no plan or second file.
 Capture the raw response and parse it:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/screen-builder-contract.js" \
+node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
   --project-root "<working_dir>" \
   --parse-return \
   --work-order ".tmp/screen-work-orders/<screenId>.json" \
@@ -238,7 +240,7 @@ not open overlapping timers on one stage. Measure wall time around each actual
 dispatch batch and append it after the batch completes:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" \
   --stage <screenBuildDirectWrite|screenBuildReturnOnly|screenBuildForeground> \
   --action record --duration-ms "<measured-channel-wall-ms>"
@@ -258,16 +260,16 @@ Run:
 
 ```bash
 npx tsc --noEmit
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+node "${PLUGIN_ROOT}/scripts/check-routes.js"
+node "${PLUGIN_ROOT}/scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <canary-files>
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <canary-files>
-node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <canary-files>
+node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <canary-files>
+node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -348,15 +350,15 @@ only and may never add or reorder a screen.
 After all screens compile, run the validators against generated screens only:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <screen-files>
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <screen-files>
+node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <screen-files>
+node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <screen-files>
 npx tsc --noEmit
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+node "${PLUGIN_ROOT}/scripts/check-routes.js"
+node "${PLUGIN_ROOT}/scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
 ```
 
@@ -375,7 +377,7 @@ previous successful record. Never skip any validation after a changed byte.
 Record the validated screen checkpoint:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
+node "${PLUGIN_ROOT}/scripts/mobile-pipeline-state.js" \
   --project-root "<working_dir>" --record --step "11.4" \
   --artifact "data-model-usage=.tmp/data-model-usage.json" \
   --artifact "scenario-facts=.tmp/scenario-facts.json" \
@@ -385,6 +387,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
 
 ### Step 12 — Start Metro
 
+**Telemetry checkpoint: `app_ready`**
+
 Run schema generation and the final validation gate synchronously. If the
 successful fingerprint and exact validator set already match Step 11.4, skip
 only this duplicate gate. Otherwise run it in full.
@@ -393,12 +397,12 @@ only this duplicate gate. Otherwise run it in full.
 cd <working_dir>
 npm run generate-schemas
 npx tsc --noEmit
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-layout.js" \
+node "${PLUGIN_ROOT}/scripts/check-routes.js"
+node "${PLUGIN_ROOT}/scripts/validate-navigation-layout.js" \
   --project-root "<working_dir>"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-data-model-usage.js" \
+node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-fixture-scenarios.js" \
+node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
 npx expo start
 ```

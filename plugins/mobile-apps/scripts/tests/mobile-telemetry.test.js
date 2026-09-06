@@ -9,8 +9,13 @@ const { spawnSync } = require('node:child_process');
 
 const {
   createTelemetryContext,
+  emitCheckpoint: emitCheckpointEvent,
   emitSkillStarted,
 } = require('../lib/mobile-telemetry');
+const {
+  emitCheckpoint: emitCheckpointCommand,
+  parseCheckpointPayload,
+} = require('../emit-telemetry-checkpoint');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
@@ -205,6 +210,128 @@ test('started event is allowlisted and carries no user, tenant, prompt, or path 
   for (const forbidden of ['orgId', 'tenantId', 'pacCliVersion', 'aadObjectId', 'prompt', 'cwd', 'path']) {
     assert.equal(Object.prototype.hasOwnProperty.call(event.data, forbidden), false);
   }
+});
+
+test('checkpoint payload accepts only tracked skills and static snake_case fields', () => {
+  assert.deepEqual(
+    parseCheckpointPayload('create-mobile-app|planning|completed|with_dataverse'),
+    {
+      skillName: 'create-mobile-app',
+      eventName: 'planning_completed',
+      severity: 'Info',
+      source: 'checkpoint',
+      additionalInfo: 'with_dataverse',
+    },
+  );
+
+  for (const payload of [
+    '',
+    'unknown-skill|planning|started',
+    'create-mobile-app|Planning|started',
+    'create-mobile-app|planning|finished',
+    'create-mobile-app|planning|started|',
+    'create-mobile-app|planning|failed|C:\\secret\\file.txt',
+    `create-mobile-app|${'a'.repeat(65)}|started`,
+    'create-mobile-app|planning|started|safe|extra',
+  ]) {
+    assert.equal(parseCheckpointPayload(payload), null, payload);
+  }
+});
+
+test('checkpoint command emits directly and remains fail-open', () => {
+  const context = { sessionId: 'checkpoint-session' };
+  let captured;
+  const result = emitCheckpointCommand(
+    'create-mobile-app|template_gate|started',
+    {
+      cwd: 'C:\\private-project',
+      createTelemetryContext: (payload) => {
+        assert.deepEqual(payload, {});
+        return context;
+      },
+      emitCheckpoint: (...args) => {
+        captured = args;
+        return 'emitted';
+      },
+    },
+  );
+
+  assert.equal(result, 'emitted');
+  assert.deepEqual(captured, [
+    context,
+    {
+      skillName: 'create-mobile-app',
+      eventName: 'template_gate_started',
+      severity: 'Info',
+      source: 'checkpoint',
+      additionalInfo: undefined,
+    },
+    { cwd: 'C:\\private-project' },
+  ]);
+  assert.equal(emitCheckpointCommand('invalid', {
+    createTelemetryContext: () => { throw new Error('must not run'); },
+  }), null);
+  assert.equal(emitCheckpointCommand('create-mobile-app|planning|started', {
+    createTelemetryContext: () => { throw new Error('telemetry unavailable'); },
+  }), null);
+});
+
+test('checkpoint event carries only static checkpoint enrichment', (t) => {
+  const context = contextFor(provisioned);
+  const event = emitCheckpointEvent(context, {
+    skillName: 'create-mobile-app',
+    eventName: 'planning_failed',
+    severity: 'Error',
+    source: 'checkpoint',
+    additionalInfo: 'dependency_missing',
+  }, {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    correlationId: 'correlation-1',
+    cwd: tempProject(t),
+  });
+
+  assert.equal(event.data.eventName, 'planning_failed');
+  assert.equal(event.data.severity, 'Error');
+  assert.equal(event.data.skillName, 'create-mobile-app');
+  assert.deepEqual(event.data.eventInfo, {
+    invocationSource: 'checkpoint',
+    additionalInfo: 'dependency_missing',
+    appInstanceId: null,
+  });
+  for (const forbidden of ['prompt', 'cwd', 'path', 'error', 'errorDescription']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(event.data, forbidden), false);
+  }
+});
+
+test('create-mobile-app uses the single direct checkpoint command at seven boundaries', () => {
+  const shared = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared', 'references', 'workflow-checkpoint-telemetry.md'),
+    'utf8',
+  );
+  const workflowFiles = [
+    'SKILL.md',
+    'references/phase-0-setup.md',
+    'references/phase-3-planning.md',
+    'references/phase-4-scaffold.md',
+    'references/phase-7-data.md',
+    'references/phase-10-navigation.md',
+    'references/phase-11-screens.md',
+  ];
+  const workflow = workflowFiles
+    .map((relativePath) => fs.readFileSync(
+      path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app', relativePath),
+      'utf8',
+    ))
+    .join('\n');
+
+  assert.match(shared, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js"/);
+  assert.doesNotMatch(shared, /trigger-telemetry/);
+  assert.deepEqual(
+    [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
+      .map((match) => match[1]),
+    ['template_gate', 'prerequisites', 'planning', 'scaffold', 'data_model', 'screens', 'app_ready'],
+  );
 });
 
 test('app instance id is minted once and reused by later skill runs', (t) => {

@@ -1,13 +1,13 @@
 # Mobile Base Template Quality Contracts
 
 The Mobile Apps plug-in ships a deterministic Expo template contract so a new
-application reaches planning and screen generation from a clean, production
-ready baseline. These rules apply to the bundled template and to
+application reaches planning and screen generation from a clean,
+production-ready baseline. These rules apply to the bundled template and to
 `/create-mobile-app`.
 
 ## Visual and Runtime Baseline
 
-- The Tamagui configuration always exposes semantic surfaces, media,
+- The native-host Tamagui factory always exposes semantic surfaces, media,
   accents, text hierarchy, status foreground/background pairs, and a
   `fonts.mono` role in both light and dark themes.
 - Shared components use literal-safe semantic tokens, minimum touch targets,
@@ -15,10 +15,10 @@ ready baseline. These rules apply to the bundled template and to
   on-accent foregrounds.
 - The starter home, login, and OAuth callback routes use semantic tokens,
   Ionicons, and route-owned safe-area edges.
-- The root layout owns `SafeAreaProvider`, host light/dark theme selection,
-  the project Tamagui config, generated schema wiring, and the optional
-  offline profile. It does not wrap the router slot in `SafeAreaView`; each
-  rendered route owns its visible edges to prevent double insets.
+- The root layout owns `SafeAreaProvider`, host light/dark theme selection, the
+  project Tamagui config, generated schema wiring, and the optional offline
+  profile. It does not wrap the router slot in `SafeAreaView`; each rendered
+  route owns its visible edges to prevent double insets.
 - OAuth callback replacement is guarded so React development effects cannot
   trigger duplicate navigation.
 
@@ -32,8 +32,8 @@ ready baseline. These rules apply to the bundled template and to
    client.
 4. Creates shared source directories and copies approved helpers only when a
    destination is missing.
-5. Merges the six shared-code aliases and their subpath mappings, makes every
-   path target explicitly relative, and removes deprecated `baseUrl`.
+5. Verifies that `tsconfig.json` inherits package shims and shared-code aliases
+   from `@microsoft/power-apps-native-host/config/tsconfig`.
 6. Structurally adds missing root provider, theme, Tamagui, and safe-area
    wiring without replacing custom navigation or unrelated providers.
 7. Verifies postconditions and fails for unsupported layouts or dangling
@@ -52,47 +52,23 @@ Power Apps data-source and schema-generation commands. This keeps generated
 artifacts compatible with protected-path validation and prevents hand-written
 stubs from masking incomplete initialization.
 
-## Environment and Approval Safety
+## Lifecycle and Approval Safety
 
-Environment resolution supports `--no-cache`. Discovery before the rough-plan
-approval may read an existing cache but cannot create
-`.resolved-environment.json` or rewrite `auth.config.json`. Persistence begins
-only after the user proceeds.
+The app instance identity is minted only after `proceed`, so `edit` and `abort`
+leave the fresh template unchanged. If a populated `power.config.json` already
+targets the approved environment, initialization is verified and skipped
+rather than invoking the CLI over an existing config.
 
-The app instance identity is also minted only after `proceed`, so `edit` and
-`abort` leave the fresh template unchanged. If a populated
-`power.config.json` already targets the approved environment, initialization
-is verified and skipped rather than invoking the CLI over an existing config.
+Step 3 writes `native-app-plan.md` before Step 5. The preparation gate therefore
+allows that approved plan while still rejecting created-app markers:
+`memory-bank.md`, `.datamodel-manifest.json`, and generated service files.
 
-HTTP failures report the status and a redacted response shape, such as an
-empty object or structured error keys. Tokens, query credentials, JWTs, and
-raw response bodies are not printed.
-
-## Dataverse, Sample Data, and Offline Order
-
-Dataverse mutation produces `.datamodel-manifest.json` before sample-data or
-offline-profile work begins. Connector-only behavior is determined by the
-approved planning mode, never inferred from a missing manifest.
-
-Sample-data generation uses fixed HTTPS CDN catalog entries for explicit
-URL/Text media columns and rotates images across visible records. Dataverse
-File/Image columns continue to use their native upload path rather than
-storing CDN URLs.
-
-For Dataverse-backed applications, offline setup runs after data model
-materialization and sample-data seeding. A missing, malformed, or empty
-manifest blocks offline setup instead of silently classifying the app as
-connector-only.
-
-## Agent and Validation Portability
-
-Leaf mobile agents do not declare the obsolete `sonnet` model alias. The host
-selects a supported model unless the caller provides an explicit override.
+## Validation Portability
 
 `validate-mobile-files.js --all-source` validates all TypeScript source under
 an application's complete `app/` tree and non-generated `src/` tree, plus root
-TypeScript configuration files. Only CLI-owned `src/generated/` is excluded;
-a route folder named `app/generated/` remains in scope. Mobile CI covers:
+TypeScript configuration files. Only CLI-owned `src/generated/` is excluded; a
+route folder named `app/generated/` remains in scope. Mobile CI covers:
 
 - deterministic preparation and rerun idempotency;
 - root-layout import-only, wrapper-only, already-correct, and custom-nesting
@@ -101,7 +77,5 @@ a route folder named `app/generated/` remains in scope. Mobile CI covers:
 - shared component accessibility and contrast contracts;
 - pristine route safe-area and icon rules;
 - generated-directory ownership;
-- environment no-cache behavior and redacted HTTP diagnostics;
-- portable agent frontmatter;
 - full template dependency installation, TypeScript compilation, and
   all-source mobile validation.

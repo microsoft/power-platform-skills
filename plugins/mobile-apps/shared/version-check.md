@@ -69,12 +69,13 @@ If the user asks how to run on a real device or simulator: point them at the Exp
 
 | Package | Pinned version | Notes |
 |---|---|---|
-| `expo` | `55.0.26` | SDK 55 |
+| `expo` | `55.0.29` | SDK 55 |
 | `react-native` | `0.83.6` | matched to Expo SDK 55 |
 | All `expo-*` packages | `55.x.y` | router, auth-session, secure-store, dev-client, etc. — version line tied to SDK |
-| `@microsoft/power-apps` | `1.2.7` | Power Apps code app SDK |
-| `@microsoft/power-apps-native-host` | `^0.2.20` | native runtime host |
-| `@microsoft/power-apps-native-offline` | `^0.1.3` | offline runtime package |
+| `@microsoft/power-apps` | `1.2.13` | Power Apps code app SDK |
+| `@microsoft/power-apps-native-host` | `^0.3.3` | native runtime host and shared config factories |
+| `@microsoft/power-apps-native-offline` | `^0.1.32` | offline runtime package |
+| `@microsoft/power-apps-cli` | `0.15.3` | project-local CLI and schema/codegen commands |
 | `tamagui`, `@tamagui/*` | `2.4.5` | design system primitives with Config v5, all `@tamagui/*` packages tracked together |
 
 ## Standard prereq snippet for skills

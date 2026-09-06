@@ -84,8 +84,8 @@ connector wiring.
 
 	### Required API permissions
 
-	The Microsoft Entra app registration requires these delegated permissions from the **Power Platform API**.
-	If you create the registration via Power Apps Wrap, it configures these automatically; the list is for reference only.
+	The Microsoft Entra app registration requires these delegated permissions
+	from the **Power Platform API**:
 
 	- `PowerApps.Apps.Play`
 	- `PowerApps.Apps.Read`
@@ -108,6 +108,19 @@ connector wiring.
 	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
 	- Play store: (coming soon)
 	- App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+
+## Offline support
+
+The template includes the native offline package, while the native host owns
+its runtime configuration, connection state, queue, synchronization, retry,
+and conflict handling. Do not add another offline dependency or configure the
+package directly in `app.config.js`.
+
+Offline support is not inferred from requirements or the app description. For
+Dataverse-backed apps, `/create-mobile-app` asks whether the user wants an
+offline profile and passes the selected profile through `PowerAppsProvider`.
+Connector-only and local-prototype apps skip this Dataverse-only profile
+question.
 
 ## Upgrade the Native Host
 
@@ -170,22 +183,6 @@ instead of modifying the old app in place. Commit or back up the old app first.
 	preserving the new template configuration. Review the changes and rerun the
 	failing command until the build succeeds.
 
-## Offline integration
-
-The template already includes `@microsoft/power-apps-native-host` and
-`@microsoft/power-apps-native-offline`; do not add another offline dependency.
-The Expo config registers the offline package, and `app/_layout.tsx` passes a
-valid root `offline-profile.json` to `PowerAppsProvider`. With no profile file,
-the Dataverse offline adapter remains inactive.
-
-Offline selection is not inferred from requirements, connectivity metadata, or
-an app screen. After Dataverse tables are materialized, `/create-mobile-app`
-asks whether the user wants offline support. Yes invokes
-`/setup-offline-profile`; No leaves the package inactive. Connector-only and
-local projects skip this Dataverse-only profile question. The host/offline
-package owns connection status, queued, syncing, failed, retry, and conflict
-behavior; do not add another dependency or hand-roll a sync engine.
-
 ## Web
 
 Start the browser app:
@@ -203,7 +200,7 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `distPath` to `dist-web` in `power.config.json`, then run
-`npx power-apps push`.
+`npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

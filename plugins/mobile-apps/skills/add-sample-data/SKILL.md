@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 # Add Sample Data
 
@@ -44,9 +44,9 @@ Before generating any row, inspect these canonical artifacts:
   sample-data projection:
 
   ```bash
-  node "${CLAUDE_SKILL_DIR}/../../scripts/compile-sample-data-obligations.js" \
+  node "${PLUGIN_ROOT}/scripts/compile-sample-data-obligations.js" \
     --project-root "<working_dir>"
-  node "${CLAUDE_SKILL_DIR}/../../scripts/compile-sample-data-obligations.js" \
+  node "${PLUGIN_ROOT}/scripts/compile-sample-data-obligations.js" \
     --project-root "<working_dir>" --check
   ```
 
@@ -94,7 +94,7 @@ If a seed file cannot be mapped safely, fall back to generated contextual sample
 
 ```bash
 test -f power.config.json && test -f app.config.js
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture the **environment URL** for subsequent script calls. If resolution fails, instruct `az login --tenant <env-tenant>` or ask for the environment URL directly, then stop.
@@ -128,14 +128,14 @@ Skip Step 2b.
 If `.datamodel-manifest.json` is missing, discover custom tables via the script:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
 ```
 
 For each table the project uses, fetch its custom columns:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true"
 ```
 
@@ -150,7 +150,7 @@ All tables from the manifest are evaluated — including reused ones — because
 For each table, query its current record count using the entity set name from the manifest (or derive it by appending `s` to the logical name as a fallback):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "<entitySetName>?\$top=5&\$select=<primaryKeyColumn>"
 ```
 
@@ -289,7 +289,7 @@ For each selected table, generate N rows. Match values to column names + types:
 For every choice column in the selected tables, query its option set before generating rows:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
 ```
 
@@ -333,7 +333,7 @@ Insert in the tier order from Step 3c. **Within a tier, parallelize across both 
 For each table, get its `EntitySetName` (the URL-path name, usually plural — e.g. `cr3e9_jobsites`). Read from `.datamodel-manifest.json` if it carries this; otherwise:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName"
 ```
 
@@ -361,7 +361,7 @@ For each tier from 0 → N:
 2. **Fire BATCH-RECORDS once per tier.** The script handles concurrency, retry, GUID extraction, and adaptive throttling internally:
 
    ```bash
-   node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
+   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
      "Tier <N>" \
      --operations '<json-from-step-1>' \
      --concurrency 5 \
@@ -399,7 +399,7 @@ For Tier 1+ tables, build each row's body with `@odata.bind` referencing the par
 Then:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
   "Tier 1" \
   --operations '<json-with-bound-lookups>' \
   --concurrency 5 \

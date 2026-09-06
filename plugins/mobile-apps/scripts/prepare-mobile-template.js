@@ -14,20 +14,7 @@ const REQUIRED_FILES = [
   'tsconfig.json',
 ];
 
-const REQUIRED_ALIASES = {
-  '@/components': ['./src/components'],
-  '@/components/*': ['./src/components/*'],
-  '@/hooks': ['./src/hooks'],
-  '@/hooks/*': ['./src/hooks/*'],
-  '@/utils': ['./src/utils'],
-  '@/utils/*': ['./src/utils/*'],
-  '@/tokens': ['./src/tokens'],
-  '@/tokens/*': ['./src/tokens/*'],
-  '@/generated': ['./src/generated'],
-  '@/generated/*': ['./src/generated/*'],
-  '@/native': ['./src/native'],
-  '@/native/*': ['./src/native/*'],
-};
+const HOST_TSCONFIG = '@microsoft/power-apps-native-host/config/tsconfig';
 
 const SHARED_FILES = [
   ['components/index.tsx', 'src/components/index.tsx'],
@@ -55,7 +42,13 @@ function escapeRegExp(value) {
 }
 
 function singleQuoted(value) {
-  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  return `'${String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+    .replace(/'/g, "\\'")}'`;
 }
 
 function readJson(filePath) {
@@ -84,7 +77,6 @@ function assertFreshTemplate(projectRoot) {
 
   const createdMarkers = [
     'memory-bank.md',
-    'native-app-plan.md',
     '.datamodel-manifest.json',
   ].filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)));
 
@@ -99,6 +91,8 @@ function assertFreshTemplate(projectRoot) {
   if (createdMarkers.length > 0) {
     throw new Error(`Template already contains created-app markers: ${createdMarkers.join(', ')}`);
   }
+
+  verifyHostTsconfig(projectRoot);
 }
 
 function updateIdentity(projectRoot, displayName, slug) {
@@ -112,8 +106,8 @@ function updateIdentity(projectRoot, displayName, slug) {
   }
 
   appConfig = appConfig
-    .replace(namePattern, `$1${singleQuoted(displayName)};`)
-    .replace(slugPattern, `$1${singleQuoted(slug)};`);
+    .replace(namePattern, (_match, prefix) => `${prefix}${singleQuoted(displayName)};`)
+    .replace(slugPattern, (_match, prefix) => `${prefix}${singleQuoted(slug)};`);
   fs.writeFileSync(appConfigPath, appConfig);
 
   const packagePath = path.join(projectRoot, 'package.json');
@@ -170,36 +164,21 @@ function copySharedFiles(projectRoot, samplesRoot) {
   return { copied, preserved };
 }
 
-function mergeAliases(projectRoot) {
+function verifyHostTsconfig(projectRoot) {
   const tsconfigPath = path.join(projectRoot, 'tsconfig.json');
   const tsconfig = readJson(tsconfigPath);
-  tsconfig.compilerOptions = tsconfig.compilerOptions || {};
-  tsconfig.compilerOptions.paths = tsconfig.compilerOptions.paths || {};
-  delete tsconfig.compilerOptions.baseUrl;
-
-  for (const [alias, targets] of Object.entries(tsconfig.compilerOptions.paths)) {
-    if (!Array.isArray(targets)) {
-      throw new Error(`tsconfig path alias ${alias} must contain an array of targets`);
-    }
-    tsconfig.compilerOptions.paths[alias] = targets.map((target) => {
-      if (typeof target !== 'string' || !target) {
-        throw new Error(`tsconfig path alias ${alias} contains an invalid target`);
-      }
-      return target.startsWith('.') || path.isAbsolute(target) ? target : `./${target}`;
-    });
+  const inheritedConfigs = Array.isArray(tsconfig.extends)
+    ? tsconfig.extends
+    : [tsconfig.extends];
+  if (!inheritedConfigs.includes(HOST_TSCONFIG)) {
+    throw new Error(`tsconfig.json must extend ${HOST_TSCONFIG}`);
   }
-
-  for (const [alias, targets] of Object.entries(REQUIRED_ALIASES)) {
-    tsconfig.compilerOptions.paths[alias] = targets;
-  }
-
-  writeJson(tsconfigPath, tsconfig);
 }
 
 function ensureNamedImports(source, moduleName, requiredNames) {
   const modulePattern = escapeRegExp(moduleName);
   const importPattern = new RegExp(
-    `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]${modulePattern}['"]\\s*;`,
+    `import\\s+(?!type\\b)(?:([A-Za-z_$][\\w$]*)\\s*,\\s*)?\\{([^}]*)\\}\\s*from\\s*['"]${modulePattern}['"][ \\t]*;?`,
   );
   const match = source.match(importPattern);
 
@@ -207,29 +186,36 @@ function ensureNamedImports(source, moduleName, requiredNames) {
     return `import { ${requiredNames.join(', ')} } from '${moduleName}';\n${source}`;
   }
 
-  const existingNames = match[1]
+  const existingNames = match[2]
     .split(',')
     .map((entry) => entry.trim().split(/\s+as\s+/)[0])
     .filter(Boolean);
   const missingNames = requiredNames.filter((name) => !existingNames.includes(name));
   if (missingNames.length === 0) return source;
 
-  const updatedNames = [...match[1].split(',').map((entry) => entry.trim()).filter(Boolean), ...missingNames];
-  const replacement = `import {\n  ${updatedNames.join(',\n  ')},\n} from '${moduleName}';`;
+  const updatedNames = [...match[2].split(',').map((entry) => entry.trim()).filter(Boolean), ...missingNames];
+  const defaultImport = match[1] ? `${match[1]}, ` : '';
+  const replacement = `import ${defaultImport}{\n  ${updatedNames.join(',\n  ')},\n} from '${moduleName}';`;
   return source.replace(importPattern, replacement);
 }
 
-function ensureDefaultImport(source, moduleName, localName) {
+function defaultImportPattern(moduleName, localName) {
   const modulePattern = escapeRegExp(moduleName);
-  const importPattern = new RegExp(
-    `import\\s+${escapeRegExp(localName)}\\s+from\\s*['"]${modulePattern}['"]\\s*;`,
+  return new RegExp(
+    `import\\s+${escapeRegExp(localName)}\\s*(?:,\\s*(?:\\{[^}]*\\}|\\*\\s+as\\s+[A-Za-z_$][\\w$]*))?\\s+from\\s*['"]${modulePattern}['"][ \\t]*;?`,
   );
+}
+
+function ensureDefaultImport(source, moduleName, localName) {
+  const importPattern = defaultImportPattern(moduleName, localName);
   if (importPattern.test(source)) return source;
   return `import ${localName} from '${moduleName}';\n${source}`;
 }
 
 function ensureColorSchemeHook(source) {
-  if (/\buseColorScheme\s*\(\s*\)/.test(source)) return source;
+  if (/\b(?:const|let)\s+colorScheme\s*=\s*useColorScheme\s*\(\s*\)/.test(source)) {
+    return source;
+  }
 
   const rootPattern = /(export\s+default\s+function\s+RootLayout\s*\([^)]*\)\s*\{)/;
   if (!rootPattern.test(source)) {
@@ -238,31 +224,141 @@ function ensureColorSchemeHook(source) {
   return source.replace(rootPattern, '$1\n  const colorScheme = useColorScheme();');
 }
 
+function findJsxOpeningTagEnd(source, startIndex) {
+  let braceDepth = 0;
+  let quote = null;
+
+  for (let index = startIndex; index < source.length; index += 1) {
+    const character = source[index];
+
+    if (quote) {
+      let slashCount = 0;
+      for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+        slashCount += 1;
+      }
+      if (character === quote && slashCount % 2 === 0) quote = null;
+      continue;
+    }
+    if (character === '\'' || character === '"' || character === '`') {
+      quote = character;
+      continue;
+    }
+    if (character === '{') {
+      braceDepth += 1;
+      continue;
+    }
+    if (character === '}') {
+      braceDepth -= 1;
+      if (braceDepth < 0) {
+        throw new Error('PowerAppsProvider opening tag contains an unmatched closing brace');
+      }
+      continue;
+    }
+    if (character === '>' && braceDepth === 0) return index;
+  }
+
+  throw new Error('PowerAppsProvider opening tag is not terminated');
+}
+
+function readJsxAttributeValue(source, startIndex) {
+  const opening = source[startIndex];
+  if (opening === '\'' || opening === '"') {
+    for (let index = startIndex + 1; index < source.length; index += 1) {
+      let slashCount = 0;
+      for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+        slashCount += 1;
+      }
+      if (source[index] === opening && slashCount % 2 === 0) return index + 1;
+    }
+    throw new Error('PowerAppsProvider opening tag contains an unterminated quoted prop');
+  }
+  if (opening === '{') {
+    let depth = 0;
+    let quote = null;
+    for (let index = startIndex; index < source.length; index += 1) {
+      const character = source[index];
+      if (quote) {
+        let slashCount = 0;
+        for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+          slashCount += 1;
+        }
+        if (character === quote && slashCount % 2 === 0) quote = null;
+        continue;
+      }
+      if (character === '\'' || character === '"' || character === '`') {
+        quote = character;
+      } else if (character === '{') {
+        depth += 1;
+      } else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) return index + 1;
+      }
+    }
+    throw new Error('PowerAppsProvider opening tag contains an unterminated expression prop');
+  }
+  let index = startIndex;
+  while (index < source.length && !/\s/.test(source[index])) index += 1;
+  return index;
+}
+
+function getTopLevelJsxAttributes(providerProps) {
+  const attributes = new Map();
+  let index = 0;
+  while (index < providerProps.length) {
+    while (index < providerProps.length && /\s/.test(providerProps[index])) index += 1;
+    if (index >= providerProps.length || providerProps[index] === '/') break;
+    if (providerProps[index] === '{') {
+      index = readJsxAttributeValue(providerProps, index);
+      continue;
+    }
+
+    const nameMatch = providerProps.slice(index).match(/^([A-Za-z_$][\w$:.-]*)/);
+    if (!nameMatch) {
+      index += 1;
+      continue;
+    }
+    const name = nameMatch[1];
+    index += name.length;
+    while (index < providerProps.length && /\s/.test(providerProps[index])) index += 1;
+    if (providerProps[index] !== '=') {
+      attributes.set(name, true);
+      continue;
+    }
+    index += 1;
+    while (index < providerProps.length && /\s/.test(providerProps[index])) index += 1;
+    const valueStart = index;
+    index = readJsxAttributeValue(providerProps, valueStart);
+    attributes.set(name, providerProps.slice(valueStart, index));
+  }
+  return attributes;
+}
+
 function ensureProviderProps(source) {
-  const providerPattern = /<PowerAppsProvider\b([\s\S]*?)>/;
-  const match = source.match(providerPattern);
+  const match = /<PowerAppsProvider\b/.exec(source);
   if (!match) {
     throw new Error('app/_layout.tsx does not contain a PowerAppsProvider opening tag');
   }
+  const tagNameEnd = match.index + match[0].length;
+  const tagEnd = findJsxOpeningTagEnd(source, tagNameEnd);
+  const providerProps = source.slice(tagNameEnd, tagEnd);
+  const providerAttributes = getTopLevelJsxAttributes(providerProps);
 
   const requiredProps = [
     ['tamaguiConfig', 'tamaguiConfig={tamaguiConfig}'],
     ['defaultTheme', "defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}"],
-    ['theme', 'theme={lightTheme}'],
-    ['darkTheme', 'darkTheme={darkTheme}'],
   ];
   const additions = requiredProps
-    .filter(([name]) => !new RegExp(`\\b${name}\\s*=`).test(match[1]))
+    .filter(([name]) => !providerAttributes.has(name))
     .map(([, text]) => text);
   if (additions.length === 0) return source;
 
   const indentMatch = source.slice(0, match.index).match(/(^|\n)([ \t]*)[^\n]*$/);
   const propIndent = `${indentMatch ? indentMatch[2] : ''}  `;
-  const existingProps = match[1].trimEnd();
+  const existingProps = providerProps.trimEnd();
   const replacement = `<PowerAppsProvider${existingProps}${existingProps ? '\n' : ' '}${additions
     .map((prop) => `${propIndent}${prop}`)
     .join('\n')}\n${indentMatch ? indentMatch[2] : ''}>`;
-  return source.replace(providerPattern, replacement);
+  return `${source.slice(0, match.index)}${replacement}${source.slice(tagEnd + 1)}`;
 }
 
 function isWrappedBySafeAreaProvider(source, powerOpenIndex, powerCloseEnd) {
@@ -298,20 +394,28 @@ function ensureSafeAreaProviderWrapper(source) {
 
 function verifyRootLayout(source) {
   const requiredChecks = [
-    ['SafeAreaProvider import', /import\s*\{[^}]*\bSafeAreaProvider\b[^}]*\}\s*from\s*['"]react-native-safe-area-context['"]/],
-    ['useColorScheme import', /import\s*\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*['"]react-native['"]/],
-    ['host light theme', /import\s*\{[^}]*\blightTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
-    ['host dark theme', /import\s*\{[^}]*\bdarkTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
-    ['Tamagui config import', /tamaguiConfig\s+from\s*['"]\.\.\/tamagui\.config['"]/],
-    ['Tamagui config provider prop', /\btamaguiConfig\s*=\s*\{tamaguiConfig\}/],
-    ['default theme provider prop', /\bdefaultTheme\s*=/],
-    ['light theme provider prop', /\btheme\s*=\s*\{lightTheme\}/],
-    ['dark theme provider prop', /\bdarkTheme\s*=\s*\{darkTheme\}/],
+    ['SafeAreaProvider import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\bSafeAreaProvider\b[^}]*\}\s*from\s*['"]react-native-safe-area-context['"]/],
+    ['useColorScheme import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*['"]react-native['"]/],
+    ['colorScheme binding', /\b(?:const|let)\s+colorScheme\s*=\s*useColorScheme\s*\(\s*\)/],
+    ['Tamagui config import', defaultImportPattern('../tamagui.config', 'tamaguiConfig')],
   ];
 
   const missing = requiredChecks
     .filter(([, pattern]) => !pattern.test(source))
     .map(([label]) => label);
+  const providerMatch = /<PowerAppsProvider\b/.exec(source);
+  if (!providerMatch) {
+    missing.push('PowerAppsProvider opening tag');
+  } else {
+    const tagNameEnd = providerMatch.index + providerMatch[0].length;
+    const tagEnd = findJsxOpeningTagEnd(source, tagNameEnd);
+    const attributes = getTopLevelJsxAttributes(source.slice(tagNameEnd, tagEnd));
+    const providerChecks = [
+      ['Tamagui config provider prop', attributes.get('tamaguiConfig') === '{tamaguiConfig}'],
+      ['default theme provider prop', attributes.has('defaultTheme')],
+    ];
+    missing.push(...providerChecks.filter(([, valid]) => !valid).map(([label]) => label));
+  }
   if (missing.length > 0) {
     throw new Error(`Root layout preparation failed postconditions: ${missing.join(', ')}`);
   }
@@ -334,11 +438,7 @@ function prepareRootLayout(projectRoot) {
 
   source = ensureNamedImports(source, 'react-native', ['useColorScheme']);
   source = ensureNamedImports(source, 'react-native-safe-area-context', ['SafeAreaProvider']);
-  source = ensureNamedImports(source, '@microsoft/power-apps-native-host', [
-    'PowerAppsProvider',
-    'lightTheme',
-    'darkTheme',
-  ]);
+  source = ensureNamedImports(source, '@microsoft/power-apps-native-host', ['PowerAppsProvider']);
   source = ensureDefaultImport(source, '../tamagui.config', 'tamaguiConfig');
   source = ensureColorSchemeHook(source);
   source = ensureProviderProps(source);
@@ -388,7 +488,6 @@ function capturePreparationState(projectRoot) {
     'app.config.js',
     'package.json',
     'power.config.json',
-    'tsconfig.json',
     'app/_layout.tsx',
     ...LEGACY_EXAMPLE_FILES,
     ...SHARED_FILES.map(([, destinationRelativePath]) => destinationRelativePath),
@@ -466,7 +565,6 @@ function prepareMobileTemplate(options) {
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
     removedLegacyFiles = removeLegacyExamples(projectRoot);
     sharedFiles = copySharedFiles(projectRoot, samplesRoot);
-    mergeAliases(projectRoot);
     prepareRootLayout(projectRoot);
     assertNoDanglingLegacyImports(projectRoot);
   } catch (error) {
@@ -507,17 +605,17 @@ if (require.main === module) {
 }
 
 module.exports = {
-  REQUIRED_ALIASES,
+  HOST_TSCONFIG,
   SHARED_FILES,
   assertFreshTemplate,
   copySharedFiles,
   ensureProviderProps,
   ensureSafeAreaProviderWrapper,
-  mergeAliases,
   prepareMobileTemplate,
   prepareRootLayout,
   removeEmptyPowerConfig,
   restorePreparationState,
   updateIdentity,
+  verifyHostTsconfig,
   verifyRootLayout,
 };

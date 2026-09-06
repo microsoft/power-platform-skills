@@ -6,7 +6,7 @@ allowed-tools: Bash
 model: haiku
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — mandatory safety, environment, failure, and execution guardrails.
+**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — mandatory safety, environment, failure, and execution guardrails.
 
 # List Connections
 

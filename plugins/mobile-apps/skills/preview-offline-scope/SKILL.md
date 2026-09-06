@@ -6,7 +6,7 @@ allowed-tools: Read, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 # Preview Offline Scope
 
@@ -29,13 +29,13 @@ Same as `/edit-offline-profile` Step 1. Read profileId from `offline-profile.jso
 
 ```bash
 test -f power.config.json
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 ### Step 2 — Run verify
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/verify-offline-profile.js" <envUrl> \
+node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl> \
   --project-root "$(pwd)"
 ```
 
@@ -58,7 +58,7 @@ For current-user/current-BU filters, resolve identity only inside this skill by 
 For each table:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "<entitysetname>?\$count=true&\$top=0&<scope-filter>"
 ```
 

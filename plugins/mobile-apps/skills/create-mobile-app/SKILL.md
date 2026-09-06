@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, Enter
 model: opus
 ---
 
-**Shared core: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first. Load a topic file from the compatibility index only when the active phase requires it.
+**Shared core: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first. Load a topic file from the compatibility index only when the active phase requires it.
 
 # Create Power Apps Code App (Native)
 
@@ -79,16 +79,16 @@ pipeline state and artifact revisions before skipping any phase.
 
 | Phase | Steps | Read at phase entry |
 |---|---|---|
-| Setup and requirements | 0–2d | [`references/phase-0-setup.md`](${CLAUDE_SKILL_DIR}/references/phase-0-setup.md) |
-| Experience, architecture, conditional Data Model, and Gates 1–2 | 3–3.9 | [`references/phase-3-planning.md`](${CLAUDE_SKILL_DIR}/references/phase-3-planning.md) |
-| Scaffold, design, Gates 3–4 | 4–6.75 | [`references/phase-4-scaffold.md`](${CLAUDE_SKILL_DIR}/references/phase-4-scaffold.md) |
-| Auth, data, offline, native, connectors | 7–10 | [`references/phase-7-data.md`](${CLAUDE_SKILL_DIR}/references/phase-7-data.md) |
-| Navigation, services, shared code, skeletons | 10b–10.8 | [`references/phase-10-navigation.md`](${CLAUDE_SKILL_DIR}/references/phase-10-navigation.md) |
-| Screen waves, validation, Metro, summary | 11–13 | [`references/phase-11-screens.md`](${CLAUDE_SKILL_DIR}/references/phase-11-screens.md) |
-| Spawn/tool failure only | on demand | [`references/degraded-hosts.md`](${CLAUDE_SKILL_DIR}/references/degraded-hosts.md) |
+| Setup and requirements | 0–2d | [`references/phase-0-setup.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-0-setup.md) |
+| Experience, architecture, conditional Data Model, and Gates 1–2 | 3–3.9 | [`references/phase-3-planning.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-3-planning.md) |
+| Scaffold, design, Gates 3–4 | 4–6.75 | [`references/phase-4-scaffold.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-4-scaffold.md) |
+| Auth, data, offline, native, connectors | 7–10 | [`references/phase-7-data.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-7-data.md) |
+| Navigation, services, shared code, skeletons | 10b–10.8 | [`references/phase-10-navigation.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-10-navigation.md) |
+| Screen waves, validation, Metro, summary | 11–13 | [`references/phase-11-screens.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-11-screens.md) |
+| Spawn/tool failure only | on demand | [`references/degraded-hosts.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/degraded-hosts.md) |
 
 After Step 2c `proceed`, read and retain the
-[`Live Build Plan protocol`](${CLAUDE_SKILL_DIR}/references/build-plan.md).
+[`Live Build Plan protocol`](${PLUGIN_ROOT}/skills/create-mobile-app/references/build-plan.md).
 Apply its milestone updates through Step 13 and its edit-journal check before
 every approval or mutation. It is the only owner of `_build_plan.html`; the
 design workflow continues to own the separate `_plan_preview.html`.
@@ -126,7 +126,7 @@ artifacts.
 
 ## Reference
 
-- [Mobile Apps agent protocol](${CLAUDE_SKILL_DIR}/../../AGENTS.md)
-- [Shared instruction index](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)
-- [Product experience compiler](${CLAUDE_SKILL_DIR}/../../shared/references/product-experience-compiler.md)
-- [A/B quality protocol](${CLAUDE_SKILL_DIR}/../../docs/optimization-quality-protocol.md)
+- [Mobile Apps agent protocol](${PLUGIN_ROOT}/AGENTS.md)
+- [Shared instruction index](${PLUGIN_ROOT}/shared/shared-instructions-core.md)
+- [Product experience compiler](${PLUGIN_ROOT}/shared/references/product-experience-compiler.md)
+- [A/B quality protocol](${PLUGIN_ROOT}/docs/remediation/mobile-generation-optimization.md)

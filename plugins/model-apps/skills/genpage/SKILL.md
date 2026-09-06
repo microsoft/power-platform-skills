@@ -402,6 +402,27 @@ it is missing, derive it as a **bare JSON array** of
 `(Global)`, row) — see `${PLUGIN_ROOT}/references/custom-api.md`. Never the
 `{ "actionBindings": [...] }` object wrapper (the deployed `config.json` shape `pac` writes).
 
+### Phase 4.7: Page Telemetry (Conditional)
+
+**Re-probe the feature gate here — do not rely on the plan content alone.**
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" custom-telemetry
+```
+
+This phase has no bindings and no artifacts; it only decides whether page-builder is
+permitted to instrument. **If it prints `disabled`**, generated pages contain no
+telemetry calls at all — identical to before the feature existed.
+
+**Carry this decision into code generation.** The probe result is `Telemetry:
+disabled` / `Telemetry: enabled` for the rest of the run, and Phase 5 **must** pass it
+verbatim in every page-builder dispatch.
+
+`enabled` is permission, not instruction. Even when it is on, page-builder emits
+telemetry **only** when the maker asked to measure or track something in their own
+words; the default output is still a page with zero telemetry. See
+`${PLUGIN_ROOT}/references/page-telemetry.md`.
+
 ### Phase 5: Build Pages (Parallel)
 
 Read `genpage-plan.md` and extract the pages table.
@@ -439,6 +460,10 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    `${PLUGIN_ROOT}/references/data-caching.md`
 5. If the plan's `## Environment` indicates non-English languages, also read
    `${PLUGIN_ROOT}/references/localization.md`
+5b. Only when the Phase 4.7 probe printed `enabled` **and** the maker's own request
+   asks to measure, track, monitor, or diagnose something, also read
+   `${PLUGIN_ROOT}/references/page-telemetry.md`. In every other case the page
+   contains no telemetry calls — do not read it.
 6. Read `genpage-plan.md` (already in working directory) and `RuntimeTypes.ts`
    if Data mode is dataverse
 7. Write the `.tsx` file to `<working-dir>/<filename>.tsx` following all rules
@@ -464,6 +489,7 @@ For each page, pass a prompt that includes:
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
 - **Connectors: `enabled` or `disabled`** — the Phase 4.5 probe result, verbatim
+- **Telemetry: `enabled` or `disabled`** — the Phase 4.7 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
 
@@ -475,6 +501,7 @@ For each page, pass a prompt that includes:
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
 > - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
@@ -490,6 +517,7 @@ For each page, pass a prompt that includes:
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
 > - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
 >
