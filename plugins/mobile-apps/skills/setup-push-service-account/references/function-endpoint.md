@@ -50,7 +50,8 @@ The bundled Node.js Azure Function accepts only this strict JSON shape:
   "title": "You have a new notification.",
   "body": "Open the app to view it.",
   "schemaVersion": "1",
-  "deepLink": "/notifications",
+  "destination": "notifications",
+  "params": "{}",
   "validateOnly": true
 }
 ```
@@ -65,7 +66,8 @@ The bundled Node.js Azure Function accepts only this strict JSON shape:
 - `validateOnly` is a required Boolean. Setup proof requires `true`.
 
 The FCM request uses `message.topic`, a notification title/body, string-only
-`data.schemaVersion`/`data.deepLink`, and top-level `validate_only`.
+`data.schemaVersion`/`data.destination`/`data.params`, and top-level
+`validate_only`. The endpoint rejects the former `deepLink` shape.
 
 ## App settings
 
@@ -76,7 +78,7 @@ Store only non-secret policy and references:
 | `KEY_VAULT_URL` | `https://<vault>.vault.azure.net/` |
 | `FIREBASE_SERVICE_ACCOUNT_SECRET_NAME` | One Key Vault secret name |
 | `FIREBASE_PROJECT_ID` | Exact target Firebase project |
-| `ALLOWED_DEEP_LINK_PREFIXES` | JSON string array, for example `["/(app)/","/notifications"]` |
+| `ALLOWED_NAVIGATION_DESTINATIONS` | JSON object mapping semantic destinations to exact parameter rules, for example `{"notifications":{},"work-item-detail":{"workItemId":{"type":"guid","required":true}}}` |
 | `ALLOWED_NOTIFICATION_TITLES` | JSON string array of generic titles |
 | `ALLOWED_NOTIFICATION_BODIES` | JSON string array of generic bodies |
 

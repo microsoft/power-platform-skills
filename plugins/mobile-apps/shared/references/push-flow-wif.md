@@ -113,9 +113,11 @@ delivery requires a GUID-validated lowercase Entra OID topic. `AllUsers`
 requires an empty Target OID and exact case-sensitive `allUsers`.
 
 Send only approved generic notification title/body plus string-valued
-`data.schemaVersion` and allowlisted internal `data.deepLink`, together with
-the discovered Android/APNs fields. OID topics are routing convenience, not an
-authorization boundary.
+`data.schemaVersion`, allowlisted semantic `data.destination`, and canonical
+destination-specific `data.params`, together with the discovered Android/APNs
+fields. Revalidate all three fields against `navigation-link-contract.md`;
+never retain a legacy `deepLink` fallback. OID topics are routing convenience,
+not an authorization boundary.
 
 ## Action security and failure handling
 

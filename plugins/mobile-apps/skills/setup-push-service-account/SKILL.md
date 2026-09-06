@@ -214,7 +214,8 @@ signed-in deployer—to call the endpoint with:
   "title": "You have a new notification.",
   "body": "Open the app to view it.",
   "schemaVersion": "1",
-  "deepLink": "/notifications",
+  "destination": "notifications",
+  "params": "{}",
   "validateOnly": true
 }
 ```

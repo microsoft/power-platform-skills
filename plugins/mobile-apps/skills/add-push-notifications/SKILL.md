@@ -1,6 +1,6 @@
 ---
 name: add-push-notifications
-description: Use whenever adding, configuring, repairing, or changing app-side push runtime integration in a Power Apps Expo mobile app. Owns notification permissions, registration-token lifecycle, FCM topic synchronization, listeners/background handling, and validated deep links; orchestrates but does not own Firebase/platform setup, sender authentication, flows, wrapped builds, installation, or physical delivery.
+description: Use whenever adding, configuring, repairing, or changing app-side push runtime integration in a Power Apps Expo mobile app. Owns notification permissions, registration-token lifecycle, FCM topic synchronization, listeners/background handling, and the shared typed navigation-intent integration; orchestrates but does not own Firebase/platform setup, sender authentication, flows, wrapped builds, installation, or physical delivery.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: opus
@@ -9,6 +9,9 @@ model: opus
 **Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 **Push contract: [push-notifications.md](${PLUGIN_ROOT}/shared/references/push-notifications.md)** — follow exactly.
+
+**Navigation contract: [navigation-link-contract.md](${PLUGIN_ROOT}/shared/references/navigation-link-contract.md)** —
+follow exactly for in-app, custom-scheme, HTTPS, and push navigation.
 
 **Lifecycle and routing:
 [push-lifecycle.md](${PLUGIN_ROOT}/shared/references/push-lifecycle.md)** —
@@ -28,7 +31,7 @@ Orchestrate the canonical independent, resumable lifecycle:
 
 This skill owns stage 3 only: permissions and consent, registration-token
 lifecycle, exact topic transitions, foreground/background/response listeners,
-and validated deep links. Never redo a proven Firebase client or platform
+and validated navigation intents. Never redo a proven Firebase client or platform
 handoff merely because runtime integration, sender authentication, flow
 authoring, build, or delivery is incomplete. Conversely, runtime integration
 does not prove any downstream stage. Do not provision sender authentication,
@@ -51,8 +54,8 @@ customer-owned; this plugin does not provision or validate it.
 
 1. Verify app and runtime -> 2. Verify auth identity -> 3. Resume/establish
 Firebase client setup -> 4. Resume manual Apple and APNs setup when
-needed -> 5. Write wrapper
--> 6. Add permission UX -> 7. Wire auth/topic lifecycle -> 8. Wire deep links
+needed -> 5. Write wrapper and shared navigation module
+-> 6. Add permission UX -> 7. Wire auth/topic lifecycle -> 8. Wire navigation sources
 -> 9. Validate -> 10. Update memory bank and report independent next steps
 
 ### 1. Verify app and runtime
@@ -131,7 +134,21 @@ Firebase `.p8` boundary: neither skill reads or uploads the key. A successful
 manual handoff means **configured, device verification pending**; it is not
 physical delivery success.
 
-### 5. Write the wrapper
+### 5. Write the wrapper and shared navigation module
+
+Create `src/navigation/linkContract.ts` first. Use the approved screen plan's
+Navigation Contracts table to define stable kebab-case destination IDs, exact
+typed parameter schemas, authentication requirements, router intent, and the
+only destination-to-Expo-Router-href mappings. Implement the non-throwing
+in-app, configured custom-scheme, approved HTTPS, and FCM-data parsers plus one
+dispatcher from `navigation-link-contract.md`. Never expose a raw route as an
+external destination.
+
+Ask for an HTTPS origin before adding App Link/Universal Link configuration;
+never guess one. When provided, add exact Android `intentFilters` and iOS
+`associatedDomains` settings, then guide the customer to host the platform
+association files. Record parser, native config, customer-confirmed association
+files, and physical installed-build verification separately.
 
 Create `src/native/pushNotifications.ts` using the required surface and result
 types from the push contract. It must:
@@ -156,7 +173,8 @@ types from the push contract. It must:
   React provider and clean up every subscription exactly once
 - export a non-throwing `handleBackgroundNotification` for the early entry
   point; it validates data and never navigates
-- validate every deep link before returning it
+- parse every notification navigation intent through
+  `src/navigation/linkContract.ts` before returning it
 - never throw into a screen
 
 Assign and await every value-returning native operation, then use that value in
@@ -172,7 +190,7 @@ auto-init/token sequence in `requestPushPermission`, topic subscribe and
 unsubscribe calls in `syncPushTopic`, listener registration in
 `registerNotificationHandlers`, background validation in
 `handleBackgroundNotification`, and cold-start response consumption in
-`consumeInitialNotificationDeepLink`. Each native-facing operation catches
+`consumeInitialNotificationIntent`. Each native-facing operation catches
 package failures and returns the documented discriminated result. Do not
 replace these paths with empty functions, hardcoded results, comments, or
 implementation markers.
@@ -210,13 +228,19 @@ and be mounted exactly once under `app/`. Strict validation rejects direct
 layout-only listener registration, missing lifecycle topic sync, and duplicate
 mounts.
 
-### 8. Wire deep links
+### 8. Wire navigation sources
 
 Register one warm response listener and consume the Expo Notifications
-cold-start response once. Funnel both through the same payload validator and
-pending-destination guard. Use Expo Router only after payload validation and
-auth readiness; never navigate from the background message handler. Add a safe
-fallback route when the app does not already have one.
+cold-start response once. Also consume initial and live custom-scheme/approved
+HTTPS URLs. Funnel all external sources through the shared parser, source-aware
+deduplication, and pending-intent guard. Use Expo Router only after contract
+validation and router/auth readiness; never navigate from the background
+message handler. Invalid or stale intents are rejected without fallback
+navigation.
+
+Expose the typed in-app helper from the same module. Existing screen actions
+that target registered semantic destinations must use it rather than
+hand-building router paths.
 
 ### 9. Validate
 
@@ -227,6 +251,7 @@ npx tsc --noEmit
 node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
   --project-root . --strict-client-integration
 node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root . \
+  --file src/navigation/linkContract.ts \
   --file src/native/pushNotifications.ts \
   --file app/_layout.tsx \
   --file app/login.tsx
@@ -237,7 +262,8 @@ Add every other changed file explicitly to the final validator call.
 ### 10. Update memory bank and report lifecycle status
 
 Update `memory-bank.md` with packages, Firebase project ID (not credentials),
-permission UX, topic policy, deep-link schema version, and validation status.
+permission UX, topic policy, navigation schema version/destination registry,
+custom-scheme/HTTPS configuration state, and validation status.
 
 Apply the canonical lifecycle resume rules. Report these states independently,
 even when several are pending and even when Android and iOS differ:

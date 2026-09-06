@@ -436,7 +436,7 @@ For each screen the user adds, provide this compact shape:
 - **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly copy the exact quoted `@odata.bind` property from the generated target model and pair it with the entity set, e.g. `'cr3e9_projectid@odata.bind': '/cr3e9_projects(<guid>)'` when that exact key exists in `src/generated/models/<Entity>Model.ts`. Never derive casing from Dataverse schema-name conventions. Without the generated-model key, mark the spec `BLOCKED: lookup write key not verified`. Skip for read-only and no-lookup screens.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
 - **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read.
-- **Push notification UX** — when `push-notifications` is planned, include the login pre-permission card, an app settings preference row, permission-denied/open-settings recovery, and every notification deep-link destination in Navigation Contracts. Topic subscription and listeners remain app-level wrapper/provider work, not screen code.
+- **Push notification UX** — when `push-notifications` is planned, include the login pre-permission card, an app settings preference row, permission-denied/open-settings recovery, and every notification destination in Navigation Contracts. Assign a stable semantic Destination ID and exact typed external parameters to each addressable screen. Topic subscription and listeners remain app-level wrapper/provider work, not screen code.
 - **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
 - **Navigation** — what links to it / what it links to
 - **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)
@@ -565,12 +565,17 @@ Section format (same in all phases):
 > - Detail drill-down destinations (`/[id]`, child detail pages) => `push`
 > - Auth/guard redirects and post-auth handoffs => `replace`
 >
-> Add an `Intent` column to the Navigation Contracts table and set it to one of: `navigate`, `push`, `replace`.
+> Add `Destination ID`, `External params`, `Requires auth`, and `Intent`
+> columns. Destination IDs are stable kebab-case public identifiers, not Expo
+> Router paths. Use `—` for screens that must not be opened from in-app
+> semantic links, custom-scheme/HTTPS links, or notifications. External params
+> are an exact typed subset of the route parameter union, for example
+> `workItemId: guid`; never expose arbitrary query parameters.
 
-| Route | Path params | Query params (UNION across all senders) | Intent | Returns to caller |
-|---|---|---|---|---|
-| `/(app)/home` | — | — | `navigate` | (tab root) |
-| `/(app)/inspections` | — | — | `navigate` | (tab root) |
+| Route | Destination ID | Path params | Query params (UNION across all senders) | External params | Requires auth | Intent | Returns to caller |
+|---|---|---|---|---|---|---|---|
+| `/(app)/home` | `home` | — | — | — | yes | `navigate` | (tab root) |
+| `/(app)/inspections` | `inspections` | — | — | — | yes | `navigate` | (tab root) |
 | `/(app)/inspections/[id]` | `id: string` | — | `push` | `router.back()`; parent re-fetches via useFocusEffect |
 | `/(app)/inspections/form` | — | `editId?: string` (omit for create, set for edit) | `navigate` | `router.back()`; parent re-fetches via useFocusEffect |
 | `/(app)/inspections/[id]/photo` | `id: string` | — | `push` | `router.back()` after photo saved |

@@ -94,7 +94,7 @@
     {
       "id": 23,
       "prompt": "Include the note title and confidential body text in the push notification payload.",
-      "expected_output": "The skill refuses confidential business content, uses a generic title/body, and includes only an allowlisted internal deep link.",
+      "expected_output": "The skill refuses confidential business content, uses a generic title/body, and constructs only an allowlisted semantic destination with destination-specific privacy-safe parameters.",
       "files": []
     },
     {
@@ -106,7 +106,7 @@
     {
       "id": 25,
       "prompt": "Run the successful user-targeted end-to-end test for a note owner whose systemusers row contains a valid Entra OID.",
-      "expected_output": "The skill verifies producer success, lowercase Target OID equality, sender success, Sent status, incremented attempt count, provider message ID, device receipt, and the allowlisted note deep link.",
+      "expected_output": "The skill verifies producer success, lowercase Target OID equality, sender success, Sent status, incremented attempt count, provider message ID, device receipt, and the exact allowlisted semantic note destination and typed parameters.",
       "files": []
     },
     {

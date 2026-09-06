@@ -106,10 +106,71 @@ function completeClientIntegration(root) {
   writeFirebaseFile(root, 'firebase/google-services.json');
   writeFirebaseFile(root, 'firebase/GoogleService-Info.plist');
   fs.mkdirSync(path.join(root, 'src/native'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src/navigation'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src/navigation/linkContract.ts'), `
+import { router } from 'expo-router';
+
+export type NavigationResult =
+  | { ok: true; value: { schemaVersion: '1'; destination: 'notifications'; params: {} } }
+  | {
+      ok: false;
+      reason:
+        | 'unsupported-version'
+        | 'unknown-destination'
+        | 'invalid-params'
+        | 'unapproved-origin'
+        | 'malformed-link';
+    };
+
+export const parsePushNavigationIntent = (
+  data?: Record<string, string | undefined>,
+): NavigationResult => {
+  if (data?.schemaVersion !== '1') return { ok: false, reason: 'unsupported-version' };
+  if (data.destination !== 'notifications') return { ok: false, reason: 'unknown-destination' };
+  try {
+    const params = JSON.parse(data.params || '');
+    if (!params || Array.isArray(params) || Object.keys(params).length !== 0) {
+      return { ok: false, reason: 'invalid-params' };
+    }
+    return {
+      ok: true,
+      value: { schemaVersion: '1', destination: 'notifications', params: {} },
+    };
+  } catch {
+    return { ok: false, reason: 'malformed-link' };
+  }
+};
+
+export const parseNavigationUrl = (value: string): NavigationResult => {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'powerapps-standalone-app:' && url.origin !== 'https://mobile.contoso.com') {
+      return { ok: false, reason: 'unapproved-origin' };
+    }
+    return parsePushNavigationIntent({
+      schemaVersion: '1',
+      destination: url.pathname.split('/').filter(Boolean).at(-1),
+      params: '{}',
+    });
+  } catch {
+    return { ok: false, reason: 'malformed-link' };
+  }
+};
+
+export const navigateTo = (intent: {
+  schemaVersion: '1';
+  destination: 'notifications';
+  params: {};
+}): NavigationResult => {
+  router.navigate('/notifications');
+  return { ok: true, value: intent };
+};
+`);
   fs.writeFileSync(path.join(root, 'src/native/pushNotifications.ts'), `
 import * as Notifications from 'expo-notifications';
 import messaging from '@react-native-firebase/messaging';
 import { Linking, Platform } from 'react-native';
+import { parsePushNavigationIntent } from '../navigation/linkContract';
 
 export type PushResult =
   | { ok: true; value?: string }
@@ -119,25 +180,14 @@ export type PushResult =
         | 'unsupported'
         | 'permission-denied'
         | 'missing-oid'
-        | 'invalid-deep-link'
+        | 'unsupported-version'
+        | 'unknown-destination'
+        | 'invalid-params'
+        | 'unapproved-origin'
+        | 'malformed-link'
         | 'firebase-error'
         | 'notification-error';
     };
-
-const validateNotificationDeepLink = (value?: string): PushResult => {
-  if (!value || /^(?:https?|javascript):/i.test(value)) {
-    return { ok: false, reason: 'invalid-deep-link' };
-  }
-  try {
-    const decoded = decodeURIComponent(value);
-    if (decoded.includes('..') || !decoded.startsWith('/')) {
-      return { ok: false, reason: 'invalid-deep-link' };
-    }
-    return { ok: true, value: decoded };
-  } catch {
-    return { ok: false, reason: 'invalid-deep-link' };
-  }
-};
 
 export async function getPushPermissionState(): Promise<PushResult> {
   try {
@@ -208,13 +258,13 @@ export function registerNotificationHandlers(): () => void {
       }),
     });
     const unsubscribeForeground = messaging().onMessage(async (message) => {
-      validateNotificationDeepLink(message.data?.deepLink);
+      parsePushNavigationIntent(message.data);
     });
     const unsubscribeRefresh = messaging().onTokenRefresh(async () => {
       await syncPushTopic(null);
     });
     const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      validateNotificationDeepLink(response.notification.request.content.data.deepLink as string);
+      parsePushNavigationIntent(response.notification.request.content.data);
     });
     return () => {
       unsubscribeForeground();
@@ -227,21 +277,19 @@ export function registerNotificationHandlers(): () => void {
 }
 
 export async function handleBackgroundNotification(message: {
-  data?: { deepLink?: string };
+  data?: Record<string, string | undefined>;
 }): Promise<PushResult> {
   try {
-    return validateNotificationDeepLink(message.data?.deepLink);
+    return parsePushNavigationIntent(message.data);
   } catch {
     return { ok: false, reason: 'notification-error' };
   }
 }
 
-export async function consumeInitialNotificationDeepLink(): Promise<PushResult> {
+export async function consumeInitialNotificationIntent(): Promise<PushResult> {
   try {
     const response = await Notifications.getLastNotificationResponseAsync();
-    return validateNotificationDeepLink(
-      response?.notification.request.content.data.deepLink as string | undefined,
-    );
+    return parsePushNavigationIntent(response?.notification.request.content.data);
   } catch {
     return { ok: false, reason: 'notification-error' };
   }
@@ -424,7 +472,7 @@ export const syncPushTopic = async () => ({ ok: true });
 export const disablePushNotifications = async () => ({ ok: true });
 export const registerNotificationHandlers = () => () => {};
 export const handleBackgroundNotification = async () => ({ ok: true });
-export const consumeInitialNotificationDeepLink = async () => ({ ok: true });
+export const consumeInitialNotificationIntent = async () => ({ ok: true });
 `);
   assert.strictEqual(
     withEnvironment({}, () => main(['--project-root', root, '--strict-client-integration'])),
@@ -511,10 +559,10 @@ test('strict mode rejects dead native evidence and canned outcomes in required f
   } catch {
     return { ok: false, reason: 'firebase-error' };
   }`],
-    ['ignored cold-start response plus canned valid link', 'consumeInitialNotificationDeepLink', `
+    ['ignored cold-start response plus canned valid intent', 'consumeInitialNotificationIntent', `
   try {
     await Notifications.getLastNotificationResponseAsync();
-    return validateNotificationDeepLink('/notifications');
+    return parsePushNavigationIntent({ schemaVersion: '1', destination: 'notifications', params: '{}' });
   } catch {
     return { ok: false, reason: 'notification-error' };
   }`],
@@ -624,7 +672,7 @@ test('strict mode rejects every missing critical push integration category', () 
     ['background handling', (root) => {
       replaceInFile(
         wrapperPath(root),
-        'return validateNotificationDeepLink(message.data?.deepLink);',
+        'return parsePushNavigationIntent(message.data);',
         'return { ok: true };',
       );
     }],
@@ -642,8 +690,19 @@ test('strict mode rejects every missing critical push integration category', () 
         'readInitialResponse()',
       );
     }],
-    ['deep-link validation', (root) => {
-      replaceInFile(wrapperPath(root), 'decodeURIComponent(value)', 'value');
+    ['shared navigation contract', (root) => {
+      replaceInFile(
+        path.join(root, 'src/navigation/linkContract.ts'),
+        'export const parseNavigationUrl',
+        'const parseNavigationUrl',
+      );
+    }],
+    ['legacy deepLink field', (root) => {
+      replaceInFile(
+        wrapperPath(root),
+        'data?: Record<string, string | undefined>;',
+        'data?: Record<string, string | undefined> & { deepLink?: string };',
+      );
     }],
     ['non-throwing discriminated results', (root) => {
       replaceAllInFile(wrapperPath(root), "'unsupported'", "'not-supported'");

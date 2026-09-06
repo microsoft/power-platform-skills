@@ -187,7 +187,8 @@ Execute exactly one mode:
 - **WIF:** follow `push-flow-wif.md` exactly.
 - **Function endpoint:** invoke only the discovered secure operation/connection
   with `topic`, approved generic `title`/`body`, string `schemaVersion`,
-  allowlisted `deepLink`, and `validateOnly:false`. Include no Key Vault,
+  allowlisted semantic `destination`, canonical destination-specific `params`,
+  and `validateOnly:false`. Include no Key Vault,
   Entra/Google token exchange, impersonation, direct FCM, service-account JSON,
   generic HTTP, or fallback path.
 
@@ -202,7 +203,11 @@ supports clearing.
 The producer uses the confirmed Dataverse webhook and singular trigger table,
 resolves the recipient, and adds one row through the plural outbox entity set.
 Set `Audience=User`, lowercase OID, generic privacy-safe Title/Body, allowlisted
-internal Deep Link, Payload Version `1`, Status `Queued`, Attempt Count `0`.
+Destination, canonical Navigation Parameters, Payload Version `1`, Status
+`Queued`, and Attempt Count `0`. Producer inputs are destination-specific safe
+fields; never accept an arbitrary route, URL, href, or complete contract JSON.
+The sender revalidates the destination/parameters before delivery. Legacy
+`deepLink` rows and branches are rejected rather than used as fallback.
 Invalid recipients terminate without queuing and expose only a bounded reason.
 Never place record text, names, email, confidential fields, tokens, or secrets
 in the notification.

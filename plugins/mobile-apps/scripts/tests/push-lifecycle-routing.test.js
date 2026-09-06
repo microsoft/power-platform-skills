@@ -72,7 +72,7 @@ test('add-push owns runtime integration and reports platform states independentl
     'registration-token lifecycle',
     'topic synchronization',
     'listeners/background handling',
-    'validated deep links',
+    'shared typed navigation-intent integration',
   ]) {
     assert.ok(description.includes(responsibility), `description owns ${responsibility}`);
   }
@@ -131,13 +131,15 @@ test('lifecycle eval IDs append locally and cover manual auth plus Android routi
 
   assert.deepStrictEqual(
     addPush.evals.map(({ id }) => id),
-    Array.from({ length: 17 }, (_, index) => index + 1),
+    Array.from({ length: 18 }, (_, index) => index + 1),
   );
   assert.match(addPush.evals[14].expected_output, /to \/build-android/);
   assert.match(addPush.evals[14].expected_output, /then \/verify-android-push/);
   assert.match(addPush.evals[15].prompt, /exact sender flow ID/);
   assert.match(addPush.evals[15].expected_output, /never inspects credentials/);
   assert.match(addPush.evals[16].expected_output, /plugin physical verification unavailable/);
+  assert.match(addPush.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
+  assert.match(addPush.evals[17].expected_output, /without fallback navigation/);
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),

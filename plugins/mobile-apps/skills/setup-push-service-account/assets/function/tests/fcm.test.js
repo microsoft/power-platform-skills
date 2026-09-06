@@ -14,7 +14,8 @@ const request = {
   title: 'You have a new notification.',
   body: 'Open the app to view it.',
   schemaVersion: '1',
-  deepLink: '/notifications',
+  destination: 'notifications',
+  params: '{}',
   validateOnly: true,
 };
 
@@ -28,7 +29,8 @@ test('constructs the expected string-data FCM validate_only request', () => {
       },
       data: {
         schemaVersion: '1',
-        deepLink: '/notifications',
+        destination: 'notifications',
+        params: '{}',
       },
     },
     validate_only: true,

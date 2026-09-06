@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Add push notifications to this generated mobile app. Signed-out devices should receive allUsers broadcasts, signed-in devices should use the Entra OID as the FCM topic, and tapping a notification should open the work item detail route.",
-      "expected_output": "The skill verifies runtime packages and host OID support, configures permission UX, topic lifecycle, and validated Expo Router deep links, or blocks precisely on a missing prerequisite.",
+      "expected_output": "The skill verifies runtime packages and host OID support, configures permission UX and topic lifecycle, then generates a typed work-item-detail destination registry entry used by notification taps and Expo Router, or blocks precisely on a missing prerequisite.",
       "files": []
     },
     {
@@ -63,8 +63,8 @@
     },
     {
       "id": 11,
-      "prompt": "The user launches the terminated iOS app by tapping a notification that deep-links to a protected work item.",
-      "expected_output": "The provider consumes the Expo Notifications cold-start response once after router/auth readiness, validates it through the shared deep-link path, retains at most one pending destination through sign-in, and never navigates from the background handler or twice from duplicate response paths.",
+      "prompt": "The user launches the terminated iOS app by tapping a notification with schemaVersion 1, destination work-item-detail, and a typed workItemId parameter.",
+      "expected_output": "The provider consumes the Expo Notifications cold-start response once after router/auth readiness, validates it through the shared semantic navigation parser, retains at most one validated pending intent through sign-in, and never navigates from the background handler or twice from duplicate response paths.",
       "files": []
     },
     {
@@ -101,6 +101,12 @@
       "id": 17,
       "prompt": "Our customer-owned sender is a hosted non-Flow endpoint, not a Power Automate sender flow. Record it and proceed with plugin physical push verification.",
       "expected_output": "The skill records only a non-secret immutable endpoint identifier with customer-owned non-Flow endpoint / plugin physical verification unavailable, keeps producer-only state distinct, and blocks plugin physical verification because FlowAgent cannot read back or correlate an exact sender flow.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "Use one work-item destination for in-app buttons, the custom scheme, our approved HTTPS domain, and notification taps. Reject old deepLink payloads and unknown destinations without opening another screen.",
+      "expected_output": "The skill creates one typed semantic destination registry and shared parser/dispatcher for all four sources, configures only the exact approved scheme and HTTPS origin, separates parser/native/association/physical verification states, rejects legacy or stale intents without fallback navigation, and keeps Expo Router as the sole executor.",
       "files": []
     }
   ]

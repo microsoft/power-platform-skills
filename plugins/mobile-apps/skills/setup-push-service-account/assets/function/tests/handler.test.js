@@ -7,7 +7,9 @@ const { CredentialError } = require('../src/credentials');
 
 const policy = {
   firebaseProjectId: 'contoso-mobile-prod',
-  deepLinkPrefixes: ['/notifications'],
+  navigationDestinations: {
+    notifications: {},
+  },
   titles: ['You have a new notification.'],
   bodies: ['Open the app to view it.'],
 };
@@ -21,7 +23,8 @@ const valid = {
   title: 'You have a new notification.',
   body: 'Open the app to view it.',
   schemaVersion: '1',
-  deepLink: '/notifications',
+  destination: 'notifications',
+  params: '{}',
   validateOnly: true,
 };
 

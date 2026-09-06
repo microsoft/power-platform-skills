@@ -11,13 +11,16 @@ runtime integration; it does not make Firebase setup, manual platform setup,
 sender authentication, flows, wrapped builds, installation, or physical
 delivery part of `/add-push-notifications`.
 
+Presentation-ready architecture diagrams:
+[push-notifications-architecture-diagrams.md](./push-notifications-architecture-diagrams.md).
+
 ## Native ownership
 
 - `@react-native-firebase/messaging` owns FCM registration tokens, token refresh,
   topic subscription, and foreground/background transport on Android and iOS.
 - `expo-notifications` owns permission requests, Android channels, foreground
   presentation, and notification-response handling.
-- `expo-router` owns navigation after a notification response is validated.
+- `expo-router` owns navigation after the shared semantic intent is validated.
 - Screens import only `src/native/pushNotifications.ts`. They never import either
   notification package directly.
 
@@ -117,34 +120,37 @@ FCM topic names are case-sensitive, while GUID comparison is not. Normalize the
 validated OID to lowercase in both the client wrapper and sender flow; do not
 otherwise hash, prefix, or transform it.
 
-## Payload and deep links
+## Payload and navigation intents
 
-Use data strings only:
+Follow
+[navigation-link-contract.md](./navigation-link-contract.md) exactly. Push,
+custom-scheme, HTTPS, and in-app navigation use the same semantic destination
+registry and Expo Router dispatcher.
+
+Use FCM data strings only:
 
 ```json
 {
   "schemaVersion": "1",
-  "deepLink": "/(app)/work-items/00000000-0000-0000-0000-000000000000"
+  "destination": "work-item-detail",
+  "params": "{\"workItemId\":\"00000000-0000-0000-0000-000000000000\"}"
 }
 ```
 
-Accept only:
-
-- an internal route beginning with `/`
-- the app's configured custom scheme
-
-Reject `http:`, `https:`, `javascript:`, encoded traversal, unknown route
-versions, and malformed values. If auth is not ready, retain one pending
-destination. Protected links opened while signed out route to login and resume
-after sign-in. Invalid or stale links route to a safe notification fallback
-screen.
+This is a deliberate breaking replacement for the former version-1 `deepLink`
+shape. Reject legacy `deepLink`, unknown destinations, extra or malformed
+parameters, unapproved schemes/origins, and stale registry mappings without
+navigating to a fallback screen. If auth is not ready, retain one validated
+pending intent. Protected destinations opened while signed out route to login
+and resume once after sign-in.
 
 Use the Expo Notifications response APIs for both warm and cold starts. The
 provider registers one `addNotificationResponseReceivedListener` for warm
 responses and consumes `getLastNotificationResponseAsync()` once after router
-and auth readiness for a cold-start response. Run both paths through the same
-payload validator and one pending-destination guard so a response cannot
-navigate twice. Do not navigate from `setBackgroundMessageHandler`.
+and auth readiness for a cold-start response. Run both paths through the shared
+navigation parser and one pending-intent/deduplication guard so a response
+cannot navigate twice. Foreground/background message handlers may validate the
+contract but do not navigate from `setBackgroundMessageHandler`.
 
 ## Required wrapper surface
 
@@ -157,7 +163,7 @@ navigate twice. Do not navigate from `setBackgroundMessageHandler`.
 - `disablePushNotifications`
 - `registerNotificationHandlers`
 - `handleBackgroundNotification`
-- `consumeInitialNotificationDeepLink`
+- `consumeInitialNotificationIntent`
 
 Generated implementations use these stable imports:
 
@@ -207,5 +213,6 @@ Expo-to-client package/bundle identity, memory handoff agreement when recorded,
 and one shared Firebase project across active Android/iOS files.
 
 Return discriminated unions with explicit `unsupported`, `permission-denied`,
-`missing-oid`, `invalid-deep-link`, `firebase-error`, and `notification-error`
-reasons.
+`missing-oid`, `unsupported-version`, `unknown-destination`, `invalid-params`,
+`unapproved-origin`, `malformed-link`, `firebase-error`, and
+`notification-error` reasons.

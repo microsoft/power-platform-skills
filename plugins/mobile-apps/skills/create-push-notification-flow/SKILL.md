@@ -15,6 +15,8 @@ smoke-test gates.
 
 **Outbox schema: [push-notification-outbox.md](${PLUGIN_ROOT}/shared/references/push-notification-outbox.md)**.
 
+**Navigation contract: [navigation-link-contract.md](${PLUGIN_ROOT}/shared/references/navigation-link-contract.md)**.
+
 **WIF runtime protocol: [push-flow-wif.md](${PLUGIN_ROOT}/shared/references/push-flow-wif.md)**.
 
 **Sender-auth handoff: [sender-auth-contract.md](${PLUGIN_ROOT}/shared/references/sender-auth-contract.md)**.
@@ -112,7 +114,10 @@ Execute Section 3 of the authoring reference. Create a missing outbox only via
 logical names, plural entity sets, actual choice integers, and `systemusers`;
 never guess them.
 
-Ask the grouped producer question from the reference. Default to Dataverse row
+Ask the grouped producer question from the reference, including one approved
+semantic Destination and its destination-specific safe parameter fields from
+the app's navigation registry. Never ask for or accept an arbitrary route,
+URL, href, or complete navigation-contract JSON. Default to Dataverse row
 created and owner-based resolution only when unspecified. `ownerid` is not an
 Entra OID: resolve `systemusers.azureactivedirectoryobjectid`, GUID-validate,
 and lowercase it. Team/missing/ambiguous owners must skip or fail, never route
@@ -140,8 +145,12 @@ because topic membership is not an authorization boundary.
 
 The producer uses `OpenApiConnectionWebhook`, singular trigger `entityname`,
 plural action `entityName`, and plural `systemusers` for owner lookup. It
-queues Payload Version `1`, Status `Queued`, and Attempt Count `0`, with no
-confidential record content.
+validates safe parameter fields, constructs canonical sorted parameter JSON,
+and queues Payload Version `1`, the allowlisted Destination, Navigation
+Parameters, Status `Queued`, and Attempt Count `0`, with no confidential
+record content. The sender revalidates the same contract and sends only
+`schemaVersion`, `destination`, and `params`; a legacy `deepLink` branch is a
+blocker.
 
 ### 6. Validate, mutate, read back, and recover
 

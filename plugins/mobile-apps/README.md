@@ -203,7 +203,15 @@ For other capabilities (only those actually shipped by the template):
 > /add-native sharing           # expo-sharing wrapper
 ```
 
-Native modules are allowlist-bound by the current template `package.json`. Push notifications use the dedicated `/add-push-notifications` workflow because they require `expo-notifications`, React Native Firebase Messaging, permission UX, auth/topic lifecycle, and Expo Router deep links.
+Native modules are allowlist-bound by the current template `package.json`.
+Push notifications use the dedicated `/add-push-notifications` workflow
+because they require `expo-notifications`, React Native Firebase Messaging,
+permission UX, auth/topic lifecycle, and a typed semantic navigation contract.
+That contract uses Expo Router and is shared by in-app actions, the configured
+custom scheme, approved HTTPS App Links/Universal Links, and notification taps.
+See
+[`shared/references/push-notifications-architecture-diagrams.md`](./shared/references/push-notifications-architecture-diagrams.md)
+for app, Power Automate, WIF, MCP ownership, and unified navigation diagrams.
 
 Notification delivery must be tested on matching wrapped physical-device
 builds. Native client setup, sender authentication, and Power Automate flow
@@ -442,7 +450,7 @@ Example edit flows:
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
-| `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
+| `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and one typed destination registry shared by in-app navigation, custom-scheme/HTTPS links, and push taps through Expo Router. HTTPS OS association remains customer-owned and separately verified. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
 | `/setup-fcm` | 🟡 preview | Official MCP-first Firebase owner — uses the vendor-official Firebase MCP to list/select/create Firebase projects, idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. No CLI fallback. |
 | `/setup-apns` | 🟡 preview | After `/setup-apple-ios`, confirm the selected Firebase iOS identity and guide the supported manual APNs `.p8` upload in Firebase Console; no supported CLI/API upload exists and the agent never handles the key. |
 | `/setup-apple-ios` | 🟡 preview | Manual Apple Developer and Xcode guidance for the exact Team, explicit bundle identifier, Push Notifications capability, registered test devices, and development/ad-hoc signing choice. Requires explicit safe confirmation before each user-performed change; does not automate Apple configuration, generate proof artifacts, or build. |

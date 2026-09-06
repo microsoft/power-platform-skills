@@ -21,7 +21,8 @@ ready, their implementation must:
    embedding credentials in the flow definition.
 2. Send only to the Firebase project already bound to the active mobile client.
 3. Accept the approved routing and privacy-safe payload fields: topic, generic
-   title/body, string `schemaVersion`, and allowlisted internal `deepLink`.
+   title/body, string `schemaVersion`, allowlisted semantic `destination`, and
+   canonical destination-specific `params`.
 4. Protect secret-bearing inputs/outputs and never log tokens, authorization
    headers, credentials, confidential payloads, or raw provider responses.
 5. Map success and bounded sanitized failures back to the outbox, preserving

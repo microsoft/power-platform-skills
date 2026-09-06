@@ -6,7 +6,7 @@
     "KEY_VAULT_URL": "https://replace-me.vault.azure.net/",
     "FIREBASE_SERVICE_ACCOUNT_SECRET_NAME": "existing-firebase-service-account",
     "FIREBASE_PROJECT_ID": "replace-me",
-    "ALLOWED_DEEP_LINK_PREFIXES": "[\"/(app)/\",\"/notifications\"]",
+    "ALLOWED_NAVIGATION_DESTINATIONS": "{\"notifications\":{},\"work-item-detail\":{\"workItemId\":{\"type\":\"guid\",\"required\":true}}}",
     "ALLOWED_NOTIFICATION_TITLES": "[\"You have a new notification.\"]",
     "ALLOWED_NOTIFICATION_BODIES": "[\"Open the app to view it.\"]"
   }

@@ -697,6 +697,15 @@ function listSourceFiles(directory) {
 }
 
 function validateStrictClientIntegration(root) {
+  const navigation = resolveRegularProjectFile(
+    root,
+    'src/navigation/linkContract.ts',
+    'shared navigation contract module',
+    true,
+  );
+  const navigationSource = stripJavaScriptComments(
+    fs.readFileSync(navigation.absolutePath, 'utf8'),
+  );
   const wrapper = resolveRegularProjectFile(
     root,
     'src/native/pushNotifications.ts',
@@ -712,7 +721,7 @@ function validateStrictClientIntegration(root) {
     'disablePushNotifications',
     'registerNotificationHandlers',
     'handleBackgroundNotification',
-    'consumeInitialNotificationDeepLink',
+    'consumeInitialNotificationIntent',
   ];
   const missingExports = requiredExports.filter((name) => !new RegExp(
     `\\bexport\\s+(?:async\\s+)?(?:function|const)\\s+${name}\\b`,
@@ -730,7 +739,68 @@ function validateStrictClientIntegration(root) {
       pattern: /\bimport\s+messaging\s+from\s+['"]@react-native-firebase\/messaging['"]/,
       description: 'the generated default `messaging` import from @react-native-firebase/messaging',
     },
+    {
+      pattern: /\bimport\s*\{[^}]*\bparsePushNavigationIntent\b[^}]*\}\s*from\s*['"][^'"]*navigation\/linkContract['"]/,
+      description: 'the shared push navigation-intent parser import',
+    },
   ], 'generated push wrapper');
+
+  requireEvidence(navigationSource, [
+    {
+      pattern: /\bexport\s+(?:function|const)\s+parsePushNavigationIntent\b/,
+      description: 'the push navigation-intent parser',
+    },
+    {
+      pattern: /\bexport\s+(?:function|const)\s+parseNavigationUrl\b/,
+      description: 'the custom-scheme/HTTPS URL parser',
+    },
+    {
+      pattern: /\bexport\s+(?:function|const)\s+navigateTo\b/,
+      description: 'the typed in-app navigation helper',
+    },
+    {
+      pattern: /\bschemaVersion\b/,
+      description: 'schema-version validation',
+    },
+    {
+      pattern: /\bdestination\b/,
+      description: 'semantic destination validation',
+    },
+    {
+      pattern: /\bparams\b/,
+      description: 'typed navigation parameter validation',
+    },
+    {
+      pattern: /\brouter\.(?:navigate|push|replace)\s*\(/,
+      description: 'Expo Router navigation execution',
+    },
+    {
+      pattern: /unsupported-version/,
+      description: 'unsupported-version rejection',
+    },
+    {
+      pattern: /unknown-destination/,
+      description: 'unknown-destination rejection',
+    },
+    {
+      pattern: /invalid-params/,
+      description: 'invalid-params rejection',
+    },
+    {
+      pattern: /unapproved-origin/,
+      description: 'unapproved-origin rejection',
+    },
+    {
+      pattern: /malformed-link/,
+      description: 'malformed-link rejection',
+    },
+  ], 'shared navigation contract module');
+  if (/\bdeepLink\b/.test(navigationSource)) {
+    throw new Error('shared navigation contract module must reject the legacy deepLink shape.');
+  }
+  if (/\bdeepLink\b/.test(wrapperSource)) {
+    throw new Error('generated push wrapper must not read or emit the legacy deepLink field.');
+  }
 
   const permissionState = requireNonThrowingBody(wrapperSource, 'getPushPermissionState');
   requireEvidence(permissionState.masked, [
@@ -877,7 +947,7 @@ function validateStrictClientIntegration(root) {
     { pattern: /\breturn\s*\(\s*\)\s*=>\s*\{/, description: 'listener cleanup function' },
   ], 'registerNotificationHandlers');
   const handlerValidationCount = (
-    handlers.masked.match(/\bvalidateNotificationDeepLink\s*\(/g) || []
+    handlers.masked.match(/\bparsePushNavigationIntent\s*\(/g) || []
   ).length;
   if (handlerValidationCount < 2) {
     throw new Error(
@@ -892,7 +962,7 @@ function validateStrictClientIntegration(root) {
 
   const background = requireNonThrowingBody(wrapperSource, 'handleBackgroundNotification');
   requireEvidence(background.masked, [
-    { pattern: /\bvalidateNotificationDeepLink\s*\(/, description: 'background payload validation' },
+    { pattern: /\bparsePushNavigationIntent\s*\(/, description: 'background payload validation' },
   ], 'handleBackgroundNotification');
   if (/\b(?:router|navigation)\s*\./.test(background.masked)) {
     throw new Error('handleBackgroundNotification must never navigate.');
@@ -900,52 +970,43 @@ function validateStrictClientIntegration(root) {
   requireDiscriminatedOutcome(
     background.body,
     'handleBackgroundNotification',
-    ['validateNotificationDeepLink'],
+    ['parsePushNavigationIntent'],
   );
 
   const coldStart = requireNonThrowingBody(
     wrapperSource,
-    'consumeInitialNotificationDeepLink',
+    'consumeInitialNotificationIntent',
   );
   requireEvidence(coldStart.masked, [
     {
       pattern: /\bNotifications\.getLastNotificationResponseAsync\s*\(/,
       description: 'cold-start response consumption',
     },
-    { pattern: /\bvalidateNotificationDeepLink\s*\(/, description: 'cold-start deep-link validation' },
-  ], 'consumeInitialNotificationDeepLink');
+    { pattern: /\bparsePushNavigationIntent\s*\(/, description: 'cold-start navigation-intent validation' },
+  ], 'consumeInitialNotificationIntent');
   requireAssignedCallInfluence(
     coldStart.masked,
     /Notifications\.getLastNotificationResponseAsync\s*\(/,
     'cold-start response query',
-    'consumeInitialNotificationDeepLink',
+    'consumeInitialNotificationIntent',
   );
   requireDiscriminatedOutcome(
     coldStart.body,
-    'consumeInitialNotificationDeepLink',
-    ['validateNotificationDeepLink'],
+    'consumeInitialNotificationIntent',
+    ['parsePushNavigationIntent'],
   );
 
-  requireEvidence(wrapperSource, [
-    {
-      pattern: /\bfunction\s+validateNotificationDeepLink\b|\bconst\s+validateNotificationDeepLink\s*=/,
-      description: 'a shared deep-link validator',
-    },
-    { pattern: /\bdecodeURIComponent\s*\(/, description: 'encoded-path validation' },
-    { pattern: /\.startsWith\s*\(\s*['"]\/['"]\s*\)/, description: 'internal-route allowlisting' },
-    {
-      pattern: /https\?|https|javascript/,
-      description: 'external/javascript scheme rejection',
-    },
-    { pattern: /['"]\.\.['"]/, description: 'decoded traversal rejection' },
-  ], 'generated push wrapper');
   requireEvidence(wrapperSource, [
     { pattern: /\bok\s*:\s*true\b/, description: 'successful discriminant' },
     { pattern: /\bok\s*:\s*false\b/, description: 'failure discriminant' },
     { pattern: /['"]unsupported['"]/, description: 'unsupported result reason' },
     { pattern: /['"]permission-denied['"]/, description: 'permission-denied result reason' },
     { pattern: /['"]missing-oid['"]/, description: 'missing-oid result reason' },
-    { pattern: /['"]invalid-deep-link['"]/, description: 'invalid-deep-link result reason' },
+    { pattern: /['"]unsupported-version['"]/, description: 'unsupported-version result reason' },
+    { pattern: /['"]unknown-destination['"]/, description: 'unknown-destination result reason' },
+    { pattern: /['"]invalid-params['"]/, description: 'invalid-params result reason' },
+    { pattern: /['"]unapproved-origin['"]/, description: 'unapproved-origin result reason' },
+    { pattern: /['"]malformed-link['"]/, description: 'malformed-link result reason' },
     { pattern: /['"]firebase-error['"]/, description: 'firebase-error result reason' },
     { pattern: /['"]notification-error['"]/, description: 'notification-error result reason' },
   ], 'generated push wrapper discriminated result contract');

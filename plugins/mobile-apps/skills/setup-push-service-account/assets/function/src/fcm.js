@@ -14,7 +14,8 @@ function buildFcmRequest(request) {
       },
       data: {
         schemaVersion: request.schemaVersion,
-        deepLink: request.deepLink,
+        destination: request.destination,
+        params: request.params,
       },
     },
     validate_only: request.validateOnly,

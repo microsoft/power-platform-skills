@@ -311,7 +311,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
   assert.deepStrictEqual(
     orchestration.evals.map(({ id }) => id),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
   );
 
   const skill = require('node:fs').readFileSync(
@@ -333,6 +333,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.match(readme, /premium connector/);
   assert.match(agents, /WIF is the preferred sender authentication/);
   assert.match(agents, /managed identity reads the existing Firebase JSON from Azure Key Vault/);
+  assert.match(orchestration.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
 });
 
 test('iOS push orchestration reports stage ownership without duplicating build or verification', () => {
