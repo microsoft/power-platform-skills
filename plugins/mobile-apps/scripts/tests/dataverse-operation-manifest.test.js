@@ -45,7 +45,7 @@ function column(logicalName, type = 'String', overrides = {}) {
       precision: 2,
     },
     File: { maxSizeInKB: 32768 },
-    Image: { maxHeight: 1440, maxWidth: 1440 },
+    Image: { maxHeight: 144, maxWidth: 144, maxSizeInKB: 10240, canStoreFullImage: true },
     Integer: { minValue: -2147483648, maxValue: 2147483647, format: 'None' },
     Memo: { maxLength: 10000, format: 'TextArea' },
     Money: {
@@ -1096,8 +1096,8 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
         contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
         contractColumn('cr1_document', 'file', 'create', { maxSizeInKB: 32768 }),
         contractColumn('cr1_photo', 'image', 'create', {
-          maxHeight: 1440,
-          maxWidth: 1440,
+          maxSizeInKB: 10240,
+          canStoreFullImage: true,
         }),
       ]),
     ],
@@ -1110,8 +1110,10 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
     }),
     column('cr1_photo', 'Virtual', {
       typeName: 'ImageType',
-      maxHeight: 1440,
-      maxWidth: 1440,
+      maxHeight: 144,
+      maxWidth: 144,
+      maxSizeInKB: 10240,
+      canStoreFullImage: true,
     }),
   ]);
   const manifest = buildManifest(buildInputs(contract, snapshot({
@@ -1145,6 +1147,70 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
     assert.equal(mismatch.executable, false);
     assert.equal(mismatch.summary.metadataOperationCount, 0);
   }
+});
+
+test('existing image full-size configuration is repaired once with a full-definition PUT', () => {
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'extend', 0, [
+      contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+      contractColumn('cr1_photo', 'image', 'create', {
+        maxSizeInKB: 10240,
+        canStoreFullImage: true,
+      }),
+    ])],
+  };
+  const imageDefinition = {
+    MetadataId: '11111111-1111-1111-1111-111111111111',
+    LogicalName: 'cr1_photo',
+    SchemaName: 'cr1_photo',
+    AttributeType: 'Virtual',
+    AttributeTypeName: { Value: 'ImageType' },
+    RequiredLevel: { Value: 'None' },
+    MaxHeight: 144,
+    MaxWidth: 144,
+    MaxSizeInKB: 10240,
+    CanStoreFullImage: false,
+  };
+  const existing = table('cr1_item', [
+    column('cr1_name', 'String', { primaryName: true }),
+    column('cr1_photo', 'Virtual', {
+      metadataId: imageDefinition.MetadataId,
+      typeName: 'ImageType',
+      sourceType: null,
+      customizable: true,
+      maxHeight: 144,
+      maxWidth: 144,
+      maxSizeInKB: 10240,
+      canStoreFullImage: false,
+      imageUpdateDefinition: imageDefinition,
+    }),
+  ]);
+  const repair = buildManifest(buildInputs(contract, snapshot({ tables: [existing] })));
+  const update = repair.execution.phases[1].operations[0];
+
+  assert.equal(repair.executable, true);
+  assert.equal(repair.summary.metadataOperationCount, 2);
+  assert.equal(update.id, 'configure-image:cr1_item:cr1_photo');
+  assert.equal(update.method, 'PUT');
+  assert.equal(
+    update.apiPath,
+    "EntityDefinitions(LogicalName='cr1_item')/Attributes(LogicalName='cr1_photo')",
+  );
+  assert.equal(update.body.MetadataId, imageDefinition.MetadataId);
+  assert.equal(update.body.CanStoreFullImage, true);
+  assert.equal(update.body.MaxHeight, 144);
+  assert.equal(update.body.MaxWidth, 144);
+  assert.equal(repair.execution.phases[4].operations.length, 1);
+
+  const configured = structuredClone(existing);
+  const configuredImage = configured.columns.find((item) => item.logicalName === 'cr1_photo');
+  configuredImage.canStoreFullImage = true;
+  configuredImage.imageUpdateDefinition.CanStoreFullImage = true;
+  const rerun = buildManifest(buildInputs(contract, snapshot({ tables: [configured] })));
+  assert.equal(rerun.executable, true);
+  assert.equal(rerun.summary.metadataOperationCount, 0);
 });
 
 test('mechanical reconciliation never changes approved architecture decisions', () => {
