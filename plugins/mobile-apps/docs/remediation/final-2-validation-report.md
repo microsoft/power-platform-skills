@@ -56,30 +56,6 @@ The parser now derives the required status from all proposal decision-bearing
 surfaces. Regression coverage rejects both a defer-containing `DONE` proposal
 and a create-only `DONE_WITH_CONCERNS` proposal.
 
-### Template dependency duplication
-
-The template dependency graph contained avoidable duplicate native/runtime
-packages:
-
-- `burnt@0.12.2` brought a nested React DOM 18 through its older `sonner`
-  dependency.
-- Microsoft native-host subpackages use a broad
-  `expo-modules-core >=55.0.23` range, which allowed npm to select the SDK 57
-  package beside Expo SDK 55.
-- Older Expo patch pins caused nested duplicate SDK 55 modules under `expo`.
-
-The template now:
-
-- uses the latest published compatible Expo SDK 55 patch packages available
-  during validation;
-- uses React Native `0.83.10`;
-- uses `burnt@0.13.0`, which resolves to React DOM 19; and
-- overrides `expo-modules-core` to Expo SDK 55's `55.0.25`.
-
-The final installed tree contains one React DOM version and one
-`expo-modules-core` version. Android and iOS exports and codegen bundles pass
-with this graph.
-
 ## Automated test matrix
 
 | Validation | Result |
@@ -156,8 +132,8 @@ the harness never represented a live environment operation as successful.
 
 ## Fresh template runtime validation
 
-A clean copy of `plugins/mobile-apps/template` was installed with Node 22 and
-1,057 packages. The following passed:
+A clean copy of `plugins/mobile-apps/template` was installed with Node 22. The
+following passed:
 
 - all native-host configuration export resolutions;
 - deterministic template preparation;
@@ -174,19 +150,34 @@ A clean copy of `plugins/mobile-apps/template` was installed with Node 22 and
 
 ### Expo Doctor
 
-Expo Doctor passed 19 of 20 checks. The duplicate-native-dependency check now
-passes. The remaining package-version check reports four items:
+The merged template dependency versions were intentionally left unchanged.
+Expo Doctor passed 18 of 20 checks and reports two categories of residual
+findings.
+
+Duplicate dependency findings:
+
+| Package | Cause |
+|---|---|
+| `react-dom` | `burnt@0.12.2` brings React DOM 18 through `sonner`, while the template uses React DOM 19 |
+| `expo-modules-core` | Current Microsoft native-host subpackages can resolve SDK 57's package alongside Expo SDK 55 |
+| Expo SDK modules | Older direct patch pins can coexist with newer copies nested under `expo` |
+
+Package-version findings include:
 
 | Package | Reported condition |
 |---|---|
-| `expo` | Doctor requests `~55.0.31`; `55.0.30` was the latest published SDK 55 package during validation |
-| `expo-dev-client` | Doctor requests `~55.0.40`; `55.0.39` was the latest published SDK 55 package during validation |
+| `expo` | Doctor requests an unpublished newer SDK 55 patch |
+| `expo-dev-client` | Doctor requests an unpublished newer SDK 55 patch |
 | `react-native-get-random-values` | Doctor expects the older `~1.11.0` line while the template uses published `2.0.0` |
 | `@react-navigation/drawer` | Doctor reports `7.13.9` against `^7.9.4`, although the installed version satisfies that range |
 
-`npx expo install --fix` cannot currently resolve the first two items because
-the requested patches are not published. These warnings did not prevent
-TypeScript, Android export, iOS export, or either codegen bundle.
+These findings did not prevent TypeScript, Android export, iOS export, or
+either codegen bundle. They should be resolved in the canonical template
+update rather than independently changing this integration branch. The
+recommended template follow-up is to evaluate the latest compatible Expo SDK
+55 patches, `burnt@0.13.0`, and an SDK-55-compatible
+`expo-modules-core` resolution together, then publish them as one tested
+template update.
 
 ### Production dependency audit
 
@@ -228,7 +219,7 @@ stop before their live write boundaries.
 ## Conclusion
 
 The final branch state is suitable for pull-request review and non-live
-release validation. All discovered plugin-owned defects were fixed with
-regression coverage, the template builds for both platforms, and the remaining
-items are upstream package metadata, dependency advisory, or live-environment
-validation boundaries rather than unhandled Mobile Apps workflow failures.
+release validation. All discovered workflow-owned defects were fixed with regression coverage.
+The unchanged merged template builds for both platforms. Its dependency
+findings remain documented for a coordinated canonical-template update rather
+than being changed only on this integration branch.
