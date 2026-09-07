@@ -98,7 +98,7 @@ connector wiring.
     so `/debug-app` works after switching between VS Code, Copilot CLI, and
     Claude Code without asking for a terminal ID.
 
-	To start Metro manually instead, run the command below from the app directory.
+    To start Metro manually instead, run the command below from the app directory.
     Manual starts and `/debug-app` use the same `.powernative` log source.
 
     ```bash
