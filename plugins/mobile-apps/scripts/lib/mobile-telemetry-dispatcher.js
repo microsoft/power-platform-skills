@@ -9,7 +9,8 @@ const path = require('node:path');
 
 const { FIELD_TYPES, pick } = require('./telemetry/lib/events');
 const { appendLocal, pluginLogDir } = require('./telemetry/lib/local-log');
-const { findAppInstanceId } = require('./app-identity');
+const { findAppInstanceId, readTelemetryCluster } = require('./app-identity');
+const { resolveClusterEnvironment } = require('./telemetry/region/region-resolver');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const {
   isTransmissionOptedOut,
@@ -42,6 +43,24 @@ function readPriorEvents(projectRoot, env = process.env) {
     }
   } catch { /* Missing or pruned logs must not block environment resolution. */ }
   return records.sort((first, second) => Date.parse(first.time) - Date.parse(second.time));
+}
+
+async function prepareTelemetryBatch(projectRoot, env, environment = null) {
+  // Snapshot before resolution can publish a cluster, excluding events sent afterward.
+  const replay = readTelemetryCluster(projectRoot) ? [] : readPriorEvents(projectRoot, env);
+  const cluster = await resolveClusterEnvironment(projectRoot, environment);
+  return { cluster, replay: cluster ? replay : [] };
+}
+
+async function flushPriorEvents(projectRoot, environment, env = process.env) {
+  const { cluster, replay } = await prepareTelemetryBatch(projectRoot, env, environment);
+  if (!cluster || !replay.length) return;
+  fireAndForget({ data: { pluginName: 'mobile-app' }, replay }, {
+    projectRoot, env,
+    configDir: env.POWER_PLATFORM_SKILLS_CONFIG_DIR,
+    ikeyJsonPath: env.POWER_PLATFORM_SKILLS_IKEY_JSON,
+    fakeProbe: env.POWER_PLATFORM_SKILLS_FAKE_HTTPS,
+  });
 }
 
 function fireAndForget(event, opts = {}) {
@@ -174,17 +193,25 @@ async function dispatch(raw, env) {
   }
   if (isTransmissionOptedOut(configDir, data.pluginName, env)) return;
 
+  let records = Array.isArray(event.replay) ? event.replay : [{ data, time }];
   let iKey = '';
   let collectorUrl = '';
   const resolver = loadResolver(path.dirname(configPath));
   if (resolver && typeof resolver.resolve === 'function') {
     try {
-      // Routing reads only the cluster saved in app.json by environment resolution.
+      let cluster;
+      if (data.pluginName === 'mobile-app') {
+        const batch = await prepareTelemetryBatch(env.POWER_PLATFORM_SKILLS_PROJECT_ROOT || '', env);
+        cluster = batch.cluster;
+        if (!cluster) return;
+        if (!Array.isArray(event.replay) && batch.replay.length) records = batch.replay;
+      }
       const resolved = await resolver.resolve({
         event,
         cfg,
         configDir,
         projectRoot: env.POWER_PLATFORM_SKILLS_PROJECT_ROOT || '',
+        cluster,
       });
       iKey = resolved && resolved.iKey || '';
       collectorUrl = resolved && resolved.collectorUrl || '';
@@ -197,7 +224,6 @@ async function dispatch(raw, env) {
   }
   if (!iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl) return;
 
-  const records = Array.isArray(event.replay) ? event.replay : [{ data, time }];
   if (!records.length) return;
   const body = records.map(record => JSON.stringify(
     buildEnvelope(sanitizeData(record.data), record.time, iKey, cfg.event_stream_name),
@@ -262,4 +288,5 @@ module.exports = {
   buildNormalEventData,
   fireAndForget,
   readPriorEvents,
+  flushPriorEvents,
 };

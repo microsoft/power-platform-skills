@@ -2,10 +2,11 @@
 
 const { resolve: resolveRegion } = require("./region/region-resolver");
 
-function resolve({ cfg, projectRoot }) {
+function resolve({ cfg, projectRoot, cluster }) {
   return resolveRegion({
     projectRoot: projectRoot || "",
     regionsMap: (cfg && cfg.regions) || {},
+    cluster,
   });
 }
 

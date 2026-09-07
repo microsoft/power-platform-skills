@@ -1,9 +1,12 @@
 "use strict";
 
 const appIdentity = require("../../app-identity");
+const { resolveEnvironment } = require("../../environment-resolution");
 
+// BAP's `unitedstatesfirstrelease` is the public Preview (United States) region.
+// See: https://learn.microsoft.com/en-us/power-platform/admin/preview-environments
 const PUBLIC_US_GEOS = new Set(["us", "br", "jp", "in", "au", "ca", "as", "za", "ae", "kr",
-  "unitedstates", "southamerica", "brazil", "japan", "india", "australia", "canada", "asia", "southafrica", "unitedarabemirates", "uae", "korea"]);
+  "unitedstates", "unitedstatesfirstrelease", "southamerica", "brazil", "japan", "india", "australia", "canada", "asia", "southafrica", "unitedarabemirates", "uae", "korea"]);
 const PUBLIC_EU_GEOS = new Set(["eu", "uk", "de", "fr", "no", "ch", "europe", "unitedkingdom",
   "germany", "france", "norway", "switzerland", "sweden", "poland", "italy"]);
 
@@ -27,14 +30,32 @@ function entryFromMap(regionsMap, cluster) {
   return { region: cluster, iKey: entry.instrumentation_key, collectorUrl: entry.collector_url };
 }
 
-async function resolve({ projectRoot, regionsMap }) {
+async function resolveClusterEnvironment(projectRoot, resolvedEnvironment = null) {
   if (!projectRoot) return null;
   try {
-    const cluster = appIdentity.readTelemetryCluster(projectRoot);
-    return cluster ? entryFromMap(regionsMap, cluster) : null;
+    const savedCluster = appIdentity.readTelemetryCluster(projectRoot);
+    if (savedCluster) return savedCluster;
+    const environment = resolvedEnvironment || await resolveEnvironment(null, projectRoot);
+    const cluster = environment?.clusterEnvironment && environment?.clusterGeoName
+      ? deriveRegion(environment.clusterEnvironment, environment.clusterGeoName) : "";
+    if (!cluster) return null;
+    const currentCluster = appIdentity.readTelemetryCluster(projectRoot);
+    if (currentCluster) return currentCluster;
+    appIdentity.writeTelemetryCluster(projectRoot, cluster);
+    return appIdentity.readTelemetryCluster(projectRoot) || null;
   } catch {
     return null;
   }
 }
 
-module.exports = { resolve, deriveRegion };
+async function resolve({ projectRoot, regionsMap, cluster }) {
+  if (!projectRoot) return null;
+  try {
+    const resolvedCluster = cluster === undefined ? await resolveClusterEnvironment(projectRoot) : cluster;
+    return resolvedCluster ? entryFromMap(regionsMap, resolvedCluster) : null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { resolve, deriveRegion, resolveClusterEnvironment };

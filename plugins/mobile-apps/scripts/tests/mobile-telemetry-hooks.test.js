@@ -116,6 +116,26 @@ test('hook dispatch runs outside the caller project and restores its cwd', () =>
   assert.equal(process.cwd(), originalCwd);
 });
 
+test('interactive Copilot invocation creates identity and logs before environment resolution', (t) => {
+  const context = fixture(t);
+  const appPath = path.join(context.projectRoot, 'app.json');
+  fs.writeFileSync(appPath, JSON.stringify({ expo: { extra: { telemetry: { appInstanceId: null, cluster: null } } } }));
+  const result = runHook('prompt', {
+    cwd: context.projectRoot,
+    session_id: 'session-1',
+    prompt: 'The user explicitly invoked the "/mobile-app:create-mobile-app" skill. Follow its instructions now.\n\n' +
+      '<skill-context name="create-mobile-app">\nredacted instructions',
+  }, context);
+  assert.equal(result.status, 0, result.stderr);
+  const telemetry = JSON.parse(fs.readFileSync(appPath, 'utf8')).expo.extra.telemetry;
+  assert.match(telemetry.appInstanceId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.equal(telemetry.cluster, null);
+  const events = waitForEvents(context, 1);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.skillName, 'create-mobile-app');
+  assert.equal(events[0].data.eventInfo.appInstanceId, telemetry.appInstanceId);
+});
+
 test('prompt and pretool paths emit independent start signals', (t) => {
   const context = fixture(t);
   assert.equal(runHook('prompt', {

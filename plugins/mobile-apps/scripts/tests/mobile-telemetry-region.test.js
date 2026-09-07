@@ -8,7 +8,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const { resolve: resolveDestination } = require('../lib/telemetry/resolver');
-const { deriveRegion, resolve } = require('../lib/telemetry/region/region-resolver');
+const { deriveRegion, resolve, resolveClusterEnvironment } = require('../lib/telemetry/region/region-resolver');
 const { urlFor } = require('../lib/telemetry/region/artemis-service');
 const { readTelemetryCluster, writeTelemetryCluster } = require('../lib/app-identity');
 
@@ -27,9 +27,10 @@ function project(t, telemetry) {
   return root;
 }
 
-function resolvedEnvironment(root, location, environmentId = orgId) {
+function resolvedEnvironment(root, clusterGeoName, environmentId = orgId) {
   fs.writeFileSync(path.join(root, '.resolved-environment.json'), JSON.stringify({
-    environmentId, tenantId: environmentId, environmentUrl: 'https://contoso.crm4.dynamics.com', location,
+    environmentId, tenantId: environmentId, environmentUrl: 'https://contoso.crm4.dynamics.com',
+    clusterEnvironment: 'Prod', clusterGeoName,
   }));
 }
 
@@ -37,6 +38,45 @@ test('Mobile declares the seven Power Apps telemetry destinations', () => {
   assert.deepEqual(Object.keys(config.regions).sort(), [
     'dod', 'eu', 'gov', 'high', 'internal', 'mooncake', 'us',
   ]);
+});
+
+test('resolveClusterEnvironment returns a saved cluster, resolves a cache miss, or returns null', async (t) => {
+  const root = project(t, { appInstanceId: null, cluster: 'us' });
+  assert.equal(await resolveClusterEnvironment(root), 'us');
+  writeTelemetryCluster(root, null);
+  assert.equal(await resolveClusterEnvironment(root), null);
+  resolvedEnvironment(root, 'EU');
+  assert.equal(await resolveClusterEnvironment(root), 'eu');
+  assert.equal(readTelemetryCluster(root), 'eu');
+  writeTelemetryCluster(root, null);
+  resolvedEnvironment(root, 'unknown');
+  assert.equal(await resolveClusterEnvironment(root), null);
+  assert.equal(readTelemetryCluster(root), '');
+  assert.equal(await resolveClusterEnvironment(''), null);
+  assert.deepEqual(fs.readdirSync(root).sort(), ['.resolved-environment.json', 'app.json']);
+  resolvedEnvironment(root, 'EU');
+  fs.writeFileSync(path.join(root, 'app.json'), '{bad json');
+  assert.equal(await resolveClusterEnvironment(root), null);
+  assert.equal(fs.readFileSync(path.join(root, 'app.json'), 'utf8'), '{bad json');
+  fs.unlinkSync(path.join(root, 'app.json'));
+  assert.equal(await resolveClusterEnvironment(root), null);
+  assert.equal(fs.existsSync(path.join(root, 'app.json')), false);
+});
+
+test('cluster resolution has no dependency on telemetry delivery or the CLI entry point', () => {
+  const pending = [require.cache[require.resolve('../lib/telemetry/region/region-resolver')]];
+  const visited = new Set();
+  const forbidden = new Set([
+    require.resolve('../lib/mobile-telemetry-dispatcher'),
+    require.resolve('../resolve-environment'),
+  ]);
+  while (pending.length) {
+    const current = pending.pop();
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+    assert.equal(forbidden.has(current.id), false, current.id);
+    pending.push(...current.children);
+  }
 });
 
 test('app.json cluster alone selects the collector without mutating configuration', async (t) => {
@@ -60,14 +100,15 @@ test('routing follows cluster updates and clearing in app.json', async (t) => {
   assert.equal(await resolve({ projectRoot: root, regionsMap: config.regions }), null);
 });
 
-test('missing or invalid cluster stays local even with resolved metadata', async (t) => {
+test('missing or invalid clusters resolve from the known environment before choosing a destination', async (t) => {
   const root = project(t, { appInstanceId: null, cluster: null });
-  resolvedEnvironment(root, 'europe');
+  resolvedEnvironment(root, 'EU');
   for (const cluster of [null, '', 'moon-base']) {
     fs.writeFileSync(path.join(root, 'app.json'), JSON.stringify({ expo: { extra: { telemetry: { cluster } } } }));
-    assert.equal(await resolve({ projectRoot: root, regionsMap: config.regions }), null);
+    assert.equal((await resolve({ projectRoot: root, regionsMap: config.regions })).region, 'eu');
+    assert.equal(readTelemetryCluster(root), 'eu');
   }
-  assert.equal(readTelemetryCluster(root), '');
+  assert.equal(await resolve({ projectRoot: root, regionsMap: config.regions, cluster: null }), null);
   assert.equal(await resolveDestination({ cfg: config, projectRoot: '' }), null);
 });
 
@@ -80,7 +121,7 @@ test('routing ignores CLI configuration and environment caches', async (t) => {
   const root = project(t, { cluster: 'us' });
   fs.writeFileSync(path.join(root, 'power.config.json'), '{bad json');
   fs.writeFileSync(path.join(root, 'auth.config.json'), '{bad json');
-  resolvedEnvironment(root, 'europe');
+  resolvedEnvironment(root, 'EU');
   assert.equal((await resolve({ projectRoot: root, regionsMap: config.regions })).region, 'us');
 });
 
@@ -103,8 +144,38 @@ test('persisting a cluster preserves unrelated app.json content', (t) => {
   assert.equal(appJson.expo.extra.telemetry.cluster, 'gov');
 });
 
+// Canonical BAP `location` names from the live public-cloud catalog, verified 2026-09-07.
+// Display names, properties.code, macroRegionId, and azureRegions are separate fields.
+// See: https://learn.microsoft.com/en-us/powershell/module/microsoft.powerapps.administration.powershell/get-adminpowerappenvironmentlocations
+test('every catalogued public BAP location maps to the expected cluster', () => {
+  const locationsByCluster = {
+    us: [
+      'unitedstates', 'unitedstatesfirstrelease', 'asia', 'australia', 'india', 'japan',
+      'canada', 'southamerica', 'unitedarabemirates', 'korea', 'southafrica',
+    ],
+    eu: [
+      'europe', 'unitedkingdom', 'france', 'germany', 'switzerland', 'norway',
+      'sweden', 'italy', 'poland',
+    ],
+  };
+  for (const [cluster, locations] of Object.entries(locationsByCluster)) {
+    for (const location of locations) {
+      assert.equal(deriveRegion('Public', location), cluster, location);
+      assert.equal(deriveRegion('Public', location.toUpperCase()), cluster, location);
+      assert.equal(deriveRegion('Preview', location), cluster, location);
+    }
+  }
+  for (const location of ['EMEA', 'north-america', 'eu-efta', 'eastus', 'westeurope', 'europefirstrelease']) {
+    assert.equal(deriveRegion('Public', location), '', location);
+  }
+});
+
 test('cloud and public geography map to the expected cluster', () => {
   assert.equal(deriveRegion('Public', 'us'), 'us');
+  assert.equal(deriveRegion('Public', 'unitedstatesfirstrelease'), 'us');
+  assert.equal(deriveRegion('Preview', 'UnitedStatesFirstRelease'), 'us');
+  assert.equal(deriveRegion('Public', 'unitedstatesfirstrelease-unknown'), '');
+  assert.equal(deriveRegion('unknown', 'unitedstatesfirstrelease'), '');
   assert.equal(deriveRegion('Public', 'eu'), 'eu');
   assert.equal(deriveRegion('UsGov', 'anything'), 'gov');
   assert.equal(deriveRegion('UsGovHigh', 'anything'), 'high');
@@ -142,7 +213,7 @@ function waitForJson(filePath) {
 // The other tests inject seams. This one runs the real hook against the real
 // ikey.json so the shipped resolver.js is actually loaded and its regional keys
 // are the ones that reach the wire.
-test('end to end: environment resolution saves the cluster and the hook reads app.json only', (t) => {
+test('end to end: a connector start initializes a null cluster before app prerequisites', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-region-e2e-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const projectRoot = path.join(root, 'project');
@@ -157,13 +228,9 @@ test('end to end: environment resolution saves the cluster and the hook reads ap
     path.join(projectRoot, 'app.json'),
     JSON.stringify({ expo: { name: 'demo', extra: { telemetry: { appInstanceId: null, cluster: null } } } }),
   );
-  resolvedEnvironment(projectRoot, 'europe');
-  const resolution = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'scripts', 'resolve-environment.js'), orgId], {
-    cwd: projectRoot, encoding: 'utf8', timeout: 5000, env: { ...process.env, PATH: '' },
-  });
-  assert.equal(resolution.status, 0, resolution.stderr);
-  assert.equal(readTelemetryCluster(projectRoot), 'eu');
-  fs.unlinkSync(path.join(projectRoot, '.resolved-environment.json'));
+  resolvedEnvironment(projectRoot, 'EU');
+  assert.equal(readTelemetryCluster(projectRoot), '');
+  assert.equal(fs.existsSync(path.join(projectRoot, 'power.config.json')), false);
 
   const probePath = path.join(root, 'probe.json');
   const result = spawnSync(
@@ -171,7 +238,9 @@ test('end to end: environment resolution saves the cluster and the hook reads ap
     [path.join(PLUGIN_ROOT, 'hooks', 'run-telemetry.js'), 'prompt'],
     {
       cwd: projectRoot,
-      input: JSON.stringify({ cwd: projectRoot, session_id: 'session-1', prompt: '/mobile-app:deploy' }),
+      input: JSON.stringify({ cwd: projectRoot, session_id: 'session-1',
+        prompt: 'The user explicitly invoked the "/mobile-app:add-connector" skill. Follow its instructions now.\n\n' +
+          '<skill-context name="add-connector">\nredacted instructions\n</skill-context>\ntet' }),
       encoding: 'utf8',
       timeout: 20_000,
       env: {
@@ -189,6 +258,7 @@ test('end to end: environment resolution saves the cluster and the hook reads ap
   assert.equal(result.status, 0);
   const probe = waitForJson(probePath);
   assert.ok(probe, 'dispatcher should write the fake HTTPS probe');
+  assert.equal(readTelemetryCluster(projectRoot), 'eu');
   assert.equal(probe.headers['x-apikey'], config.regions.eu.instrumentation_key);
   assert.equal(probe.url, config.regions.eu.collector_url);
   // US and EU share the production key, so the collector is the real discriminator.
