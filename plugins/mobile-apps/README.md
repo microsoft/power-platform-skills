@@ -249,15 +249,14 @@ to be committed, and the template discovers them automatically; project-relative
 environment overrides remain available when needed. For iOS,
 `/setup-apple-ios` provides manual Apple Developer and Xcode guidance for the
 exact Team, explicit bundle identifier, Push Notifications capability,
-registered test devices, and the selected `development` or `ad-hoc` path. Each
-portal or Xcode change requires an explicit safe confirmation; the skill does
-not automate Apple configuration or generate an Apple proof artifact.
-`/setup-apns` then guides the only supported Firebase path: manual Apple APNs
-authentication-key (`.p8`) upload in Firebase Console. Browser automation,
-undocumented endpoints, and agent access to the one-time-downloaded key are
-prohibited. Completion is recorded as **configured, device verification
-pending** until `/verify-ios-push` passes on the matching physical-device
-build.
+registered test devices, and the selected `development` or `ad-hoc` path. Each portal or Xcode step is presented separately and confirmed with a Yes/No
+choice; the skill does not automate Apple configuration or generate an Apple
+proof artifact. `/setup-apns` then lets the user choose a manual Apple APNs
+authentication-key (`.p8`, recommended) or APNs certificate (`.p12`) upload in
+Firebase Console. Browser automation, undocumented endpoints, and agent access
+to either credential are prohibited. Completion is recorded as **configured,
+device verification pending** until `/verify-ios-push` passes on the matching
+physical-device build.
 
 After APNs configuration, complete the native client and sender auth/flows,
 then run `/build-ios` to create either a `development`
@@ -382,11 +381,12 @@ use Microsoft Learn docs rather than guessed contracts.
   an Entra-authenticated premium connector/connection usable by Power
   Automate. Azure hosting charges and Power Platform premium licensing may
   apply.
-- **iOS configuration:** Apple Developer access and manual APNs `.p8` upload
-  to Firebase. `/setup-apple-ios` provides manual Apple Developer/Xcode
-  guidance with explicit safe confirmations; `/setup-apns` guides the manual
-  Firebase Console upload. The agent never handles the key or its local path
-  and does not automate Apple configuration.
+- **iOS configuration:** Apple Developer access and manual APNs `.p8` key or
+  `.p12` certificate upload to Firebase. `/setup-apple-ios` provides manual
+  Apple Developer/Xcode guidance with Yes/No confirmations; `/setup-apns`
+  guides the selected manual Firebase Console upload. The agent never handles
+  the credential, password, private key, or local path and does not automate
+  Apple configuration.
 - **iOS build and verification:** macOS Wrap/Xcode tooling, a registered
   physical device, and Apple signing assets retained outside the repository.
   The user directly manages signing; `/build-ios` runs the confirmed Wrap
@@ -452,8 +452,8 @@ Example edit flows:
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and one typed destination registry shared by in-app navigation, custom-scheme/HTTPS links, and push taps through Expo Router. HTTPS OS association remains customer-owned and separately verified. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
 | `/setup-fcm` | 🟡 preview | Official MCP-first Firebase owner — uses the vendor-official Firebase MCP to list/select/create Firebase projects, idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. No CLI fallback. |
-| `/setup-apns` | 🟡 preview | After `/setup-apple-ios`, confirm the selected Firebase iOS identity and guide the supported manual APNs `.p8` upload in Firebase Console; no supported CLI/API upload exists and the agent never handles the key. |
-| `/setup-apple-ios` | 🟡 preview | Manual Apple Developer and Xcode guidance for the exact Team, explicit bundle identifier, Push Notifications capability, registered test devices, and development/ad-hoc signing choice. Requires explicit safe confirmation before each user-performed change; does not automate Apple configuration, generate proof artifacts, or build. |
+| `/setup-apns` | 🟡 preview | After `/setup-apple-ios`, confirm the selected Firebase iOS identity and let the user choose a manual APNs `.p8` authentication key or `.p12` certificate upload in Firebase Console; no supported CLI/API upload exists and the agent never handles the credential. |
+| `/setup-apple-ios` | 🟡 preview | Manual Apple Developer and Xcode guidance for the exact Team, explicit bundle identifier, Push Notifications capability, registered test devices, and development/ad-hoc signing choice. Presents each step and uses Yes/No confirmation choices; does not automate Apple configuration, generate proof artifacts, or build. |
 | `/build-android` | 🟡 preview | Build and validate a customer-signed direct-test APK through `npm run build:android` (`wrap android`). Requires an existing customer-managed signing setup, never creates a keystore or handles signing passwords, rejects repository-local/symlinked keystores and secret-bearing config, and emits a non-secret `android-build.json`. APK only; AAB/Google Play is deferred. |
 | `/verify-android-push` | 🟡 preview | Verify the exact fresh wrapped APK and published producer/sender flows on a physical Android 8+ device across permission/channel behavior, foreground/background/terminated delivery, exactly-once deep links, topic transitions, opt-out, and token refresh or same-APK re-registration recovery. |
 | `/build-ios` | 🟡 preview | Run a confirmed registered-device development or ad-hoc IPA build directly through `npm run build:ios` (`wrap ios`) after manual Apple/Xcode and APNs setup. The user owns signing assets, device registration, profiles, and credentials; the skill retains safe local validation and artifact checks. Not for simulator, TestFlight, App Store, or enterprise distribution. |

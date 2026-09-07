@@ -57,7 +57,7 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /customer supplies and approves recording the exact sender flow ID/);
   assert.match(lifecycle, /Use a distinct non-Flow handoff schema/);
   assert.match(lifecycle, /Omit `Sender flow ID` and `Sender flow state`/);
-  assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with explicit safe confirmations/);
+  assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with Yes\/No confirmations/);
   assert.match(lifecycle, /Neither automates Apple configuration or emits an Apple proof artifact/);
   assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
   assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);

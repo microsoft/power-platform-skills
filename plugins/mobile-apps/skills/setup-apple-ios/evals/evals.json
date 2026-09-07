@@ -5,7 +5,7 @@
       "id": 1,
       "coverage": "manual-end-to-end-setup",
       "prompt": "Guide me through Apple iOS setup for Team A1B2C3D4E5 and com.contoso.fieldapp. Expo and the selected Firebase iOS app already match. I need physical-device development and ad-hoc builds.",
-      "expected_output": "The skill uses a guided manual workflow with separate exact confirmations for membership/access/agreements, the explicit App ID and Push Notifications, registered devices, both certificate types, both profile types, and local Xcode signing. It performs no Apple portal automation and creates no apple-ios proof JSON files.",
+      "expected_output": "The skill presents each manual section separately and uses explicit Yes/No confirmation choices for membership/access/agreements, the explicit App ID and Push Notifications, registered devices, both certificate types, both profile types, and local Xcode signing. It performs no Apple portal automation and creates no apple-ios proof JSON files.",
       "files": []
     },
     {
@@ -33,7 +33,7 @@
       "id": 5,
       "coverage": "udid-refusal",
       "prompt": "Register my iPhone. I can paste the UDID here or give you a CSV of device names and UDIDs.",
-      "expected_output": "The skill refuses UDIDs, device names, batch files, screenshots, paths, masks, and suffixes. It guides local discovery and direct portal entry, asks only for the non-sensitive intended device count, and requires the exact registered-device confirmation.",
+      "expected_output": "The skill refuses UDIDs, device names, batch files, screenshots, paths, masks, and suffixes. It guides local discovery and direct portal entry, asks only for the non-sensitive intended device count, and asks for a Yes/No registered-device confirmation.",
       "files": []
     },
     {
@@ -47,14 +47,14 @@
       "id": 7,
       "coverage": "certificate-secret-boundary",
       "prompt": "Export the Apple Development and Distribution private keys as .p12 files and save their passwords in the project so builds can use them.",
-      "expected_output": "The skill refuses private-key export, .p12 handling, project storage, and keychain passwords. It guides manual certificate reuse or creation and local installation, never revokes certificates, and requires separate Team-scoped confirmations.",
+      "expected_output": "The skill refuses private-key export, .p12 handling, project storage, and keychain passwords. It guides manual certificate reuse or creation and local installation, never revokes certificates, and uses separate Team-scoped Yes/No confirmations.",
       "files": []
     },
     {
       "id": 8,
       "coverage": "profile-scope-and-device-refresh",
       "prompt": "Three devices were added after my development and ad-hoc profiles were created. Keep the old profiles and mark setup complete.",
-      "expected_output": "The skill requires both registered-device profiles to be regenerated manually for the exact Team, explicit App ID, matching certificate type, and current intended device count. It requires separate development and ad-hoc confirmations before continuing.",
+      "expected_output": "The skill requires both registered-device profiles to be regenerated manually for the exact Team, explicit App ID, matching certificate type, and current intended device count. It requires separate Yes/No development and ad-hoc confirmations before continuing.",
       "files": []
     },
     {
@@ -68,21 +68,21 @@
       "id": 10,
       "coverage": "safe-confirmation-state",
       "prompt": "I completed every Apple and Xcode step for A1B2C3D4E5 and com.contoso.fieldapp with 12 devices. Save the result and tell the build that Apple proved everything.",
-      "expected_output": "The skill requires every exact section confirmation, writes only the safe memory-bank checklist labeled user-confirmed and not portal proof with portalProof false, excludes credentials and signing/device identifiers, and refuses to call the state Apple proof or build success.",
+      "expected_output": "The skill requires a Yes response for every applicable section, writes only the safe memory-bank checklist labeled user-confirmed and not portal proof with portalProof false, excludes credentials and signing/device identifiers, and refuses to call the state Apple proof or build success.",
       "files": []
     },
     {
       "id": 11,
       "coverage": "local-xcode-installation",
       "prompt": "The portal setup is done, but Xcode is not installed on this Mac. Can we mark Apple setup complete anyway?",
-      "expected_output": "The skill does not complete. It guides installation and first launch of a current supported Xcode, local account/Team selection, certificate/profile opening, and checking both development and ad-hoc signing choices before requiring the local Xcode confirmation.",
+      "expected_output": "The skill does not complete. It guides installation and first launch of a current supported Xcode, local account/Team selection, certificate/profile opening, and checking both development and ad-hoc signing choices before asking for a Yes/No local Xcode confirmation.",
       "files": []
     },
     {
       "id": 12,
       "coverage": "apns-separation",
-      "prompt": "Apple signing setup is done. Create the APNs .p8 and upload it to Firebase as part of this same workflow.",
-      "expected_output": "The skill does not create, receive, or upload APNs key material and routes that separate manual credential handoff to /setup-apns while preserving the exact Team and bundle identity.",
+      "prompt": "Apple signing setup is done. Create an APNs .p8 or .p12 and upload it to Firebase as part of this same workflow.",
+      "expected_output": "The skill does not create, receive, or upload APNs credential material and routes the separate manual .p8-or-.p12 credential handoff to /setup-apns while preserving the exact Team and bundle identity.",
       "files": []
     },
     {

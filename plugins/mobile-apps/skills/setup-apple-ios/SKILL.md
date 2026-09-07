@@ -32,8 +32,10 @@ not operate Apple Developer, inspect signing assets, or manufacture proof.
   remove devices, or create an App Store Connect listing.
 
 All account, portal, device, certificate, profile, and Xcode interactions are
-performed by the user in interfaces they control. Use exact per-section
-confirmation phrases from the shared guide. Generic yes/no is insufficient.
+performed by the user in interfaces they control. Present one section at a
+time, then use `AskUserQuestion` with explicit **Yes** and **No** choices to ask
+whether the displayed instructions were completed for the displayed Team,
+bundle, and mode scope. Never ask the user to type a confirmation phrase.
 
 ## Phase 1 — Resolve immutable identity and scope
 
@@ -57,14 +59,17 @@ conflicting. Route Firebase/Expo drift to `/setup-fcm` or the owning plan step;
 never repair it by changing Apple resources. Require an explicit approved plan
 change before replacing previously recorded Team identity.
 
-Require:
+Use `AskUserQuestion` to display the resolved Team ID, bundle ID, and approved
+development and/or ad-hoc scope, then ask:
 
 ```text
-confirm Apple identity and scope: <TEAM_ID> <BUNDLE_ID> modes=development,ad-hoc
+Continue with this Apple identity and registered-device build scope?
+Choices: Yes / No
 ```
 
-Adjust the modes value to the approved development and/or ad-hoc scope. This is
-a user confirmation of the displayed local identity, not Apple portal proof.
+Continue only on **Yes**. A **No** response stops before portal changes and
+returns to identity or scope correction. This is a user confirmation of the
+displayed local identity, not Apple portal proof.
 
 ## Phase 2 — Guide every manual section
 
@@ -82,11 +87,13 @@ Skip only certificate/profile sections for modes that are not in the approved
 scope; never require distribution assets for development-only setup or
 development assets for ad-hoc-only setup. For each applicable section, provide
 the official Apple URL, restate the exact Team and bundle identity, explain
-sensitive values the user must keep out of chat, and wait for that section's
-exact confirmation phrase before advancing. A blocked agreement, missing role,
-quota, identifier conflict, device limit, absent private key, profile mismatch,
-or Xcode identity drift stops the workflow at that section without claiming
-later sections complete.
+sensitive values the user must keep out of chat, and use `AskUserQuestion` to
+ask whether that section is complete with **Yes** and **No** choices. Advance
+only on **Yes**. On **No**, keep the workflow at that section, explain the safe
+remediation or owner, and do not claim later sections complete. A blocked
+agreement, missing role, quota, identifier conflict, device limit, absent
+private key, profile mismatch, or Xcode identity drift stops the workflow at
+that section.
 
 ## Phase 3 — Record safe user-confirmed state
 
@@ -112,8 +119,9 @@ for Apple portal state.
 
 ## Completion
 
-Complete only when all manual section confirmations match the same Team ID and
-bundle ID and the safe memory block has been written. Report:
+Complete only when all manual sections received **Yes** confirmation for the
+same Team ID, bundle ID, and approved mode scope and the safe memory block has
+been written. Report:
 
 ```text
 Apple iOS manual setup user-confirmed; not portal proof.
@@ -121,9 +129,10 @@ Scope: registered-device <SELECTED_MODES>.
 Next owner: /setup-apns.
 ```
 
-`/setup-apns` separately owns manual APNs `.p8` creation/reuse and Firebase
-Console upload. `/build-ios` owns current local signing preflight and build
-output; `/verify-ios-push` owns physical delivery evidence.
+`/setup-apns` separately owns the manual choice and Firebase Console upload of
+either an APNs authentication key (`.p8`) or APNs certificate (`.p12`).
+`/build-ios` owns current local signing preflight and build output;
+`/verify-ios-push` owns physical delivery evidence.
 
 Run changed-file validation only for `memory-bank.md` when this skill changed it:
 

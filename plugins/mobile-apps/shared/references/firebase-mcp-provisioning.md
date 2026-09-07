@@ -378,17 +378,17 @@ validator, and changed-file validation before reporting completion.
 
 The official Firebase MCP server does **not** expose an APNs authentication-key
 upload tool. There is no supported Firebase MCP, Firebase CLI, or Firebase
-Management API operation for uploading an Apple APNs authentication key.
+Management API operation for uploading an Apple APNs credential.
 
-For iOS push, use only a manually handled Apple APNs authentication key (`.p8`)
-created or selected on the exact validated Apple Team, downloaded once to a
-user-controlled location outside every repository, and manually uploaded by the
-user in Firebase Console to the exact selected Firebase iOS app.
+For iOS push, the user manually uploads either an Apple APNs authentication key
+(`.p8`) or an APNs certificate (`.p12`) in Firebase Console to the exact
+selected Firebase iOS app. The `.p8` route is recommended but not mandatory.
+Both credential types remain user-controlled and outside every repository.
 
-An agent must never request, read, copy, encode, validate, or upload the `.p8`.
-Do not automate APNs credential creation, generate APNs certificate/`.p12`
-credentials, use certificate-based Firebase credentials, automate the browser,
-or call undocumented/reverse-engineered upload endpoints as substitutes.
+An agent must never request, read, copy, encode, validate, or upload the `.p8`
+or `.p12`, its password, private key, contents, or path. Do not automate APNs
+credential creation/export, automate the browser, or call
+undocumented/reverse-engineered upload endpoints as substitutes.
 
 ## Official references
 

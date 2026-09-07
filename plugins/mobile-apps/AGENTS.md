@@ -98,7 +98,7 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Template is supplied as a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `npx power-apps init`.
 - ✅ Push notification architecture: `expo-notifications` for consent/presentation/responses, React Native Firebase Messaging for Android+iOS FCM topics, lowercase-canonical Entra OID while signed in, exact `allUsers` while signed out, and Expo Router behind one typed semantic destination registry shared by in-app actions, the configured custom scheme, approved HTTPS App Links/Universal Links, and push taps. Invalid/stale intents are rejected without fallback navigation. Client-managed OID topics are explicitly not an authorization boundary.
 - ✅ Push cloud setup is **official MCP-first**: `/setup-fcm` owns Firebase project/app selection and SDK config retrieval through the vendor-official Firebase MCP only. `/setup-push-wif` separately requires gcloud MCP for Google-side WIF operations. No Firebase or gcloud CLI fallback is part of the documented architecture.
-- ✅ Firebase native app setup is idempotent by exact Android package name and exact iOS bundle identifier. One exact match is reused automatically; safe duplicates require an immutable app-ID selection independently per platform and a fresh identity read-back. Validated client configs live in committed `firebase/` files and are auto-discovered by Expo config. `/setup-apple-ios` provides manual Apple Developer/Xcode guidance with explicit safe confirmations, then `/setup-apns` permits only manual Firebase Console upload of a one-time-downloaded APNs `.p8`; no supported Firebase CLI/Management API upload exists, and agents never handle the key.
+- ✅ Firebase native app setup is idempotent by exact Android package name and exact iOS bundle identifier. One exact match is reused automatically; safe duplicates require an immutable app-ID selection independently per platform and a fresh identity read-back. Validated client configs live in committed `firebase/` files and are auto-discovered by Expo config. `/setup-apple-ios` provides manual Apple Developer/Xcode guidance with Yes/No confirmations, then `/setup-apns` permits manual Firebase Console upload of either an APNs `.p8` authentication key or `.p12` certificate; no supported Firebase CLI/Management API upload exists, and agents never handle the credential.
 - ✅ Push setup has independently resumable owners. The prescribed Android chain
   is `/setup-fcm` → native client integration → sender authentication/flows →
   `/build-android` → `/verify-android-push`. The prescribed iOS chain is
@@ -126,8 +126,8 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
   verification separately without duplicating their owner workflows.
 - ✅ `/setup-apns` ends at **configured, device verification pending** after
   the user confirms the exact Apple Team/identifier/Push setup and completes
-  the manual Firebase Console `.p8` upload. Browser automation and
-  undocumented upload endpoints are prohibited. Only a complete
+  the selected manual Firebase Console `.p8` or `.p12` upload. Browser
+  automation and undocumented upload endpoints are prohibited. Only a complete
   `/verify-ios-push` physical-device matrix may mark APNs physically verified.
 - ✅ `/setup-apple-ios` is manual Apple Developer and Xcode guidance. It helps
   the user confirm the exact Team, explicit bundle identifier, Push

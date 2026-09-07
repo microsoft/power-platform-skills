@@ -94,11 +94,13 @@ If iOS is selected, Firebase client setup alone does not establish APNs
 delivery. Hand off first to `/setup-apple-ios` for manual Apple Developer/Xcode
 guidance covering the exact Team, explicit bundle identifier, Push
 Notifications capability, registered test devices, and the selected
-`development` or `ad-hoc` path. Require explicit safe confirmation before each
-user-performed change; do not automate Apple setup or expect a generated proof
+`development` or `ad-hoc` path. Present each user-performed step and require a
+Yes/No confirmation; do not automate Apple setup or expect a generated proof
 artifact. Only after that guidance is complete, hand off to `/setup-apns`.
 
-APNs key creation and upload remain manual user actions in the Apple Developer
-and Firebase consoles. Never ask to read, copy, encode, commit, or
-automatically upload a `.p8` key. Android-only setup skips this handoff;
-both-platform setup completes Android configuration before the same iOS chain.
+APNs credential preparation and upload remain manual user actions in Apple-
+controlled interfaces and Firebase Console. `/setup-apns` supports either a
+`.p8` authentication key or `.p12` certificate. Never ask to read, copy,
+encode, commit, or automatically upload either credential, its password, or its
+private key. Android-only setup skips this handoff; both-platform setup
+completes Android configuration before the same iOS chain.

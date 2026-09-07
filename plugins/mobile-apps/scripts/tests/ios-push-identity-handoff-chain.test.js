@@ -50,7 +50,7 @@ test('iOS push chain: setup-fcm handles Google credentials safely', () => {
   assert.ok(skill.includes('Session ID'), 'requires session-id verification during login');
   assert.match(skill, /Hand off first to `\/setup-apple-ios`/);
   assert.match(skill, /manual Apple Developer\/Xcode\s+guidance/);
-  assert.match(skill, /explicit safe confirmation/);
+  assert.match(skill, /Yes\/No confirmation/);
   assert.match(skill, /do not automate Apple setup or expect a generated proof\s+artifact/);
   assert.match(skill, /Only after that guidance is complete, hand off to `\/setup-apns`/);
 });
@@ -64,25 +64,23 @@ test('iOS push chain: setup-apns consumes setup-fcm handoff', () => {
   assert.ok(skill.includes('Consume the `/setup-fcm` handoff'), 'consumes FCM handoff');
   assert.ok(skill.includes('memory-bank.md'), 'reads from memory-bank');
   assert.ok(skill.includes('STOP if any field is absent'), 'validates handoff completeness');
-  assert.ok(skill.includes('Never persist the `.p8`'), 'blocks p8 file storage');
+  assert.match(skill, /Never persist either credential type/, 'blocks APNs credential storage');
+  assert.match(skill, /APNs certificate \(`\.p12`\)/, 'supports p12 certificate route');
 });
 
-test('iOS push chain: setup-apns keeps the p8 upload manual', () => {
+test('iOS push chain: setup-apns keeps both credential uploads manual', () => {
   const skill = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'),
     'utf8',
   );
 
-  assert.ok(
-    skill.includes('The only supported Firebase credential route'),
-    'limits Firebase to the manual p8 route',
-  );
+  assert.match(skill, /either an APNs authentication key \(`\.p8`\) or an\s+APNs certificate \(`\.p12`\)/);
+  assert.match(skill, /authentication key is recommended[\s\S]*not mandatory/i);
+  assert.match(skill, /Choices: Yes \/ No/);
   assert.ok(skill.includes('no supported') || skill.includes('There is no supported'),
     'states that no supported automated Firebase upload exists');
-  assert.ok(
-    skill.includes('outside this and every other repository'),
-    'keeps the one-time key download outside repositories',
-  );
+  assert.match(skill, /outside\s+(?:this and )?every\s+(?:other\s+)?repository/,
+    'keeps APNs credentials outside repositories');
 });
 
 test('iOS push chain: add-push-notifications enables independent resumable tracks', () => {
@@ -121,7 +119,7 @@ test('iOS push chain: owned orchestration keeps Wrap and signing user-managed', 
     'utf8',
   );
 
-  assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with explicit safe confirmations/);
+  assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with Yes\/No confirmations/);
   assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
   assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
   assert.match(deploy, /directly confirmed `npm run build:ios` Wrap path/);
@@ -174,7 +172,7 @@ test('iOS push chain: credentials remain user-owned throughout', () => {
 
   // All skills block credential storage
   assert.match(fcm, /Do not record Google\s+account/, 'setup-fcm blocks Google creds');
-  assert.ok(apns.includes('Never persist the `.p8`'), 'setup-apns blocks .p8');
+  assert.match(apns, /Never persist either credential type/, 'setup-apns blocks APNs credentials');
   assert.match(readme, /keeps all signing assets and\s+secrets outside the\s+repository/);
   assert.match(readme, /does not inspect, generate, stage,\s+or attest signing assets/);
   assert.ok(verify.includes('Never') && verify.includes('authorization header'),

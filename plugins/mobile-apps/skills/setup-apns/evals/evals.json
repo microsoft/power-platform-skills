@@ -5,7 +5,7 @@
       "id": 1,
       "coverage": "manual-apns-end-to-end",
       "prompt": "/setup-fcm recorded project field-ops-prod, iOS app 1:123456789:ios:abc123, bundle com.contoso.fieldops, and firebase/GoogleService-Info.plist. Manual Apple setup recorded Team A1B2C3D4E5 for the same bundle. Guide me through APNs.",
-      "expected_output": "The skill confirms the exact project/app/Team/bundle continuity, guides manual APNs-capable key reuse or creation in Apple Developer, then manual upload to the exact Firebase Console iOS app with separate exact confirmations. It never handles the .p8 and ends configured, device verification pending.",
+      "expected_output": "The skill confirms the exact project/app/Team/bundle continuity with Yes/No choices, lets the user choose either a .p8 authentication key or .p12 certificate, then guides manual upload to the exact Firebase Console iOS app. It never handles the credential and ends configured, device verification pending.",
       "files": []
     },
     {
@@ -33,7 +33,7 @@
       "id": 5,
       "coverage": "key-reuse-and-safe-identifiers",
       "prompt": "Our Apple admin says an existing APNs-capable key on Team A1B2C3D4E5 is active and securely retained. Must I create another?",
-      "expected_output": "The skill prefers safe reuse, does not create or revoke a key, asks only for the 10-character safe Key ID and exact Team-scoped confirmation, and never asks for the key name, contents, or path.",
+      "expected_output": "The skill prefers safe reuse, does not create or revoke a key, asks only for the 10-character safe Key ID and a Team-scoped Yes/No confirmation, and never asks for the key name, contents, or path.",
       "files": []
     },
     {
@@ -52,9 +52,9 @@
     },
     {
       "id": 8,
-      "coverage": "safe-confirmations",
-      "prompt": "I said 'yes' after downloading a key and uploading something in Firebase. Mark APNs done.",
-      "expected_output": "The skill rejects generic confirmation, requires exact identity, key-selection, and Firebase-upload phrases containing only safe project/app/Team/bundle/Key ID values, labels the result user-confirmed and not portal proof, and keeps device verification pending.",
+      "coverage": "yes-no-confirmations",
+      "prompt": "Guide me without making me type exact confirmation phrases.",
+      "expected_output": "The skill presents the exact safe identity and instructions for each phase, then uses explicit Yes/No choices for identity continuity, credential readiness, and Firebase upload. It labels the result user-confirmed and not portal proof and keeps device verification pending.",
       "files": []
     },
     {
@@ -82,7 +82,14 @@
       "id": 12,
       "coverage": "safe-memory-state",
       "prompt": "Save the APNs result, including the key file path, key name, my Apple login, and a screenshot of Firebase Console.",
-      "expected_output": "The skill refuses sensitive and identifying state, stores only the user-confirmed project/app/bundle/Team/Key ID, confirmation basis, portalProof false, timestamp, and pending-verification status.",
+      "expected_output": "The skill refuses sensitive and identifying state, stores only the user-confirmed project/app/bundle/Team, credential type, optional safe Key ID or certificate environments, confirmation basis, portalProof false, timestamp, and pending-verification status.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "coverage": "p12-alternative",
+      "prompt": "Our Apple team cannot issue another APNs .p8 key, but we have an Apple Push Services certificate that can be exported as a password-protected .p12. Continue without blocking us.",
+      "expected_output": "The skill treats .p12 as a supported alternative rather than a blocker, confirms the exact Team, bundle, selected build-mode APNs environments, guides user-controlled certificate export and Firebase Console upload, and never requests the file, password, private key, path, certificate identifiers, or screenshots.",
       "files": []
     }
   ]

@@ -11,9 +11,10 @@ The mobile-apps plugin ships four MCP entries in `.mcp.json`:
 
 Apple Developer and Xcode setup is intentionally outside MCP automation.
 `/setup-apple-ios` provides manual guidance with explicit safe confirmations,
-and `/setup-apns` guides the manual Firebase Console `.p8` upload. No MCP
-server, local provisioning tool, or generated proof artifact substitutes for
-those user-owned steps.
+and `/setup-apns` guides the manual Firebase Console upload of a user-selected
+`.p8` authentication key or `.p12` certificate. No MCP server, local
+provisioning tool, or generated proof artifact substitutes for those user-owned
+steps.
 
 ### Firebase
 

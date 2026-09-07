@@ -52,8 +52,9 @@ Never request, accept, read, repeat, inspect, store, or transmit:
   certificate signing request private material;
 - device UDIDs, device names, screenshots that expose them, profile contents,
   profile UUIDs, or local credential/profile paths;
-- APNs `.p8` contents or paths. `/setup-apns` owns the separate manual APNs
-  authentication-key handoff.
+- APNs `.p8` contents or paths, or APNs certificate `.p12` files, passwords,
+  private keys, contents, or paths. `/setup-apns` owns the separate manual APNs
+  credential handoff.
 
 The user enters credentials and device identifiers only in Apple, Xcode, or
 macOS interfaces they control. If sensitive material appears in chat, do not
@@ -85,8 +86,10 @@ For each section:
 1. Explain the exact user action and its official URL.
 2. State what must match the approved Team ID and bundle ID.
 3. State what is out of scope and what must not be shared.
-4. Ask for the section's exact confirmation phrase.
-5. Continue only after the exact phrase is supplied.
+4. Use `AskUserQuestion` to ask whether the section is complete, with explicit
+   **Yes** and **No** choices.
+5. Continue only after **Yes**. On **No**, remain at the current section and
+   provide safe remediation or the correct owner.
 
 These confirmations are attestations from the user, not portal read-back,
 machine validation, or proof. Never describe them as verified, validated, or
@@ -105,10 +108,11 @@ Do not accept agreements, alter membership, invite users, change roles, or
 change legal/billing data. Those actions belong to the Account Holder or the
 organization's Apple administrator.
 
-Require:
+After presenting the instructions, ask:
 
 ```text
-confirm Apple access: <TEAM_ID>
+Is membership, access, and agreement setup complete for Team <TEAM_ID>?
+Choices: Yes / No
 ```
 
 ## 2. Exact explicit App ID and Push Notifications
@@ -117,20 +121,20 @@ In Certificates, Identifiers & Profiles, guide the user to Identifiers. They
 must reuse the exact explicit App ID for `<BUNDLE_ID>` or create it only if
 absent on the approved Team. Wildcard IDs are not acceptable.
 
-Before creation, require:
-
-```text
-create explicit App ID: <TEAM_ID> <BUNDLE_ID>
-```
+Before creating a missing identifier, explain the exact Team, bundle, and
+capability change and ask whether the user wants to proceed, with **Yes** and
+**No** choices. Do not create or guide creation after **No**.
 
 The user then enables only the required Push Notifications capability for that
 exact identifier. Do not create an App Store Connect record, rename/delete
 another identifier, or alter unrelated capabilities.
 
-Require after the portal displays the exact explicit identifier and capability:
+After the portal displays the exact explicit identifier and capability, ask:
 
 ```text
-confirm App ID and Push: <TEAM_ID> <BUNDLE_ID>
+Is the explicit App ID <BUNDLE_ID> present with Push Notifications enabled on
+Team <TEAM_ID>?
+Choices: Yes / No
 ```
 
 If an identifier exists on another team, only a wildcard match exists, or the
@@ -147,10 +151,11 @@ paths, masks, suffixes, or pasted identifiers. Do not disable, remove, or rename
 existing devices.
 
 Ask only for the non-sensitive total count the user expects the profiles to
-cover, then require:
+cover, then ask:
 
 ```text
-confirm registered devices: <TEAM_ID> count=<COUNT>
+Are all <COUNT> intended test devices registered on Team <TEAM_ID>?
+Choices: Yes / No
 ```
 
 If the portal reports a device-limit or registration conflict, stop and direct
@@ -180,14 +185,18 @@ serial numbers, fingerprints, private-key details, or screenshots. Never revoke
 or delete a certificate. Certificate quota or an unusable/missing private key is
 a hard stop for the user or Apple administrator to resolve.
 
-Require the applicable confirmation or confirmations:
+For each applicable certificate type, ask the matching Yes/No question:
 
 ```text
-confirm Apple Development certificate: <TEAM_ID>
+Is an Apple Development certificate with its private key available to Xcode
+for Team <TEAM_ID>?
+Choices: Yes / No
 ```
 
 ```text
-confirm Apple Distribution certificate: <TEAM_ID>
+Is an Apple Distribution certificate with its private key available to Xcode
+for Team <TEAM_ID>?
+Choices: Yes / No
 ```
 
 ## 5. Mode-specific provisioning profiles
@@ -206,14 +215,18 @@ Do not use wildcard identifiers, mismatched certificates, another Team, or a
 profile for another bundle. Never ask for profile contents, UUIDs, device lists,
 certificate identifiers, or local paths.
 
-Require the applicable confirmation or confirmations:
+For each applicable profile, ask the matching Yes/No question:
 
 ```text
-confirm development profile: <TEAM_ID> <BUNDLE_ID> count=<COUNT>
+Is the development profile current for Team <TEAM_ID>, bundle <BUNDLE_ID>, and
+all <COUNT> intended devices?
+Choices: Yes / No
 ```
 
 ```text
-confirm ad-hoc profile: <TEAM_ID> <BUNDLE_ID> count=<COUNT>
+Is the ad-hoc profile current for Team <TEAM_ID>, bundle <BUNDLE_ID>, and all
+<COUNT> intended devices?
+Choices: Yes / No
 ```
 
 ## 6. Local Xcode installation
@@ -232,10 +245,12 @@ same Team, bundle ID, and profile mode. Do not require a pre-existing native
 Xcode project, and do not inspect Keychain Access, Xcode account data,
 provisioning directories, or signing assets by script.
 
-Require:
+Ask:
 
 ```text
-confirm local Xcode signing: <TEAM_ID> <BUNDLE_ID> modes=<SELECTED_MODES>
+Is local Xcode signing ready for Team <TEAM_ID>, bundle <BUNDLE_ID>, and
+registered-device modes <SELECTED_MODES>?
+Choices: Yes / No
 ```
 
 Use `development`, `ad-hoc`, or `development,ad-hoc` exactly as approved. If a
@@ -274,6 +289,7 @@ paths, screenshots, credentials, or diagnostics. This state is a resumable
 checklist and continuity handoff only. It is not evidence from Apple and must
 not be used to claim that a build or physical delivery succeeded.
 
-Route next to `/setup-apns`. `/build-ios` must still perform its own current
-local signing preflight, and `/verify-ios-push` remains the only physical
-delivery evidence.
+Route next to `/setup-apns`, where the user may choose a manually uploaded APNs
+authentication key (`.p8`) or APNs certificate (`.p12`). `/build-ios` must
+still perform its own current local signing preflight, and `/verify-ios-push`
+remains the only physical delivery evidence.

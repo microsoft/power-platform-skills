@@ -130,9 +130,10 @@ guidance is completed, invoke
 `/setup-apns --working-dir <root>` when iOS client setup is new, the app ID or
 project changed, or APNs completion cannot be proven. Android-only work skips
 both steps. Propagate blockers without downgrading them. Preserve the manual
-Firebase `.p8` boundary: neither skill reads or uploads the key. A successful
-manual handoff means **configured, device verification pending**; it is not
-physical delivery success.
+Firebase APNs credential boundary: neither skill reads or uploads the selected
+`.p8` authentication key or `.p12` certificate. A successful manual handoff
+means **configured, device verification pending**; it is not physical delivery
+success.
 
 ### 5. Write the wrapper and shared navigation module
 
