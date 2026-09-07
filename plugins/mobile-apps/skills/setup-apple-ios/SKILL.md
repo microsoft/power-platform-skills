@@ -1,6 +1,6 @@
 ---
 name: setup-apple-ios
-description: Use when manually preparing Apple Developer and local Xcode signing prerequisites for a Power Apps Expo iOS app: membership/access and agreements, exact explicit App ID, Push Notifications, physical devices, Apple Development and Apple Distribution certificates, development/ad-hoc profiles, or Team/bundle drift. This is the required guided entry point before APNs or registered-device iOS builds; it never automates Apple or handles credentials.
+description: Use when manually preparing Apple Developer and local Xcode signing prerequisites for a Power Apps Expo iOS app. Membership/access and agreements, exact explicit App ID, Push Notifications, physical devices, Apple Development and Apple Distribution certificates, development/ad-hoc profiles, or Team/bundle drift. This is the required guided entry point before APNs or registered-device iOS builds; it never automates Apple or handles credentials.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
