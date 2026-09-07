@@ -13,7 +13,7 @@ const events = require('./telemetry/lib/events');
 const { fireAndForget } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
-const { findAppInstanceId } = require('./app-identity');
+const { ensureAppInstanceId } = require('./app-identity');
 
 function readPluginVersion() {
   const manifestPath = path.resolve(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
@@ -249,7 +249,12 @@ function commonFields(context, invocation, opts = {}) {
   const eventInfo = {};
   if (invocation.source) eventInfo.invocationSource = invocation.source;
   if (invocation.additionalInfo) eventInfo.additionalInfo = invocation.additionalInfo;
-  const appInstanceId = findAppInstanceId(opts.cwd) || null;
+  let appInstanceId = null;
+  try {
+    if (opts.cwd) appInstanceId = ensureAppInstanceId(opts.cwd);
+  } catch {
+    // Identity persistence must never block a skill invocation.
+  }
   eventInfo.appInstanceId = appInstanceId;
   if (Object.keys(eventInfo).length) fields.eventInfo = eventInfo;
 

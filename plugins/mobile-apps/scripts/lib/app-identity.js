@@ -91,9 +91,7 @@ function ensureAppInstanceId(projectRoot = process.cwd()) {
 
   const filePath = appJsonPath(root);
   const appJson = readJsonFile(filePath);
-  // The create workflow gates on the supported Expo template before calling
-  // this helper. Refuse to manufacture a minimal config when that invariant is
-  // broken because doing so would hide scaffold damage and overwrite evidence.
+  // Telemetry must not manufacture project configuration outside a valid Expo app.
   if (!isPlainObject(appJson) || !isPlainObject(appJson.expo)) {
     throw new Error('Cannot create app identity without an existing, valid Expo app.json');
   }

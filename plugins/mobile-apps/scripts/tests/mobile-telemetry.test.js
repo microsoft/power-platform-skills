@@ -457,6 +457,25 @@ test('events outside a project carry no app identity', (t) => {
   assert.equal(findAppInstanceId(tempProject(t)), '');
 });
 
+test('event identity initialization leaves missing or invalid project files untouched', (t) => {
+  const context = contextFor(provisioned);
+  const emitFrom = (cwd) => emitSkillStarted(context, invocation, {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    cwd,
+  }).data;
+
+  for (const contents of [null, '{ invalid json', '{}']) {
+    const project = tempProject(t);
+    const filePath = path.join(project, 'app.json');
+    if (contents !== null) fs.writeFileSync(filePath, contents);
+    assert.equal(emitFrom(project).eventInfo.appInstanceId, null);
+    assert.equal(fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null, contents);
+  }
+  assert.equal(emitFrom('').eventInfo.appInstanceId, null);
+  assert.equal(emitFrom(undefined).eventInfo.appInstanceId, null);
+});
+
 test('a hand-edited app identity is ignored rather than emitted', (t) => {
   const project = tempProject(t);
   fs.writeFileSync(
@@ -474,7 +493,7 @@ test('a hand-edited app identity is ignored rather than emitted', (t) => {
   assert.equal(findAppInstanceId(project), '');
 });
 
-test('two apps in one session emit distinct app identities', (t) => {
+test('first events generate distinct app identities and later events reuse them', (t) => {
   const context = contextFor(provisioned);
   const emitFrom = (project) => emitSkillStarted(context, invocation, {
     emit: () => {},
@@ -491,10 +510,14 @@ test('two apps in one session emit distinct app identities', (t) => {
   const projectB = tempProject(t);
   fs.writeFileSync(path.join(projectA, 'app.json'), JSON.stringify({ expo: {} }));
   fs.writeFileSync(path.join(projectB, 'app.json'), JSON.stringify({ expo: {} }));
-  ensureAppInstanceId(projectA);
-  ensureAppInstanceId(projectB);
   const a = emitFrom(projectA);
   const b = emitFrom(projectB);
+  assert.match(a.eventInfo.appInstanceId, /^[0-9a-f-]{36}$/);
+  assert.match(b.eventInfo.appInstanceId, /^[0-9a-f-]{36}$/);
+  assert.equal(findAppInstanceId(projectA), a.eventInfo.appInstanceId);
+  assert.equal(findAppInstanceId(projectB), b.eventInfo.appInstanceId);
+  assert.equal(emitFrom(projectA).eventInfo.appInstanceId, a.eventInfo.appInstanceId);
+  assert.equal(emitFrom(projectB).eventInfo.appInstanceId, b.eventInfo.appInstanceId);
   assert.notEqual(a.eventInfo.appInstanceId, b.eventInfo.appInstanceId);
   assert.equal(a.sessionId, b.sessionId);
 });
