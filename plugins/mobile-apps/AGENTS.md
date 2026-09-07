@@ -36,8 +36,8 @@ The Expo template snapshot ships bundled inside this plugin at `template/`. It i
 
 | Edit | Purpose |
 |---|---|
-| `app.config.js`: `name`, `slug` | Replace `'Power Apps Dev Player'` / `'powerapps-dev-player'` with wizard answers |
-| `package.json`: `name` | Replace `'powerapps-dev-app'` with the app slug |
+| `app.config.js`: `name`, `slug` | Replace `'Power Apps Standalone App'` / `'powerapps-standalone-app'` with wizard answers |
+| `package.json`: `name` | Replace `'powerapps-standalone-app'` with the app slug |
 | Remove an empty placeholder `power.config.json` | Preserve populated environment configuration; `npx power-apps init` creates a missing file |
 | Remove legacy example hooks and query-client files | Preserve every artifact under `src/generated/` |
 | `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` | Use host light/dark defaults until generated brand themes are explicitly wired |
