@@ -18,12 +18,16 @@ function caretVersionAtLeast(value, minimum) {
   return true;
 }
 
+function extractMetroCollector(debugSkill) {
+  const collector = /node - "\$LOG_PATH" <saved-cursor> 262144 5000 <<'NODE'\r?\n([\s\S]*?)\r?\nNODE/.exec(debugSkill);
+  assert.ok(collector, 'expected the foreground Metro log collector snippet');
+  return collector[1];
+}
+
 function metroCollectorSource() {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const debugSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'debug-app', 'SKILL.md'), 'utf8');
-  const collector = /node - "\$LOG_PATH" <saved-cursor> 262144 5000 <<'NODE'\n([\s\S]*?)\nNODE/.exec(debugSkill);
-  assert.ok(collector, 'expected the foreground Metro log collector snippet');
-  return collector[1];
+  return extractMetroCollector(debugSkill);
 }
 
 function runMetroCollector(source, logPath, cursor, observationMs) {
@@ -116,6 +120,7 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(debugSkill, /observation: interval/);
   assert.doesNotMatch(debugSkill, /ordinary tool execution provides the cadence/);
   assert.doesNotThrow(() => new vm.Script(metroCollectorSource()));
+  assert.doesNotThrow(() => new vm.Script(extractMetroCollector(debugSkill.replace(/\n/g, '\r\n'))));
   const traceScanCount = (debugSkill.match(/find app src -type f/g) || []).length;
   const generatedExclusionCount = (debugSkill.match(/! -path 'src\/generated\/\*'/g) || []).length;
   assert.ok(traceScanCount >= 2, 'expected trace discovery and verification scans');
