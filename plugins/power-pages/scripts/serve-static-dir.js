@@ -68,6 +68,14 @@ function streamFile(filePath, res, deps = {}) {
   stream.pipe(res);
 }
 
+function serverUrl(host, port) {
+  // RFC 3986 requires IPv6 literals to be enclosed in brackets when used as
+  // the host component of a URL. The unbracketed value remains correct for
+  // server.listen(). See: https://www.rfc-editor.org/rfc/rfc3986#section-3.2.2
+  const urlHost = net.isIP(host) === 6 ? `[${host}]` : host;
+  return `http://${urlHost}:${port}/`;
+}
+
 function startServer({ root, host, port, urlFile }) {
   const server = http.createServer((req, res) => {
     const filePath = safeResolve(root, req.url);
@@ -84,7 +92,7 @@ function startServer({ root, host, port, urlFile }) {
   });
   server.listen(port, host, () => {
     const address = server.address();
-    const url = `http://${host}:${address.port}/`;
+    const url = serverUrl(host, address.port);
     if (urlFile) fs.writeFileSync(urlFile, url, 'utf8');
   });
 }
@@ -113,7 +121,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     stdio: 'ignore',
   });
   child.unref();
-  const url = `http://${args.host}:${port}/`;
+  const url = serverUrl(args.host, port);
   if (args.urlFile) fs.writeFileSync(args.urlFile, url, 'utf8');
   return { ok: true, url, pid: child.pid };
 }
@@ -127,4 +135,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, safeResolve, contentType, isServableFile, streamFile, main };
+module.exports = { parseArgs, safeResolve, contentType, isServableFile, streamFile, serverUrl, main };

@@ -397,37 +397,37 @@ async function applySeedData({ seedDir, envUrl }, deps = {}) {
       for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {
         indexSeedRecords(seedEntry, idToEntitySet);
         for (const record of seedEntry.records) {
-        const context = { file: path.basename(filePath), entitySetName: seedEntry.entitySetName };
-        try {
-          const validationError = validateFilesContract({ seedDir, seed: seedEntry, record }, deps);
-          const { recordBody, files } = splitReservedFiles(record);
-          if (validationError) {
+          const context = { file: path.basename(filePath), entitySetName: seedEntry.entitySetName };
+          try {
+            const validationError = validateFilesContract({ seedDir, seed: seedEntry, record }, deps);
+            const { recordBody, files } = splitReservedFiles(record);
+            if (validationError) {
+              summary.failed += 1;
+              summary.errors.push({ ...context, message: validationError });
+              continue;
+            }
+            const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: applyCamelCaseLookupBinds(recordBody, idToEntitySet) }, deps);
+            let shouldUploadFiles = false;
+            if (res.error) {
+              summary.failed += 1;
+              summary.errors.push({ ...context, message: res.error });
+            } else if (isDuplicateConflict(res)) {
+              summary.skipped += 1;
+              shouldUploadFiles = true;
+            } else if (res.statusCode >= 200 && res.statusCode < 300) {
+              summary.inserted += 1;
+              shouldUploadFiles = true;
+            } else {
+              summary.failed += 1;
+              summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
+            }
+            if (shouldUploadFiles && files) {
+              await uploadRecordFiles({ seedDir, seed: seedEntry, record, files, envUrl, tokenProvider, summary, context }, deps);
+            }
+          } catch (err) {
             summary.failed += 1;
-            summary.errors.push({ ...context, message: validationError });
-            continue;
+            summary.errors.push({ ...context, message: err.message });
           }
-          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: applyCamelCaseLookupBinds(recordBody, idToEntitySet) }, deps);
-          let shouldUploadFiles = false;
-          if (res.error) {
-            summary.failed += 1;
-            summary.errors.push({ ...context, message: res.error });
-          } else if (isDuplicateConflict(res)) {
-            summary.skipped += 1;
-            shouldUploadFiles = true;
-          } else if (res.statusCode >= 200 && res.statusCode < 300) {
-            summary.inserted += 1;
-            shouldUploadFiles = true;
-          } else {
-            summary.failed += 1;
-            summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
-          }
-          if (shouldUploadFiles && files) {
-            await uploadRecordFiles({ seedDir, seed: seedEntry, record, files, envUrl, tokenProvider, summary, context }, deps);
-          }
-        } catch (err) {
-          summary.failed += 1;
-          summary.errors.push({ ...context, message: err.message });
-        }
         }
       }
     }

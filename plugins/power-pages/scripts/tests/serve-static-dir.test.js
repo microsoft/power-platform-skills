@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { EventEmitter } = require('events');
 
-const { parseArgs, safeResolve, contentType, isServableFile, streamFile } = require('../serve-static-dir');
+const { parseArgs, safeResolve, contentType, isServableFile, streamFile, serverUrl } = require('../serve-static-dir');
 
 test('parseArgs reads static server options', () => {
   assert.deepEqual(parseArgs(['--root', '/tmp/import', '--urlFile', '/tmp/url.txt', '--port', '8123']), {
@@ -45,6 +45,11 @@ test('contentType returns useful types for import status assets', () => {
   assert.equal(contentType('index.html'), 'text/html; charset=utf-8');
   assert.equal(contentType('status.json'), 'application/json; charset=utf-8');
   assert.equal(contentType('preview.png'), 'image/png');
+});
+
+test('serverUrl brackets IPv6 literals without changing IPv4 hosts', () => {
+  assert.equal(serverUrl('127.0.0.1', 8123), 'http://127.0.0.1:8123/');
+  assert.equal(serverUrl('::1', 8123), 'http://[::1]:8123/');
 });
 
 test('streamFile ends the response when read stream creation throws', () => {
