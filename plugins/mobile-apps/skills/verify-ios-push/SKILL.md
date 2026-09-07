@@ -70,6 +70,8 @@ proved behaviorally using the safe test correlation ID, topic category
 
 ## Workflow
 
+**Telemetry checkpoint: `verify_ios_push_delivery`**
+
 1. Prove local build and identity -> 2. Prove published flows -> 3. Establish
 safe correlation -> 4. Execute the physical-device matrix -> 5. Record safe
 evidence -> 6. Complete or keep APNs pending

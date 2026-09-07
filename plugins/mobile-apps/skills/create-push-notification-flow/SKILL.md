@@ -44,6 +44,8 @@ provisioning from this skill.
 
 ## Required workflow
 
+**Telemetry checkpoint: `author_push_notification_flows`**
+
 ### 1. Bootstrap and prove the environment
 
 Execute Sections 1–2 of `push-flow-authoring.md`. The mobile plugin declares

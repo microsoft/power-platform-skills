@@ -4,6 +4,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { createRequire } = require('node:module');
 const {
   parseAndroidClientIdentities,
   parsePlistStrings,
@@ -118,18 +119,98 @@ function readJson(filePath, label) {
   }
 }
 
+function fallbackPowerAppsExpoConfig(config, options, customize) {
+  const resolved = {
+    ...config,
+    name: options.name,
+    slug: options.slug,
+    version: options.version,
+    scheme: options.scheme,
+    ...(options.iconPath ? { icon: options.iconPath } : {}),
+    web: {
+      bundler: 'metro',
+      output: 'static',
+    },
+    platforms: ['ios', 'android', 'web'],
+    experiments: {
+      typedRoutes: true,
+    },
+    plugins: [
+      ...(options.isDevClient ? ['expo-dev-client'] : []),
+      'expo-router',
+      'expo-secure-store',
+      '@microsoft/power-apps-native-host',
+      '@microsoft/power-apps-native-offline',
+      '@react-native-community/datetimepicker',
+    ],
+    android: {
+      package: options.androidPackage,
+      versionCode: options.versionCode,
+      ...(options.iconPath ? {
+        adaptiveIcon: {
+          foregroundImage: options.iconPath,
+          backgroundColor: '#ffffff',
+        },
+      } : {}),
+    },
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier: options.iosBundleIdentifier,
+      infoPlist: {
+        LSApplicationQueriesSchemes: [
+          'intunemam',
+          'ms-acompli',
+          'msauthv2',
+          'msauthv3',
+        ],
+      },
+    },
+  };
+  return typeof customize === 'function' ? customize(resolved) : resolved;
+}
+
 function evaluateExpoConfig(configPath) {
-  delete require.cache[require.resolve(configPath)];
-  try {
-    const exported = require(configPath);
-    const config = typeof exported === 'function' ? exported({ config: {} }) : exported;
-    if (!config || typeof config !== 'object') {
-      throw new Error('configuration did not return an object');
+  const source = fs.readFileSync(configPath, 'utf8');
+  const localRequire = createRequire(configPath);
+  const configModule = { exports: {} };
+  const requireFromConfig = (specifier) => {
+    if (specifier !== '@microsoft/power-apps-native-host/config/expoConfig') {
+      return localRequire(specifier);
     }
-    return config;
-  } finally {
-    delete require.cache[require.resolve(configPath)];
+    try {
+      return localRequire(specifier);
+    } catch (error) {
+      if (
+        error?.code !== 'MODULE_NOT_FOUND' ||
+        !String(error.message).includes(specifier)
+      ) {
+        throw error;
+      }
+      return { createPowerAppsExpoConfig: fallbackPowerAppsExpoConfig };
+    }
+  };
+
+  const load = new Function(
+    'exports',
+    'require',
+    'module',
+    '__filename',
+    '__dirname',
+    source,
+  );
+  load(
+    configModule.exports,
+    requireFromConfig,
+    configModule,
+    configPath,
+    path.dirname(configPath),
+  );
+  const exported = configModule.exports;
+  const config = typeof exported === 'function' ? exported({ config: {} }) : exported;
+  if (!config || typeof config !== 'object') {
+    throw new Error('configuration did not return an object');
   }
+  return config;
 }
 
 function pluginNames(plugins) {
@@ -1328,6 +1409,7 @@ if (require.main === module) {
 
 module.exports = {
   configuredFirebaseFile,
+  evaluateExpoConfig,
   findClosingBrace,
   findForbiddenCredential,
   isWithinRoot,

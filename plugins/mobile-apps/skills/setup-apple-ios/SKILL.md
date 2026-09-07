@@ -39,6 +39,8 @@ bundle, and mode scope. Never ask the user to type a confirmation phrase.
 
 ## Phase 1 — Resolve immutable identity and scope
 
+**Telemetry checkpoint: `configure_apple_ios_identity`**
+
 1. Read `memory-bank.md`, `native-app-plan.md`, `package.json`,
    `app.config.js`, and the `/setup-fcm` handoff.
 2. Require macOS plus a physical registered-device development and/or ad-hoc

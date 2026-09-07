@@ -4,7 +4,10 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { main } = require('../validate-push-notification-config');
+const {
+  evaluateExpoConfig: evaluateConfigFile,
+  main,
+} = require('../validate-push-notification-config');
 
 const TEST_WORK_ROOT = path.join(__dirname, '.validate-push-notification-config-work');
 const TEMPLATE_ROOT = path.resolve(__dirname, '../../template');
@@ -68,15 +71,9 @@ function withEnvironment(env, callback) {
 }
 
 function evaluateExpoConfig(root, env = {}) {
-  return withEnvironment(env, () => {
-    const configPath = path.join(root, 'app.config.js');
-    delete require.cache[require.resolve(configPath)];
-    try {
-      return require(configPath)({ config: {} });
-    } finally {
-      delete require.cache[require.resolve(configPath)];
-    }
-  });
+  return withEnvironment(env, () => (
+    evaluateConfigFile(path.join(root, 'app.config.js'))
+  ));
 }
 
 function writeFirebaseFile(root, relativePath) {
@@ -866,8 +863,8 @@ test('blocks Firebase plugin activation without a validated config relationship'
   const root = projectFixture();
   replaceInFile(
     path.join(root, 'app.config.js'),
-    "...(HAS_FIREBASE_CLIENT_CONFIG ? [",
-    '...([true] ? [',
+    'const firebasePlugins = HAS_FIREBASE_CLIENT_CONFIG',
+    'const firebasePlugins = true',
   );
   assert.strictEqual(withEnvironment({}, () => main(['--project-root', root])), 2);
 });
@@ -908,8 +905,8 @@ test('requires an explicitly resolvable APNs environment and remote notification
 
   replaceInFile(
     path.join(root, 'app.config.js'),
-    "UIBackgroundModes: ['remote-notification']",
-    'UIBackgroundModes: []',
+    "          'remote-notification',",
+    "          'fetch',",
   );
   assert.strictEqual(withEnvironment({}, () => main(['--project-root', root])), 2);
 });

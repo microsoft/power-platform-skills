@@ -51,6 +51,8 @@ authentication is customer-owned; this plugin does not inspect or validate it.
 
 ## Workflow
 
+**Telemetry checkpoint: `configure_push_notifications`**
+
 1. Verify app and runtime -> 2. Verify auth identity -> 3. Resume/establish
 Firebase client setup -> 4. Resume manual Apple and APNs setup when
 needed -> 5. Write wrapper and shared navigation module

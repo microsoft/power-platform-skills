@@ -110,6 +110,8 @@ guarded official CLI fallback, plus `@azure/mcp@2.0.5`:
 
 ## Required execution order
 
+**Telemetry checkpoint: `configure_push_wif`**
+
 1. Read `memory-bank.md`, `sender-auth.json` when present, the provisioning
    reference, and the handoff contract.
 2. Verify the active Azure identity and gcloud MCP account. Gather the exact

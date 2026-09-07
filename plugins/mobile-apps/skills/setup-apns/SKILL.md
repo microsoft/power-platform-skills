@@ -63,6 +63,8 @@ certificates, or provisioning profiles. Route those to `/setup-apple-ios`.
 
 ## Phase 1 — Consume the `/setup-fcm` handoff and re-establish identity
 
+**Telemetry checkpoint: `validate_apns_identity`**
+
 1. Read the `/setup-fcm` handoff and the `Apple iOS manual setup
    (user-confirmed; not portal proof)` block from `memory-bank.md`.
 2. Require the Firebase project ID, immutable selected Firebase iOS app ID,

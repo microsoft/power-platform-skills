@@ -77,6 +77,8 @@ values.
 
 ## Workflow
 
+**Telemetry checkpoint: `verify_android_push_delivery`**
+
 1. Prove build and installed app -> 2. Prove client identity -> 3. Read back
 exact flows -> 4. Establish safe correlation -> 5. Run A-H -> 6. Record outcome
 

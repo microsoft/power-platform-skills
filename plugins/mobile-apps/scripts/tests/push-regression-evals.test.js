@@ -299,7 +299,7 @@ test('iOS push orchestration reports stage ownership without duplicating build o
   assert.match(readme, /\| `\/verify-ios-push` \|/);
   assert.match(readme, /development and ad-hoc\s+registered-device IPA workflows/);
   assert.match(readme, /user directly manages signing; `\/build-ios` runs the confirmed Wrap\s+command/);
-  assert.match(agents, /36 skills \+ 5 agents/);
+  assert.match(agents, /35 skills \+ 5 agents/);
   assert.match(agents, /manual Apple Developer and Xcode guidance/);
   assert.match(agents, /user owns signing assets, registered devices/);
 });
