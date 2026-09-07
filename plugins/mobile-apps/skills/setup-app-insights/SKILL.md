@@ -223,6 +223,36 @@ Parse `app.json` with Node after the mutation and assert:
 - `enable` / `change-resource`: `enabled === true` and `connectionString` is non-empty.
 - `disable`: `enabled === false` and `connectionString === ""`.
 
+## Step 6.5 — Offer operation instrumentation (enable / change-resource only)
+
+**Telemetry checkpoint: `offer_operation_instrumentation`**
+
+This skill only wires the telemetry pipeline; it never edits screens or generated services. Enabling Application Insights emits host-level signals (app load, unhandled errors, navigation) automatically, but **domain events like `todo_created` or `order_deleted` are customer-defined and require source changes**. Those changes belong to `/edit-app` → screen-planner → screen-builder, which emit named events through `getCustomerTelemetryLogger` under the existing scalar-only, no-PII allowlist. Offer that follow-up here; never instrument operations from this skill.
+
+Run this step only after a successful `enable` or `change-resource`. Skip it entirely for `disable`.
+
+- **Mode B (standalone):** ask one `AskUserQuestion`, defaulting to **No** (instrumentation is opt-in, mirroring Application Insights being off by default):
+
+  > Application Insights is on. Want me to add custom telemetry to your app's major operations (create / update / delete)?
+
+  - **Yes** → invoke `/edit-app` with a scoped instrumentation brief and let its normal edit flow discover the entities, screens, and operation boundaries (this skill does not read the data model or screens):
+
+    ```
+    Invoke skill: /edit-app
+
+    Arguments:
+      Add customer telemetry events at each successful create, update, and
+      delete boundary for the app's main entities. Emit named events through
+      getCustomerTelemetryLogger with approved scalar properties only — no
+      operation results, response payloads, form values, free text, record
+      titles, personal identifiers, tokens, precise coordinates, nested
+      objects, or complete URLs. Use trackScenario() for any duration.
+    ```
+
+  - **No** → finish with the normal Mode B summary.
+
+- **Mode A (invoked by `/edit-app`):** do **not** ask the user or re-invoke `/edit-app` from here — that would loop back into the orchestrator. Instead signal the available follow-up in the return block (`instrumentation_offer: available`) so `/edit-app` surfaces the offer after the fast path completes.
+
 ## Support boundary
 
 This skill discovers or accepts an **existing** Application Insights resource; it does not provision Azure resources. If the user lacks Azure access and has no administrator-provided connection string, leave telemetry disabled without blocking — the app runs fine with customer telemetry off.
@@ -237,12 +267,15 @@ action: <enable|change-resource|disable>
 enabled: <true|false>
 app_id: <appId>
 layout_patched: <yes|no>
+instrumentation_offer: <available|none>
 ```
 
-Use `DONE_WITH_CONCERNS: <list>` when applied with caveats (e.g. an admin-provided string that could not be verified), `NEEDS_CONTEXT: <missing>` when a required input is unavailable, and `BLOCKED: <reason>` when `app.json` is unusable.
+`instrumentation_offer` is `available` only after a successful `enable`/`change-resource` (see Step 6.5); use `none` for `disable` or when telemetry was not turned on. Use `DONE_WITH_CONCERNS: <list>` when applied with caveats (e.g. an admin-provided string that could not be verified), `NEEDS_CONTEXT: <missing>` when a required input is unavailable, and `BLOCKED: <reason>` when `app.json` is unusable.
 
 **Mode B (standalone) — human summary:**
 
 > Application Insights <enabled|updated|disabled> for this app.
 > Configuration: `app.json` → `expo.extra.appInsightsConfig`
 > To change the resource or turn it off later, run `/setup-app-insights` again.
+
+After an `enable`/`change-resource`, if the user accepted the Step 6.5 offer, note that operation instrumentation was handed to `/edit-app`; if they declined, mention they can run `/edit-app` later to add custom operation events.

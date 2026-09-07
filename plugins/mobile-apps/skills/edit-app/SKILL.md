@@ -134,7 +134,9 @@ Determine `--action` from the request (`enable` / `change-resource` / `disable`)
 
 Handle the return per the status protocol (AGENTS.md rule #12):
 
-- `DONE` → print the action completed and stop; do not continue to Step 1.
+- `DONE` → print the action completed. Then, if the return includes `instrumentation_offer: available` (a successful enable/change-resource), ask the user one question, defaulting to **No**: "Application Insights is on. Want me to add custom telemetry to your app's major operations (create / update / delete)?"
+  - **Yes** → continue into the normal edit workflow (Step 1 onward) with this brief: *"Add customer telemetry events at each successful create, update, and delete boundary for the app's main entities; emit named events through `getCustomerTelemetryLogger` with approved scalar properties only (no operation results, payloads, form values, free text, record titles, personal identifiers, tokens, precise coordinates, nested objects, or complete URLs); use `trackScenario()` for any duration."* Screen-planner and screen-builder own the source edits under their existing privacy allowlist.
+  - **No** (or `instrumentation_offer: none`) → stop; do not continue to Step 1.
 - `DONE_WITH_CONCERNS` → surface concerns, then stop.
 - `NEEDS_CONTEXT` → surface the question, re-invoke with the answer.
 - `BLOCKED` → surface the error (usually `app.json` unusable) and stop.
