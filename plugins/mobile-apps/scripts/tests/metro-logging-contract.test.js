@@ -1,9 +1,12 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 function caretVersionAtLeast(value, minimum) {
   const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(value);
@@ -13,6 +16,24 @@ function caretVersionAtLeast(value, minimum) {
     if (actual[index] !== minimum[index]) return actual[index] > minimum[index];
   }
   return true;
+}
+
+function metroCollectorSource() {
+  const pluginRoot = path.resolve(__dirname, '..', '..');
+  const debugSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'debug-app', 'SKILL.md'), 'utf8');
+  const collector = /node - "\$LOG_PATH" <saved-cursor> 262144 5000 <<'NODE'\n([\s\S]*?)\nNODE/.exec(debugSkill);
+  assert.ok(collector, 'expected the foreground Metro log collector snippet');
+  return collector[1];
+}
+
+function runMetroCollector(source, logPath, cursor, observationMs) {
+  const result = spawnSync(
+    process.execPath,
+    ['-', logPath, String(cursor), '262144', String(observationMs)],
+    { input: source, encoding: 'utf8', timeout: 2000 },
+  );
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  return JSON.parse(result.stdout);
 }
 
 test('template uses the host Metro factory that installs project-local logging', () => {
@@ -38,9 +59,13 @@ test('template uses the host Metro factory that installs project-local logging',
     'the host package must include the Metro logger introduced in 0.2.26',
   );
   assert.match(gitignore, /^\.powernative\//m);
+  assert.equal(packageJson.scripts.dev, 'expo start');
+  assert.equal(packageJson.scripts.predev, 'npm run generate-schemas && npm run type-check');
   const workflowCoversMobileApps = /plugins\/mobile-apps\/\*\*/.test(workflow);
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/metro\.config\.js/.test(workflow));
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/package\.json/.test(workflow));
+  assert.match(workflow, /appDisplayName: 'Template Quality Probe'/);
+  assert.match(workflow, /npm run predev/);
 });
 
 test('skill contracts read logs and persist host-neutral state under .powernative', () => {
@@ -48,13 +73,17 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   const createSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8');
   const debugSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'debug-app', 'SKILL.md'), 'utf8');
   const deploySkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'deploy', 'SKILL.md'), 'utf8');
+  const agentsGuide = fs.readFileSync(path.join(pluginRoot, 'AGENTS.md'), 'utf8');
 
   const createFrontmatter = createSkill.split('---', 3)[1];
   assert.match(createFrontmatter, /allowed-tools:.*\bSkill\b/);
   assert.match(createSkill, /\.powernative\/metro-logs/);
   assert.match(createSkill, /npm run dev/);
-  assert.match(createSkill, /npx expo start/);
-  assert.match(createSkill, /without rerunning the `predev` schema hook/);
+  assert.match(createSkill, /12\. Start Metro \(`npm run dev`\)/);
+  assert.match(createSkill, /createPowerAppsMetroConfig/);
+  assert.match(createSkill, /npm does not launch `expo start` when either gate fails/);
+  assert.doesNotMatch(createSkill, /npx expo start|without rerunning the `predev` schema hook/);
+  assert.doesNotMatch(createSkill, /delegates Metro terminal output.*power-apps-native-host\/metro-logger/);
   assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
   assert.match(debugSkill, /\.powernative\/metro-logs/);
   assert.match(debugSkill, /\.powernative\/debug-app/);
@@ -83,6 +112,10 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(debugSkill, /append only the verifier's output/);
   assert.match(debugSkill, /logging instrumentation failed/);
   assert.match(debugSkill, /baseline read gets `ENOENT`/);
+  assert.match(debugSkill, /watcher = fs\.watch/);
+  assert.match(debugSkill, /observation: interval/);
+  assert.doesNotMatch(debugSkill, /ordinary tool execution provides the cadence/);
+  assert.doesNotThrow(() => new vm.Script(metroCollectorSource()));
   const traceScanCount = (debugSkill.match(/find app src -type f/g) || []).length;
   const generatedExclusionCount = (debugSkill.match(/! -path 'src\/generated\/\*'/g) || []).length;
   assert.ok(traceScanCount >= 2, 'expected trace discovery and verification scans');
@@ -90,4 +123,34 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.doesNotMatch(debugSkill, /tail -n 500 "\$LOG_PATH"/);
   assert.doesNotMatch(debugSkill, /BashOutput|METRO_TERMINAL_ID|metro-session\.js|start --project-root/);
   assert.match(deploySkill, /\.powernative/);
+  assert.match(agentsGuide, /user-owned `npm run dev`/);
+  assert.doesNotMatch(agentsGuide, /detached project-local process|start\/status\/tail\/stop/);
+});
+
+test('Metro collector returns already-appended bytes without waiting', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'metro-collector-backlog-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const logPath = path.join(directory, 'metro.log');
+  fs.writeFileSync(logPath, 'new output');
+
+  const result = runMetroCollector(metroCollectorSource(), logPath, 0, 1000);
+
+  assert.equal(result.observation, 'initial');
+  assert.equal(result.output, 'new output');
+  assert.equal(result.nextCursor, 10);
+  assert.equal(result.readError, null);
+});
+
+test('Metro collector waits for a complete idle observation interval', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'metro-collector-idle-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const logPath = path.join(directory, 'metro.log');
+  fs.writeFileSync(logPath, 'existing');
+
+  const result = runMetroCollector(metroCollectorSource(), logPath, 8, 50);
+
+  assert.equal(result.observation, 'interval');
+  assert.equal(result.output, '');
+  assert.ok(result.observedMs >= 40, `expected an idle wait, received ${result.observedMs}ms`);
+  assert.equal(result.readError, null);
 });

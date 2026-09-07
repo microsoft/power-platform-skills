@@ -6,7 +6,7 @@
     "dev": "expo start",
     "web": "power-apps-web",
     "generate-schemas": "generate-connector-schemas",
-    "predev": "npm run generate-schemas",
+    "predev": "npm run generate-schemas && npm run type-check",
     "type-check": "tsc --noEmit",
     "build:android": "wrap android",
     "build:ios": "wrap ios",

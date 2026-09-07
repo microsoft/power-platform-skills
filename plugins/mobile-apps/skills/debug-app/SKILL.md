@@ -571,33 +571,87 @@ Read `.powernative/debug-app/metro-cursor.json` and rediscover all live `.powern
 - If the saved session is no longer valid and multiple valid sessions remain, show the session choices and ask which one to monitor, then return to Phase 0.2.
 - If no valid session remains, stop with the applicable Phase 0.0 failure instead of reading a stale log.
 
-Otherwise read newly appended bytes from the pinned session:
+Otherwise collect newly appended bytes from the pinned session. When no bytes are already waiting, this foreground collector watches the log directory until that file changes or a full 5-second observation interval completes:
 
 ```bash
-node - "$LOG_PATH" <saved-cursor> 262144 <<'NODE'
+node - "$LOG_PATH" <saved-cursor> 262144 5000 <<'NODE'
 const fs = require('node:fs');
-const [file, cursorText, maxText] = process.argv.slice(2);
+const path = require('node:path');
+const [file, cursorText, maxText, observationText] = process.argv.slice(2);
 const cursor = Number(cursorText);
 const maxBytes = Number(maxText);
-const size = fs.statSync(file).size;
-const start = Number.isInteger(cursor) && cursor <= size ? cursor : 0;
-const fd = fs.openSync(file, 'r');
-const buffer = Buffer.alloc(Math.min(maxBytes, Math.max(0, size - start)));
-const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, start);
-fs.closeSync(fd);
-process.stdout.write(JSON.stringify({
-   cursor: start,
-   nextCursor: start + bytesRead,
-   rotationLost: start !== cursor,
-   truncated: start + bytesRead < size,
-   output: buffer.subarray(0, bytesRead).toString('utf8')
-}, null, 2));
+const observationMs = Number(observationText);
+const observedAt = Date.now();
+let watcher;
+let timer;
+let finished = false;
+
+function snapshot(observation) {
+   try {
+      const size = fs.statSync(file).size;
+      const start = Number.isInteger(cursor) && cursor >= 0 && cursor <= size ? cursor : 0;
+      const fd = fs.openSync(file, 'r');
+      const buffer = Buffer.alloc(Math.min(maxBytes, Math.max(0, size - start)));
+      let bytesRead;
+      try {
+         bytesRead = fs.readSync(fd, buffer, 0, buffer.length, start);
+      } finally {
+         fs.closeSync(fd);
+      }
+      return {
+         cursor: start,
+         nextCursor: start + bytesRead,
+         rotationLost: start !== cursor,
+         truncated: start + bytesRead < size,
+         fileMissing: false,
+         readError: null,
+         observation,
+         observedMs: Date.now() - observedAt,
+         output: buffer.subarray(0, bytesRead).toString('utf8'),
+      };
+   } catch (error) {
+      return {
+         cursor,
+         nextCursor: cursor,
+         rotationLost: false,
+         truncated: false,
+         fileMissing: error && error.code === 'ENOENT',
+         readError: error && typeof error.code === 'string' ? error.code : 'UNKNOWN',
+         observation,
+         observedMs: Date.now() - observedAt,
+         output: '',
+      };
+   }
+}
+
+function finish(observation) {
+   if (finished) return;
+   finished = true;
+   if (watcher) watcher.close();
+   if (timer) clearTimeout(timer);
+   process.stdout.write(JSON.stringify(snapshot(observation), null, 2));
+}
+
+const initial = snapshot('initial');
+if (initial.readError || initial.rotationLost || initial.truncated || initial.output) {
+   process.stdout.write(JSON.stringify(initial, null, 2));
+} else {
+   try {
+      watcher = fs.watch(path.dirname(file), (_event, changedFile) => {
+         if (!changedFile || String(changedFile) === path.basename(file)) finish('change');
+      });
+      watcher.on('error', () => finish('watch-error'));
+      timer = setTimeout(() => finish('interval'), observationMs);
+   } catch {
+      finish('watch-error');
+   }
+}
 NODE
 ```
 
-Use only the returned `output` for this cycle. Immediately persist the current `logPath`, `pid`, `port`, `nextCursor`, and a new `updatedAt` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles file replacement safely.
+Use only the returned `output` for this cycle. `fileMissing: true` means the logger may have renamed `port-unknown`; rediscover sessions instead of advancing the cursor. Any other non-null `readError`, or `observation: watch-error`, is not a clean cycle: report the bounded error code and stop rather than polling rapidly. Otherwise immediately persist the current `logPath`, `pid`, `port`, `nextCursor`, and a new `updatedAt` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles file replacement safely.
 
-Count a clean cycle only after observing a full 5-second interval with empty or non-error new output. If the log file changes, the PID/port check becomes contradictory, or the cursor resets because the file shrank/rotated, never count that cycle as clean.
+Count a clean cycle only when `readError` is null, `observation: interval`, `observedMs >= 5000`, and `output` is empty or contains no classifiable error. An early `change` observation with informational output is not yet a full clean interval; process it and start the next collection cycle. If the log file changes, the PID/port check becomes contradictory, or the cursor resets because the file shrank/rotated, never count that cycle as clean.
 
 If `truncated: true`, never count the result as clean. Process any nonempty output, then issue at most three additional tail calls from the returned cursor in the same cycle. If `rotationLost: true`, record an explicit rotation warning in `fixes.md` and require a fresh full observation interval before incrementing the clean counter. If data remains truncated after four chunks, record a backlog warning and continue next cycle rather than consuming unbounded context.
 
@@ -737,7 +791,7 @@ Exit the loop. Do NOT auto-resume.
 
 > "⚠ Loop reached the iteration cap (50 cycles). Symptom may be intermittent OR a fix is regressing on every reload. See `.powernative/debug-app/fixes.md` for the per-cycle log. Suggested next step: review the last 3 fixes for circular regressions, or re-run with a more specific symptom."
 
-If counter is < 3 AND the cap hasn't tripped, return to Step A on the next monitoring beat. Do not run shell `sleep` or a host-specific wait command; ordinary tool execution provides the cadence and the cursor prevents duplicate reads.
+If counter is below `targetCleanCycles` and the cap has not tripped, return to Step A. Its foreground file watcher provides the observation interval; do not add shell `sleep`, a host-specific wait command, or a rapid polling loop.
 
 ### Step D — If issues ARE found
 

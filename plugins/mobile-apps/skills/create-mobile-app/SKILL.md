@@ -957,7 +957,7 @@ Bundle ID and scheme are left as template defaults — they are fixed across all
 
 **Fix 1b — Verify captured dev logging path**
 
-Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` delegates Metro terminal output and HTTP bundle failure logging to `@microsoft/power-apps-native-host/metro-logger`, which writes `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
+Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` delegates to `createPowerAppsMetroConfig` from `@microsoft/power-apps-native-host/config/metroConfig`; that factory installs sanitized Metro terminal and HTTP bundle-failure logging under `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
 
 ```bash
 node - "<working_dir>" <<'NODE'
@@ -969,8 +969,8 @@ const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
 if (!pkg.scripts || pkg.scripts.dev !== 'expo start') {
   throw new Error('Expected package.json scripts.dev to be "expo start". Do not route dev through a wrapper.');
 }
-if (pkg.scripts.predev && pkg.scripts.predev !== 'npm run generate-schemas') {
-  throw new Error('Unexpected predev script. Keep schema generation as the only predev hook.');
+if (pkg.scripts.predev !== 'npm run generate-schemas && npm run type-check') {
+  throw new Error('Expected predev to run schema generation followed by type-checking.');
 }
 NODE
 ```
@@ -2248,7 +2248,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 **Print before starting:**
 > "→ [Step 12/13] Launching Metro so you can scan the QR; logs will be written under .powernative/."
 
-This skill runs the schema/typecheck gates explicitly, then launches `npx expo start`. Manual `npm run dev` remains the template's normal entry point and produces the same project-local log because logging is configured in `metro.config.js`.
+This skill launches the template's canonical `npm run dev` command. Its `predev` lifecycle runs schema generation followed by the final TypeScript gate before Expo starts, and logging is configured in `metro.config.js`.
 
 1. The native Metro URL is printed by Expo — the user can scan it immediately.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
@@ -2262,23 +2262,16 @@ The **port** is the log identity: it is what the QR encodes, what the device dia
 
 `.powernative/` is gitignored by the template. Do not copy these files into `memory-bank.md` or commit them.
 
-**Launch commands:**
+**Launch command:**
 
 ```bash
 cd "<working_dir>"
-npm run generate-schemas    # refresh schema map for any data sources added since last run (idempotent)
-npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
+npm run dev
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then start the dev server without rerunning the `predev` schema hook:
-
-```bash
-npx expo start
-```
+`npm run dev` runs `predev` first: `npm run generate-schemas && npm run type-check`. npm does not launch `expo start` when either gate fails. Capture the full failing gate output once, batch-fix by root cause, then rerun `npm run dev`; continue only when `predev` passes and Expo prints its Metro URL.
 
 This is a long-running dev server. In hosts that support background terminals, run it as a background/async terminal only for process lifetime; do not persist or depend on the terminal ID. `/debug-app` discovers logs from `.powernative/metro-logs/`, not from terminal output.
-
-The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual `npm run dev` starts.
 
 Read the initial terminal output and locate the generated `.powernative` log directly:
 
