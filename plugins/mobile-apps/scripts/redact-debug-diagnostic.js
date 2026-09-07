@@ -7,12 +7,12 @@ const MAX_OUTPUT_LENGTH = 4096;
 const headerPattern = /^(\s*)(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|client-secret|x-ms-token[^:]*):[^\r\n]*$/gim;
 const bearerPattern = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const jwtPattern = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
-const querySecretPattern = /([?&](?:sig|se|sp|sv|code|token|access_token|refresh_token|id_token|client_secret)=)[^&#\s]+/gi;
-const assignedSecretPattern = /\b((?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|password|api[_-]?key|accountkey|sharedaccesskey)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+const querySecretPattern = /([?&;](?:sig|se|sp|sv|code|token|access_token|refresh_token|id_token|client_secret)=)[^&#;\s]+/gi;
+const assignedSecretPattern = /(^|[^\w])((?:[\w.-]*?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|client[_-]?secret|password|api[_-]?key|accountkey|sharedaccesskey))\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gim;
 const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const guidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 const providerSecretPattern = /\b(?:AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,})\b/g;
-const residualPattern = /\bBearer\s+(?!\[REDACTED_SECRET\])\S+|\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|[?&](?:sig|token|access_token|refresh_token|id_token|client_secret)=(?!\[REDACTED_SECRET\])[^&#\s]+/i;
+const residualPattern = /\bBearer\s+(?!\[REDACTED_SECRET\])\S+|\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b|[?&;](?:sig|se|sp|sv|code|token|access_token|refresh_token|id_token|client_secret)=(?!\[REDACTED_SECRET\])[^&#;\s]+|(?:^|[^\w])(?:[\w.-]*?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|token|client[_-]?secret|password|api[_-]?key|accountkey|sharedaccesskey))\s*[:=]\s*(?!\[REDACTED_SECRET\])("[^"]*"|'[^']*'|[^\s,;}]+)/im;
 
 function argumentValue(name) {
   const index = process.argv.indexOf(name);
@@ -28,9 +28,12 @@ function redact(input, workingDir) {
   const resolvedWorkingDir = workingDir ? path.resolve(workingDir) : process.cwd();
   const homeDir = os.homedir();
 
-  output = output.replace(new RegExp(`${escapeRegExp(resolvedWorkingDir)}[/\\\\]?`, 'g'), '');
+  output = output.replace(new RegExp(`${escapeRegExp(resolvedWorkingDir)}(?:[/\\\\]|$)`, 'g'), '');
   if (homeDir && path.resolve(homeDir) !== resolvedWorkingDir) {
-    output = output.replace(new RegExp(`${escapeRegExp(path.resolve(homeDir))}[/\\\\][^\\s:()]+`, 'g'), '[REDACTED_PATH]');
+    output = output.replace(
+      new RegExp(`${escapeRegExp(path.resolve(homeDir))}[/\\\\][^\\r\\n:()'"]+`, 'g'),
+      '[REDACTED_PATH]',
+    );
   }
 
   output = output
@@ -38,7 +41,7 @@ function redact(input, workingDir) {
     .replace(bearerPattern, 'Bearer [REDACTED_SECRET]')
     .replace(jwtPattern, '[REDACTED_SECRET]')
     .replace(querySecretPattern, '$1[REDACTED_SECRET]')
-    .replace(assignedSecretPattern, '$1[REDACTED_SECRET]')
+    .replace(assignedSecretPattern, '$1$2[REDACTED_SECRET]')
     .replace(providerSecretPattern, '[REDACTED_SECRET]')
     .replace(emailPattern, '[REDACTED_EMAIL]')
     .replace(guidPattern, '[REDACTED_ID]');
@@ -54,13 +57,15 @@ function redact(input, workingDir) {
   return output;
 }
 
-let input = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => {
-  input += chunk;
-});
-process.stdin.on('end', () => {
-  process.stdout.write(redact(input, argumentValue('--working-dir')));
-});
+if (require.main === module) {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    input += chunk;
+  });
+  process.stdin.on('end', () => {
+    process.stdout.write(redact(input, argumentValue('--working-dir')));
+  });
+}
 
 module.exports = { redact };
