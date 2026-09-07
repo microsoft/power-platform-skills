@@ -8,7 +8,7 @@ function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..',
 
 const { migrateAppSpec, validateAppSpec, lookupColumnsFor, SDK_ROLE_MARKER } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
-const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor } = pluginLib('sdk-build.js');
+const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
 const { subgridSectionIntent } = pluginLib('artifact-intent.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
@@ -201,16 +201,41 @@ function makeAllPresentReader(spec) {
   }
   const xml = `<SiteMap>${tags.join('')}</SiteMap>`;
 
+  // Business rules and BPFs are both `workflows` rows, and verifySpec reads them with a raw OData
+  // filter rather than by name — so an "all present" reader has to answer that query specifically.
+  // Returning the generic one-row stub is not enough: the row carries no `statecode`, and verify
+  // compares the deployed state against the spec's declared `status`, so every Active rule read as
+  // Draft and the fixture failed on an artifact that is, by construction, present.
+  //
+  // The filters are built by `businessRuleFilter` / `bpfFilter` and differ only by category:
+  //   category eq 2 and type eq 1 and name eq 'Lock the summary' and primaryentity eq 'new_case'
+  //   category eq 4 and type eq 1 and businessprocesstype eq 0 and name eq '...' and primaryentity eq '...'
+  // `odataLit` doubles a literal apostrophe, so undo that when matching the name back.
+  const workflowRow = (filter) => {
+    const f = String(filter || '');
+    const nameMatch = /name eq '((?:[^']|'')*)'/.exec(f);
+    if (!nameMatch) return [];
+    const wanted = nameMatch[1].replace(/''/g, "'");
+    const declared = /category eq 4/.test(f) ? (spec.businessProcessFlows || []) : (spec.businessRules || []);
+    const hit = declared.find((x) => x && x.name === wanted);
+    if (!hit) return [];
+    // Exactly ONE row: verify treats two rows sharing a name as duplicates, which is a real failure
+    // and must stay detectable rather than be papered over by a reader that always says "fine".
+    return [{ workflowid: `wf-${wanted}`, statecode: (hit.status || 'Active') === 'Active' ? 1 : 0 }];
+  };
+
   return {
     findTable: async (logical) => (entities.has(logical) ? { logicalName: logical } : null),
     findColumns: async (logical) => columnsByEntity[logical] || [],
     // All view/chart/form/dashboard existence checks pass — the reader always reports present. A
     // `role` query (verifySpec's persona-role check) returns an SDK-authored (marker) role, and a
     // `businessunit` query returns a root BU so the BU-scoped, fail-closed role check resolves offline.
-    queryRecords: async (set) => (set === 'role'
+    queryRecords: async (set, opts) => (set === 'role'
       ? [{ roleid: 'role-x', description: SDK_ROLE_MARKER, ismanaged: false }]
       : set === 'businessunit'
       ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
+      : set === 'workflow'
+      ? workflowRow(opts && opts.filter)
       : [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }]),
     sitemapXml: async () => xml,
   };
@@ -273,6 +298,53 @@ function subareaTargets(appShell) {
 function teardownFacts(spec) {
   const kinds = planTeardown(spec).map((s) => s.kind);
   return { kinds };
+}
+
+// process: the two DECLARATIVE-LOGIC surfaces — `businessRules[]` and `businessProcessFlows[]`.
+//
+// Both compile to a nested node shape that the platform accepts far more readily than it honours: a
+// business rule whose condition tree is mis-shaped deploys, activates, and never fires, and a BPF
+// step with no bound field is refused outright by the platform rather than by any local check. So
+// what matters here is not "did we emit something" but WHICH COLUMNS the emitted definition actually
+// binds — the one property a downstream reader can compare against the spec's own data model.
+//
+// Facts are taken from the same pure def builders the engine pushes (`businessRuleDef` / `bpfDef`),
+// so a mapping change that silently drops a field shows up as a missing binding rather than as a
+// still-green count.
+function processFacts(spec) {
+  const rules = (spec.businessRules || []).map((r) => {
+    const def = businessRuleDef(r);
+    const clauses = (def.rootCondition && def.rootCondition.clauses) || [];
+    const actions = (def.rootCondition && def.rootCondition.trueBranch) || [];
+    return {
+      name: def.name,
+      entity: lc(def.entityLogicalName),
+      status: def.status,
+      // Every column the compiled rule touches, from both halves of the tree. A rule that binds a
+      // column the app does not create is authored against nothing.
+      fields: [...clauses.map((c) => lc(c.field)), ...actions.map((a) => lc(a.field))].filter(Boolean),
+      operators: clauses.map((c) => c.operator),
+      actionTypes: actions.map((a) => a.type),
+    };
+  });
+  const flows = (spec.businessProcessFlows || []).map((f) => {
+    const def = bpfDef(f);
+    const stages = (def.stages || []).map((st) => ({
+      name: st.name,
+      entity: lc(st.entityLogicalName),
+      steps: (st.steps || []).map((s) => ({ name: s.name, field: lc(s.fieldName), required: s.required === true })),
+    }));
+    return {
+      name: def.name,
+      entity: lc(def.entityLogicalName),
+      status: def.status,
+      stages,
+      // Flattened for the binding check: a step whose `fieldName` did not survive the mapping
+      // arrives here as an empty string, which the assertion reports by stage and step name.
+      steps: stages.flatMap((st) => st.steps.map((s) => ({ stage: st.name, ...s }))),
+    };
+  });
+  return { rules, flows };
 }
 
 // A synthetic "deployed app" reader built from the spec, so hydrateSpec (the pure download primitive)
@@ -409,6 +481,7 @@ async function stageFacts(rawSpec) {
     security: securityFacts(spec),
     verify: await verifyFacts(spec),
     page: pageFacts(spec),
+    process: processFacts(spec),
     teardown: teardownFacts(spec),
     roundTrip: await roundTripFacts(spec),
     PHASES,

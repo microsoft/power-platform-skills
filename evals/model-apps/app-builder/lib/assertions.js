@@ -312,6 +312,139 @@ ASSERTIONS.set('teardown: every declared command bar has a teardown step', ({ fa
   return steps === entities.size ? PASS : fail(`expected ${entities.size} command-bar teardown step(s), got ${steps}`);
 });
 
+// declarative logic: businessRules[] + businessProcessFlows[] ------------------------------------
+//
+// Both surfaces share one failure mode that no downstream check catches: the platform ACCEPTS a
+// definition whose column bindings are wrong or missing, and the artifact then simply does nothing.
+// A business rule that binds a column the app never creates deploys, activates and never fires; a
+// BPF is refused outright for a field-less step, but only at push time on a live environment.
+//
+// So these grade the BINDINGS, against the spec's own data model, from the same pure def builders
+// the engine pushes. Each skips when the fixture declares none, so they are safe as common
+// assertions across every fixture.
+
+// Resolve the column names an entity legitimately offers a rule or a flow: its own columns, its
+// primary name, and the lookup columns its relationships create.
+const lcName = (s) => String(s || '').toLowerCase();
+function boundColumnsFor(spec, entityLogical) {
+  const ent = (spec.entities || []).find((e) => e && lcName(e.schemaName) === entityLogical);
+  if (!ent) return null;
+  const cols = new Set((ent.columns || []).map((c) => lcName(c && c.schemaName)));
+  if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(lcName(ent.primaryAttribute.schemaName));
+  for (const r of spec.relationships || []) {
+    if (r && r.type !== 'ManyToMany' && lcName(r.referencing) === entityLogical) {
+      cols.add(lcName(r.lookupName || `${String(r.referenced || '').toLowerCase()}id`));
+    }
+  }
+  return cols;
+}
+
+ASSERTIONS.set('process: every business rule binds only columns the spec creates', ({ facts, spec }) => {
+  const rules = (facts.process && facts.process.rules) || [];
+  if (!rules.length) return skip('spec declares no business rules');
+  const bad = [];
+  for (const r of rules) {
+    const cols = boundColumnsFor(spec, r.entity);
+    if (!cols) { bad.push(`${r.name}: unknown entity '${r.entity}'`); continue; }
+    // An EMPTY binding set is the dangerous case, not merely an unknown one: it is what a
+    // mis-shaped condition tree produces, and it deploys as a rule with no clauses and no actions.
+    if (!r.fields.length) { bad.push(`${r.name}: compiles to NO column bindings at all`); continue; }
+    const unknown = r.fields.filter((f) => !cols.has(f));
+    if (unknown.length) bad.push(`${r.name}: binds unknown column(s) ${unknown.join(', ')}`);
+  }
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('process: every business rule compiles at least one condition and one action', ({ facts }) => {
+  const rules = (facts.process && facts.process.rules) || [];
+  if (!rules.length) return skip('spec declares no business rules');
+  const bad = rules.filter((r) => !r.operators.length || !r.actionTypes.length)
+    .map((r) => `${r.name}: ${r.operators.length} condition(s), ${r.actionTypes.length} action(s)`);
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('process: every BPF step binds a field on the flow entity', ({ facts, spec }) => {
+  const flows = (facts.process && facts.process.flows) || [];
+  if (!flows.length) return skip('spec declares no business process flows');
+  const bad = [];
+  for (const f of flows) {
+    const cols = boundColumnsFor(spec, f.entity);
+    if (!cols) { bad.push(`${f.name}: unknown entity '${f.entity}'`); continue; }
+    if (!f.stages.length) { bad.push(`${f.name}: has no stages`); continue; }
+    for (const st of f.stages) {
+      if (!st.steps.length) bad.push(`${f.name}/${st.name}: stage has no steps`);
+      // The platform rejects a field-less step outright ("datafieldname of ControlStep cannot be
+      // null or empty"), so an unbound step is a build failure, not a cosmetic gap.
+      for (const s of st.steps) {
+        if (!s.field) bad.push(`${f.name}/${st.name}/${s.name}: step binds no field`);
+        else if (!cols.has(s.field)) bad.push(`${f.name}/${st.name}/${s.name}: unknown column '${s.field}'`);
+      }
+    }
+  }
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('process: every BPF stage is scoped to the flow entity (v1 is single-entity)', ({ facts }) => {
+  const flows = (facts.process && facts.process.flows) || [];
+  if (!flows.length) return skip('spec declares no business process flows');
+  const bad = flows.flatMap((f) => f.stages.filter((st) => st.entity !== f.entity)
+    .map((st) => `${f.name}/${st.name}: stage entity '${st.entity}' != flow entity '${f.entity}'`));
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('teardown: every declared business rule and process flow has a teardown step', ({ facts, spec }) => {
+  const rules = (spec.businessRules || []).length;
+  const flows = (spec.businessProcessFlows || []).length;
+  if (!rules && !flows) return skip('spec declares no business rules or process flows');
+  const ruleSteps = facts.teardown.kinds.filter((k) => k === 'businessRules').length;
+  const flowSteps = facts.teardown.kinds.filter((k) => k === 'businessProcessFlows').length;
+  if (ruleSteps !== rules) return fail(`expected ${rules} business-rule teardown step(s), got ${ruleSteps}`);
+  if (flowSteps !== flows) return fail(`expected ${flows} process-flow teardown step(s), got ${flowSteps}`);
+  return PASS;
+});
+
+// per-eval expectations (eval 5 "process logic") — the declarative-logic surfaces, by value --------
+
+ASSERTIONS.set('the BPF stage order is Intake, Investigate, Resolve and every step binds a declared column', ({ facts }) => {
+  const flow = (facts.process.flows || [])[0];
+  if (!flow) return fail('no business process flow fact');
+  const order = flow.stages.map((s) => s.name);
+  if (!eq(order, ['Intake', 'Investigate', 'Resolve'])) return fail(`stage order = [${order}]`);
+  // Stage order is positional, not a sortable field: the SDK emits stages in array order and the
+  // stage bar renders them that way, so a mapping that reordered them would silently change the
+  // process an agent is walked through.
+  const unbound = flow.steps.filter((s) => !s.field).map((s) => `${s.stage}/${s.name}`);
+  return unbound.length ? fail(`step(s) with no field: ${unbound.join(', ')}`) : PASS;
+});
+
+ASSERTIONS.set('the BPF binds the relationship lookup new_customerid, not just the case table’s own columns', ({ facts }) => {
+  // A lookup column exists only because a relationship creates it, so it is absent from the
+  // entity's `columns[]`. A binding check that consulted only `columns[]` would reject this
+  // perfectly valid step — the guard has to know where lookups come from.
+  const flow = (facts.process.flows || [])[0];
+  if (!flow) return fail('no business process flow fact');
+  const fields = flow.steps.map((s) => s.field);
+  return fields.includes('new_customerid') ? PASS : fail(`bound fields = [${fields}]`);
+});
+
+ASSERTIONS.set('a rule with two conditions compiles both, ANDed, and neither is dropped', ({ facts }) => {
+  const rule = (facts.process.rules || []).find((r) => r.name === 'Hide the diagnosis until investigation starts');
+  if (!rule) return fail('no two-condition rule fact');
+  if (rule.operators.length !== 2) return fail(`compiled ${rule.operators.length} condition(s), expected 2: [${rule.operators}]`);
+  // The presence operator carries no value, so a mapper that assumed every clause has one would
+  // drop it — and the rule would then fire on status alone.
+  if (!rule.operators.includes('DoesNotContainData')) return fail(`presence operator lost: [${rule.operators}]`);
+  return rule.fields.includes('new_owner') ? PASS : fail(`the presence clause lost its column: [${rule.fields}]`);
+});
+
+ASSERTIONS.set('every business rule and the process flow each get exactly one teardown step', ({ facts, spec }) => {
+  const rules = facts.teardown.kinds.filter((k) => k === 'businessRules').length;
+  const flows = facts.teardown.kinds.filter((k) => k === 'businessProcessFlows').length;
+  if (rules !== (spec.businessRules || []).length) return fail(`business-rule teardown steps = ${rules}`);
+  if (flows !== (spec.businessProcessFlows || []).length) return fail(`process-flow teardown steps = ${flows}`);
+  return PASS;
+});
+
 // per-eval expectations (eval 4 "hardening") — explicit, value-specific checks of each fix ---------
 
 ASSERTIONS.set('the ticket default view keeps new_customerid even though the table has 8 scalar columns (#2)', ({ facts }) => {

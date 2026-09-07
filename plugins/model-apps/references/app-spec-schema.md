@@ -428,6 +428,13 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
     { "attr": "new_duedate", "op": "this-week" }                    // relative-date — no value
   ] }
 ```
+- **`columns[]` is an array of column NAMES (strings)**, and so are `sort[].attr` and
+  `filters[].attr`. Not `[{ "name": "..." }]` — that is the shape `forms[]` uses for its fields, and
+  it used to be accepted here and stringified into the view's FetchXML as `[object object]`. The
+  build then failed at the platform, mid-run, and left behind a view row that could not be read or
+  deleted, so every later build failed the same way
+  ([#525](https://github.com/microsoft/power-platform-skills/issues/525)). It is now rejected up
+  front, naming the view and the offending entry.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).

@@ -1166,9 +1166,41 @@ function validateAppSpec(spec, opts = {}) {
     }
   }
   for (const v of spec.views || []) {
-    validateDescription(v && v.description, `view '${(v && (v.name || v.entity)) || '(unnamed)'}'`, errors);
+    const vlabel = `view '${(v && (v.name || v.entity)) || '(unnamed)'}'`;
+    validateDescription(v && v.description, vlabel, errors);
     if (!entityNames.has(v.entity)) {
       errors.push(`view references unknown entity '${v.entity}'`);
+    }
+    // A column/attribute reference is STRINGIFIED downstream, never type-checked: `viewDef` maps
+    // every one of them with `String(x).toLowerCase()`. So a non-string is not rejected — it is
+    // silently turned into text, and an object becomes the literal `[object object]`, which lands
+    // in the view's fetchxml. Dataverse refuses it with an opaque metadata error ("entity doesn't
+    // contain attribute with Name = '[object object]'") mid-build, after the solution, tables and
+    // columns already exist.
+    //
+    // The damage outlives that run. The savedquery row is created holding the bad fetchxml, so
+    // every later READ of it also 400s and the next build dies at the same step; Dataverse reports
+    // the row as system-defined and refuses to delete it, so recovery means tearing the table down.
+    // https://github.com/microsoft/power-platform-skills/issues/525
+    //
+    // `{ "name": "..." }` is not an exotic mistake: it is exactly the shape `forms[]` uses for its
+    // fields, so an author moving between the two surfaces writes it naturally.
+    const attrRef = (value, where) => {
+      if (typeof value !== 'string' || !value.trim()) {
+        errors.push(`${vlabel}: ${where} must be a non-empty column name (a string), got ${JSON.stringify(value)}`);
+      }
+    };
+    if (v && v.columns !== undefined) {
+      if (!Array.isArray(v.columns)) errors.push(`${vlabel}: columns must be an array of column names`);
+      else v.columns.forEach((c, i) => attrRef(c, `columns[${i}]`));
+    }
+    if (v && v.sort !== undefined) {
+      if (!Array.isArray(v.sort)) errors.push(`${vlabel}: sort must be an array`);
+      else v.sort.forEach((s, i) => attrRef(s && s.attr, `sort[${i}].attr`));
+    }
+    if (v && v.filters !== undefined) {
+      if (!Array.isArray(v.filters)) errors.push(`${vlabel}: filters must be an array`);
+      else v.filters.forEach((f, i) => attrRef(f && f.attr, `filters[${i}].attr`));
     }
   }
   // Commands (modern command-bar buttons). A functional button needs a JS library + function;
