@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 24 skills + 2 bounded agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 26 skills + 2 bounded agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -48,6 +48,12 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 ## Guiding Principles
 
 1. **Connector-first for data** — All Power Platform data access goes through connectors and generated services in `src/generated/`. No direct Graph / Azure REST calls.
+   **Explicit local prototypes are separate:** `/create-mobile-prototype` is a
+   thin `/create-mobile-app --prototype --gated` profile selected before any
+   environment/auth/init work. Its actual local repositories, rules, hooks,
+   media and startup live under app-owned `src/data`; canonical
+   `.tmp/scenario-facts.json` is the only fixture authority. No fake generated
+   services/config and no fallback from failed live data to local data.
 2. **Native code is allowlist-bounded; pure JavaScript is app-scoped.** Expo modules and packages that ship native source, a podspec, codegen configuration, an Expo module/config plugin, or platform projects must already exist in `template/package.json`. The rewrap binary is built from a pre-built base, so adding those packages to an app cannot add their native code. Do not classify a package from its name alone: a `react-native-*` package can still be pure JavaScript. For an explicit library request or an approved use case that benefits from an established library, foreground planning may select a compatible pure-JavaScript package, pin it in the app's `package.json`, and install it before builders use it; no Android/iOS rebuild is required. Do not bundle optional libraries such as `react-native-calendars` in the base template. Follow [`shared/references/javascript-dependency-planning.md`](shared/references/javascript-dependency-planning.md). `expo-haptics` remains runtime-banned even if it appears in a future template (see [`agents/screen-builder.md`](agents/screen-builder.md) HARD RULE). The native boundary and reconciliation rule are in [`skills/add-native/SKILL.md`](skills/add-native/SKILL.md).
 3. **Fresh-template mode** — `/create-mobile-app` validates and prepares an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
@@ -55,8 +61,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 6. **Four-gate Product Experience flow** — Gate 1 approves UX DNA, Product
    Scope, architecture/capabilities/connectors, and persistence ownership;
    Gate 2 approves the conditional data model, Workflow Journey, and build packs;
-   Gate 3 approves the materialized design and interactive HTML journey
-   preview; Gate 4 confirms implementation. Graph/spec compilation does not
+   Gate 3 approves the materialized design and optional HTML journey
+   preview; Gate 4 confirms implementation. `MOBILE_APP_HTML_COMPANIONS=0`
+   (Player default) retains structured contracts, design and all gates without
+   generating/serving HTML; standalone defaults to `1`. Graph/spec compilation does not
   create extra user gates. `_build_plan.html` is a separate live execution
   companion opened only after Step 2c `proceed`; it derives from canonical
   contracts, uses revision-checked pre-Dataverse data-model edits, and never
@@ -99,6 +107,35 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 
 ## Decisions made
 
+- ✅ `/create-mobile-prototype` generates persistent app-scoped local CRUD,
+  bounded queries, and captured media without selecting an environment. It
+  preserves the same Product Experience/Scope/Journey and four gates.
+- ✅ `/prototype-to-real-app` explicitly reuses bounded Dataverse planning and
+  sequential execution, verifies logical/service mappings, and stages
+  app-owned adapters while retaining the prototype and remote journal. It does
+  not deploy or import demo records/media by default.
+- ✅ Candidate local data and media use an isolated copy-on-write namespace.
+  Player mode uses the shared authoring decision/publication transport; the
+  bridge alone publishes, and mounted readiness is a separate native receipt.
+- ✅ Native helpers accept an explicit verified `--prototype` profile without
+  live configuration. Local signatures persist through the photo store;
+  connected-only tracking remains gated. A project precheck or package match
+  does not prove device hardware/permission support. The read-only catalogue
+  lists capabilities included in the template's package.json with friendly
+  labels; ordinary Player runtime compatibility checks remain separate.
+- ✅ `/list-connections` defaults to genuine environment-scoped read-only
+  discovery; it never creates connections/references or repairs consent.
+  `/add-connector` and `/add-sharepoint --existing-only` preserve the selected
+  API/environment and exact ID or reference. Local-to-connected initialization
+  is separately approved; selection is not Dataverse provisioning permission.
+- ✅ Connector-only prototype startup uses the real host/auth/schema provider
+  with retained local repositories and copy-on-write preview namespaces.
+  `mixed` requires Dataverse; local plus connector owners remain
+  `connector-only`. App-owned runtime reference pins never rewrite official
+  generated configuration, local models/rules or existing screen markup.
+  Action-only connectors require an approved connector decision but no fake
+  persistent concept: connectivity profile `connector` is independent of
+  logical persistence, which may remain `local-prototype`.
 - ✅ Markdown plan with Mermaid plus a model-authored, deterministically
   validated interactive HTML experience preview before implementation
 - ✅ Product Experience Compiler with adaptive screen/table budgets,
@@ -113,7 +150,7 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Template is supplied from `microsoft/power-platform-skills/plugins/mobile-apps/template#main` before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `npx power-apps init`.
 - ✅ `brand/` directory convention: `/design-system` (Step 6.75) always writes
   `brand/design-system.md` and `brand/tokens.ts`, and writes
-  `_plan_preview.html` in the same design-system model execution from generated
+  `_plan_preview.html`, when HTML companions are enabled, in the same design-system model execution from generated
   tokens, signature components, and the compiled primary journey. The
   deterministic renderer writes only `_plan_preview.structural.html`. No-brand
   paths materialize Product Experience deliberately; inspection presets are

@@ -14,6 +14,11 @@ Validate and open the existing model-authored product-experience storyboard. Do
 not inspect or translate TSX, author another final design, call another model, or
 create a second preview-only design system.
 
+With `MOBILE_APP_HTML_COMPANIONS=0`, do not render, validate or open HTML.
+Use the existing native preview for implemented screens and retain the same
+canonical/brand gates; report that the HTML companion was not requested.
+Explicit HTML review requires `MOBILE_APP_HTML_COMPANIONS=1`.
+
 ## When to use
 
 - Before implementation, to review approved product intent at Gate 3.

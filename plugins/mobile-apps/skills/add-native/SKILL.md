@@ -12,6 +12,11 @@ model: sonnet
 
 Generate a one-file typed wrapper under `src/native/` for a native device capability that the upstream template already ships. Screens import the wrapper instead of touching Expo modules directly, so the discriminated-union result contract stays consistent across the app.
 
+First read [project profile and local persistence](references/prototype-mode.md).
+Explicit prototypes need no environment or `power.config.json`. A verified
+catalogue lists included template packages; device permissions and normal
+Player runtime compatibility remain separate from project validity.
+
 ## Hard rules — do NOT cross these lines
 
 1. **Never run `npx expo install`, `npm install`, or `yarn add` for a native module.** The set of native modules in `package.json` is fixed by the upstream template. Adding a new one breaks the rewrap pipeline (the customer's binary is built from a pre-built base, not from their `package.json`).
@@ -39,7 +44,14 @@ For every other capability listed below, this skill writes the wrapper directly.
 
 ## Native capability gate
 
-Before adding any native control or wrapper, apply every gate: classify the intent, resolve the exact package/control from the live `package.json`, confirm it is not runtime-banned, confirm the input/output/storage constraints, then use the matching route below. If any gate fails, the native functionality is not supported for this app version — do not install packages, edit native config, or create fake wrappers.
+Before adding a control, resolve its exact package from the template and app
+`package.json`, check the runtime-ban/package-version policy and the planned
+input/output/storage constraints, then use the matching route below. The
+catalogue means **included in the template**, not proven device hardware or
+permission support. Do not add a binary-inventory or method-probe prerequisite.
+Normal Player runtime compatibility and the wrapper's actual permission/error
+handling remain in place. Missing/banned packages do not authorize installation,
+native-config edits, or fake wrappers.
 
 | User intent | Add/use | Required package or control | Do not use / fallback |
 |---|---|---|---|
@@ -126,8 +138,8 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 
 | Capability | Module | Wrapper to generate | Notes |
 |---|---|---|---|
-| `camera`, `take-photo`, `photo`, `expo-camera` | `expo-camera` | `src/native/camera.ts` | `/add-native` routes internally to `add-camera` |
-| `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/imagePicker.ts` | `/add-native` routes internally to `add-camera` |
+| `camera`, `take-photo`, `photo`, `expo-camera` | `expo-image-picker` | `src/native/camera.ts` | Internal `add-camera` owns quick capture through `takePhoto`; legacy initialized-app precheck also requires `expo-camera` |
+| `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/camera.ts` | Internal `add-camera` owns gallery selection through `pickImage`; reuse the shared wrapper |
 | `barcode-scanner`, `qr-scanner`, `scanner`, `barcode`, `qr` | `expo-camera` | `src/native/barcodeScanner.tsx` | `/add-native` routes internally to `add-camera` |
 | `document-picker` | `expo-document-picker` | `src/native/documentPicker.ts` | Picks/imports user-selected files (PDF, docs, etc.) from the device |
 | `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; 0.2.9+ opens HTTPS URLs and file URIs |
@@ -146,7 +158,13 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | `sensors` | `expo-sensors` | `src/native/sensors.ts` | Use only for sensor APIs exposed by the installed package |
 | `screen-orientation` | `expo-screen-orientation` | `src/native/screenOrientation.ts` | Use only when package is present; do not edit native config |
 | `device-info` | `expo-device` / `expo-application` / `expo-cellular` | `src/native/deviceInfo.ts` | Read-only device/app/cellular metadata wrappers |
-| `date-time-picker` | `@react-native-community/datetimepicker` | screen-level component usage | Use directly in form screens per screen-builder rules; no `/add-native` wrapper required |
+| `date-time-picker` | `@react-native-community/datetimepicker` | screen-level component usage | Use directly in one explicitly selected approved form screen under screen-builder rules; no `/add-native` wrapper |
+
+Camera and gallery share one real `camera.ts` output; never manufacture a
+second image-picker wrapper to match a guessed path. Explicit prototypes use
+the existing `src/data/capture.ts` compiler instead, with separate approved
+camera/library sources. A shared file's existence does not mean both
+capabilities are enabled or used.
 
 ### PDF / pen routing rules
 
@@ -168,7 +186,7 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 - Never put File column bytes in the create/update JSON body. File bytes are uploaded only after the parent row ID exists.
 - Screens must handle unsupported, cancelled, upload failed, and viewer failed states explicitly. Pen cancellation is a non-error result that screens can ignore.
 
-**Missing or banned packages:** `package.json` plus the runtime-ban list is authoritative. If the relevant package/control is absent, or the package is runtime-banned, stop with a transparency note. `expo-haptics` remains banned unless the screen-builder hard rule is explicitly removed; use visual-only feedback instead.
+**Missing or banned packages:** `package.json` and the runtime-ban list bound eligible packages; the actual binary still must prove support. If the relevant package/control is absent, banned, or unavailable in that binary, stop with a transparency note. `expo-haptics` remains banned unless the screen-builder hard rule is explicitly removed; use visual-only feedback instead.
 
 Use scoped system pickers for user-selected media and documents. Do not add or
 recommend broad `expo-media-library` access when `expo-image-picker`,
@@ -183,9 +201,9 @@ workflow.
 
 ### Step 1 — Verify project
 
-```bash
-test -f app.config.js && test -f power.config.json && test -f package.json
-```
+Run the profile-specific `verify-prototype-native.js` command in
+[prototype-mode.md](references/prototype-mode.md). Propagate `--prototype` to
+dedicated helpers; do not initialize an environment to satisfy this precheck.
 
 ### Step 2 — Resolve capability
 
@@ -316,13 +334,15 @@ Sample usage:
     showToast('Camera permission required');
   }
 
-⚠️  No native rebuild required. Wrappers are pure JS — Metro hot-reload picks them up.
-    The underlying native module was already linked when the template was scaffolded.
+Template package          : <included package and declared version>
+Device interaction        : <observed result, or "not exercised">
+The wrapper adds no native code. A passing type-check alone does not establish
+that the running binary supports the capability.
 ─────────────────────────────────────────────
 ```
 
 ## Notes
 
-- This skill never modifies `package.json`, `app.config.js`, `src/playerConfig.ts`, `src/generated/`, or any screen file.
+- This skill never modifies `package.json`, `app.config.js`, `src/playerConfig.ts`, `src/generated/`, or any screen file. Prototype camera/gallery refreshes invoke the existing `src/data` compiler, never direct edits to its owned files.
 - For capabilities not in the supported table (`expo-notifications`, Bluetooth, NFC, BLE, AR — until the template adds them), tell the user the template doesn't ship them yet — file a request at the upstream template repo. Do NOT attempt to install or configure anything yourself.
 - Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.

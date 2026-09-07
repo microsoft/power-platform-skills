@@ -2723,6 +2723,8 @@ function createCliRequest(
   createExecutor = createDataverseRequestExecutor,
   executorOptions = {},
 ) {
+  const broker = require('./lib/player-dataverse').playerDataverse(executorOptions);
+  if (broker) return (method, apiPath, body = null) => broker.metadata(args['env-url'], method, apiPath, body);
   return createExecutor({
     environmentUrl: args['env-url'],
     tenantId: args['tenant-id'],

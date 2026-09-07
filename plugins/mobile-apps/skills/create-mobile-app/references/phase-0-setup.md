@@ -1,5 +1,15 @@
 # Setup and Requirements
 
+## Profile boundary
+
+Select `CREATE_PROFILE` from the entry skill before running this file.
+For explicit `prototype`, first execute the non-mutating compatibility check
+in [prototype-profile.md](./prototype-profile.md). Skip every Azure account,
+environment, name-collision, publisher, auth, and init operation below; they
+are the **real-profile branch only**. Node/npm and installed-template checks,
+the full requirements brief, Step 2c, and all subsequent logical gates remain.
+Use the shared authoring decision adapter for every question in Player mode.
+
 ## Fresh-template working-directory mode
 
 This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
@@ -107,8 +117,15 @@ Then run the checks:
 ```bash
 node --version                                      # v22+
 npm  --version                                      # v10+
-az account show --query "user.name" -o tsv          # Azure CLI logged in (needed for Dataverse helper scripts)
 git --version                                       # optional
+```
+
+Only for the explicitly selected **real** profile, run the separate account
+probe below. Prototype never runs it; do not depend on a shell variable carried
+from an earlier tool call:
+
+```bash
+az account show --query "user.name" -o tsv
 ```
 
 **Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx power-apps push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — only the **Always required** tier matters here.
@@ -116,11 +133,13 @@ git --version                                       # optional
 | Missing | Action |
 |---|---|
 | Node < 22 | STOP — instruct `nvm install 22 && nvm use 22` |
-| `az` | STOP — instruct `az login` |
+| `az`, real profile only | STOP — instruct `az login` |
 
 Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbacks, vendor fallbacks, or registry rewrites. The user must run `npm install` in the fresh template folder before invoking `/create-mobile-app`.
 
-Capture target Power Platform environment for the remaining flow.
+**Real profile only:** capture the target Power Platform environment for the
+remaining flow. In explicit prototype mode jump directly to Step 1.7 without
+executing this resolver/account block or asking for an environment.
 
 **Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `npx power-apps init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `npx power-apps init` because init needs `--environment-id`.
 
@@ -184,13 +203,15 @@ environment override or name collision:
 | App display name | derived from description |
 | Target platforms | `ios`, `android` (multi-select, default both) |
 | Aesthetic | minimal / playful / professional / matches existing brand |
-| Target environment | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1.6, or choose "use a different environment" and provide another environment ID |
+| Target environment (real profile only) | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1.6, or choose "use a different environment" and provide another environment ID |
 
 **App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
 
-**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js <id> --no-cache` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`. Do not persist the selection before Step 2c approval.
+**Environment override branch (real profile only):** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js <id> --no-cache` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`. Do not persist the selection before Step 2c approval.
 
-**App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
+**App-name collision pre-flight (real profile only).** Prototype names are local;
+do not query a tenant. Once `<displayName>` is fixed for a real app, check the
+chosen env for a name collision:
 
 ```bash
 npx power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null | grep -F "<displayName>" >/dev/null && \
@@ -346,6 +367,12 @@ preset.
 
 Print the block once, exactly in this format (substitute computed values; ranges as `low-high`):
 
+For explicit prototype keep this same review, but print **Dataverse tables 0
+(not applicable)**, label future connectors as deferred external effects, and
+describe scaffolding as local registry/provider preparation, **not init**.
+Print four gated reviews in Player/prototype mode; do not imply a consolidated
+approval or add an environment prerequisite.
+
 ```
 ─── Plan preview (rough) ─────────────────────────────────
 Based on your confirmed brief, before foreground planning runs:
@@ -376,6 +403,13 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 **Three-option exit:**
 
+In Player, present this review as a shared `kind: "plan"`,
+`gateId: "create-preflight"` question with `fields: []`. Bind the initial source
+(or at least `app.json` and `package.json`); `approve` means proceed, `revise`
+means edit the brief, and `reject` means abort. Do not convert an unanswered
+question or empty typed answer into consent. Operational question/receipt logs
+are not permission to mutate app files.
+
 | User answer | Action |
 |---|---|
 | `proceed` (or empty / Enter) | Initialize app identity, then continue to Step 3. Default. |
@@ -383,6 +417,21 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 | `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
 
 After `proceed`, and only after `proceed`, initialize the app identity:
+
+**Player prototype:** bind the verified bridge app ID instead of minting a
+different one:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/bind-prototype-identity.js" \
+  --project-root "<working_dir>" --receipt "<verified-create-preflight-receipt>"
+```
+
+The helper re-verifies that exact preflight receipt, requires the existing v4
+identity contract, and refuses to replace a different app identity. An already
+matching ID is a read-only idempotent result. Never write an ID before this
+gate or derive it from a Metro address.
+
+**Ordinary CLI (including prototype):** retain the existing identity owner:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/lib/app-identity.js" "<working_dir>"
@@ -400,6 +449,9 @@ long-running background process, and open the returned `launchUrl` once. This
 is the first point where `_build_plan.html` or any Build Plan artifact may be
 created. Retain the process/terminal handle through Step 13; never copy its
 token-bearing URL into persisted project documentation.
+In Player, the shared authoring transport replaces interactive question
+surfaces. Build Plan HTML is progress only; it cannot approve gates or publish
+a candidate. Do not launch a second Metro or send its private URL to the maker.
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.

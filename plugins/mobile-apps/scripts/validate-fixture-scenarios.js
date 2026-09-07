@@ -9,6 +9,7 @@ const {
   contractRevision,
   sha256Hex,
 } = require('./lib/product-experience-contracts');
+const { referencedMediaKeys, validateScenarioImages } = require('./lib/prototype-images');
 
 const DEFAULT_PATHS = {
   input: '.tmp/scenario-facts-input.json',
@@ -129,6 +130,7 @@ function validateInvariant(invariant, records, errors, pointer) {
 function compilePreview(binding, records, mediaAssets, errors, pointer) {
   const preview = binding.preview || {};
   const boundRecordIds = new Set(binding.recordIds || []);
+  const recordMediaKeys = new Set([...records.values()].flatMap(referencedMediaKeys));
   const compiled = {
     headline: resolveValue(
       preview.headline,
@@ -178,6 +180,15 @@ function compilePreview(binding, records, mediaAssets, errors, pointer) {
         `${pointer}.records[${index}]`,
       ));
     }
+    if (mediaAssets.get(item.mediaAssetKey)?.source?.kind === 'cdn'
+      && ((recordMediaKeys.has(item.mediaAssetKey) && !referencedMediaKeys(record).includes(item.mediaAssetKey))
+        || !(binding.mediaAssetKeys || []).includes(item.mediaAssetKey))) {
+      errors.push(finding(
+        'preview-media-binding-mismatch',
+        'Preview image must match its exact canonical record field and screen media binding',
+        `${pointer}.records[${index}]`,
+      ));
+    }
     compiled.records.push({
       recordId: item.recordId,
       title: String(field(item.titleField) ?? ''),
@@ -221,6 +232,8 @@ function compileScenarioFacts(input, source) {
   const records = uniqueIndex(input.records, 'id', 'record', errors);
   const scenarios = uniqueIndex(input.scenarios, 'id', 'scenario', errors);
   const mediaAssets = uniqueIndex(input.mediaAssets, 'key', 'media-asset', errors);
+  const recordMediaKeys = new Set(input.records.flatMap(referencedMediaKeys));
+  errors.push(...validateScenarioImages(input.records, input.mediaAssets));
   const scopeScreens = new Set((source.scope.screens || []).map((screen) => screen.id));
   const compiledScreens = new Map((source.compiled.screens || []).map(
     (screen) => [screen.screenId, screen],
@@ -286,6 +299,15 @@ function compileScenarioFacts(input, source) {
       }
       if (!asset.fallback) {
         errors.push(finding('media-fallback-missing', `media asset ${key} requires a fallback`, pointer));
+      }
+      if (asset.source?.kind === 'cdn' && recordMediaKeys.has(key) && !(binding.recordIds || []).some((recordId) => (
+        referencedMediaKeys(records.get(recordId)).includes(key)
+      ))) {
+        errors.push(finding(
+          'screen-media-record-mismatch',
+          `Screen image ${key} must belong to a canonical record bound to this screen`,
+          pointer,
+        ));
       }
       assets.push(structuredClone(asset));
     }
@@ -400,6 +422,7 @@ function validateScenarioFacts(compiled, source) {
   if (!compiled || compiled.contractType !== 'scenario-facts') {
     return { ok: false, errors: [finding('scenario-contract-invalid', 'scenario-facts contract is required')] };
   }
+  errors.push(...validateScenarioImages(compiled.records, compiled.mediaAssets));
   const expected = sourceBindings(source);
   const codes = {
     scopeRevision: 'stale-scope-binding',

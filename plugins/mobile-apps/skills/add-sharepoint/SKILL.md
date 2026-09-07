@@ -16,7 +16,14 @@ model: sonnet
 
 # Add SharePoint
 
-Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
+Two paths: **existing lists** (Steps 1–2, then Step 6) or **new lists** (full workflow).
+
+For catalogue/`--existing-only` additions, read
+[existing selection and initialization](../list-connections/references/existing-selection.md).
+Only existing lists are in scope: skip Steps 3–5, forward the exact selected
+environment/API/ID-or-reference, and never create a connection or list as a
+selection side effect. Local prototype initialization requires the separate
+owning edit approval and preserves its domain, data and UI.
 
 ## Workflow
 
@@ -34,6 +41,10 @@ Also confirm this is a mobile app:
 ```bash
 test -f power.config.json && test -f app.config.js && echo "OK" || echo "ERROR: not a mobile app"
 ```
+
+For an approved local prototype, use `verify-prototype-connection.js` and the
+explicit initialization transition in the selection reference instead of
+treating missing configuration as permission to initialize.
 
 ### Step 2: Plan
 
@@ -96,15 +107,15 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 Get the SharePoint Online connection ID (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
-```bash
-npx power-apps create-connection --api-id shared_sharepointonline --json
-```
+Use `/list-connections --read-only --environment-id <explicit-id> --api-id
+shared_sharepointonline`, optionally including existing references. Verify the
+exact selection as described in the shared selection reference. A supplied
+Player integration is authoritative; do not replace it.
 
-Use **`shared_sharepointonline`** as the `apiId` and capture **`connectionId`** from the output. Use these exact values in the commands below.
-
-If `create-connection` cannot complete because browser-based connection creation is disabled or the connector needs interactive auth, direct the user to create one:
-
-> Open `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search "SharePoint" → Create. Then provide the connection ID or rerun `/list-connections shared_sharepointonline`.
+No existing/available connection means stop. Connection creation is a separate
+explicit workflow, never a fallback in this catalogue add. Discovery below uses
+the verified `discoveryConnectionId`. Final adds retain the original selected
+`--connection-id` or `--connection-ref`, exactly one.
 
 ### Step 7: Discover Sites
 
@@ -145,11 +156,19 @@ SharePoint is a tabular datasource — requires `--connection-id`, `--dataset`, 
 npx power-apps add-data-source --api-id <apiId-from-list> --connection-id <connectionId-from-list> --dataset '<site-url>' --resource-name '<table-name>'
 ```
 
+When a reference was selected, use `--connection-ref <selected-reference>`
+instead of `--connection-id`; do not silently convert it to the bound ID.
+
 Run once per list or document library.
 
 ### Step 10: Configure
 
 **Read [sharepoint-reference.md](./references/sharepoint-reference.md) before writing any SharePoint code** — column encoding, choice fields, and lookups have critical gotchas.
+
+In an existing-only catalogue edit, only implement the approved list/action
+scope. Connector selection is not consent for arbitrary CRUD mutations.
+Gate new SharePoint calls on real `useAuth`, offering `/login`; keep existing
+local screens and offline local queries usable.
 
 Use `Grep` to find methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large — see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
 
@@ -192,6 +211,17 @@ await SharePointOnlineService.PatchItem({
 
 ```bash
 npm run generate-schemas
+```
+
+For an app that started as a local prototype or has startup profile
+`connector`, run **`stage-prototype-connector.js`** through the
+[retained-local startup](../list-connections/references/existing-selection.md#retained-local-connector-startup)
+contract before the final type-check. The approved proposal must include its
+bounded root/auth-route/provider/metadata changes, preserved local/connector ownership
+and isolated preview. Configure real auth through the existing approved flow;
+do not fabricate an environment/client ID or run Dataverse provisioning.
+
+```bash
 npx tsc --noEmit
 ```
 

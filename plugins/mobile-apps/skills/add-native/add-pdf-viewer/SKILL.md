@@ -19,11 +19,10 @@ Generate or verify the native PDF viewer wrapper and show how to call its **nati
 
 ### 1. Verify app
 
-```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
-```
-
-If this fails, tell the user to run `/create-mobile-app` first and STOP.
+Read [prototype-mode.md](../references/prototype-mode.md) and run its
+`verify-prototype-native.js` command, forwarding `--prototype` when selected.
+Use the parent template-package catalogue and the package-version check below.
+Viewing local or HTTPS PDFs does not require environment initialization.
 
 ### 2. Verify package is already present
 

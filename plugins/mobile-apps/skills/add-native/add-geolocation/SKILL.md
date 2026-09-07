@@ -24,8 +24,13 @@ Hard rules:
 
 ## 1. Verify app and package
 
+Read [prototype-mode.md](../references/prototype-mode.md). This is a
+connected-only capability: forward `--prototype` to the command below when
+invoked from a local app, and stop on its rejection before any environment
+query. Do not convert a local prototype implicitly.
+
 ```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
+node "${PLUGIN_ROOT}/scripts/verify-prototype-native.js" --project-root "<working_dir>" --require-connected
 node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-bglocation'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m); process.exit(1); } console.log('OK: geolocation package present');"
 ```
 

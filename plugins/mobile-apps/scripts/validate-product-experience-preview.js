@@ -53,6 +53,8 @@ const {
   projectScreenFacts,
   validateScenarioFacts,
 } = require('./validate-fixture-scenarios');
+const { validateImageAsset } = require('./lib/prototype-images');
+const { htmlCompanionsEnabled } = require('./lib/html-companions');
 
 const TOOL = 'validate-product-experience-preview';
 const USAGE = 'Usage: node validate-product-experience-preview.js [--project-root <dir>] [--preview <path>] [--tokens <path>] [--signature-components <path>] [--contract-output <path>]';
@@ -166,6 +168,17 @@ function scenarioEvidence(screenId, facts) {
   return candidates;
 }
 
+function previewMedia(asset, role) {
+  const result = { key: asset.key, fallback: asset.fallback, role };
+  if (asset.provenance) {
+    validateImageAsset(asset);
+    result.source = structuredClone(asset.source);
+    result.alt = asset.alt;
+    result.provenance = structuredClone(asset.provenance);
+  }
+  return result;
+}
+
 function buildFinalPreviewContract({
   experience,
   scope,
@@ -244,11 +257,7 @@ function buildFinalPreviewContract({
           targetScreenId: action.targetScreenId || null,
         })),
         states: Object.entries(screen.pack.states || {}).map(([name, copy]) => ({ name, copy })),
-        media: (facts?.media || []).map((asset) => ({
-          key: asset.key,
-          fallback: asset.fallback,
-          role: screen.pack.media?.role || 'none',
-        })),
+        media: (facts?.media || []).map((asset) => previewMedia(asset, screen.pack.media?.role || 'none')),
         scenarioEvidence: scenarioEvidence(screen.screenId, facts),
         prohibitedDefaults: screen.pack.forbiddenDefaults || [],
       };
@@ -277,6 +286,9 @@ function validateSources(sources) {
   }
   if (!sources.signatureComponentsSource.trim()) {
     errors.push(finding('signature-components-empty', 'brand/signature-components.ts must not be empty'));
+  }
+  if (!sources.designSystemSource.trim()) {
+    errors.push(finding('design-system-empty', 'brand/design-system.md must not be empty'));
   }
   if (INVENTED_OFFLINE_RUNTIME.test(sources.designSystemSource)) {
     errors.push(finding(
@@ -351,6 +363,10 @@ function elementsWith(elements, attribute, value = null) {
 function validateHtml(html, expected) {
   const parsed = parseHtmlDocument(html);
   const errors = parsed.errors.map((message) => finding('preview-html-invalid', message));
+  const creditNodes = new Set();
+  const visibleCreditTree = (node) => ({
+    ...node, children: node.children.filter((child) => !child.hidden).map(visibleCreditTree),
+  });
   if (!parsed.hasDoctype) errors.push(finding('preview-doctype-missing', 'final preview requires <!doctype html>'));
   const findId = (id) => elementsWith(parsed.elements, 'id', id);
   const requireUnique = (id, tag) => {
@@ -443,6 +459,29 @@ function validateHtml(html, expected) {
       const marker = elementsWith(parsed.elements, 'data-media-asset-key', asset.key)
         .find((node) => !node.hidden && isDescendant(node, screenNode));
       if (!marker) errors.push(finding('preview-media-missing', `${screen.screenId} is missing media ${asset.key}`));
+      if (!asset.provenance) continue;
+      const image = parsed.elements.find((node) => node.tag === 'img'
+        && marker && (node === marker || isDescendant(node, marker))
+        && node.attrs.src === asset.source.value && node.attrs.alt === asset.alt);
+      if (!image) errors.push(finding('preview-canonical-image-missing', `${screen.screenId} must use the canonical image source and alt for ${asset.key}`));
+      const credit = elementsWith(parsed.elements, 'data-media-credit-key', asset.key)
+        .find((node) => !node.hidden && (
+          (storyboard && isDescendant(node, storyboard)) || (allScreens && isDescendant(node, allScreens))
+        ));
+      const text = credit ? normalizedText(visibleCreditTree(credit)) : '';
+      const creditValues = ['attribution', 'creator', 'changes', 'license'].map(
+        (field) => asset.provenance[field].replace(/\s+/g, ' ').trim(),
+      );
+      const links = credit ? parsed.elements.filter((node) => node.tag === 'a' && !node.hidden
+        && isDescendant(node, credit) && normalizedText(visibleCreditTree(node))) : [];
+      if (credit) {
+        creditNodes.add(credit);
+        for (const node of parsed.elements.filter((element) => isDescendant(element, credit))) creditNodes.add(node);
+      }
+      if (!credit || creditValues.some((value) => !text.includes(value))
+        || [asset.provenance.sourcePage, asset.provenance.licenseUrl].some((url) => !links.some((node) => node.attrs.href === url))) {
+        errors.push(finding('preview-image-credit-missing', `Preserve visible canonical credit, creator, changes and source/license links for ${asset.key}`));
+      }
     }
     for (const evidence of screen.scenarioEvidence) {
       const marker = elementsWith(parsed.elements, 'data-scenario-evidence-id', evidence.id)
@@ -516,10 +555,12 @@ function validateHtml(html, expected) {
     storyboard,
     allScreens,
     ...screenNodes,
+    ...creditNodes,
     ...[
       'data-signature-intent',
       'data-primary-action',
       'data-media-asset-key',
+      'data-media-credit-key',
       'data-scenario-evidence-id',
       'data-navigation-destination',
       'data-all-screen-id',
@@ -598,6 +639,8 @@ async function main(argv) {
     ),
   };
   try {
+    const htmlCompanions = htmlCompanionsEnabled();
+    if (!htmlCompanions && !paths.contractOutput) paths.contractOutput = path.join(projectRoot, FULL_PREVIEW_CONTRACT_PATH);
     for (const [label, file] of Object.entries(paths)) {
       if (['preview', 'contractOutput', 'authoringProjection', 'persistence', 'tokens'].includes(label)) continue;
       if (!fs.existsSync(file)) return fatal(TOOL, `missing ${label}: ${file}`);
@@ -696,14 +739,16 @@ async function main(argv) {
       }
       const provenance = ownership ? writeDesignRunProvenance({
         projectRoot,
-        status: 'prepared',
+        status: htmlCompanions ? 'prepared' : 'passed',
         contract,
         authoringProjection,
       }) : null;
       return emitResult({
         ok: true,
         tool: TOOL,
-        mode: 'contract-preparation',
+        mode: htmlCompanions ? 'contract-preparation' : 'design-materialization',
+        htmlCompanions,
+        ...(htmlCompanions ? {} : { htmlValidation: 'not-requested', previewPath: null }),
         contractPath: paths.contractOutput,
         authoringProjectionPath: paths.authoringProjection,
         authoringProjectionRevision: authoringProjection.projectionRevision,

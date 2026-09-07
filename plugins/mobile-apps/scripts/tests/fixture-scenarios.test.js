@@ -2,6 +2,8 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { revision } = require('../lib/prototype-files');
+const { sampleImageAsset } = require('./helpers/prototype-image-fixtures');
 
 const {
   compileScenarioFacts,
@@ -277,4 +279,143 @@ test('compiled scenario validation rejects stale source revisions', () => {
   assert.ok(validateScenarioFacts(compiled, fixture).errors.some(
     (item) => item.code === 'stale-screen-pack-binding',
   ));
+});
+
+function imageSource() {
+  const fixture = source();
+  const asset = sampleImageAsset('equipment-tm-014-photo');
+  fixture.input.records[0].fields.photo = { mediaAssetKey: asset.key };
+  fixture.input.mediaAssets = [asset];
+  fixture.input.screenBindings[1].preview.records = [{
+    recordId: 'equipment-tm-014', titleField: 'name', mediaAssetKey: asset.key,
+  }];
+  return fixture;
+}
+
+test('licensed CDN metadata stays canonical and survives exact screen/record projection without fetching', (t) => {
+  t.mock.method(globalThis, 'fetch', () => { throw new Error('Deterministic compilation must not fetch'); });
+  const fixture = imageSource();
+  const before = structuredClone(fixture.input);
+  const result = compileScenarioFacts(fixture.input, fixture);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(fixture.input, before);
+  assert.deepEqual(result.compiled.records[0].fields.photo, { mediaAssetKey: 'equipment-tm-014-photo' });
+  assert.deepEqual(result.compiled.mediaAssets, before.mediaAssets);
+  assert.equal(validateScenarioFacts(result.compiled, fixture).ok, true);
+  const projected = projectScreenFacts(result.compiled, 'equipment');
+  assert.deepEqual(projected.records[0].media, before.mediaAssets[0]);
+  assert.deepEqual(projected.media[0].provenance, before.mediaAssets[0].provenance);
+  assert.equal(projectScreenFacts(result.compiled, 'complete').media.length, 0);
+  projected.records[0].media.provenance.creator = 'Mutated projection';
+  assert.equal(result.compiled.mediaAssets[0].provenance.creator, 'Hannes Röst');
+  assert.equal(compileScenarioFacts(fixture.input, fixture).compiled.scenarioRevision, result.compiled.scenarioRevision);
+});
+
+test('CDN assets require bounded source, license, credit, alt and fallback facts', () => {
+  for (const change of [
+    (asset) => { delete asset.provenance; },
+    (asset) => { delete asset.provenance.sourcePage; },
+    (asset) => { asset.provenance.license = ''; },
+    (asset) => { asset.provenance.licenseUrl = 'http://creativecommons.org/licenses/by-sa/3.0/'; },
+    (asset) => { asset.provenance.attribution = 'a'.repeat(601); },
+    (asset) => { asset.provenance.creator = ''; },
+    (asset) => { asset.provenance.attributionRequired = 'true'; },
+    (asset) => { asset.provenance.changes = ''; },
+    (asset) => { asset.provenance.verified = true; },
+    (asset) => { asset.alt = ''; },
+    (asset) => { asset.fallback = ''; },
+    (asset) => { asset.fit = 'stretch'; },
+    (asset) => { asset.aspectRatio = 0; },
+    (asset) => { asset.focalPoint = 'top'; },
+  ]) {
+    const fixture = imageSource();
+    change(fixture.input.mediaAssets[0]);
+    const result = compileScenarioFacts(fixture.input, fixture);
+    assert.equal(result.compiled, null);
+    assert.ok(result.errors.some((item) => item.code === 'media-provenance-invalid'), JSON.stringify(result.errors));
+  }
+});
+
+test('sample URLs reject insecure, private, signed and random sources deterministically', () => {
+  for (const uri of [
+    'http://upload.wikimedia.org/photo.jpg',
+    'https://localhost/photo.jpg', 'https://127.0.0.1/photo.jpg',
+    'https://0x7f.0.0.1/photo.jpg', 'https://[::1]/photo.jpg',
+    'https://photos.internal/photo.jpg', 'https://photos.local/photo.jpg',
+    'https://user:password@upload.wikimedia.org/photo.jpg',
+    'https://upload.wikimedia.org:443/photo.jpg',
+    'https://upload.wikimedia.org/photo.jpg?sig=not-a-real-signature',
+    'https://upload.wikimedia.org/photo.jpg#fragment',
+    'https://upload.wikimedia.org/%72andom/photo.jpg',
+    'https://source.unsplash.com/featured/?mountain',
+    'https://picsum.photos/seed/mountain/600/400',
+    'https://loremflickr.com/600/400/mountain',
+    'https://images.unsplash.com/random',
+    'https://upload.wikimedia.org/photo.jpg?Random=true',
+    'data:image/png;base64,AA==', '//upload.wikimedia.org/photo.jpg',
+  ]) {
+    const fixture = imageSource();
+    fixture.input.mediaAssets[0].source.value = uri;
+    const result = compileScenarioFacts(fixture.input, fixture);
+    assert.equal(result.compiled, null, uri);
+    assert.ok(result.errors.some((item) => item.code === 'media-provenance-invalid'), uri);
+  }
+});
+
+test('canonical image field references reject unknown keys and duplicate fixture photo populations', () => {
+  for (const photo of [
+    { mediaAssetKey: 'missing' },
+    { mediaAssetKey: 'equipment-tm-014-photo', uri: sampleImageAsset().source.value },
+    { status: 'ready', id: 'equipment-tm-014-photo', uri: sampleImageAsset().source.value },
+  ]) {
+    const fixture = imageSource();
+    fixture.input.records[0].fields.photo = photo;
+    assert.equal(compileScenarioFacts(fixture.input, fixture).compiled, null);
+  }
+  const fixture = imageSource();
+  fixture.input.mediaAssets[0].source = { kind: 'generated', value: 'mountain' };
+  assert.ok(compileScenarioFacts(fixture.input, fixture).errors.some((item) => item.code === 'media-source-invalid'));
+});
+
+test('licensed presentation images preserve screen bindings without inventing persistent photo fields', () => {
+  const fixture = imageSource();
+  delete fixture.input.records[0].fields.photo;
+  const result = compileScenarioFacts(fixture.input, fixture);
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.compiled);
+  assert.deepEqual(result.compiled.records, fixture.input.records);
+  const projection = projectScreenFacts(result.compiled, 'equipment');
+  assert.deepEqual(projection.media[0], fixture.input.mediaAssets[0]);
+});
+
+test('CDN preview imagery cannot borrow another record or an unbound screen asset', () => {
+  const fixture = imageSource();
+  fixture.input.screenBindings[1].preview.records[0].recordId = 'inspection-001';
+  fixture.input.screenBindings[1].preview.records[0].titleField = 'result';
+  assert.ok(compileScenarioFacts(fixture.input, fixture).errors.some((item) => item.code === 'preview-media-binding-mismatch'));
+  fixture.input.screenBindings[1].preview.records = [];
+  fixture.input.screenBindings[1].recordIds = ['inspection-001'];
+  assert.ok(compileScenarioFacts(fixture.input, fixture).errors.some((item) => item.code === 'screen-media-record-mismatch'));
+});
+
+test('legacy presentation-only CDN metadata cannot be reused as an uncredited record photo', () => {
+  const fixture = imageSource();
+  delete fixture.input.records[0].fields.photo;
+  delete fixture.input.mediaAssets[0].alt;
+  delete fixture.input.mediaAssets[0].provenance;
+  assert.deepEqual(compileScenarioFacts(fixture.input, fixture).errors, []);
+  fixture.input.records[0].fields.photo = { mediaAssetKey: fixture.input.mediaAssets[0].key };
+  assert.ok(compileScenarioFacts(fixture.input, fixture).errors.some((item) => item.code === 'media-provenance-invalid'));
+});
+
+test('a rehashed canonical contract cannot bypass deterministic image provenance checks', () => {
+  const fixture = imageSource();
+  const compiled = compileScenarioFacts(fixture.input, fixture).compiled;
+  delete compiled.mediaAssets[0].provenance;
+  delete compiled.scenarioRevision;
+  compiled.scenarioRevision = revision(compiled);
+  const checked = validateScenarioFacts(compiled, fixture);
+  assert.equal(checked.ok, false);
+  assert.ok(checked.errors.some((item) => item.code === 'media-provenance-invalid'));
+  assert.equal(checked.errors.some((item) => item.code === 'scenario-revision-mismatch'), false);
 });

@@ -19,7 +19,15 @@ model: sonnet
 
 Generate typed camera + image-picker wrappers, an optional barcode/QR scanner control, and optional custom-upload guidance for Dataverse image/file workflows.
 
-This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by `microsoft/power-platform-skills/plugins/mobile-apps/template#main`. If they're missing, STOP and tell the user the template doesn't ship them yet.
+Camera/gallery share exactly `src/native/camera.ts`: `takePhoto` captures and
+`pickImage` selects from the gallery. Preserve that output path for either
+selected capability; do not create a second gallery wrapper. The explicit
+prototype branch uses its existing `src/data/capture.ts` owner instead.
+
+This skill writes JS files under `src/native/`; the explicit prototype capture
+branch instead invokes the existing `src/data` owner compiler. It does not
+install modules or touch `package.json`/`app.config.js` — the underlying Expo
+modules must already be shipped by the selected template and actual binary.
 
 Why: customer binaries are built from a pre-built rewrap base, not from the customer's `package.json`. Adding a native module here would compile against modules the binary doesn't actually contain, causing runtime crashes after rewrap. See [`/add-native`](../SKILL.md) for the same hard rules.
 
@@ -39,13 +47,16 @@ Two modules are required (must already be in `package.json`):
 
 ### Step 1 — Verify project
 
-```bash
-test -f app.config.js && test -f power.config.json && test -f package.json
-```
-
-If any file is missing, report and STOP — this skill requires an initialized Power Apps mobile app.
+Read [prototype-mode.md](../references/prototype-mode.md) and run its
+`verify-prototype-native.js` command, forwarding `--prototype` when selected.
+Local prototypes require their real app-owned startup, not `power.config.json`.
+Use the parent template-package catalogue; no extra binary probe is required.
 
 ### Step 2 — Verify modules are template-shipped
+
+For prototype quick camera/gallery capture, the owner compiler verifies the
+installed `expo-image-picker`; require `expo-camera` additionally only for a
+requested live scanner. The connected legacy wrapper checks below are unchanged.
 
 Both `expo-camera` and `expo-image-picker` must already be in `package.json`. Do **not** install them — if they're missing, the upstream template hasn't shipped them yet, and this skill STOPs.
 
@@ -66,6 +77,12 @@ If the wrapper exists, skip Step 3 — do NOT overwrite. Continue to Step 3b / S
 Detect whether barcode/QR scanning is requested by checking `$ARGUMENTS` and `native-app-plan.md` for `barcode`, `bar code`, `QR`, `scanner`, `scan gate`, `SKU scan`, or `inventory scan`. If present, set `SCANNER_NEEDED=yes`; otherwise skip Step 3b unless the user explicitly asks for scanner support.
 
 ### Step 3 — Write camera wrapper
+
+**Explicit prototype:** follow the actual `@/data/capture` generator path in
+`prototype-mode.md` instead of writing the legacy wrapper below. This preserves
+persistent photos, namespace isolation and common rules. Run Step 3b as well
+only if a scanner was requested, then jump to Step 6. Do not run Steps 4–5 or
+offer Dataverse setup in this branch. The connected branch below is unchanged.
 
 **Print before starting:**
 > "→ Writing src/native/camera.ts wrapper (takePhoto + pickImage with discriminated-union results)…"

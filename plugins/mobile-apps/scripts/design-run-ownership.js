@@ -4,6 +4,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { htmlCompanionsEnabled } = require('./lib/html-companions');
 
 const {
   canonicalJson,
@@ -272,6 +273,7 @@ function beginDesignRun({
   const state = {
     schemaVersion: 1,
     contractType: 'automatic-design-run-state',
+    htmlCompanions: htmlCompanionsEnabled(),
     runId: runId(),
     startedAt: now(),
     canonicalInputs,
@@ -350,6 +352,9 @@ function verifyDesignRun({ projectRoot }) {
   const changes = diffEntries(state.workspaceEntries, collectWorkspaceEntries(root));
   const writeViolations = changes.filter((change) => !isAllowedWrite(change.path));
   const errors = [];
+  if ((state.htmlCompanions ?? true) !== htmlCompanionsEnabled()) {
+    errors.push(finding('design-presentation-mode-changed', 'HTML companion mode changed during design; finish or end this run before starting a new design run'));
+  }
   if (immutableMutations.length > 0) {
     errors.push(finding(
       'design-ownership-immutable-input-mutated',

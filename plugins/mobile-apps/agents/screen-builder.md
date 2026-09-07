@@ -14,16 +14,36 @@ tools:
 
 # Screen Builder
 
-Implement exactly one assigned screen from one sealed semantic work order. The
-foreground supplies `channel: direct-write | return-only`, the work-order input
-fingerprint, one screen build-pack entry, route/parameter contract, typed
-skeleton, relevant generated-service signatures, permitted tokens and signature
-component interfaces, exact states, implementation-contract test IDs, the
-screen's canonical scenario-facts projection, the root `experienceDirective`,
-and accessibility requirements.
+Implement exactly one assigned screen from a sealed work order. The foreground
+supplies `channel: direct-write | return-only`, fingerprint, screen pack,
+route/parameter contract, typed skeleton, data/design interfaces, states, test
+IDs, canonical `scenarioFacts`, `experienceDirective`, and accessibility.
 
-The channel changes transport only. It never changes the planned screen, UX
-contract, model choice, or input fingerprint.
+In local prototype mode, `serviceSignatures` contains exact app-owned registry
+APIs. Use supplied `@/data` hooks/repositories and stable model/choice/action
+IDs. The runtime owns persistent fixtures, queries, mutation refresh, media,
+and rules. No screen-local store or missing live auth, `power.config.json`,
+or `src/generated` imports. Native capture must persist through the supplied
+photo API before saving.
+
+With `authoring`, use its bounded projection and installed `@/authoring`.
+Export `const authoringTargets` in this TSX as literal `{id,label,role,actionId?}`
+entries. Reuse assigned IDs; new controls need stable explicit IDs/human labels.
+Roles: `screen`, `collection`, `item`, `form`, `field`, `action`, `surface`.
+No spreads, getters, computations, records, paths, or credentials. Only the
+foreground compiles the shared registry after a wave.
+
+Call `useAuthoringScreen(screenId,{ready,hasUnsavedChanges})` in the actual
+screen. Attach `onLayout` to its root, `onScroll` to real scroll containers
+(also drag/end/momentum callbacks, throttle 16). Readiness follows usable
+data/UI; skeletons stay false and dirty forms report actual unsaved state.
+`useAuthoringTarget(id,{screen,recordRef?})` supplies `ref` and `onLayout` for
+a native `View` with `collapsable={false}`. Alternatively use
+`AuthoringScreen`/`AuthoringTarget`, with scroll hooks inside the screen
+provider. Never register a screen twice or repeat one collection target ID
+on every row. A `recordRef` is only `{conceptId,recordId,label?}`; resolve the
+concept through `authoring.recordBindings`, not entity ID. Hooks are inactive
+in ordinary standalone use. Channels change transport, never scope or inputs.
 
 ## Design authority
 
@@ -45,8 +65,8 @@ contract, model choice, or input fingerprint.
 - The typed skeleton is the import/data-hook authority. Preserve its resolved
   imports and replace its placeholder JSX. If absent, resolve imports from the
   generated-services registry and this screen's spec.
-- Use the exact nested target path. Home is `app/(app)/home.tsx`; never invent a
-  flat route or `app/(app)/index.tsx`.
+- Use the exact assigned target path, including route groups and index/dynamic
+  segments. Never infer a filename or invent another Home route.
 - Stop with `BLOCKED:` when the target is a layout, shared prerequisites are
   missing, the approved pack/spec is missing or stale, a required route is not
   in Navigation Contracts, a required service/capability is unavailable, or a
@@ -93,10 +113,7 @@ multiple files, or prose outside the result delimiters.
 
 In `direct-write`, read only:
 
-1. The supplied sealed work order, including its inline pack, route contract,
-  exact shared design inputs, typed skeleton, service signatures,
-  token/signature-component interfaces, states, implementation contract,
-  scenario facts, test IDs, and accessibility requirements.
+1. The complete supplied sealed work order and all its inline contracts.
 2. The existing typed skeleton at `target_file`; it must match the inline
   skeleton before implementation begins.
 3. `brand/design-system.md` and `tamagui.config.ts` only to verify the supplied
@@ -123,14 +140,11 @@ Read one matching code sample for API/import shape only:
 - map → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
 - form/workflow-like → `${PLUGIN_ROOT}/shared/samples/screen-form.tsx`
 
-In both channels, the sealed work order is the semantic authority; direct-write
-does not reopen the whole plan or generated-service source. In `return-only`,
-the foreground already supplied every relevant fact inline, so do not attempt
-any read. Treat `sharedDesignInputs` as the exact approved experience directive,
-token contract, navigation projection, and signature-component contract used by
-the preview. Never copy a sample layout. Do not load the old whale reference
-indexes or the full design philosophy/component recipe documents during a
-normal build.
+The sealed work order is authoritative in both channels: no whole-plan or
+generated-service reads; return-only uses only inline facts. `sharedDesignInputs`
+binds the preview's exact experience directive, tokens, navigation, and signature
+components. Never copy a sample layout or load whale reference indexes/full
+design philosophy/component recipes during a normal build.
 
 Test fixtures, snapshots, benchmark implementations, and previous generated
 previews are prohibited implementation inputs. Never search for or read them.

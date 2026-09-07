@@ -76,6 +76,35 @@ test('local prototype ownership contains only local and transient concepts', () 
   assert.deepEqual(contract.transientConceptIds, ['cart']);
 });
 
+test('connector-only mode retains local and transient owners without inventing Dataverse scope', () => {
+  const contract = compilePersistenceContract(
+    scope({ Appointment: 'local-configuration', Directory: 'connector-source', Search: 'transient-ui-state' }),
+    decisions(
+      { appointment: 'local', directory: 'connector:directory', search: 'transient' },
+      [{ apiName: 'directory', displayName: 'Directory', approved: true }],
+    ),
+  );
+  assert.equal(contract.mode, 'connector-only');
+  assert.deepEqual(contract.dataverseConceptIds, []);
+  assert.deepEqual(contract.localConceptIds, ['appointment']);
+  assert.deepEqual(contract.connectorConceptIds, ['directory']);
+  assert.deepEqual(contract.transientConceptIds, ['search']);
+});
+
+test('an approved action connector does not fabricate a persistent concept or change local ownership mode', () => {
+  const contract = compilePersistenceContract(
+    scope({ Appointment: 'local-configuration' }),
+    decisions(
+      { appointment: 'local' },
+      [{ apiName: 'notifications', displayName: 'Notifications', approved: true }],
+    ),
+  );
+  assert.equal(contract.mode, 'local-prototype');
+  assert.deepEqual(contract.connectorConceptIds, []);
+  assert.deepEqual(contract.localConceptIds, ['appointment']);
+  assert.equal(contract.conceptOwners.length, 1);
+  assert.equal(contract.connectors[0].apiName, 'notifications');
+});
 test('mixed ownership keeps connector concepts out of the Dataverse projection', () => {
   const contract = compilePersistenceContract(
     scope({ Equipment: 'existing-table', Warranty: 'connector-source', Filter: 'transient-ui-state' }),

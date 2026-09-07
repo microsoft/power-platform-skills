@@ -9,6 +9,8 @@ const {
   approveGate,
   invalidateApprovalReceipt,
   validateIntegrity,
+  validatePrototypeApprovals,
+  validatePresentationApprovals,
 } = require('./lib/mobile-plan-approval');
 const { stableJson } = require('./build-dataverse-operation-manifest');
 
@@ -58,6 +60,12 @@ function main(argv = process.argv) {
     if (args.command === 'validate') {
       const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
       const result = validateIntegrity(receipt);
+      if (result.valid) {
+        const prototype = validatePrototypeApprovals(projectRoot, receipt);
+        const presentation = validatePresentationApprovals(projectRoot, receipt);
+        result.valid = prototype.valid && presentation.valid;
+        result.errors.push(...prototype.errors, ...presentation.errors);
+      }
       if (!result.valid) result.errors.forEach((error) => process.stderr.write(`${error}\n`));
       else process.stdout.write(`${JSON.stringify({ ok: true, receipt: APPROVAL_PATH })}\n`);
       return result.valid ? 0 : 1;

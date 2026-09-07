@@ -139,6 +139,58 @@ instead of modifying the old app in place. Commit or back up the old app first.
 
 ## Hello world — your first run
 
+### Start locally, connect real data later
+
+From the same fresh installed template, run:
+
+```text
+/mobile-app:create-mobile-prototype Build a scheduling app for service appointments
+```
+
+This thin entry uses `/create-mobile-app --prototype --gated` before any
+environment, sign-in, or initialization query. It keeps the full product/design
+approval flow and builds real persistent local repositories, typed hooks, and
+photo storage under app-owned `src/data`. Canonical scenario facts supply the
+sample records; no fake Dataverse services or configuration are generated.
+Approved camera/gallery actions use the installed native picker and only report
+a ready photo after its bytes persist; cancellation preserves prior evidence.
+`/add-native --prototype` uses a real read-only local-project precheck, not a
+placeholder environment. Pen/signature images can persist through the same
+isolated file store. Native catalogue availability still requires the selected
+binary's evidence; package presence and TypeScript success are not proof.
+Standalone local startup is `npm run dev:prototype`, which intentionally
+bypasses the real template's `predev` schema-generation hook.
+
+When ready, explicitly run:
+
+```text
+/mobile-app:prototype-to-real-app
+```
+
+Review the environment, Reuse/Extend/Create/Adapt/Defer decisions, and exact
+logical-to-physical mappings. The skill runs the existing Dataverse tools and
+wraps verified official services without replacing screens, stable IDs, or
+taught rules. The connected candidate is read-only until the appropriate
+approval; Apply is separate. Demo records/photos are **not imported by
+default**, and file Undo cannot roll back completed Dataverse changes.
+An optional, separately approved two-hour test grant permits only bounded new
+disposable rows, never arbitrary existing business rows. Interrupted writes
+retain a reconciliation journal instead of silently replaying.
+
+In paired Player authoring mode, the bridge publishes validated candidate
+revisions and the native runtime acknowledges mounting. Candidate local
+records/media are isolated so Discard cannot alter active data. The supported
+template/config exports and native capabilities are checked explicitly; these
+workflows never repair incompatibility by changing dependency versions.
+
+Dev Player defaults to `MOBILE_APP_HTML_COMPANIONS=0`: structured plans,
+approvals, design materials and progressive native screens remain, without
+generating or serving duplicate HTML companions. Set the flag to `1` before
+starting the bridge to restore them. Ordinary CLI/VS Code defaults remain on.
+Changing an approved run's mode requires fresh Gate 3/4 approval.
+
+### Create against a real environment
+
 After the prereq sanity check passes:
 
 ```text
@@ -211,6 +263,26 @@ Native modules are allowlist-bound by the current template `package.json`. If th
 
 ### 4. Add a connector
 
+`/list-connections --read-only --environment-id <id>` discovers actual existing
+connections without creating a connection, repairing consent, initializing an
+environment, or changing app files. Optional `--references` includes verified
+existing Dataverse connection references. Discovery errors remain errors, not
+empty catalogues. A selected connection/reference is revision-bound to its
+exact environment and API; `/add-connector --existing-only` and
+`/add-sharepoint --existing-only` preserve that selection. A local prototype
+needs separate approval for official connected initialization and keeps its
+local records, repositories and UI; connector addition is not Dataverse
+provisioning or sample-data import.
+
+The implemented connector-only startup helper composes the official host,
+schema map and real authentication while preserving local model/rules/data
+and existing screen markup. Local+connector ownership stays `connector-only`,
+not Dataverse `mixed`. Candidate local data remains isolated; selected runtime
+connections stay pinned. This is still a development prototype, not a
+production-authentication shortcut.
+Action-only connectors can enable this startup without adding a persistence
+concept; their compiler-derived data mode remains `local-prototype`.
+
 ```text
 > /add-sharepoint                # SharePoint Online lists / documents
 > /add-connector                 # any other Power Platform connector
@@ -225,7 +297,7 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 > /deploy                        # npm run build + npx power-apps push
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
 > /preview-screens               # validate/open final intent, or neutral structure (no Metro)
-> /list-connections              # diagnostic when a service call returns 401
+> /list-connections              # read-only existing inventory; no automatic 401 repair
 > /check-updates                 # ordered dependency updates
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
@@ -266,7 +338,7 @@ Example edit flows:
 | `/setup-datamodel` | ✅ v0 | Foreground Dataverse and connector planner. Discovers existing metadata, proposes reuse / extend / create decisions, validates a structured contract, and can return plan-only artifacts to `/create-mobile-app` or `/edit-app`. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
-| `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
+| `/list-connections` | ✅ v0 | Read-only environment-scoped existing connection/reference inventory with exact revision-bound selection. Connection creation or consent repair is never a listing side effect. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and routes final intent preview changes through `/design-system`. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |

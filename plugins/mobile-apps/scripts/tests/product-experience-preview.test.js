@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const { compileNavigationManifest } = require('../compile-navigation-manifest');
 const { compileScreenBuildPack } = require('../compile-screen-build-pack');
@@ -14,6 +15,7 @@ const {
 const { bundleFor } = require('./helpers/product-experience-scenarios');
 const { cleanup, makeProjectDir, runCli, writeContracts } = require('./helpers/contract-cli');
 const { scenarioFactsForBundle } = require('./helpers/scenario-facts-fixtures');
+const { sampleImageAsset } = require('./helpers/prototype-image-fixtures');
 
 const VECTOR_PACKAGE = { dependencies: { '@expo/vector-icons': '15.1.1' } };
 
@@ -186,6 +188,59 @@ test('resolved scenario CDN media renders directly and retains its stable asset 
   });
   assert.match(html, /https:\/\/images\.example\.test\/catalog\/cloud-runner\.jpg/);
   assert.match(html, new RegExp(`data-asset-key="${asset.key}"`));
+});
+
+test('licensed preview media preserves canonical alt and credits while real load/error callbacks stay truthful', () => {
+  const bundle = bundleFor('commerce');
+  const navigation = navigationForBundle(bundle);
+  const { compiled, scenario } = scenarioFactsForBundle(bundle, { navigation });
+  const asset = sampleImageAsset(scenario.mediaAssets[0].key);
+  scenario.mediaAssets[0] = asset;
+  const html = renderHtml({ experience: bundle.experience, compiled, journey: bundle.journey, scenario, navigation });
+  assert.ok(html.includes(`alt="${asset.alt}"`));
+  assert.ok(html.includes(`data-media-credit-key="${asset.key}"`));
+  for (const field of ['creator', 'attribution', 'changes', 'license', 'licenseUrl', 'sourcePage']) {
+    assert.ok(html.includes(asset.provenance[field]), field);
+  }
+  assert.match(html, /data-asset-loading role="status"/);
+  assert.match(html, /rel="noopener noreferrer"/);
+  const imageAttributes = new Map();
+  const frameAttributes = new Map();
+  const callbacks = {};
+  const loading = { hidden: false };
+  const fallback = { hidden: true };
+  const image = {
+    complete: false, naturalWidth: 0, hidden: false, nextElementSibling: fallback,
+    setAttribute: (key, value) => imageAttributes.set(key, value),
+    getAttribute: (key) => imageAttributes.get(key),
+    addEventListener: (name, callback) => { callbacks[name] = callback; },
+    parentElement: {
+      setAttribute: (key, value) => frameAttributes.set(key, value),
+      querySelector: () => loading,
+    },
+  };
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  vm.runInNewContext(script, { document: {
+    querySelectorAll: (selector) => selector === '[data-preview-asset]' ? [image] : [],
+  } });
+  assert.equal(loading.hidden, false);
+  assert.equal(frameAttributes.get('aria-busy'), 'true');
+  assert.equal(imageAttributes.get('aria-hidden'), 'true');
+  image.complete = true;
+  image.naturalWidth = 960;
+  callbacks.load({ type: 'load' });
+  assert.equal(loading.hidden, true);
+  assert.equal(frameAttributes.get('aria-busy'), 'false');
+  assert.equal(imageAttributes.get('aria-hidden'), 'false');
+  image.complete = false;
+  callbacks.error({ type: 'error' });
+  assert.equal(image.hidden, true);
+  assert.equal(fallback.hidden, false);
+  assert.equal(loading.hidden, true);
+  image.complete = true;
+  callbacks.load({ type: 'load' });
+  assert.equal(image.hidden, true);
+  assert.equal(fallback.hidden, false);
 });
 
 test('structural renderer ignores brand tokens and cannot overwrite the final preview', () => {

@@ -1,65 +1,69 @@
 ---
 name: list-connections
-description: Use to find or create a Power Platform connection ID or reference for an Expo/React Native Power Apps mobile app.
+description: Lists existing environment-scoped Power Platform connections and optional references for a mobile app without creating or changing them.
 user-invocable: true
-allowed-tools: Bash
+allowed-tools: Read, Bash, AskUserQuestion
 model: haiku
 ---
 
-**📋 Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — mandatory safety, environment, failure, and execution guardrails.
+**Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
-# List Connections
+# List Existing Connections
 
-Finds or creates a Power Platform connection with the Power Apps CLI. Returns the **Connection ID** or **Connection Reference** that callers feed into `npx power-apps add-data-source`.
+Read [selection and initialization](references/existing-selection.md).
+The default, `--read-only`, and `--existing-only` paths are discovery only:
+no connection creation, consent repair, environment initialization, or mutation.
+Listing does not require an app `power.config.json` or Dataverse database.
 
-## Workflow
+## 1. Resolve the explicitly selected environment
 
-1. Get Connection → 2. Present Results
+Use the caller's exact `--environment-id` or ask which environment to inspect.
+Do not substitute the current CLI environment or infer one from a display name.
+In Player, use the selected catalogue environment and the shared question
+transport for every clarification. Do not ask for credentials in chat.
 
----
-
-### Step 1 — Get Connection
-
-Use one of the supported paths below.
-
-If the caller already provided a connection ID, validate the connector/API ID from context and return it as-is for `--connection-id`.
-
-If the caller provided a connector API ID and needs a new connection, create it from the app root:
+## 2. Read the existing inventory
 
 ```bash
-npx power-apps create-connection --api-id <api-id> --json
+node "${PLUGIN_ROOT}/scripts/list-prototype-connections.js" \
+  --environment-id "<environment-id>"
 ```
 
-Use the returned `connectionId` for `--connection-id <connectionId>`. Optional display names are supported:
+Optional `--api-id <exact-api-id>` limits the connector. Optional
+`--references` additionally reads existing Dataverse connection references;
+it never creates them. `--tenant-id` is an optional explicit auth tenant.
+Output is JSON; do not add an unsupported `--json` flag.
 
-```bash
-npx power-apps create-connection --api-id <api-id> --display-name '<display-name>' --json
-```
+The helper uses environment-scoped read-only APIs, bounded same-origin paging,
+minimal fields and a stable `catalogRevision`. It does not derive connections
+from `package.json`. Authentication/error responses are not empty inventories.
+No references requested means `references: "not-requested"`, not “none exist”.
+Reference discovery failures are surfaced; do not hide them as a complete list.
 
-Browser-based connection creation is disabled by default. If the connector is not SSO-eligible and the command reports that browser creation is disabled, tell the user to either set `POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true` and rerun the command, or create the connection in the maker portal.
+## 3. Present and preserve the exact selection
 
-### Step 1b — Fetch Connection References When Solution-Aware
+Show display name, exact API, connection ID or reference, environment and
+availability. Only `availability: "available"` can be selected. Preserve the
+selected ID/reference and catalogue revision; never pick the first match
+automatically or silently switch references/connections.
 
-If the caller provided a solution ID and needs a connection reference name, list connection references from the app root:
+Even caller-supplied IDs must match this environment/API inventory. A reference
+is usable only when its exact bound connection is present and connected; another
+connection for the same API is not an acceptable substitute.
 
-```bash
-npx power-apps list-connection-references --solution-id <solution-id> --json
-```
+Return the normalized selection documented in `existing-selection.md`.
+Do not add a data source or initialize an app from this listing skill.
 
-If a matching connection reference exists, return its reference name for `--connection-ref <connection-ref>`.
+## Missing connections and explicit creation
 
-If `npx power-apps create-connection` or `list-connection-references` fails because of auth, wrong user, multiple accounts, no output, or timeout, follow shared-instructions command-failure handling and retry once.
+An empty result means no existing connection was found in the selected
+environment. Show **Create a connection in Power Apps, then refresh**, linking
+to [Power Apps](https://make.powerapps.com/), plus a **Refresh** action.
+Also show [Supported Power Apps connectors](https://learn.microsoft.com/en-us/connectors/connector-reference/connector-reference-powerapps-connectors).
+That reference lists supported connector types, not the user's connections.
+Do not scrape it into a claimed live inventory.
 
-**Other failures:**
-- Non-zero exit for any reason other than auth: report the exact output. STOP.
-
-### Step 2 — Present Results
-
-Show the supported add path. A **Connection ID** goes into `--connection-id <connection-id>` when adding a data source. When Step 1b was requested, also show matching connection references; a **Connection Reference** goes into `--connection-ref <connection-ref>`.
-
-**If the needed connector is missing:**
-
-1. Share the direct Connections URL using the active environment ID from context (read from `power.config.json` `environmentId`):
-   `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection**
-2. Search for and create the connector, then complete the sign-in / consent flow
-3. Rerun `/list-connections <api-id>` or provide the portal connection ID so the data-source skill can continue
+Do not create a connection/reference, repair consent, or initialize an app from
+this listing. Authentication failures remain explicit errors, never empty-list
+success. After the maker creates a connection in the portal, rerun the same
+read-only listing and preserve the exact selected connection ID.

@@ -19,11 +19,11 @@ Generate or verify the native pen input wrapper and show how to call its **nativ
 
 ### 1. Verify app
 
-```bash
-test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
-```
-
-If this fails, tell the user to run `/create-mobile-app` first and STOP.
+Read [prototype-mode.md](../references/prototype-mode.md) and run its
+`verify-prototype-native.js` command, forwarding `--prototype` when selected.
+Apply the parent template-package policy. In local mode, persist
+approved signature evidence through `getDataRuntime().importPhoto` as described
+there; skip the optional Dataverse save and do not silently provision a table.
 
 ### 2. Verify package is already present
 

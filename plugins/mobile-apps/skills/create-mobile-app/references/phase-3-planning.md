@@ -1,5 +1,7 @@
 # Foreground Planning and Approval Contracts
 
+Prototype mode retains all gates; apply [prototype-profile.md](./prototype-profile.md).
+
 Follow the retained
 [`Live Build Plan protocol`](./build-plan.md). Mark `experience`, then
 `architecture`, then conditional `data-model` active/complete around their
@@ -84,6 +86,7 @@ Keep the existing contracts and tools. Do not introduce a whole-plan schema.
 | Dataverse schema contract (conditional) | `.tmp/dataverse-schema-contract.json` | `build-dataverse-operation-manifest.js` and `validate-dataverse-planning-decisions.js` |
 | Data-model usage input | `.tmp/data-model-usage-input.json` | AI-authored mapping consumed by `validate-data-model-usage.js` |
 | Compiled data-model usage | `.tmp/data-model-usage.json` | `validate-data-model-usage.js --check` |
+| Prototype domain/bindings/rules | [Prototype contracts](./prototype-profile.md#logical-domain-and-sole-fixture-authority) | `generate-prototype.js --validate-contracts` |
 | Human plan | `native-app-plan.md` | section hashes in `.tmp/mobile-plan-status.json` |
 
 Read each exact current schema before authoring its contract. A path or schema
@@ -258,6 +261,9 @@ concept as a Dataverse table. Offline support is not a requirement, Product
 Experience value, architecture decision, or persistence-contract field. The
 create flow asks about it explicitly only after Dataverse materialization.
 
+Explicit prototypes require `local-prototype` ownership: local records, transient
+view state, visibly deferred external effects. Contradictions reopen Gate 1.
+
 Write compact `.tmp/architecture-decisions.json` in the compiler's exact input
 shape. Arrays contain approved decisions only; keep `approved: true` because the
 compiler rejects connector ownership that is not backed by an approved
@@ -357,6 +363,9 @@ compiled.
 Read `.tmp/persistence-contract.json` and branch only on `persistence.mode`.
 
 ### `connector-only` or `local-prototype`
+
+Explicit prototypes also author/validate the fixture-free domain, bindings, and
+rules in `prototype-profile.md`; bind all three revisions in Gate 2.
 
 Run `compile-persistence-contract.js --project-root "<working_dir>"
 --check-artifacts` again. Do not query a publisher prefix, resolve Dataverse
@@ -774,6 +783,7 @@ branch on `persistence.mode`:
   Dataverse concepts/snapshot/evidence/cache/schema, `_dm_section.md`,
   `.datamodel-manifest.json`, generated Dataverse service, seed, or Offline
   Profile artifact. Do not run schema normalization or snapshot validation.
+  Explicit prototypes also revalidate their domain/bindings/rules against Gate 2.
 - `dataverse` / `mixed`: require `.tmp/dataverse-concepts.json` IDs to equal
   `persistence.dataverseConceptIds` exactly. Verify the approved schema contract
   uses the detected publisher prefix and realizes only those concepts. In

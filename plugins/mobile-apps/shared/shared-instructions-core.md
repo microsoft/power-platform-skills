@@ -53,6 +53,24 @@ needs them.
 - On a rerun, verify deterministic state and current artifact revisions before
   skipping work.
 
+## Question transport
+
+With `MOBILE_AUTHORING_CONTEXT`, every foreground skill (including nested and
+direct-read helpers) MUST follow [Player question transport](references/mobile-authoring.md)
+before any question/approval. Otherwise use ordinary `AskUserQuestion`.
+
+## Optional HTML companions
+
+`MOBILE_APP_HTML_COMPANIONS=0` skips HTML generation, HTML validation, browser
+opening, and the Build Plan web server. Dev Player supplies `0` by default;
+ordinary CLI/VS Code runs default to `1`. Set `1` before a new run to restore
+HTML companions. This is separate from `visual_companion` (auto-opening only).
+Keep structured progress, all four approvals, design ownership, brand tokens,
+signature components, the validated full design contract, and native screen
+quality gates. Gate 3 reviews these materials in the current host instead of
+HTML; never claim it inspected native screens that do not yet exist. Changing
+the mode requires renewed Gate 3/4 approval.
+
 ## Workflow checkpoint telemetry
 
 At a `Telemetry checkpoint` marker, follow

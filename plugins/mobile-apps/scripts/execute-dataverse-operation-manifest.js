@@ -120,6 +120,7 @@ async function executeManifest(options) {
     inventoryCachePath,
     timingPath,
     getToken = getAuthToken,
+    sendRequest,
     runPhase = runMetadataBatch,
     invalidateCache = invalidateInventoryCache,
     fileSystem = fs,
@@ -134,6 +135,8 @@ async function executeManifest(options) {
   if (!validation.valid) {
     throw new Error(`Invalid Dataverse operation manifest: ${validation.errors.join('; ')}`);
   }
+  const broker = require('./lib/player-dataverse').playerDataverse(options);
+  if (broker) return broker.executeManifest(options);
   const counts = executionCounts(validation.phases);
   writeTiming(timingPath, 'start', { counts, nowMs, nowIso });
   const startedAt = nowMs();
@@ -174,6 +177,8 @@ async function executeManifest(options) {
           manifestHash: manifest.integritySha256,
           reconciliationHash: manifest.binding.reconciliationSha256,
           allOperations: validation.operations,
+          getToken,
+          ...(sendRequest ? { sendRequest } : {}),
         },
       );
       token = outcome.token || token;

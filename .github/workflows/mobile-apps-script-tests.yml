@@ -60,6 +60,19 @@ jobs:
               working-directory: plugins/mobile-apps/template
               run: npm install --no-audit --no-fund
 
+            - name: test-prototype-template-integration
+              shell: bash
+              working-directory: plugins/mobile-apps
+              run: |
+                  MOBILE_PROTOTYPE_TEMPLATE_MODULES="$PWD/template/node_modules" \
+                    node --test --test-concurrency=2 \
+                      scripts/tests/prototype-generation.test.js \
+                      scripts/tests/prototype-authoring.test.js \
+                      scripts/tests/prototype-connected-startup.test.js \
+                      scripts/tests/prototype-connector-startup.test.js \
+                      scripts/tests/prototype-screen-authoring.test.js \
+                      scripts/tests/authoring-edit-registration.test.js
+
             - name: prepare-and-type-check-template
               shell: bash
               working-directory: plugins/mobile-apps/template

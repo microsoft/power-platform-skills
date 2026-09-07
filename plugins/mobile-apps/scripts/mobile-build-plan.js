@@ -9,6 +9,7 @@ const {
   writeBuildPlan,
 } = require('./lib/mobile-build-plan');
 const { startBuildPlanServer } = require('./lib/mobile-build-plan-server');
+const { htmlCompanionsEnabled } = require('./lib/html-companions');
 
 const COMMANDS = new Set(['render', 'progress', 'model', 'serve']);
 
@@ -64,6 +65,7 @@ async function main(argv = process.argv.slice(2)) {
   const projectRoot = path.resolve(args.projectRoot);
   try {
     if (args.command === 'render') {
+      if (!htmlCompanionsEnabled()) throw new Error('HTML companions are disabled; set MOBILE_APP_HTML_COMPANIONS=1 to render HTML');
       const result = writeBuildPlan(projectRoot, { output: args.output });
       process.stdout.write(`${JSON.stringify({
         ok: true,
@@ -85,6 +87,7 @@ async function main(argv = process.argv.slice(2)) {
         ok: true,
         progressRevision: progress.revision,
         modelRevision: result.model.revision,
+        htmlCompanions: result.htmlCompanions,
       }, null, 2)}\n`);
     } else if (args.command === 'model') {
       process.stdout.write(`${JSON.stringify(deriveBuildPlanModel(projectRoot), null, 2)}\n`);

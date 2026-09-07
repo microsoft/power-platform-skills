@@ -211,7 +211,10 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
   return res;
 }
 
-function createDataverseRequestExecutor({
+function createDataverseRequestExecutor(options) {
+  const broker = require('./lib/player-dataverse').playerDataverse(options);
+  if (broker) return (method, apiPath, body = null) => broker.metadata(options.environmentUrl, method, apiPath, body);
+  const {
   environmentUrl,
   tenantId,
   solution = null,
@@ -220,7 +223,7 @@ function createDataverseRequestExecutor({
   onTelemetry = null,
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   nowMs = () => Date.now(),
-}) {
+  } = options;
   const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
   if (!envUrl) throw new Error('environmentUrl is required');
 
@@ -361,6 +364,15 @@ async function main() {
     manifestOperations,
     manifestFile,
   } = parseArgs();
+
+  const broker = require('./lib/player-dataverse').playerDataverse();
+  if (broker) {
+    if (method !== 'GET' || body !== null || operations || manifestFile) {
+      throw new Error('Player metadata discovery is GET-only. Use execute-dataverse-operation-manifest.js for the exact approved schema; generic and record writes are not permitted.');
+    }
+    console.log(JSON.stringify(await broker.metadata(envUrl, method, apiPath)));
+    return;
+  }
 
   let token = await getAuthToken(envUrl, tenantId);
   if (!token) {
@@ -1034,6 +1046,13 @@ async function runMetadataBatch(
       Boolean(op.includeHeaders),
       op.solution || defaultSolution,
       tenantId,
+      journalOptions.getToken,
+      journalOptions.sendRequest,
+      {
+        ...(journalOptions.nowMs ? { nowMs: journalOptions.nowMs } : {}),
+        ...(journalOptions.sleep ? { sleep: journalOptions.sleep } : {}),
+        ...(journalOptions.onRateLimited ? { onRateLimited: journalOptions.onRateLimited } : {}),
+      },
     );
     token = executed.token;
     const result = {

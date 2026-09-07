@@ -18,7 +18,9 @@ mode.
 
 Creation writes `brand/design-system.md`, `brand/tokens.ts`,
 `brand/signature-components.ts`, and, when an approved plan exists, the
-model-authored and deterministically validated `_plan_preview.html`.
+model-authored and deterministically validated `_plan_preview.html` when
+`MOBILE_APP_HTML_COMPANIONS` is not `0`. With `0`, materialize the same brand and
+validated full design contract, but skip HTML authoring, repair and opening.
 
 `brand/design-system.html` is an optional component gallery, not a substitute
 for the journey preview.

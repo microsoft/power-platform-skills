@@ -19,6 +19,11 @@ Fallback skill for any connector not covered by a dedicated `/add-*` skill. For 
 
 The native host runtime (`@microsoft/power-apps-native-host`) handles connector routing, connection resolution, and OAuth consent through `PowerAppsProvider` in `app/_layout.tsx` — no separate executor wiring is needed.
 
+Read [existing selection and initialization](../list-connections/references/existing-selection.md)
+before any catalogue/`--existing-only` addition. A local prototype's transition
+is explicitly approved and preserves its local data/UI; no connection or
+Dataverse table is created merely to list/select a connector.
+
 ## Workflow
 
 1. Check Memory Bank → 2. Identify Connector → 3. Add Connector → 4. Inspect & Configure → 5. Build → 6. Update Memory Bank
@@ -35,7 +40,10 @@ Also confirm we're inside a Power Apps mobile app:
 test -f power.config.json && test -f app.config.js
 ```
 
-If either is missing, instruct the user to run `/create-mobile-app` first and stop.
+For an existing connected app, both files are required. For a verified local
+prototype, use `verify-prototype-connection.js` and the explicitly approved
+initialization transition in the selection reference before continuing.
+Missing configuration alone never authorizes initialization.
 
 ### Step 2 — Identify Connector
 
@@ -44,6 +52,14 @@ If either is missing, instruct the user to run `/create-mobile-app` first and st
 Otherwise, ask the user which connector they want to add. Browse available connectors: [Connector Reference](https://learn.microsoft.com/en-us/connectors/connector-reference/).
 
 **Before proceeding, check if the connector has a dedicated skill. If it does, delegate immediately and STOP:**
+
+**`--existing-only` exception:** delegate only SharePoint to `/add-sharepoint`,
+forwarding every exact selection argument. Other non-Dataverse selections stay
+in this generic verified path; do not route through a legacy convenience
+wrapper that could create or replace connections. For a Dataverse API, stop and
+explain that it requires the separate explicit Connect to Dataverse workflow,
+rather than silently delegating a schema mutation. The table below applies to
+ordinary requests without a catalogue selection.
 
 | Connector API name      | Delegate to        |
 | ----------------------- | ------------------ |
@@ -78,8 +94,16 @@ After `add-flow`, continue at Step 4 and inspect the generated service/model fil
 
 **First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
-Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
-`https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
+Run `/list-connections --read-only --environment-id <explicit-id> --api-id <api>`
+and preserve the exact selected ID/reference and catalogue revision. For
+`--existing-only` or a Player `integration`, use only the validated selection
+already supplied; do not create a connection, silently pick another, or repair
+consent. A missing/unavailable selection stops this add operation.
+
+Every command below showing `--connection-id` uses the verified selected ID
+(or the selected reference's `discoveryConnectionId` for discovery only).
+For a final add selected by reference, replace that flag with
+`--connection-ref <selected-reference>`; never pass both.
 
 **Classify the connector before running `add-data-source`:**
 
@@ -131,8 +155,8 @@ If the user actually needs Dataverse table CRUD, stop and delegate to `/add-data
 **Parameter reference:**
 
 - `--api-id` / `-a` — connector API ID (often `shared_<connector>`, e.g., `shared_office365users`). Use the exact value provided by the caller or connector docs.
-- `--connection-id` / `-c` — required for non-Dataverse connectors unless using `--connection-ref`. Get from `create-connection`, the maker portal, or caller context.
-- `--connection-ref` / `-cr` — optional connection reference name when adding into a solution-aware app.
+- `--connection-id` / `-c` — exact selected existing ID from the environment-scoped read-only catalogue.
+- `--connection-ref` / `-cr` — exact selected existing reference, mutually exclusive with `--connection-id`.
 - `--dataset` / `-d` — required for table-based datasources (for example SharePoint site URL, Excel file/location, SQL database).
 - `--resource-name` / `-t` — table/list/resource name for table-based datasources.
 - `--sql-stored-procedure` / `-sp` — SQL stored procedure name when adding a stored procedure instead of a table.
@@ -161,6 +185,11 @@ For each method the user needs:
 
 Help the user write code using the generated service methods.
 
+For an existing-only prototype addition, gate the new connector section/action
+on real `useAuth` and offer `/login` when needed. Do not gate existing local
+screens on network sign-in, or infer permission for remote writes merely from
+a connector selection.
+
 ### Step 5 — Build
 
 **Print before starting:**
@@ -170,10 +199,29 @@ Help the user write code using the generated service methods.
 
 ```bash
 npm run generate-schemas
+```
+
+If the app started as a local prototype (or already has startup profile
+`connector`), now run **`stage-prototype-connector.js`** exactly as documented in
+[retained-local startup](../list-connections/references/existing-selection.md#retained-local-connector-startup).
+Use the approved compiler-derived local/connector-only scope, exact catalogue selection and isolated
+transaction preview. Include the helper's root/auth routes/provider/metadata
+paths in the approved edit proposal; do not widen paths after approval.
+Real existing auth client/tenant setup is required—use the shared auth setup
+flow rather than fabricate IDs, silently skip sign-in, or create a registration
+without its own approval. This step is not the Dataverse conversion generator.
+An action-only connector needs no fabricated persistence concept: connectivity
+uses profile `connector` while logical data mode may stay `local-prototype`.
+
+Then run:
+
+```bash
 npx tsc --noEmit
 ```
 
-Fix TypeScript errors before proceeding. Common gotcha: the new generated service may import a peer dependency you don't have installed yet — if so, `npx expo install <missing-package>` (NOT plain `npm install`, so versions stay Expo-compatible).
+Fix TypeScript errors before proceeding. A missing dependency does not authorize
+native installs/upgrades. Use approved pure-JavaScript dependency planning when
+applicable; otherwise block rather than changing the prebuilt native boundary.
 
 Do NOT deploy yet — that's `/deploy`'s job after all data sources are added.
 

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const { htmlCompanionsEnabled } = require('./html-companions');
 
 const {
   ARTIFACTS,
@@ -147,6 +148,7 @@ function statusForError(error) {
 }
 
 async function startBuildPlanServer(options) {
+  if (!htmlCompanionsEnabled()) throw new Error('HTML companions are disabled; use structured progress or set MOBILE_APP_HTML_COMPANIONS=1 to serve HTML');
   const projectRoot = path.resolve(options.projectRoot);
   const token = options.token || crypto.randomBytes(32).toString('hex');
   const sessionToken = crypto.randomBytes(32).toString('hex');

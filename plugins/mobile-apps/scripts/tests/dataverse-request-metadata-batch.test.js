@@ -29,6 +29,36 @@ test('metadata mutations allow longer server processing than reads', () => {
   assert.equal(MUTATION_REQUEST_TIMEOUT_MS, 120000);
 });
 
+test('metadata batch forwards injected refresh and transport through retries without falling back to Azure CLI', async () => {
+  const seenTokens = [];
+  const refreshes = [];
+  const sleeps = [];
+  const result = await runMetadataBatch(
+    'https://contoso.crm.dynamics.com',
+    [{ index: 0, id: 'create:new_table', method: 'POST', apiPath: 'EntityDefinitions', body: { SchemaName: 'new_Table' } }],
+    'private-old-token', 'Default', 'test-tenant', false,
+    {
+      getToken: async (url, tenant, stale) => {
+        refreshes.push({ url, tenant, stale });
+        return 'private-refreshed-token';
+      },
+      sendRequest: async (_url, method, apiPath, _body, token) => {
+        seenTokens.push(token);
+        assert.equal(method, 'POST');
+        assert.equal(apiPath, 'EntityDefinitions');
+        return seenTokens.length === 1 ? { statusCode: 401 }
+          : seenTokens.length === 2 ? { statusCode: 429, headers: { 'retry-after': '0' } }
+            : { statusCode: 204 };
+      },
+      sleep: async (ms) => { sleeps.push(ms); },
+    },
+  );
+  assert.equal(result.failed, false);
+  assert.deepEqual(seenTokens, ['private-old-token', 'private-refreshed-token', 'private-refreshed-token']);
+  assert.deepEqual(refreshes, [{ url: 'https://contoso.crm.dynamics.com', tenant: 'test-tenant', stale: 'private-old-token' }]);
+  assert.deepEqual(sleeps, [0]);
+});
+
 function manifestStableJson(value) {
   function clone(item) {
     if (Array.isArray(item)) return item.map(clone);

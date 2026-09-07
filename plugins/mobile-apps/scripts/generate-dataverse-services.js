@@ -85,6 +85,8 @@ function generateDataverseServices(options) {
   if (!validation.valid) {
     throw new Error(`Invalid Dataverse operation manifest: ${validation.errors.join('; ')}`);
   }
+  const broker = require('./lib/player-dataverse').playerDataverse(options);
+  if (broker) return broker.generateServices(options);
   const logicalNames = requiredServiceTables(manifest);
   writeTiming(timingPath, 'start', logicalNames.length, { nowMs, nowIso });
   const startedAt = nowMs();
@@ -152,12 +154,12 @@ function parseArgs(argv) {
   return args;
 }
 
-function main(argv = process.argv) {
+async function main(argv = process.argv) {
   try {
     const args = parseArgs(argv);
     const projectRoot = path.resolve(args.projectRoot);
     const manifestPath = resolveInside(projectRoot, args.manifest);
-    const result = generateDataverseServices({
+    const result = await generateDataverseServices({
       projectRoot,
       manifest: JSON.parse(fs.readFileSync(manifestPath, 'utf8')),
       environmentUrl: args.environmentUrl,
@@ -174,7 +176,7 @@ function main(argv = process.argv) {
   }
 }
 
-if (require.main === module) process.exitCode = main();
+if (require.main === module) main().then((status) => { process.exitCode = status; });
 
 module.exports = {
   configuredDataSources,

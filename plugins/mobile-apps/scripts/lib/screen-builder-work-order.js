@@ -7,6 +7,8 @@ const { validateGeneratedSourceIsolation } = require('./final-preview-isolation'
 const { canonicalJson, sha256Hex } = require('./product-experience-contracts');
 const { projectScreenFacts } = require('../validate-fixture-scenarios');
 const { fileToRoute } = require('../validate-navigation-layout');
+const { validateDataAccess } = require('./prototype-registry');
+const { validateAuthoringRegistry } = require('./authoring-runtime');
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_MAX_INPUT_BYTES = 48 * 1024;
@@ -26,6 +28,8 @@ const FIELDS = new Set([
   'routeContract',
   'typedSkeleton',
   'serviceSignatures',
+  'dataAccess',
+  'authoring',
   'tokenInterfaces',
   'signatureComponentInterfaces',
   'states',
@@ -200,6 +204,37 @@ function normalizeWorkOrder(value, {
       'accessibilityRequirements',
     ),
   };
+  const registryPath = path.join(projectRoot, '.tmp', 'data-access-registry.json');
+  if (fileSystem.existsSync(registryPath)) {
+    const registry = JSON.parse(fileSystem.readFileSync(registryPath, 'utf8'));
+    normalized.dataAccess = validateDataAccess(registry, value.dataAccess, normalized.serviceSignatures, compiledScreen.implementationContract?.requiredOperations || []);
+  } else if (value.dataAccess !== undefined || fileSystem.existsSync(path.join(projectRoot, '.tmp', 'prototype-profile.json'))) {
+    throw new Error('A data-access projection requires the current app-owned registry');
+  }
+  const authoringPath = path.join(projectRoot, '.tmp', 'authoring-registry.json');
+  if (fileSystem.existsSync(authoringPath)) {
+    const registry = validateAuthoringRegistry(projectRoot, JSON.parse(fileSystem.readFileSync(authoringPath, 'utf8')));
+    const screen = registry.screens.find((entry) => entry.screenId === screenId);
+    if (!screen || screen.route !== route || path.resolve(projectRoot, screen.sourceFile) !== targetPath) {
+      throw new Error('Authoring metadata must bind the actual assigned screen and route');
+    }
+    const projection = {
+      schemaVersion: 1, screenId, route, moduleSpecifier: '@/authoring',
+      metadataExport: 'authoringTargets', targets: screen.targets,
+      recordBindings: (normalized.dataAccess?.entities || []).map(({ entityId, conceptId }) => ({ entityId, conceptId })),
+    };
+    // Bind only this screen's metadata; completing a sibling must not restamp
+    // an already sealed work order or discard a successful screen result.
+    projection.revision = sha256Hex(canonicalJson(projection));
+    if (value.authoring !== undefined && canonicalJson(value.authoring) !== canonicalJson(projection)) {
+      throw new Error('Work-order authoring projection is stale or invented');
+    }
+    normalized.authoring = projection;
+  } else if (value.authoring !== undefined
+    || fileSystem.existsSync(path.join(projectRoot, '.tmp', 'prototype-profile.json'))
+    || fileSystem.existsSync(path.join(projectRoot, '.tmp', 'mobile-authoring-runtime.json'))) {
+    throw new Error('Configure the prototype authoring registry after typed skeletons and before sealing screen work orders');
+  }
   if (!isPlainObject(normalized.states)) throw new Error('states must be an object');
   return normalized;
 }

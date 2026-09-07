@@ -73,7 +73,7 @@ function deriveMode(owners) {
     .filter((kind) => kind !== 'transient'));
   if (durableKinds.has('dataverse') && durableKinds.size > 1) return 'mixed';
   if (durableKinds.has('dataverse')) return 'dataverse';
-  if (durableKinds.has('connector')) return durableKinds.size > 1 ? 'mixed' : 'connector-only';
+  if (durableKinds.has('connector')) return 'connector-only';
   return 'local-prototype';
 }
 

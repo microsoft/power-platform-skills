@@ -1,6 +1,6 @@
 ---
 name: edit-app
-description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
+description: "Edit an existing Power Apps mobile app, selected Player screen/region, global app style, or teach a bounded saved business rule. Reuses foreground contracts, the one-screen worker, required approvals and verification; Player jobs prepare isolated candidates for separate maker Apply/Discard."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus
@@ -10,12 +10,60 @@ model: opus
 
 # Edit App (`/edit-app`)
 
-Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
+Post-generation editor for an existing mobile app. Canonical Product
+Experience/Scope/Journey and compiled screen contracts are the execution
+authority; `native-app-plan.md` is their human projection. The normal outcome
+is a verified app change, not a plan-only diff. After the maker approves the
+scoped delta, perform only its authorized data/native/design/screen mutations,
+verify, update `memory-bank.md`, and refresh the preview when UI changed.
+With `MOBILE_APP_HTML_COMPANIONS=0`, use the native preview and skip static HTML
+generation/opening; all selected design and screen-quality gates still apply.
 
 Use `--plan-only` only when the user explicitly asks to update planning docs without changing app code. Normal follow-up prompts in Copilot Chat Agent mode should apply the app change end to end.
 
 `--builder-concurrency <1-6>` overrides the screen-builder wave cap. The
 non-interactive equivalent is `MOBILE_APP_BUILDER_CONCURRENCY`; default is 4.
+
+## Player entry and prototype-safe editing
+
+If `MOBILE_AUTHORING_CONTEXT` is present, first read and execute
+[`references/player-authoring.md`](references/player-authoring.md). This is a
+candidate-safe wrapper around the foreground steps below, not a new editor
+agent. It verifies app/job/base revision and registered context, seals exact
+allowed files, gets maker approval to **prepare**, and uses the bridge's
+separate preview/Apply/Discard lifecycle. Never edit the active Metro tree or
+claim a submitted candidate was applied. Every question—including nested
+design/native/data/offline questions—uses the shared Player transport, not
+`AskUserQuestion` or an additional VS Code prompt.
+
+Without a descriptor, retain this skill's normal direct-edit behavior and
+ordinary foreground question tool. Do not start a bridge implicitly.
+
+Read `.tmp/persistence-contract.json` before any environment/data probe. For
+`mode: "local-prototype"`, use actual app-owned `src/data` repositories,
+`.tmp/prototype-domain.json`, `.tmp/prototype-rules.json`, and the validated
+`.tmp/data-access-registry.json`. Skip environment/auth/init, generated-service
+refresh, Dataverse/offline mutation, and remote sample-data work. Missing live
+services are not a reason to manufacture `src/generated` or `power.config.json`.
+A request to convert the domain to Dataverse belongs to the separately approved
+`/prototype-to-real-app` flow. A Player-selected existing connector
+(`descriptor.integration.kind: "connector"`) instead uses the explicit
+catalogue integration profile: preparation approval, reopened Gate 1, official
+init/service generation, retained local domain/rules/UI, and separate Apply.
+It cannot create connections, SharePoint lists/columns, Dataverse schema, or
+import records/photos. A selected native capability uses `/add-native` with
+the selected template's supported package workflow, without installs or
+an extra device-probe gate for browsing/selection.
+Read the fixed handoff in `references/player-authoring.md`; selection alone
+is not consent. A failed real-data call never falls back to local prototype data.
+
+Teaching uses this same workflow. Discover existing domain entities, actions,
+choice IDs, and fields; clarify ambiguous condition/photo/action/scope through
+the selected question transport. Do not infer a table from a screenshot.
+“App background” defaults to global styling. A selected list-to-cards change
+defaults to the registered collection and preserves queries, actions, paging,
+and navigation. No registered target means generic app chat and targeted
+clarification, not invented screen context.
 
 ## When to use
 
@@ -29,6 +77,9 @@ non-interactive equivalent is `MOBILE_APP_BUILDER_CONCURRENCY`; default is 4.
 - "Add a `case` table to the data model"
 - "Replace the Drawer navigation with Tabs"
 - "Add `expo-camera` to the native capabilities"
+- "Turn this selected list into cards without changing what it loads"
+- "Change the app background"
+- "Require a damage photo before saving a failed inspection — all inspection saves"
 - "Add signature capture to approvals and store it in Dataverse"
 - "Generate an evidence PDF and retain it on the inspection record"
 - "Add a View PDF action for an HTTPS report URL"
@@ -37,8 +88,8 @@ non-interactive equivalent is `MOBILE_APP_BUILDER_CONCURRENCY`; default is 4.
 ## When NOT to use
 
 - Brand-new project → `/create-mobile-app`
-- Just adding one connector with no screen changes → `/add-connector` directly
-- Just adding a single native wrapper with no screen changes → `/add-native` directly
+- Just adding one connector with no screen changes → `/add-connector` directly outside a Player job; a catalogue-selected Player add stays in this gated candidate workflow
+- Just adding a single native wrapper with no screen changes → `/add-native` directly outside a Player job; a catalogue-selected Player add stays in this gated candidate workflow
 - The plan file is missing → re-run `/create-mobile-app` (don't try to reconstruct)
 
 ## Workflow
@@ -141,7 +192,8 @@ Build an edit brief before Step 2:
 
 If the edit brief is incomplete after inspection, ask scenario-specific questions before continuing.
 
-Ask via `AskUserQuestion`:
+Only when the brief is still incomplete, ask through the active question
+transport (ordinary `AskUserQuestion` outside Player):
 
 > "What should this app edit change?
 > (a) Data model — add/extend/reuse Dataverse tables
@@ -168,6 +220,8 @@ Scenario-specific questions to ask only when the answer is not already obvious:
 | New requirement + screen | What user workflow is being added? Who uses it? What data/native/connectors does it need? Where does it sit in navigation? What is success/failure behavior? |
 | New data source | What job does the data source support? Is it structured business data (Dataverse), SharePoint list/library, cloud flow/action, or another connector? Which screen(s), if any, should use it now? |
 | Preview only | Preview all screens or only changed/key screens? Should Visual Companion auto-open behavior be honored? |
+| Selected Player region | Is the registered screen/target current? With no registered target, ask which existing screen; never guess from pixels. |
+| Teach a saved rule | Which existing save action, condition field/choice, required photo/field, and scope? Reuse confirmed answers; propose “All inspection saves” when requested, not a global Dataverse-required column. |
 
 Existing-state checks before deciding to add vs edit:
 
@@ -199,7 +253,7 @@ One user-visible feature may require multiple plan sections. That is allowed and
 
 Loophole checks before continuing:
 
-- If the request adds UI that reads or writes data, confirm the generated service exists or add the data source before screen work. Never let screen-builders invent services.
+- If the request adds UI that reads or writes data, confirm its actual app-owned repository or generated service exists before screen work. Local prototypes use their data-access registry; never let screen-builders invent services.
 - If the request is ambiguous about Dataverse vs SharePoint vs another connector, route through `/add-datasource` rather than guessing.
 - If a screen requires a native wrapper, run `/add-native` before screen-builders import `src/native/*`.
 - If a native capability is not shipped by the template, stop with a clear block; do not install native packages or fake support.
@@ -256,7 +310,9 @@ If the user chooses **edit**, return to Step 1 and refine the edit brief. If can
 
 **If the user picks (d) Design:**
 
-Read and execute the `/design-system` skill instead of spawning a planner agent. Determine the dimension from the user's description:
+Read the `/design-system` planning rules instead of spawning a planner agent.
+Determine the dimension from the user's description, but defer its writes
+until the applicable preparation/mutation approval:
 
 | User says | Route to |
 |---|---|
@@ -270,7 +326,7 @@ Read and execute the `/design-system` skill instead of spawning a planner agent.
 
 **One-major-change-per-prompt enforced.** If the user asks to change palette AND typography → refuse, ask which first. This matches `/design-system`'s own behavior.
 
-After `/design-system --refresh` returns, print:
+After the approved `/design-system --refresh` execution in Step 5 returns, print:
 
 ```
 ✅ Design system updated. brand/design-system.md + brand/tokens.ts refreshed.
@@ -311,6 +367,13 @@ Apply the narrow invalidation cascade:
 - Journey change → rebuild packs only.
 - Pack-only composition/content change → recompile only the affected packs.
 - Data-model-only change → preserve all product contracts unless job, entity realization, or visible screen behavior also changed.
+
+An architecture, native-capability, connector, or persistence-ownership change
+reopens Gate 1 before downstream work. Use the existing
+`mobile-plan-approval.js invalidate --from-gate 1` path so stale local
+`pipeline-state.json` cannot survive reapproval; preserve canonical Dataverse
+schema, separate derived execution schema, and remote execution evidence.
+All reopened questions still use the active shared transport.
 
 For a Dataverse schema edit, read and execute `/setup-datamodel --plan-only`
 with the current edit brief, Product Scope, environment snapshot/evidence, and
@@ -368,7 +431,7 @@ Show the user a side-by-side diff (or before/after) for every changed plan secti
 - Whether `_plan_preview.html` will be reauthored by `/design-system`, validated,
   or left unchanged
 
-Ask:
+Outside Player, ask through the ordinary foreground question tool:
 
 > "Approve this edit and apply it to the app?
 > (a) Approve and apply
@@ -376,6 +439,12 @@ Ask:
 > (c) Cancel — discard changes"
 
 If revise → loop back to Step 2 with the user's notes appended. If approve → continue. If cancel → STOP, leave the plan and app untouched.
+
+In Player mode this is **approval to prepare the bounded candidate**, using
+`authoring-edit.js authorize --plan <sealed-id>` as described in the Player
+reference. It is not approval to Apply or mutate remote data. Do not also ask
+the standalone question above. Conditional schema, data-import, native, and
+reopened contract gates retain their own exact artifact-bound decisions.
 
 If `$ARGUMENTS` includes `--plan-only`, change option (a) to "Approve and save plan only" and stop after Step 4 with a clear note that the app was intentionally not changed.
 
@@ -398,9 +467,21 @@ If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print 
 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
+For a local prototype, skip items 0–3 and Step 5.5/5.6's live-data work unless
+the maker has explicitly started the separate conversion flow or approved
+the catalogue-selected existing-connector profile. That connector profile
+permits only its selected connection/schema metadata and official SDK setup,
+not Dataverse/schema/data mutations. A teaching
+candidate uses `authoring-edit.js teach --plan <sealed-id>` to compile its
+approved typed rule into app-owned `src/data/rules.ts` and refresh only the
+bound rule/registry/ownership outputs. It does not modify business records,
+capture files, or Dataverse column requirements. Existing repositories merge
+the current record and validate before their local/live adapter; all form
+submissions must use that common high-level create/update path.
+
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
 1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
-2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
+2. **Sample Data** — if a new Dataverse table was created and a changed screen will use it, obtain the separate explicit sample-data consent before `/add-sample-data`. Schema/preparation consent never authorizes record or photo import. If the maker declines, keep real empty states. If approved seeding fails, record the failure and continue only if the app handles empty states.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
@@ -439,6 +520,13 @@ mkdir -p .tmp
 Refresh `.tmp/generated-services-snapshot.md` on every relevant edit run.
 Screen-builders must receive it as `generated_services_path` and treat it as
 authoritative. Do not rewrite the approved `native-app-plan.md`.
+
+For ordinary local prototypes, do not run this generated-service snapshot step. Pass
+only the target's actual repository/type signatures projected from the current
+data-access registry using the existing local screen-work-order channel.
+For an approved catalogue connector addition, include only the actual selected
+SDK signatures alongside—not instead of—the preserved local repository
+contracts. Do not manufacture a live service or replace local ownership.
 
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
 
@@ -593,6 +681,15 @@ If verification fails because the edit exposed stale generated services, rerun t
 
 ### Step 8 — Preview + memory-bank update
 
+For Player candidates, finish the local memory-bank/preview updates before
+`authoring-edit.js candidate --plan <sealed-id> --ready-screen <id> ... --final`.
+The helper checks the exact approved file scope and source-bound readiness,
+records a code/contracts-only eligible Undo receipt, and submits to the
+bridge. Keep `applied: false` until bridge publication and the revision-bound
+native acknowledgement. Do not generate a second Apply question: the bridge
+owns candidate review and Apply/Discard. Stop/Discard/failure preserves the
+last-good active source and its business records.
+
 Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
 If approved Product Experience, design, navigation, or visible scenario facts
@@ -625,7 +722,7 @@ Final summary must say what changed in the app, what verification ran, where the
 
 ## Notes
 
-- `native-app-plan.md` is still the durable source of truth. The change should be planned before it is applied, but planning is not the end state.
+- Canonical contracts and compiled packs remain execution authority; `native-app-plan.md` is the durable human projection. Plan before mutation, but do not confuse a plan or candidate submission with an applied app change.
 - For complex multi-section edits, update and gate every required section first, then apply the mutation in dependency order. Do not leave a native capability entry that references missing Dataverse storage or a screen state that was never planned.
 - Edit planning uses the same foreground contracts, validators, and compilers as initial creation, so planning improvements flow through here.
 - This skill intentionally covers post-generation iteration. It is acceptable

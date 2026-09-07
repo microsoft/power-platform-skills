@@ -9,6 +9,11 @@ capability/connector concerns without rewriting the approved scope.
 
 ### Step 7 — Auth config
 
+**Explicit prototype:** skip Step 7 entirely. Do not resolve a tenant, open a
+Wrap page, ask for an app registration, or write auth IDs. The app-owned local
+provider is not a bypass for a failed live sign-in. Continue to Step 8's
+all-mode contract checks and its existing local branch.
+
 **Print before starting:**
 > "→ [Step 7/13] Configuring app authentication (Entra ID app registration)…"
 
@@ -159,6 +164,12 @@ Branch on all four modes:
 | `mixed` | Same Dataverse steps, but only for `dataverseConceptIds`; connector/local concepts remain with their declared owners and are never mirrored as tables. Step 8.85 asks the offline-support question. |
 | `connector-only` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Steps 8, 8.5, and 8.85 are not applicable. |
 | `local-prototype` | No publisher, snapshot, schema, Dataverse service, manifest, seed, or Mobile Offline Profile artifact. Steps 8, 8.5, and 8.85 are not applicable. |
+
+For explicit prototype creation run `generate-prototype.js --project-root
+"<working_dir>" --check` as the actual local data-materialization gate.
+Scenario-derived local fixture projection is not a Dataverse seed import.
+Never enter the real environment pre-check, `/add-dataverse`, sample seeding,
+or Mobile Offline Profile question from this branch.
 
 For `connector-only` and `local-prototype`, require the approved `## Data
 Model` to say `Not applicable` and render every concept owner. The successful
@@ -438,6 +449,34 @@ than guesses table readiness.
 
 ### Step 9 — Apply native capabilities
 
+For explicit prototype, native wrappers use only the installed allowlist and
+the approved local repository/photo contract. Custom captures call
+`getDataRuntime().importPhoto` before a record save. Do not emit a Dataverse
+upload helper, `useAuth`, or a host File/Image field that depends on live
+services in this mode. Unsupported capture is a visible state, never a fake
+successful photo.
+
+**Prototype execution branch:** verify the actual binary through the read-only
+native catalogue; package presence alone is not support. Camera and image-picker approvals are already materialized
+by `generate-prototype.js` as the actual `capturePhoto` adapter under
+`src/data/capture.ts`. Read `data-access-registry.json.media.captureSources`
+(`camera` / `library`) and pass that bounded API to affected screen builders.
+The adapter requests native permission, invokes the shipped Expo picker,
+persists the selected image, and only then returns `status: ready`. Assign the
+result only when ready; pending, cancellation, denial, or persistence failure
+preserves the previous record/photo.
+
+For other approved native capabilities, invoke `/add-native` with the same
+working directory/capability and **`--prototype`**. Read its
+[profile and persistence reference](../../add-native/references/prototype-mode.md);
+its real verifier and dedicated helpers support the local branch without
+`power.config.json`. Connected-only background geolocation remains blocked
+until separately approved conversion, not silently simulated. Keep shared
+`src/data` compiler refreshes serial; independent `src/native` wrappers may use
+the existing batch. No native dependencies are installed. Continue at Step 9a.
+
+**Real profile:** use the existing `/add-native` orchestration below unchanged.
+
 **Print before starting:**
 > "→ [Step 9/13] Wiring <N> independent native capabilities concurrently: <list>."
 
@@ -474,6 +513,13 @@ code/config or incompatible runtime dependencies, remove only the newly added
 package and STOP with the exact failed criterion.
 
 ### Step 9b — Apply design system
+
+**Prototype provider difference:** materialize the same brand tokens and
+Tamagui config, preserving the local provider. It already passes that config
+to the installed `TamaguiProvider`. Do not import `PowerAppsProvider`,
+`useThemeTokens`, or `useThemeControl` into this no-auth tree. Use Tamagui's
+theme and the platform color scheme. The host ThemeTokens mapping below is
+real-profile-only and becomes applicable after explicit conversion.
 
 `/design-system` owns user-facing brand/design choices. This step owns the internal Tamagui integration that makes those choices usable by generated screens. Even if the user accepts the default design path, run the alias-only integration so screens can rely on the semantic token contract.
 
@@ -550,6 +596,12 @@ statuses. For runtime theme switching, use `useThemeControl()` from
 `@microsoft/power-apps-native-host`.
 
 ### Step 10 — Add connectors
+
+**Explicit prototype:** skip remote connector registration/generation.
+Unconnected external effects remain explicitly unavailable with an explanation;
+local record CRUD is real local persistence, not a simulated connector. Any
+request to enable a live effect reopens architecture and requires an explicit
+connected operation, never an automatic mode switch.
 
 **Print before starting:**
 > "→ [Step 10/13] Adding <N> connectors: <list>. Each runs sequentially (parallel writes would race)."

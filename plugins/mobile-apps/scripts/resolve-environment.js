@@ -302,6 +302,9 @@ async function resolveEnvironment(target, options = {}) {
     throw new Error('Pass the environment ID from power.config.json, or pass the Dataverse environment URL directly.');
   }
 
+  const broker = require('./lib/player-dataverse').playerDataverse(options);
+  if (broker) return broker.resolveEnvironment(target, options);
+
   const cached = readCachedResolution(target);
   if (hasCachedEnvironmentDetails(cached)) {
     const result = toEnvironmentResult(cached, 'cache');

@@ -12,33 +12,34 @@ All non-Dataverse connectors require either a **connection ID** (`--connection-i
 CONNECTION_ID argument is required for connector data sources
 ```
 
-### Step 1 — Get a connection
+### Step 1 — Select an existing connection
 
-Use one of these supported paths:
-
-- If the caller already has an existing connection ID, use it directly with `--connection-id`.
-- If the app is solution-aware and the caller has a solution ID, run `list-connection-references` and use the returned connection reference name with `--connection-ref`.
-- Otherwise create a connection with `create-connection` and use the returned `connectionId`.
+Use the actual environment-scoped read-only catalogue, even for caller-supplied
+IDs. Preserve the selected ID or reference and its catalogue revision; never
+silently pick another connection. See
+[existing selection](../skills/list-connections/references/existing-selection.md)
+for the exact helper, selection/verifier schema and prototype initialization boundary.
 
 ```bash
-npx power-apps create-connection --api-id <apiId> --json
-npx power-apps list-connection-references --solution-id <solutionId> --json
+node "${PLUGIN_ROOT}/scripts/list-prototype-connections.js" --environment-id "<id>" --api-id "<apiId>"
+node "${PLUGIN_ROOT}/scripts/list-prototype-connections.js" --environment-id "<id>" --api-id "<apiId>" --references
 ```
 
-With `--json`, `create-connection` prints `{ "connectionId": "...", "displayName": "..." }` on success. Browser-based connection creation is disabled by default in the CLI; if a connector is not SSO-eligible and interactive browser creation is required, set `POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true` before running the command, or create the connection in the maker portal.
+Listing never creates a connection, reference, environment, or consent session.
 
 ### Step 2 — If no connection exists
 
-If `create-connection` fails because browser-based connection creation is disabled or the connector needs interactive auth, use the maker portal:
-
-1. Construct the URL using the active environment ID from `power.config.json`:
-   `https://make.powerapps.com/environments/<environment-id>/connections`
-2. Direct the user to **+ New connection** → search for the connector → sign in / consent.
-3. Capture the connection ID from the portal or rerun `npx power-apps create-connection --api-id <apiId> --json` if the connector can now complete.
+Stop the existing-connection add and report the actual finding. Only a separate
+explicit connection-creation request may use `npx power-apps create-connection`
+or the maker UI; it is not a catalogue fallback. Refresh the read-only catalogue
+after that workflow before selecting anything.
 
 ### Step 3 — Add the data source
 
-Use long-form flags. Run from the app root after `power.config.json` exists, and use the exact `apiId` plus either a `connectionId` from `create-connection`/the portal or a `connectionRef` from `list-connection-references`:
+Use long-form flags after official initialization has been separately approved
+and its environment verified. Preserve the exact selected API and exactly one
+connection ID/reference. Reference selections use their verified bound ID for
+dataset/table discovery only, while the final add retains `--connection-ref`:
 
 ```bash
 # Non-tabular connectors (Teams, Office 365 Users, Azure DevOps, etc.)
@@ -91,7 +92,6 @@ npx power-apps list-connection-references --solution-id <solutionId> --json
 npx power-apps list-environment-variables --json
 npx power-apps list-flows --search '<flow-name-or-keyword>' --json
 npx power-apps find-dataverse-api --search '<operation-name>' --json
-npx power-apps create-connection --api-id <apiId> --json
 ```
 
 Cloud flows are added with `add-flow`, not `add-data-source`:
@@ -124,7 +124,10 @@ This avoids context window bloat and is much faster than reading entire generate
 
 ## Connector routing (runtime)
 
-`PowerAppsProvider` in `app/_layout.tsx` handles all connector routing at runtime — both Dataverse and non-Dataverse connectors use the same unified pipeline. No separate executor or provider wiring is needed.
+For an already connected app, `PowerAppsProvider` in `app/_layout.tsx` handles
+connector routing. A local prototype first needs its separately approved
+connected root transition; merely generating a service does not replace its
+local provider or prove runtime connectivity.
 
 When a screen calls a generated service method:
 1. `PowerAppsProvider` resolves the connection from `connectionReferences` in `power.config.json`

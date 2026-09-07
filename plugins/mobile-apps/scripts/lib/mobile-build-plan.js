@@ -20,12 +20,14 @@ const {
   updateProgress,
 } = require('./mobile-build-plan-model');
 const { renderBuildPlanHtml } = require('./mobile-build-plan-renderer');
+const { htmlCompanionsEnabled } = require('./html-companions');
 
 function writeBuildPlan(projectRoot, options = {}) {
   const model = deriveBuildPlanModel(projectRoot, options);
+  if (!htmlCompanionsEnabled(options.htmlCompanions)) return { output: null, model, htmlCompanions: false };
   const output = resolveInsideProject(projectRoot, options.output || BUILD_PLAN_OUTPUT);
   fs.writeFileSync(output, renderBuildPlanHtml(model, options), 'utf8');
-  return { output, model };
+  return { output, model, htmlCompanions: true };
 }
 
 module.exports = {

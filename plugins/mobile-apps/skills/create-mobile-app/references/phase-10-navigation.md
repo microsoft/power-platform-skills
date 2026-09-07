@@ -83,6 +83,9 @@ Step 11 so parallel screen builders never race on shared navigation files.
 
 Preserve the existing auth guard and unrelated code in the outer layout. Add
 only the navigator, icon, and theme imports required by `pattern`.
+For an explicit prototype the prepared outer layout deliberately has no auth
+guard or host-auth import; preserve that no-environment tree instead. Do not
+copy the real template's login redirect into a local screen layout.
 
 - For `tabs-plus-stacks`, render `Tabs.Screen` entries from `visibleTabs` only,
   in manifest order. Use each destination's `label`, `targetPath`, and
@@ -115,6 +118,17 @@ backed layouts or route skeletons reported by the validator, rerun it, and
 never fall back to prose, filesystem, or icon inference.
 
 ### Step 10.7 — Snapshot generated services into the plan
+
+**Explicit prototype branch:** run `generate-prototype.js --project-root
+"<working_dir>" --check` and read `.tmp/data-access-registry.json`. This is a
+real typed operation registry for app-owned local repositories/hooks, not a
+generated-service mock. Supply only each screen's referenced entity entries
+and exact signatures to its sealed work order. Do not probe
+`src/generated/services`, emit an empty service snapshot, or write missing-
+service TODO imports in prototype mode. A missing declared local operation is
+`BLOCKED` and returns to the domain/owning contract.
+
+**Real profile branch:** retain the official generated-service snapshot below.
 
 **Print before starting:**
 > "→ [Step 10.7/13] Probing src/generated/services/ and writing the execution service registry…"
@@ -150,10 +164,11 @@ Write/replace `.tmp/generated-services-snapshot.md` on every run:
 | `Cr3e9_projectsService` | `src/generated/services/Cr3e9_projectsService.ts` | `getAll, get, create, update, delete` |
 | `Cr3e9_tasksService` | `src/generated/services/Cr3e9_tasksService.ts` | `getAll, get, create, update, delete` |
 
-**For screen-builders:** if a service your spec references is in this table, import it and use the exact name + methods listed. If it is NOT in this table, the data source has not been added yet — write the screen with the expected import path and a `// TODO(connector-not-yet-added): run /add-dataverse to generate <ServiceName>` comment so the user can see what's blocked. Do not invent or rename services.
+**For screen-builders:** if a service your spec references is in this table, import it and use the exact name + methods listed. If it is NOT in this table, return `BLOCKED` to the foreground data-source owner before implementation. Do not invent/rename services or write an unresolved import with a TODO.
 ```
 
-If the directory is empty (no data sources added yet), still write the section with an empty table and a one-line note: "No generated services yet — builders will emit TODO stubs for any service their spec references."
+If the directory is empty, record that no official services exist. A screen
+requiring one is blocked until its approved data-source step completes.
 
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
 
@@ -171,6 +186,12 @@ name, status, date, metric, image URL, or fallback into a skeleton.
 ---
 
 #### 10.8a — Analyze plan for cross-screen patterns
+
+For explicit prototype, use app-owned `EntityMap` types, canonical choice IDs,
+and the generated `@/data/hooks` API instead of generated Dataverse types,
+numeric choices, or `useListData` wrappers. `useEntityList` returns a bounded
+`Page` with `items`/`nextCursor`; preserve the same declared query/actions in
+shared components. Do not copy fixtures into a second hook-level array.
 
 Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 
@@ -212,6 +233,13 @@ For each screen in the plan's Screen Map that will be built by a screen-builder,
 4. An empty return with a `// TODO: screen-builder fills JSX here` marker
 5. Typed placeholders for the screen's canonical scenario binding and media
   keys when the compiled implementation contract requires them
+
+For explicit prototype, resolve imports to the actual registry and generated
+`@/data` modules. Skeletons for destinations not yet built render a visibly
+labeled building state with disabled unfinished actions, rather than `null` or
+fake success. The canary must be useful and dependency-complete. The
+Dataverse skeleton examples below are **real-profile-only**; never copy their
+`@/generated` imports into a prototype work order.
 
 **Skeleton template for a Cursor List screen (`Pagination: cursor`):**
 ```tsx
@@ -409,6 +437,40 @@ This sub-step previously appended `### Standard Imports` + per-screen `#### Reso
 
 #### 10.8d — Navigation/skeleton TypeScript gate
 
+**Explicit prototype:** after all assigned typed skeleton files exist, install
+the shared runtime before this gate:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/configure-prototype-authoring.js" \
+  --project-root "<working_dir>" \
+  --screen-source "<screen-id>=<exact-assigned-app-screen.tsx>" \
+  --wire-screen "<screen-id>"
+```
+
+Repeat `--screen-source` for every compiled screen, using the actual normalized
+project-relative `app/...tsx` path assigned when writing that typed skeleton.
+Repeat `--wire-screen` for each foreground-owned skeleton using the supported
+native-container shape. This is a source-generation action: it inserts the
+real `useAuthoringScreen` call with `ready:false`, binds native root layout,
+and fills missing scroll callbacks (all four events, throttle 16). It does
+not derive usable readiness, dirty state, or semantic control locations.
+For custom compositions, wire the documented runtime APIs directly instead;
+the ordinary registry check does not impose an AST/JSX-shape quality gate.
+Never discover or infer source paths by scanning routes or the filesystem.
+The configurator checks these explicit assignments against canonical routes,
+compiles their exported literal `authoringTargets` metadata, adds only the
+`@/authoring` aliases, and wraps the current root outside data consumers.
+It does not publish or mark skeletons ready. No second screen plan or
+user approval is introduced. Before this command, skeletons may import
+`useAuthoringScreen` from `@/authoring` and export an empty literal
+`authoringTargets` array; keep `ready:false` until their actual usable
+implementation exists. An existing callback is never overwritten; compose it
+with the documented authoring callback before requesting automatic wiring.
+Missing files, ambiguous routes, and custom incompatible
+root wiring block rather than producing a phantom preview. Later runs reuse
+the exact saved `.tmp/authoring-registry.json` assignments. Supply the complete
+explicit source list again when an approved screen is added, removed, or moved.
+
 After Step 10b layouts, Step 10.7 service snapshot, and Step 10.8 shared code/skeletons are all written, run the **Navigation/skeleton gate**:
 
 ```bash
@@ -423,6 +485,14 @@ node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
 If this fails, do not launch Step 11. Capture the full error list once, batch-fix layout names, route paths, skeleton imports, shared component exports, generated service imports, or hook signatures, then rerun the gate. Screen-builders should start only from a clean shell with typed skeletons that compile with `return null`.
 
 Record the clean screen-build boundary:
+
+For the real profile, use the command below. For an explicit prototype,
+replace its `service-registry`, `power-config`, and `auth` arguments with
+`--artifact "data-registry=.tmp/data-access-registry.json"` and
+`--artifact "prototype-profile=.tmp/prototype-profile.json"`. Do not create
+empty live artifacts just to satisfy a checkpoint. Authoring metadata and
+its generated registry continue evolving with the screen waves; the source
+tree and final configurator check bind that generated output.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/mobile-pipeline-state.js" \

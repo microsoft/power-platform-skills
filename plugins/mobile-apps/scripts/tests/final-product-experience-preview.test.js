@@ -13,10 +13,14 @@ const {
 const {
   buildFinalPreviewContract,
   collectPreviewFindings,
+  validateHtml,
 } = require('../validate-product-experience-preview');
 const { bundleFor } = require('./helpers/product-experience-scenarios');
 const { cleanup, makeProjectDir, runCli, writeContracts } = require('./helpers/contract-cli');
 const { scenarioFactsForBundle } = require('./helpers/scenario-facts-fixtures');
+const { sampleImageAsset } = require('./helpers/prototype-image-fixtures');
+const { canonicalJson, sha256Hex } = require('../lib/product-experience-contracts');
+const { readDesignTokenContract } = require('../lib/design-token-contract');
 
 const VECTOR_PACKAGE = { dependencies: { '@expo/vector-icons': '15.1.1' } };
 
@@ -64,8 +68,34 @@ export const tokens = {
     path.join(projectRoot, 'brand', 'signature-components.ts'),
     'export interface ProductSignatureProps { state: "ready" | "busy"; }\n',
   );
+  return bundle;
 }
 
+test('HTML-off design validates actual materials and retains native builder inputs without HTML', () => {
+  const projectRoot = makeProjectDir('final-design-no-html');
+  try {
+    prepare(projectRoot);
+    fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Approved current product\n');
+    const env = { MOBILE_APP_HTML_COMPANIONS: '0' };
+    const begun = runCli('design-run-ownership.js', ['--project-root', projectRoot, '--begin'], { env });
+    assert.equal(begun.code, 0, begun.stdout);
+    const result = runCli('validate-product-experience-preview.js', ['--project-root', projectRoot], { env });
+    assert.equal(result.code, 0, result.stdout);
+    assert.equal(result.json.mode, 'design-materialization');
+    assert.equal(result.json.htmlValidation, 'not-requested');
+    assert.equal(fs.existsSync(path.join(projectRoot, '_plan_preview.html')), false);
+    assert.equal(fs.existsSync(path.join(projectRoot, '.tmp/product-experience-final-preview-contract.json')), true);
+    assert.equal(runCli('design-run-ownership.js', ['--project-root', projectRoot, '--verify'], { env }).code, 0);
+    const changedMode = runCli('design-run-ownership.js', ['--project-root', projectRoot, '--verify'], {
+      env: { MOBILE_APP_HTML_COMPANIONS: '1' },
+    });
+    assert.notEqual(changedMode.code, 0);
+    fs.writeFileSync(path.join(projectRoot, 'brand/tokens.ts'), 'invalid design tokens');
+    const invalid = runCli('validate-product-experience-preview.js', ['--project-root', projectRoot], { env });
+    assert.notEqual(invalid.code, 0);
+    assert.equal(fs.existsSync(path.join(projectRoot, '_plan_preview.html')), false);
+  } finally { cleanup(projectRoot); }
+});
 function finalHtml(contract) {
   const navigation = contract.navigation.durableDestinations.map((destination) => (
     `<a data-navigation-destination="${destination.destinationId}" data-navigation-target-path="${destination.targetPath}">${escapeHtml(destination.label)}</a>`
@@ -143,6 +173,56 @@ function finalHtml(contract) {
 </body>
 </html>\n`;
 }
+
+test('final preview binds licensed sample sources and requires visible canonical credit and working link declarations', () => {
+  const root = makeProjectDir('licensed-final-preview');
+  try {
+    const bundle = prepare(root);
+    const scenarioPath = path.join(root, '.tmp/scenario-facts.json');
+    const scenario = JSON.parse(fs.readFileSync(scenarioPath));
+    const asset = sampleImageAsset(scenario.mediaAssets[0].key);
+    scenario.mediaAssets[0] = asset;
+    delete scenario.scenarioRevision;
+    scenario.scenarioRevision = sha256Hex(canonicalJson(scenario));
+    fs.writeFileSync(scenarioPath, JSON.stringify(scenario));
+    const contract = buildFinalPreviewContract({
+      experience: bundle.experience, scope: bundle.scope, journey: bundle.journey, scenario,
+      compiled: JSON.parse(fs.readFileSync(path.join(root, '.tmp/compiled-screen-build-pack.json'))),
+      navigation: JSON.parse(fs.readFileSync(path.join(root, '.tmp/navigation-manifest.json'))),
+      tokenContract: readDesignTokenContract(path.join(root, 'brand/tokens.ts')),
+      signatureComponentsSource: fs.readFileSync(path.join(root, 'brand/signature-components.ts'), 'utf8'),
+    });
+    const projected = contract.screens.flatMap((screen) => screen.media).find((media) => media.key === asset.key);
+    assert.deepStrictEqual(projected.provenance, asset.provenance);
+    assert.deepStrictEqual(projected.source, asset.source);
+    assert.strictEqual(projected.alt, asset.alt);
+    const initial = finalHtml(contract);
+    assert.ok(validateHtml(initial, contract).errors.some((item) => item.code === 'preview-canonical-image-missing'));
+    assert.ok(validateHtml(initial, contract).errors.some((item) => item.code === 'preview-image-credit-missing'));
+    const credit = asset.provenance;
+    const original = `<figure data-media-asset-key="${asset.key}">${escapeHtml(asset.fallback)}</figure>`;
+    const image = `<figure data-media-asset-key="${asset.key}"><img src="${escapeHtml(asset.source.value)}" alt="${escapeHtml(asset.alt)}" width="64" height="64">
+<figcaption data-media-credit-key="${asset.key}">${escapeHtml(credit.attribution)} · ${escapeHtml(credit.creator)} · ${escapeHtml(credit.changes)}
+<a href="${escapeHtml(credit.sourcePage)}">Image source</a> · <a href="${escapeHtml(credit.licenseUrl)}">${escapeHtml(credit.license)}</a></figcaption></figure>`;
+    const valid = initial.split(original).join(image);
+    assert.deepStrictEqual(validateHtml(valid, contract).errors, []);
+    for (const changed of [
+      valid.replaceAll(`data-media-credit-key="${asset.key}"`, `hidden data-media-credit-key="${asset.key}"`),
+      valid.replaceAll(escapeHtml(credit.creator), 'Uncredited'),
+      valid.replaceAll(escapeHtml(credit.creator), `<span hidden>${escapeHtml(credit.creator)}</span>`),
+      valid.replaceAll(`href="${escapeHtml(credit.licenseUrl)}"`, 'href="#not-the-license"'),
+    ]) {
+      assert.ok(validateHtml(changed, contract).errors.some((item) => item.code === 'preview-image-credit-missing'));
+    }
+    const substituted = valid.replaceAll(`src="${escapeHtml(asset.source.value)}"`, 'src="https://example.test/different.jpg"');
+    assert.ok(validateHtml(substituted, contract).errors.some((item) => item.code === 'preview-canonical-image-missing'));
+    const cssHidden = valid.replace('</head>', '<style>[data-media-credit-key]{display:none}</style></head>');
+    assert.ok(validateHtml(cssHidden, contract).errors.some((item) => item.code === 'preview-required-content-css-hidden'));
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(scenarioPath)).mediaAssets[0], asset);
+  } finally {
+    cleanup(root);
+  }
+});
 
 test('validator prepares and accepts a canonical AI-authored final preview', () => {
   const projectRoot = makeProjectDir('final-experience-preview');

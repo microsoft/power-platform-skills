@@ -27,6 +27,8 @@ const {
   projectScreenFacts,
   validateScenarioFacts,
 } = require('./validate-fixture-scenarios');
+const { validateImageAsset } = require('./lib/prototype-images');
+const { htmlCompanionsEnabled } = require('./lib/html-companions');
 
 const TOOL = 'render-product-experience-preview';
 const USAGE = 'Usage: node render-product-experience-preview.js [--project-root <dir>] [--compiled <path>] [--scenario <path>] [--persistence <path>] [--navigation <path>] [--output <path>]';
@@ -159,9 +161,25 @@ function resolvedAssetSource(asset) {
 }
 
 function sampleImage(label, index, colors, className = '', asset = null) {
+  if (asset?.provenance) validateImageAsset(asset);
   const source = resolvedAssetSource(asset) || imageDataUri(label, index, colors);
   const fallback = asset?.fallback || label;
-  return `<span class="asset-frame ${escapeHtml(className)}-frame"><img class="${escapeHtml(className)}" src="${escapeHtml(source)}" alt="${escapeHtml(label)}" data-preview-asset data-asset-key="${escapeHtml(asset?.key || 'generated-fallback')}"><span class="asset-fallback" data-asset-fallback hidden>${escapeHtml(fallback)}</span></span>`;
+  const alt = asset?.alt || label;
+  return `<span class="asset-frame ${escapeHtml(className)}-frame"><img class="${escapeHtml(className)}" src="${escapeHtml(source)}" alt="${escapeHtml(alt)}" data-preview-asset data-asset-key="${escapeHtml(asset?.key || 'generated-fallback')}"><span class="asset-fallback" data-asset-fallback role="img" aria-label="${escapeHtml(`${alt}. ${fallback}`)}" hidden>${escapeHtml(fallback)}</span>${asset?.provenance ? '<span class="asset-loading" data-asset-loading role="status">Loading image</span>' : ''}</span>`;
+}
+
+function renderImageCredits(screens) {
+  const assets = new Map();
+  for (const screen of screens) {
+    for (const asset of screen.pack.scenarioMedia || []) if (asset.provenance) assets.set(asset.key, validateImageAsset(asset));
+  }
+  if (!assets.size) return '';
+  return `<section class="image-credits" aria-label="Canonical image credits"><h2>Image credits</h2><ul>${[...assets.values()].map((asset) => {
+    const credit = asset.provenance;
+    return `<li data-media-credit-key="${escapeHtml(asset.key)}"><p>${escapeHtml(credit.attribution)} · ${escapeHtml(credit.creator)}</p>
+<p>${escapeHtml(credit.changes)}</p><a href="${escapeHtml(credit.sourcePage)}" target="_blank" rel="noopener noreferrer">Image source</a>
+ · <a href="${escapeHtml(credit.licenseUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(credit.license)}</a></li>`;
+  }).join('')}</ul></section>`;
 }
 
 function previewRecords(pack) {
@@ -448,13 +466,13 @@ function applyScenarioFacts(compiled, scenario) {
             headline: String(facts.headline ?? ''),
             supportingText: String(facts.supportingText ?? ''),
             ...(media[0] ? {
-              heroMediaLabel: media[0].fallback,
+              heroMediaLabel: media[0].alt || media[0].fallback,
             } : {}),
             metrics: facts.metrics || [],
             records: (facts.records || []).map((record) => ({
               ...record,
               ...(record.media ? {
-                mediaLabel: record.media.fallback,
+                mediaLabel: record.media.alt || record.media.fallback,
                 scenarioMedia: record.media,
               } : {}),
             })),
@@ -501,6 +519,7 @@ function renderHtml({ experience, compiled, journey, scenario = null, navigation
 body{background:#fff}.page-head,.controls,.review-links{max-width:1800px;margin-left:auto;margin-right:auto}.review-links{display:flex;gap:8px;flex-wrap:wrap;padding:0 clamp(20px,5vw,72px) 18px}.review-links a{border:1px solid var(--border);border-radius:8px;padding:8px 11px;color:var(--primary);font-size:12px;font-weight:800;text-decoration:none}.preview-grid{grid-template-columns:repeat(var(--screen-count),minmax(300px,1fr));gap:18px;width:calc(100% - 48px);max-width:1800px;margin:0 auto 28px;padding:30px 28px 40px;overflow-x:auto;background:linear-gradient(180deg,#f8fafc,#f2f5f9);border:1px solid #e5e9ef;border-radius:24px}.phone,.phone.extra{display:block;min-width:300px}.screen-label{min-height:62px;padding:0 8px 12px;text-align:center}.screen-label strong{display:block;font-size:12px;letter-spacing:.035em;color:#111827}.screen-label span{display:block;max-width:240px;margin:5px auto 0;color:#667085;font-size:10px;line-height:1.35}.phone-shell{height:720px;border:1px solid #dfe4ea;border-radius:34px;background:var(--surface);box-shadow:0 16px 34px rgba(32,45,63,.12);overflow:hidden;display:grid;grid-template-rows:auto auto 1fr}.statusbar{background:var(--surface);color:var(--text);padding:10px 18px 5px}.phone header{padding:15px 18px 12px}.phone h2{font-size:22px}.sample-badge{right:16px;top:15px}.phone main{padding:4px 18px 24px}.phone-caption{display:none}.frame-provenance{font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace!important;color:var(--muted)!important;text-align:center}.media-product,.media-hero{height:205px}.media-supportive,.media-evidence{height:150px}.tile-card{grid-template-rows:96px auto}.record-thumb{width:50px;height:50px}.phone.focused .phone-shell{outline:3px solid color-mix(in srgb,var(--primary) 35%,transparent);box-shadow:0 20px 46px color-mix(in srgb,var(--primary) 22%,transparent)}.all-screens{width:calc(100% - 48px);max-width:1800px;margin:0 auto 56px;border:1px solid var(--border);border-radius:16px;background:var(--surface)}.all-screens>summary{cursor:pointer;padding:16px 18px;font-weight:900}.all-screens>summary span{color:var(--muted);font-weight:600;margin-left:8px}.all-screen-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1px;background:var(--border);border-top:1px solid var(--border)}.graph-screen{background:var(--surface);padding:15px;min-width:0}.graph-screen header{display:flex;justify-content:space-between;gap:8px}.graph-screen header span{font-size:9px;color:var(--primary);font-weight:900;text-transform:uppercase}.graph-screen p{font-size:11px}.graph-screen dl{margin:0}.graph-screen dl div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:8px;padding:5px 0;border-top:1px solid var(--border);font-size:10px}.graph-screen dt{color:var(--muted)}.graph-screen dd{margin:0;overflow-wrap:anywhere}
 .page-head,.controls,.review-links,.experience-directive{max-width:1800px;margin-left:auto;margin-right:auto}.experience-directive{display:flex;gap:8px;flex-wrap:wrap;padding:0 clamp(20px,5vw,72px) 18px}.experience-directive span{padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;font-size:10px;font-weight:800;color:var(--muted)}.phone-shell{grid-template-rows:auto auto 1fr auto;box-shadow:0 16px 34px rgba(32,45,63,var(--preview-shadow-alpha));transition:box-shadow var(--preview-motion) ease}.statusbar{padding-left:var(--preview-pad);padding-right:var(--preview-pad)}.phone header{padding:var(--preview-pad)}.phone h2{font-weight:var(--preview-heading-weight)}.sample-badge{right:var(--preview-pad);top:var(--preview-pad)}.phone main{padding:4px var(--preview-pad) var(--preview-pad)}.media-product,.media-hero,.media-essential{height:var(--preview-media-height)}.media-supportive,.media-evidence{height:min(170px,var(--preview-media-height))}.media-incidental{height:min(110px,var(--preview-media-height))}.tile-grid,.metric-grid,.comparison,.trust-grid{gap:var(--preview-gap)}.record-row,.settings-list>div{padding:var(--preview-row-pad) 0}body[data-risk-level="high"] .trust-item,body[data-risk-level="critical"] .trust-item{border-left:4px solid var(--warning)}.phone-nav{display:grid;grid-template-columns:repeat(auto-fit,minmax(60px,1fr));gap:2px;padding:8px 10px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--surface)}.phone-nav span{display:grid;place-items:center;gap:3px;font-size:8px;color:var(--muted)}.phone-nav span.active{color:var(--primary);font-weight:900}.phone-nav b{font-size:8px}.stack-return{padding:8px var(--preview-pad) max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--border);font-size:9px;color:var(--muted)}@media(max-width:980px){.preview-grid{grid-template-columns:repeat(var(--screen-count),300px);justify-content:start}}@media(max-width:600px){.page-head{padding-top:22px}.preview-grid{width:calc(100% - 24px);grid-template-columns:repeat(var(--screen-count),286px);gap:16px;padding:24px 16px 32px}.phone{min-width:286px}.phone-shell{height:680px}}
 .asset-frame{position:relative;display:block;width:100%;height:100%;min-width:0;overflow:hidden}.record-thumb-frame{width:50px;height:50px;border-radius:14px}.comparison-media-frame{height:105px;border-radius:11px;margin-bottom:10px}.asset-fallback{position:absolute;inset:0;display:grid;place-items:center;padding:10px;background:var(--accent);color:var(--primary);font-size:10px;font-weight:900;text-align:center}.asset-fallback[hidden]{display:none}.preview-fidelity{display:flex;justify-content:center;gap:10px;align-items:center;padding:9px 16px;font-size:11px;border-bottom:1px solid var(--border)}.preview-fidelity strong{font-weight:900}.preview-fidelity-structural{background:#e7e7e3;color:#303330}.preview-fidelity-structural strong{text-transform:uppercase;letter-spacing:.08em}.phone h2,.phone h3{font-family:var(--preview-font),ui-rounded,Avenir,sans-serif;font-weight:var(--preview-heading-weight);letter-spacing:var(--preview-heading-tracking);line-height:var(--preview-heading-line)}.phone h3{font-size:var(--preview-heading-size)}
+.asset-loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--surface);color:var(--text)}.asset-loading[hidden]{display:none}.image-credits{margin:1rem 0;padding:1rem;border:1px solid var(--border);overflow-wrap:anywhere}.image-credits li{margin-bottom:1rem}.image-credits a{color:inherit}
 </style>
 </head>
 <body ${presentation.attributes} data-preview-mode="structural" data-token-source="neutral-structural">
@@ -523,16 +542,26 @@ body{background:#fff}.page-head,.controls,.review-links{max-width:1800px;margin-
   `<button data-state="${state}" class="${index === 0 ? 'active' : ''}">${state[0].toUpperCase() + state.slice(1)}</button>`).join('')}</div></section>
 <section class="preview-grid" style="--screen-count:${screens.length}">${screens.map((screen, index) => renderPhone(screen, index, colors, previewScreenIds, provenance, navigation)).join('')}</section>
 ${renderAllScreens(scenarioCompiled, previewScreenIds)}
+${renderImageCredits(screens)}
 <script>
-function syncAssetFallback(image){
+function syncAssetFallback(image,event){
   var fallback=image.nextElementSibling;
-  var failed=image.complete&&image.naturalWidth===0;
+  if(event&&event.type==='error')image.setAttribute('data-asset-failed','true');
+  var failed=image.getAttribute('data-asset-failed')==='true'||image.complete&&image.naturalWidth===0;
+  var loading=!failed&&!image.complete;
   image.hidden=failed;
+  image.setAttribute('aria-hidden',String(failed||loading));
   if(fallback)fallback.hidden=!failed;
+  var frame=image.parentElement;
+  if(frame){
+    frame.setAttribute('aria-busy',String(loading));
+    var indicator=frame.querySelector('[data-asset-loading]');
+    if(indicator)indicator.hidden=!loading;
+  }
 }
 document.querySelectorAll('[data-preview-asset]').forEach(function(image){
-  image.addEventListener('load',function(){syncAssetFallback(image)});
-  image.addEventListener('error',function(){syncAssetFallback(image)});
+  image.addEventListener('load',function(event){syncAssetFallback(image,event)});
+  image.addEventListener('error',function(event){syncAssetFallback(image,event)});
   syncAssetFallback(image);
 });
 document.querySelectorAll('[data-state]').forEach(function(button){
@@ -659,6 +688,9 @@ function main(argv) {
     return 0;
   }
   if ((args.unknown || []).length) return fatal(TOOL, `unknown argument(s): ${args.unknown.join(', ')}. ${USAGE}`);
+  try {
+    if (!htmlCompanionsEnabled()) return fatal(TOOL, 'HTML companions are disabled; set MOBILE_APP_HTML_COMPANIONS=1 to render HTML');
+  } catch (error) { return fatal(TOOL, error.message); }
 
   const projectRoot = args.projectRoot ? path.resolve(args.projectRoot) : process.cwd();
   const paths = {

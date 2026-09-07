@@ -22,6 +22,8 @@ const {
 const { validateScopeContract } = require('../validate-product-scope');
 const { cleanup } = require('./helpers/contract-cli');
 const { bundleFor } = require('./helpers/product-experience-scenarios');
+const { runCli } = require('./helpers/contract-cli');
+const { htmlCompanionsEnabled } = require('../lib/html-companions');
 
 function makeProjectDir(label) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`));
@@ -33,6 +35,26 @@ function writeJson(projectRoot, relativePath, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+test('HTML flag retains structured progress without rendering or starting a server', () => {
+  assert.equal(htmlCompanionsEnabled(), true);
+  assert.equal(htmlCompanionsEnabled('0'), false);
+  assert.equal(htmlCompanionsEnabled('1'), true);
+  assert.throws(() => htmlCompanionsEnabled('false'), /must be 0 or 1/);
+  const projectRoot = makeProjectDir('mobile-build-plan-no-html');
+  try {
+    const env = { MOBILE_APP_HTML_COMPANIONS: '0' };
+    const progress = runCli('mobile-build-plan.js', [
+      'progress', '--project-root', projectRoot, '--phase', 'requirements', '--status', 'complete',
+    ], { env });
+    assert.equal(progress.code, 0, progress.stderr);
+    assert.equal(progress.json.htmlCompanions, false);
+    assert.equal(fs.existsSync(path.join(projectRoot, '.tmp/mobile-build-progress.json')), true);
+    assert.equal(fs.existsSync(path.join(projectRoot, '_build_plan.html')), false);
+    assert.notEqual(runCli('mobile-build-plan.js', ['serve', '--project-root', projectRoot], { env }).code, 0);
+    assert.equal(fs.existsSync(path.join(projectRoot, '.tmp/mobile-build-plan-server.json')), false);
+    assert.notEqual(runCli('mobile-build-plan.js', ['render', '--project-root', projectRoot], { env }).code, 0);
+  } finally { cleanup(projectRoot); }
+});
 test('Build Plan refuses to write through a symlinked artifact directory', () => {
   const projectRoot = makeProjectDir('mobile-build-plan-symlink');
   const outside = makeProjectDir('mobile-build-plan-outside');

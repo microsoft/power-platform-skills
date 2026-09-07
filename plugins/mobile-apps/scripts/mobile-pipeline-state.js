@@ -101,6 +101,21 @@ function atomicWriteJson(file, value) {
   }
 }
 
+function prototypeApprovalErrors(projectRoot) {
+  const { APPROVAL_PATH, PROTOTYPE_ARTIFACT_PATHS, validateIntegrity, validatePrototypeApprovals, validatePresentationApprovals } = require('./lib/mobile-plan-approval');
+  const file = path.join(projectRoot, APPROVAL_PATH);
+  if (!fs.existsSync(file)) return [];
+  const receipt = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const hasLocalReview = Object.values(PROTOTYPE_ARTIFACT_PATHS).some((relative) => fs.existsSync(path.join(projectRoot, relative)))
+    || Object.values(receipt.gates || {}).some((gate) => gate.prototypeRevisions !== undefined);
+  if (!hasLocalReview && receipt.gates?.gate3?.status !== 'approved') return [];
+  const integrity = validateIntegrity(receipt);
+  return integrity.valid ? [
+    ...(hasLocalReview ? validatePrototypeApprovals(projectRoot, receipt).errors : []),
+    ...validatePresentationApprovals(projectRoot, receipt).errors,
+  ] : integrity.errors;
+}
+
 function recordState({
   projectRoot,
   stateFile,
@@ -111,6 +126,8 @@ function recordState({
   now = () => new Date().toISOString(),
 }) {
   if (!step) throw new Error('--step is required with --record');
+  const approvalErrors = prototypeApprovalErrors(projectRoot);
+  if (approvalErrors.length) throw new Error(approvalErrors.join('; '));
   const entries = [
     ...artifacts.map((value) => parseArtifact(value, projectRoot, 'file')),
     ...mutableArtifacts.map((value) => ({
@@ -132,6 +149,10 @@ function recordState({
     }
   }
   const suppliedNames = new Set(entries.map((entry) => entry.name));
+  if (!require('./lib/html-companions').htmlCompanionsEnabled()) {
+    previousArtifacts = Object.fromEntries(Object.entries(previousArtifacts)
+      .filter(([, artifact]) => artifact.path !== '_plan_preview.html'));
+  }
   for (const [name, previous] of Object.entries(previousArtifacts)) {
     if ((previous.kind || 'file') !== 'file') continue;
     const absolute = path.resolve(projectRoot, previous.path);
@@ -213,6 +234,13 @@ function verifyState({ projectRoot, stateFile }) {
     return { valid: false, reason: 'invalid-shape', resumeAfterStep: null, mismatches: [] };
   }
   const mismatches = [];
+  try {
+    for (const message of prototypeApprovalErrors(projectRoot)) {
+      mismatches.push({ name: 'prototype-approval', reason: 'approval-artifact-changed', message });
+    }
+  } catch (error) {
+    mismatches.push({ name: 'prototype-approval', reason: 'invalid-approval', message: error.message });
+  }
   for (const [name, artifact] of Object.entries(state.artifacts)) {
     const absolute = path.resolve(projectRoot, artifact.path);
     const relative = path.relative(projectRoot, absolute);

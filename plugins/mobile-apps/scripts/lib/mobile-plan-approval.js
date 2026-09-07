@@ -11,10 +11,11 @@ const {
   validateApprovalReceipt,
 } = require('../build-dataverse-operation-manifest');
 const {
-  canonicalJson,
   contractRevision,
   sha256Hex,
 } = require('./product-experience-contracts');
+const { readRegularFile } = require('./authoring-source');
+const { htmlCompanionsEnabled } = require('./html-companions');
 
 const APPROVAL_PATH = '.tmp/mobile-plan-status.json';
 const PLAN_PATH = 'native-app-plan.md';
@@ -30,6 +31,17 @@ const ARTIFACT_PATHS = {
   scenarioFacts: '.tmp/scenario-facts.json',
   dataModelUsage: '.tmp/data-model-usage.json',
   preview: '_plan_preview.html',
+};
+const PROTOTYPE_ARTIFACT_PATHS = {
+  prototypeDomain: '.tmp/prototype-domain.json',
+  prototypeBindings: '.tmp/prototype-bindings.json',
+  prototypeRules: '.tmp/prototype-rules.json',
+};
+const DESIGN_ARTIFACT_PATHS = {
+  designSystem: 'brand/design-system.md',
+  designTokens: 'brand/tokens.ts',
+  signatureComponents: 'brand/signature-components.ts',
+  designContract: '.tmp/product-experience-final-preview-contract.json',
 };
 const GATE_SECTIONS = {
   1: [
@@ -115,16 +127,100 @@ function artifactRevision(value) {
     || contractRevision(value);
 }
 
-function loadArtifacts(projectRoot, { planRequired = true } = {}) {
+function loadArtifacts(projectRoot, { planRequired = true, htmlCompanions = htmlCompanionsEnabled() } = {}) {
   const artifacts = Object.fromEntries(Object.entries(ARTIFACT_PATHS).map(([name, file]) => [
     name,
     name === 'preview'
-      ? readBytes(projectRoot, file, { required: false })
+      ? htmlCompanions ? readBytes(projectRoot, file, { required: false }) : null
       : readJson(projectRoot, file, { required: false }),
   ]));
   artifacts.planBytes = readBytes(projectRoot, PLAN_PATH, { required: planRequired });
   artifacts.plan = artifacts.planBytes ? artifacts.planBytes.toString('utf8') : null;
   return artifacts;
+}
+
+function designRevisions(projectRoot) {
+  return Object.fromEntries(Object.entries(DESIGN_ARTIFACT_PATHS).map(([name, relative]) => {
+    const bytes = readRegularFile(resolveInsideProject(projectRoot, relative));
+    if (!bytes.toString('utf8').trim()) throw new Error(`Gate 3 requires materialized ${relative}`);
+    return [name, sha256(bytes)];
+  }));
+}
+
+function assertPresentationCurrent(projectRoot, receipt, artifacts, htmlCompanions) {
+  const gate = receipt.gates?.gate3;
+  if (gate?.status !== 'approved') return;
+  if ((gate.htmlCompanions ?? true) !== htmlCompanions) {
+    throw new Error('HTML companion mode changed; reopen Gate 3 and Gate 4');
+  }
+  if (htmlCompanions && (!artifacts.preview || sha256(artifacts.preview) !== gate.previewSha256)) {
+    throw new Error('Gate 3 HTML preview changed and requires reapproval');
+  }
+  if (!htmlCompanions && stableJson(gate.designRevisions) !== stableJson(designRevisions(projectRoot))) {
+    throw new Error('Gate 3 materialized design changed and requires reapproval');
+  }
+  if (gate.artifactRevisions && stableJson(gate.artifactRevisions) !== stableJson(currentRevisions(artifacts))) {
+    throw new Error('Gate 3 canonical design inputs changed and require reapproval');
+  }
+}
+
+function validatePresentationApprovals(projectRoot, receipt, options = {}) {
+  try {
+    if (receipt.gates?.gate3?.status !== 'approved') return { valid: true, errors: [] };
+    const htmlCompanions = htmlCompanionsEnabled(options.htmlCompanions);
+    assertPresentationCurrent(projectRoot, receipt, loadArtifacts(projectRoot, { htmlCompanions }), htmlCompanions);
+    return { valid: true, errors: [] };
+  } catch (error) { return { valid: false, errors: [error.message] }; }
+}
+
+function prototypeRevisions(projectRoot) {
+  const entries = Object.entries(PROTOTYPE_ARTIFACT_PATHS).map(([name, relative]) => {
+    const file = resolveInsideProject(projectRoot, relative);
+    try { return { name, relative, file, stat: fs.lstatSync(file) }; }
+    catch (error) {
+      if (error.code === 'ENOENT') return { name, relative, file, stat: null };
+      throw error;
+    }
+  });
+  const present = entries.filter((entry) => entry.stat !== null);
+  if (present.length && present.length !== entries.length) {
+    throw new Error('The logical domain review requires its complete domain, bindings, and rules');
+  }
+  return Object.fromEntries(present.map(({ name, relative, file, stat }) => {
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 4 * 1024 * 1024) {
+      throw new Error(`Prototype approval requires a bounded regular sidecar: ${relative}`);
+    }
+    const bytes = readRegularFile(file);
+    let value;
+    try { value = JSON.parse(bytes.toString('utf8')); }
+    catch { throw new Error(`Prototype approval sidecar is not valid JSON: ${relative}`); }
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.schemaVersion !== 1) {
+      throw new Error(`Prototype approval sidecar requires a schemaVersion 1 object: ${relative}`);
+    }
+    return [name, sha256Hex(bytes)];
+  }));
+}
+
+function assertPrototypeGatesCurrent(receipt, current, beforeGate = 5) {
+  for (let gate = 2; gate < beforeGate; gate += 1) {
+    const record = receipt.gates?.[`gate${gate}`];
+    if (record?.status !== 'approved') continue;
+    // Bind absence too: adding a local domain after a data gate is a new review.
+    if (stableJson(record.prototypeRevisions || {}) !== stableJson(current)) {
+      throw new Error(`Gate ${gate} prototype domain, bindings, or rules changed and require reapproval`);
+    }
+  }
+}
+
+function validatePrototypeApprovals(projectRoot, receipt) {
+  const approved = [2, 3, 4].some((gate) => receipt.gates?.[`gate${gate}`]?.status === 'approved');
+  if (!approved) return { valid: true, errors: [] };
+  try {
+    assertPrototypeGatesCurrent(receipt, prototypeRevisions(projectRoot));
+    return { valid: true, errors: [] };
+  } catch (error) {
+    return { valid: false, errors: [error.message] };
+  }
 }
 
 function baseReceipt(existing = null) {
@@ -267,19 +363,25 @@ function currentRevisions(artifacts) {
 function approveGate(projectRoot, gate, options = {}) {
   const numericGate = Number(gate);
   if (![1, 2, 3, 4].includes(numericGate)) throw new Error('gate must be 1, 2, 3, or 4');
-  const artifacts = loadArtifacts(projectRoot, { planRequired: numericGate > 1 });
+  const htmlCompanions = htmlCompanionsEnabled(options.htmlCompanions);
+  const artifacts = loadArtifacts(projectRoot, { planRequired: numericGate > 1, htmlCompanions });
   const existing = readJson(projectRoot, APPROVAL_PATH, { required: false });
   if (existing) {
     const integrity = validateIntegrity(existing);
     if (!integrity.valid) throw new Error(integrity.errors.join('; '));
   }
-  const receipt = baseReceipt(existing);
+  const receipt = baseReceipt(numericGate === 3 && existing?.gates?.gate4?.status === 'approved'
+    ? invalidateApprovalReceipt(existing, { fromGate: 4, now: options.now, reason: 'design-reapproved' }) : existing);
   assertGateOrder(receipt, numericGate);
   assertPriorSectionsCurrent(receipt, artifacts, numericGate);
+  if (numericGate === 4) assertPresentationCurrent(projectRoot, receipt, artifacts, htmlCompanions);
+  const localRevisions = numericGate > 1 ? prototypeRevisions(projectRoot) : null;
+  if (localRevisions) assertPrototypeGatesCurrent(receipt, localRevisions, numericGate);
   const approvedAt = options.now || new Date().toISOString();
   const gateRecord = {
     status: 'approved',
     approvedAt,
+    ...(localRevisions && Object.keys(localRevisions).length ? { prototypeRevisions: localRevisions } : {}),
     ...(artifacts.planBytes ? {
       planSha256: sha256(artifacts.planBytes),
       sectionHashes: sectionHashes(artifacts.plan, GATE_SECTIONS[numericGate]),
@@ -317,13 +419,16 @@ function approveGate(projectRoot, gate, options = {}) {
     receipt.approvals.dataModelUsage = { status: 'approved', approvedAt };
     receipt.approvals.scenarioFacts = { status: 'approved', approvedAt };
   } else if (numericGate === 3) {
-    if (!artifacts.preview || !artifacts.buildPack) {
-      throw new Error('Gate 3 requires the compiled build pack and _plan_preview.html');
+    if (!artifacts.buildPack || (htmlCompanions && !artifacts.preview)) {
+      throw new Error(`Gate 3 requires the compiled build pack${htmlCompanions ? ' and _plan_preview.html' : ''}`);
     }
     receipt.approvals.screenPlan = { status: 'approved', approvedAt };
     receipt.experience = { status: 'approved', approvedAt };
     receipt.screenPlan = { status: 'approved', approvedAt };
-    gateRecord.previewSha256 = sha256(artifacts.preview);
+    gateRecord.htmlCompanions = htmlCompanions;
+    gateRecord.artifactRevisions = currentRevisions(artifacts);
+    if (htmlCompanions) gateRecord.previewSha256 = sha256(artifacts.preview);
+    else gateRecord.designRevisions = designRevisions(projectRoot);
   } else {
     receipt.implementation = { status: 'approved', approvedAt };
     receipt.receiptState = 'complete';
@@ -341,7 +446,7 @@ function approveGate(projectRoot, gate, options = {}) {
 
   receipt.gates[`gate${numericGate}`] = gateRecord;
   if (artifacts.planBytes) receipt.currentPlanSha256 = sha256(artifacts.planBytes);
-  receipt.artifactRevisions = currentRevisions(artifacts);
+  receipt.artifactRevisions = { ...currentRevisions(artifacts), ...(localRevisions || {}) };
   const sealed = sealReceipt(receipt);
   if (numericGate === 4 && artifacts.dataModel) {
     const validation = validateApprovalReceipt(sealed, {
@@ -409,6 +514,8 @@ function invalidateApprovalReceipt(receipt, nowOrOptions = {}) {
 module.exports = {
   APPROVAL_PATH,
   ARTIFACT_PATHS,
+  PROTOTYPE_ARTIFACT_PATHS,
+  DESIGN_ARTIFACT_PATHS,
   GATE_SECTIONS,
   approveGate,
   invalidateApprovalReceipt,
@@ -416,4 +523,6 @@ module.exports = {
   sealReceipt,
   serviceDependencies,
   validateIntegrity,
+  validatePrototypeApprovals,
+  validatePresentationApprovals,
 };

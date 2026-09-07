@@ -44,6 +44,14 @@ If preparation returns `NEEDS_CONTEXT`, stop and return the exact finding to the
 planning owner. Never reorder journeys or rewrite screen, navigation, or
 scenario authorities to obtain different frames.
 
+When `MOBILE_APP_HTML_COMPANIONS=0`, successful preparation returns
+`mode: "design-materialization"` and `htmlValidation: "not-requested"`. Keep the
+full contract and brand artifacts for screen builders, then return `DONE`
+without reading an HTML authoring projection, generating HTML, opening a
+browser, or entering the HTML repair loop below. Contract, token, scenario,
+ownership and source-isolation validation still ran; no native rendering is
+claimed. This branch also applies to the final validator invocation.
+
 Test fixtures, snapshots, and benchmark implementations are prohibited
 authoring inputs. Generate the experience only from the current run's contracts
 and approved design references. Never read a previous `_plan_preview.html` as an

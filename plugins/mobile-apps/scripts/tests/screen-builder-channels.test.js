@@ -12,6 +12,8 @@ const { readDesignTokenContract } = require('../lib/design-token-contract');
 const { canonicalJson, sha256Hex } = require('../lib/product-experience-contracts');
 const { buildSharedDesignInputs } = require('../lib/shared-design-inputs');
 const { projectScreenFacts } = require('../validate-fixture-scenarios');
+const { registryFor } = require('../lib/prototype-generator');
+const { projectDataAccess } = require('../lib/prototype-registry');
 
 const {
   delimiters,
@@ -224,6 +226,47 @@ test('direct-write and return-only channels consume the same sealed work order',
   const second = sealWorkOrder(workOrder(root), contractOptions(root));
   assert.equal(first.sealed.inputFingerprint, second.sealed.inputFingerprint);
   assert.deepEqual(first.sealed, second.sealed);
+});
+
+test('local screen sealing binds real registry operations and cannot lose them by deleting the registry', (context) => {
+  const root = fs.realpathSync(project(context));
+  const registry = registryFor({
+    domain: { entities: [{ id: 'Record', operations: ['list', 'get'] }] },
+    bindings: { entities: [{ entityId: 'Record', conceptId: 'record' }] },
+    inputRevisions: { domain: 'reviewed-logical-domain', persistence: 'reviewed-local-ownership' },
+  }, { conceptOwners: [{ conceptId: 'record', owner: 'local' }] });
+  fs.writeFileSync(path.join(root, '.tmp/data-access-registry.json'), JSON.stringify(registry));
+  fs.writeFileSync(path.join(root, '.tmp/prototype-profile.json'), '{"profile":"prototype"}');
+  const order = workOrder(root);
+  const options = contractOptions(root);
+  options.compiledScreenBuildPack.screens[0].implementationContract.requiredOperations = [{ kind: 'read', entity: 'Record' }];
+  order.pack = options.compiledScreenBuildPack.screens[0];
+  order.dataAccess = projectDataAccess(registry, ['Record']);
+  order.serviceSignatures = [registry.entities[0].operations[0].signature];
+  assert.throws(() => sealWorkOrder(order, options), /Configure the prototype authoring registry/);
+  const appInstanceId = '22222222-2222-4222-8222-222222222222';
+  fs.writeFileSync(path.join(root, 'app.json'), JSON.stringify({ expo: { extra: { telemetry: { appInstanceId } } } }));
+  fs.writeFileSync(path.join(root, '.tmp/compiled-screen-build-pack.json'), JSON.stringify(options.compiledScreenBuildPack));
+  const authoring = {
+    schemaVersion: 1, appInstanceId, screens: [{
+      screenId: 'home', route: '/home', sourceFile: path.relative(root, order.targetPath).split(path.sep).join('/'),
+      targets: [{ id: 'records', label: 'Records', role: 'collection' }],
+    }],
+  };
+  fs.writeFileSync(path.join(root, '.tmp/authoring-registry.json'), JSON.stringify(authoring));
+  assert.equal(sealWorkOrder(order, options).sealed.dataAccess.entities[0].module, '@/data/runtime');
+  const sealed = sealWorkOrder(order, options).sealed;
+  assert.deepEqual(sealed.authoring.recordBindings, [{ entityId: 'Record', conceptId: 'record' }]);
+  assert.equal(sealed.authoring.metadataExport, 'authoringTargets');
+  assert.throws(() => sealWorkOrder({ ...order, authoring: { ...sealed.authoring, route: '/elsewhere' } }, options), /stale or invented/);
+  authoring.screens[0].targets[0].label = 'Updated record collection';
+  fs.writeFileSync(path.join(root, '.tmp/authoring-registry.json'), JSON.stringify(authoring));
+  assert.throws(() => sealWorkOrder(sealed, options), /stale or invented/);
+  assert.throws(() => sealWorkOrder({ ...order, serviceSignatures: [] }, options), /omits the verified/);
+  assert.throws(() => sealWorkOrder({ ...order, dataAccess: projectDataAccess(registry, []), serviceSignatures: [] }, options), /omits the canonical/);
+  fs.unlinkSync(path.join(root, '.tmp/data-access-registry.json'));
+  delete order.dataAccess;
+  assert.throws(() => sealWorkOrder(order, options), /current app-owned registry/);
 });
 
 test('work-order targets must implement their assigned Expo screen route', (context) => {

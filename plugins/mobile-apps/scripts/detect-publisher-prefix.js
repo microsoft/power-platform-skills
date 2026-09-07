@@ -29,6 +29,17 @@ async function main() {
     process.exit(0);
   }
 
+  const broker = require('./lib/player-dataverse').playerDataverse();
+  if (broker) {
+    const result = await broker.metadata(envUrl, 'GET',
+      `solutions?$select=uniquename&$expand=publisherid($select=customizationprefix)&$filter=uniquename eq '${solutionName}'`);
+    const prefix = result.status === 200 ? result.data?.value?.[0]?.publisherid?.customizationprefix : null;
+    console.log(JSON.stringify(prefix
+      ? { prefix, source: 'detected' }
+      : { prefix: null, reason: 'The approved desktop metadata read did not return a publisher prefix.' }));
+    return;
+  }
+
   const token = await getAuthToken(envUrl, tenantId);
   if (!token) {
     console.log(JSON.stringify({

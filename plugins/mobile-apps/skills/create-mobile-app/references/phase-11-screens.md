@@ -1,5 +1,11 @@
 # Screen Generation and Launch
 
+For explicit prototype, consume the real app-owned registry and require
+`generate-prototype.js --project-root "<working_dir>" --check` before each
+publication gate. In Player mode the shared authoring adapter is mandatory;
+all writes remain in the operation's bound candidate workspace. The bridge is
+the sole preview publisher, even while the foreground builds later waves.
+
 Follow the retained
 [`Live Build Plan protocol`](./build-plan.md). Update `screens` after every
 canary/supporting channel attempt and wave, and wrap each executable quality
@@ -49,7 +55,20 @@ create `.tmp/screen-work-orders/<screenId>.unsealed.json` with:
   only this screen's binding, referenced records, relationships, media assets,
   and applicable invariants;
 - complete typed skeleton;
-- only relevant generated-service signatures;
+- only relevant actual data-access signatures: app-owned registry entries for
+  prototype, official generated-service signatures for real apps;
+- when the app-owned registry exists, `dataAccess` is the exact
+  `projectDataAccess(registry, entityIds)` result from
+  `scripts/lib/prototype-registry.js`. Sealing verifies its registry revision,
+  entries, and every service signature. Do not author this projection by hand;
+  the projection also carries exact logical fields and capability-bounded media
+  APIs. Every canonical read/create/update/delete operation must include its
+  actual repository/signature; deleting a prototype registry cannot bypass it;
+- for an instrumented app, the sealer automatically projects `authoring`
+  from the current registry and this screen's validated data-access bindings.
+  It binds only this screen's IDs, route, explicit target metadata, runtime
+  module/export contract, and persistence concept IDs. Never hand-author a
+  different projection or give the child all other screens;
 - permitted token and signature-component interfaces;
 - exact states, `Object.values(implementationContract.testIds)`, and
   accessibility requirements.
@@ -101,6 +120,14 @@ Repeat `--work-order` for every assigned screen in deterministic screen-ID
 order. Initialization revalidates every sealed work order and rejects duplicate
 normalized target paths or aliases of the same existing file. Stop and repair
 the foreground assignments before launching any builder if this check fails.
+
+In Player mode, report the **actual approved** screen plan using the shared
+adapter `event --input <bounded-json-file>`. Project stable screen IDs, titles,
+routes, and dependency IDs from the current contracts; validate with the pinned
+wire `assertScreenPlan`. Do not substitute example screens or status-derived
+screen lists. Prefer the return-only channel so workers cannot touch shared
+candidate files. Report `building`, `checking`, and failure states through the
+same adapter; a worker's `DONE` is not a published/ready or mounted receipt.
 
 Immediately before dispatching each screen on any channel, record its explicit
 Build Plan state:
@@ -259,6 +286,35 @@ do not attribute validation or user waiting to a screen-build channel.
 
 ## Step 11.2 — Canary validation gate
 
+For an instrumented prototype, first finish the selected channel's scope audit,
+then compile the completed screen exports before running these gates:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/configure-prototype-authoring.js" \
+  --project-root "<working_dir>" --ready-screen "<completed-screen-id>"
+node "${PLUGIN_ROOT}/scripts/configure-prototype-authoring.js" \
+  --project-root "<working_dir>" --ready-screen "<completed-screen-id>" --check
+```
+
+Repeat `--ready-screen` for the exact completed set, including earlier validated
+waves. Run this same sequence for every supporting wave and after a new screen
+or conversion. The compiler reads only explicit literal `authoringTargets`
+exports; it does not infer controls from JSX, React internals, or pixels.
+It reuses the exact assigned source paths saved at Step 10.8d; new or moved
+screens require the full explicit `--screen-source` list, never route scanning.
+It updates the derived registry and owned runtime before the final source
+fingerprint is captured. A source export/registry mismatch cannot be published.
+The builder must still wire actual screen readiness, dirty state, layout and
+target hooks. Compiler success is not a mounted-screen acknowledgement.
+For the supported direct hook/component composition, foreground may add
+`--wire-screen "<completed-screen-id>"` to the first command: it writes missing
+layout/scroll/target-view properties using the screen's explicit handles,
+never guessed readiness or control locations. Scope this source-generation
+action to completed, foreground-owned files after the channel audit. Existing
+callbacks must already compose the authoring callback; custom compositions
+remain valid through direct runtime integration and the ordinary gates,
+without a mandatory AST/regex TSX inspection pass.
+
 Do not start supporting waves until the canary proves that navigation, tokens,
 signature components, data bindings, states, and first-viewport composition work
 together.
@@ -284,7 +340,8 @@ Measure each canary, wave, and final validator gate as `screenValidation` using
 `--action record --duration-ms <measured-wall-ms>`. Do not double-record an
 identical final validation skipped by a successful workspace fingerprint.
 
-Inspect the required HTML experience preview and native Home/key-flow screens.
+Inspect native Home/key-flow screens; inspect the HTML experience companion
+only when `MOBILE_APP_HTML_COMPANIONS` is not `0`.
 Confirm:
 
 - one focal point and visible primary action in the first viewport;
@@ -299,6 +356,25 @@ Confirm:
 
 Repair only failed canary screens and rerun the same gate. Do not fan out while
 any canary compile, route, UX, contrast, safe-area, or inspection finding remains.
+
+### Player publication barrier after a useful canary
+
+Only after all gates above and the complete shared/import/asset dependency
+closure pass, call:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/mobile-authoring.js" candidate \
+  --ready-screen "<approved-ready-screen-id>" \
+  --ready-screen "<other-approved-ready-screen-id>"
+```
+
+Supply exactly the validated dependency-complete IDs; remaining destinations
+must have checked, visibly labeled pending placeholders or disabled entry
+actions. The helper uses the shared `captureSource` contract and reports the
+real checks/receipt to the bridge. Do not invent a source digest or URL, start
+Metro, mutate the active tree, or mark screens mounted. The bridge validates
+and publishes one immutable candidate revision; native acknowledgement is
+separate. A later failing wave leaves the last good candidate addressable.
 
 ## Step 11.3 — Supporting waves
 
@@ -352,6 +428,11 @@ repeating `--screen-id <id>` with `--screen-status validated`. Product Scope
 remains the screen-list and navigation authority; these updates carry status
 only and may never add or reorder a screen.
 
+In Player mode repeat the same candidate barrier for each useful
+dependency-complete wave. Do not request active-source Apply in place of a
+candidate preparation gate, and never use completion to auto-approve an edit
+or conversion.
+
 ## Step 11.4 — Cross-screen quality sweep
 
 After all screens compile, run the validators against generated screens only:
@@ -396,13 +477,17 @@ node "${PLUGIN_ROOT}/scripts/mobile-pipeline-state.js" \
 
 **Telemetry checkpoint: `app_ready`**
 
-Run schema generation and the final validation gate synchronously. If the
+Run mode-correct preparation and the final validation gate synchronously. If the
 successful fingerprint and exact validator set already match Step 11.4, skip
 only this duplicate gate. Otherwise run it in full.
 
 ```bash
 cd <working_dir>
-npm run generate-schemas
+case "<confirmed-create-profile>" in
+  prototype) node "${PLUGIN_ROOT}/scripts/generate-prototype.js" --project-root "<working_dir>" --check ;;
+  real) npm run generate-schemas ;;
+  *) echo "Select the explicit creation profile before running a launch gate"; exit 2 ;;
+esac
 npx tsc --noEmit
 node "${PLUGIN_ROOT}/scripts/check-routes.js"
 node "${PLUGIN_ROOT}/scripts/validate-navigation-layout.js" \
@@ -411,9 +496,16 @@ node "${PLUGIN_ROOT}/scripts/validate-data-model-usage.js" \
   --project-root "<working_dir>" --check
 node "${PLUGIN_ROOT}/scripts/validate-fixture-scenarios.js" \
   --project-root "<working_dir>" --check
-npx expo start
 ```
 
+**Player mode:** after the final gate call `mobile-authoring.js candidate
+--ready-screen <id>` for every ready screen, with `--final`, then
+`mobile-authoring.js complete` as defined by the shared adapter. Do not run any
+Metro/npm dev command or alter active workspace paths. Actual screen mounting
+is reported by the associated native runtime, not inferred here.
+
+**Ordinary CLI only:** use `npm run dev:prototype` for explicit prototype, or
+`npx expo start` for the unchanged real profile.
 Launch Metro asynchronously, capture the terminal ID and native Metro URL,
 generate/open the QR image where supported, and persist the terminal ID in
 `memory-bank.md`. Do not perform route crawling or React Native Web substitution.
@@ -422,8 +514,16 @@ Offer `/debug-app` only after the user reports a concrete native symptom.
 
 ### Step 13 — Summary
 
+Explicit prototype completion states that records/photos are local and external
+effects are unavailable unless separately connected. Offer continued local
+preview, `/edit-app` (including teach), approved native additions, and explicit
+`/prototype-to-real-app`. Do not offer immediate deployment or auth setup as a
+prerequisite for a completed local prototype. In Player mode preserve bridge-
+owned preview lifetime; stop only this skill's Build Plan companion.
+
 Before printing the summary, record the Build Plan's final `validation`
-milestone with `--overall-status complete`. Then stop only the retained live
+milestone with `--overall-status complete`. If an HTML server was started,
+stop only the retained live
 Build Plan process/terminal so its tokenless completed `_build_plan.html`
 snapshot remains available. Do not stop Metro.
 
@@ -433,7 +533,7 @@ screen-build channel, aggregate `screenBuildMs`, `screenValidationMs`,
 Do not attribute foreground work, validation, or user waiting to child-model
 performance.
 
-Print the compact creation summary, then present exactly 5 options:
+For the **real profile**, print the compact creation summary, then present exactly 5 options:
 
 ```text
 What now?

@@ -10,6 +10,34 @@ model: opus
 
 # Create Power Apps Code App (Native)
 
+## Select the creation profile before Phase 0
+
+`--prototype` selects the explicit **local prototype** profile. Without it,
+the current real-app flow is unchanged. `/mobile-app:create-mobile-prototype`
+is a thin wrapper for this same flag, not another creation implementation.
+Keep `CREATE_PROFILE=prototype|real` in foreground state; do not infer it from
+missing services, auth failure, a Metro URL, or the persistence enum.
+
+For `--prototype`, read [`references/prototype-profile.md`](references/prototype-profile.md)
+first and run its non-mutating compatibility gate **before** environment
+resolution, account checks, name-collision queries, authentication, or init.
+Every later phase's prototype branch is mandatory. Prototype selection is not
+permission to skip Product Experience, Scope, Journey, scenarios, usage,
+design review, sealed screen work orders, or any logical approval/quality gate.
+
+When `MOBILE_AUTHORING_CONTEXT` is set (or `--authoring-context` was supplied),
+read and apply
+[`shared/references/mobile-authoring.md`](${PLUGIN_ROOT}/shared/references/mobile-authoring.md)
+before any question or write. Run `mobile-authoring.js verify`. Every
+clarification, Step 2c, and Gates 1–4 uses that decision adapter with its actual
+gate ID and source revision; never manufacture a maker receipt or bypass a
+gate with `--consolidated-review`. Work only in the bound candidate workspace.
+The bridge is the sole preview publisher; this skill never starts its own Metro
+or points active Metro at files being built in Player mode.
+The descriptor's `operation: prototype` must match `CREATE_PROFILE=prototype`;
+a mismatch is a block, not permission to enter real setup. A `connect` job uses
+`/prototype-to-real-app`, not a second create.
+
 Top-level orchestrator for a quality-gated Power Apps native code app. It owns
 the user-visible flow, delegates planning to qualified `mobile-app:*` agents,
 and routes mutations to dedicated `/add-*` skills.
@@ -22,7 +50,7 @@ and routes mutations to dedicated `/add-*` skills.
   planning artifacts, or project files before `proceed`. Do not query a
   publisher prefix or run Dataverse snapshot/cache/schema work before the
   persistence contract resolves ownership.
-- Use the selected Power Platform environment consistently. Resolve it without
+- In the real profile, use the selected Power Platform environment consistently. Resolve it without
   persistence before approval and persist only after the user proceeds.
 - Gates never become optional. TypeScript, route, contract, changed-file, and
   stylistic validators remain required even when execution is faster.
@@ -95,6 +123,10 @@ design workflow continues to own the separate `_plan_preview.html`.
 
 ## Runtime flags and compatibility
 
+- `--prototype` selects no-environment local creation before Phase 0. It does
+  not silently convert an existing real app or authorize any remote effects.
+- `--authoring-context <descriptor-path>` uses the paired Player decision and
+  staged-preview transport; its secret comes only from the runner environment.
 - `--consolidated-review` opts into one review of the same four plan sections
   and interactive preview. If the user objects, reopen only the affected
   section's owning gate and refresh its approval receipt.

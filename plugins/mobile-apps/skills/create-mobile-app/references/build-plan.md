@@ -16,11 +16,14 @@ answer. Immediately after app identity is initialized:
 node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" progress \
   --project-root "<working_dir>" \
   --phase requirements --status complete --detail "Brief confirmed"
-node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" serve \
-  --project-root "<working_dir>" --port 0
+if [ "${MOBILE_APP_HTML_COMPANIONS:-1}" = "1" ]; then
+  node "${PLUGIN_ROOT}/scripts/mobile-build-plan.js" serve \
+    --project-root "<working_dir>" --port 0
+fi
 ```
 
-Launch `serve` as a long-running background process. Read its one JSON startup
+With HTML disabled, keep `progress` and its structured JSON only; do not start
+or open a server. Otherwise launch `serve` as a long-running background process. Read its one JSON startup
 record, retain its process/terminal handle in memory, and open `launchUrl` once.
 Do not persist or repeat that token-bearing URL in `memory-bank.md`, the human
 plan, logs, or chat. The mode-0600
@@ -33,7 +36,7 @@ address, proxy it, or send environment, tenant, credential, or token values to
 its model API.
 
 If a host cannot keep a local server running, use `progress` at the same
-milestones. Every call refreshes a tokenless standalone `_build_plan.html`.
+milestones. With HTML enabled, every call refreshes a tokenless standalone `_build_plan.html`.
 Continue the build; live transport is presentation, not an execution gate.
 
 ## Canonical planning inputs
