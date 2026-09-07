@@ -151,8 +151,7 @@ async function dispatch(raw, env) {
   const resolver = loadResolver(path.dirname(configPath));
   if (resolver && typeof resolver.resolve === 'function') {
     try {
-      // Resolved here, not in the hook: an unresolved cluster costs a `pac auth
-      // who` cold start, and this child is already detached from skill execution.
+      // Routing reads only the cluster saved in app.json by environment resolution.
       const resolved = await resolver.resolve({
         event,
         cfg,

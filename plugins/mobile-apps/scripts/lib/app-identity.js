@@ -62,11 +62,9 @@ function readTelemetryCluster(projectRoot = process.cwd()) {
 }
 
 function writeTelemetryCluster(projectRoot, cluster) {
-  if (!projectRoot || !TELEMETRY_CLUSTERS.has(cluster)) return;
+  if (!projectRoot || (cluster !== null && !TELEMETRY_CLUSTERS.has(cluster))) return;
   const filePath = appJsonPath(projectRoot);
-  // Re-read here rather than reusing an earlier parse: telemetry runs in a
-  // detached child that can overlap with project tooling which also owns
-  // app.json, so the write window must stay as small as possible.
+  // Re-read to keep the write window small when other project tooling updates app.json.
   const appJson = readJsonFile(filePath);
   if (!isPlainObject(appJson) || !isPlainObject(appJson.expo)) return;
   const extra = isPlainObject(appJson.expo.extra) ? appJson.expo.extra : {};

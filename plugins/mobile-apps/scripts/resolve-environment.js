@@ -8,6 +8,8 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
+const { readTelemetryCluster, writeTelemetryCluster } = require('./lib/app-identity');
+const { deriveRegion } = require('./lib/telemetry/region/region-resolver');
 
 const BAP_RESOURCE = 'https://api.bap.microsoft.com';
 const BAP_TOKEN_FALLBACK_RESOURCE = 'https://service.powerapps.com/';
@@ -60,12 +62,18 @@ function hasCachedEnvironmentDetails(value) {
   return Boolean(value && value.environmentUrl && value.tenantId);
 }
 
+function canUseCachedResolution(value, target, cluster = '') {
+  return hasCachedEnvironmentDetails(value) &&
+    (Boolean(cluster) || !GUID_RE.test(target) || (typeof value.location === 'string' && value.location.trim() !== ''));
+}
+
 function toEnvironmentResult(value, source) {
   return {
     environmentUrl: value.environmentUrl,
     environmentId: value.environmentId || null,
     displayName: value.displayName || null,
     tenantId: value.tenantId || null,
+    location: value.location || null,
     source,
   };
 }
@@ -90,6 +98,10 @@ function writeCacheIfProject(result) {
 }
 
 function printResult(result) {
+  if (!readTelemetryCluster(process.cwd())) {
+    const cluster = deriveRegion('Public', result.location);
+    if (cluster) writeTelemetryCluster(process.cwd(), cluster);
+  }
   console.log(JSON.stringify(result, null, 2));
 }
 
@@ -217,6 +229,7 @@ function environmentFromPowerPlatformPayload(payload, environmentId) {
     environmentId: payload.name || props.environmentId || payload.environmentId || environmentId || null,
     displayName: props.displayName || linked.friendlyName || null,
     environmentUrl,
+    location: payload.location || props.location || null,
     tenantId: (props.createdBy && props.createdBy.tenantId) || props.tenantId || linked.tenantId || null,
   };
 }
@@ -252,7 +265,7 @@ async function main() {
   }
 
   const cached = readCachedResolution(target);
-  if (hasCachedEnvironmentDetails(cached)) {
+  if (canUseCachedResolution(cached, target, readTelemetryCluster(process.cwd()))) {
     const result = toEnvironmentResult(cached, 'cache');
     writeCacheIfProject(result);
     printResult(result);
@@ -268,6 +281,7 @@ async function main() {
       environmentUrl: normalizedUrl,
       environmentId: cached && cached.environmentId ? cached.environmentId : null,
       displayName: cached && cached.displayName ? cached.displayName : null,
+      location: cached && cached.location || null,
       tenantId: challengeTenant || (cached && cached.tenantId) || null,
     };
   } else if (GUID_RE.test(target)) {
@@ -279,6 +293,7 @@ async function main() {
           environmentUrl: cached.environmentUrl,
           environmentId: cached.environmentId || target,
           displayName: cached.displayName || null,
+          location: cached.location || null,
           tenantId: cached.tenantId || null,
           source: 'cache-refresh',
         };
@@ -303,7 +318,11 @@ async function main() {
   printResult(result);
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.message}\n`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(1);
+  });
+}
+
+module.exports = { cacheMatchesTarget, canUseCachedResolution, toEnvironmentResult, environmentFromPowerPlatformPayload };

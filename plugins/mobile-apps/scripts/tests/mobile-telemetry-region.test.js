@@ -27,7 +27,11 @@ function project(t, telemetry) {
   return root;
 }
 
-const neverCalled = () => { throw new Error('must not run'); };
+function resolvedEnvironment(root, location, environmentId = orgId) {
+  fs.writeFileSync(path.join(root, '.resolved-environment.json'), JSON.stringify({
+    environmentId, tenantId: environmentId, environmentUrl: 'https://contoso.crm4.dynamics.com', location,
+  }));
+}
 
 test('Mobile declares the seven Power Apps telemetry destinations', () => {
   assert.deepEqual(Object.keys(config.regions).sort(), [
@@ -35,50 +39,33 @@ test('Mobile declares the seven Power Apps telemetry destinations', () => {
   ]);
 });
 
-test('step 1: a cluster in app.json is used without touching pac or Artemis', async (t) => {
+test('app.json cluster alone selects the collector without mutating configuration', async (t) => {
   const root = project(t, { appInstanceId: null, cluster: 'eu' });
+  const before = fs.readFileSync(path.join(root, 'app.json'), 'utf8');
   const destination = await resolve({
     projectRoot: root,
     regionsMap: config.regions,
-    _readPacAuth: neverCalled,
-    _fetchGeo: neverCalled,
   });
   assert.equal(destination.region, 'eu');
   assert.equal(destination.iKey, config.regions.eu.instrumentation_key);
   assert.equal(destination.collectorUrl, config.regions.eu.collector_url);
+  assert.equal(fs.readFileSync(path.join(root, 'app.json'), 'utf8'), before);
 });
 
-test('step 2: an unresolved cluster falls back to whoami and is persisted', async (t) => {
-  const root = project(t, { appInstanceId: null, cluster: null });
-  const destination = await resolve({
-    projectRoot: root,
-    regionsMap: config.regions,
-    _readPacAuth: () => ({ orgId, cloud: 'Public' }),
-    _fetchGeo: () => Promise.resolve({ geoName: 'eu', stamp: 'Public' }),
-  });
-  assert.equal(destination.region, 'eu');
-  assert.equal(readTelemetryCluster(root), 'eu');
-
-  // The persisted value is what makes later events skip the pac fork entirely.
-  const second = await resolve({
-    projectRoot: root,
-    regionsMap: config.regions,
-    _readPacAuth: neverCalled,
-    _fetchGeo: neverCalled,
-  });
-  assert.equal(second.region, 'eu');
+test('routing follows cluster updates and clearing in app.json', async (t) => {
+  const root = project(t, { appInstanceId: null, cluster: 'eu' });
+  writeTelemetryCluster(root, 'us');
+  assert.equal((await resolve({ projectRoot: root, regionsMap: config.regions })).region, 'us');
+  writeTelemetryCluster(root, null);
+  assert.equal(await resolve({ projectRoot: root, regionsMap: config.regions }), null);
 });
 
-test('step 3: still unresolved stays local', async (t) => {
+test('missing or invalid cluster stays local even with resolved metadata', async (t) => {
   const root = project(t, { appInstanceId: null, cluster: null });
-  const cases = [
-    { _readPacAuth: () => null, _fetchGeo: neverCalled },
-    { _readPacAuth: () => ({ orgId, cloud: 'Public' }), _fetchGeo: () => Promise.resolve(null) },
-    { _readPacAuth: () => ({ orgId, cloud: 'Public' }), _fetchGeo: () => Promise.reject(new Error('offline')) },
-    { _readPacAuth: () => ({ orgId, cloud: 'Public' }), _fetchGeo: () => Promise.resolve({ geoName: 'zz' }) },
-  ];
-  for (const seam of cases) {
-    assert.equal(await resolve({ projectRoot: root, regionsMap: config.regions, ...seam }), null);
+  resolvedEnvironment(root, 'europe');
+  for (const cluster of [null, '', 'moon-base']) {
+    fs.writeFileSync(path.join(root, 'app.json'), JSON.stringify({ expo: { extra: { telemetry: { cluster } } } }));
+    assert.equal(await resolve({ projectRoot: root, regionsMap: config.regions }), null);
   }
   assert.equal(readTelemetryCluster(root), '');
   assert.equal(await resolveDestination({ cfg: config, projectRoot: '' }), null);
@@ -87,6 +74,24 @@ test('step 3: still unresolved stays local', async (t) => {
 test('a hand-edited cluster is ignored rather than trusted', (t) => {
   const root = project(t, { appInstanceId: null, cluster: 'moon-base' });
   assert.equal(readTelemetryCluster(root), '');
+});
+
+test('routing ignores CLI configuration and environment caches', async (t) => {
+  const root = project(t, { cluster: 'us' });
+  fs.writeFileSync(path.join(root, 'power.config.json'), '{bad json');
+  fs.writeFileSync(path.join(root, 'auth.config.json'), '{bad json');
+  resolvedEnvironment(root, 'europe');
+  assert.equal((await resolve({ projectRoot: root, regionsMap: config.regions })).region, 'us');
+});
+
+test('all seven saved clusters select their configured destinations', async (t) => {
+  const root = project(t, { cluster: null });
+  for (const [cluster, entry] of Object.entries(config.regions)) {
+    writeTelemetryCluster(root, cluster);
+    assert.deepEqual(await resolve({ projectRoot: root, regionsMap: config.regions }), {
+      region: cluster, iKey: entry.instrumentation_key, collectorUrl: entry.collector_url,
+    });
+  }
 });
 
 test('persisting a cluster preserves unrelated app.json content', (t) => {
@@ -137,7 +142,7 @@ function waitForJson(filePath) {
 // The other tests inject seams. This one runs the real hook against the real
 // ikey.json so the shipped resolver.js is actually loaded and its regional keys
 // are the ones that reach the wire.
-test('end to end: the real hook routes to the cluster recorded in app.json', (t) => {
+test('end to end: environment resolution saves the cluster and the hook reads app.json only', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-region-e2e-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const projectRoot = path.join(root, 'project');
@@ -150,8 +155,15 @@ test('end to end: the real hook routes to the cluster recorded in app.json', (t)
   );
   fs.writeFileSync(
     path.join(projectRoot, 'app.json'),
-    JSON.stringify({ expo: { name: 'demo', extra: { telemetry: { appInstanceId: null, cluster: 'eu' } } } }),
+    JSON.stringify({ expo: { name: 'demo', extra: { telemetry: { appInstanceId: null, cluster: null } } } }),
   );
+  resolvedEnvironment(projectRoot, 'europe');
+  const resolution = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'scripts', 'resolve-environment.js'), orgId], {
+    cwd: projectRoot, encoding: 'utf8', timeout: 5000, env: { ...process.env, PATH: '' },
+  });
+  assert.equal(resolution.status, 0, resolution.stderr);
+  assert.equal(readTelemetryCluster(projectRoot), 'eu');
+  fs.unlinkSync(path.join(projectRoot, '.resolved-environment.json'));
 
   const probePath = path.join(root, 'probe.json');
   const result = spawnSync(
@@ -169,6 +181,7 @@ test('end to end: the real hook routes to the cluster recorded in app.json', (t)
         // The probe keeps this off the network while still proving which key won.
         POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
         POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '',
+        PATH: '',
       },
     },
   );
@@ -209,7 +222,7 @@ test('end to end: an unresolvable cluster transmits nothing', (t) => {
         POWER_PLATFORM_SKILLS_IKEY_JSON: REAL_IKEY_PATH,
         POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
         POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '',
-        // No PAC on PATH, so step 2 cannot resolve and the event must stay local.
+        // A missing cluster must leave the event local without CLI discovery.
         PATH: '',
       },
     },
