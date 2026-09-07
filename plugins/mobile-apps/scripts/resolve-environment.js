@@ -10,6 +10,7 @@ const https = require('https');
 const path = require('path');
 const { readTelemetryCluster, writeTelemetryCluster } = require('./lib/app-identity');
 const { deriveRegion } = require('./lib/telemetry/region/region-resolver');
+const { readPriorEvents, fireAndForget } = require('./lib/mobile-telemetry-dispatcher');
 
 const BAP_RESOURCE = 'https://api.bap.microsoft.com';
 const BAP_TOKEN_FALLBACK_RESOURCE = 'https://service.powerapps.com/';
@@ -100,7 +101,19 @@ function writeCacheIfProject(result) {
 function printResult(result) {
   if (!readTelemetryCluster(process.cwd())) {
     const cluster = deriveRegion('Public', result.location);
-    if (cluster) writeTelemetryCluster(process.cwd(), cluster);
+    if (cluster) {
+      // Snapshot before publishing the cluster so later transmitted events are not replayed.
+      const replay = readPriorEvents(process.cwd());
+      writeTelemetryCluster(process.cwd(), cluster);
+      if (replay.length && readTelemetryCluster(process.cwd()) === cluster) {
+        fireAndForget({ data: { pluginName: 'mobile-app' }, replay }, {
+          projectRoot: process.cwd(),
+          configDir: process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR,
+          ikeyJsonPath: process.env.POWER_PLATFORM_SKILLS_IKEY_JSON,
+          fakeProbe: process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS,
+        });
+      }
+    }
   }
   console.log(JSON.stringify(result, null, 2));
 }
