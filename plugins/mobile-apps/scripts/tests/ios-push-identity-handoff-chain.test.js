@@ -66,6 +66,8 @@ test('iOS push chain: setup-apns consumes setup-fcm handoff', () => {
   assert.ok(skill.includes('STOP if any field is absent'), 'validates handoff completeness');
   assert.match(skill, /Never persist either credential type/, 'blocks APNs credential storage');
   assert.match(skill, /APNs certificate \(`\.p12`\)/, 'supports p12 certificate route');
+  assert.match(skill, /Resume an already completed manual upload/);
+  assert.match(skill, /already\s+uploaded[\s\S]*`\.p12`|uploaded `\.p12`/);
 });
 
 test('iOS push chain: setup-apns keeps both credential uploads manual', () => {

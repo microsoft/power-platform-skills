@@ -42,6 +42,7 @@ const EXPECTED_COVERAGE = [
   'auto-discovery-explicit-override',
   'firebase-admin-key-forbidden',
   'apns-manual-handoff',
+  'missing-firebase-json-project-activation',
 ].sort();
 const EXPECTED = {
   projectId: 'field-ops-prod',
@@ -320,6 +321,9 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(provisioning, /15\.27\.0/);
   assert.match(provisioning, /organization[\s\S]*folder[\s\S]*Do not fall back to CLI parent flags/i);
   assert.match(provisioning, /no separate addFirebase core MCP tool/i);
+  assert.match(provisioning, /Establish the project-directory anchor first/);
+  assert.match(provisioning, /project_dir/);
+  assert.match(provisioning, /acknowledged update without persisted read-back is a failure/i);
   assert.doesNotMatch(provisioning, /npx firebase-tools/);
   assert.doesNotMatch(provisioning, /15\.28\.1/);
 
@@ -340,6 +344,8 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(skill, /Yes\/No confirmation/);
   assert.match(skill, /do not automate Apple setup or expect a generated proof\s+artifact/);
   assert.match(skill, /Never request, download, copy, or commit a Firebase Admin/);
+  assert.match(skill, /regular,\s+non-symlink project-root `firebase\.json`/);
+  assert.match(skill, /both the\s+exact project root as `project_dir` and the selected ID as `active_project`/);
   assert.match(provisioning, /## 1\. Verify Firebase MCP authentication/);
   assert.match(provisioning, /firebase_get_environment/);
   assert.match(provisioning, /firebase_login/);
@@ -370,6 +376,8 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(apnsSkill, /outside\s+(?:this and )?every\s+(?:other\s+)?repository/);
   assert.match(apnsSkill, /exact immutable iOS Firebase app ID and bundle ID from Phase 1/i);
   assert.match(apnsSkill, /Did Firebase Console accept the selected APNs/);
+  assert.match(apnsSkill, /Resume an already completed manual upload/);
+  assert.match(apnsSkill, /Do \*\*not\*\* call\s+`validate-firebase-client-config\.js` with the canonical plist as both/);
   assert.match(apnsSkill, /user-confirmed; not portal proof/);
   assert.doesNotMatch(apnsSkill, /npx firebase-tools/);
   assert.doesNotMatch(apnsSkill, /apps:create IOS/);

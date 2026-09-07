@@ -77,6 +77,32 @@ owner workflows only when they explicitly need local `gcloud` continuity.
 
 ## 2. List, select, and activate a Firebase project
 
+### Establish the project-directory anchor first
+
+Before calling `firebase_update_environment` with an active project, require a
+regular, non-symlink `firebase.json` at the project root. Older generated apps
+may not have one, and Firebase MCP can report that an update was accepted while
+subsequent tools still see no active project when the project directory has no
+Firebase config.
+
+If `firebase.json` is absent, create it with:
+
+```json
+{
+  "react-native": {
+    "messaging_auto_init_enabled": false,
+    "messaging_ios_auto_register_for_remote_messages": false
+  }
+}
+```
+
+If it exists, parse it as a JSON object, preserve every unrelated key, and
+merge those two exact `react-native` values. Stop on malformed JSON, a symlink,
+or a path outside the project root. Never replace an existing file wholesale.
+This local compatibility step establishes Firebase MCP project-directory state
+and preserves consent-first Messaging initialization; it does not prove native
+runtime integration.
+
 List accessible Firebase projects with the official MCP tool:
 
 ```json
@@ -106,13 +132,20 @@ stable `firebase-tools` 15.27.0 exposes `project_id` and `display_name`, but **n
 organization/folder parent arguments. Do not fall back to CLI parent flags.
 
 For an existing Firebase project, confirm the authenticated user and exact
-project ID, then activate it with `mcp__firebase__firebase_update_environment`:
+project ID, then activate it with `mcp__firebase__firebase_update_environment`
+using both the exact project root and selected project:
 
 ```json
 {
+  "project_dir": "<PROJECT_ROOT>",
   "active_project": "<PROJECT_ID>"
 }
 ```
+
+Immediately rerun `mcp__firebase__firebase_get_environment`. Require its
+project directory and active project to equal the requested values. An
+acknowledged update without persisted read-back is a failure; do not continue
+to `firebase_get_project` or app operations.
 
 ## 3. Create a project or add Firebase to an existing Google Cloud project
 
@@ -152,9 +185,11 @@ After selecting or creating/upgrading a project:
 
 1. Rerun `mcp__firebase__firebase_list_projects` and require the exact
    `projectId` to appear in the latest paginated result set.
-2. Call `mcp__firebase__firebase_update_environment` with
-   `{ "active_project": "<PROJECT_ID>" }`.
-3. Call `mcp__firebase__firebase_get_project` (`firebase_get_project`) with `{}`
+2. Call `mcp__firebase__firebase_update_environment` with both
+   `{ "project_dir": "<PROJECT_ROOT>", "active_project": "<PROJECT_ID>" }`.
+3. Rerun `mcp__firebase__firebase_get_environment` and require both the exact
+   project directory and active project to persist.
+4. Call `mcp__firebase__firebase_get_project` (`firebase_get_project`) with `{}`
    and require the returned current project to match the exact selected
    `projectId`.
 

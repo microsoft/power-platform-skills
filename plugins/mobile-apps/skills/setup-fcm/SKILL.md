@@ -47,19 +47,32 @@ automation as fallback.
 2. Resolve native platform identity with
    `resolve-firebase-app-identity.js`; stop on placeholders or missing package/
    bundle identifiers. This workflow skips Web apps.
-3. Execute the reference's authentication flow using
+3. Before the first `firebase_update_environment` call, establish the local
+   Firebase project-directory anchor from the reference. Require a regular,
+   non-symlink project-root `firebase.json`. If it is absent, create it with
+   the exact consent-first React Native Messaging settings. If it exists,
+   parse it as JSON, preserve unrelated keys, and merge those exact settings;
+   stop on malformed JSON or an unsafe path. This compatibility preflight is
+   required for older generated apps because Firebase MCP may acknowledge an
+   active-project update but discard it when no project config exists.
+4. Execute the reference's authentication flow using
    `mcp__firebase__firebase_get_environment`,
    `mcp__firebase__firebase_update_environment`, and, when necessary,
    `mcp__firebase__firebase_login`. Display both the login URL and Session ID
    and require the user to compare the browser Session ID. Do not record Google
    account details, login URLs, Session IDs, or authorization codes.
-4. List/select/create and then read back the exact project. The official
+5. List/select/create and then read back the exact project. Activate it with
+   one `mcp__firebase__firebase_update_environment` call containing both the
+   exact project root as `project_dir` and the selected ID as `active_project`.
+   Immediately rerun `firebase_get_environment`; continue only when both values
+   persisted, then require `firebase_get_project` to return the same project.
+   The official
    Firebase MCP `firebase_create_project` tool in stable `firebase-tools`
    15.27.0 handles both new projects and adding Firebase to an existing Google
    Cloud project; there is no separate addFirebase core MCP tool. New
    organization/folder placement is unsupported: Do not fall back to CLI
    parent flags.
-5. For each selected native platform, use the exact app-list scratch files and
+6. For each selected native platform, use the exact app-list scratch files and
    resolver branches in the reference. `selection-required` needs an immutable
    per-platform app-ID choice and a rerun such as:
 
@@ -72,19 +85,19 @@ automation as fallback.
 
    `no-match` may create only after explicit persistent-mutation confirmation.
    Reread the platform app list and rerun the resolver after every creation.
-6. Retrieve configs only with `mcp__firebase__firebase_get_sdk_config`.
+7. Retrieve configs only with `mcp__firebase__firebase_get_sdk_config`.
    Preserve the exact MCP result first in
    `firebase/.android-sdk-config.mcp.txt` or
    `firebase/.ios-sdk-config.mcp.txt`, then use
    `extract-firebase-sdk-config.js` and
    `validate-firebase-client-config.js`. Never overwrite a canonical file
    before validation and explicit conflict-replacement confirmation.
-7. Verify evaluated Expo service-file paths and Firebase plugins. Record non-secret setup state
+8. Verify evaluated Expo service-file paths and Firebase plugins. Record non-secret setup state
    using the stable `Firebase push handoff` keys from the reference. This skill
    must not implement or record runtime registration
    token/topic lifecycle; `/add-push-notifications` owns consent, token
    registration, `allUsers`, and lowercase Entra OID subscriptions.
-8. Run the reference's Expo-config, TypeScript, push-config, and changed-file
+9. Run the reference's Expo-config, TypeScript, push-config, and changed-file
    validation gates. Never request, download, copy, or commit a Firebase Admin
    service-account private-key JSON.
 

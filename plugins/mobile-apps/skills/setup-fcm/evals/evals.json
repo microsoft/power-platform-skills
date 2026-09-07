@@ -205,6 +205,13 @@
       "files": [
         "skills/setup-fcm/evals/fixtures/firebase-apps-conflicting.json"
       ]
+    },
+    {
+      "id": 25,
+      "coverage": "missing-firebase-json-project-activation",
+      "prompt": "Set up FCM in an older generated app with no firebase.json. firebase_update_environment says the active project was updated, but firebase_get_environment still reports no active project.",
+      "expected_output": "Before retrying project activation, the skill creates a regular project-root firebase.json with the exact consent-first React Native Messaging settings, or safely merges those settings while preserving unrelated keys. It then calls firebase_update_environment with both project_dir and active_project, reruns firebase_get_environment, and proceeds only when both values persist before calling firebase_get_project.",
+      "files": []
     }
   ]
 }

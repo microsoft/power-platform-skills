@@ -91,6 +91,13 @@
       "prompt": "Our Apple team cannot issue another APNs .p8 key, but we have an Apple Push Services certificate that can be exported as a password-protected .p12. Continue without blocking us.",
       "expected_output": "The skill treats .p12 as a supported alternative rather than a blocker, confirms the exact Team, bundle, selected build-mode APNs environments, guides user-controlled certificate export and Firebase Console upload, and never requests the file, password, private key, path, certificate identifiers, or screenshots.",
       "files": []
+    },
+    {
+      "id": 14,
+      "coverage": "p12-upload-resume",
+      "prompt": "The APNs .p12 certificates are already uploaded to Firebase. Resume setup for a development and ad-hoc app.",
+      "expected_output": "The skill treats this as the .p12 resume path, re-establishes the exact recorded project/app/Team/bundle identity, requires a bounded Yes/No confirmation that Firebase accepted both development and production certificate entries, runs the canonical push validator rather than comparing the plist to itself, and records configured, device verification pending without requesting credential files, passwords, paths, identifiers, or screenshots.",
+      "files": []
     }
   ]
 }

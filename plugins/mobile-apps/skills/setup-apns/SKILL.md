@@ -80,6 +80,19 @@ certificates, or provisioning profiles. Route those to `/setup-apple-ios`.
    Only the bounded local validators may parse its non-secret project, app, and
    bundle identity fields. Do not print raw plist contents or inspect unrelated
    fields.
+   Run this exact bounded check:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
+     --project-root .
+   ```
+
+   This validator reads the installed canonical client config and compares it
+   with evaluated Expo identity and the memory handoff. Do **not** call
+   `validate-firebase-client-config.js` with the canonical plist as both
+   `--candidate` and `--destination`; that validator is only for comparing a
+   freshly downloaded candidate with its canonical destination and correctly
+   rejects identical paths.
 6. Require the Apple Team ID to be exactly 10 uppercase ASCII letters/digits.
    Display only project ID, immutable Firebase app ID, bundle ID, plist path,
    and Team ID.
@@ -102,6 +115,28 @@ its owning setup skill. This is a user confirmation of continuity, not
 Firebase or Apple portal proof.
 
 ## Phase 2 — Choose the APNs credential route
+
+### Resume an already completed manual upload
+
+If the user says an APNs credential is already uploaded, treat that statement
+as a resume cue rather than restarting credential creation:
+
+1. Infer `.p8` or `.p12` only when the user named the credential type; otherwise
+   ask the Phase 2 route question.
+2. Re-establish Phase 1 identity before accepting the resume.
+3. For `.p12`, derive required environments from the recorded Apple mode scope:
+   `development` requires `development`, `ad-hoc` requires `production`, and
+   `development,ad-hoc` requires both. Ask whether Firebase Console accepted
+   every required environment-specific certificate entry.
+4. For `.p8`, ask for the safe Key ID only when it is needed for the memory
+   handoff.
+5. On explicit **Yes**, continue directly to Phase 4. Do not reject an already
+   uploaded `.p12`, redirect the user to `.p8`, request another upload, or ask
+   for credential files, passwords, paths, identifiers, or screenshots.
+
+An unqualified statement such as "the certificate is uploaded" is not enough
+when multiple APNs environments are required; ask the bounded Yes/No acceptance
+question for the exact project, app, Team, bundle, and required environments.
 
 Use `AskUserQuestion` with these choices:
 
