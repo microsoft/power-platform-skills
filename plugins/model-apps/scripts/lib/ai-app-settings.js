@@ -24,16 +24,36 @@ const { odataLit } = require('./odata.js');
 // Keep in sync with the vendored SDK; `sdk-surface-contract.test.js` guards the method surface and
 // `verify-spec.test.js` pins these names.
 const AI_APP_SETTING = {
-  // `FormFillBarUXEnabled` is the form fill assist TOOLBAR only — one capability of AI form fill
-  // assistance, per the SDK's own type docs. Three siblings are NOT covered by this flag and are not
-  // exposed by the App Spec: `FormFillFileUploadEnabled` (file upload),
-  // `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form predictions).
-  // Do not silently repoint this key at a sibling — exposing those is a feature (new keys plus live
-  // verification), not a rename.
+  // The AI form-fill FAMILY. `FormFillBarUXEnabled` is only the assist toolbar; the SDK now models
+  // the three siblings as first-class features too, so the App Spec exposes them rather than
+  // pretending "form fill" is one switch.
+  //
+  // Note `formFillSmartPaste` writes `FormPredictSmartPasteEnabledOnByDefault` per app while its ORG
+  // GATE is `FormPredictSmartPasteEnabled` — a different row, like nlSearch. Mirrors the SDK's
+  // `APP_SETTING`; the gate names live in the SDK's `AI_GATE`.
   formFill: 'FormFillBarUXEnabled',
+  formFillSuggestions: 'FormPredictEnabled',
+  formFillSmartPaste: 'FormPredictSmartPasteEnabledOnByDefault',
+  formFillFiles: 'FormFillFileUploadEnabled',
   nlSearch: 'NLGridSearchSetting',
   nlChart: 'NLChartDataVisualizationSetting',
   m365: 'm365copilotmodelappenabled',
+};
+
+// ON/OFF values are NOT uniform across these settings, and `1` is not universally "on".
+//
+// MIRRORS the SDK's `SETTING_CODEC` (api/AiApi.ts), which cites the first-party admin UI:
+//     FormFillBarUXEnabled / formPredictEnabled / smart-paste-on-by-default:
+//        0 = default (defer to flighting)   1 = DISABLED   2 = ENABLED
+// So the obvious `true -> '1'` mapping writes DISABLED for every one of them, and `0` means
+// "platform default", which is NOT the same as off. Settings absent from this table keep the plain
+// numeric convention ('1' on, '0' off) — deliberately, because their semantics are not evidenced
+// the same way.
+const AI_SETTING_CODEC = {
+  formFill: { enabled: '2', disabled: '1' },
+  formFillSuggestions: { enabled: '2', disabled: '1' },
+  formFillSmartPaste: { enabled: '2', disabled: '1' },
+  formFillFiles: { enabled: '2', disabled: '1' },
 };
 
 // Derived, never hand-maintained: the validator's allow-list IS the set of features we can write.
@@ -65,13 +85,22 @@ function resolveAiFlags(spec) {
 }
 
 /**
- * Normalize a requested flag to the string the numeric setting stores. `true`/`false` are the
- * ergonomic spellings of `'1'`/`'0'`; any other integer (e.g. 2 = "on for everyone") is used
- * verbatim. Mirrors the SDK's `settingValueOf`, minus its throwing validation — the spec validator
- * has already rejected out-of-range values by the time this runs.
+ * Normalize a requested flag to the string the setting actually stores.
+ *
+ * `true`/`false` are ergonomic spellings, but what they MEAN is per setting: for the AI form-fill
+ * family on is `'2'` and off is `'1'` (`'0'` is the platform default, not off), while everything else
+ * keeps the plain `'1'`/`'0'` convention. Any explicit integer is used verbatim.
+ *
+ * `feature` is required for a codec-governed setting. Without it a boolean maps to `'1'`, which for
+ * the form-fill family means DISABLED — and since the build writes through the SDK (which applies
+ * the codec), a verifier using the wrong spelling reports a correctly-applied feature as missing.
+ * That mismatch is the reason this takes a feature at all.
  */
-function featureWantValue(requested) {
-  return typeof requested === 'boolean' ? (requested ? '1' : '0') : String(requested).trim();
+function featureWantValue(requested, feature) {
+  if (typeof requested !== 'boolean') return String(requested).trim();
+  const codec = feature && AI_SETTING_CODEC[feature];
+  if (codec) return requested ? codec.enabled : codec.disabled;
+  return requested ? '1' : '0';
 }
 
 /**
@@ -212,16 +241,29 @@ async function effectiveSettingValue(read, appModuleId, setting) {
 }
 
 /**
- * Is a setting value "on"? Values are stored as STRINGS ("0"/"1"/"2"/"true"/"false"), so plain JS
- * truthiness is wrong twice over — it calls the string "0" true, and it calls "false" true. A
- * non-zero number or the literal `true` means on; anything unparseable returns undefined so a
- * caller can say "indeterminate" rather than guess.
+ * Is a setting value "on" FOR THIS FEATURE?
+ *
+ * Values are stored as STRINGS ("0"/"1"/"2"/"true"/"false"), so plain JS truthiness is wrong twice
+ * over — it calls "0" true and "false" true. Worse, the numeric meaning is not uniform: for the
+ * AI form-fill family `1` means DISABLED and `2` means ENABLED, so a "non-zero is on" rule reports a
+ * deliberately disabled feature as running. `0` there means "platform default" (defer to flighting),
+ * which is genuinely UNKNOWN rather than off — reporting it as off overstates what we know.
+ *
+ * `feature` is optional so existing callers keep the plain numeric convention; pass it whenever the
+ * feature is known, which is every caller inside this plugin.
  */
-function settingIsOn(value) {
+function settingIsOn(value, feature) {
   if (value === undefined || value === null || value === '') return undefined;
   const s = String(value).trim().toLowerCase();
   if (s === 'true') return true;
   if (s === 'false') return false;
+  const codec = feature && AI_SETTING_CODEC[feature];
+  if (codec) {
+    if (s === codec.enabled) return true;
+    if (s === codec.disabled) return false;
+    // '0' = platform default: not a claim either way.
+    return undefined;
+  }
   const n = Number(s);
   return Number.isNaN(n) ? undefined : n !== 0;
 }
@@ -239,6 +281,7 @@ function odataGuid(id) {
 
 module.exports = {
   AI_APP_SETTING,
+  AI_SETTING_CODEC,
   AI_FEATURE_KEYS,
   AI_FEATURE_MAX_VALUE,
   DEFAULT_APP_FEATURES,

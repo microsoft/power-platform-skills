@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: opus
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Set Up Data Model + Connectors
 
@@ -30,12 +30,14 @@ Confirm we're inside a Power Apps mobile app:
 
 ```bash
 test -f power.config.json && echo "OK" || echo "ERROR: not a mobile app — run /create-mobile-app first"
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
 Capture the **environment URL**, **environment ID**, **tenant ID**, and **organization ID** for Phase 5.
 
 ### Phase 2 — Design Data Model
+
+**Telemetry checkpoint: `design_dataverse_schema`**
 
 Check `$ARGUMENTS` for diagram hints first (`*.png`, `*.jpg`, `erDiagram` keyword, `||--o{` cardinality syntax). If a hint is present → Path A. If `$ARGUMENTS` describes the app at all → silently take Path B (architect propose). Only if both are empty, ask:
 
@@ -75,7 +77,7 @@ Prompt:
   You are the data-model-architect agent for a Power Apps mobile app.
   Requirements: <$ARGUMENTS or ask the user what the app does>
   Working directory: <cwd>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
+  Plugin root: ${PLUGIN_ROOT}
 
   Follow your agent file. Return a ## Data Model section with Mermaid ER diagram,
   reuse/extend/create table, and dependency-tier ordering. If requirements mention
@@ -93,7 +95,9 @@ Write `## Data Model` as "None — no Dataverse tables needed." Continue to Phas
 
 ### Phase 3 — Plan Connectors
 
-Follow [`shared/references/connector-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/connector-planning.md):
+**Telemetry checkpoint: `plan_connector_integrations`**
+
+Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md):
 
 1. **Infer** — if `$ARGUMENTS` describes what the app does, scan for connector keywords. Build a candidate list.
 2. **Confirm** — present via `AskUserQuestion`. Let the user add, remove, or confirm.
@@ -104,6 +108,8 @@ If the user provided no requirements context, ask:
 > "What does your app need to connect to? (e.g. SharePoint, Teams, email, Excel, OneDrive, Azure DevOps — or none)"
 
 ### Phase 4 — Combined Approval
+
+**Telemetry checkpoint: `approve_data_model_and_connectors`**
 
 Present the full plan — data model + connectors — together in a single `EnterPlanMode` block:
 
@@ -126,6 +132,8 @@ Approve both to proceed with execution?
 - **Change connectors** → loop back to Phase 3, then re-present Phase 4
 
 ### Phase 5 — Execute Data Model
+
+**Telemetry checkpoint: `apply_dataverse_schema`**
 
 Invoke `/add-dataverse` with `--skip-planning` so it reads the approved plan directly without re-prompting:
 
@@ -151,6 +159,8 @@ Skip if Phase 2 chose Path C (no Dataverse).
 
 ### Phase 6 — Execute Connectors
 
+**Telemetry checkpoint: `generate_connector_data_sources`**
+
 Read `## Connectors` from `native-app-plan.md`. For each connector row, invoke `/add-connector`:
 
 ```
@@ -165,15 +175,17 @@ Run sequentially. Skip if `## Connectors` is "None".
 
 ### Phase 6.5 — Offline profile reconciliation
 
+**Telemetry checkpoint: `reconcile_offline_profile`**
+
 If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Because Phase 5 invoked `/add-dataverse` with `--skip-planning` (which suppresses that skill's own Step 8.5 reconciliation), this orchestrator owns the check. Skip when Phase 2 chose Path C (no Dataverse).
 
 Run the local, no-network delta check:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
 
 ### Phase 7 — Summary
 
@@ -204,7 +216,7 @@ Next steps:
 
 ## Reference
 
-- [shared/references/connector-planning.md](${CLAUDE_SKILL_DIR}/../../shared/references/connector-planning.md) — connector inference + confirmation logic
-- [shared/references/offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Phase 6.5 offline delta check + reconciliation flow
+- [shared/references/connector-planning.md](${PLUGIN_ROOT}/shared/references/connector-planning.md) — connector inference + confirmation logic
+- [shared/references/offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md) — Phase 6.5 offline delta check + reconciliation flow
 - [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) — full data model execution workflow
 - [agents/data-model-architect.md](../../agents/data-model-architect.md) — read-only architect agent

@@ -342,16 +342,34 @@ async function buildModelApp(spec, opts, deps) {
         // opts.verify without mustVerifyPages and no verifier → silently skip (no pages to enforce).
       } else {
         try {
-          const vr = await deps.verify(spec);
+          // Hand verify what the BUILD could not do on this environment, and which phases actually
+          // ran. Without the first, an environment-gated business-rule skip reports `not deployed`
+          // and drives `verify.ok` false forever — and that value gates the exit code,
+          // `.last-applied.json` AND the `--changed-only` snapshot, so the baseline would never be
+          // written and every later run would fall back to a full build. Without the second, the
+          // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
+          // at all) fails the same way on every run after the first.
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
+          // Named explicitly rather than folded into the pass, so a green verify never reads as
+          // "everything the spec asked for is deployed" when part of it could not be. Two distinct
+          // causes get two distinct messages: telling an operator on a HEALTHY environment that it
+          // cannot host business rules — which is what a single shared message did on every
+          // `--changed-only` fast apply — is worse than saying nothing.
+          if (vr.environmentSkipped && vr.environmentSkipped.length) {
+            log(`  ⊘ ${vr.environmentSkipped.length} check(s) not applicable on this environment: ${vr.environmentSkipped.join(', ')}`);
+          }
+          if (vr.phaseSkipped && vr.phaseSkipped.length) {
+            log(`  ⊘ ${vr.phaseSkipped.length} check(s) not verified because their phase did not run in this build: ${vr.phaseSkipped.join(', ')}`);
+          }
           // Include `detail` on a failure so a READ that failed (throttling, auth expiry, a 5xx) is
           // not reported identically to an artifact that is genuinely absent.
           if (!vr.ok) for (const m of vr.missing) log(`  ✗ ${m.kind}: ${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
           // Propagate unableToRun from verifySpec (RECONCILIATION 1): verifySpec itself sets
           // unableToRun when the reader lacks pages/pageCode methods. Only include the property
           // when truthy so existing callers using deepStrictEqual are not affected on the normal path.
-          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}) };
+          r.verify = { ok: vr.ok, present, total: vr.checks.length, missing: vr.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`), ...(vr.unableToRun ? { unableToRun: true } : {}), ...(vr.environmentSkipped && vr.environmentSkipped.length ? { environmentSkipped: vr.environmentSkipped } : {}), ...(vr.phaseSkipped && vr.phaseSkipped.length ? { phaseSkipped: vr.phaseSkipped } : {}) };
           if (journal) journal.record({ phase: 'verify', status: vr.ok ? 'ok' : 'error', label: `verify ${present}/${vr.checks.length} present`, ...(vr.ok ? {} : { detail: r.verify.missing.join(', ') }) });
         } catch (e) {
           if (mustVerifyPages) {
@@ -573,7 +591,7 @@ async function main() {
       // EntityDefinitions request. Omitting them degraded silently: `--apply --verify` reported a
       // clean PASS having never checked what any persona's role actually grants. Caught live —
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
-      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env })),
+      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env }), verifyOpts),
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),

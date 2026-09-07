@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Add Native Capability
 
@@ -23,7 +23,7 @@ Generate a one-file typed wrapper under `src/native/` for a native device capabi
 
 Some capabilities have a dedicated implementation helper that does more than a plain wrapper (camera writes scanner/upload helpers; PDF report/viewer helpers enforce local-vs-HTTPS boundaries; pen has native-control-specific validation). Users should still call `/add-native <capability>` for native controls. When a dedicated implementation exists, **run it internally and do not ask the user to run that helper directly**.
 
-**Lookup convention:** after normalizing the capability, first check the internal-helper map below. For `camera`, `image-picker`, `barcode-scanner`, and `qr-scanner`, read and execute `${CLAUDE_SKILL_DIR}/add-camera/SKILL.md` inside this `/add-native` invocation. For `pdf-report`, read and execute `${CLAUDE_SKILL_DIR}/add-pdf-report/SKILL.md`. For `pdf-viewer`, read and execute `${CLAUDE_SKILL_DIR}/add-pdf-viewer/SKILL.md`. For `pen-input`, read and execute `${CLAUDE_SKILL_DIR}/add-pen-input/SKILL.md`. For `geolocation`, read and execute `${CLAUDE_SKILL_DIR}/add-geolocation/SKILL.md`. If no helper exists, fall through to this skill's inline wrapper flow.
+**Lookup convention:** after normalizing the capability, first check the internal-helper map below. For `camera`, `image-picker`, `barcode-scanner`, and `qr-scanner`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-camera/SKILL.md` inside this `/add-native` invocation. For `pdf-report`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-pdf-report/SKILL.md`. For `pdf-viewer`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-pdf-viewer/SKILL.md`. For `pen-input`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-pen-input/SKILL.md`. For `geolocation`, read and execute `${PLUGIN_ROOT}/skills/add-native/add-geolocation/SKILL.md`. If no helper exists, fall through to this skill's inline wrapper flow.
 
 Current dedicated implementations:
 
@@ -186,6 +186,8 @@ test -f app.config.js && test -f power.config.json && test -f package.json
 
 ### Step 2 — Resolve capability
 
+**Telemetry checkpoint: `resolve_native_capability`**
+
 If `$ARGUMENTS` includes a capability name, package name, or control name, use it. Otherwise look for a `## Native Capabilities` section in `native-app-plan.md` and present the planned capabilities for confirmation. If neither exists, prompt the user with the supported-capabilities list above plus any relevant installed package from `package.json` that directly matches their request.
 
 Normalize the capability name to lowercase, hyphenated form (e.g., `Camera` → `camera`, `ImagePicker` → `image-picker`, `SecureStore` → `secure-store`). Also normalize aliases: `take-photo` / `photo` / `camera-control` / `expo-camera` → `camera`; `gallery` / `pick-image` / `expo-image-picker` → `image-picker`; `scanner` / `barcode` / `qr` → `barcode-scanner`; `open-pdf` / `view-pdf` / `pdf-control` / `pdf-viewer-control` / `@microsoft/power-apps-native-pdf-viewer` → `pdf-viewer`; `native-pdf-viewer` → `pdf-viewer`; `generate-pdf` / `pdf-export` → `pdf-report`; `signature` / `sign-off` / `ink` / `draw` / `pen-control` / `@microsoft/power-apps-native-pen-input` → `pen-input`; `location-tracking` / `background-location` / `gps-tracking` / `geo-tracking` / `track-location` / `power-apps-native-bglocation` / `@microsoft/power-apps-native-bglocation` → `geolocation`.
@@ -196,15 +198,17 @@ If the user names something not in the supported table, apply the Native capabil
 
 ### Step 3 — Route to nested helpers or inline wrappers
 
+**Telemetry checkpoint: `dispatch_native_capability`**
+
 For normalized `camera`, `image-picker`, `barcode-scanner`, `qr-scanner`, `pdf-report`, `pdf-viewer`, `pen-input`, or `geolocation`, do not fall through to the generic wrapper flow and do not tell the user to run another slash command. Read the nested helper and follow its steps inside this `/add-native` invocation:
 
 ```bash
 case "<capability>" in
-  camera|image-picker|barcode-scanner|qr-scanner) test -f "${CLAUDE_SKILL_DIR}/add-camera/SKILL.md" && echo "INTERNAL_HELPER:add-camera" ;;
-  pdf-report) test -f "${CLAUDE_SKILL_DIR}/add-pdf-report/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-report" ;;
-  pdf-viewer) test -f "${CLAUDE_SKILL_DIR}/add-pdf-viewer/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-viewer" ;;
-  pen-input) test -f "${CLAUDE_SKILL_DIR}/add-pen-input/SKILL.md" && echo "INTERNAL_HELPER:add-pen-input" ;;
-  geolocation) test -f "${CLAUDE_SKILL_DIR}/add-geolocation/SKILL.md" && echo "INTERNAL_HELPER:add-geolocation" ;;
+  camera|image-picker|barcode-scanner|qr-scanner) test -f "${PLUGIN_ROOT}/skills/add-native/add-camera/SKILL.md" && echo "INTERNAL_HELPER:add-camera" ;;
+  pdf-report) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-report/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-report" ;;
+  pdf-viewer) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-viewer/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-viewer" ;;
+  pen-input) test -f "${PLUGIN_ROOT}/skills/add-native/add-pen-input/SKILL.md" && echo "INTERNAL_HELPER:add-pen-input" ;;
+  geolocation) test -f "${PLUGIN_ROOT}/skills/add-native/add-geolocation/SKILL.md" && echo "INTERNAL_HELPER:add-geolocation" ;;
   *) echo "INLINE" ;;
 esac
 ```
@@ -223,6 +227,8 @@ node -e "const p = require('./package.json'); const m = '<expo-module-name>'; if
 If the check fails, STOP. Do not run `npx expo install`. Print the error verbatim.
 
 ### Step 5 — Write wrapper
+
+**Telemetry checkpoint: `generate_native_wrapper`**
 
 **Print before starting:**
 > "→ Writing src/native/<wrapper>.ts (typed wrapper with discriminated-union result + iOS/Android platform guards)…"
@@ -281,6 +287,8 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 
 ### Step 6 — Type-check
 
+**Telemetry checkpoint: `validate_native_wrapper`**
+
 **Print before starting:**
 > "→ Running tsc to verify wrapper compiles (~10–20 seconds)."
 
@@ -322,4 +330,4 @@ Sample usage:
 
 - This skill never modifies `package.json`, `app.config.js`, `src/playerConfig.ts`, `src/generated/`, or any screen file.
 - For capabilities not in the supported table (`expo-notifications`, Bluetooth, NFC, BLE, AR — until the template adds them), tell the user the template doesn't ship them yet — file a request at the upstream template repo. Do NOT attempt to install or configure anything yourself.
-- Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.
+- Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.

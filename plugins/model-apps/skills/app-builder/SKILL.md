@@ -164,6 +164,14 @@ every prompt yourself via `AskUserQuestion`. In short:
    - **Level (a) — data model**: entities/columns/relationships **derived from those jobs**; run the
      **early data-model lint** (catches e.g. the relationship-vs-lookup collision before forms are
      authored on top).
+   - **Descriptions are part of authoring, not a cleanup pass.** Every table, column, view, chart,
+     form, dashboard and business rule takes an optional `description`, and you should **write one as
+     you create the artifact** — never as a backfill. A name says what a thing is called; a
+     description says what it is *for*, and it is the only intent an app carries that an agent can
+     read back later when it inspects an app it did not build. Describe the purpose, not the shape:
+     `"Severity 1-5; drives the escalation rule and the SLA clock"`, not `"The priority column"`.
+     (`commands[]` and `Customer` columns accept one but the SDK cannot write it — you'll get a
+     warning; `personas[]` does not take one at all. See the schema reference for why.)
    - **Level (b) — artifacts + page-intents + design**: **enumerate every surface each job needs and
      classify it** per the genpage-first policy above — record CRUD → form + view; anything else
      (overview/landing, dashboard, KPIs, analytics, guided/wizard flow, composite or comparison
@@ -363,11 +371,14 @@ Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to i
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
 failed build — run the classifier-safe teardown. It deletes only the artifacts the spec declares, in
-dependency order (**app module → security roles → dashboards → command bars → forms → charts → views
+dependency order (**app module → dashboards → command bars → forms → security roles → charts → views
 → reset enriched default views to drop parent lookups → relationships → AI row summaries → tables
 [children-first] → web resources (generated app icon + page manifest + declared) → global choices →
 solution**). Forms/charts/views/relationships are deleted **explicitly before tables** (a table
-delete does not reliably cascade cross-references; it does remove the table's own columns). Command
+delete does not reliably cascade cross-references; it does remove the table's own columns). Security
+roles come **after forms** because a form assigned to a role names it inside its own formxml, which
+the platform counts as a dependency, and **before** relationships/tables because a role holding a
+table's privileges can block that table's delete. Command
 teardown removes the whole command bar for any entity the spec authored commands on. **Teardown only
 deletes tables this build created** — a **system/standard table** (account, contact, …) is
 auto-detected and **skipped**, and a **reused custom table** is skipped when its entity is flagged
@@ -505,7 +516,9 @@ solution (idempotent) → data model — **discover** existing tables/columns/re
 `createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
 laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[]`) applied as
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
-→ **business rules** (`businessRules[]`; compiled to classic workflow XAML and activated) →
+→ **business rules** (`businessRules[]` — authored as the workflow object model through the bound
+`CreateProcessWithWfomJson` member and activated; **skipped with a warning** on an environment that
+does not declare that member) →
 **command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
 the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
@@ -541,14 +554,35 @@ child view id. Each step emits `[n/total]`.
   checks **content** (a view's column set, relationship + command existence), so an unapplied edit
   surfaces as a loud `verify FAIL`, not a false pass. Full in-place convergence is tracked in
   `docs/app-builder-capabilities.md`.
-- Not in scope (later): business rules, **conditional** command visibility (Power-Fx-only), **titled
+- Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
-  multi-area sitemaps, **column-level (field) security**, **access teams / hierarchy security** (the
-  security surface today is role-per-persona only — a tracked SDK follow-up).
+  multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
+  (both tracked SDK follow-ups). The security surface today is role-per-persona plus per-form role
+  assignment, and both of those ship.
+- **Environment-gated (may not work where you are running):**
+  - **Business rules** (`businessRules[]`). The SDK writes a rule through the bound
+    `CreateProcessWithWfomJson` member — the same one the modern business-rule designer uses — and
+    **has no fallback**: the client-side workflow-XAML compiler it used to fall back on was removed
+    upstream because it covered 4 of the 7 action types and a single clause, so it silently narrowed
+    a rule into something that did not say what the author wrote. Environments that do not declare
+    the member therefore **cannot host business rules at all** — and that is the common case, not an
+    edge case. The build **skips** the rules, warns once naming the
+    member, and builds everything else normally, so an app is never left half-created. If rules are
+    essential, verify the environment first.
 - Supported: the full data model — all column types, **AutoNumber primary**, global choices, status
-  reasons, alternate keys, **N:N + junction-with-payload**; adaptive main forms with **1:N / N:N
-  sub-grids**; **quick-create / quick-view forms** (`formType`) + **quick-view placement**
-  (`forms[].quickViews[]`); Choice-column charts; **security roles** (`personas[]` — one role per
+  reasons, alternate keys, **N:N + junction-with-payload**; **`required` reconciled on existing
+  columns** (an explicit `required` converges on rebuild; an omitted one never demotes);
+  **Boolean `defaultValue`**, whole-number **`integerFormat`** (incl. `Duration`), and per-column
+  **write permissions** (`isValidForCreate` / `isValidForUpdate` / `isValidForRead` — this is how you
+  make a column read-only), all applied on **create and on rebuild**; adaptive
+  main forms with **1:N / N:N sub-grids**; **per-field form control** (`readOnly` / `hidden` /
+  `after` positioning, plus `prune: false` to edit a subset of a form non-destructively);
+  **quick-create / quick-view forms** (`formType`) + **quick-view placement**
+  (`forms[].quickViews[]`); **per-form security roles** (`forms[].securityRoles` — name the
+  `personas[]` this form is offered to, or `everyone: true`; applied after the roles exist. A form
+  with no assignment is visible to **every** role, so this **restricts** a form rather than granting
+  it); Choice-column charts; **business rules** (`businessRules[]` — authored as the modern workflow
+  object model and activated; see the environment gate above); **security roles** (`personas[]` — one role per
   persona sized from its jobs-to-be-done, with app access so the app opens for non-admins);
   **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
   placement**; **generative pages** (`pages[]` — the genpage-first default, uploaded via

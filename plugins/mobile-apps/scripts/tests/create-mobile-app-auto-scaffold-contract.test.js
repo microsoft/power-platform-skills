@@ -68,7 +68,7 @@ test('template preparation joins the exact install before package mutation', () 
     '### Step 6 — Initialize',
   );
   const joinIndex = prepare.indexOf('$NPM_INSTALL_TERMINAL_ID');
-  const mutationIndex = prepare.indexOf('Then apply these **safe idempotent** prep steps');
+  const mutationIndex = prepare.indexOf('scripts/prepare-mobile-template.js');
 
   assert.ok(joinIndex >= 0);
   assert.ok(mutationIndex > joinIndex);

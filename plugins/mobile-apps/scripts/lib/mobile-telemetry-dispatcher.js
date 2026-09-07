@@ -39,7 +39,7 @@ function fireAndForget(event, opts = {}) {
         APPDATA: env.APPDATA || '',
         POWER_PLATFORM_SKILLS_CONFIG_DIR: opts.configDir || '',
         POWER_PLATFORM_SKILLS_FAKE_HTTPS: opts.fakeProbe || '',
-        POWER_PLATFORM_SKILLS_CLOUD: opts.cloud || '',
+        POWER_PLATFORM_SKILLS_PROJECT_ROOT: opts.projectRoot || '',
         POWER_PLATFORM_SKILLS_IKEY_JSON: opts.ikeyJsonPath || '',
         ...(optOutName && optOutValue ? { [optOutName]: optOutValue } : {}),
       },
@@ -116,6 +116,8 @@ function buildEnvelope(data, time, iKey, eventStreamName) {
   return envelope;
 }
 
+// TEST ONLY. Captures the would-be POST so tests can assert on it without
+// touching the real collector; nothing in the shipped product sets the env var.
 function writeProbe(filePath, record) {
   try {
     fs.writeFileSync(filePath, JSON.stringify(record), 'utf8');
@@ -149,20 +151,24 @@ async function dispatch(raw, env) {
   const resolver = loadResolver(path.dirname(configPath));
   if (resolver && typeof resolver.resolve === 'function') {
     try {
+      // Resolved here, not in the hook: an unresolved cluster costs a `pac auth
+      // who` cold start, and this child is already detached from skill execution.
       const resolved = await resolver.resolve({
         event,
         cfg,
-        cloud: env.POWER_PLATFORM_SKILLS_CLOUD || '',
         configDir,
+        projectRoot: env.POWER_PLATFORM_SKILLS_PROJECT_ROOT || '',
       });
       iKey = resolved && resolved.iKey || '';
       collectorUrl = resolved && resolved.collectorUrl || '';
     } catch {
-      // A resolver failure falls through to the static Mobile configuration.
+      // A resolver failure leaves the event in the local mirror.
     }
+    if (!iKey || !collectorUrl) return;
+  } else {
+    iKey = cfg.instrumentationKey || '';
+    collectorUrl = cfg.collector_url || '';
   }
-  iKey = iKey || cfg.instrumentationKey || '';
-  collectorUrl = collectorUrl || cfg.collector_url || '';
   if (!iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl) return;
 
   const envelope = buildEnvelope(data, time, iKey, cfg.event_stream_name);
@@ -173,8 +179,11 @@ async function dispatch(raw, env) {
     'Content-Length': Buffer.byteLength(body),
   };
 
+  // TEST ONLY: unset in production, so real runs fall through to the POST below.
+  // The URL is captured because US and EU share one instrumentation key and differ
+  // only by collector, so headers alone cannot prove where an event was routed.
   if (env.POWER_PLATFORM_SKILLS_FAKE_HTTPS) {
-    writeProbe(env.POWER_PLATFORM_SKILLS_FAKE_HTTPS, { headers, body });
+    writeProbe(env.POWER_PLATFORM_SKILLS_FAKE_HTTPS, { headers, body, url: collectorUrl });
     return;
   }
 

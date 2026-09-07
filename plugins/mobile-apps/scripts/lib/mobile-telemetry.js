@@ -248,6 +248,7 @@ function commonFields(context, invocation, opts = {}) {
   // identity rides here rather than needing a new allowlisted column.
   const eventInfo = {};
   if (invocation.source) eventInfo.invocationSource = invocation.source;
+  if (invocation.additionalInfo) eventInfo.additionalInfo = invocation.additionalInfo;
   const appInstanceId = findAppInstanceId(opts.cwd) || null;
   eventInfo.appInstanceId = appInstanceId;
   if (Object.keys(eventInfo).length) fields.eventInfo = eventInfo;
@@ -265,6 +266,7 @@ function dispatch(context, event, opts = {}) {
       fakeProbe: context.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || '',
       ikeyJsonPath: context.ikeyPath,
       env: context.env,
+      projectRoot: opts.cwd || '',
     });
   } catch {
     // Telemetry is observational and must never affect a skill invocation.
@@ -280,7 +282,19 @@ function emitSkillStarted(context, invocation, opts = {}) {
   return event;
 }
 
+function emitCheckpoint(context, invocation, opts = {}) {
+  const event = events.buildSkillStarted(
+    context.eventStreamName,
+    commonFields(context, invocation, opts),
+  );
+  event.data.eventName = invocation.eventName;
+  event.data.severity = invocation.severity;
+  dispatch(context, event, opts);
+  return event;
+}
+
 module.exports = {
   createTelemetryContext,
+  emitCheckpoint,
   emitSkillStarted,
 };

@@ -86,6 +86,8 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 
 ## Sub-step 1 — Brand inputs
 
+**Telemetry checkpoint: `collect_brand_inputs`**
+
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
@@ -143,6 +145,8 @@ If flag was passed on invocation, skip asking — process directly.
 
 ## Sub-step 2 — Cost picker
 
+**Telemetry checkpoint: `select_design_depth`**
+
 **Print:**
 > "→ [design-system] How much design depth do you want?"
 
@@ -180,9 +184,9 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 - **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
   1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
      **Source-of-truth lookup order for the preset bundle:**
-    1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${CLAUDE_SKILL_DIR}/references/vibe/direction-<name>.md` and use its tokens.
-    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
-    3. **Else (true "all defaults" path) → load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent (Power Platform–aligned default), status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange, sourced from `uber-design.md`) is now opt-in via `--direction inspection` for true outdoor-only field apps.
+    1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${PLUGIN_ROOT}/skills/design-system/references/vibe/direction-<name>.md` and use its tokens.
+    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${PLUGIN_ROOT}/skills/design-system/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
+    3. **Else (true "all defaults" path) → load [`${PLUGIN_ROOT}/skills/design-system/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent (Power Platform–aligned default), status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange, sourced from `uber-design.md`) is now opt-in via `--direction inspection` for true outdoor-only field apps.
      4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
 
      Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
@@ -248,6 +252,8 @@ Store result as `picked_direction` with all resolved dimensions.
 ---
 
 ## Sub-step 4 — Write brand/design-system.md + brand/tokens.ts
+
+**Telemetry checkpoint: `generate_design_system_artifacts`**
 
 **Print:**
 > "→ [design-system] Writing brand/design-system.md…"
@@ -372,6 +378,8 @@ cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial
 
 ## Sub-step 5 — Render brand/design-system.html (paths (a) and (b))
 
+**Telemetry checkpoint: `render_design_system_gallery`**
+
 **Print:**
 > "→ [design-system] Rendering design system gallery (deterministic, 0 tokens)…"
 
@@ -404,6 +412,8 @@ open "brand/design-system.html" 2>/dev/null \
 ---
 
 ## Sub-step 6 — Confirmation gate
+
+**Telemetry checkpoint: `approve_design_system`**
 
 **Print:**
 > "→ [design-system] Design system ready for review."
@@ -451,6 +461,8 @@ Go back to Sub-step 3 (counts against retry cap of 2).
 
 ## Sub-step 6.5 — Re-render screen previews with brand tokens (paths (a), (b), (c))
 
+**Telemetry checkpoint: `render_branded_screen_previews`**
+
 **Print:**
 > "→ [design-system] Design system locked."
 
@@ -480,6 +492,8 @@ Overwrites `_plan_preview.html` with branded versions. Opens browser.
 ---
 
 ## Sub-step 7 — Persist + return
+
+**Telemetry checkpoint: `persist_design_system`**
 
 **Print:**
 > "→ [design-system] Done. Design system locked."
@@ -598,7 +612,7 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
 | `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
-| Tamagui integration reference | `brand/tokens.ts` | Imported into `tamagui.config.ts` by `/create-mobile-app` Step 9b |
+| Tamagui integration reference | `brand/tokens.ts` | Applied through native-host theme helpers by `/create-mobile-app` Step 9b |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
 | `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
 | `/deploy` | `brand/` shipped in bundle | No special handling |
