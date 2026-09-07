@@ -5,6 +5,19 @@ notifications. The stages are independent and resumable for Android and iOS.
 Completion on one platform never proves completion on the other, and completing
 an earlier stage never proves a later stage.
 
+## Guided entry point
+
+`/add-push-notifications` is the default user-facing command. It inspects the
+recorded handoffs, asks for a platform and stopping point only when the prompt
+does not already provide them, implements runtime integration, and invokes the
+owner of each other incomplete stage in order.
+
+The individual owner skills remain directly invocable as advanced resume and
+repair entry points. A user should not need to manually chain them for a normal
+setup. The orchestrator must continue in-session when an owner can run, and
+stop only at the selected stopping point, a user-managed external action, or a
+real blocker.
+
 ## Canonical stages and owners
 
 | Stage | Completion evidence | Owner / resume route |

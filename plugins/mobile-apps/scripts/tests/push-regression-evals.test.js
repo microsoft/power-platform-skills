@@ -63,7 +63,7 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
   assert.match(readme, /`\/setup-fcm`.*vendor-official Firebase MCP/);
   assert.match(
     readme,
-    /\| `\/setup-fcm` \| .*vendor-official Firebase MCP to list\/select\/create Firebase projects.*No CLI fallback\./,
+    /\| `\/setup-fcm` \| .*vendor-official Firebase MCP\. No CLI fallback\./,
   );
   assert.match(readme, /gcloud MCP for `\/setup-push-wif` Google Cloud operations/);
   assert.match(readme, /does not expose the `keyvault` namespace/i);
@@ -240,7 +240,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
   assert.deepStrictEqual(
     orchestration.evals.map(({ id }) => id),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
   );
 
   const skill = require('node:fs').readFileSync(
@@ -255,7 +255,11 @@ test('push orchestration documents independent resumable setup tracks', () => {
   );
 
   assert.match(skill, /independent,\s+resumable lifecycle/);
+  assert.match(skill, /default user-facing push command/);
+  assert.match(skill, /Default to \*\*Create delivery flows\*\*/);
+  assert.match(skill, /do not merely print the next slash\s+command/i);
   assert.match(lifecycle, /Track Android and iOS independently/);
+  assert.match(lifecycle, /A user should not need to manually chain them/);
   assert.match(lifecycle, /\| 5\. Power Automate flows .*`\/create-push-notification-flow` \|/);
   assert.match(readme, /Push notification cloud prerequisites/);
   assert.match(readme, /premium connector/);
@@ -264,7 +268,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.match(orchestration.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
 });
 
-test('iOS push orchestration reports stage ownership without duplicating build or verification', () => {
+test('iOS push orchestration invokes owners without duplicating their workflows', () => {
   const fs = require('node:fs');
   const skill = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
@@ -276,18 +280,12 @@ test('iOS push orchestration reports stage ownership without duplicating build o
   const readme = fs.readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
   const agents = fs.readFileSync(path.join(PLUGIN_ROOT, 'AGENTS.md'), 'utf8');
 
-  for (const state of [
-    'Native client',
-    'APNs',
-    'Sender authentication',
-    'Power Automate flows',
-    'Wrapped iOS build',
-    'Physical iOS delivery',
-  ]) {
-    assert.match(skill, new RegExp(`\\| ${state.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')} \\|`));
-  }
+  assert.match(skill, /\| iOS \| Firebase client; Apple\/APNs capability; runtime integration; wrapped build; physical delivery \|/);
+  assert.match(skill, /\| Shared delivery \| Sender authentication; producer\/sender flows \|/);
   assert.match(skill, /configured, device verification pending/i);
-  assert.match(skill, /These\s+are handoffs, not substeps/);
+  assert.match(skill, /invoking and resuming those owners, not copying their implementation/i);
+  assert.match(skill, /invoke `\/build-android` and\/or\s+`\/build-ios`/);
+  assert.match(skill, /invoke `\/verify-android-push` and\/or\s+`\/verify-ios-push`/);
   assert.match(apns, /configured, device verification\s+pending/i);
   assert.match(apns, /Only `\/verify-ios-push`/);
   assert.match(deploy, /Power Platform \*\*web bundle deployment\*\*/);

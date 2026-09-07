@@ -181,7 +181,7 @@ test('iOS push chain: credentials remain user-owned throughout', () => {
     'verify-ios-push blocks auth headers');
 });
 
-test('iOS push chain: prescribed order and manual boundaries stay explicit', () => {
+test('iOS push chain: guided orchestration and manual boundaries stay explicit', () => {
   const addPush = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
     'utf8',
@@ -192,11 +192,12 @@ test('iOS push chain: prescribed order and manual boundaries stay explicit', () 
   );
   assert.match(
     addPush,
-    /`\/setup-fcm` -> `\/setup-apple-ios` -> `\/setup-apns`[\s\S]*`\/build-ios` -> `\/verify-ios-push`/,
+    /default user-facing push command[\s\S]*invokes the owner skills/i,
   );
+  assert.match(addPush, /invoke `\/build-android` and\/or\s+`\/build-ios`/);
+  assert.match(addPush, /invoke `\/verify-android-push` and\/or\s+`\/verify-ios-push`/);
   assert.match(addPush, /does not automate Apple setup or emit a proof artifact/);
-  assert.match(addPush, /user manages Xcode configuration and signing assets/);
-  assert.match(addPush, /skill runs the direct Wrap command after exact confirmation/);
+  assert.match(addPush, /owner-required installation handoff/);
   assert.match(shared, /Apple setup is manual and user-owned/);
   assert.match(shared, /Do not automate Apple\s+configuration, generate a proof contract, inspect signing assets/);
 });

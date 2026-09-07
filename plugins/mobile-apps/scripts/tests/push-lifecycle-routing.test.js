@@ -61,7 +61,7 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
 });
 
-test('add-push owns runtime integration and reports platform states independently', () => {
+test('add-push owns runtime integration and orchestrates platform owners', () => {
   const skill = read('skills/add-push-notifications/SKILL.md');
   const description = skill.match(/^description: (.+)$/m)?.[1] || '';
 
@@ -75,24 +75,17 @@ test('add-push owns runtime integration and reports platform states independentl
     assert.ok(description.includes(responsibility), `description owns ${responsibility}`);
   }
 
-  for (const state of [
-    'Wrapped Android build',
-    'Wrapped iOS build',
-    'Physical Android delivery',
-    'Physical iOS delivery',
-  ]) {
-    assert.match(skill, new RegExp(`\\| ${state} \\|`));
-  }
-
-  assert.match(skill, /\| `\/build-android`; route by name only/);
-  assert.match(skill, /\| `\/verify-android-push`; route by name only/);
-  assert.match(skill, /without requiring\s+`sender-auth\.json`/);
-  assert.match(skill, /customer-supplied exact sender flow ID/);
+  assert.match(skill, /default user-facing push command/);
+  assert.match(skill, /Select one stopping point/);
+  assert.match(skill, /Default to \*\*Create delivery flows\*\*/);
+  assert.match(skill, /invoke `\/build-android`/);
+  assert.match(skill, /invoke `\/verify-android-push`/);
+  assert.match(skill, /never requires or fabricates\s+`sender-auth\.json`/);
+  assert.match(skill, /exact\s+plugin-created sender flow ID/);
   assert.doesNotMatch(skill, /non-Flow endpoint/);
   assert.match(skill, /manual Apple Developer\/Xcode guidance/);
   assert.match(skill, /does not automate Apple setup or emit a proof artifact/);
-  assert.match(skill, /user manages Xcode configuration and signing assets/);
-  assert.match(skill, /skill runs the direct Wrap command after exact confirmation/);
+  assert.match(skill, /cloud\s+provisioning, flow mutation, wrapped builds/);
 });
 
 test('build and physical verification boundaries remain non-overlapping', () => {
@@ -123,21 +116,23 @@ test('build and physical verification boundaries remain non-overlapping', () => 
   assert.match(physical, /## Completion rules/);
 });
 
-test('lifecycle eval IDs append locally and cover manual auth plus Android routing', () => {
+test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   const addPush = JSON.parse(read('skills/add-push-notifications/evals/evals.json'));
   const verifyIos = JSON.parse(read('skills/verify-ios-push/evals/evals.json'));
 
   assert.deepStrictEqual(
     addPush.evals.map(({ id }) => id),
-    Array.from({ length: 18 }, (_, index) => index + 1),
+    Array.from({ length: 19 }, (_, index) => index + 1),
   );
-  assert.match(addPush.evals[14].expected_output, /to \/build-android/);
-  assert.match(addPush.evals[14].expected_output, /then \/verify-android-push/);
+  assert.match(addPush.evals[14].expected_output, /invokes build-android/);
+  assert.match(addPush.evals[14].expected_output, /invokes verify-android-push/);
   assert.match(addPush.evals[15].expected_output, /exact plugin-created sender flow ID/);
   assert.match(addPush.evals[15].expected_output, /never inspects credentials/);
   assert.match(addPush.evals[16].expected_output, /custom endpoint and Azure Function sender options are not offered/);
   assert.match(addPush.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
   assert.match(addPush.evals[17].expected_output, /without fallback navigation/);
+  assert.match(addPush.evals[18].expected_output, /one guided workflow/);
+  assert.match(addPush.evals[18].expected_output, /never makes the user manually chain slash commands/);
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),

@@ -22,7 +22,7 @@
     {
       "id": 4,
       "prompt": "Resume push setup. Android and iOS already have active validated Firebase client files for the same project, but sender authentication and the Power Automate flows have not been created.",
-      "expected_output": "The skill parses the active Android and iOS client files, proves exact Expo package/bundle identity, immutable app IDs and one shared Firebase project (plus memory handoff agreement when recorded), reuses that client integration, completes only missing app-side work, and reports sender authentication and flow creation as independent resumable next tracks.",
+      "expected_output": "The skill parses the active Android and iOS client files, proves exact Expo package/bundle identity, immutable app IDs and one shared Firebase project (plus memory handoff agreement when recorded), reuses that client integration, completes only missing app-side work, and invokes create-push-notification-flow because the default stopping point is delivery flows.",
       "files": []
     },
     {
@@ -70,13 +70,13 @@
     {
       "id": 12,
       "prompt": "Push client code and the selected iOS Firebase app are valid, APNs was uploaded manually, sender-auth.json is missing, no flows exist, and no IPA has been built. Tell me exactly where setup stands and continue.",
-      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It preserves the manual setup-apple-ios and Firebase Console setup-apns boundary, routes sender setup to WIF or customer-configured FCM authentication in plugin-created flows, then routes the direct user-managed Wrap build to build-ios and delivery to verify-ios-push without performing those workflows itself.",
+      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It preserves the completed Apple/APNs handoffs and invokes create-push-notification-flow, which offers WIF or customer-configured FCM authentication. Because no build or verification intent was stated, it stops after the delivery-flow goal and reports the later stages without asking the user to chain commands.",
       "files": []
     },
     {
       "id": 13,
       "prompt": "Everything for iOS push is configured and the flows are published. Please make the signed IPA and prove background and terminated delivery as part of /add-push-notifications.",
-      "expected_output": "The skill does not inspect signing assets or duplicate the user-managed Wrap build, FlowAgent read-back, or physical test procedures. It reports the existing states, routes the registered-device development/ad-hoc IPA to /build-ios, and routes physical delivery to /verify-ios-push after the exact build is ready.",
+      "expected_output": "The skill does not inspect signing assets or duplicate the user-managed Wrap build, FlowAgent read-back, or physical test procedures. It invokes build-ios, resumes after its exact artifact handoff, and invokes verify-ios-push after the user-managed installation step is complete.",
       "files": []
     },
     {
@@ -88,13 +88,13 @@
     {
       "id": 15,
       "prompt": "Android push runtime integration, sender authentication, and the exact published flows are ready; iOS is not selected. Build and verify Android push next.",
-      "expected_output": "The skill reports Android and iOS build and physical-delivery states independently, keeps iOS not applicable, routes by name to /build-android and then /verify-android-push, and does not assume an Android artifact format, build mode, installation mechanism, internal matrix, or evidence schema.",
+      "expected_output": "The skill reports Android and iOS states independently, keeps iOS not applicable, invokes build-android, then invokes verify-android-push after the owner-required installation handoff. It does not duplicate or assume the Android owner's artifact, signing, installation, matrix, or evidence details.",
       "files": []
     },
     {
       "id": 16,
       "prompt": "Use the plugin-created Power Automate sender after we manually configure its FCM authentication. Continue toward iOS build and physical verification without validating our credentials.",
-      "expected_output": "The skill requires the exact plugin-created sender flow ID in the producer's recorded environment and the safe FlowAgent read-back of both Started flows plus the observable queued/idempotent/topic/delivery/outbox contract. It records authentication as customer-owned and not plugin-validated, never inspects credentials or secure action data, and only then routes to build-ios and verify-ios-push.",
+      "expected_output": "The skill requires the exact plugin-created sender flow ID in the producer's recorded environment and the safe FlowAgent read-back of both Started flows plus the observable queued/idempotent/topic/delivery/outbox contract. It records authentication as customer-owned and not plugin-validated, never inspects credentials or secure action data, then invokes build-ios and, after installation, verify-ios-push.",
       "files": []
     },
     {
@@ -107,6 +107,12 @@
       "id": 18,
       "prompt": "Use one work-item destination for in-app buttons, the custom scheme, our approved HTTPS domain, and notification taps. Reject old deepLink payloads and unknown destinations without opening another screen.",
       "expected_output": "The skill creates one typed semantic destination registry and shared parser/dispatcher for all four sources, configures only the exact approved scheme and HTTPS origin, separates parser/native/association/physical verification states, rejects legacy or stale intents without fallback navigation, and keeps Expo Router as the sole executor.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "Add push notifications for Android and take me all the way through a physical-device test. I do not know which setup commands to run.",
+      "expected_output": "The skill uses one guided workflow: it infers Android and end-to-end verification as the stopping point, resumes each existing handoff, invokes setup-fcm only if needed, implements runtime integration, invokes create-push-notification-flow for sender auth and flows, invokes build-android, and invokes verify-android-push after installation. It asks only stage-specific safety and business questions and never makes the user manually chain slash commands.",
       "files": []
     }
   ]

@@ -99,12 +99,12 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Push notification architecture: `expo-notifications` for consent/presentation/responses, React Native Firebase Messaging for Android+iOS FCM topics, lowercase-canonical Entra OID while signed in, exact `allUsers` while signed out, and Expo Router behind one typed semantic destination registry shared by in-app actions, the configured custom scheme, approved HTTPS App Links/Universal Links, and push taps. Invalid/stale intents are rejected without fallback navigation. Client-managed OID topics are explicitly not an authorization boundary.
 - ✅ Push cloud setup is **official MCP-first**: `/setup-fcm` owns Firebase project/app selection and SDK config retrieval through the vendor-official Firebase MCP only. `/setup-push-wif` separately requires gcloud MCP for Google-side WIF operations. No Firebase or gcloud CLI fallback is part of the documented architecture.
 - ✅ Firebase native app setup is idempotent by exact Android package name and exact iOS bundle identifier. One exact match is reused automatically; safe duplicates require an immutable app-ID selection independently per platform and a fresh identity read-back. Validated client configs live in committed `firebase/` files and are auto-discovered by Expo config. `/setup-apple-ios` provides manual Apple Developer/Xcode guidance with Yes/No confirmations, then `/setup-apns` permits manual Firebase Console upload of either an APNs `.p8` authentication key or `.p12` certificate; no supported Firebase CLI/Management API upload exists, and agents never handle the credential.
-- ✅ Push setup has independently resumable owners. The prescribed Android chain
-  is `/setup-fcm` → native client integration → sender authentication/flows →
-  `/build-android` → `/verify-android-push`. The prescribed iOS chain is
-  `/setup-fcm` → `/setup-apple-ios` → `/setup-apns` → native client integration
-  → sender authentication/flows → `/build-ios` → `/verify-ios-push`. Existing
-  active client integrations may resume at their first unproven stage.
+- ✅ `/add-push-notifications` is the single guided push entry point. It asks
+  for a platform and stopping point only when unclear, implements native client
+  runtime integration, and invokes the independently resumable owners for
+  Firebase, Apple/APNs, sender auth/flows, wrapped builds, and physical
+  verification. The owner skills remain directly invocable for advanced repair
+  and resume scenarios; normal users do not manually chain them.
 - ✅ Android v1 native distribution is customer-signed direct-test APK only.
   `/build-android` uses the template's `npm run build:android` Wrap path,
   rejects repository-local or symlinked keystores and secret-bearing config,
@@ -122,8 +122,9 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
   configuration: `/build-ios` creates an exact registered-device
   `development` or `ad-hoc` IPA through `npm run build:ios`, and
   `/verify-ios-push` proves physical delivery. `/add-push-notifications`
+  invokes these owners when the selected stopping point requires them and
   reports native client, APNs, sender auth, flows, wrapped build, and delivery
-  verification separately without duplicating their owner workflows.
+  verification separately without duplicating their workflows.
 - ✅ `/setup-apns` ends at **configured, device verification pending** after
   the user confirms the exact Apple Team/identifier/Push setup and completes
   the selected manual Firebase Console `.p8` or `.p12` upload. Browser
