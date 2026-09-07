@@ -2312,7 +2312,7 @@ Branch as follows:
 
 Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from the latest `.powernative` log when needed.
 
-This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
+After Step 12 starts the long-running server, continue through the optional Step 12.5 debug handoff and print the Step 13 summary, then return so the user can iterate locally. Production build + tenant push remains a separate, explicit user action via the `/deploy` skill.
 
 ### Step 12.5 — Optional debug handoff
 

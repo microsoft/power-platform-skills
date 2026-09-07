@@ -87,6 +87,8 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createSkill, /12\. Start Metro \(`npm run dev`\)/);
   assert.match(createSkill, /createPowerAppsMetroConfig/);
   assert.match(createSkill, /npm does not launch `expo start` when either gate fails/);
+  assert.match(createSkill, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
+  assert.doesNotMatch(createSkill, /stops after Step 12/);
   assert.doesNotMatch(createSkill, /npx expo start|without rerunning the `predev` schema hook/);
   assert.doesNotMatch(createSkill, /delegates Metro terminal output.*power-apps-native-host\/metro-logger/);
   assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
