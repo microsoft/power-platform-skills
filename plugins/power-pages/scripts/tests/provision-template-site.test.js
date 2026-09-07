@@ -46,7 +46,7 @@ test('findCodeSiteRoot resolves one nested PAC clone output and rejects ambiguit
   assert.throws(() => findCodeSiteRoot(dir), /found 2/);
 });
 
-test('provisionTemplateSite clones packaged SPA code then uploads the cloned root', (t) => {
+test('provisionTemplateSite clones packaged website code then uploads the cloned root', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const source = path.join(dir, 'source');

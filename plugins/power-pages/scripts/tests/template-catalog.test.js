@@ -20,8 +20,8 @@ const {
   downloadTemplateVariant,
   downloadSeedDataDirectory,
   validateZipContainsSolution,
-  validateSpaCodeDirectory,
-  validateSpaCodePath,
+  validateWebsiteCodeDirectory,
+  validateWebsiteCodePath,
   validateUnpackedSolutionDirectory,
   repositoryDirectoryCheckoutRoot,
   templateVariantRoot,
@@ -53,7 +53,7 @@ const VALID_TEMPLATE = {
   requiredDataverseLanguages: [1033],
   previewImages: ['templates/spa/company-portal/previews/home.png'],
   solutionPath: 'templates/spa/company-portal/solution',
-  spaCodePath: 'templates/spa/company-portal/spa-code',
+  websiteCodePath: 'templates/spa/company-portal/website-code',
   templateVersion: '1.0.0',
   author: 'Microsoft',
 };
@@ -73,13 +73,32 @@ const VALID_TEMPLATE_FAMILY = {
     react: {
       templateVersion: '1.0.0',
       solutionPath: 'templates/spa/supplier-portal/variants/react/solution',
-      spaCodePath: 'templates/spa/supplier-portal/variants/react/spa-code',
+      websiteCodePath: 'templates/spa/supplier-portal/variants/react/website-code',
     },
     vue: {
       templateVersion: '1.0.1',
       solutionPath: 'templates/spa/supplier-portal/variants/vue/solution',
-      spaCodePath: 'templates/spa/supplier-portal/variants/vue/spa-code',
+      websiteCodePath: 'templates/spa/supplier-portal/variants/vue/website-code',
       previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
+    },
+  },
+};
+
+const VALID_TRADITIONAL_TEMPLATE_FAMILY = {
+  id: 'customer-self-service',
+  displayName: 'Customer self-service',
+  description: 'A traditional Power Pages website template',
+  kind: 'traditional',
+  keywords: ['customer-service'],
+  audience: ['makers'],
+  requiredDataverseLanguages: [1033],
+  previewImages: [],
+  author: 'Microsoft',
+  variants: {
+    none: {
+      templateVersion: '1.0.0',
+      solutionPath: 'templates/traditional/customer-self-service/variants/none/solution',
+      websiteCodePath: 'templates/traditional/customer-self-service/variants/none/website-code',
     },
   },
 };
@@ -158,6 +177,7 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
     catalogLocalPath: path.join(dir, SHA, 'templates/manifest.json'),
     cacheDir: path.join(dir, SHA),
     catalog,
+    selectableCatalog: catalog,
   });
   assert.deepEqual(gitCalls, [['git', ['ls-remote', '--tags', 'https://github.com/o/r.git']]]);
   assert.deepEqual(seen, [
@@ -176,7 +196,7 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
       ...VALID_TEMPLATE,
       previewImages: ['spa/company-portal/previews/home.png', 'templates/spa/company-portal/previews/already-rooted.png'],
       solutionPath: 'spa/company-portal/solution',
-      spaCodePath: 'spa/company-portal/spa-code',
+      websiteCodePath: 'spa/company-portal/website-code',
       seedDataPath: 'spa/company-portal/seed/data.json',
     }],
   };
@@ -198,12 +218,108 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
     'templates/spa/company-portal/previews/already-rooted.png',
   ]);
   assert.equal(result.catalog.templates[0].solutionPath, 'templates/spa/company-portal/solution');
-  assert.equal(result.catalog.templates[0].spaCodePath, 'templates/spa/company-portal/spa-code');
+  assert.equal(result.catalog.templates[0].websiteCodePath, 'templates/spa/company-portal/website-code');
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/company-portal/seed/data.json');
 });
 
 test('validateCatalogShape accepts nested template families with framework variants', () => {
   assert.equal(validateCatalogShape({ manifestVersion: '2.0', templates: [VALID_TEMPLATE_FAMILY] }), null);
+});
+
+test('validateCatalogShape requires websiteCodePath for every template kind', () => {
+  const traditionalFlatTemplate = {
+    ...VALID_TEMPLATE,
+    id: 'traditional-flat-template',
+    kind: 'traditional',
+    framework: 'none',
+    solutionPath: 'templates/traditional/flat-template/solution',
+    websiteCodePath: 'templates/traditional/flat-template/website-code',
+  };
+
+  assert.equal(
+    validateCatalogShape({
+      manifestVersion: '2.0',
+      templates: [VALID_TEMPLATE_FAMILY, VALID_TRADITIONAL_TEMPLATE_FAMILY, traditionalFlatTemplate],
+    }),
+    null
+  );
+  assert.match(
+    validateCatalogShape({
+      manifestVersion: '2.0',
+      templates: [{
+        ...VALID_TEMPLATE_FAMILY,
+        variants: {
+          react: {
+            templateVersion: '1.0.0',
+            solutionPath: 'templates/spa/supplier-portal/variants/react/solution',
+          },
+        },
+      }],
+    }),
+    /missing string field\(s\): websiteCodePath/
+  );
+  assert.match(
+    validateCatalogShape({
+      manifestVersion: '2.0',
+      templates: [{
+        ...VALID_TRADITIONAL_TEMPLATE_FAMILY,
+        variants: {
+          none: {
+            templateVersion: '1.0.0',
+            solutionPath: 'templates/traditional/customer-self-service/variants/none/solution',
+          },
+        },
+      }],
+    }),
+    /missing string field\(s\): websiteCodePath/
+  );
+});
+
+test('fetchCatalog keeps traditional entries but exposes only SPA templates for selection', async (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const catalog = {
+    manifestVersion: '2.0',
+    templates: [
+      {
+        ...VALID_TEMPLATE_FAMILY,
+        variants: {
+          react: {
+            ...VALID_TEMPLATE_FAMILY.variants.react,
+            solutionPath: 'spa/supplier-portal/variants/react/solution',
+            websiteCodePath: 'spa/supplier-portal/variants/react/website-code',
+          },
+        },
+      },
+      {
+        ...VALID_TRADITIONAL_TEMPLATE_FAMILY,
+        variants: {
+          none: {
+            ...VALID_TRADITIONAL_TEMPLATE_FAMILY.variants.none,
+            solutionPath: 'traditional/customer-self-service/variants/none/solution',
+            websiteCodePath: 'traditional/customer-self-service/variants/none/website-code',
+          },
+        },
+      },
+    ],
+  };
+
+  const result = await fetchCatalog({ owner: 'o', repo: 'r', ref: 'templates-v2.0.0', cacheRoot: dir }, {
+    execFileSync: () => `${SHA}\trefs/tags/templates-v2.0.0\n`,
+    requestJson: async () => catalog,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.catalog.templates.length, 2);
+  assert.deepEqual(result.selectableCatalog.templates.map((template) => template.id), ['supplier-portal']);
+  assert.equal(
+    result.catalog.templates[1].variants.none.websiteCodePath,
+    'templates/traditional/customer-self-service/variants/none/website-code'
+  );
+  assert.equal(
+    result.catalog.templates[1].variants.none.solutionPath,
+    'templates/traditional/customer-self-service/variants/none/solution'
+  );
 });
 
 test('validateCatalogShape rejects duplicate framework variants in a family', () => {
@@ -234,12 +350,12 @@ test('fetchCatalog materializes nested family and variant artifact paths', async
         react: {
           templateVersion: '1.0.0',
           solutionPath: 'spa/supplier-portal/variants/react/solution',
-          spaCodePath: 'spa/supplier-portal/variants/react/spa-code',
+          websiteCodePath: 'spa/supplier-portal/variants/react/website-code',
         },
         vue: {
           templateVersion: '1.0.1',
           solutionPath: 'spa/supplier-portal/variants/vue/solution',
-          spaCodePath: 'spa/supplier-portal/variants/vue/spa-code',
+          websiteCodePath: 'spa/supplier-portal/variants/vue/website-code',
           previewImages: ['spa/supplier-portal/variants/vue/previews/home.png'],
           seedDataPath: 'spa/supplier-portal/variants/vue/seed-data/data.json',
         },
@@ -256,7 +372,10 @@ test('fetchCatalog materializes nested family and variant artifact paths', async
   assert.deepEqual(result.catalog.templates[0].previewImages, ['templates/spa/supplier-portal/previews/home.png']);
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/supplier-portal/seed-data/data.json');
   assert.equal(result.catalog.templates[0].variants.react.solutionPath, 'templates/spa/supplier-portal/variants/react/solution');
-  assert.equal(result.catalog.templates[0].variants.react.spaCodePath, 'templates/spa/supplier-portal/variants/react/spa-code');
+  assert.equal(
+    result.catalog.templates[0].variants.react.websiteCodePath,
+    'templates/spa/supplier-portal/variants/react/website-code'
+  );
   assert.deepEqual(result.catalog.templates[0].variants.vue.previewImages, ['templates/spa/supplier-portal/variants/vue/previews/home.png']);
   assert.equal(result.catalog.templates[0].variants.vue.seedDataPath, 'templates/spa/supplier-portal/variants/vue/seed-data/data.json');
 });
@@ -291,7 +410,7 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
         templateVersion: '1.0.0',
         solutionPath: 'templates/spa/supplier-portal/variants/react/solution',
-        spaCodePath: 'templates/spa/supplier-portal/variants/react/spa-code',
+        websiteCodePath: 'templates/spa/supplier-portal/variants/react/website-code',
         author: 'Microsoft',
       },
       {
@@ -309,7 +428,7 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
         templateVersion: '1.0.1',
         solutionPath: 'templates/spa/supplier-portal/variants/vue/solution',
-        spaCodePath: 'templates/spa/supplier-portal/variants/vue/spa-code',
+        websiteCodePath: 'templates/spa/supplier-portal/variants/vue/website-code',
         author: 'Microsoft',
       },
     ],
@@ -430,10 +549,10 @@ test('validateCatalogShape accepts a complete template entry and rejects broken 
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, keywords: 'portal' }] }), /keywords/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: [] }] }), /requiredDataverseLanguages/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: ['1033'] }] }), /requiredDataverseLanguages/);
-  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, spaCodePath: '' }] }), /spaCodePath/);
+  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, websiteCodePath: '' }] }), /websiteCodePath/);
   assert.match(
     validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, solutionPath: 'templates/spa/company-portal/solution.zip' }] }),
-    /sibling solution\/ and spa-code\//
+    /solutionPath must end with a solution\/ folder/
   );
 });
 
@@ -451,7 +570,7 @@ test('validateCatalogShape accepts the 311 Portal audience array and rejects non
     audience: ['makers', 'developers'],
     previewImages: ['spa/311-portal/previews/home.png'],
     solutionPath: 'spa/311-portal/solution',
-    spaCodePath: 'spa/311-portal/spa-code',
+    websiteCodePath: 'spa/311-portal/website-code',
     templateVersion: '1.0.0.1',
   };
 
@@ -567,7 +686,7 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const variantPath = 'templates/spa/company/variants/react';
   const solutionPath = `${variantPath}/solution`;
-  const spaCodePath = `${variantPath}/spa-code`;
+  const websiteCodePath = `${variantPath}/website-code`;
   const calls = [];
   let partialRoot;
 
@@ -575,8 +694,9 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
     owner: 'o',
     repo: 'r',
     sha: SHA,
+    kind: 'spa',
     solutionPath,
-    spaCodePath,
+    websiteCodePath,
     cacheRoot: dir,
   }, {
     execFileSync(command, args) {
@@ -584,10 +704,11 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
       if (args[0] === 'init') partialRoot = args[2];
       if (args.includes('checkout')) {
         const localVariant = path.join(partialRoot, ...variantPath.split('/'));
-        const localSpaCode = path.join(localVariant, 'spa-code');
-        fs.mkdirSync(path.join(localSpaCode, '.powerpages-site'), { recursive: true });
-        fs.writeFileSync(path.join(localSpaCode, 'powerpages.config.json'), '{}');
-        fs.writeFileSync(path.join(localSpaCode, 'package.json'), '{}');
+        const localWebsiteCode = path.join(localVariant, 'website-code');
+        fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
+        fs.writeFileSync(path.join(localWebsiteCode, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
+        fs.writeFileSync(path.join(localWebsiteCode, 'powerpages.config.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, 'package.json'), '{}');
         const solutionOther = path.join(localVariant, 'solution', 'Other');
         fs.mkdirSync(solutionOther, { recursive: true });
         fs.writeFileSync(
@@ -603,8 +724,9 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
     owner: 'o',
     repo: 'r',
     sha: SHA,
+    kind: 'spa',
     solutionPath,
-    spaCodePath,
+    websiteCodePath,
     cacheRoot: dir,
   }, {
     execFileSync() {
@@ -619,30 +741,77 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
     repositoryDirectoryCheckoutRoot({ cacheRoot: dir, sha: SHA, directoryPath: variantPath })
   );
   assert.equal(result.solutionPath, path.join(result.variantPath, 'solution'));
-  assert.equal(result.spaCodePath, path.join(result.variantPath, 'spa-code'));
+  assert.equal(result.websiteCodePath, path.join(result.variantPath, 'website-code'));
   assert.deepEqual(cached, { ...result, cached: true });
   assert.equal(calls.filter(([, args]) => args.includes('sparse-checkout')).length, 1);
   assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${variantPath}`)), true);
 });
 
-test('templateVariantRoot requires sibling solution and spa-code folders', () => {
+test('downloadTemplateVariant accepts traditional website source and website solution components', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const variantPath = 'templates/traditional/customer-self-service/variants/none';
+  const solutionPath = `${variantPath}/solution`;
+  const websiteCodePath = `${variantPath}/website-code`;
+  let partialRoot;
+
+  const result = downloadTemplateVariant({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    kind: 'traditional',
+    solutionPath,
+    websiteCodePath,
+    cacheRoot: dir,
+  }, {
+    execFileSync(command, args) {
+      if (args[0] === 'init') partialRoot = args[2];
+      if (args.includes('checkout')) {
+        const localVariant = path.join(partialRoot, ...variantPath.split('/'));
+        const localWebsiteCode = path.join(localVariant, 'website-code');
+        fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
+        fs.writeFileSync(
+          path.join(localWebsiteCode, '.powerpages-site', 'website.yml'),
+          'adx_name: Customer self-service\n'
+        );
+        const solutionOther = path.join(localVariant, 'solution', 'Other');
+        fs.mkdirSync(solutionOther, { recursive: true });
+        fs.writeFileSync(
+          path.join(solutionOther, 'Solution.xml'),
+          '<ImportExportXml><SolutionManifest><Managed>0</Managed></SolutionManifest></ImportExportXml>'
+        );
+        fs.writeFileSync(
+          path.join(solutionOther, 'Customizations.xml'),
+          '<ImportExportXml><powerpagecomponents /></ImportExportXml>'
+        );
+      }
+      return '';
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.solutionPath, path.join(result.variantPath, 'solution'));
+  assert.equal(result.websiteCodePath, path.join(result.variantPath, 'website-code'));
+});
+
+test('templateVariantRoot requires sibling solution and website-code folders', () => {
   assert.equal(
     templateVariantRoot(
       'templates/spa/company/variants/react/solution',
-      'templates/spa/company/variants/react/spa-code'
+      'templates/spa/company/variants/react/website-code'
     ),
     'templates/spa/company/variants/react'
   );
   assert.throws(
     () => templateVariantRoot(
       'templates/spa/company/solution',
-      'templates/spa/company/variants/react/spa-code'
+      'templates/spa/company/variants/react/website-code'
     ),
-    /sibling solution\/ and spa-code\//
+    /sibling solution\/ and website-code\//
   );
 });
 
-test('unpacked solution validation requires unmanaged reviewable source without website artifacts', (t) => {
+test('unpacked solution validation can allow website artifacts for traditional templates', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   assert.match(validateUnpackedSolutionDirectory(dir), /missing Other[/\\]Solution.xml/);
@@ -660,25 +829,36 @@ test('unpacked solution validation requires unmanaged reviewable source without 
   fs.writeFileSync(path.join(other, 'Solution.xml'), '<SolutionManifest><Managed>0</Managed></SolutionManifest>');
   fs.writeFileSync(path.join(other, 'Customizations.xml'), '<ImportExportXml><powerpagecomponents /></ImportExportXml>');
   assert.match(validateUnpackedSolutionDirectory(dir), /website components/);
+  assert.equal(validateUnpackedSolutionDirectory(dir, { allowWebsiteComponents: true }), null);
   fs.writeFileSync(path.join(other, 'Customizations.xml'), '<ImportExportXml />');
   fs.writeFileSync(path.join(dir, 'committed.zip'), 'zip');
   assert.match(validateUnpackedSolutionDirectory(dir), /committed zip/);
 });
 
-test('SPA code validation rejects escaping paths and generated content', (t) => {
-  assert.match(validateSpaCodePath('../outside'), /stay inside/);
-  assert.match(validateSpaCodePath('/absolute/path'), /repository-relative/);
-  assert.match(validateSpaCodePath('templates\\spa\\site'), /repository-relative/);
-  assert.match(validateSpaCodePath('templates/spa/--upload-pack=evil/site'), /unsupported characters/);
-  assert.match(validateSpaCodePath('templates/spa/site name'), /unsupported characters/);
+test('website code validation handles SPA and traditional source layouts', (t) => {
+  assert.match(validateWebsiteCodePath('../outside'), /stay inside/);
+  assert.match(validateWebsiteCodePath('/absolute/path'), /repository-relative/);
+  assert.match(validateWebsiteCodePath('templates\\spa\\site'), /repository-relative/);
+  assert.match(validateWebsiteCodePath('templates/spa/--upload-pack=evil/site'), /unsupported characters/);
+  assert.match(validateWebsiteCodePath('templates/spa/site name'), /unsupported characters/);
 
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '.powerpages-site'));
+  fs.writeFileSync(path.join(dir, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
   fs.writeFileSync(path.join(dir, 'powerpages.config.json'), '{}');
   fs.writeFileSync(path.join(dir, 'package.json'), '{}');
   fs.mkdirSync(path.join(dir, 'node_modules'));
-  assert.match(validateSpaCodeDirectory(dir), /generated or local-only/);
+  assert.match(validateWebsiteCodeDirectory(dir, { kind: 'spa' }), /generated or local-only/);
+
+  const traditionalDir = tempDir();
+  t.after(() => fs.rmSync(traditionalDir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(traditionalDir, '.powerpages-site'));
+  fs.writeFileSync(
+    path.join(traditionalDir, '.powerpages-site', 'website.yml'),
+    'adx_name: Traditional Site\n'
+  );
+  assert.equal(validateWebsiteCodeDirectory(traditionalDir, { kind: 'traditional' }), null);
 });
 
 test('downloadSeedDataDirectory downloads a seed JSON file and its referenced __files attachments without tree API', async (t) => {
@@ -794,15 +974,17 @@ test('fetch-template-variant CLI parser accepts both sibling artifact paths', ()
     '--owner', 'contoso',
     '--repo', 'samples',
     '--sha', SHA,
+    '--kind', 'spa',
     '--solutionPath', 'templates/spa/company/variants/react/solution',
-    '--spaCodePath', 'templates/spa/company/variants/react/spa-code',
+    '--websiteCodePath', 'templates/spa/company/variants/react/website-code',
     '--cacheRoot', '/tmp/cache',
   ]), {
     owner: 'contoso',
     repo: 'samples',
     sha: SHA,
+    kind: 'spa',
     solutionPath: 'templates/spa/company/variants/react/solution',
-    spaCodePath: 'templates/spa/company/variants/react/spa-code',
+    websiteCodePath: 'templates/spa/company/variants/react/website-code',
     cacheRoot: '/tmp/cache',
   });
 });

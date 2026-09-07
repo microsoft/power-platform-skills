@@ -11,6 +11,7 @@ const DEFAULT_REPO = 'power-pages-samples';
 const DEFAULT_REF = 'latest-release';
 const DEFAULT_CATALOG_PATH = 'templates/manifest.json';
 const FRAMEWORKS = new Set(['react', 'vue', 'angular', 'astro', 'none', 'other']);
+const TEMPLATE_KINDS = new Set(['spa', 'traditional']);
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function getDefaultCacheRoot() {
@@ -52,6 +53,10 @@ function isNestedFamilyTemplate(template) {
   return template && typeof template.variants === 'object' && template.variants && !Array.isArray(template.variants);
 }
 
+function isSpaTemplate(template) {
+  return template && template.kind === 'spa';
+}
+
 function assertValidSha(sha) {
   if (!/^[0-9a-f]{40}$/i.test(sha || '')) {
     throw new Error(`Expected an immutable 40-character commit sha, got: ${sha}`);
@@ -68,7 +73,7 @@ function validateCatalogShape(catalog) {
   //       "requiredDataverseLanguages": [1033],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
   //       "solutionPath": "spa/311-portal/solution",
-  //       "spaCodePath": "spa/311-portal/spa-code",
+  //       "websiteCodePath": "spa/311-portal/website-code",
   //       "seedDataPath": "spa/311-portal/seed/data.json",
   //       "templateVersion": "1.0.0.1", "author": "Microsoft" }
   //   ] }
@@ -87,12 +92,16 @@ function validateCatalogShape(catalog) {
     if (!template || typeof template !== 'object') return `template at index ${index} is not an object`;
     const requiredStringFields = isNestedFamilyTemplate(template)
       ? ['id', 'displayName', 'description', 'kind', 'author']
-      : ['id', 'displayName', 'description', 'kind', 'framework', 'solutionPath', 'spaCodePath', 'templateVersion', 'author'];
+      : [
+          'id', 'displayName', 'description', 'kind', 'framework',
+          'solutionPath', 'websiteCodePath', 'templateVersion', 'author',
+        ];
     const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
+    if (!TEMPLATE_KINDS.has(template.kind)) return `template ${template.id} has unsupported kind: ${template.kind}`;
     if (!isNestedFamilyTemplate(template)) {
       try {
-        templateVariantRoot(template.solutionPath, template.spaCodePath);
+        templateVariantRoot(template.solutionPath, template.websiteCodePath);
       } catch (err) {
         return `template ${template.id || index} has invalid variant paths: ${err.message}`;
       }
@@ -122,10 +131,15 @@ function validateCatalogShape(catalog) {
         seenFrameworks.add(normalizedFramework);
         if (!FRAMEWORKS.has(normalizedFramework)) return `template ${template.id} variant ${framework} has unsupported framework`;
         if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return `template ${template.id} variant ${framework} is not an object`;
-        const variantMissing = ['templateVersion', 'solutionPath', 'spaCodePath'].filter((field) => !isNonEmptyString(variant[field]));
+        const variantRequiredFields = [
+          'templateVersion',
+          'solutionPath',
+          'websiteCodePath',
+        ];
+        const variantMissing = variantRequiredFields.filter((field) => !isNonEmptyString(variant[field]));
         if (variantMissing.length > 0) return `template ${template.id} variant ${framework} missing string field(s): ${variantMissing.join(', ')}`;
         try {
-          templateVariantRoot(variant.solutionPath, variant.spaCodePath);
+          templateVariantRoot(variant.solutionPath, variant.websiteCodePath);
         } catch (err) {
           return `template ${template.id} variant ${framework} has invalid paths: ${err.message}`;
         }
@@ -180,8 +194,8 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
       if (template.solutionPath) {
         materialized.solutionPath = resolveCatalogArtifactPath(catalogPath, template.solutionPath);
       }
-      if (template.spaCodePath) {
-        materialized.spaCodePath = resolveCatalogArtifactPath(catalogPath, template.spaCodePath);
+      if (template.websiteCodePath) {
+        materialized.websiteCodePath = resolveCatalogArtifactPath(catalogPath, template.websiteCodePath);
       }
       if (template.seedDataPath) {
         materialized.seedDataPath = resolveCatalogArtifactPath(catalogPath, template.seedDataPath);
@@ -191,7 +205,9 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
           const materializedVariant = {
             ...variant,
             solutionPath: resolveCatalogArtifactPath(catalogPath, variant.solutionPath),
-            spaCodePath: resolveCatalogArtifactPath(catalogPath, variant.spaCodePath),
+            ...(variant.websiteCodePath
+              ? { websiteCodePath: resolveCatalogArtifactPath(catalogPath, variant.websiteCodePath) }
+              : {}),
           };
           if (Array.isArray(variant.previewImages)) {
             materializedVariant.previewImages = variant.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath));
@@ -237,7 +253,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
           templateVersion: template.templateVersion,
           solutionPath: template.solutionPath,
-          spaCodePath: template.spaCodePath,
+          websiteCodePath: template.websiteCodePath,
           author: template.author,
         }],
       };
@@ -270,7 +286,7 @@ function normalizeCatalogFamilies(catalog = {}) {
           ...(variant.seedDataPath || template.seedDataPath ? { seedDataPath: variant.seedDataPath || template.seedDataPath } : {}),
           templateVersion: variant.templateVersion,
           solutionPath: variant.solutionPath,
-          spaCodePath: variant.spaCodePath,
+          websiteCodePath: variant.websiteCodePath,
           author: template.author,
         };
       }),
@@ -454,6 +470,13 @@ async function fetchCatalog(options = {}, deps = {}) {
     const catalogError = validateCatalogShape(rawCatalog);
     if (catalogError) throw new Error(`Template catalog is malformed: ${catalogError}`);
     const catalog = materializeCatalogArtifactPaths(rawCatalog, catalogPath);
+    // Traditional templates remain in the downloaded catalog so a mixed
+    // marketplace stays valid. create-site only exposes SPA templates until the
+    // traditional solution-import provisioning path is implemented.
+    const selectableCatalog = {
+      ...catalog,
+      templates: catalog.templates.filter(isSpaTemplate),
+    };
     fsImpl.mkdirSync(cacheDir, { recursive: true });
     const catalogLocalPath = artifactCachePath({ cacheRoot, sha, artifactPath: catalogPath });
     fsImpl.mkdirSync(path.dirname(catalogLocalPath), { recursive: true });
@@ -471,6 +494,7 @@ async function fetchCatalog(options = {}, deps = {}) {
       catalogLocalPath,
       cacheDir,
       catalog,
+      selectableCatalog,
     };
   } catch (err) {
     return { ok: false, owner, repo, ref, catalogPath, error: err.message };
@@ -536,33 +560,47 @@ async function downloadArtifact(options = {}, deps = {}) {
   return { localPath, cached: false };
 }
 
-function validateSpaCodePath(spaCodePath) {
-  if (!isNonEmptyString(spaCodePath)) return 'spaCodePath is required';
-  if (path.isAbsolute(spaCodePath) || spaCodePath.includes('\\')) {
-    return 'SPA code path must be a repository-relative POSIX directory';
+function validateRepositoryDirectoryPath(directoryPath, fieldName, label) {
+  if (!isNonEmptyString(directoryPath)) return `${fieldName} is required`;
+  if (path.isAbsolute(directoryPath) || directoryPath.includes('\\')) {
+    return `${label} must be a repository-relative POSIX directory`;
   }
-  const segments = spaCodePath.split('/');
+  const segments = directoryPath.split('/');
   if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment === '.git')) {
-    return 'SPA code path must stay inside the template repository';
+    return `${label} must stay inside the template repository`;
   }
   if (segments.some((segment) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))) {
-    return 'SPA code path contains unsupported characters';
+    return `${label} contains unsupported characters`;
   }
   return null;
 }
 
-function validateSpaCodeDirectory(localPath, deps = {}) {
+function validateWebsiteCodePath(websiteCodePath) {
+  return validateRepositoryDirectoryPath(websiteCodePath, 'websiteCodePath', 'Website code path');
+}
+
+function validateSolutionPath(solutionPath) {
+  return validateRepositoryDirectoryPath(solutionPath, 'solutionPath', 'Template solution path');
+}
+
+function validateWebsiteCodeDirectory(localPath, options = {}, deps = {}) {
   const fsImpl = deps.fs || fs;
-  const requiredFiles = ['powerpages.config.json', 'package.json'];
+  // Both traditional and code sites keep PAC website source under
+  // `.powerpages-site/website.yml`. Code sites also carry the package metadata
+  // needed to build and upload the SPA.
+  // See: https://learn.microsoft.com/power-platform/developer/cli/reference/pages#pac-pages-download
+  const requiredFiles = options.kind === 'traditional'
+    ? []
+    : ['powerpages.config.json', 'package.json'];
   for (const requiredFile of requiredFiles) {
     const requiredPath = path.join(localPath, requiredFile);
     if (!fsImpl.existsSync(requiredPath) || !fsImpl.statSync(requiredPath).isFile()) {
-      return `SPA code directory is missing ${requiredFile}`;
+      return `Website code directory is missing ${requiredFile}`;
     }
   }
-  const metadataPath = path.join(localPath, '.powerpages-site');
-  if (!fsImpl.existsSync(metadataPath) || !fsImpl.statSync(metadataPath).isDirectory()) {
-    return 'SPA code directory is missing .powerpages-site';
+  const websiteMetadataPath = path.join(localPath, '.powerpages-site', 'website.yml');
+  if (!fsImpl.existsSync(websiteMetadataPath) || !fsImpl.statSync(websiteMetadataPath).isFile()) {
+    return 'Website code directory is missing .powerpages-site/website.yml';
   }
 
   const queue = [localPath];
@@ -570,10 +608,10 @@ function validateSpaCodeDirectory(localPath, deps = {}) {
     const current = queue.pop();
     for (const entry of fsImpl.readdirSync(current, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) {
-        return `SPA code directory contains a symbolic link: ${path.relative(localPath, path.join(current, entry.name))}`;
+        return `Website code directory contains a symbolic link: ${path.relative(localPath, path.join(current, entry.name))}`;
       }
       if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.DS_Store' || entry.name.endsWith('.tsbuildinfo')) {
-        return `SPA code directory contains generated or local-only content: ${path.relative(localPath, path.join(current, entry.name))}`;
+        return `Website code directory contains generated or local-only content: ${path.relative(localPath, path.join(current, entry.name))}`;
       }
       if (entry.isDirectory()) queue.push(path.join(current, entry.name));
     }
@@ -632,7 +670,7 @@ function validateUnpackedSolutionDirectory(localPath, deps = {}) {
     return 'Template solution source must describe an unmanaged solution';
   }
   const customizationsXml = fsImpl.readFileSync(customizationsXmlPath, 'utf8');
-  if (/<powerpagecomponents(?:\s|>)/i.test(customizationsXml)) {
+  if (!deps.allowWebsiteComponents && /<powerpagecomponents(?:\s|>)/i.test(customizationsXml)) {
     return 'Template supporting solution must not contain Power Pages website components';
   }
   return null;
@@ -640,7 +678,11 @@ function validateUnpackedSolutionDirectory(localPath, deps = {}) {
 
 function repositoryDirectoryCheckoutRoot({ cacheRoot = getDefaultCacheRoot(), sha, directoryPath }) {
   assertValidSha(sha);
-  const pathError = validateSpaCodePath(directoryPath);
+  const pathError = validateRepositoryDirectoryPath(
+    directoryPath,
+    'directoryPath',
+    'Repository directory path'
+  );
   if (pathError) throw new Error(pathError);
   // Keep cached content under a reserved leaf so a cached parent path and one of
   // its descendants cannot overwrite each other.
@@ -671,7 +713,11 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
   } = options;
   const fsImpl = deps.fs || fs;
   assertValidSha(sha);
-  const pathError = validateSpaCodePath(directoryPath);
+  const pathError = validateRepositoryDirectoryPath(
+    directoryPath,
+    'directoryPath',
+    'Repository directory path'
+  );
   if (pathError) throw new Error(pathError);
   const checkoutRoot = repositoryDirectoryCheckoutRoot({ cacheRoot, sha, directoryPath });
   const localPath = checkoutRoot;
@@ -702,55 +748,66 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
   return { localPath, cached: false };
 }
 
-function templateVariantRoot(solutionPath, spaCodePath) {
-  const solutionPathError = validateSpaCodePath(solutionPath);
+function templateSolutionRoot(solutionPath) {
+  const solutionPathError = validateSolutionPath(solutionPath);
   if (solutionPathError) throw new Error(`Invalid solutionPath: ${solutionPathError}`);
-  const spaCodePathError = validateSpaCodePath(spaCodePath);
-  if (spaCodePathError) throw new Error(`Invalid spaCodePath: ${spaCodePathError}`);
-  const solutionRoot = path.posix.dirname(solutionPath);
-  const variantRoot = path.posix.dirname(spaCodePath);
+  if (path.posix.basename(solutionPath) !== 'solution') {
+    throw new Error('solutionPath must end with a solution/ folder');
+  }
+  return path.posix.dirname(solutionPath);
+}
+
+function templateVariantRoot(solutionPath, websiteCodePath) {
+  const solutionRoot = templateSolutionRoot(solutionPath);
+  const websiteCodePathError = validateWebsiteCodePath(websiteCodePath);
+  if (websiteCodePathError) throw new Error(`Invalid websiteCodePath: ${websiteCodePathError}`);
+  const variantRoot = path.posix.dirname(websiteCodePath);
   if (
-    path.posix.basename(solutionPath) !== 'solution' ||
-    path.posix.basename(spaCodePath) !== 'spa-code' ||
+    path.posix.basename(websiteCodePath) !== 'website-code' ||
     solutionRoot !== variantRoot
   ) {
-    throw new Error('solutionPath and spaCodePath must use sibling solution/ and spa-code/ folders');
+    throw new Error('solutionPath and websiteCodePath must use sibling solution/ and website-code/ folders');
   }
   return variantRoot;
 }
 
-function validateTemplateVariantDirectory(localVariantPath, solutionPath, spaCodePath, deps = {}) {
+function validateTemplateVariantDirectory(localVariantPath, solutionPath, websiteCodePath, kind, deps = {}) {
   const fsImpl = deps.fs || fs;
-  const variantRoot = templateVariantRoot(solutionPath, spaCodePath);
+  const variantRoot = templateVariantRoot(solutionPath, websiteCodePath);
   const relativeSolutionPath = path.posix.relative(variantRoot, solutionPath);
-  const relativeSpaCodePath = path.posix.relative(variantRoot, spaCodePath);
+  const relativeWebsiteCodePath = path.posix.relative(variantRoot, websiteCodePath);
   const localSolutionPath = path.join(localVariantPath, ...relativeSolutionPath.split('/'));
-  const localSpaCodePath = path.join(localVariantPath, ...relativeSpaCodePath.split('/'));
-  const solutionError = validateUnpackedSolutionDirectory(localSolutionPath, { ...deps, fs: fsImpl });
+  const localWebsiteCodePath = path.join(localVariantPath, ...relativeWebsiteCodePath.split('/'));
+  const solutionError = validateUnpackedSolutionDirectory(localSolutionPath, {
+    ...deps,
+    fs: fsImpl,
+    allowWebsiteComponents: kind === 'traditional',
+  });
   if (solutionError) return solutionError;
-  return validateSpaCodeDirectory(localSpaCodePath, deps);
+  return validateWebsiteCodeDirectory(localWebsiteCodePath, { kind }, deps);
 }
 
 function downloadTemplateVariant(options = {}, deps = {}) {
-  const { solutionPath, spaCodePath } = options;
+  const { solutionPath, websiteCodePath, kind } = options;
   try {
-    const variantRoot = templateVariantRoot(solutionPath, spaCodePath);
+    if (!TEMPLATE_KINDS.has(kind)) throw new Error(`Unsupported template kind: ${kind}`);
+    const variantRoot = templateVariantRoot(solutionPath, websiteCodePath);
     const result = downloadRepositoryDirectory(
       { ...options, directoryPath: variantRoot },
-      (localPath) => validateTemplateVariantDirectory(localPath, solutionPath, spaCodePath, deps),
+      (localPath) => validateTemplateVariantDirectory(localPath, solutionPath, websiteCodePath, kind, deps),
       deps
     );
     const relativeSolutionPath = path.posix.relative(variantRoot, solutionPath);
-    const relativeSpaCodePath = path.posix.relative(variantRoot, spaCodePath);
+    const relativeWebsiteCodePath = path.posix.relative(variantRoot, websiteCodePath);
     return {
       ok: true,
       variantPath: result.localPath,
       solutionPath: path.join(result.localPath, ...relativeSolutionPath.split('/')),
-      spaCodePath: path.join(result.localPath, ...relativeSpaCodePath.split('/')),
+      websiteCodePath: path.join(result.localPath, ...relativeWebsiteCodePath.split('/')),
       cached: result.cached,
     };
   } catch (err) {
-    return { ok: false, solutionPath, spaCodePath, error: err.message };
+    return { ok: false, solutionPath, websiteCodePath, error: err.message };
   }
 }
 
@@ -831,14 +888,17 @@ module.exports = {
   downloadArtifact,
   downloadTemplateVariant,
   downloadSeedDataDirectory,
-  validateSpaCodePath,
-  validateSpaCodeDirectory,
+  validateWebsiteCodePath,
+  validateSolutionPath,
+  validateWebsiteCodeDirectory,
   validateUnpackedSolutionDirectory,
   repositoryDirectoryCheckoutRoot,
+  templateSolutionRoot,
   templateVariantRoot,
   validateTemplateVariantDirectory,
   validateCatalogShape,
   normalizeCatalogFamilies,
+  isSpaTemplate,
   zipFileNames,
   assertValidSha,
 };

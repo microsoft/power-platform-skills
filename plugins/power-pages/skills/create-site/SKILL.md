@@ -119,7 +119,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Goal**: Route the user into the appropriate creation path after path-agnostic Discovery.
 
-> **Current implementation state:** Template discovery, selection, supporting-solution import, packaged SPA cloning/upload, optional seed data, activation, live-site preview, and terminal telemetry are implemented here. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
+> **Current implementation state:** Template discovery, selection, supporting-solution import, packaged SPA cloning/upload, optional seed data, activation, live-site preview, and terminal telemetry are implemented for `kind: "spa"`. Traditional catalog entries are accepted but not shown until their solution-only provisioning flow is implemented. The user can always choose **Start from scratch** to continue into the existing scaffold flow.
 
 **Actions**:
 
@@ -134,8 +134,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    Evaluate the JSON result:
    - **If `ok: false`**: tell the user templates are temporarily unavailable and continue with the from-scratch path. This is additive; a catalog failure must never block `create-site`.
-   - **If `ok: true` but `catalog.templates` is empty or malformed**: tell the user no templates are currently available and continue with the from-scratch path.
-   - **If templates are available**: proceed to semantic matching.
+   - **If `ok: true` but `selectableCatalog.templates` is empty**: tell the user no supported SPA templates are currently available and continue with the from-scratch path. Do not offer entries from `catalog.templates` whose `kind` is `traditional`.
+   - **If supported SPA templates are available**: use `selectableCatalog.templates` for every matching, preview, browse, and selection step below. Keep `catalog.templates` only as the complete downloaded manifest.
 
 3. Semantically match the template families against the Phase 1 context (`$ARGUMENTS`, site name, purpose, audience, and any framework mentioned by the user):
    - Use each family template's `displayName`, `description`, `keywords`, `audience`, available variant frameworks, and any variant-specific previews.
@@ -153,7 +153,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    Branch on the answer:
    - **Show matching templates**: set `TEMPLATE_PREVIEW_FAMILIES` to the matched family or families and continue to browser preview.
-   - **Browse all templates**: set `TEMPLATE_PREVIEW_FAMILIES` to the full catalog and continue to browser preview.
+   - **Browse all templates**: set `TEMPLATE_PREVIEW_FAMILIES` to all entries in `selectableCatalog.templates` and continue to browser preview.
    - **Create from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
 
 5. Render `TEMPLATE_PREVIEW_FAMILIES` for browser preview:
@@ -185,7 +185,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    | Several plausible family matches | One option per shortlisted family, See all templates, Start from scratch |
    | Full catalog browse | One option per family, Start from scratch |
 
-   When the user chooses **See all templates** from a matching-template branch, set `TEMPLATE_PREVIEW_FAMILIES` to the full catalog, render the full family-first catalog gallery, and ask again with the **Full catalog browse** options. If the selected family has multiple variants, ask a second terminal question for the framework.
+   When the user chooses **See all templates** from a matching-template branch, set `TEMPLATE_PREVIEW_FAMILIES` to all entries in `selectableCatalog.templates`, render the family-first SPA template gallery, and ask again with the **Full catalog browse** options. If the selected family has multiple variants, ask a second terminal question for the framework.
 
 7. Branch on the user's selection:
    - **Template family and framework variant selected**:
@@ -193,12 +193,13 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         ```bash
         node "${PLUGIN_ROOT}/scripts/fetch-template-variant.js" \
           --sha "<catalog-sha>" \
+          --kind "<SELECTED_TEMPLATE.kind>" \
           --solutionPath "<selected variant solutionPath>" \
-          --spaCodePath "<selected variant spaCodePath>"
+          --websiteCodePath "<selected variant websiteCodePath>"
         ```
-        The script derives the shared variant folder from the sibling `solution/` and `spa-code/` paths, performs one sparse checkout, validates the unpacked unmanaged solution source and Power Pages project, and rejects symlinks, committed ZIPs, unsafe paths, or local/generated content.
+        The script derives the shared variant folder from the sibling `solution/` and `website-code/` paths, performs one sparse checkout, validates the unpacked unmanaged solution source and website code, and rejects symlinks, committed ZIPs, unsafe paths, or local/generated content.
      2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTION_SOURCE = <result.solutionPath>`, and `SELECTED_TEMPLATE_SPA_CODE = <result.spaCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTION_SOURCE = <result.solutionPath>`, and `SELECTED_TEMPLATE_WEBSITE_CODE = <result.websiteCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
         Do not mention this telemetry command to the user and do not print its output.
         ```bash
         node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -226,7 +227,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 >
 > **Trigger:** Phase 1.5 after `resolve-template-import-context.js` returns `environmentUrl` and before any CLI-tenant, `.js` unblock, language, solution import, seed, or activation step.
 > **Why we ask:** PAC auth can point at a different Dataverse environment than the user intended. Even preflights can inspect or modify environment-level settings, so the skill must not continue silently.
-> **Cancel leaves:** `template-cache` — template catalog assets, the selected solution zip, and packaged SPA code may already be cached locally; no org mutation has happened if cancelled here.
+> **Cancel leaves:** `template-cache` — template catalog assets, the selected solution source, and website code may already be cached locally; no org mutation has happened if cancelled here.
 
    3. Mark **Resolve target environment** as `completed` and **Confirm target environment** as `in_progress`, then ask the user to confirm the resolved target environment before any environment preflight:
 
@@ -260,7 +261,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 <!-- gate: create-site:1.5.unblock-js | category=consent | cancel-leaves=attachment-block-modified -->
 
-> 🚦 **Gate (consent · create-site:1.5.unblock-js):** Preflight unblock of `.js` from the target environment's `blockedattachments` setting before uploading packaged SPA code.
+> 🚦 **Gate (consent · create-site:1.5.unblock-js):** Preflight unblock of `.js` from the target environment's `blockedattachments` setting before uploading website code.
 >
 > **Trigger:** Phase 1.5 when `fix-blocked-attachments.js --dry-run --extensions js` reports `.js` is blocked in the target environment.
 > **Why we ask:** The packaged SPA is uploaded with `pac pages upload-code-site` after its supporting solution is ready. That upload includes JavaScript files and fails when `.js` is blocked. Checking before solution import avoids leaving supporting artifacts behind when the site cannot be created.
@@ -303,7 +304,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged supporting solution, clones the packaged SPA code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged supporting solution, clones the website code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: stop; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
@@ -350,7 +351,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
         | Question | Header | Options |
         |----------|--------|---------|
-        | Template `<displayName>` supporting artifacts are already installed at the same or newer version. Skip solution import and create a new `<SELECTED_TEMPLATE_VARIANT.framework>` site from the packaged SPA code? | Create Template Site | Yes, create the site (Recommended), No, cancel |
+        | Template `<displayName>` supporting artifacts are already installed at the same or newer version. Skip solution import and create a new `<SELECTED_TEMPLATE_VARIANT.framework>` site from the website code? | Create Template Site | Yes, create the site (Recommended), No, cancel |
 
         If the user confirms, append the install-path tasks without **Import template supporting solution**, set `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, and continue at the common pre-clone snapshot and packaged-site provisioning steps below. If the user declines, stop. Do not emit an import result event because no solution import was attempted; `template_used` was already emitted when the template path was selected.
       - **`decision: "ask"`** or detection failure: ask whether to import anyway, start from scratch, or stop.
@@ -505,16 +506,16 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       Create a fresh temporary output directory, then clone the packaged SPA source and upload the clone:
       ```bash
       node "${PLUGIN_ROOT}/scripts/provision-template-site.js" \
-        --sourcePath "<SELECTED_TEMPLATE_SPA_CODE>" \
+        --sourcePath "<SELECTED_TEMPLATE_WEBSITE_CODE>" \
         --outputDirectory "<fresh temp clone directory>" \
         --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
       This wrapper runs the two required PAC operations in order:
       ```bash
-      pac pages clone --path "<SELECTED_TEMPLATE_SPA_CODE>" --outputDirectory "<fresh temp clone directory>" --name "<SELECTED_TEMPLATE.displayName>" --overwrite
+      pac pages clone --path "<SELECTED_TEMPLATE_WEBSITE_CODE>" --outputDirectory "<fresh temp clone directory>" --name "<SELECTED_TEMPLATE.displayName>" --overwrite
       pac pages upload-code-site --rootPath "<cloned code-site root>" --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
-      Save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`. Never upload `SELECTED_TEMPLATE_SPA_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
+      Save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`. Never upload `SELECTED_TEMPLATE_WEBSITE_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
    11. If clone or upload fails, run `template_clone_failure` telemetry silently with `errorClass` set to `PacPagesClone` or `PacPagesUploadCodeSite` from the returned `step`, and a short non-PII `errorDescription`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \

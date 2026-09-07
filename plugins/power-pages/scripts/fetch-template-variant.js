@@ -6,23 +6,25 @@ const { parseTemplateRepoArgs, runBestEffortJsonCli } = require('./lib/template-
 
 function parseArgs(argv) {
   const solutionArgs = parseTemplateRepoArgs(argv, '--solutionPath');
-  const spaCodeArgs = parseTemplateRepoArgs(argv, '--spaCodePath');
+  const websiteCodeArgs = parseTemplateRepoArgs(argv, '--websiteCodePath');
   const { artifactPath: solutionPath, ...repoArgs } = solutionArgs;
+  const kindIndex = argv.indexOf('--kind');
   return {
     owner: DEFAULT_OWNER,
     repo: DEFAULT_REPO,
     ...repoArgs,
     solutionPath,
-    spaCodePath: spaCodeArgs.artifactPath,
+    websiteCodePath: websiteCodeArgs.artifactPath,
+    kind: kindIndex >= 0 ? argv[kindIndex + 1] : undefined,
   };
 }
 
 function run(argv = process.argv.slice(2), deps = {}) {
   const args = parseArgs(argv);
-  if (!args.sha || !args.solutionPath || !args.spaCodePath) {
+  if (!args.sha || !args.solutionPath || !args.websiteCodePath || !args.kind) {
     return {
       ok: false,
-      error: 'Usage: fetch-template-variant.js --sha <sha> --solutionPath <path> --spaCodePath <path>',
+      error: 'Usage: fetch-template-variant.js --sha <sha> --kind <spa|traditional> --solutionPath <path> --websiteCodePath <path>',
     };
   }
   return downloadTemplateVariant(args, deps);
