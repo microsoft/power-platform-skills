@@ -84,8 +84,8 @@ connector wiring.
 
 	### Required API permissions
 
-	The Microsoft Entra app registration requires these delegated permissions from the **Power Platform API**.
-	If you create the registration via Power Apps Wrap, it configures these automatically; the list is for reference only.
+	The Microsoft Entra app registration requires these delegated permissions
+	from the **Power Platform API**:
 
 	- `PowerApps.Apps.Play`
 	- `PowerApps.Apps.Read`
@@ -187,7 +187,7 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `distPath` to `dist-web` in `power.config.json`, then run
-`npx power-apps push`.
+`npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

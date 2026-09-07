@@ -710,6 +710,12 @@ custom control), but the spec validator emits a warning.
 - Every `field` must be a column on the rule's own `entity` (its own columns, its primary name, or a
   lookup a relationship creates). A rule naming a column that does not exist is accepted by the
   platform and then simply **never fires**, so this is validated up front.
+- **A rule is validated against the designer's own completeness rules before it is written.** The
+  push cannot tell you a rule is wrong — a condition tree in an unexpected shape is ignored by the
+  serializer and written as a rule with no clauses and no actions, which returns 204, activates, and
+  never fires. The build runs the same validator the business-rule designer gates its Save button on
+  and **halts** with its findings. Nothing this schema allows is rejected by it; if you hit it, the
+  rule genuinely would not have worked.
 - **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
   edits are **not** re-applied. Recreate the rule to change it.
 

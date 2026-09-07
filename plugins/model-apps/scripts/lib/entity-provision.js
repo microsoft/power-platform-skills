@@ -216,6 +216,29 @@ class BuildHalt extends Error {
   }
 }
 
+// Collect every `code` along an error's `cause` chain, outermost first.
+//
+// A phase-level `skipIf` predicate is handed whatever reached the runner, and that is NOT always the
+// SDK's own error: a failure the SDK reports BY VALUE goes through `requireSuccessfulPush`, which
+// wraps it in a `BuildHalt` carrying the SdkError as `cause`. A predicate that only reads `err.code`
+// therefore matches the thrown form and silently misses the returned form of the SAME condition —
+// which is exactly how a preview-gated capability turned from a clean skip into a build halt when
+// the SDK moved it from a throw to a return.
+//
+// Depth is bounded so a self-referential `cause` (seen in the wild when an error is re-wrapped with
+// itself) cannot spin here.
+function errorCodeChain(err, maxDepth = 5) {
+  const codes = [];
+  const seen = new Set();
+  let e = err;
+  for (let i = 0; e && typeof e === 'object' && i < maxDepth && !seen.has(e); i += 1) {
+    seen.add(e);
+    if (e.code) codes.push(e.code);
+    e = e.cause;
+  }
+  return codes;
+}
+
 // A metadata create that fails because the component already exists (the classic re-run
 // case). Dataverse answers 409, or 400 with a duplicate-name message. Used to make
 // otherwise non-idempotent creates (e.g. alternate keys — the SDK has no key lister) safe
@@ -383,17 +406,30 @@ function requireSuccessfulPush(result, what, warn) {
   if (!result) return result;
   const committed = result.saved !== undefined ? result.saved : result.success;
   if (committed === false || (committed === undefined && result.error)) {
-    // Two DIFFERENT by-value failures reach here, and they need different remedies. Reporting an
-    // already-exists collision as a concurrent edit tells the operator to re-download when nothing
-    // changed under them, and hides the actual cause.
-    const alreadyExists = result.error && result.error.code === 'ARTIFACT_ALREADY_EXISTS';
+    // SEVERAL different by-value failures reach here and they need different remedies, so the
+    // diagnosis is SELECTED from the SDK's own error code rather than assumed.
+    //
+    // The set is open and it grows: the SDK keeps moving failures from a throw to a return, and
+    // every newly-returned one landed on the "changed in Maker" wording below — telling the operator
+    // to re-download an app nobody had touched, over a cause that wording cannot describe. (Measured
+    // on the business-rule preview gate: an environment without the bound member now RESOLVES with
+    // `saved:false` where it used to throw.) So an unrecognised code is reported VERBATIM and
+    // propagated as the halt's own `code`, which also lets a phase-level `skipIf` match on it.
+    const label = what || result.type || 'artifact';
+    const sdkCode = (result.error && result.error.code) || null;
     const detail = (result.error && result.error.message) || 'version conflict (412)';
-    throw new BuildHalt(
-      alreadyExists
-        ? `push ${what || result.type || 'artifact'} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`
-        : `push ${what || result.type || 'artifact'} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`,
-      { phase: 'push', code: alreadyExists ? 'already-exists' : 'version-conflict', recoverable: true, cause: result.error }
-    );
+    const opts = { phase: 'push', recoverable: true, cause: result.error };
+    // Reporting an already-exists collision as a concurrent edit tells the operator to re-download
+    // when nothing changed under them, and hides the actual cause.
+    if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`, { ...opts, code: 'already-exists' });
+    }
+    // No code at all is the bare 412 this guard was originally written for, where re-downloading
+    // genuinely IS the remedy.
+    if (!sdkCode) {
+      throw new BuildHalt(`push ${label} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`, { ...opts, code: 'version-conflict' });
+    }
+    throw new BuildHalt(`push ${label} failed: ${detail}`, { ...opts, code: sdkCode });
   }
   // A push can COMMIT and still be partially wrong, and the SDK reports that by value rather than
   // failing: an app whose components could not all be pinned, whose system-admin role assignment
@@ -890,4 +926,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported };

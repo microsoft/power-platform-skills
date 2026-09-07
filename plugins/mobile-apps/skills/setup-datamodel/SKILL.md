@@ -37,6 +37,8 @@ Capture the **environment URL**, **environment ID**, **tenant ID**, and **organi
 
 ### Phase 2 — Design Data Model
 
+**Telemetry checkpoint: `design_dataverse_schema`**
+
 Check `$ARGUMENTS` for diagram hints first (`*.png`, `*.jpg`, `erDiagram` keyword, `||--o{` cardinality syntax). If a hint is present → Path A. If `$ARGUMENTS` describes the app at all → silently take Path B (architect propose). Only if both are empty, ask:
 
 > "How would you like to define the data model?"
@@ -93,6 +95,8 @@ Write `## Data Model` as "None — no Dataverse tables needed." Continue to Phas
 
 ### Phase 3 — Plan Connectors
 
+**Telemetry checkpoint: `plan_connector_integrations`**
+
 Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md):
 
 1. **Infer** — if `$ARGUMENTS` describes what the app does, scan for connector keywords. Build a candidate list.
@@ -104,6 +108,8 @@ If the user provided no requirements context, ask:
 > "What does your app need to connect to? (e.g. SharePoint, Teams, email, Excel, OneDrive, Azure DevOps — or none)"
 
 ### Phase 4 — Combined Approval
+
+**Telemetry checkpoint: `approve_data_model_and_connectors`**
 
 Present the full plan — data model + connectors — together in a single `EnterPlanMode` block:
 
@@ -126,6 +132,8 @@ Approve both to proceed with execution?
 - **Change connectors** → loop back to Phase 3, then re-present Phase 4
 
 ### Phase 5 — Execute Data Model
+
+**Telemetry checkpoint: `apply_dataverse_schema`**
 
 Invoke `/add-dataverse` with `--skip-planning` so it reads the approved plan directly without re-prompting:
 
@@ -151,6 +159,8 @@ Skip if Phase 2 chose Path C (no Dataverse).
 
 ### Phase 6 — Execute Connectors
 
+**Telemetry checkpoint: `generate_connector_data_sources`**
+
 Read `## Connectors` from `native-app-plan.md`. For each connector row, invoke `/add-connector`:
 
 ```
@@ -164,6 +174,8 @@ Arguments:
 Run sequentially. Skip if `## Connectors` is "None".
 
 ### Phase 6.5 — Offline profile reconciliation
+
+**Telemetry checkpoint: `reconcile_offline_profile`**
 
 If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns. Because Phase 5 invoked `/add-dataverse` with `--skip-planning` (which suppresses that skill's own Step 8.5 reconciliation), this orchestrator owns the check. Skip when Phase 2 chose Path C (no Dataverse).
 

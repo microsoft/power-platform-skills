@@ -7,8 +7,47 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [Unreleased] — 2.6.0
 
-SDK uptake, plus two new authoring surfaces: business process flows and per-form security roles.
-**Business rules now require an environment that supports them.**
+Business process flows, plus an SDK uptake that changes how business rules fail on an environment
+that cannot host them.
+
+### Added
+
+- **`businessProcessFlows[]` — guided, staged processes on a table.** Ordered stages with steps bound
+  to that table's columns, activated on create (an inactive flow is invisible, not merely inert).
+  Every step must bind a `field`; the platform refuses one without. v1 is single-entity and linear —
+  branching, stage actions and role grants ([#513]) are rejected rather than silently dropped.
+
+### Changed
+
+- **A business rule is validated before it is written.** A rule the SDK's compiler cannot understand
+  used to deploy as an empty rule that never fires. The build now runs the designer's own
+  completeness validator first and fails with its findings. No rule this spec surface can author is
+  affected — the whole operator/action/scope matrix was measured clean.
+
+### Fixed
+
+- **A build no longer halts on an environment that cannot host business rules.** The SDK now reports
+  the preview gate as a returned no-op instead of a thrown error; the build read that as a version
+  conflict and stopped. Such rules are skipped with a warning again, as documented — which matters
+  because those environments are the common case.
+- **A failed push reports the SDK's own reason.** Any push failure the build had no specific remedy
+  for was reported as *"the artifact changed in Maker"*, sending you to re-download an app nobody had
+  touched.
+- **Download round-trips `app.newLook` and `app.headerNavigationRefresh`** ([#514]). A downloaded spec
+  carried neither, so rebuilding it into another environment produced a classic-shell app and nothing
+  reported the loss.
+- **`views[].columns` rejects a non-string entry** ([#525]). An object was accepted by validation and
+  written into the view's fetchxml as `[object object]`; the build then failed at the platform and
+  left behind a view row that could not be read or deleted, so every later build failed the same way.
+
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
+[#514]: https://github.com/microsoft/power-platform-skills/issues/514
+[#525]: https://github.com/microsoft/power-platform-skills/issues/525
+
+## [2.5.1]
+
+SDK uptake. Adds per-form security roles and three column capabilities; **business rules now require
+an environment that supports them**.
 
 ### Changed
 
@@ -19,10 +58,24 @@ SDK uptake, plus two new authoring surfaces: business process flows and per-form
 
 ### Added
 
-- **`businessProcessFlows[]` — guided, staged processes on a table.** Ordered stages with steps bound
-  to that table's columns, activated on create (an inactive flow is invisible, not merely inert).
-  Every step must bind a `field`; the platform refuses one without. v1 is single-entity and linear —
-  branching, stage actions and role grants ([#513]) are rejected rather than silently dropped.
+- **Generated pages can report to the customer's Application Insights** — behind the new
+  default-OFF `custom-telemetry` feature flag. When enabled, `genpage-page-builder` may
+  instrument a page through an optional `props.appInsights` surface (`trackEvent`,
+  `trackMetric`, `trackTrace`, `trackException`, `trackDependency`, `startTrack` /
+  `stopTrack`), with built-in call-site throttling for rapid-fire handlers.
+
+  The flag is permission, not instruction. Even with it on, a page is instrumented **only**
+  when the maker asked to measure, track, monitor, or diagnose something in their own words —
+  the default output is still a page with zero telemetry, so nothing changes for existing
+  prompts. `/genpage` re-probes the flag at Phase 4.7 and passes the verbatim result as
+  `Telemetry: enabled|disabled` into every page-builder dispatch, the same contract
+  `Connectors:` already uses; the dispatch value wins over anything else.
+
+  The contract — when to instrument, the API, naming and privacy rules, known-good shapes and
+  anti-patterns — lives in `references/page-telemetry.md`, read only when both gates pass.
+  It ships OFF pending the host runtime, authoring control, agent prompt and ECS setting
+  reaching PROD. Not to be confused with the plugin's own usage telemetry
+  (`/model-apps:telemetry`), which is unrelated and unchanged.
 - **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
   `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form; undo
   with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)

@@ -34,6 +34,8 @@ node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(re
 
 ### Step 2 — Run verify
 
+**Telemetry checkpoint: `verify_offline_profile_snapshot`**
+
 ```bash
 node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl> \
   --project-root "$(pwd)"
@@ -42,6 +44,8 @@ node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl> \
 If `status: drift`, surface the drift list verbatim. The estimate that follows is still meaningful but flag that the live profile diverges from `offline-profile.json` — recommend re-running `/setup-offline-profile` or `/edit-offline-profile` to reconcile.
 
 ### Step 3 — Per-table row counts (with scope-applied filter)
+
+**Telemetry checkpoint: `count_offline_profile_rows`**
 
 For each table in the profile, run a `count` query that applies the same filter the runtime would use:
 
@@ -65,6 +69,8 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 Cap at 5000 (Dataverse non-aggregate count cap). When the result is exactly 5000, prefix with `≥` in the report.
 
 ### Step 4 — Cache-size estimate
+
+**Telemetry checkpoint: `estimate_offline_cache_size`**
 
 Rough byte-per-row heuristics (configurable; replace with measured values once we have a real sync benchmark):
 
