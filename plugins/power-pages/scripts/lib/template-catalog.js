@@ -5,6 +5,7 @@ const https = require('https');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { inspectSolutionDirectory } = require('./template-reinstall-policy');
 
 const DEFAULT_OWNER = 'microsoft';
 const DEFAULT_REPO = 'power-pages-samples';
@@ -72,8 +73,6 @@ function validateCatalogShape(catalog) {
   //       "audience": ["makers", "developers"],
   //       "requiredDataverseLanguages": [1033],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
-  //       "solutionPath": "spa/311-portal/solution",
-  //       "websiteCodePath": "spa/311-portal/website-code",
   //       "seedDataPath": "spa/311-portal/seed/data.json",
   //       "templateVersion": "1.0.0.1", "author": "Microsoft" }
   //   ] }
@@ -94,17 +93,13 @@ function validateCatalogShape(catalog) {
       ? ['id', 'displayName', 'description', 'kind', 'author']
       : [
           'id', 'displayName', 'description', 'kind', 'framework',
-          'solutionPath', 'websiteCodePath', 'templateVersion', 'author',
+          'templateVersion', 'author',
         ];
     const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
     if (!TEMPLATE_KINDS.has(template.kind)) return `template ${template.id} has unsupported kind: ${template.kind}`;
-    if (!isNestedFamilyTemplate(template)) {
-      try {
-        templateVariantRoot(template.solutionPath, template.websiteCodePath);
-      } catch (err) {
-        return `template ${template.id || index} has invalid variant paths: ${err.message}`;
-      }
+    if (template.solutionPath !== undefined || template.websiteCodePath !== undefined) {
+      return `template ${template.id || index} must not define derivable solutionPath or websiteCodePath`;
     }
     if (!ID_PATTERN.test(template.id)) return `template ${template.id} id must be kebab-case`;
     if (!Array.isArray(template.audience) || template.audience.length === 0 || !template.audience.every(isNonEmptyString)) {
@@ -131,17 +126,11 @@ function validateCatalogShape(catalog) {
         seenFrameworks.add(normalizedFramework);
         if (!FRAMEWORKS.has(normalizedFramework)) return `template ${template.id} variant ${framework} has unsupported framework`;
         if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return `template ${template.id} variant ${framework} is not an object`;
-        const variantRequiredFields = [
-          'templateVersion',
-          'solutionPath',
-          'websiteCodePath',
-        ];
+        const variantRequiredFields = ['templateVersion'];
         const variantMissing = variantRequiredFields.filter((field) => !isNonEmptyString(variant[field]));
         if (variantMissing.length > 0) return `template ${template.id} variant ${framework} missing string field(s): ${variantMissing.join(', ')}`;
-        try {
-          templateVariantRoot(variant.solutionPath, variant.websiteCodePath);
-        } catch (err) {
-          return `template ${template.id} variant ${framework} has invalid paths: ${err.message}`;
+        if (variant.solutionPath !== undefined || variant.websiteCodePath !== undefined) {
+          return `template ${template.id} variant ${framework} must not define derivable solutionPath or websiteCodePath`;
         }
         if (variant.previewImages !== undefined && !Array.isArray(variant.previewImages)) {
           return `template ${template.id} variant ${framework} previewImages must be an array`;
@@ -191,24 +180,12 @@ function materializeCatalogArtifactPaths(catalog, catalogPath) {
         ...template,
         previewImages: template.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath)),
       };
-      if (template.solutionPath) {
-        materialized.solutionPath = resolveCatalogArtifactPath(catalogPath, template.solutionPath);
-      }
-      if (template.websiteCodePath) {
-        materialized.websiteCodePath = resolveCatalogArtifactPath(catalogPath, template.websiteCodePath);
-      }
       if (template.seedDataPath) {
         materialized.seedDataPath = resolveCatalogArtifactPath(catalogPath, template.seedDataPath);
       }
       if (isNestedFamilyTemplate(template)) {
         materialized.variants = Object.fromEntries(Object.entries(template.variants).map(([framework, variant]) => {
-          const materializedVariant = {
-            ...variant,
-            solutionPath: resolveCatalogArtifactPath(catalogPath, variant.solutionPath),
-            ...(variant.websiteCodePath
-              ? { websiteCodePath: resolveCatalogArtifactPath(catalogPath, variant.websiteCodePath) }
-              : {}),
-          };
+          const materializedVariant = { ...variant };
           if (Array.isArray(variant.previewImages)) {
             materializedVariant.previewImages = variant.previewImages.map((imagePath) => resolveCatalogArtifactPath(catalogPath, imagePath));
           }
@@ -252,8 +229,6 @@ function normalizeCatalogFamilies(catalog = {}) {
           previewImages: template.previewImages || [],
           ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
           templateVersion: template.templateVersion,
-          solutionPath: template.solutionPath,
-          websiteCodePath: template.websiteCodePath,
           author: template.author,
         }],
       };
@@ -285,8 +260,6 @@ function normalizeCatalogFamilies(catalog = {}) {
           previewImages: Array.isArray(variant.previewImages) ? variant.previewImages : (template.previewImages || []),
           ...(variant.seedDataPath || template.seedDataPath ? { seedDataPath: variant.seedDataPath || template.seedDataPath } : {}),
           templateVersion: variant.templateVersion,
-          solutionPath: variant.solutionPath,
-          websiteCodePath: variant.websiteCodePath,
           author: template.author,
         };
       }),
@@ -575,14 +548,6 @@ function validateRepositoryDirectoryPath(directoryPath, fieldName, label) {
   return null;
 }
 
-function validateWebsiteCodePath(websiteCodePath) {
-  return validateRepositoryDirectoryPath(websiteCodePath, 'websiteCodePath', 'Website code path');
-}
-
-function validateSolutionPath(solutionPath) {
-  return validateRepositoryDirectoryPath(solutionPath, 'solutionPath', 'Template solution path');
-}
-
 function validateWebsiteCodeDirectory(localPath, options = {}, deps = {}) {
   const fsImpl = deps.fs || fs;
   // Both traditional and code sites keep PAC website source under
@@ -748,66 +713,114 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
   return { localPath, cached: false };
 }
 
-function templateSolutionRoot(solutionPath) {
-  const solutionPathError = validateSolutionPath(solutionPath);
-  if (solutionPathError) throw new Error(`Invalid solutionPath: ${solutionPathError}`);
-  if (path.posix.basename(solutionPath) !== 'solution') {
-    throw new Error('solutionPath must end with a solution/ folder');
-  }
-  return path.posix.dirname(solutionPath);
+function templateVariantRoot({ catalogPath = DEFAULT_CATALOG_PATH, kind, templateId, variant }) {
+  if (!TEMPLATE_KINDS.has(kind)) throw new Error(`Unsupported template kind: ${kind}`);
+  if (!ID_PATTERN.test(templateId || '')) throw new Error(`Invalid template id: ${templateId}`);
+  const normalizedVariant = String(variant || '').toLowerCase();
+  if (!FRAMEWORKS.has(normalizedVariant)) throw new Error(`Unsupported template variant: ${variant}`);
+  return path.posix.join(catalogBasePath(catalogPath), kind, templateId, 'variants', normalizedVariant);
 }
 
-function templateVariantRoot(solutionPath, websiteCodePath) {
-  const solutionRoot = templateSolutionRoot(solutionPath);
-  const websiteCodePathError = validateWebsiteCodePath(websiteCodePath);
-  if (websiteCodePathError) throw new Error(`Invalid websiteCodePath: ${websiteCodePathError}`);
-  const variantRoot = path.posix.dirname(websiteCodePath);
-  if (
-    path.posix.basename(websiteCodePath) !== 'website-code' ||
-    solutionRoot !== variantRoot
-  ) {
-    throw new Error('solutionPath and websiteCodePath must use sibling solution/ and website-code/ folders');
-  }
-  return variantRoot;
+function compareCaseInsensitivePathNames(left, right) {
+  const normalizedLeft = left.toLowerCase();
+  const normalizedRight = right.toLowerCase();
+  if (normalizedLeft < normalizedRight) return -1;
+  if (normalizedLeft > normalizedRight) return 1;
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
-function validateTemplateVariantDirectory(localVariantPath, solutionPath, websiteCodePath, kind, deps = {}) {
+function inspectTemplateSolutions(localSolutionsPath, kind, deps = {}) {
   const fsImpl = deps.fs || fs;
-  const variantRoot = templateVariantRoot(solutionPath, websiteCodePath);
-  const relativeSolutionPath = path.posix.relative(variantRoot, solutionPath);
-  const relativeWebsiteCodePath = path.posix.relative(variantRoot, websiteCodePath);
-  const localSolutionPath = path.join(localVariantPath, ...relativeSolutionPath.split('/'));
-  const localWebsiteCodePath = path.join(localVariantPath, ...relativeWebsiteCodePath.split('/'));
-  const solutionError = validateUnpackedSolutionDirectory(localSolutionPath, {
-    ...deps,
-    fs: fsImpl,
-    allowWebsiteComponents: kind === 'traditional',
-  });
-  if (solutionError) return solutionError;
-  return validateWebsiteCodeDirectory(localWebsiteCodePath, { kind }, deps);
+  if (!fsImpl.existsSync(localSolutionsPath)) {
+    return { ok: false, error: 'Template variant is missing solutions/' };
+  }
+  const rootStat = fsImpl.lstatSync(localSolutionsPath);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    return { ok: false, error: 'Template variant solutions/ must be a directory and not a symbolic link' };
+  }
+
+  const entries = fsImpl.readdirSync(localSolutionsPath, { withFileTypes: true })
+    .sort((left, right) => compareCaseInsensitivePathNames(left.name, right.name));
+  if (entries.length === 0) {
+    return { ok: false, error: 'Template variant solutions/ must contain at least one solution' };
+  }
+
+  const seenUniqueNames = new Set();
+  const solutions = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      return { ok: false, error: `Template variant solutions/ contains a non-directory entry: ${entry.name}` };
+    }
+    const solutionPath = path.join(localSolutionsPath, entry.name);
+    const solutionError = validateUnpackedSolutionDirectory(solutionPath, {
+      ...deps,
+      fs: fsImpl,
+      allowWebsiteComponents: kind === 'traditional',
+    });
+    if (solutionError) return { ok: false, error: `${entry.name}: ${solutionError}` };
+
+    const inspected = inspectSolutionDirectory(solutionPath, { ...deps, fs: fsImpl });
+    if (!inspected.ok) return { ok: false, error: `${entry.name}: ${inspected.error}` };
+    if (entry.name !== inspected.uniqueName) {
+      return {
+        ok: false,
+        error: `Solution folder ${entry.name} must match the Solution.xml unique name ${inspected.uniqueName}`,
+      };
+    }
+    const normalizedUniqueName = inspected.uniqueName.toLowerCase();
+    if (seenUniqueNames.has(normalizedUniqueName)) {
+      return { ok: false, error: `Template variant contains duplicate solution unique name: ${inspected.uniqueName}` };
+    }
+    seenUniqueNames.add(normalizedUniqueName);
+    solutions.push({
+      uniqueName: inspected.uniqueName,
+      version: inspected.version,
+      solutionPath,
+    });
+  }
+  return { ok: true, solutions };
+}
+
+function inspectTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
+  const websiteCodePath = path.join(localVariantPath, 'website-code');
+  const websiteCodeError = validateWebsiteCodeDirectory(websiteCodePath, { kind }, deps);
+  if (websiteCodeError) return { ok: false, error: websiteCodeError };
+  const solutionResult = inspectTemplateSolutions(path.join(localVariantPath, 'solutions'), kind, deps);
+  if (!solutionResult.ok) return solutionResult;
+  return {
+    ok: true,
+    websiteCodePath,
+    solutions: solutionResult.solutions,
+  };
+}
+
+function validateTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
+  const result = inspectTemplateVariantDirectory(localVariantPath, kind, deps);
+  return result.ok ? null : result.error;
 }
 
 function downloadTemplateVariant(options = {}, deps = {}) {
-  const { solutionPath, websiteCodePath, kind } = options;
+  const { catalogPath = DEFAULT_CATALOG_PATH, kind, templateId, variant } = options;
   try {
-    if (!TEMPLATE_KINDS.has(kind)) throw new Error(`Unsupported template kind: ${kind}`);
-    const variantRoot = templateVariantRoot(solutionPath, websiteCodePath);
+    const variantRoot = templateVariantRoot({ catalogPath, kind, templateId, variant });
     const result = downloadRepositoryDirectory(
       { ...options, directoryPath: variantRoot },
-      (localPath) => validateTemplateVariantDirectory(localPath, solutionPath, websiteCodePath, kind, deps),
+      (localPath) => validateTemplateVariantDirectory(localPath, kind, deps),
       deps
     );
-    const relativeSolutionPath = path.posix.relative(variantRoot, solutionPath);
-    const relativeWebsiteCodePath = path.posix.relative(variantRoot, websiteCodePath);
+    const inspected = inspectTemplateVariantDirectory(result.localPath, kind, deps);
+    if (!inspected.ok) throw new Error(inspected.error);
     return {
       ok: true,
       variantPath: result.localPath,
-      solutionPath: path.join(result.localPath, ...relativeSolutionPath.split('/')),
-      websiteCodePath: path.join(result.localPath, ...relativeWebsiteCodePath.split('/')),
+      websiteCodePath: inspected.websiteCodePath,
+      solutions: inspected.solutions,
       cached: result.cached,
     };
   } catch (err) {
-    return { ok: false, solutionPath, websiteCodePath, error: err.message };
+    return { ok: false, kind, templateId, variant, error: err.message };
   }
 }
 
@@ -888,13 +901,12 @@ module.exports = {
   downloadArtifact,
   downloadTemplateVariant,
   downloadSeedDataDirectory,
-  validateWebsiteCodePath,
-  validateSolutionPath,
   validateWebsiteCodeDirectory,
   validateUnpackedSolutionDirectory,
   repositoryDirectoryCheckoutRoot,
-  templateSolutionRoot,
   templateVariantRoot,
+  inspectTemplateSolutions,
+  inspectTemplateVariantDirectory,
   validateTemplateVariantDirectory,
   validateCatalogShape,
   normalizeCatalogFamilies,

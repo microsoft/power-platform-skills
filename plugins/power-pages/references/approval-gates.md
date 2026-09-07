@@ -479,15 +479,15 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
 | `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading website code | attachment-block-modified |
 | `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
-| `create-site:1.5.template-import` | gate | consent | 1.5 | Selected solution and website code downloaded and target env resolved — confirm importing supporting artifacts and creating the code site | template-cache |
-| `create-site:1.5.update-installed` | gate | consent | 1.5 | Selected template solution is installed but the downloaded source is newer — confirm unmanaged update import | template-cache |
-| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Supporting solution is same/newer — confirm skipping its import and creating a new site from website code | template-cache |
-| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Local validation or `pac solution pack` failed before any Dataverse import attempt — retry, fall back, or stop | template-cache |
+| `create-site:1.5.template-import` | gate | consent | 1.5 | Discovered solutions and website code downloaded and target env resolved — confirm importing required supporting artifacts and creating the code site | template-cache |
+| `create-site:1.5.update-installed` | gate | consent | 1.5 | One discovered solution is installed but the downloaded source is newer — confirm unmanaged update import; fires per matching solution iteration | template-cache |
+| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Every supporting solution is same/newer — confirm skipping all imports and creating a new site from website code | template-cache |
+| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Local validation or `pac solution pack` failed for one discovered solution before its Dataverse import attempt — retry, fall back, or stop; fires per failed solution iteration | template-cache |
 | `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live route choice to download the cloned template source for local customization | — |
 | `create-site:1.5.template-download-location` | not-a-gate | — | 1.5 | Download folder selection before running `pac pages download-code-site`; no download runs until a path is selected | — |
 | `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone or code-site upload failed — choose retry, from-scratch fallback, or stop | partial-template-clone |
-| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-solution detection failed — confirm whether to import anyway, start from scratch, or stop | template-cache |
-| `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop | partial-unmanaged-template-import |
+| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
+| `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |

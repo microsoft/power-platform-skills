@@ -193,13 +193,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         ```bash
         node "${PLUGIN_ROOT}/scripts/fetch-template-variant.js" \
           --sha "<catalog-sha>" \
+          --catalogPath "<catalogPath from fetch-template-catalog.js>" \
           --kind "<SELECTED_TEMPLATE.kind>" \
-          --solutionPath "<selected variant solutionPath>" \
-          --websiteCodePath "<selected variant websiteCodePath>"
+          --templateId "<SELECTED_TEMPLATE.id>" \
+          --variant "<SELECTED_TEMPLATE_VARIANT.variantKey>"
         ```
-        The script derives the shared variant folder from the sibling `solution/` and `website-code/` paths, performs one sparse checkout, validates the unpacked unmanaged solution source and website code, and rejects symlinks, committed ZIPs, unsafe paths, or local/generated content.
+        The script derives `templates/<kind>/<template-id>/variants/<variant>/` from catalog identity, performs one sparse checkout, validates `website-code/`, and discovers every unpacked solution under `solutions/<solution-unique-name>/`. Solution folders are returned in case-insensitive lexical unique-name order. Each folder name must exactly match `Other/Solution.xml`, and sibling solutions must not depend on one another because the manifest does not carry import ordering metadata.
      2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTION_SOURCE = <result.solutionPath>`, and `SELECTED_TEMPLATE_WEBSITE_CODE = <result.websiteCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTIONS = <result.solutions>`, and `SELECTED_TEMPLATE_WEBSITE_CODE = <result.websiteCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
         Do not mention this telemetry command to the user and do not print its output.
         ```bash
         node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -227,7 +228,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 >
 > **Trigger:** Phase 1.5 after `resolve-template-import-context.js` returns `environmentUrl` and before any CLI-tenant, `.js` unblock, language, solution import, seed, or activation step.
 > **Why we ask:** PAC auth can point at a different Dataverse environment than the user intended. Even preflights can inspect or modify environment-level settings, so the skill must not continue silently.
-> **Cancel leaves:** `template-cache` — template catalog assets, the selected solution source, and website code may already be cached locally; no org mutation has happened if cancelled here.
+> **Cancel leaves:** `template-cache` — template catalog assets, the discovered solution sources, and website code may already be cached locally; no org mutation has happened if cancelled here.
 
    3. Mark **Resolve target environment** as `completed` and **Confirm target environment** as `in_progress`, then ask the user to confirm the resolved target environment before any environment preflight:
 
@@ -257,14 +258,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       Evaluate the language result:
       - **`ok: true` and `hasRequiredLanguages: true`**: mark **Validate Dataverse language requirements** as `completed`; the target environment has every LCID required by the selected variant, falling back to the family requirements when the variant does not override them.
       - **`ok: false`**: tell the user the skill could not verify available Dataverse languages, surface the script error, then ask whether to switch to from-scratch or stop. Do not import the template and do not mutate `blockedattachments`.
-      - **`ok: true` and `hasRequiredLanguages: false`**: explain that the selected template solution requires the missing Dataverse language LCIDs from `missingLocaleIds`. Block before any solution import mutation. Do not provide a "proceed anyway" branch and do not mutate `blockedattachments`.
+      - **`ok: true` and `hasRequiredLanguages: false`**: explain that the selected template requires the missing Dataverse language LCIDs from `missingLocaleIds`. Block before any solution import mutation. Do not provide a "proceed anyway" branch and do not mutate `blockedattachments`.
 
 <!-- gate: create-site:1.5.unblock-js | category=consent | cancel-leaves=attachment-block-modified -->
 
 > 🚦 **Gate (consent · create-site:1.5.unblock-js):** Preflight unblock of `.js` from the target environment's `blockedattachments` setting before uploading website code.
 >
 > **Trigger:** Phase 1.5 when `fix-blocked-attachments.js --dry-run --extensions js` reports `.js` is blocked in the target environment.
-> **Why we ask:** The packaged SPA is uploaded with `pac pages upload-code-site` after its supporting solution is ready. That upload includes JavaScript files and fails when `.js` is blocked. Checking before solution import avoids leaving supporting artifacts behind when the site cannot be created.
+> **Why we ask:** The packaged SPA is uploaded with `pac pages upload-code-site` after its supporting solutions are ready. That upload includes JavaScript files and fails when `.js` is blocked. Checking before solution import avoids leaving supporting artifacts behind when the site cannot be created.
 > **Cancel leaves:** `attachment-block-modified` is possible only if the user approved and the update partially completed. Pure Cancel here leaves the original `blockedattachments` value untouched and no template installation has started.
 
       Use `AskUserQuestion`:
@@ -296,35 +297,34 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 > 🚦 **Gate (consent · create-site:1.5.template-import):** Confirm installing the selected template in the current Power Platform environment.
 >
-> **Trigger:** Phase 1.5 after the selected unpacked template solution source is downloaded and the target environment is resolved.
-> **Why we ask:** The install can import an unmanaged supporting solution and create a new code site. Choosing the wrong environment or template is disruptive and cannot be cleanly undone.
-> **Cancel leaves:** `template-cache` — the selected solution source and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
+> **Trigger:** Phase 1.5 after the template variant and its unpacked solutions are downloaded and the target environment is resolved.
+> **Why we ask:** The install can import unmanaged supporting solutions and create a new code site. Choosing the wrong environment or template is disruptive and cannot be cleanly undone.
+> **Cancel leaves:** `template-cache` — the discovered solution sources and preview images may remain in the SHA-keyed temp cache; no org mutation has occurred.
 
    7. If the language preflight passed but `.js` was blocked and the user approved/verification passed, mark **Validate JavaScript unblock requirement** as `completed`. Then mark **Confirm template install** as `in_progress`, present the template and environment, and ask:
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports an unmanaged supporting solution, clones the website code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports any required unmanaged supporting solutions, clones the website code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: stop; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
-   8. Mark **Confirm template install** as `completed`, then inspect the selected unpacked solution source and check whether that solution is already installed:
+   8. Mark **Confirm template install** as `completed`. Initialize `TEMPLATE_SOLUTIONS_TO_IMPORT = []` and `TEMPLATE_SOLUTIONS_TO_SKIP = []`, then process every entry in `SELECTED_TEMPLATE_SOLUTIONS` in the returned order:
       ```bash
-      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --solutionPath "<SELECTED_TEMPLATE_SOLUTION_SOURCE>"
-      node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<uniqueName>" --envUrl "<environmentUrl>"
-      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --solutionPath "<SELECTED_TEMPLATE_SOLUTION_SOURCE>" --installed "<true|false>" --installedVersion "<version-or-empty>"
+      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --solutionPath "<solution.solutionPath>"
+      node "${PLUGIN_ROOT}/scripts/check-solution-installed.js" --solutionName "<solution.uniqueName>" --envUrl "<environmentUrl>"
+      node "${PLUGIN_ROOT}/scripts/inspect-template-solution.js" --solutionPath "<solution.solutionPath>" --installed "<true|false>" --installedVersion "<version-or-empty>"
       ```
-      The supporting solution must not contain the Power Pages website or code-site files. Do not derive a website name from the solution or expect solution import to add a `pac pages list -v` row.
-      If metadata inspection returns `ok: false` after the downloaded source passed variant validation, treat installed-state detection as unknown (`decision: "ask"`). The source may still pack and import if the user explicitly chooses to continue, but the safer defaults are **Start from scratch** or **Stop**.
-      If `check-solution-installed.js` exits 1, treat detection as unknown (`decision: "ask"`) and do not assume the solution is absent.
-      - **`decision: "import"`**: append the full install-path tasks (**Import template supporting solution**, **Clone and upload template site**, **Show inactive template site**, optional **Apply template seed data**, **Activate template site**, **Show live template site**) and continue.
-      - **`decision: "confirm-update"`**: tell the user a newer version of the exact selected family/framework variant is available and confirm before importing in place. Do not compare versions across framework variants.
+      Do not derive a website name from a solution or expect supporting-solution import to add a `pac pages list -v` row. If metadata inspection returns `ok: false` after variant validation, or `check-solution-installed.js` exits 1, treat that solution as `decision: "ask"` rather than assuming it is absent.
+      - **`decision: "import"`**: append the solution to `TEMPLATE_SOLUTIONS_TO_IMPORT`.
+      - **`decision: "confirm-update"`**: tell the user that this specific solution has a newer version available and confirm before adding it to `TEMPLATE_SOLUTIONS_TO_IMPORT`.
 
         <!-- gate: create-site:1.5.update-installed | category=consent | cancel-leaves=template-cache -->
 
-        > 🚦 **Gate (consent · create-site:1.5.update-installed):** Confirm updating an already-installed unmanaged template solution.
+        > 🚦 **Gate (consent · create-site:1.5.update-installed):** Confirm updating an already-installed unmanaged template solution. Repeat for each solution that needs an update.
         >
-        > **Trigger:** Phase 1.5 when the selected template solution is already installed and the downloaded source has a newer version.
+        > **Trigger:** Phase 1.5 when one of the selected template solutions is already installed and the downloaded source has a newer version.
+        > **Loop behavior:** Fires once per matching entry in `SELECTED_TEMPLATE_SOLUTIONS`; three solutions needing updates require three confirmations.
         > **Why we ask:** Updating an unmanaged solution merges changes into the environment and cannot be cleanly rolled back.
         > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
 
@@ -332,48 +332,48 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
         | Question | Header | Options |
         |----------|--------|---------|
-        | Template `<displayName>` - `<SELECTED_TEMPLATE_VARIANT.framework>` is already installed at version `<installedVersion>`. The selected framework package is newer (`<availableVersion>`). Update the unmanaged solution in this environment? | Update Template | Yes, update this framework variant (Recommended), No, cancel |
+        | Solution `<solution.uniqueName>` is installed at version `<installedVersion>`, and the template contains `<availableVersion>`. Update it in this environment? | Update Solution | Yes, update this solution (Recommended), No, cancel |
 
         If the user declines or cancels, stop before import; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
-        If the user confirms, append the full install-path tasks and continue.
-
-      - **`decision: "offer-clone"`**: do not re-import the same or older supporting solution. Offer to continue with the packaged SPA clone/upload path:
-
-        <!-- gate: create-site:1.5.clone-existing | category=consent | cancel-leaves=template-cache -->
-
-        > 🚦 **Gate (consent · create-site:1.5.clone-existing):** Confirm creating a new site while reusing an already-installed supporting solution.
-        >
-        > **Trigger:** Phase 1.5 when the selected template's supporting solution is already installed at the same or newer version.
-        > **Why we ask:** The skill will skip solution import but still create and upload a new code site from the packaged SPA source.
-        > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no site clone/upload happens if cancelled.
-
-        Use `AskUserQuestion`:
-
-        | Question | Header | Options |
-        |----------|--------|---------|
-        | Template `<displayName>` supporting artifacts are already installed at the same or newer version. Skip solution import and create a new `<SELECTED_TEMPLATE_VARIANT.framework>` site from the website code? | Create Template Site | Yes, create the site (Recommended), No, cancel |
-
-        If the user confirms, append the install-path tasks without **Import template supporting solution**, set `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, and continue at the common pre-clone snapshot and packaged-site provisioning steps below. If the user declines, stop. Do not emit an import result event because no solution import was attempted; `template_used` was already emitted when the template path was selected.
-      - **`decision: "ask"`** or detection failure: ask whether to import anyway, start from scratch, or stop.
+        If the user confirms, append this solution to `TEMPLATE_SOLUTIONS_TO_IMPORT`.
+      - **`decision: "offer-clone"`**: append the same-or-newer solution to `TEMPLATE_SOLUTIONS_TO_SKIP`.
+      - **`decision: "ask"`** or detection failure: ask whether to import that solution anyway, start from scratch, or stop.
 
         <!-- gate: create-site:1.5.reinstall-unknown | category=consent | cancel-leaves=template-cache -->
 
         > 🚦 **Gate (consent · create-site:1.5.reinstall-unknown):** Confirm whether to import when installed-solution detection failed.
         >
-        > **Trigger:** Phase 1.5 when `check-solution-installed.js` cannot determine whether the selected template solution already exists.
-        > **Why we ask:** Importing an unmanaged solution that may already exist can merge components or create duplicate site state.
+        > **Trigger:** Phase 1.5 when `check-solution-installed.js` cannot determine whether one selected template solution already exists.
+        > **Loop behavior:** Fires once per unknown entry in `SELECTED_TEMPLATE_SOLUTIONS`; an answer applies only to the named solution.
+        > **Why we ask:** Importing an unmanaged solution that may already exist can merge components.
         > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no org mutation happens if cancelled.
 
         Use `AskUserQuestion`:
 
         | Question | Header | Options |
         |----------|--------|---------|
-        | I couldn't determine whether this template solution is already installed. Importing anyway may merge unmanaged components or create duplicate site state. How would you like to proceed? | Template Install Unknown | Import anyway (advanced), Start from scratch (Recommended), Stop |
+        | I couldn't determine whether solution `<solution.uniqueName>` is installed. Importing it may merge unmanaged components. How would you like to proceed? | Solution Install Unknown | Import anyway (advanced), Start from scratch (Recommended), Stop |
 
         Branch on the answer:
-        - **Import anyway**: append the full install-path tasks and continue to the site snapshot and import flow below.
+        - **Import anyway**: append this solution to `TEMPLATE_SOLUTIONS_TO_IMPORT`.
         - **Start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
         - **Stop**: stop before import; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
+
+      After all solutions are classified, append the full site-install tasks. Include **Import template supporting solutions** only when `TEMPLATE_SOLUTIONS_TO_IMPORT` is non-empty. If every solution was skipped, ask once before creating the site:
+
+      <!-- gate: create-site:1.5.clone-existing | category=consent | cancel-leaves=template-cache -->
+
+      > 🚦 **Gate (consent · create-site:1.5.clone-existing):** Confirm creating a new site while reusing already-installed supporting solutions.
+      >
+      > **Trigger:** Phase 1.5 when every selected template solution is installed at the same or a newer version.
+      > **Why we ask:** The skill will skip all solution imports but still clone and upload a new code site.
+      > **Cancel leaves:** `template-cache` — downloaded template artifacts remain in the SHA-keyed temp cache; no site clone/upload happens if cancelled.
+
+      | Question | Header | Options |
+      |----------|--------|---------|
+      | All supporting solutions are already installed at the same or newer versions. Create a new `<SELECTED_TEMPLATE_VARIANT.framework>` site from the website code? | Create Template Site | Yes, create the site (Recommended), No, cancel |
+
+      If the user confirms, set `SKIP_TEMPLATE_SOLUTION_IMPORT = true`. If the user declines, stop. Do not emit an import result event because no solution import was attempted.
 
    6. Capture a site list snapshot before either solution import or site upload:
       ```bash
@@ -384,7 +384,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```bash
       # Create <temp-import-status-dir>/ and write this initial status JSON to <temp-import-status-dir>/status.json:
       # Import path:
-      # { "state": "running", "phase": "solution", "message": "Importing supporting solution" }
+      # { "state": "running", "phase": "solution", "message": "Importing supporting solutions" }
       # SKIP_TEMPLATE_SOLUTION_IMPORT path:
       # { "state": "running", "phase": "site", "message": "Preparing template site" }
       node "${PLUGIN_ROOT}/scripts/render-template-import-status.js" \
@@ -396,14 +396,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
       ```
       Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
-   8. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solution** as `in_progress` and prepare the unmanaged solution for import:
+   8. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solutions** as `in_progress`. Process `TEMPLATE_SOLUTIONS_TO_IMPORT` sequentially in its existing case-insensitive lexical unique-name order. For each entry, set `CURRENT_TEMPLATE_SOLUTION` and prepare its unmanaged solution for import:
       ```bash
       # Update the status JSON:
-      # { "state": "running", "phase": "solution", "message": "Preparing supporting solution" }
+      # { "state": "running", "phase": "solution", "message": "Preparing solution <CURRENT_TEMPLATE_SOLUTION.uniqueName>" }
       node "${PLUGIN_ROOT}/scripts/pack-template-solution.js" \
-        --solutionPath "<SELECTED_TEMPLATE_SOLUTION_SOURCE>"
+        --solutionPath "<CURRENT_TEMPLATE_SOLUTION.solutionPath>"
       ```
-      Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>` and `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>`. The packer creates the ZIP only in an owned OS temporary directory. Never write a packed ZIP into the downloaded variant or another repository path.
+      Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>` and `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>` for the current solution. The packer creates the ZIP only in an owned OS temporary directory. Never write a packed ZIP into the downloaded variant or another repository path.
 
       If packing fails, do not call Dataverse and do not emit `template_import_failure` because no import was attempted. The packer removes partial output automatically.
 
@@ -411,7 +411,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       > 🚦 **Gate (progress · create-site:1.5.pack-failed):** Choose how to proceed after preparing the local solution package fails.
       >
-      > **Trigger:** Phase 1.5 when local solution validation or `pac solution pack` fails.
+      > **Trigger:** Phase 1.5 when local validation or `pac solution pack` fails for one discovered solution.
+      > **Loop behavior:** Fires per failed iteration of `TEMPLATE_SOLUTIONS_TO_IMPORT`; an answer applies only to `CURRENT_TEMPLATE_SOLUTION`.
       > **Why we ask:** No environment mutation has happened, but template installation cannot continue without a valid temporary solution ZIP.
       > **Cancel leaves:** `template-cache` — downloaded template source remains in the SHA-keyed temp cache; partial pack output has been removed.
 
@@ -419,11 +420,11 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | The supporting solution could not be prepared for import. How would you like to proceed? | Template Pack Failed | Retry packing, Fall back to from-scratch (Recommended), Stop |
+      | Solution `<CURRENT_TEMPLATE_SOLUTION.uniqueName>` could not be prepared for import. How would you like to proceed? | Template Pack Failed | Retry packing, Fall back to from-scratch (Recommended), Stop |
 
       - **Retry packing**: return to the pack command above.
       - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
-      - **Stop**: stop after showing the local pack error. Do not mark **Import template supporting solution** as completed.
+      - **Stop**: stop after showing the local pack error. Do not mark **Import template supporting solutions** as completed.
 
       After packing succeeds, import the temporary ZIP inline. Do not invoke `/import-solution` or write ALM artifacts. After `ImportSolutionAsync` returns the async operation id, immediately clean the packer's work directory, then launch a Task subagent to run `poll-async-operation.js` and write `<temp-import-status-dir>/status.json`:
       ```bash
@@ -452,7 +453,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```
       If encoding or `ImportSolutionAsync` fails before returning an async operation id, clean `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY` before retrying, falling back, or stopping. Treat a cleanup failure as a local warning and show the work-directory path so the user can remove it manually; do not hide the original failure.
 
-      The subagent must return the poller's final JSON when the command exits. Do not rely only on that notification: read `<temp-import-status-dir>/status.json` every 30 seconds until `state` is `succeeded`, `failed`, `canceled`, or `timeout`. Do not start site cloning until either the subagent reports `Succeeded` or the status JSON has `state: "succeeded"`.
+      The subagent must return the poller's final JSON when the command exits. Do not rely only on that notification: read `<temp-import-status-dir>/status.json` every 30 seconds until `state` is `succeeded`, `failed`, `canceled`, or `timeout`. Do not start the next solution import until the current solution succeeds, and do not start site cloning until every solution in `TEMPLATE_SOLUTIONS_TO_IMPORT` succeeds.
       If the poll result is not `Succeeded`, query the import job (using the `ImportJobKey` returned by `ImportSolutionAsync`) and parse its component-level error XML, following `/import-solution`'s Phase 6 pattern. Do **not** auto-clean up the unmanaged partial import. Run the `template_import_failure` telemetry command silently before asking the recovery question. Do not mention this telemetry command to the user and do not print its output:
       ```bash
       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -472,23 +473,24 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       > 🚦 **Gate (progress · create-site:1.5.import-failed):** Choose how to proceed after template solution import fails.
       >
       > **Trigger:** Phase 1.5 when `ImportSolutionAsync` fails, times out, or reports component-level failures.
-      > **Why we ask:** The environment may contain a partial unmanaged import; retrying or switching paths should be an explicit choice.
-      > **Cancel leaves:** `partial-unmanaged-template-import` — downloaded template artifacts remain in the SHA-keyed temp cache; any unmanaged partial import remains in Dataverse and is explained in the error summary.
+      > **Loop behavior:** Fires per failed iteration of `TEMPLATE_SOLUTIONS_TO_IMPORT`; an answer applies only to `CURRENT_TEMPLATE_SOLUTION`.
+      > **Why we ask:** The environment may contain the current partial unmanaged import plus any earlier solutions imported during this run; retrying or switching paths should be an explicit choice.
+      > **Cancel leaves:** `partial-unmanaged-template-import` — downloaded template artifacts remain in the SHA-keyed temp cache; the current partial import and any earlier successful solution imports remain in Dataverse and are explained in the error summary.
 
       Use `AskUserQuestion`:
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | Supporting-solution import failed or partially completed. How would you like to proceed? | Template Import Failed | Retry import, Fall back to from-scratch (Recommended), Stop |
+      | Supporting solution `<CURRENT_TEMPLATE_SOLUTION.uniqueName>` failed or partially completed. How would you like to proceed? | Template Import Failed | Retry import, Fall back to from-scratch (Recommended), Stop |
 
       Branch on the answer:
       - **Retry import**: return to the pack-and-import command sequence above and poll again.
       - **Fall back to from-scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Tell the user the unmanaged partial import may remain in Dataverse. The eventual from-scratch branch emits the single terminal telemetry event.
-      - **Stop**: stop after showing the error summary. Do not mark **Import template supporting solution** as completed and do not clone or upload the site. The `template_import_failure` event was already emitted when the import failure was detected.
+      - **Stop**: stop after showing the error summary. Do not mark **Import template supporting solutions** as completed and do not clone or upload the site. The `template_import_failure` event was already emitted when the import failure was detected.
 
       If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
       Only continue to the next step when the import poll result is `Succeeded`.
-   9. When import succeeds, mark **Import template supporting solution** as `completed`, then run the `template_import_success` telemetry command silently. If solution import was skipped, mark the task as skipped and do not emit an import event:
+   9. When every required solution import succeeds, mark **Import template supporting solutions** as `completed`, then run the `template_import_success` telemetry command once. If every solution import was skipped, mark the task as skipped and do not emit an import event:
       ```bash
       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
         --eventName template_import_success \
@@ -535,14 +537,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       > 🚦 **Gate (progress · create-site:1.5.clone-failed):** Choose how to proceed after cloning or uploading the packaged template site fails.
       >
       > **Trigger:** Phase 1.5 when `pac pages clone` or `pac pages upload-code-site` fails.
-      > **Why we ask:** The temp directory can contain clone output, the environment can contain a partial code-site upload, and the supporting solution may already be installed.
-      > **Cancel leaves:** `partial-template-clone` — cached template artifacts and local clone files remain; a supporting solution or partial site upload may also remain in Dataverse.
+      > **Why we ask:** The temp directory can contain clone output, the environment can contain a partial code-site upload, and supporting solutions may already be installed.
+      > **Cancel leaves:** `partial-template-clone` — cached template artifacts and local clone files remain; supporting solutions or a partial site upload may also remain in Dataverse.
 
       | Question | Header | Options |
       |----------|--------|---------|
       | The template site could not be cloned or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
 
-      Do not retry automatically. A retry must use a new temporary output directory. If the user falls back to from-scratch, explain that the supporting solution or partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
+      Do not retry automatically. A retry must use a new temporary output directory. If the user falls back to from-scratch, explain that supporting solutions or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
    12. When clone and upload succeed, mark **Clone and upload template site** as `completed` and run `template_clone_success` telemetry silently:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -1307,7 +1309,7 @@ After the reinstall policy chooses a normal import, update, or import-anyway pat
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Import template supporting solution | Importing supporting solution | Import the selected unmanaged supporting solution and poll the async job to completion |
+| Import template supporting solutions | Importing supporting solutions | Import each required unmanaged supporting solution in deterministic order and poll every async job to completion |
 | Clone and upload template site | Creating template site | Clone the packaged SPA source and upload the resulting code site |
 | Show inactive template site | Showing template site | Diff `pac pages list -v` output to identify the cloned site record and tell the user it is not live yet |
 | Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
@@ -1321,7 +1323,7 @@ If the user chooses to customize the live template, append:
 | Download template site source | Downloading template source | Ask for a local folder and run `pac pages download-code-site -id <Website Record ID> -p <path>` |
 | Plan template customizations | Planning customizations | Ask what the user wants changed and plan edits against the downloaded code site |
 
-When the supporting solution is already installed at the same or newer version, append the same list without **Import template supporting solution**. The packaged SPA clone/upload, site discovery, seed, activation, and live-preview tasks still run.
+When every supporting solution is already installed at the same or newer version, append the same list without **Import template supporting solutions**. The packaged SPA clone/upload, site discovery, seed, activation, and live-preview tasks still run.
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`. This gives the user visibility into progress and keeps the workflow deterministic while avoiding permanently skipped tasks on future non-from-scratch branches.
 

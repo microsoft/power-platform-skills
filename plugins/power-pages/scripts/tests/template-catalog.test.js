@@ -21,9 +21,9 @@ const {
   downloadSeedDataDirectory,
   validateZipContainsSolution,
   validateWebsiteCodeDirectory,
-  validateWebsiteCodePath,
   validateUnpackedSolutionDirectory,
   repositoryDirectoryCheckoutRoot,
+  inspectTemplateSolutions,
   templateVariantRoot,
   zipFileNames,
   validateCatalogShape,
@@ -52,8 +52,6 @@ const VALID_TEMPLATE = {
   audience: ['makers', 'developers'],
   requiredDataverseLanguages: [1033],
   previewImages: ['templates/spa/company-portal/previews/home.png'],
-  solutionPath: 'templates/spa/company-portal/solution',
-  websiteCodePath: 'templates/spa/company-portal/website-code',
   templateVersion: '1.0.0',
   author: 'Microsoft',
 };
@@ -72,13 +70,9 @@ const VALID_TEMPLATE_FAMILY = {
   variants: {
     react: {
       templateVersion: '1.0.0',
-      solutionPath: 'templates/spa/supplier-portal/variants/react/solution',
-      websiteCodePath: 'templates/spa/supplier-portal/variants/react/website-code',
     },
     vue: {
       templateVersion: '1.0.1',
-      solutionPath: 'templates/spa/supplier-portal/variants/vue/solution',
-      websiteCodePath: 'templates/spa/supplier-portal/variants/vue/website-code',
       previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
     },
   },
@@ -97,8 +91,6 @@ const VALID_TRADITIONAL_TEMPLATE_FAMILY = {
   variants: {
     none: {
       templateVersion: '1.0.0',
-      solutionPath: 'templates/traditional/customer-self-service/variants/none/solution',
-      websiteCodePath: 'templates/traditional/customer-self-service/variants/none/website-code',
     },
   },
 };
@@ -110,6 +102,21 @@ function fakeZipWithLocalFile(name) {
   header.writeUInt16LE(nameBytes.length, 26);
   header.writeUInt16LE(0, 28);
   return Buffer.concat([header, nameBytes]);
+}
+
+function writeUnpackedSolution(solutionPath, uniqueName, options = {}) {
+  const other = path.join(solutionPath, 'Other');
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(
+    path.join(other, 'Solution.xml'),
+    `<ImportExportXml><SolutionManifest><UniqueName>${uniqueName}</UniqueName><Version>${options.version || '1.0.0.0'}</Version><Managed>0</Managed></SolutionManifest></ImportExportXml>`
+  );
+  fs.writeFileSync(
+    path.join(other, 'Customizations.xml'),
+    options.websiteComponents
+      ? '<ImportExportXml><powerpagecomponents /></ImportExportXml>'
+      : '<ImportExportXml />'
+  );
 }
 
 test('builds raw and git remote URLs from repo and template-relative paths', () => {
@@ -187,7 +194,7 @@ test('fetchCatalog resolves the latest release to a sha, fetches the catalog at 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, SHA, 'templates/manifest.json'), 'utf8')), catalog);
 });
 
-test('fetchCatalog resolves manifest artifact paths relative to the catalog folder', async (t) => {
+test('fetchCatalog resolves non-derived artifact paths relative to the catalog folder', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const catalog = {
@@ -195,8 +202,6 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
     templates: [{
       ...VALID_TEMPLATE,
       previewImages: ['spa/company-portal/previews/home.png', 'templates/spa/company-portal/previews/already-rooted.png'],
-      solutionPath: 'spa/company-portal/solution',
-      websiteCodePath: 'spa/company-portal/website-code',
       seedDataPath: 'spa/company-portal/seed/data.json',
     }],
   };
@@ -217,8 +222,6 @@ test('fetchCatalog resolves manifest artifact paths relative to the catalog fold
     'templates/spa/company-portal/previews/home.png',
     'templates/spa/company-portal/previews/already-rooted.png',
   ]);
-  assert.equal(result.catalog.templates[0].solutionPath, 'templates/spa/company-portal/solution');
-  assert.equal(result.catalog.templates[0].websiteCodePath, 'templates/spa/company-portal/website-code');
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/company-portal/seed/data.json');
 });
 
@@ -226,14 +229,12 @@ test('validateCatalogShape accepts nested template families with framework varia
   assert.equal(validateCatalogShape({ manifestVersion: '2.0', templates: [VALID_TEMPLATE_FAMILY] }), null);
 });
 
-test('validateCatalogShape requires websiteCodePath for every template kind', () => {
+test('validateCatalogShape rejects manifest paths that are derived from template identity', () => {
   const traditionalFlatTemplate = {
     ...VALID_TEMPLATE,
     id: 'traditional-flat-template',
     kind: 'traditional',
     framework: 'none',
-    solutionPath: 'templates/traditional/flat-template/solution',
-    websiteCodePath: 'templates/traditional/flat-template/website-code',
   };
 
   assert.equal(
@@ -256,7 +257,7 @@ test('validateCatalogShape requires websiteCodePath for every template kind', ()
         },
       }],
     }),
-    /missing string field\(s\): websiteCodePath/
+    /must not define derivable solutionPath or websiteCodePath/
   );
   assert.match(
     validateCatalogShape({
@@ -266,12 +267,12 @@ test('validateCatalogShape requires websiteCodePath for every template kind', ()
         variants: {
           none: {
             templateVersion: '1.0.0',
-            solutionPath: 'templates/traditional/customer-self-service/variants/none/solution',
+            websiteCodePath: 'templates/traditional/customer-self-service/variants/none/website-code',
           },
         },
       }],
     }),
-    /missing string field\(s\): websiteCodePath/
+    /must not define derivable solutionPath or websiteCodePath/
   );
 });
 
@@ -281,26 +282,8 @@ test('fetchCatalog keeps traditional entries but exposes only SPA templates for 
   const catalog = {
     manifestVersion: '2.0',
     templates: [
-      {
-        ...VALID_TEMPLATE_FAMILY,
-        variants: {
-          react: {
-            ...VALID_TEMPLATE_FAMILY.variants.react,
-            solutionPath: 'spa/supplier-portal/variants/react/solution',
-            websiteCodePath: 'spa/supplier-portal/variants/react/website-code',
-          },
-        },
-      },
-      {
-        ...VALID_TRADITIONAL_TEMPLATE_FAMILY,
-        variants: {
-          none: {
-            ...VALID_TRADITIONAL_TEMPLATE_FAMILY.variants.none,
-            solutionPath: 'traditional/customer-self-service/variants/none/solution',
-            websiteCodePath: 'traditional/customer-self-service/variants/none/website-code',
-          },
-        },
-      },
+      VALID_TEMPLATE_FAMILY,
+      VALID_TRADITIONAL_TEMPLATE_FAMILY,
     ],
   };
 
@@ -312,14 +295,8 @@ test('fetchCatalog keeps traditional entries but exposes only SPA templates for 
   assert.equal(result.ok, true);
   assert.equal(result.catalog.templates.length, 2);
   assert.deepEqual(result.selectableCatalog.templates.map((template) => template.id), ['supplier-portal']);
-  assert.equal(
-    result.catalog.templates[1].variants.none.websiteCodePath,
-    'templates/traditional/customer-self-service/variants/none/website-code'
-  );
-  assert.equal(
-    result.catalog.templates[1].variants.none.solutionPath,
-    'templates/traditional/customer-self-service/variants/none/solution'
-  );
+  assert.equal(result.catalog.templates[1].variants.none.websiteCodePath, undefined);
+  assert.equal(result.catalog.templates[1].variants.none.solutionPath, undefined);
 });
 
 test('validateCatalogShape rejects duplicate framework variants in a family', () => {
@@ -337,7 +314,7 @@ test('validateCatalogShape rejects duplicate framework variants in a family', ()
   );
 });
 
-test('fetchCatalog materializes nested family and variant artifact paths', async (t) => {
+test('fetchCatalog materializes nested preview and seed artifact paths', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const catalog = {
@@ -349,13 +326,9 @@ test('fetchCatalog materializes nested family and variant artifact paths', async
       variants: {
         react: {
           templateVersion: '1.0.0',
-          solutionPath: 'spa/supplier-portal/variants/react/solution',
-          websiteCodePath: 'spa/supplier-portal/variants/react/website-code',
         },
         vue: {
           templateVersion: '1.0.1',
-          solutionPath: 'spa/supplier-portal/variants/vue/solution',
-          websiteCodePath: 'spa/supplier-portal/variants/vue/website-code',
           previewImages: ['spa/supplier-portal/variants/vue/previews/home.png'],
           seedDataPath: 'spa/supplier-portal/variants/vue/seed-data/data.json',
         },
@@ -371,11 +344,6 @@ test('fetchCatalog materializes nested family and variant artifact paths', async
   assert.equal(result.ok, true);
   assert.deepEqual(result.catalog.templates[0].previewImages, ['templates/spa/supplier-portal/previews/home.png']);
   assert.equal(result.catalog.templates[0].seedDataPath, 'templates/spa/supplier-portal/seed-data/data.json');
-  assert.equal(result.catalog.templates[0].variants.react.solutionPath, 'templates/spa/supplier-portal/variants/react/solution');
-  assert.equal(
-    result.catalog.templates[0].variants.react.websiteCodePath,
-    'templates/spa/supplier-portal/variants/react/website-code'
-  );
   assert.deepEqual(result.catalog.templates[0].variants.vue.previewImages, ['templates/spa/supplier-portal/variants/vue/previews/home.png']);
   assert.equal(result.catalog.templates[0].variants.vue.seedDataPath, 'templates/spa/supplier-portal/variants/vue/seed-data/data.json');
 });
@@ -409,8 +377,6 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         previewImages: ['templates/spa/supplier-portal/previews/home.png'],
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
         templateVersion: '1.0.0',
-        solutionPath: 'templates/spa/supplier-portal/variants/react/solution',
-        websiteCodePath: 'templates/spa/supplier-portal/variants/react/website-code',
         author: 'Microsoft',
       },
       {
@@ -427,8 +393,6 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
         templateVersion: '1.0.1',
-        solutionPath: 'templates/spa/supplier-portal/variants/vue/solution',
-        websiteCodePath: 'templates/spa/supplier-portal/variants/vue/website-code',
         author: 'Microsoft',
       },
     ],
@@ -549,10 +513,13 @@ test('validateCatalogShape accepts a complete template entry and rejects broken 
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, keywords: 'portal' }] }), /keywords/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: [] }] }), /requiredDataverseLanguages/);
   assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, requiredDataverseLanguages: ['1033'] }] }), /requiredDataverseLanguages/);
-  assert.match(validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, websiteCodePath: '' }] }), /websiteCodePath/);
+  assert.match(
+    validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, websiteCodePath: '' }] }),
+    /must not define derivable solutionPath or websiteCodePath/
+  );
   assert.match(
     validateCatalogShape({ templates: [{ ...VALID_TEMPLATE, solutionPath: 'templates/spa/company-portal/solution.zip' }] }),
-    /solutionPath must end with a solution\/ folder/
+    /must not define derivable solutionPath or websiteCodePath/
   );
 });
 
@@ -569,8 +536,6 @@ test('validateCatalogShape accepts the 311 Portal audience array and rejects non
     keywords: ['311', 'citizen-services'],
     audience: ['makers', 'developers'],
     previewImages: ['spa/311-portal/previews/home.png'],
-    solutionPath: 'spa/311-portal/solution',
-    websiteCodePath: 'spa/311-portal/website-code',
     templateVersion: '1.0.0.1',
   };
 
@@ -681,12 +646,10 @@ test('artifactCachePath rejects paths that escape the sha cache directory', () =
   );
 });
 
-test('downloadTemplateVariant fetches the shared variant folder once and returns both artifacts', (t) => {
+test('downloadTemplateVariant derives the variant layout and discovers solutions in stable order', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const variantPath = 'templates/spa/company/variants/react';
-  const solutionPath = `${variantPath}/solution`;
-  const websiteCodePath = `${variantPath}/website-code`;
   const calls = [];
   let partialRoot;
 
@@ -695,8 +658,8 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
     repo: 'r',
     sha: SHA,
     kind: 'spa',
-    solutionPath,
-    websiteCodePath,
+    templateId: 'company',
+    variant: 'react',
     cacheRoot: dir,
   }, {
     execFileSync(command, args) {
@@ -709,13 +672,8 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
         fs.writeFileSync(path.join(localWebsiteCode, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
         fs.writeFileSync(path.join(localWebsiteCode, 'powerpages.config.json'), '{}');
         fs.writeFileSync(path.join(localWebsiteCode, 'package.json'), '{}');
-        const solutionOther = path.join(localVariant, 'solution', 'Other');
-        fs.mkdirSync(solutionOther, { recursive: true });
-        fs.writeFileSync(
-          path.join(solutionOther, 'Solution.xml'),
-          '<ImportExportXml><SolutionManifest><Managed>0</Managed></SolutionManifest></ImportExportXml>'
-        );
-        fs.writeFileSync(path.join(solutionOther, 'Customizations.xml'), '<ImportExportXml />');
+        writeUnpackedSolution(path.join(localVariant, 'solutions', 'CompanyBase'), 'CompanyBase', { version: '1.0.0.0' });
+        writeUnpackedSolution(path.join(localVariant, 'solutions', 'CompanyPortal'), 'CompanyPortal', { version: '2.0.0.0' });
       }
       return '';
     },
@@ -725,8 +683,8 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
     repo: 'r',
     sha: SHA,
     kind: 'spa',
-    solutionPath,
-    websiteCodePath,
+    templateId: 'company',
+    variant: 'react',
     cacheRoot: dir,
   }, {
     execFileSync() {
@@ -740,8 +698,19 @@ test('downloadTemplateVariant fetches the shared variant folder once and returns
     result.variantPath,
     repositoryDirectoryCheckoutRoot({ cacheRoot: dir, sha: SHA, directoryPath: variantPath })
   );
-  assert.equal(result.solutionPath, path.join(result.variantPath, 'solution'));
   assert.equal(result.websiteCodePath, path.join(result.variantPath, 'website-code'));
+  assert.deepEqual(result.solutions, [
+    {
+      uniqueName: 'CompanyBase',
+      version: '1.0.0.0',
+      solutionPath: path.join(result.variantPath, 'solutions', 'CompanyBase'),
+    },
+    {
+      uniqueName: 'CompanyPortal',
+      version: '2.0.0.0',
+      solutionPath: path.join(result.variantPath, 'solutions', 'CompanyPortal'),
+    },
+  ]);
   assert.deepEqual(cached, { ...result, cached: true });
   assert.equal(calls.filter(([, args]) => args.includes('sparse-checkout')).length, 1);
   assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${variantPath}`)), true);
@@ -751,8 +720,6 @@ test('downloadTemplateVariant accepts traditional website source and website sol
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const variantPath = 'templates/traditional/customer-self-service/variants/none';
-  const solutionPath = `${variantPath}/solution`;
-  const websiteCodePath = `${variantPath}/website-code`;
   let partialRoot;
 
   const result = downloadTemplateVariant({
@@ -760,8 +727,8 @@ test('downloadTemplateVariant accepts traditional website source and website sol
     repo: 'r',
     sha: SHA,
     kind: 'traditional',
-    solutionPath,
-    websiteCodePath,
+    templateId: 'customer-self-service',
+    variant: 'none',
     cacheRoot: dir,
   }, {
     execFileSync(command, args) {
@@ -774,15 +741,10 @@ test('downloadTemplateVariant accepts traditional website source and website sol
           path.join(localWebsiteCode, '.powerpages-site', 'website.yml'),
           'adx_name: Customer self-service\n'
         );
-        const solutionOther = path.join(localVariant, 'solution', 'Other');
-        fs.mkdirSync(solutionOther, { recursive: true });
-        fs.writeFileSync(
-          path.join(solutionOther, 'Solution.xml'),
-          '<ImportExportXml><SolutionManifest><Managed>0</Managed></SolutionManifest></ImportExportXml>'
-        );
-        fs.writeFileSync(
-          path.join(solutionOther, 'Customizations.xml'),
-          '<ImportExportXml><powerpagecomponents /></ImportExportXml>'
+        writeUnpackedSolution(
+          path.join(localVariant, 'solutions', 'CustomerSelfService'),
+          'CustomerSelfService',
+          { websiteComponents: true }
         );
       }
       return '';
@@ -790,25 +752,53 @@ test('downloadTemplateVariant accepts traditional website source and website sol
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.solutionPath, path.join(result.variantPath, 'solution'));
   assert.equal(result.websiteCodePath, path.join(result.variantPath, 'website-code'));
+  assert.equal(result.solutions[0].uniqueName, 'CustomerSelfService');
 });
 
-test('templateVariantRoot requires sibling solution and website-code folders', () => {
+test('templateVariantRoot derives fixed paths from catalog identity', () => {
   assert.equal(
-    templateVariantRoot(
-      'templates/spa/company/variants/react/solution',
-      'templates/spa/company/variants/react/website-code'
-    ),
+    templateVariantRoot({
+      catalogPath: 'templates/manifest.json',
+      kind: 'spa',
+      templateId: 'company',
+      variant: 'React',
+    }),
     'templates/spa/company/variants/react'
   );
   assert.throws(
-    () => templateVariantRoot(
-      'templates/spa/company/solution',
-      'templates/spa/company/variants/react/website-code'
-    ),
-    /sibling solution\/ and website-code\//
+    () => templateVariantRoot({
+      catalogPath: 'templates/manifest.json',
+      kind: 'spa',
+      templateId: '../company',
+      variant: 'react',
+    }),
+    /Invalid template id/
   );
+});
+
+test('inspectTemplateSolutions rejects folder and Solution.xml unique-name drift', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  writeUnpackedSolution(path.join(dir, 'WrongFolder'), 'ActualUniqueName');
+
+  const result = inspectTemplateSolutions(dir, 'spa');
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /WrongFolder must match .* ActualUniqueName/);
+});
+
+test('inspectTemplateSolutions requires a non-empty solutions directory containing only solution folders', (t) => {
+  const missingDir = path.join(tempDir(), 'missing');
+  t.after(() => fs.rmSync(path.dirname(missingDir), { recursive: true, force: true }));
+  assert.match(inspectTemplateSolutions(missingDir, 'spa').error, /missing solutions/);
+
+  const emptyDir = tempDir();
+  t.after(() => fs.rmSync(emptyDir, { recursive: true, force: true }));
+  assert.match(inspectTemplateSolutions(emptyDir, 'spa').error, /at least one solution/);
+
+  fs.writeFileSync(path.join(emptyDir, 'README.md'), 'not a solution');
+  assert.match(inspectTemplateSolutions(emptyDir, 'spa').error, /non-directory entry: README\.md/);
 });
 
 test('unpacked solution validation can allow website artifacts for traditional templates', (t) => {
@@ -836,12 +826,6 @@ test('unpacked solution validation can allow website artifacts for traditional t
 });
 
 test('website code validation handles SPA and traditional source layouts', (t) => {
-  assert.match(validateWebsiteCodePath('../outside'), /stay inside/);
-  assert.match(validateWebsiteCodePath('/absolute/path'), /repository-relative/);
-  assert.match(validateWebsiteCodePath('templates\\spa\\site'), /repository-relative/);
-  assert.match(validateWebsiteCodePath('templates/spa/--upload-pack=evil/site'), /unsupported characters/);
-  assert.match(validateWebsiteCodePath('templates/spa/site name'), /unsupported characters/);
-
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '.powerpages-site'));
@@ -969,22 +953,24 @@ test('fetch-template-catalog CLI parser defaults ref to latest-release', () => {
   assert.equal(parseCatalogArgs([]).ref, 'latest-release');
 });
 
-test('fetch-template-variant CLI parser accepts both sibling artifact paths', () => {
+test('fetch-template-variant CLI parser accepts derivable variant identity', () => {
   assert.deepEqual(parseVariantArgs([
     '--owner', 'contoso',
     '--repo', 'samples',
     '--sha', SHA,
     '--kind', 'spa',
-    '--solutionPath', 'templates/spa/company/variants/react/solution',
-    '--websiteCodePath', 'templates/spa/company/variants/react/website-code',
+    '--templateId', 'company',
+    '--variant', 'react',
+    '--catalogPath', 'templates/manifest.json',
     '--cacheRoot', '/tmp/cache',
   ]), {
     owner: 'contoso',
     repo: 'samples',
     sha: SHA,
     kind: 'spa',
-    solutionPath: 'templates/spa/company/variants/react/solution',
-    websiteCodePath: 'templates/spa/company/variants/react/website-code',
+    templateId: 'company',
+    variant: 'react',
+    catalogPath: 'templates/manifest.json',
     cacheRoot: '/tmp/cache',
   });
 });
