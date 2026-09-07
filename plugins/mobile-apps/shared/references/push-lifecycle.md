@@ -12,8 +12,8 @@ an earlier stage never proves a later stage.
 | 1. Firebase client | Each selected platform has an active client config matching evaluated Expo identity, an immutable Firebase app ID, and the same Firebase project. | `/setup-fcm` |
 | 2. Platform credentials and capabilities | Platform-specific identifiers, entitlements, capabilities, and user-managed signing prerequisites required before wrapping are configured for the exact app identity. iOS uses `/setup-apple-ios` for manual Apple Developer/Xcode guidance with Yes/No confirmations, followed by the `/setup-apns` manual Firebase Console upload of a selected `.p8` authentication key or `.p12` certificate; completion remains pending physical verification. Android may report `not applicable` when the selected runtime requires no separate external handoff. | Current iOS owners are `/setup-apple-ios` and `/setup-apns`. Neither automates Apple configuration or emits an Apple proof artifact. Do not invent an Android credential workflow when no owner is bundled. |
 | 3. Runtime integration | The selected platform runtime contains the required native modules, and the app implements consent/permissions, registration-token lifecycle, exact topic transitions, foreground/background/response listeners, and one typed semantic navigation contract shared by in-app, custom-scheme, HTTPS, and push entry points. | `/add-push-notifications` |
-| 4. Sender authentication | One sender path is operational for the Firebase project: keyless WIF, the managed Function compatibility path, or a customer-owned manual implementation. | `/setup-push-wif`, `/setup-push-service-account`, or the customer's manual process |
-| 5. Power Automate flows | The exact producer and sender flow IDs are recorded, published, and read back from the live environment. A customer-owned Power Automate sender must satisfy the same observable flow-ID/state/contract handoff even though its authentication remains unvalidated. | `/create-push-notification-flow` |
+| 4. Sender authentication | The Power Automate sender uses either a valid keyless WIF handoff or customer-configured FCM authentication that remains plugin-unvalidated. | `/setup-push-wif` or the customer's manual configuration in the plugin-created sender |
+| 5. Power Automate flows | The exact producer and sender flow IDs are recorded, published, and read back from the live environment. | `/create-push-notification-flow` |
 | 6. Wrapped build | A fresh platform artifact is created from the current app and push inputs and recorded by the platform build owner. For iOS, signing assets and Xcode configuration are user-managed; `/build-ios` runs the direct Wrap command only after exact confirmation. Artifact creation does not include installation or delivery proof. | iOS: `/build-ios`. Android: `/build-android`. |
 | 7. Physical delivery | The exact current wrapped artifact is installed on a supported physical device and end-to-end delivery is correlated through the live flows, provider, device states, topic transitions, and validated semantic navigation intents. HTTPS App Link/Universal Link activation is verified separately on an installed build. | iOS: `/verify-ios-push`. Android: `/verify-android-push`. |
 
@@ -36,10 +36,10 @@ define those details.
 4. Sender authentication and flows may serve both platforms, but their
    completion still does not prove either wrapped build or either physical
    delivery state.
-5. A managed sender requires a fresh valid `sender-auth.json`. Manual senders
-   use the safe handoff contract below; never fabricate `sender-auth.json`,
-   redirect them through WIF or the Function compatibility owner, inspect
-   credentials, or claim their authentication design was validated.
+5. A WIF sender requires a fresh valid `sender-auth.json`. A manually
+   authenticated sender uses the exact plugin-created Power Automate flow and
+   safe handoff below; never fabricate `sender-auth.json`, inspect credentials,
+   or claim its authentication design was validated.
 6. Route to a build owner only after the requested platform's stages 1-3 and
    the shared sender-auth/flow stages 4-5 are ready. Route to physical
    verification only after that platform's exact current build is ready and
@@ -57,8 +57,7 @@ Use explicit states rather than a single push-ready flag:
   blocked.
 - **Sender authentication:** missing / valid managed handoff / stale or blocked
   / customer-owned Power Automate sender, observable contract read back but
-  authentication not plugin-validated / customer-owned non-Flow endpoint,
-  plugin physical verification unavailable.
+  authentication not plugin-validated.
 - **Power Automate flows:** missing / recorded / published-and-read-back /
   blocked.
 - **Wrapped build, per platform:** not applicable / missing / stale / ready /
@@ -98,28 +97,6 @@ rotation, least privilege, or authentication design.
 This handoff may resume wrapped build and physical verification. The platform
 verification owner must fetch the same exact flow IDs again and require the
 same observable live contract before sending.
-
-### Customer-owned non-Flow endpoint
-
-When the sender is not a Power Automate flow, record only a customer-supplied,
-non-secret, immutable endpoint identifier and the status:
-`customer-owned non-Flow endpoint / plugin physical verification unavailable`.
-Do not record endpoint credentials, signed URLs, authorization metadata,
-headers, or payloads.
-
-Use a distinct non-Flow handoff schema containing only: `Environment ID`,
-`Dataverse URL`, `Producer flow ID`, `Producer flow state`,
-`Sender authentication status`, `Sender endpoint identifier`, and
-`Flow read-back timestamp`. Omit `Sender flow ID` and `Sender flow state`
-because no sender flow exists; empty, null, placeholder, or fabricated sender
-flow fields are invalid.
-
-The producer may be recorded independently, but the Power Automate-flow stage
-is incomplete for plugin end-to-end verification because FlowAgent cannot read
-back a sender flow or correlate its run. Do not route this status into plugin
-physical verification or claim physical delivery verified. The customer owns
-sender validation and end-to-end delivery evidence outside the plugin. A later
-exact Power Automate sender-flow handoff may replace this blocked status.
 
 ## Shared physical-delivery contract
 

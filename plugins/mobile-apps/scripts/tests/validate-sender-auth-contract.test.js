@@ -15,27 +15,19 @@ const TEST_WORK_ROOT = path.join(__dirname, '.validate-sender-auth-contract-work
 const NOW = new Date('2026-08-18T12:00:00.000Z');
 const TENANT = '11111111-2222-3333-4444-555555555555';
 const CLIENT = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
-const SUBSCRIPTION = '99999999-8888-7777-6666-555555555555';
 
-function proof(mode, overrides = {}) {
+function proof(overrides = {}) {
   return {
     firebaseProjectId: 'contoso-mobile-prod',
     verifiedAt: '2026-08-18T08:00:00.000Z',
     validUntil: '2026-08-19T08:00:00.000Z',
-    verifier: mode === 'wif' ? 'setup-push-wif' : 'setup-push-service-account',
-    steps: mode === 'wif'
-      ? {
-        entraTokenIssued: true,
-        googleStsExchanged: true,
-        serviceAccountImpersonated: true,
-        fcmValidateOnly: true,
-      }
-      : {
-        entraAuthorization: true,
-        keyVaultSecretRead: true,
-        googleTokenMinted: true,
-        fcmValidateOnly: true,
-      },
+    verifier: 'setup-push-wif',
+    steps: {
+      entraTokenIssued: true,
+      googleStsExchanged: true,
+      serviceAccountImpersonated: true,
+      fcmValidateOnly: true,
+    },
     ...overrides,
   };
 }
@@ -67,31 +59,7 @@ function wifContract() {
         appIdentityValue: CLIENT,
       },
     },
-    proof: proof('wif'),
-  };
-}
-
-function functionContract() {
-  return {
-    version: 1,
-    mode: 'function-endpoint',
-    firebaseProjectId: 'contoso-mobile-prod',
-    functionEndpoint: {
-      endpointUrl: 'https://contoso-push.azurewebsites.net/api/send',
-      entra: {
-        resourceAudience: 'api://contoso-push-function',
-        applicationId: 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff',
-      },
-      connection: {
-        referenceName: 'fcmSenderFunction',
-        resourceId: `/subscriptions/${SUBSCRIPTION}/resourceGroups/mobile-prod/providers/Microsoft.Web/connections/fcm-sender`,
-      },
-      deploymentIdentity: {
-        resourceId: `/subscriptions/${SUBSCRIPTION}/resourceGroups/mobile-prod/providers/Microsoft.Web/sites/contoso-push`,
-        principalId: 'cccccccc-dddd-eeee-ffff-000000000000',
-      },
-    },
-    proof: proof('function-endpoint'),
+    proof: proof(),
   };
 }
 
@@ -103,31 +71,28 @@ test.after(() => {
   fs.rmSync(TEST_WORK_ROOT, { recursive: true, force: true });
 });
 
-test('accepts complete wif and function-endpoint contracts', () => {
+test('accepts a complete wif contract', () => {
   assert.deepStrictEqual(codes(wifContract()), []);
-  assert.deepStrictEqual(codes(functionContract()), []);
 });
 
-test('requires the proof verifier that owns each sender-auth mode', () => {
+test('requires the setup-push-wif proof verifier', () => {
   const wif = wifContract();
-  wif.proof.verifier = 'setup-push-service-account';
+  wif.proof.verifier = 'other-setup-skill';
   assert.ok(codes(wif).includes('proof-verifier-mismatch'));
-
-  const endpoint = functionContract();
-  endpoint.proof.verifier = 'setup-push-wif';
-  assert.ok(codes(endpoint).includes('proof-verifier-mismatch'));
 });
 
-test('rejects unknown versions, modes, and mode-specific field conflicts', () => {
+test('rejects unknown versions, modes, and fields', () => {
   const unknown = wifContract();
   unknown.version = 2;
   unknown.mode = 'service-account';
   assert.ok(codes(unknown).includes('unsupported-version'));
   assert.ok(codes(unknown).includes('unsupported-mode'));
 
-  const conflict = wifContract();
-  conflict.functionEndpoint = functionContract().functionEndpoint;
-  assert.ok(codes(conflict).includes('mode-field-conflict'));
+  const removedFunction = wifContract();
+  removedFunction.mode = 'function-endpoint';
+  removedFunction.functionEndpoint = {};
+  assert.ok(codes(removedFunction).includes('unsupported-mode'));
+  assert.ok(codes(removedFunction).includes('unknown-field'));
 
   const manual = wifContract();
   manual.mode = 'manual';
@@ -140,13 +105,18 @@ test('rejects unknown versions, modes, and mode-specific field conflicts', () =>
 });
 
 test('rejects secret fields, private keys, bearer tokens, raw JWTs, and embedded URL credentials', () => {
-  for (const mutate of [
+  const forbiddenValues = [
+    '-----BEGIN PRIVATE KEY-----',
+    ['Bearer', 'synthetic-token-value'].join(' '),
+    ['eyJheader', 'eyJpayload', 'signature'].join('.'),
+    ['https://user', 'password@example.com/path'].join(':'),
+  ];
+  const mutations = [
     (value) => { value.client_secret = 'not-allowed'; },
-    (value) => { value.note = '-----BEGIN PRIVATE KEY-----'; },
-    (value) => { value.note = 'Bearer secret-token-value'; },
-    (value) => { value.note = 'eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJmY20ifQ.signature'; },
-    (value) => { value.note = 'https://user:password@example.com/path'; },
-  ]) {
+    ...forbiddenValues.map((forbidden) => (value) => { value.note = forbidden; }),
+  ];
+
+  for (const mutate of mutations) {
     const contract = wifContract();
     mutate(contract);
     const result = codes(contract);
@@ -156,17 +126,6 @@ test('rejects secret fields, private keys, bearer tokens, raw JWTs, and embedded
       || result.includes('embedded-credentials-forbidden'),
     );
   }
-});
-
-test('rejects non-HTTPS or credential-bearing function endpoints', () => {
-  const http = functionContract();
-  http.functionEndpoint.endpointUrl = 'http://contoso.example/api/send';
-  assert.ok(codes(http).includes('invalid-https-url'));
-
-  const credentials = functionContract();
-  credentials.functionEndpoint.endpointUrl = 'https://user:password@contoso.example/api/send';
-  assert.ok(codes(credentials).includes('embedded-credentials-forbidden'));
-  assert.ok(codes(credentials).includes('invalid-https-url'));
 });
 
 test('rejects malformed safe resource identifiers and inconsistent observed claims', () => {
@@ -182,43 +141,13 @@ test('rejects malformed safe resource identifiers and inconsistent observed clai
   assert.ok(result.includes('claim-client-mismatch'));
 });
 
-test('rejects malformed function resource IDs and WIF issuer/provider mismatches', () => {
-  const endpoint = functionContract();
-  endpoint.functionEndpoint.connection.resourceId =
-    '/subscriptions/not-a-guid/resourceGroups/mobile/providers/Microsoft.Web/connections/sender';
-  delete endpoint.functionEndpoint.deploymentIdentity.principalId;
-  const endpointResult = codes(endpoint);
-  assert.ok(endpointResult.includes('malformed-resource-id'));
-  assert.ok(endpointResult.includes('missing-field'));
-
+test('rejects WIF issuer and provider mismatches', () => {
   const wif = wifContract();
   wif.wif.observedClaimShape.issuer =
     'https://sts.windows.net/bbbbbbbb-cccc-dddd-eeee-ffffffffffff/';
   wif.wif.observedClaimShape.googleProviderIssuer = 'https://login.example/tenant';
-  const wifResult = codes(wif);
-  assert.ok(wifResult.includes('issuer-tenant-mismatch'));
-});
-
-test('requires Function connection and deployment IDs to identify their actual Azure resources', () => {
-  const swapped = functionContract();
-  swapped.functionEndpoint.connection.resourceId =
-    `/subscriptions/${SUBSCRIPTION}/resourceGroups/mobile-prod/providers/Microsoft.Web/sites/contoso-push`;
-  swapped.functionEndpoint.deploymentIdentity.resourceId =
-    `/subscriptions/${SUBSCRIPTION}/resourceGroups/mobile-prod/providers/Microsoft.Web/connections/fcm-sender`;
-  const swappedIssues = validateContract(swapped, { now: NOW });
-
-  assert.ok(swappedIssues.some((entry) => (
-    entry.code === 'malformed-resource-id'
-    && entry.field === 'functionEndpoint.connection.resourceId'
-  )));
-  assert.ok(swappedIssues.some((entry) => (
-    entry.code === 'malformed-resource-id'
-    && entry.field === 'functionEndpoint.deploymentIdentity.resourceId'
-  )));
-
-  const nested = functionContract();
-  nested.functionEndpoint.deploymentIdentity.resourceId += '/slots/staging';
-  assert.ok(codes(nested).includes('malformed-resource-id'));
+  const result = codes(wif);
+  assert.ok(result.includes('issuer-tenant-mismatch'));
 });
 
 test('rejects incomplete, stale, future, or overlong proof metadata', () => {

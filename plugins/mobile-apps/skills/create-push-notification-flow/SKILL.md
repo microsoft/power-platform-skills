@@ -1,6 +1,6 @@
 ---
 name: create-push-notification-flow
-description: Use when creating, repairing, or extending the Power Automate producer and sender flows for Power Apps mobile push notifications, including choosing between recommended WIF, managed Azure Function compatibility, or customer-owned manual sender authentication; Dataverse row-created triggers; outbox queuing; lowercase Entra OID topics; FCM HTTP v1; FlowAgent setup; or push-flow smoke tests.
+description: Use when creating, repairing, or extending Power Automate producer and sender flows for Power Apps mobile push notifications, including choosing recommended WIF or customer-configured FCM authentication; Dataverse triggers; outbox queuing; content mapping; trigger-aware deep links; lowercase Entra OID topics; FCM HTTP v1; FlowAgent setup; or push-flow smoke tests.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__list_connections, mcp__flowagent__test_connection, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_entity, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__preview_update, mcp__flowagent__smoke_test, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_expression_help, mcp__flowagent__invoke_operation, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__list_backups, mcp__flowagent__get_backup, mcp__flowagent__restore_backup
 model: opus
@@ -23,34 +23,33 @@ smoke-test gates.
 
 **Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)**.
 
-**Function sender protocol: [function-endpoint.md](${PLUGIN_ROOT}/skills/setup-push-service-account/references/function-endpoint.md)**.
-
 # Create Push Notification Flow
 
 For a plugin-managed sender, create two separate FlowAgent-authored flows:
 
-1. a producer that resolves a recipient and writes a privacy-safe `Queued`
+1. a producer that resolves a recipient and writes a user-approved `Queued`
    outbox row; and
 2. a sender that owns idempotency, delivery, and `Sent`/`Failed` transitions.
 
-For manual/customer-owned authentication, do not author or mutate the sender.
-Author the requested producer/outbox, then require the safe sender handoff
-below: either read back the exact customer-owned Power Automate sender flow ID
-and observable non-secret contract, or record the non-Flow unavailable-
-verification status. The customer authors, validates, publishes, monitors, and
-supports the sender. Never put FCM authorization into each business-event flow.
+For customer-configured authentication, author both flows stopped, but leave
+the sender's FCM authentication unconfigured and clearly identify the action
+the customer must complete. The customer configures, validates, publishes,
+monitors, and supports that authentication. Never put FCM authorization into
+each business-event flow.
 
 This skill consumes owner-skill handoffs. `/setup-fcm` owns Firebase through
 the vendor-official Firebase MCP only; `/setup-push-wif` owns Google-side WIF
-provisioning; `/setup-push-service-account` owns the Function compatibility
-path. Do not fall back to `firebase-tools`, `gcloud`, or Azure provisioning from this skill.
+provisioning. Do not fall back to `firebase-tools`, `gcloud`, or cloud
+provisioning from this skill.
 
 ## Required workflow
 
 ### 1. Bootstrap and prove the environment
 
-Execute Sections 1–2 of `push-flow-authoring.md`. If FlowAgent is unavailable,
-give its exact plugin install/restart/setup sequence and stop. Prove
+Execute Sections 1–2 of `push-flow-authoring.md`. The mobile plugin declares
+no automatic installation dependency on the separate `power-automate` plugin.
+If FlowAgent is unavailable, give the documented manual
+install/restart/setup steps and stop. Prove
 `power.config.json`, `npx power-apps`, PAC, Azure, and FlowAgent target the same
 environment/URL/tenant before any mutation. FlowAgent is the only flow mutation
 path; do not use portal automation, shell flow commands, or guessed
@@ -62,50 +61,35 @@ Read active native Firebase configs and require one project. Do not rerun
 `/setup-fcm` when valid selected-platform client configuration is already
 active.
 
-Validate a project-local `sender-auth.json` before plugin-managed sender
-discovery. If absent or invalid, read the sender-auth choices reference and
-show its three-option comparison, then ask the customer to choose:
+Validate a project-local `sender-auth.json` before WIF sender discovery. If
+absent or invalid, read the sender-auth choices reference and show its
+two-option comparison, then ask the customer to choose:
 
 1. **Workload Identity Federation (Recommended):** invoke `/setup-push-wif`.
-2. **Managed Azure Function compatibility:** invoke
-   `/setup-push-service-account`; it may consume an existing customer-owned
-   Firebase service-account JSON but must never create or download one.
-3. **Manual/customer-owned sender authentication:** do not invoke or create a
-   setup skill, request credentials, or create `sender-auth.json`/a managed
-   authentication handoff. The safe operational sender handoff below is still
-   required. When it is a Power Automate sender, require its exact flow ID for
-   FlowAgent identity/state/observable-contract read-back.
+2. **Create Power Automate flows; configure FCM authentication manually:**
+   create both flows stopped without credentials or `sender-auth.json`. The
+   customer completes the sender's authentication before publication.
 
 After an owner skill returns, revalidate against the exact client Firebase
-project. Never translate modes, construct the managed handoff here, or add a
-second mode as a fallback.
+project. Never construct the WIF handoff here or add another authentication
+mode as a fallback.
 
-In manual mode, FlowAgent authors only the producer/outbox artifacts, but the
-workflow is not ready for downstream routing without a safe sender handoff.
-Record no managed auth handoff, credentials, endpoint secrets, or success-
-shaped proof. The plugin must not create a placeholder or unauthenticated HTTP
-action for the sender. A checkbox or verbal confirmation cannot promote this
-route to plugin-validated or publish-ready. Give the customer-owned completion
-checklist from the choices reference.
+In manual-auth mode, FlowAgent authors the complete non-secret producer,
+outbox, idempotency, routing, payload, and sender action structure. The sender
+remains stopped and explicitly incomplete until the customer configures FCM
+authentication in the identified action. Record no managed auth handoff,
+credentials, endpoint secrets, or success-shaped authentication proof. A
+checkbox or verbal confirmation cannot promote authentication to
+plugin-validated.
 
-For a customer-owned Power Automate sender, require the customer-supplied and
-approved **exact sender flow ID**—never a similar display name—and call
-`get_flow` for that ID in the proved FlowAgent environment. Require the
-returned ID to match exactly and state `Started`. Read back only the observable
+After the customer says authentication is configured, fetch the exact
+plugin-created sender flow ID and read back only the observable
 queued-outbox trigger/guard, idempotent claim, `allUsers` versus lowercase-OID
 routing, one delivery invocation, and terminal `Sent`/`Failed` updates. Do not
 request or inspect credentials, secure values, authentication headers,
-connection secrets, endpoint secrets, or raw delivery bodies; do not validate
+connection secrets, or raw delivery bodies; do not validate
 `sender-auth.json` or claim the customer's authentication, least privilege, or
-rotation design was technically validated. Stop before producer publication
-when the ID is missing, unreadable, different, not `Started`, or lacks the
-observable contract.
-
-If the manual sender is a non-Flow endpoint, record only its customer-approved
-non-secret immutable identifier and report
-`customer-owned non-Flow endpoint / plugin physical verification unavailable`.
-Keep the producer-only state distinct and do not route to plugin physical
-verification because there is no exact sender flow for FlowAgent to correlate.
+rotation design was technically validated.
 
 ### 3. Resolve the outbox and producer intent
 
@@ -114,14 +98,23 @@ Execute Section 3 of the authoring reference. Create a missing outbox only via
 logical names, plural entity sets, actual choice integers, and `systemusers`;
 never guess them.
 
-Ask the grouped producer question from the reference, including one approved
-semantic Destination and its destination-specific safe parameter fields from
-the app's navigation registry. Never ask for or accept an arbitrary route,
-URL, href, or complete navigation-contract JSON. Default to Dataverse row
-created and owner-based resolution only when unspecified. `ownerid` is not an
-Entra OID: resolve `systemusers.azureactivedirectoryobjectid`, GUID-validate,
-and lowercase it. Team/missing/ambiguous owners must skip or fail, never route
-to a guessed topic.
+Ask the grouped producer question from the reference. For title, body, and
+additional data, explain lock-screen/device exposure and that topic membership
+is not authorization, recommend minimizing sensitive data, then let the user
+choose source fields and templates. Reject only credentials, tokens, private
+keys, authentication headers, or technically invalid payload shapes; do not
+override the user's business-content choice on privacy grounds.
+
+Based on the selected Dataverse trigger table, inspect the screen plan and
+navigation registry and suggest a relevant detail destination with the trigger
+row ID, otherwise a relevant list destination, otherwise no deep link. Show
+the suggestion and let the user accept it, choose another registered
+destination, or choose no deep link. Never accept an arbitrary route, URL,
+href, or complete navigation-contract JSON. Default to Dataverse row created
+and owner-based resolution only when unspecified. `ownerid` is not an Entra
+OID: resolve `systemusers.azureactivedirectoryobjectid`, GUID-validate, and
+lowercase it. Team/missing/ambiguous owners must skip or fail, never route to a
+guessed topic.
 
 ### 4. Discover before authoring
 
@@ -131,25 +124,28 @@ Execute Section 4. Use `get_connector`/`search_operations`, then
 references, or Dataverse choice values.
 
 For WIF, require the proved Key Vault connection and read
-`push-flow-wif.md`. For Function mode, require the handoff's exact
-Entra-authenticated connection/operation and endpoint audience. If it cannot be
-proved, return to `/setup-push-service-account`; never substitute generic HTTP
-or WIF.
+`push-flow-wif.md`. For manual-auth mode, discover the FCM HTTP action schema
+but leave its authentication configuration for the customer; never insert a
+placeholder credential or secret.
 
 ### 5. Author stopped definitions
 
-Execute Section 5 exactly. The sender is idempotent, concurrency-safe, and has
-one mode-specific branch. `User` uses a validated lowercase OID topic;
-`AllUsers` uses empty Target OID plus exact `allUsers`. Payloads remain generic
-because topic membership is not an authorization boundary.
+Execute Section 5 exactly. The sender is idempotent and concurrency-safe.
+`User` uses a validated lowercase OID topic; `AllUsers` uses empty Target OID
+plus exact `allUsers`. Before authoring payload mappings, warn that
+title/body/data can be visible on the device and that topic membership is not
+authorization. Use the user's approved content mappings, including business
+data if they explicitly choose it, while continuing to prohibit credentials
+and authentication material.
 
 The producer uses `OpenApiConnectionWebhook`, singular trigger `entityname`,
 plural action `entityName`, and plural `systemusers` for owner lookup. It
-validates safe parameter fields, constructs canonical sorted parameter JSON,
-and queues Payload Version `1`, the allowlisted Destination, Navigation
-Parameters, Status `Queued`, and Attempt Count `0`, with no confidential
-record content. The sender revalidates the same contract and sends only
-`schemaVersion`, `destination`, and `params`; a legacy `deepLink` branch is a
+validates selected parameter and Additional Data fields, constructs canonical
+sorted JSON, and queues Payload Version `1`, optional allowlisted
+Destination/Navigation Parameters, Status `Queued`, and Attempt Count `0`.
+The sender revalidates the same contract, merges approved Additional Data
+without reserved keys, and includes `schemaVersion`, `destination`, and
+`params` only when navigation was selected; a legacy `deepLink` branch is a
 blocker.
 
 ### 6. Validate, mutate, read back, and recover
@@ -167,11 +163,12 @@ without a usable backup, disable it, read it back as `Stopped`, report its
 exact ID, and leave cleanup explicitly user-owned; do not delete it.
 
 Present verified stopped IDs and require explicit publication confirmation.
-Publish/read back the sender as `Started` before the producer. Manual mode never
-edits or publishes the customer's sender. In customer-owned Power Automate
-mode, immediately reread the exact sender ID as `Started`, then publish the
-producer only after the customer confirms operational readiness and explicitly
-approves. Read both exact IDs back after publication.
+For WIF, publish/read back the sender as `Started` before the producer. For
+manual-auth mode, stop after authoring until the customer configures FCM
+authentication in the sender. Then validate/preflight and read back the same
+exact sender flow without inspecting secure values, require explicit approval,
+publish the sender before the producer, and read both exact IDs back after
+publication.
 
 ### 7. Gate delivery testing and hand off
 
@@ -181,27 +178,16 @@ history/actions back; do not repeatedly resubmit failures or retain raw
 diagnostics.
 
 Report environment, Firebase project, connections, read-back results, and
-whether delivery was skipped or verified. For flow-backed senders report
-producer/sender IDs and states; for a non-Flow endpoint report only the
-producer ID/state, approved non-secret `Sender endpoint identifier`, and exact
-blocked status. Never print secrets, tokens, JWTs, Function responses, or
-confidential payloads.
+whether delivery was skipped or verified. Report producer/sender IDs and
+states. Never print secrets, tokens, JWTs, secure action values, or raw
+payloads.
 
-Persist exactly one of the authoring reference's `Push flow handoff` schemas in
-`memory-bank.md`:
-
-- For a plugin-managed or customer-owned Power Automate sender, record the
-  exact environment, producer ID/state, sender ID/state, read-back timestamp,
-  and sender authentication status. In manual Power Automate mode, both IDs
-  must read back as `Started`; record exactly
-  `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`
-  and no authentication-validation result.
-- For a non-Flow endpoint, record only the environment, producer ID/state,
-  customer-approved immutable non-secret `Sender endpoint identifier`,
-  read-back timestamp, and exact status
-  `customer-owned non-Flow endpoint / plugin physical verification unavailable`.
-  Omit `Sender flow ID` and `Sender flow state` entirely; do not emit empty or
-  `not applicable` placeholders.
+Persist the authoring reference's flow-backed `Push flow handoff` schema in
+`memory-bank.md`. Record the exact environment, producer ID/state, sender
+ID/state, read-back timestamp, and sender authentication status. In manual
+Power Automate mode, both IDs must read back as `Started`; record exactly
+`customer-owned Power Automate sender / observable contract read back;
+authentication not plugin-validated` and no authentication-validation result.
 
 For iOS, published-and-read-back flows hand off to the direct user-managed
 `/build-ios` Wrap path after manual `/setup-apple-ios` and `/setup-apns`

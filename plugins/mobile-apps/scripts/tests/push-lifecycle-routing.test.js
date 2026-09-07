@@ -36,7 +36,6 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
     '/setup-apns',
     '/add-push-notifications',
     '/setup-push-wif',
-    '/setup-push-service-account',
     '/create-push-notification-flow',
     '/build-ios',
     '/verify-ios-push',
@@ -53,10 +52,9 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /\[push-physical-verification\.md\]\(\.\/push-physical-verification\.md\)/);
   assert.match(lifecycle, /## Safe manual sender handoff/);
   assert.match(lifecycle, /customer-owned Power Automate sender \/ observable contract read back; authentication not plugin-validated/);
-  assert.match(lifecycle, /customer-owned non-Flow endpoint \/ plugin physical verification unavailable/);
+  assert.doesNotMatch(lifecycle, /customer-owned non-Flow endpoint/);
   assert.match(lifecycle, /customer supplies and approves recording the exact sender flow ID/);
-  assert.match(lifecycle, /Use a distinct non-Flow handoff schema/);
-  assert.match(lifecycle, /Omit `Sender flow ID` and `Sender flow state`/);
+  assert.doesNotMatch(lifecycle, /Use a distinct non-Flow handoff schema/);
   assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with Yes\/No confirmations/);
   assert.match(lifecycle, /Neither automates Apple configuration or emits an Apple proof artifact/);
   assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
@@ -90,7 +88,7 @@ test('add-push owns runtime integration and reports platform states independentl
   assert.match(skill, /\| `\/verify-android-push`; route by name only/);
   assert.match(skill, /without requiring\s+`sender-auth\.json`/);
   assert.match(skill, /customer-supplied exact sender flow ID/);
-  assert.match(skill, /non-Flow endpoint \/ plugin physical verification unavailable/);
+  assert.doesNotMatch(skill, /non-Flow endpoint/);
   assert.match(skill, /manual Apple Developer\/Xcode guidance/);
   assert.match(skill, /does not automate Apple setup or emit a proof artifact/);
   assert.match(skill, /user manages Xcode configuration and signing assets/);
@@ -113,7 +111,7 @@ test('build and physical verification boundaries remain non-overlapping', () => 
   assert.match(verify, /A-H matrix below remain mandatory and authoritative/);
   assert.match(verify, /Do not run the sender-auth validator\s+for a customer-owned Power Automate sender/);
   assert.match(verify, /exact canonical status and customer-supplied sender flow ID/);
-  assert.match(verify, /A recorded non-Flow endpoint identifier is not sufficient/);
+  assert.doesNotMatch(verify, /non-Flow endpoint/);
   assert.match(verify, /### A\. Permission UX/);
   assert.match(verify, /### H\. Token refresh\/re-registration recovery/);
   assert.match(verify, /Mark APNs physical verification complete only when A-H\s+all pass/);
@@ -135,9 +133,9 @@ test('lifecycle eval IDs append locally and cover manual auth plus Android routi
   );
   assert.match(addPush.evals[14].expected_output, /to \/build-android/);
   assert.match(addPush.evals[14].expected_output, /then \/verify-android-push/);
-  assert.match(addPush.evals[15].prompt, /exact sender flow ID/);
+  assert.match(addPush.evals[15].expected_output, /exact plugin-created sender flow ID/);
   assert.match(addPush.evals[15].expected_output, /never inspects credentials/);
-  assert.match(addPush.evals[16].expected_output, /plugin physical verification unavailable/);
+  assert.match(addPush.evals[16].expected_output, /custom endpoint and Azure Function sender options are not offered/);
   assert.match(addPush.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
   assert.match(addPush.evals[17].expected_output, /without fallback navigation/);
 
@@ -148,19 +146,20 @@ test('lifecycle eval IDs append locally and cover manual auth plus Android routi
   assert.strictEqual(verifyIos.evals[8].coverage, 'manual-auth-downstream');
   assert.match(verifyIos.evals[8].prompt, /exact manual Power Automate sender flow ID/);
   assert.match(verifyIos.evals[8].expected_output, /does not require or fabricate sender-auth\.json/);
-  assert.strictEqual(verifyIos.evals[9].coverage, 'non-flow-sender-unverifiable');
+  assert.strictEqual(verifyIos.evals[9].coverage, 'unsupported-custom-endpoint');
 });
 
 test('manual Power Automate sender handoff stays aligned with flow authoring', () => {
   const createFlow = read('skills/create-push-notification-flow/SKILL.md');
   const authoring = read('shared/references/push-flow-authoring.md');
-  const canonicalStatus =
-    'customer-owned Power Automate sender / observable contract read back; ' +
-    'authentication not plugin-validated';
 
   for (const content of [createFlow, authoring]) {
-    assert.ok(content.includes(canonicalStatus), 'uses the canonical manual sender status');
-    assert.match(content, /exact sender flow ID/i);
+    assert.match(
+      content,
+      /customer-owned Power Automate sender \/ observable contract read back;\s+authentication not plugin-validated/,
+      'uses the canonical manual sender status',
+    );
+    assert.match(content, /exact\s+(?:plugin-created\s+)?sender flow ID/i);
     assert.match(content, /queued[- ]outbox\s+(?:trigger\/guard|guard)/i);
     assert.match(content, /idempotent claim/i);
     assert.match(content, /`allUsers`.*lowercase-OID/is);

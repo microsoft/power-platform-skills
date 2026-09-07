@@ -259,10 +259,7 @@ test('common protocol requires safe read-back, idempotency, and bounded retry', 
     common,
     /customer-owned Power Automate sender \/ observable contract read\s+back; authentication not plugin-validated/,
   );
-  assert.match(
-    common,
-    /customer-owned non-Flow endpoint \/ plugin physical verification\s+unavailable/,
-  );
+  assert.doesNotMatch(common, /customer-owned non-Flow endpoint/);
   assert.match(common, /exact customer-supplied\s+sender flow ID/);
   assert.match(common, /Do not inspect credentials, authorization configuration/);
   assert.doesNotMatch(common, /customer-owned \/ not plugin-validated/);
@@ -291,11 +288,7 @@ test('Android verification routes customer-owned senders without credential insp
   assert.match(skill, /exact customer-supplied sender flow ID/);
   assert.match(skill, /Refetch that ID with\s+`get_flow`, require `Started`/);
   assert.match(skill, /Do not run the sender-auth validator, inspect\s+credentials/);
-  assert.match(
-    skill,
-    /customer-owned non-Flow endpoint \/ plugin physical verification\s+unavailable/,
-  );
-  assert.match(skill, /stop before live sends/);
+  assert.doesNotMatch(skill, /customer-owned non-Flow endpoint/);
   assert.doesNotMatch(skill, /customer-owned \/ not plugin-validated/);
 });
 

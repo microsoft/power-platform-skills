@@ -18,7 +18,6 @@ const FIREBASE_PROJECT_RE = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/;
 const GOOGLE_ID_RE = /^[a-z][a-z0-9-]{2,31}$/;
 const SERVICE_ACCOUNT_RE =
   /^[a-z][a-z0-9-]{2,29}@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$/;
-const LOGICAL_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,99}$/;
 const SAFE_LABEL_RE = /^[A-Za-z][A-Za-z0-9_-]{0,99}$/;
 const SECRET_KEY_RE =
   /^(private[_-]?key|private[_-]?key[_-]?id|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|password|authorization|credential|service[_-]?account[_-]?json)$/i;
@@ -141,22 +140,6 @@ function expectedProviderIssuer(issuer, tenantId, issues) {
   return null;
 }
 
-function validateAzureResourceId(value, field, resourceType, issues) {
-  const resourceIdPattern = new RegExp(
-    '^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-      + '/resourceGroups/[A-Za-z0-9._()-]{1,90}'
-      + `/providers/Microsoft\\.Web/${resourceType}/[A-Za-z0-9._()-]{1,128}$`,
-    'i',
-  );
-  requiredString(
-    value,
-    field,
-    resourceIdPattern,
-    issues,
-    `Value must identify a Microsoft.Web/${resourceType} resource.`,
-  );
-}
-
 function findForbiddenContent(value, field = '$', seen = new Set()) {
   const findings = [];
   if (value && typeof value === 'object') {
@@ -195,13 +178,14 @@ function findForbiddenContent(value, field = '$', seen = new Set()) {
   return findings;
 }
 
-function validateProof(proof, mode, firebaseProjectId, now, issues) {
-  const expectedVerifier = mode === 'wif'
-    ? 'setup-push-wif'
-    : 'setup-push-service-account';
-  const stepNames = mode === 'wif'
-    ? ['entraTokenIssued', 'googleStsExchanged', 'serviceAccountImpersonated', 'fcmValidateOnly']
-    : ['entraAuthorization', 'keyVaultSecretRead', 'googleTokenMinted', 'fcmValidateOnly'];
+function validateProof(proof, firebaseProjectId, now, issues) {
+  const expectedVerifier = 'setup-push-wif';
+  const stepNames = [
+    'entraTokenIssued',
+    'googleStsExchanged',
+    'serviceAccountImpersonated',
+    'fcmValidateOnly',
+  ];
   if (!checkKeys(
     proof,
     ['firebaseProjectId', 'verifiedAt', 'validUntil', 'verifier', 'steps'],
@@ -218,7 +202,7 @@ function validateProof(proof, mode, firebaseProjectId, now, issues) {
     issues.push(issue(
       'proof-verifier-mismatch',
       'proof.verifier',
-      `${mode} proof must be produced by ${expectedVerifier}.`,
+      `WIF proof must be produced by ${expectedVerifier}.`,
     ));
   }
   if (checkKeys(proof.steps, stepNames, stepNames, 'proof.steps', issues)) {
@@ -340,102 +324,30 @@ function validateWif(contract, now, issues) {
       issues.push(issue('provider-issuer-mismatch', 'wif.observedClaimShape.googleProviderIssuer', 'Google provider issuer must match the normalized observed issuer.'));
     }
   }
-  validateProof(contract.proof, 'wif', contract.firebaseProjectId, now, issues);
-}
-
-function validateFunctionEndpoint(contract, now, issues) {
-  const endpoint = contract.functionEndpoint;
-  if (!checkKeys(
-    endpoint,
-    ['endpointUrl', 'entra', 'connection', 'deploymentIdentity'],
-    ['endpointUrl', 'entra', 'connection', 'deploymentIdentity'],
-    'functionEndpoint',
-    issues,
-  )) return;
-  validatePlainHttpsUrl(endpoint.endpointUrl, 'functionEndpoint.endpointUrl', issues, { allowPath: true });
-
-  if (checkKeys(
-    endpoint.entra,
-    ['resourceAudience', 'applicationId'],
-    ['resourceAudience', 'applicationId'],
-    'functionEndpoint.entra',
-    issues,
-  )) {
-    validateAudience(endpoint.entra.resourceAudience, 'functionEndpoint.entra.resourceAudience', issues);
-    requiredString(endpoint.entra.applicationId, 'functionEndpoint.entra.applicationId', GUID_RE, issues);
-  }
-  if (checkKeys(
-    endpoint.connection,
-    ['referenceName', 'resourceId'],
-    ['referenceName', 'resourceId'],
-    'functionEndpoint.connection',
-    issues,
-  )) {
-    requiredString(endpoint.connection.referenceName, 'functionEndpoint.connection.referenceName', LOGICAL_NAME_RE, issues);
-    // This is the Power Automate custom-connector connection, not the Function app.
-    validateAzureResourceId(
-      endpoint.connection.resourceId,
-      'functionEndpoint.connection.resourceId',
-      'connections',
-      issues,
-    );
-  }
-  if (checkKeys(
-    endpoint.deploymentIdentity,
-    ['resourceId', 'principalId'],
-    ['resourceId', 'principalId'],
-    'functionEndpoint.deploymentIdentity',
-    issues,
-  )) {
-    // The principal belongs to the deployed Function app, whose ARM resource is a Web site.
-    validateAzureResourceId(
-      endpoint.deploymentIdentity.resourceId,
-      'functionEndpoint.deploymentIdentity.resourceId',
-      'sites',
-      issues,
-    );
-    requiredString(endpoint.deploymentIdentity.principalId, 'functionEndpoint.deploymentIdentity.principalId', GUID_RE, issues);
-  }
-  validateProof(contract.proof, 'function-endpoint', contract.firebaseProjectId, now, issues);
+  validateProof(contract.proof, contract.firebaseProjectId, now, issues);
 }
 
 function validateContract(contract, { expectedFirebaseProject, now = new Date() } = {}) {
   const issues = findForbiddenContent(contract);
   if (!checkKeys(
     contract,
-    ['version', 'mode', 'firebaseProjectId', 'wif', 'functionEndpoint', 'proof'],
-    ['version', 'mode', 'firebaseProjectId', 'proof'],
+    ['version', 'mode', 'firebaseProjectId', 'wif', 'proof'],
+    ['version', 'mode', 'firebaseProjectId', 'wif', 'proof'],
     '$',
     issues,
   )) return issues;
   if (contract.version !== CONTRACT_VERSION) {
     issues.push(issue('unsupported-version', 'version', `Only contract version ${CONTRACT_VERSION} is supported.`));
   }
-  if (!['wif', 'function-endpoint'].includes(contract.mode)) {
-    issues.push(issue('unsupported-mode', 'mode', 'Mode must be wif or function-endpoint.'));
+  if (contract.mode !== 'wif') {
+    issues.push(issue('unsupported-mode', 'mode', 'Mode must be wif.'));
   }
   requiredString(contract.firebaseProjectId, 'firebaseProjectId', FIREBASE_PROJECT_RE, issues);
   if (expectedFirebaseProject && contract.firebaseProjectId !== expectedFirebaseProject) {
     issues.push(issue('firebase-project-mismatch', 'firebaseProjectId', 'Firebase project does not match the expected project.'));
   }
   if (contract.mode === 'wif') {
-    if (Object.hasOwn(contract, 'functionEndpoint')) {
-      issues.push(issue('mode-field-conflict', 'functionEndpoint', 'Function endpoint fields are forbidden in wif mode.'));
-    }
-    if (!Object.hasOwn(contract, 'wif')) {
-      issues.push(issue('missing-field', 'wif', 'WIF mode requires wif details.'));
-    } else {
-      validateWif(contract, now, issues);
-    }
-  } else if (contract.mode === 'function-endpoint') {
-    if (Object.hasOwn(contract, 'wif')) {
-      issues.push(issue('mode-field-conflict', 'wif', 'WIF fields are forbidden in function-endpoint mode.'));
-    }
-    if (!Object.hasOwn(contract, 'functionEndpoint')) {
-      issues.push(issue('missing-field', 'functionEndpoint', 'Function endpoint mode requires endpoint details.'));
-    } else {
-      validateFunctionEndpoint(contract, now, issues);
-    }
+    validateWif(contract, now, issues);
   }
   return issues;
 }

@@ -81,9 +81,8 @@ The plugin's `.mcp.json` also registers the **Microsoft Learn MCP server** (`mic
 ## Official MCP-first push architecture
 
 Push-notification cloud setup is **official MCP-first**. For `/setup-fcm`,
-`/setup-push-wif`, `/setup-push-service-account`,
-`/create-push-notification-flow`, `/verify-ios-push`, and the cross-skill push
-orchestration around them, use these boundaries:
+`/setup-push-wif`, `/create-push-notification-flow`, `/verify-ios-push`, and
+the cross-skill push orchestration around them, use these boundaries:
 
 **Pinned bootstrap baselines for the documented MCP path:** Firebase MCP
 package `firebase-tools` **15.27.0** (with `15.28.1` still main/unpublished on npm),
@@ -96,19 +95,18 @@ gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.
   MCP is unavailable.
 - **gcloud MCP preferred for `/setup-push-wif`** — use the vendor-official
   gcloud MCP for Google Cloud IAM/WIF/API enablement and other Google-side WIF
-  operations when available. If that MCP surface is unavailable after the
-  documented recovery sequence, `/setup-push-wif` may use an authenticated
-  official `gcloud` CLI only through `scripts/run-allowlisted-gcloud.js`.
+  operations when available. The MCP requires an installed Google Cloud CLI.
+  `/setup-push-wif` may offer to install it only after explicit approval and
+  only through a supported package manager already present. If the MCP surface
+  is unavailable after the documented recovery sequence, `/setup-push-wif`
+  may use an authenticated official `gcloud` CLI only through
+  `scripts/run-allowlisted-gcloud.js`.
   Firebase setup remains Firebase-MCP-only, and no other skill may broaden this
   fallback.
 - **Azure MCP required for covered operations** — use the vendor-official Azure
-  MCP in namespace mode (`mcp__azure__role`, `mcp__azure__functionapp`,
-  `mcp__azure__appservice`) for the bounded GA `2.0.5`
-  operation set this plugin actually documents: `role_assignment_list`,
-  `functionapp_get`, `appservice_webapp_get`,
-  `appservice_webapp_deployment_get`,
-  `appservice_webapp_settings_get-appsettings`,
-  `appservice_webapp_settings_update-appsettings`, and diagnostics. The plugin
+  MCP in namespace mode (`mcp__azure__subscription`, `mcp__azure__group`,
+  `mcp__azure__role`) for the bounded GA `2.0.5` read-back operations used by
+  WIF, including `role_assignment_list`. The plugin
   intentionally does not expose the `keyvault` namespace because GA `2.0.5`
   provides value-carrying secret operations but no safe metadata-list surface.
   Do **not** rely on nonexistent names such

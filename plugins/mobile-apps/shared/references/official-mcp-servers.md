@@ -42,6 +42,14 @@ the authentication and active-project tools required by `/setup-fcm` and
 plugin constrains it with a checked-in allowlist at
 `${PLUGIN_ROOT}/shared/mcp/gcloud-allowlist.json`.
 
+The MCP package invokes the locally installed Google Cloud CLI and therefore
+requires Node.js 20+ plus a working `gcloud` executable. The plugin can install
+the CLI on the user's behalf only after an explicit machine-level installation
+confirmation and only through a supported package manager already present.
+Otherwise, the user installs it from the official Google Cloud CLI
+documentation. Never silently install Homebrew, add package repositories, use
+`sudo`, or execute a downloaded installer.
+
 `run_gcloud_command` prepends the `gcloud` executable itself, so workflow
 examples and callers must pass `args` starting with the subcommand (`config`,
 `iam`, `services`, etc.), not a literal `"gcloud"` first token.
@@ -53,20 +61,16 @@ pool/provider management, service-account IAM, and custom-role management.
 ### Azure
 
 The Azure MCP bootstrap stays in namespace mode and exposes only these
-namespaces:
+namespaces for the WIF workflow:
 
 - `subscription`
 - `group`
 - `role`
-- `appservice`
-- `functionapp`
 
 `keyvault` is intentionally not exposed because GA `2.0.5` publishes
 value-carrying secret operations but no safe vault/secret metadata-list tool.
-`deploy` is also excluded because the push workflows do not use its generic
-planning/guidance tools for Function deployment. Secret-safe Key Vault writes
-and unsupported Function deployment edges remain the explicitly documented
-`az` exceptions.
+Secret-safe Key Vault writes and Entra resource work remain explicitly
+documented `az` exceptions.
 
 The pin for `firebase-tools` stays on `15.27.0` because live npm metadata on
 2026-08-24 showed `15.28.1` only on GitHub main / unpublished.
@@ -102,8 +106,6 @@ provisioning run, or extend this exception to Firebase or Azure.
 |---|---|---|
 | `/setup-fcm` | `firebase` | `mcp__firebase__firebase_get_environment`, `mcp__firebase__firebase_login`, `mcp__firebase__firebase_update_environment`, `mcp__firebase__firebase_list_projects`, `mcp__firebase__firebase_get_project`, `mcp__firebase__firebase_create_project`, `mcp__firebase__firebase_list_apps`, `mcp__firebase__firebase_create_app`, `mcp__firebase__firebase_get_sdk_config` |
 | `/setup-push-wif` | `azure`; `gcloud` preferred | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`; use `mcp__gcloud__run_gcloud_command` when available, otherwise the guarded official CLI fallback |
-| `/setup-push-service-account` | `azure` | `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`, `mcp__azure__functionapp`, `mcp__azure__appservice` |
-
 `/setup-apns` has no MCP readiness gate. It consumes the exact `/setup-fcm`
 identity handoff, then the user performs the APNs key upload manually in
 Firebase Console because the official Firebase MCP exposes no credential-upload

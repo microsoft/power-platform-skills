@@ -60,15 +60,15 @@
     {
       "id": 9,
       "coverage": "customer-owned-sender-routing",
-      "prompt": "Our handoff says `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated` and includes the exact customer-supplied sender flow ID. Refetch it safely and proceed without inspecting credentials. If we replace it with `customer-owned non-Flow endpoint / plugin physical verification unavailable`, treat that as equivalent.",
-      "expected_output": "The skill refetches the exact customer-supplied Power Automate sender flow ID with FlowAgent, requires Started and the observable queued/idempotent/topic/delivery/outbox contract without inspecting credentials or secure data, and may continue physical verification. It explicitly rejects the non-Flow status as non-equivalent and stops before live sends because FlowAgent cannot correlate a sender flow.",
+      "prompt": "Our handoff says `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated` and includes the exact plugin-created sender flow ID. Refetch it safely and proceed without inspecting credentials.",
+      "expected_output": "The skill refetches the exact plugin-created Power Automate sender flow ID with FlowAgent, requires Started and the observable queued/idempotent/topic/delivery/outbox contract without inspecting credentials or secure data, and may continue physical verification.",
       "files": []
     },
     {
       "id": 10,
       "coverage": "full-managed-physical-success",
-      "prompt": "I independently provide the customer-managed signer certificate SHA-256. validate-android-build-handoff.js returns exit 0/status valid with that fingerprint and the exact APK is installed on a physical Android 13 device. Both exact flows are Started/read back and I approve generic sends. Run complete verification.",
-      "expected_output": "The skill passes the independent expected signer to every handoff validation, consumes returned app minSdk/targetSdk and inputs.digest/counts/timestamps, requires the pre-send rerun to return the same digest and signer-bound fresh metadata proof, executes A-H with privacy-safe FlowAgent correlation, and only then reports Android push physically verified.",
+      "prompt": "I independently provide the customer-managed signer certificate SHA-256. validate-android-build-handoff.js returns exit 0/status valid with that fingerprint and the exact APK is installed on a physical Android 13 device. Both exact flows are Started/read back and I approve the test notification content after reviewing the device-exposure warning. Run complete verification.",
+      "expected_output": "The skill passes the independent expected signer to every handoff validation, consumes returned app minSdk/targetSdk and inputs.digest/counts/timestamps, requires the pre-send rerun to return the same digest and signer-bound fresh metadata proof, executes A-H with safely bounded FlowAgent correlation, and only then reports Android push physically verified.",
       "files": []
     }
   ]

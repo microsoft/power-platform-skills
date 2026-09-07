@@ -30,8 +30,38 @@ Never create or download a Google service-account key.
 
 ## Google tool readiness gate
 
+The official gcloud MCP requires Node.js 20+ and an installed `gcloud`
+executable. Before MCP recovery, run `node --version` and `gcloud --version`.
+
+If `gcloud` is missing, explain that it is a machine-level prerequisite and use
+`AskUserQuestion` with these choices:
+
+1. **Install Google Cloud CLI for me**
+2. **I will install it manually**
+3. **Use the manual Power Automate authentication option instead**
+
+For **Install Google Cloud CLI for me**, show the exact official installation
+command and its machine-level impact, then obtain a separate explicit
+confirmation before running it. Use only a supported package manager already
+installed on the machine:
+
+- macOS with Homebrew:
+  `brew update && brew install --cask gcloud-cli`
+- Debian/Ubuntu: follow the current official Google package-repository steps;
+  do not pipe a remote installer directly into a shell.
+- Windows: launch the signed Google Cloud CLI installer from the official
+  Google download path; do not silently install it.
+
+Do not install Homebrew, add an OS package repository, use `sudo`, or run a
+downloaded installer without separate explicit approval. If no supported
+package manager is available, give the official installation URL and wait for
+the user to complete it. After installation, require a fresh
+`gcloud --version`; if PATH changed, ask the user to restart the terminal or
+host before continuing.
+
 Before any cloud read-back, require the Azure MCP surfaces and prefer the
-official gcloud MCP surface. If gcloud MCP is unavailable, first give:
+official gcloud MCP surface. If gcloud MCP is unavailable after `gcloud`
+readiness is proven, first give:
 
 ```text
 /mcp

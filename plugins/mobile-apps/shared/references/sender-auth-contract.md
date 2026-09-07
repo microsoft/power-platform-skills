@@ -16,12 +16,11 @@ short-lived authorization proof, not credentials. Record only its project-local
 path, mode, Firebase project ID, and safe resource identifiers in
 `memory-bank.md`.
 
-This strict contract covers only the plugin-managed `wif` and
-`function-endpoint` modes. A customer who chooses manual/customer-owned sender
-authentication configures and validates that Power Automate authentication
-path independently. Do not create a manual mode, arbitrary endpoint schema, or
-credential-bearing escape hatch in `sender-auth.json`; report it as
-`customer-owned / not plugin-validated` instead. See
+This strict contract covers only the plugin-managed `wif` mode. A customer who
+chooses manual FCM authentication configures that authentication in the
+plugin-created Power Automate sender independently. Do not create a manual
+mode or credential-bearing escape hatch in `sender-auth.json`; report it as
+customer-owned and not plugin-validated instead. See
 [push-sender-auth-options.md](./push-sender-auth-options.md).
 
 ## Common envelope (version 1)
@@ -44,9 +43,7 @@ credential-bearing escape hatch in `sender-auth.json`; report it as
 Proof timestamps use canonical UTC ISO 8601. The validity window is at most 24
 hours. Consumers reject expired proofs and proofs more than 24 hours old;
 resource existence alone is not authorization proof. `proof.firebaseProjectId`
-binds the proof to the same Firebase project as the envelope. The verifier is
-mode-bound: `wif` requires `setup-push-wif`, while `function-endpoint` requires
-`setup-push-service-account`.
+binds the proof to the same Firebase project as the envelope. The verifier is mode-bound: `wif` requires `setup-push-wif`.
 
 The validator rejects unknown versions, modes, and fields. It also rejects
 private keys, service-account JSON, secret values, passwords, credentials,
@@ -107,51 +104,6 @@ read back the live provider, IAM/RBAC, sender account, FCM permission, and Key
 Vault reference, observe a fresh Entra claim shape, and complete a new Entra ->
 STS -> impersonation -> FCM `validateOnly` proof. Reusing names or finding that
 resources exist does not satisfy the proof requirement.
-
-## `function-endpoint` mode
-
-```json
-{
-  "version": 1,
-  "mode": "function-endpoint",
-  "firebaseProjectId": "contoso-mobile-prod",
-  "functionEndpoint": {
-    "endpointUrl": "https://contoso-push.azurewebsites.net/api/send",
-    "entra": {
-      "resourceAudience": "api://contoso-push-function",
-      "applicationId": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-    },
-    "connection": {
-      "referenceName": "fcmSenderFunction",
-      "resourceId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/mobile-prod/providers/Microsoft.Web/connections/fcm-sender"
-    },
-    "deploymentIdentity": {
-      "resourceId": "/subscriptions/11111111-2222-3333-4444-555555555555/resourceGroups/mobile-prod/providers/Microsoft.Web/sites/contoso-push",
-      "principalId": "cccccccc-dddd-eeee-ffff-000000000000"
-    }
-  },
-  "proof": {
-    "firebaseProjectId": "contoso-mobile-prod",
-    "verifiedAt": "2026-08-18T08:00:00.000Z",
-    "validUntil": "2026-08-19T08:00:00.000Z",
-    "verifier": "setup-push-service-account",
-    "steps": {
-      "entraAuthorization": true,
-      "keyVaultSecretRead": true,
-      "googleTokenMinted": true,
-      "fcmValidateOnly": true
-    }
-  }
-}
-```
-
-The endpoint must be HTTPS and must not contain user info, query parameters, or
-fragments. `connection.resourceId` identifies the Power Automate connection at
-`Microsoft.Web/connections/<name>`. `deploymentIdentity.resourceId` identifies
-the Function app that owns the managed identity at
-`Microsoft.Web/sites/<name>`; `principalId` is that identity's object ID. These
-are identifiers only; the Function remains responsible for Key Vault access,
-Google credential minting, and FCM delivery.
 
 ## CLI result and exit codes
 

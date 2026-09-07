@@ -51,18 +51,13 @@ Stop before any live send unless all of these are available and consistent:
    `/create-push-notification-flow`, plus their environment handoff.
 5. Either:
    - a fresh valid project-local `sender-auth.json` for a plugin-managed
-     `wif` or `function-endpoint` sender; or
+     `wif` sender; or
    - the exact recorded status `customer-owned Power Automate sender /
      observable contract read back; authentication not plugin-validated`, with
      the customer-supplied exact sender flow ID and safe FlowAgent read-back
      evidence.
 6. User confirmation that the exact APK named by `android-build.json` is
    installed on a physical Android 8+ device.
-
-The status `customer-owned non-Flow endpoint / plugin physical verification
-unavailable` blocks this skill before install confirmation or live sends.
-FlowAgent cannot read back or correlate a non-Flow sender, so do not infer a
-sender flow or inspect endpoint credentials.
 
 Reject an emulator, Expo Go, Metro-only preview, browser preview, generic
 Power Apps Developer, a differently named/copied APK, a previous installation,
@@ -208,7 +203,7 @@ scripts to inspect or mutate flows.
    similar display name. Call `get_flow` for both and require live state
    `Started`.
 3. Read back the producer trigger, recipient resolution, lowercase OID
-   expression, generic payload, and queued outbox create action.
+   expression, user-approved payload mapping, and queued outbox create action.
 4. Read back the sender's queued guard, atomic/idempotent transition,
    `allUsers` versus user-topic routing, secure settings, one FCM delivery
    branch, bounded failure handling, and `Sent`/`Failed` updates.
@@ -233,11 +228,6 @@ scripts to inspect or mutate flows.
    credentials or authorization configuration, request secure inputs/outputs,
    or claim credential security, rotation, least privilege, or authentication
    design was validated.
-8. For `customer-owned non-Flow endpoint / plugin physical verification
-   unavailable`, stop before live sends. Do not infer a sender flow or inspect
-   endpoint credentials; the customer owns end-to-end evidence outside the
-   plugin.
-
 Do not call any flow create, update, edit, publish, disable, copy, or delete
 tool. A stopped, drifted, disconnected, unpublished, or unreadable flow
 returns to `/create-push-notification-flow`.
@@ -264,14 +254,16 @@ Use the same independently sourced expected signer fingerprint; a changed or
 missing signer value blocks the send.
 
 Follow the common physical verification protocol exactly. Before each test
-send, obtain explicit consent for one generic, non-confidential notification.
+send, explain lock-screen and device payload exposure, recommend non-sensitive
+test values, and obtain explicit consent for the user-selected notification
+content and optional navigation intent.
 Use a new opaque case label, a UTC window, one source/outbox row, and the exact
 producer/sender run chain.
 
 Use FlowAgent `invoke_operation` for the discovered Dataverse operation, or
 `run_flow` only when live read-back proves a manual trigger. User-targeted
 tests must enter through the recorded producer; never bypass it with a direct
-user-targeted outbox insert. An `allUsers` case may create one generic queued
+user-targeted outbox insert. An `allUsers` case may create one approved queued
 outbox row through the discovered live Dataverse add-row operation.
 
 Use `get_run_history`, `get_run_details`, and `get_run_actions` for safe

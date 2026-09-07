@@ -163,7 +163,7 @@ Never run `adb devices`, collect an ADB serial, or request any device ID.
 
 ## Execute A-H in order
 
-Use a fresh opaque case label and one confirmed generic send for every delivery
+Use a fresh opaque case label and one confirmed user-approved send for every delivery
 case. Record device observation immediately. Stop when correlation becomes
 ambiguous.
 
@@ -202,7 +202,7 @@ Keep the user signed out and the exact app foregrounded.
 1. Require the app-created Android notification channel used by push delivery
    to exist with the intended user-visible name and non-silent importance.
    Channel configuration alone is not delivery proof.
-2. Send one generic `allUsers` case.
+2. Send one approved `allUsers` case.
 3. Require one outbox lifecycle, one sender run, and one visible foreground
    presentation matching the case label and UTC window.
 4. Require the app to remain usable and avoid duplicate foreground display.
@@ -211,7 +211,7 @@ Do not expose raw payload or provider response while checking presentation.
 
 ### C. Signed-out background `allUsers`
 
-Move the exact app to background without force-stopping it. Send a new generic
+Move the exact app to background without force-stopping it. Send a new approved
 `allUsers` case and require an independent outbox/run chain plus one visible
 system notification while backgrounded. Foreground success cannot satisfy this
 case. A sender success or `Sent` row without device receipt fails the case.
@@ -238,7 +238,7 @@ Sign in as consenting test account A. The live producer read-back must prove it
 validates the Entra OID and lowercases it before user-topic routing; never
 request or inspect the actual OID.
 
-Exercise the exact producer with one generic event owned by account A. Require
+Exercise the exact producer with one approved event owned by account A. Require
 one producer run, one queued user-audience outbox row, one sender run, terminal
 `Sent`, and one device receipt. Do not insert a user-targeted outbox row
 directly and do not use Firebase Console.
@@ -249,12 +249,12 @@ Switch from consenting account A to consenting account B without reinstalling.
 Require the client transition order to subscribe the new lowercase OID topic
 before removing the prior app-owned topic.
 
-1. Send one producer-owned generic account-B event and require receipt.
-2. Send one producer-owned generic account-A negative case and require no
+1. Send one producer-owned approved account-B event and require receipt.
+2. Send one producer-owned approved account-A negative case and require no
    receipt during the fixed two-minute window.
 3. Sign out; require transition order to subscribe exact `allUsers` before
    removing the remembered account-B topic.
-4. Send a fresh generic `allUsers` case and require receipt as the positive
+4. Send a fresh approved `allUsers` case and require receipt as the positive
    control for the account transition.
 
 Refer to the accounts only as `account-A` and `account-B`. Never collect,
@@ -266,7 +266,7 @@ Use the app's notification opt-out. Require a non-throwing disabled state and
 the intended unsubscribe behavior for the remembered app-owned topic plus
 `allUsers`.
 
-Send one new generic `allUsers` case. The server path may finish, but the device
+Send one new approved `allUsers` case. The server path may finish, but the device
 must not present it during a fixed two-minute observation window. Record the
 non-receipt as provisional until H's positive control passes.
 
@@ -287,7 +287,7 @@ Re-enable notifications. Use one supported recovery route:
    branch, and restore the signed-out `allUsers` state.
 
 Do not claim token-refresh coverage when only reinstall/re-registration was
-tested. Send one final generic `allUsers` control and require the full
+tested. Send one final approved `allUsers` control and require the full
 outbox/run/device receipt chain. This receipt is both recovery proof and the
 positive control that makes G's non-delivery meaningful.
 

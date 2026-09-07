@@ -33,8 +33,8 @@
     },
     {
       "id": 6,
-      "prompt": "The native Firebase client is already integrated. We use an existing Firebase service-account sender and want to create the Power Automate flows without WIF.",
-      "expected_output": "The skill allows direct create-push-notification-flow setup without redoing the native client, prefers WIF for new senders, and routes the existing service-account integration only through setup-push-service-account's Key Vault, managed-identity, Entra-protected Azure Function compatibility path.",
+      "prompt": "The native Firebase client is already integrated. We want the plugin to create the Power Automate flows, but we will configure FCM authentication ourselves.",
+      "expected_output": "The skill allows direct create-push-notification-flow setup without redoing the native client, presents WIF or customer-configured FCM authentication, and routes the manual choice to stopped plugin-created producer and sender flows without credentials.",
       "files": []
     },
     {
@@ -70,7 +70,7 @@
     {
       "id": 12,
       "prompt": "Push client code and the selected iOS Firebase app are valid, APNs was uploaded manually, sender-auth.json is missing, no flows exist, and no IPA has been built. Tell me exactly where setup stands and continue.",
-      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It preserves the manual setup-apple-ios and Firebase Console setup-apns boundary, routes sender auth to setup-push-wif or the compatibility skill, flow authoring to create-push-notification-flow, then the direct user-managed Wrap build to build-ios and delivery to verify-ios-push without performing those workflows itself.",
+      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It preserves the manual setup-apple-ios and Firebase Console setup-apns boundary, routes sender setup to WIF or customer-configured FCM authentication in plugin-created flows, then routes the direct user-managed Wrap build to build-ios and delivery to verify-ios-push without performing those workflows itself.",
       "files": []
     },
     {
@@ -93,14 +93,14 @@
     },
     {
       "id": 16,
-      "prompt": "Use our customer-owned manual Power Automate sender. The producer exists, and we can provide the exact sender flow ID. Continue toward iOS build and physical verification without validating our credentials.",
-      "expected_output": "The skill requires the exact customer-supplied sender flow ID in the producer's recorded environment and the safe FlowAgent read-back of both Started flows plus the observable queued/idempotent/topic/delivery/outbox contract. It records authentication as customer-owned and not plugin-validated, never inspects credentials or secure action data, and only then routes to build-ios and verify-ios-push.",
+      "prompt": "Use the plugin-created Power Automate sender after we manually configure its FCM authentication. Continue toward iOS build and physical verification without validating our credentials.",
+      "expected_output": "The skill requires the exact plugin-created sender flow ID in the producer's recorded environment and the safe FlowAgent read-back of both Started flows plus the observable queued/idempotent/topic/delivery/outbox contract. It records authentication as customer-owned and not plugin-validated, never inspects credentials or secure action data, and only then routes to build-ios and verify-ios-push.",
       "files": []
     },
     {
       "id": 17,
-      "prompt": "Our customer-owned sender is a hosted non-Flow endpoint, not a Power Automate sender flow. Record it and proceed with plugin physical push verification.",
-      "expected_output": "The skill records only a non-secret immutable endpoint identifier with customer-owned non-Flow endpoint / plugin physical verification unavailable, keeps producer-only state distinct, and blocks plugin physical verification because FlowAgent cannot read back or correlate an exact sender flow.",
+      "prompt": "Use a hosted custom endpoint instead of a Power Automate sender flow.",
+      "expected_output": "The skill explains that custom endpoint and Azure Function sender options are not offered. It presents only WIF or plugin-created Power Automate flows with customer-configured FCM authentication.",
       "files": []
     },
     {

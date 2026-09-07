@@ -297,56 +297,42 @@ Azure MCP where its current coverage applies, inspects a real Entra app-only
 token, configures the provider from the observed issuer and application claim,
 and proves the Google STS and service-account impersonation exchange without
 storing a Google private key. Azure MCP GA `2.0.5` is used here for covered
-read-back/settings operations; RBAC mutations, Function
-provisioning/deployment/auth/managed identity, Entra resource work, and
-secret-safe provisioning gaps remain explicit `az` work owned by the sender-auth
-skills.
+read-back operations; RBAC mutations, Entra resource work, and secret-safe
+provisioning gaps remain explicit `az` work owned by the sender-auth skill.
 
-Organizations with an existing Firebase service-account integration may
-instead run `/setup-push-service-account`. It validates or deploys an
-Entra-protected Azure Function, using Azure MCP only for covered read-back /
-settings surfaces such as `role_assignment_list`, `functionapp_get`, and App
-Service web app/deployment/appsettings/diagnostics reads. The package's full
-Azure MCP GA `2.0.5` surface includes value-carrying Key Vault secret tools,
-so this plugin does not expose the `keyvault` namespace. RBAC
-mutations, Function provisioning/deployment/auth/managed identity, Entra
-resource work, and secret-safe writes remain explicit `az` gaps. The skill
-never creates or downloads a Firebase Admin key.
-
-Customers may also choose **manual/customer-owned sender authentication**.
-That route can use an organization-selected Power Automate connector, custom
-connector, HTTP action, or hosted endpoint and whatever identity provider,
-secret store, API gateway, hosting, monitoring, and licensing it requires. The
-plugin does not provide a setup skill, accept credentials, or mark this route
-validated. The customer owns secure authentication, credential rotation, FCM
-HTTP v1 compliance, non-delivery testing, publication, monitoring, and support.
+Customers may instead choose **Create Power Automate flows; configure FCM
+authentication manually**. The plugin creates the producer/outbox and sender
+flow structure stopped, then identifies the exact FCM action the customer must
+configure. It does not accept credentials or mark the customer's
+authentication validated.
 
 `/create-push-notification-flow` first shows an informed comparison of all
-three choices—**WIF (Recommended)**, managed Azure Function compatibility, and
-manual/customer-owned setup. For either managed choice it consumes the
-validated sender-auth handoff and uses FlowAgent to create the outbox sender
-and producer flow. For manual setup it may create the producer/outbox only;
-the customer owns the sender. The
-producer defaults to a Dataverse row-created trigger and resolves the row owner
-to a lowercase Entra OID topic. When Microsoft-side semantics are uncertain,
-use Microsoft Learn docs rather than guessed contracts.
+two choices—**WIF (Recommended)** or customer-configured FCM authentication in
+the plugin-created Power Automate sender. The producer defaults to a Dataverse
+row-created trigger and resolves the row owner to a lowercase Entra OID topic.
+It warns about lock-screen/device exposure but lets the user choose title,
+body, and additional payload mappings. Based on the trigger table, it suggests
+a matching detail or list destination and lets the user change it or choose no
+deep link. When Microsoft-side semantics are uncertain, use Microsoft Learn
+docs rather than guessed contracts.
 
 #### Push notification cloud prerequisites
 
 - **Required MCP servers:** vendor-official Firebase MCP for Firebase
   project/app work, gcloud MCP for `/setup-push-wif` Google Cloud operations,
-  Azure MCP for covered read-back/settings work, and FlowAgent for Power
-  Automate mutation/read-back. There is no CLI fallback for Firebase or gcloud
-  in the documented push architecture. Azure MCP GA `2.0.5` currently covers
-  `role_assignment_list`, `functionapp_get`,
-  `appservice_webapp_get`, `appservice_webapp_deployment_get`,
-  `appservice_webapp_settings_get-appsettings`,
-  `appservice_webapp_settings_update-appsettings`, and diagnostics. This plugin
+  Azure MCP for covered WIF read-back, and FlowAgent for Power Automate
+  mutation/read-back. The separate `power-automate@power-platform-skills`
+  plugin is not installed automatically; `/create-push-notification-flow`
+  provides the exact manual install, restart, setup, and MCP verification steps
+  when FlowAgent is unavailable. The gcloud MCP requires Node.js 20+ and the Google Cloud
+  CLI. `/setup-push-wif` can install the CLI only after explicit approval and
+  only through a supported package manager already present. Azure MCP GA
+  `2.0.5` currently covers the WIF subscription/group/RBAC read-back used by
+  this plugin. This plugin
   intentionally does not expose the `keyvault` namespace because its available
   secret operations can return or accept secret values.
-  Azure CLI remains the explicit gap path for RBAC mutations, Function
-  provisioning/deployment/auth/managed identity, Entra resource work,
-  secret-safe writes, plus narrow local identity checks.
+  Azure CLI remains the explicit gap path for RBAC mutations, Entra resource
+  work, secret-safe writes, plus narrow local identity checks.
   Microsoft Learn MCP/docs remain the authoritative source for
   Microsoft-platform behavior. Tested stable package baselines for this path
   are Firebase MCP package `firebase-tools` **15.27.0** (`15.28.1` is
@@ -359,14 +345,10 @@ use Microsoft Learn docs rather than guessed contracts.
   connection identity, a Google Workload Identity Pool/Provider, a dedicated
   least-privilege Google sender service account/FCM role, and Power Automate
   Dataverse, Key Vault, and HTTP connections/actions.
-- **Managed Function compatibility:** an existing Firebase service-account
-  JSON, Azure Key Vault, managed-identity-enabled Azure Function hosting and
-  deployment resources, Entra protection, a tested Power Automate
-  connection/custom connector, Azure RBAC, and applicable premium licensing.
-- **Manual/customer-owned:** all connector or endpoint hosting, identity,
-  secret storage, gateway/networking, monitoring, licensing, credential
-  rotation, and operational support required by the customer's selected
-  architecture. The plugin does not validate this path.
+- **Manual FCM authentication:** Power Automate Dataverse and HTTP
+  connections/actions plus the customer's chosen Google credential and secret
+  storage approach. The plugin authors both flows stopped but does not inspect
+  or validate the configured authentication.
 - **Azure/Entra:** an Azure subscription; permission to create or validate the
   dedicated Entra applications/service principals and connection identities;
   and Azure Key Vault with data-plane RBAC. Contributor alone does not grant
@@ -375,12 +357,6 @@ use Microsoft Learn docs rather than guessed contracts.
   sender service account, an Entra sender credential stored in Key Vault, and
   Power Automate connections for Key Vault and the discovered premium HTTP
   actions.
-- **Existing service-account compatibility:** an already provisioned Firebase
-  service-account JSON kept outside repositories; Azure Function hosting,
-  managed identity, Key Vault, App Service/Function Entra authentication, and
-  an Entra-authenticated premium connector/connection usable by Power
-  Automate. Azure hosting charges and Power Platform premium licensing may
-  apply.
 - **iOS configuration:** Apple Developer access and manual APNs `.p8` key or
   `.p12` certificate upload to Firebase. `/setup-apple-ios` provides manual
   Apple Developer/Xcode guidance with Yes/No confirmations; `/setup-apns`
@@ -458,9 +434,8 @@ Example edit flows:
 | `/verify-android-push` | 🟡 preview | Verify the exact fresh wrapped APK and published producer/sender flows on a physical Android 8+ device across permission/channel behavior, foreground/background/terminated delivery, exactly-once deep links, topic transitions, opt-out, and token refresh or same-APK re-registration recovery. |
 | `/build-ios` | 🟡 preview | Run a confirmed registered-device development or ad-hoc IPA build directly through `npm run build:ios` (`wrap ios`) after manual Apple/Xcode and APNs setup. The user owns signing assets, device registration, profiles, and credentials; the skill retains safe local validation and artifact checks. Not for simulator, TestFlight, App Store, or enterprise distribution. |
 | `/verify-ios-push` | 🟡 preview | Verify the exact fresh wrapped IPA and published producer/sender flows on a registered physical iPhone/iPad across permission, foreground/background/terminated delivery, deep links, topic transitions, opt-out, and re-registration recovery. |
-| `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation through the official gcloud MCP plus Azure MCP read-back/settings coverage, while explicit `az` gaps remain for RBAC, Function provisioning/auth/managed identity, Entra resource work, and secret-safe writes that Azure MCP GA 2.0.5 does not cover. Then prove the complete exchange and write the non-secret sender-auth handoff. |
-| `/setup-push-service-account` | 🟡 preview | Compatibility path for an existing Firebase service-account integration: use Azure MCP for covered read-back/settings work, but keep RBAC mutations, Function provisioning/deployment/auth/managed identity, Entra resource work, and secret-safe writes on the documented `az` gap path. Never creates or downloads a Firebase Admin key. |
-| `/create-push-notification-flow` | 🟡 preview | Resume from an integrated Firebase client, compare recommended WIF, managed Function compatibility, and customer-owned manual sender authentication, then use FlowAgent for managed sender/producer flows or producer/outbox-only manual handoff. User notifications use lowercase Entra OID topics; broadcasts use exact `allUsers`. |
+| `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation through the official gcloud MCP plus Azure MCP read-back coverage. The gcloud MCP requires Google Cloud CLI; the skill may install it only after explicit approval. |
+| `/create-push-notification-flow` | 🟡 preview | Resume from an integrated Firebase client, choose recommended WIF or plugin-created Power Automate flows with customer-configured FCM authentication, then author and read back the producer/sender flows. The user chooses notification content after a privacy warning, and the skill suggests an editable trigger-table-aware deep link. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |

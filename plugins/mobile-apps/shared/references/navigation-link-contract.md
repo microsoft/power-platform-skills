@@ -27,6 +27,10 @@ reader: a payload containing `deepLink` is invalid. Existing queued rows and
 producer/sender flows must be migrated before a client using this contract is
 released.
 
+Push notifications may omit all three navigation fields. In that case, tapping
+the notification opens or foregrounds the app without dispatching a route.
+Partial navigation fields are invalid.
+
 ## Destination registry
 
 Create `src/navigation/linkContract.ts`. It owns:
@@ -160,21 +164,32 @@ Background FCM handling never navigates.
 
 ## Power Automate contract
 
-Flow makers provide an allowlisted destination and destination-specific safe
-fields. The producer validates those fields and constructs canonical `params`
-JSON. It never accepts an arbitrary route, URL, href, or complete navigation
-contract JSON.
+For a Dataverse-triggered producer, inspect the source table and the approved
+screen/navigation plan. Suggest the most relevant registered destination:
 
-The outbox stores:
+1. prefer a detail screen backed by the trigger table, with the trigger row ID
+   mapped to its required parameter;
+2. otherwise suggest a list screen backed by that table;
+3. otherwise suggest no deep link.
+
+Show the suggestion and rationale, then let the user accept it, choose another
+registered destination, or select no deep link. The producer validates any
+selected destination and constructs canonical `params` JSON. It never accepts
+an arbitrary route, URL, href, or complete navigation contract JSON.
+
+When navigation is selected, the outbox stores:
 
 - Payload Version (`"1"`);
 - Destination; and
 - Navigation Parameters (canonical JSON object of string values).
 
 The sender revalidates all three fields against the same destination allowlist
-before sending them as `schemaVersion`, `destination`, and `params`. WIF,
-Function, and customer-owned Power Automate sender paths must use the same
-observable contract and must not retain a `deepLink` fallback.
+before sending them as `schemaVersion`, `destination`, and `params`. When no
+navigation is selected, it omits all three fields. WIF and manually
+authenticated Power Automate sender paths must use the same observable
+contract and must not retain a `deepLink` fallback.
 
-Navigation parameters remain privacy-safe and non-confidential. Topic
-membership is routing convenience, not authorization.
+The skill must warn that navigation parameters and additional notification
+data reach the device and that topic membership is routing convenience, not
+authorization. The user chooses which business values to include. Credentials,
+tokens, private keys, and authentication material remain prohibited.

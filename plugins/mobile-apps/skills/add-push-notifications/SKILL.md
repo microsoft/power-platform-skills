@@ -42,13 +42,12 @@ Push cloud setup around this skill is **official MCP-first**. `/setup-fcm` is
 the only supported Firebase owner and requires the vendor-official Firebase MCP
 only; do not substitute `firebase-tools`, `gcloud`, or browser automation from
 here. `/setup-push-wif` separately owns Google-side WIF provisioning through
-gcloud MCP or its guarded official CLI fallback,
-`/setup-push-service-account` owns the Azure compatibility path,
-and FlowAgent remains the only Power Automate mutation path.
+gcloud MCP or its guarded official CLI fallback, and FlowAgent remains the
+only Power Automate mutation path.
 
 **Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)** —
-use this comparison when reporting sender-auth next steps. Manual setup is
-customer-owned; this plugin does not provision or validate it.
+use this comparison when reporting sender-auth next steps. Manual FCM
+authentication is customer-owned; this plugin does not inspect or validate it.
 
 ## Workflow
 
@@ -279,7 +278,7 @@ even when several are pending and even when Android and iOS differ:
 | APNs | Compatibility summary of the iOS platform row: not applicable / incomplete / **configured, device verification pending** / physically verified | `/setup-apns` configures; only `/verify-ios-push` can mark physical verification complete |
 | Android runtime integration | missing / incomplete / integrated / blocked | This skill |
 | iOS runtime integration | missing / incomplete / integrated / blocked | This skill |
-| Sender authentication | missing / valid managed handoff present / stale or blocked / customer-owned Power Automate sender with observable contract read back but authentication not plugin-validated / customer-owned non-Flow endpoint with plugin physical verification unavailable | `/create-push-notification-flow` presents and records the safe manual handoff; `/setup-push-wif` is recommended and `/setup-push-service-account` is the managed compatibility path |
+| Sender authentication | missing / valid WIF handoff present / stale or blocked / customer-owned Power Automate sender with observable contract read back but authentication not plugin-validated | `/create-push-notification-flow` offers WIF or plugin-created flows with customer-configured FCM authentication |
 | Power Automate flows | missing / producer only / exact producer+sender IDs recorded / published-and-read-back, without mutating or re-verifying them here | `/create-push-notification-flow`; manual Power Automate mode still requires the customer-supplied exact sender flow ID and safe FlowAgent read-back |
 | Wrapped Android build | not applicable / missing / stale / ready / blocked | `/build-android`; route by name only and do not assume its artifact format, build modes, or evidence contract |
 | Wrapped iOS build | not applicable / missing / stale / recorded `development` or `ad-hoc` IPA | `/build-ios`; the user manages Xcode configuration and signing assets, then the skill runs the direct Wrap command after exact confirmation |
@@ -292,10 +291,10 @@ this skill -> sender authentication and `/create-push-notification-flow` ->
 `/build-ios` -> `/verify-ios-push`. Route to `/build-ios` only after sender
 authentication and the exact producer/sender flows are ready. A manual sender
 must use the canonical safe handoff: the preferred Power Automate route has a
-customer-supplied exact sender flow ID plus observable FlowAgent read-back, and
-its authentication remains not plugin-validated. A bare manual choice,
-producer-only handoff, or non-Flow endpoint identifier is not sufficient for
-this build/readiness gate or plugin physical verification. These
+the exact plugin-created sender flow ID plus observable FlowAgent read-back,
+and its authentication remains not plugin-validated. A bare manual choice or
+producer-only handoff is not sufficient for this build/readiness gate or
+plugin physical verification. These
 are handoffs, not substeps: do not copy their manual Apple/Xcode guidance,
 user-managed Wrap build, FlowAgent read-back, or physical-device procedures
 into this workflow.
@@ -310,12 +309,9 @@ steps, or evidence schema.
 
 For an already integrated native client, the user may run
 `/create-push-notification-flow` directly. That skill validates the active
-client project and resumes sender authentication as needed: WIF is preferred;
-an existing service-account integration is supported only through the secure
-Key Vault + managed identity + Entra-protected Azure Function compatibility
-path owned by `/setup-push-service-account`; or the customer may choose the
-manual route and own the Power Automate authentication and sender
-implementation without a plugin-managed handoff. For Microsoft-stack uncertainty,
+client project and resumes sender authentication as needed: WIF is preferred,
+or the customer may choose plugin-created Power Automate flows and configure
+the sender's FCM authentication manually. For Microsoft-stack uncertainty,
 use the Microsoft Learn guidance in `shared/shared-instructions.md` instead of
 guessing connector, Entra, or Power Platform behavior.
 
@@ -327,10 +323,3 @@ contract, report:
 Continue to the requested platform build owner without requiring
 `sender-auth.json`, rerouting through a managed auth skill, inspecting
 credentials, or claiming authentication validation.
-
-When the customer instead records a non-secret non-Flow endpoint identifier,
-report:
-`customer-owned non-Flow endpoint / plugin physical verification unavailable`.
-Keep the producer-only flow state distinct, do not route to plugin physical
-verification, and do not claim end-to-end readiness. The customer owns that
-sender's validation and delivery evidence outside the plugin.

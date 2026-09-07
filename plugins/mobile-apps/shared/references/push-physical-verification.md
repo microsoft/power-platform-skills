@@ -10,7 +10,7 @@ Physical verification joins four independent facts for one test case:
 
 1. the exact fresh native artifact is installed on a supported physical device;
 2. the active Firebase client identity belongs to that artifact;
-3. the exact published producer and sender flows process one privacy-safe event
+3. the exact published producer and sender flows process one user-approved event
    through the expected outbox lifecycle; and
 4. the device exhibits the required foreground, background, terminated,
    topic-transition, opt-out, or recovery behavior.
@@ -34,10 +34,6 @@ Before a live test, require:
 - explicit confirmation of the exact artifact installed on a supported
   physical device.
 
-The status `customer-owned non-Flow endpoint / plugin physical verification
-unavailable` is not a physical-verification handoff. Stop before live sends:
-FlowAgent cannot read back an exact sender flow or correlate its run.
-
 Never select an artifact, Firebase app, environment, or flow by a similar
 display name. Missing, conflicting, or stale identity stops the test.
 
@@ -60,7 +56,7 @@ flow authoring, and still requires explicit send consent.
    environment ID and Dataverse URL.
 2. Fetch producer and sender by exact recorded IDs and require live state
    `Started`.
-3. Read back the producer's actual trigger, recipient resolution, generic
+3. Read back the producer's actual trigger, recipient resolution, approved
    payload construction, lowercase-OID expression, and queued outbox action.
 4. Read back the sender's queued guard, atomic/idempotent claim, audience/topic
    mapping, one authentication/delivery branch, secure settings, and terminal
@@ -77,17 +73,16 @@ flow authoring, and still requires explicit send consent.
    inputs/outputs, headers, token exchanges, or endpoint secret material. Do
    not claim credential storage, rotation, least privilege, or authentication
    design was validated.
-8. For `customer-owned non-Flow endpoint / plugin physical verification
-   unavailable`, stop. Do not infer a sender flow, inspect endpoint
-   credentials, or attempt plugin physical correlation.
-
 FlowAgent `smoke_test` proves connectivity only. It does not prove a specific
 flow definition, topic subscription, provider delivery, or device receipt.
 
 ## Privacy-safe correlation
 
-Obtain explicit confirmation before every live notification. Use generic,
-non-confidential title/body text and one allowlisted internal route.
+Obtain explicit confirmation before every live notification. Explain that
+title/body may appear on a lock screen and data payload fields reach the
+device. Recommend non-sensitive test content, but let the user approve the
+actual title, body, additional data, and whether to include an allowlisted
+internal route.
 
 Create a unique opaque case label, for example
 `PUSH-20260824-01`. The label must not contain a person's name, email, tenant,

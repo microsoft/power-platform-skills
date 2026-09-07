@@ -36,8 +36,6 @@ const AZURE_NAMESPACES = Object.freeze([
   'subscription',
   'group',
   'role',
-  'appservice',
-  'functionapp',
 ]);
 
 const OFFICIAL_SERVER_IDS = Object.freeze(['firebase', 'gcloud', 'azure']);

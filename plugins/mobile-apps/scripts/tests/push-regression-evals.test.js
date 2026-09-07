@@ -8,7 +8,6 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const EVAL_FILES = [
   'skills/create-push-notification-flow/evals/evals.json',
   'skills/setup-push-wif/evals/evals.json',
-  'skills/setup-push-service-account/evals/evals.json',
   'skills/add-dataverse/evals/evals.json',
   'skills/set-app-registration-native/evals/evals.json',
 ];
@@ -54,15 +53,8 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
   assert.match(shared, /Firebase MCP required/);
   assert.match(shared, /gcloud MCP preferred for `\/setup-push-wif`/);
   assert.match(shared, /mcp__azure__role/);
-  assert.match(shared, /mcp__azure__functionapp/);
-  assert.match(shared, /mcp__azure__appservice/);
   assert.doesNotMatch(shared, /mcp__azure__keyvault/);
   assert.match(shared, /role_assignment_list/);
-  assert.match(shared, /functionapp_get/);
-  assert.match(shared, /appservice_webapp_get/);
-  assert.match(shared, /appservice_webapp_deployment_get/);
-  assert.match(shared, /appservice_webapp_settings_get-appsettings/);
-  assert.match(shared, /appservice_webapp_settings_update-appsettings/);
   assert.match(shared, /does not expose the `keyvault` namespace/i);
   assert.match(shared, /value-carrying secret operations/i);
   assert.match(shared, /Do \*\*not\*\* rely on nonexistent names such[\s\S]*`functionapp_list` or `keyvault_secret_list`/);
@@ -74,16 +66,15 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
     /\| `\/setup-fcm` \| .*vendor-official Firebase MCP to list\/select\/create Firebase projects.*No CLI fallback\./,
   );
   assert.match(readme, /gcloud MCP for `\/setup-push-wif` Google Cloud operations/);
-  assert.match(readme, /`functionapp_get`/);
   assert.match(readme, /does not expose the `keyvault` namespace/i);
 
   assert.match(agents, /Firebase MCP for `\/setup-fcm`/);
   assert.match(agents, /gcloud MCP for `\/setup-push-wif`/);
-  assert.match(agents, /`role_assignment_list`, `functionapp_get`, `appservice_webapp_get`/);
-  assert.match(agents, /does not expose Azure MCP's `keyvault` namespace/i);
+  assert.match(agents, /gcloud MCP requires Node\.js 20\+ and Google Cloud CLI/i);
+  assert.match(agents, /`keyvault` namespace remains excluded/i);
   assert.match(officialMcp, /Workflow readiness gates and `\/mcp` recovery/);
   assert.match(officialMcp, /\/setup-push-wif[\s\S]*`azure`; `gcloud` preferred[\s\S]*mcp__azure__role[\s\S]*mcp__gcloud__run_gcloud_command/s);
-  assert.match(officialMcp, /\/setup-push-service-account[\s\S]*azure[\s\S]*mcp__azure__functionapp[\s\S]*mcp__azure__appservice/s);
+  assert.match(officialMcp, /requires Node\.js 20\+ plus a working `gcloud` executable/i);
   assert.match(officialMcp, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
   assert.match(officialMcp, /Never call `gcloud` directly[\s\S]*extend this exception to Firebase or Azure/i);
 
@@ -118,29 +109,22 @@ test('push flow presents informed managed and customer-owned sender auth choices
   const agents = fs.readFileSync(path.join(PLUGIN_ROOT, 'AGENTS.md'), 'utf8');
 
   assert.match(flow, /Workload Identity Federation \(Recommended\)/);
-  assert.match(flow, /Managed Azure Function compatibility/);
-  assert.match(flow, /Manual\/customer-owned sender authentication/);
-  assert.match(flow, /show its three-option comparison/);
-  assert.match(flow, /do not invoke or create a\s+setup skill/i);
+  assert.match(flow, /Create Power Automate flows; configure FCM authentication manually/);
+  assert.match(flow, /two-option comparison/);
+  assert.doesNotMatch(flow, /Managed Azure Function compatibility/);
+  assert.doesNotMatch(flow, /non-Flow endpoint/);
   assert.match(
     flow,
     /customer-owned Power Automate sender \/ observable contract read back;\s+authentication not plugin-validated/,
   );
-  assert.match(
-    flow,
-    /authors only the producer\/outbox artifacts[\s\S]*not ready for downstream routing without a safe sender handoff/i,
-  );
-  assert.match(flow, /must not create a placeholder[\s\S]*unauthenticated HTTP\s+action/i);
+  assert.match(flow, /authors the complete non-secret producer,[\s\S]*sender action structure/i);
+  assert.match(flow, /remains stopped/i);
+  assert.match(flow, /customer configures FCM\s+authentication/i);
   assert.match(flow, /checkbox or verbal confirmation cannot promote/i);
-  assert.match(flow, /customer-supplied and\s+approved \*\*exact sender flow ID\*\*/i);
-  assert.match(flow, /call\s+`get_flow` for that ID/i);
-  assert.match(flow, /returned ID to match exactly and state `Started`/i);
+  assert.match(flow, /exact\s+plugin-created sender flow ID/i);
   assert.match(flow, /observable\s+queued-outbox trigger\/guard, idempotent claim/i);
   assert.match(flow, /no\s+authentication-validation result/i);
-  assert.match(
-    authoring,
-    /A display name, URL with\s+an unproved ID, screenshot,\s+checkbox, or verbal "it works" is not a flow identity/i,
-  );
+  assert.match(authoring, /display name, screenshot, checkbox, or verbal "it works" is not a flow\s+identity/i);
   assert.match(authoring, /Read back only its observable, non-secret contract/i);
   assert.match(authoring, /Push flow handoff/);
   assert.match(authoring, /Sender flow ID/);
@@ -148,41 +132,29 @@ test('push flow presents informed managed and customer-owned sender auth choices
     authoring,
     /customer-owned Power Automate sender \/ observable contract read back;\s+authentication not plugin-validated/,
   );
-  assert.match(authoring, /### Flow-backed handoff schema/);
   assert.match(authoring, /both exact IDs must read back by ID\s+as `Started`/i);
-  assert.match(authoring, /### Non-Flow blocked handoff schema/);
-  const nonFlowFields = authoring.match(
-    /### Non-Flow blocked handoff schema[\s\S]*?Use only these fields:\n([\s\S]*?)\n\nThe endpoint identifier/,
-  )?.[1] || '';
-  assert.match(nonFlowFields, /`Sender endpoint identifier`/);
-  assert.match(nonFlowFields, /`Producer flow ID`/);
-  assert.match(nonFlowFields, /`Producer flow state`/);
-  assert.doesNotMatch(nonFlowFields, /`Sender flow ID`|`Sender flow state`/);
-  assert.match(
-    flow,
-    /For a non-Flow endpoint[\s\S]*Omit `Sender flow ID` and `Sender flow state` entirely/i,
-  );
+  assert.doesNotMatch(authoring, /Non-Flow blocked handoff/);
 
   assert.match(options, /Workload Identity Federation \(Recommended\)/);
   assert.match(options, /Dedicated Entra app\/service principal and credential/);
   assert.match(options, /Azure Key Vault secret plus data-plane RBAC/);
   assert.match(options, /Google Workload Identity Pool and Provider/);
-  assert.match(options, /existing Firebase service-account JSON/i);
-  assert.match(options, /managed-identity-enabled Azure Function/);
-  assert.match(options, /customer-selected design requires/i);
-  assert.match(options, /No setup skill, provisioning, credential handling/);
+  assert.match(options, /Create Power Automate flows; configure FCM authentication manually/);
+  assert.match(options, /authors the flows stopped/i);
+  assert.doesNotMatch(options, /Managed Azure Function compatibility/);
+  assert.doesNotMatch(options, /hosted endpoint/);
   assert.match(options, /FCM `validateOnly`/);
-  assert.match(options, /customer-owned \/ not plugin-validated/);
+  assert.match(options, /authentication not plugin-validated/);
 
-  assert.match(contract, /covers only the plugin-managed `wif` and\s+`function-endpoint` modes/i);
-  assert.match(contract, /Do not create a manual mode/i);
+  assert.match(contract, /covers only the plugin-managed `wif` mode/i);
+  assert.match(contract, /Do not create a manual\s+mode/i);
   assert.match(
     orchestration,
     /customer-owned Power Automate sender[\s\S]*authentication not plugin-validated/i,
   );
-  assert.match(readme, /three choices—\*\*WIF \(Recommended\)\*\*/);
-  assert.match(readme, /Manual\/customer-owned/);
-  assert.match(agents, /three informed sender-auth choices/);
+  assert.match(readme, /two choices—\*\*WIF \(Recommended\)\*\*/);
+  assert.match(readme, /customer-configured FCM authentication/);
+  assert.match(agents, /presents two sender-auth choices/);
 });
 
 test('push flow recovery keeps the tool surface non-destructive', () => {
@@ -212,11 +184,11 @@ test('push flow recovery keeps the tool surface non-destructive', () => {
   assert.match(evals.find(({ id }) => id === 47).expected_output, /does not use delete_flow/i);
   assert.match(
     evals.find(({ id }) => id === 48).expected_output,
-    /omits Sender flow ID and Sender flow state entirely/i,
+    /does not offer or record a custom endpoint route/i,
   );
 });
 
-test('push sender auth skills pin GA MCP versions and namespace semantics', () => {
+test('WIF sender auth pins MCP versions and gcloud prerequisites', () => {
   const fs = require('node:fs');
   const wifSkill = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
@@ -226,17 +198,12 @@ test('push sender auth skills pin GA MCP versions and namespace semantics', () =
     path.join(PLUGIN_ROOT, 'shared/references/push-flow-wif.md'),
     'utf8',
   );
-  const endpointSkill = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills/setup-push-service-account/SKILL.md'),
-    'utf8',
-  );
-  const functionReference = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills/setup-push-service-account/references/function-endpoint.md'),
-    'utf8',
-  );
-
   assert.match(wifSkill, /allowed-tools: .*mcp__gcloud__run_gcloud_command.*mcp__azure__subscription.*mcp__azure__group.*mcp__azure__role/s);
   assert.match(wifSkill, /Google tool readiness gate/);
+  assert.match(wifSkill, /official gcloud MCP requires Node\.js 20\+/i);
+  assert.match(wifSkill, /Install Google Cloud CLI for me/);
+  assert.match(wifSkill, /brew update && brew install --cask gcloud-cli/);
+  assert.match(wifSkill, /separate explicit\s+confirmation/i);
   assert.match(wifSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
   assert.match(wifSkill, /require the Azure MCP surfaces and prefer the\s+official gcloud MCP surface/i);
   assert.match(wifSkill, /@google-cloud\/gcloud-mcp@0\.5\.3/);
@@ -266,44 +233,6 @@ test('push sender auth skills pin GA MCP versions and namespace semantics', () =
   assert.match(wifReference, /Call the namespace tool with routed command\/parameters/);
   assert.match(wifReference, /does not expose its[\s\S]*`keyvault` namespace/i);
   assert.match(wifReference, /no safe[\s\S]*metadata-only route/i);
-
-  assert.match(endpointSkill, /allowed-tools: .*mcp__azure__subscription.*mcp__azure__group.*mcp__azure__role.*mcp__azure__functionapp.*mcp__azure__appservice/s);
-  assert.match(endpointSkill, /MCP readiness gate/);
-  assert.match(endpointSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
-  assert.match(endpointSkill, /show `azure` connected with the required[\s\S]*tools/i);
-  assert.match(endpointSkill, /@azure\/mcp@2\.0\.5/);
-  assert.match(endpointSkill, /mcp__azure__subscription/);
-  assert.match(endpointSkill, /mcp__azure__group/);
-  assert.doesNotMatch(endpointSkill, /allowed-tools: .*mcp__azure__keyvault/s);
-  assert.match(endpointSkill, /mcp__azure__functionapp/);
-  assert.match(endpointSkill, /mcp__azure__appservice/);
-  assert.doesNotMatch(endpointSkill, /allowed-tools: .*mcp__azure__deploy/s);
-  assert.match(endpointSkill, /mcp__azure__role/);
-  assert.match(endpointSkill, /Use the namespace[\s\S]*tool plus routed command\/parameters/);
-  assert.match(endpointSkill, /does not[\s\S]*expose the `keyvault` namespace/i);
-  assert.match(endpointSkill, /mcp__azure__azmcp_functionapp_get/);
-  assert.match(endpointSkill, /mcp__azure__azmcp_role_assignment_list/);
-  assert.match(endpointSkill, /functionapp_list/);
-  assert.match(endpointSkill, /keyvault_secret_list/);
-
-  assert.match(functionReference, /@azure\/mcp@2\.0\.5/);
-  assert.match(functionReference, /mcp__azure__subscription/);
-  assert.match(functionReference, /mcp__azure__group/);
-  assert.doesNotMatch(functionReference, /mcp__azure__keyvault/);
-  assert.match(functionReference, /mcp__azure__functionapp/);
-  assert.match(functionReference, /functionapp_get/);
-  assert.match(functionReference, /mcp__azure__appservice/);
-  assert.match(functionReference, /appservice_webapp_get/);
-  assert.match(functionReference, /appservice_webapp_deployment_get/);
-  assert.match(functionReference, /appservice_webapp_settings_get-appsettings/);
-  assert.match(functionReference, /appservice_webapp_settings_update-appsettings/);
-  assert.match(functionReference, /mcp__azure__role/);
-  assert.match(functionReference, /role_assignment_list/);
-  assert.match(functionReference, /does not expose a safe[\s\S]*metadata-only Key Vault namespace route/i);
-  assert.match(functionReference, /Function creation\/deployment and other unsupported mutation edges/);
-  assert.match(functionReference, /Do not use `keyvault_secret_get` or `keyvault_secret_create`/);
-  assert.doesNotMatch(functionReference, /mcp__azure__deploy/);
-  assert.match(functionReference, /do not\s+invent nonexistent tool names such as `mcp__azure__azmcp_functionapp_get` or\s+`functionapp_list`/i);
 });
 
 test('push orchestration documents independent resumable setup tracks', () => {
@@ -328,11 +257,10 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.match(skill, /independent,\s+resumable lifecycle/);
   assert.match(lifecycle, /Track Android and iOS independently/);
   assert.match(lifecycle, /\| 5\. Power Automate flows .*`\/create-push-notification-flow` \|/);
-  assert.match(readme, /`\/setup-push-service-account`/);
   assert.match(readme, /Push notification cloud prerequisites/);
   assert.match(readme, /premium connector/);
   assert.match(agents, /WIF is the preferred sender authentication/);
-  assert.match(agents, /managed identity reads the existing Firebase JSON from Azure Key Vault/);
+  assert.match(agents, /Azure Function and custom endpoint options are not offered/);
   assert.match(orchestration.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
 });
 
@@ -371,7 +299,7 @@ test('iOS push orchestration reports stage ownership without duplicating build o
   assert.match(readme, /\| `\/verify-ios-push` \|/);
   assert.match(readme, /development and ad-hoc\s+registered-device IPA workflows/);
   assert.match(readme, /user directly manages signing; `\/build-ios` runs the confirmed Wrap\s+command/);
-  assert.match(agents, /38 skills \+ 5 agents/);
+  assert.match(agents, /36 skills \+ 5 agents/);
   assert.match(agents, /manual Apple Developer and Xcode guidance/);
   assert.match(agents, /user owns signing assets, registered devices/);
 });
@@ -410,14 +338,8 @@ test('push docs require official MCP-first orchestration boundaries', () => {
   assert.match(shared, /gcloud MCP preferred for `\/setup-push-wif`/);
   assert.match(shared, /Azure MCP required for covered operations/);
   assert.match(shared, /role_assignment_list/);
-  assert.match(shared, /functionapp_get/);
-  assert.match(shared, /appservice_webapp_get/);
-  assert.match(shared, /appservice_webapp_deployment_get/);
-  assert.match(shared, /appservice_webapp_settings_get-appsettings/);
-  assert.match(shared, /appservice_webapp_settings_update-appsettings/);
   assert.match(shared, /secret values and are intentionally excluded/i);
   assert.match(shared, /RBAC mutations/);
-  assert.match(shared, /Function\s+creation\/deployment\/auth\/managed identity/);
   assert.match(shared, /Entra resource work/);
   assert.match(shared, /secret-safe writes/);
   assert.match(shared, /FlowAgent remains the Power Automate mutation path/);
@@ -429,24 +351,25 @@ test('push docs require official MCP-first orchestration boundaries', () => {
   assert.match(readme, /firebase-tools` \*\*15\.27\.0\*\*/);
   assert.match(readme, /gcloud MCP \*\*0\.5\.3\*\*/);
   assert.match(readme, /Azure MCP GA \*\*2\.0\.5\*\*/);
-  assert.match(readme, /`role_assignment_list`/);
-  assert.match(readme, /`functionapp_get`/);
+  assert.match(readme, /subscription\/group\/RBAC read-back/i);
   assert.match(readme, /does not expose the `keyvault` namespace/i);
   assert.match(readme, /RBAC mutations/);
   assert.match(agents, /Push cloud setup is \*\*official MCP-first\*\*/);
   assert.match(agents, /firebase-tools` 15\.27\.0/);
   assert.match(agents, /gcloud MCP 0\.5\.3/);
   assert.match(agents, /Azure MCP GA 2\.0\.5/);
-  assert.match(agents, /`role_assignment_list`, `functionapp_get`, `appservice_webapp_get`/);
-  assert.match(agents, /secret-safe writes remain explicit `az` gaps/);
+  assert.match(agents, /Google Cloud CLI/);
   assert.match(addPush, /vendor-official Firebase MCP\s+only/);
   assert.match(
     createFlow,
-    /Do not fall\s+back to `firebase-tools`,\s*`gcloud`, or Azure provisioning from this skill/,
+    /Do not fall\s+back to `firebase-tools`, `gcloud`, or cloud\s+provisioning from this skill/,
   );
   assert.match(verify, /consumes only previously validated MCP-first handoffs/i);
   assert.match(officialMcp, /Apple Developer and Xcode setup is intentionally outside MCP automation/);
-  assert.match(officialMcp, /No MCP\s+server, local provisioning tool, or generated proof artifact substitutes/);
+  assert.match(
+    officialMcp,
+    /No MCP\s+server, local\s+provisioning tool, or generated proof artifact substitutes/,
+  );
 });
 
 test('iOS push contract is consent-first and registers background handling before Router', () => {

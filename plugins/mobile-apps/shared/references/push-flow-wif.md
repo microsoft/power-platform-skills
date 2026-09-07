@@ -6,9 +6,8 @@ Firebase project as the native client. Provisioning, reuse, repair, IAM/RBAC,
 live proof, and handoff creation belong to
 `push-wif-provisioning.md` and `/setup-push-wif`.
 
-A `function-endpoint` flow must not contain any action from this sequence, even
-as a fallback. Its validated Entra-protected Function owns Google
-authentication and FCM.
+Do not add a second sender-authentication branch or fallback. WIF is the only
+plugin-managed sender-auth mode.
 
 ## Provisioning ownership boundary
 
@@ -112,12 +111,19 @@ Use `message.topic`, never a condition assembled from untrusted text. `User`
 delivery requires a GUID-validated lowercase Entra OID topic. `AllUsers`
 requires an empty Target OID and exact case-sensitive `allUsers`.
 
-Send only approved generic notification title/body plus string-valued
-`data.schemaVersion`, allowlisted semantic `data.destination`, and canonical
-destination-specific `data.params`, together with the discovered Android/APNs
-fields. Revalidate all three fields against `navigation-link-contract.md`;
-never retain a legacy `deepLink` fallback. OID topics are routing convenience,
-not an authorization boundary.
+Send the user-approved notification title/body and Additional Data string
+fields. Additional Data cannot override reserved `schemaVersion`,
+`destination`, `params`, or `deepLink` keys. When navigation is selected, add
+the validated string-valued `data.schemaVersion`, allowlisted semantic
+`data.destination`, and canonical destination-specific `data.params`; omit all
+three when no deep link is selected. Include the discovered Android/APNs
+fields and never retain a legacy `deepLink` fallback.
+
+Before content is approved, explain that notification text may appear on a lock
+screen and data fields reach the device, and that OID topics are routing
+convenience rather than an authorization boundary. Recommend minimizing
+sensitive data, but honor the user's business-content choice. Credentials,
+tokens, private keys, and authentication headers remain prohibited.
 
 ## Action security and failure handling
 
@@ -137,7 +143,7 @@ not an authorization boundary.
 
 The authoring workflow must read the persisted flow back and prove this exact
 Key Vault -> Entra -> STS -> impersonation -> FCM action tree, secure settings,
-and mode-specific connections. Any Function branch, generic fallback,
+and mode-specific connections. Any Azure Function branch, generic fallback,
 service-account JSON, or mixed-mode path is a blocker.
 
 References:

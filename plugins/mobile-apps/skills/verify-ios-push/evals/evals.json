@@ -47,13 +47,13 @@
       "id": 7,
       "coverage": "topic-transition-and-opt-out",
       "prompt": "Verify signed-in user routing, sign-out to allUsers, and opt-out without inspecting identity values, registration tokens, derived topic strings, or raw recipient target fields.",
-      "expected_output": "The skill proves the signed-in transition behaviorally: the signed-in account receives the intended generic notification through the producer-to-outbox-to-sender chain, correlated only by safe case ID and topic category user. It proves sign-out through a fresh allUsers receipt, tests opt-out non-receipt, and requires a successful re-registration control.",
+      "expected_output": "The skill proves the signed-in transition behaviorally: the signed-in account receives the user-approved notification through the producer-to-outbox-to-sender chain, correlated only by safe case ID and topic category user. It proves sign-out through a fresh allUsers receipt, tests opt-out non-receipt, and requires a successful re-registration control.",
       "files": []
     },
     {
       "id": 8,
       "coverage": "full-physical-success",
-      "prompt": "The exact fresh ad-hoc IPA recorded after the manual Team/bundle/mode signing confirmation is installed on a registered iPhone. Firebase/APNs/build identities match, sender-auth is valid, both flows are Started and read back correctly, and I approve generic test sends. Run and record the complete iOS push matrix.",
+      "prompt": "The exact fresh ad-hoc IPA recorded after the manual Team/bundle/mode signing confirmation is installed on a registered iPhone. Firebase/APNs/build identities match, sender-auth is valid, both flows are Started and read back correctly, and I approve the test notification content after reviewing the device-exposure warning. Run and record the complete iOS push matrix.",
       "expected_output": "The skill preserves exact recorded IPA path/size/mtime continuity without requiring generated provisioning proof, executes A-H in order, correlates safe source/outbox/run/provider/device/route evidence for each case, verifies permission denial/grant, signed-out foreground/background/cold-start, behavioral signed-in user-topic delivery using only safe case ID and topic category, sign-out, opt-out, and token-refresh or same-IPA re-registration recovery, validates memory-bank.md, and only then marks APNs physical verification complete.",
       "files": []
     },
@@ -66,9 +66,9 @@
     },
     {
       "id": 10,
-      "coverage": "non-flow-sender-unverifiable",
-      "prompt": "The current IPA is installed and the producer flow is Started, but our customer-owned sender is a hosted non-Flow endpoint identified in the handoff. Run plugin iOS physical verification.",
-      "expected_output": "The skill stops before live sends, reports customer-owned non-Flow endpoint / plugin physical verification unavailable, refuses to infer a sender flow or inspect endpoint credentials, and keeps APNs and iOS physical delivery pending because FlowAgent cannot read back or correlate the sender.",
+      "coverage": "unsupported-custom-endpoint",
+      "prompt": "The current IPA is installed and the producer flow is Started, but we want to use a hosted custom endpoint instead of the Power Automate sender. Run plugin iOS physical verification.",
+      "expected_output": "The skill explains that custom endpoint sender handoffs are not supported and requires the exact plugin-created Power Automate sender flow or a WIF-authenticated sender before physical verification.",
       "files": []
     }
   ]

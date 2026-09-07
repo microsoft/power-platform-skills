@@ -30,7 +30,7 @@ test('verify-ios-push evals cover the approved physical-device matrix', () => {
       'topic-transition-and-opt-out',
       'full-physical-success',
       'manual-auth-downstream',
-      'non-flow-sender-unverifiable',
+      'unsupported-custom-endpoint',
     ],
   );
   assert.deepStrictEqual(

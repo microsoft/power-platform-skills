@@ -111,8 +111,6 @@ function validateCapabilities(issues) {
     'subscription',
     'group',
     'role',
-    'appservice',
-    'functionapp',
   ];
 
   if (JSON.stringify(AZURE_NAMESPACES) !== JSON.stringify(expectedAzureNamespaces)) {

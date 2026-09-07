@@ -94,7 +94,7 @@
     {
       "id": 23,
       "prompt": "Include the note title and confidential body text in the push notification payload.",
-      "expected_output": "The skill refuses confidential business content, uses a generic title/body, and constructs only an allowlisted semantic destination with destination-specific privacy-safe parameters.",
+      "expected_output": "The skill explains lock-screen and device payload exposure and that topic membership is not authorization, recommends minimizing sensitive content, then lets the user choose whether to include the note title/body. It still rejects credentials, tokens, private keys, authorization headers, and invalid payload shapes.",
       "files": []
     },
     {
@@ -110,6 +110,36 @@
       "files": []
     },
     {
+      "id": 30,
+      "prompt": "The trigger table is new_workitem and the app has a registered work-item-detail destination that accepts workItemId. Suggest the deep link.",
+      "expected_output": "The skill suggests work-item-detail because it is backed by the trigger table, maps the trigger row ID to workItemId, explains the choice, and lets the user accept it, choose another registered destination, or choose no deep link.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "prompt": "The trigger table has a matching list screen but no detail destination.",
+      "expected_output": "The skill suggests the matching list destination, explains that no detail destination is registered, and lets the user accept, change, or omit navigation.",
+      "files": []
+    },
+    {
+      "id": 32,
+      "prompt": "The trigger table has no matching registered screen.",
+      "expected_output": "The skill suggests no deep link and lets the user choose another registered destination if desired; it never invents an Expo Router path.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "prompt": "Add source fields to the additional FCM data payload.",
+      "expected_output": "The skill warns that data reaches the device, lets the user select business fields, canonicalizes them as a flat string map, and rejects reserved navigation keys and authentication secrets.",
+      "files": []
+    },
+    {
+      "id": 34,
+      "prompt": "FlowAgent is missing even though mobile-app was installed.",
+      "expected_output": "The skill explains that mobile-app does not automatically install the separate power-automate plugin, then provides the manual marketplace install, restart, setup, and MCP verification steps.",
+      "files": []
+    },
+    {
       "id": 35,
       "prompt": "The native app already has active Android and iOS Firebase client files for the same project. Create the push flows without rerunning setup-fcm.",
       "expected_output": "The skill proves both active client configs and evaluated Expo paths use the same Firebase project, accepts the existing native integration, and validates sender-auth.json against that project without invoking setup-fcm again.",
@@ -117,8 +147,8 @@
     },
     {
       "id": 36,
-      "prompt": "There is no sender-auth.json yet. I might have existing WIF resources or an existing Entra-protected Azure Function sender.",
-      "expected_output": "The skill authors no sender actions and offers distinct routes: preferred setup-push-wif provision/reuse/repair, setup-push-service-account validation/reuse for the existing endpoint, or its compatibility scaffold only when an existing service-account JSON is already possessed.",
+      "prompt": "There is no sender-auth.json yet. Show the supported sender authentication choices.",
+      "expected_output": "The skill offers exactly two routes: preferred setup-push-wif provision/reuse/repair, or plugin-created stopped Power Automate producer/sender flows whose FCM authentication the customer configures manually.",
       "files": []
     },
     {
@@ -129,20 +159,20 @@
     },
     {
       "id": 38,
-      "prompt": "A fresh validated function-endpoint sender-auth.json matches the native Firebase project. Use the Azure Function to send.",
-      "expected_output": "The skill finds and tests the handoff's exact connection resource, discovers its Entra-authenticated operation with FlowAgent, invokes it with secure inputs/outputs and the strict privacy-safe request, and includes no Key Vault, STS, impersonation, direct FCM, generic HTTP, or WIF fallback action.",
+      "prompt": "Create only the Power Automate flows and let me configure FCM authentication.",
+      "expected_output": "The skill creates the producer, outbox, idempotent sender, topic routing, payload, and terminal updates as stopped flows, leaves the exact FCM authentication action unconfigured, requests no credentials, and pauses before publication.",
       "files": []
     },
     {
       "id": 39,
-      "prompt": "The Function sender operation cannot be discovered on the handoff connection. Add the WIF action tree as a fallback so the flow can still publish.",
-      "expected_output": "The skill blocks authoring and routes back to setup-push-service-account; it never guesses an operation, swaps connections, or falls back between sender-auth modes.",
+      "prompt": "Add an Azure Function fallback to the manually authenticated sender.",
+      "expected_output": "The skill refuses because Azure Function and custom endpoint sender options are not supported; it keeps exactly one route, WIF or customer-configured authentication in the Power Automate sender.",
       "files": []
     },
     {
       "id": 40,
       "prompt": "There is no sender-auth.json. Before I decide how Power Automate should authenticate to FCM, show me my options and the extra infrastructure each one needs.",
-      "expected_output": "The skill presents WIF as recommended, managed Azure Function compatibility, and customer-owned manual setup. It accurately lists each option's Azure, Google/Firebase, Power Automate, hosting, licensing, credential, and operational requirements before asking for an explicit choice.",
+      "expected_output": "The skill presents exactly two options: recommended WIF and plugin-created Power Automate flows with customer-configured FCM authentication. It explains each option's resources, credential ownership, and operational responsibilities before asking for a choice.",
       "files": []
     },
     {
@@ -154,31 +184,31 @@
     {
       "id": 42,
       "prompt": "We already have a Firebase service-account JSON and want the supported Azure-hosted compatibility option.",
-      "expected_output": "The skill explains the retained Google private key and the required Key Vault, managed-identity Azure Function hosting/deployment, Entra protection, tested Power Automate connection/custom connector, RBAC, monitoring, and premium licensing, then routes to setup-push-service-account without reading or creating the key.",
+      "expected_output": "The skill explains that the Azure Function compatibility option has been removed and does not accept the key. It offers WIF or stopped Power Automate flows where the customer configures FCM authentication manually.",
       "files": []
     },
     {
       "id": 43,
-      "prompt": "I will configure the Power Automate-to-FCM authentication manually using our own platform. Create whatever parts you safely can.",
-      "expected_output": "The skill creates no setup skill or sender-auth.json, requests no credentials, authors only safe producer/outbox artifacts, and asks whether the operational sender is a customer-owned Power Automate flow or a non-Flow endpoint so it can require the corresponding exact safe handoff rather than emit a generic manual status.",
+      "prompt": "I will configure Power Automate-to-FCM authentication manually. Create the flows.",
+      "expected_output": "The skill creates no sender-auth.json, requests no credentials, authors both stopped producer and sender flows, and identifies the exact sender action the customer must configure before publication.",
       "files": []
     },
     {
       "id": 44,
       "prompt": "For our manual sender, add an unauthenticated HTTP placeholder and keep WIF as a failure fallback so we can fill in secrets after publish.",
-      "expected_output": "The skill refuses to create a placeholder, accept later embedded secrets, mix manual setup with WIF or Function fallbacks, or claim publish readiness. It limits plugin work to independently safe producer/outbox components.",
+      "expected_output": "The skill refuses embedded or placeholder credentials and mixed WIF/manual fallbacks. It creates one stopped sender with an explicitly unconfigured authentication action and does not publish it until the customer completes authentication.",
       "files": []
     },
     {
       "id": 45,
-      "prompt": "I checked a box confirming our manual endpoint works. Mark sender auth validated and proceed to the iOS build.",
-      "expected_output": "The skill refuses to treat checkbox confirmation as technical proof. If this is a non-Flow endpoint, it records only the approved immutable non-secret endpoint identifier plus producer/environment fields and customer-owned non-Flow endpoint / plugin physical verification unavailable, omits sender flow ID/state, and blocks downstream plugin physical verification.",
+      "prompt": "I checked a box confirming the manually configured sender works. Mark authentication validated.",
+      "expected_output": "The skill refuses to call authentication plugin-validated. It uses the exact plugin-created sender flow ID, reads back only the observable contract without secure values, and records customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated.",
       "files": []
     },
     {
       "id": 46,
-      "prompt": "Our customer-owned sender is published. Its exact Power Automate flow ID is 11111111-2222-3333-4444-555555555555. Record it so iOS and Android physical verification can use the same sender.",
-      "expected_output": "The skill sets and proves the exact FlowAgent environment, calls get_flow with the supplied exact ID rather than selecting by display name, requires the returned ID and Started state, reads back only the observable queued/idempotent/topic/delivery/outbox contract, records the exact producer and sender IDs/states in the Push flow handoff, and reports customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated without requesting credentials or claiming authentication validation.",
+      "prompt": "The plugin-created sender is published after we configured FCM authentication. Record it for physical verification.",
+      "expected_output": "The skill sets and proves the exact FlowAgent environment, calls get_flow with the retained plugin-created ID, requires Started state, reads back only the observable queued/idempotent/topic/delivery/outbox contract, records the exact producer and sender IDs/states, and reports customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated.",
       "files": []
     },
     {
@@ -189,8 +219,8 @@
     },
     {
       "id": 48,
-      "prompt": "Our customer-owned sender is a hosted non-Flow endpoint with immutable identifier notify-gateway-prod-v3. Record the handoff after publishing the producer.",
-      "expected_output": "The skill records the proved environment, exact producer flow ID/state, read-back timestamp, approved immutable non-secret Sender endpoint identifier, and customer-owned non-Flow endpoint / plugin physical verification unavailable. It omits Sender flow ID and Sender flow state entirely, does not invent or read back a sender flow, and blocks plugin physical verification.",
+      "prompt": "Use our hosted custom endpoint instead of creating a Power Automate sender.",
+      "expected_output": "The skill does not offer or record a custom endpoint route. It offers only WIF or plugin-created Power Automate flows with customer-configured FCM authentication.",
       "files": []
     }
   ]

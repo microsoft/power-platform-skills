@@ -2,8 +2,8 @@
 
 Canonical environment, connector discovery, definition authoring, mutation,
 read-back, recovery, publication, and smoke-test workflow for the push producer
-and plugin-managed sender, plus exact identity/state/observable-contract
-read-back for a customer-owned Power Automate sender.
+and sender. Sender authentication is either plugin-managed WIF or configured
+manually by the customer in the plugin-created Power Automate sender.
 
 ## Contents
 
@@ -21,7 +21,9 @@ FlowAgent tool names below omit client prefixes. Claude Code exposes
 
 ## 1. Bootstrap FlowAgent
 
-If tools are missing, give these supported Copilot CLI steps exactly and stop:
+The mobile plugin does not automatically install the separate
+`power-automate@power-platform-skills` plugin. If FlowAgent tools are missing,
+give these supported Copilot CLI setup steps exactly and stop:
 
 ```text
 /plugin marketplace add microsoft/power-platform-skills
@@ -78,17 +80,16 @@ node "${PLUGIN_ROOT}/scripts/validate-sender-auth-contract.js" \
 
 Exit `0` is required. Never salvage IDs from an expired, mismatched, symlinked,
 path-escaping, mode-conflicted, or credential-bearing file. The owner skill
-must repair it. A manual/customer-owned route has no plugin-managed
-authentication handoff; create no `sender-auth.json` and no placeholder sender.
-It still requires the safe operational sender handoff below.
+must repair it. A manual-auth route has no plugin-managed authentication handoff; create no
+`sender-auth.json`. It still creates a real stopped sender definition, but its
+FCM authentication remains intentionally incomplete until the customer
+configures it.
 
-For a customer-owned Power Automate sender, the customer must create and
-operate it through their own process, then provide and approve recording its
-**exact sender flow ID**. A display name, URL with an unproved ID, screenshot,
-checkbox, or verbal "it works" is not a flow identity. Call `get_flow` with
-that exact ID in the already-proved current environment and require the
-returned ID to match exactly and live state to be `Started`. Stop on a missing,
-stopped, unreadable, or different flow.
+For manual authentication, retain the exact sender flow ID created by this
+workflow. After the customer configures FCM authentication and asks to resume,
+call `get_flow` with that exact ID in the already-proved current environment.
+A display name, screenshot, checkbox, or verbal "it works" is not a flow
+identity.
 
 Read back only its observable, non-secret contract: queued-outbox
 trigger/guard, idempotent claim, `allUsers` versus lowercase-OID routing, one
@@ -99,13 +100,6 @@ Do not run `sender-auth.json` validation, test or approve the customer's
 authentication architecture, or convert this read-back into a plugin-
 authentication claim. Retain the exact ID for the final producer publication
 gate and downstream physical verification.
-
-If the customer uses a non-Flow endpoint instead, record only a
-customer-approved non-secret immutable endpoint identifier. Keep the
-producer-only flow state distinct and report
-`customer-owned non-Flow endpoint / plugin physical verification unavailable`;
-FlowAgent cannot provide the exact sender-flow continuity required by plugin
-physical verification.
 
 Read `push-notification-outbox.md` and `.datamodel-manifest.json`. If the table
 is absent, invoke `/add-dataverse --skip-planning`, then reread manifest and
@@ -123,10 +117,31 @@ Use `resolve_entity`, connector dynamic resolvers, and repository metadata
 helpers. FlowAgent `list_tables` is not Dataverse metadata. `Push
 Notification` is not a connector parameter.
 
-Ask one grouped producer question: source event/filter, recipient rule, generic
-title/body, internal deep link, requested artifacts, and whether created flows
-remain stopped. Default to Dataverse row created. For owner-based delivery,
-read `ownerid`, get the row from plural `systemusers`, GUID-validate
+Ask one grouped producer question:
+
+- source Dataverse table, event, and optional filter;
+- recipient rule;
+- title and body templates;
+- additional data payload fields;
+- suggested internal navigation;
+- requested artifacts; and
+- whether created flows remain stopped.
+
+Before asking for content mappings, explain that title/body may appear on a
+lock screen and all data fields reach the device. Explain that topic membership
+is not authorization and recommend minimizing personal, confidential, or
+regulated data. The user chooses the business content. Do not reject it solely
+on privacy grounds after explicit selection. Always reject credentials,
+tokens, private keys, authorization headers, and secret values.
+
+For navigation, inspect `native-app-plan.md` and the generated destination
+registry. Based on the trigger table, suggest a detail screen backed by that
+table and map the trigger row ID when possible; otherwise suggest a list screen
+for that table; otherwise suggest no deep link. Ask the user to accept the
+suggestion, choose another registered destination, or choose no deep link.
+
+Default to Dataverse row created. For owner-based delivery, read `ownerid`, get
+the row from plural `systemusers`, GUID-validate
 `azureactivedirectoryobjectid`, and lowercase it. A team owner, absent OID, or
 ambiguity must skip/fail explicitly; never guess a topic.
 
@@ -138,8 +153,7 @@ For every trigger/action, use `get_connector` or `search_operations`, then
 - Dataverse row-created/added-or-modified trigger;
 - Dataverse get-row, add-row, and update-row;
 - WIF Key Vault retrieval and all four HTTP actions; or
-- the exact Entra-authenticated Function operation compatible with the
-  validated endpoint URL, audience, and connection.
+- the FCM HTTP action shape whose authentication the customer will configure.
 
 Use `resolve_params`, `resolve_refs`, and `invoke_operation` for dynamic values.
 Never infer operation IDs, parameter names, enums, action types, API IDs,
@@ -150,13 +164,6 @@ Use `list_connections`, `pick_or_create_connection`, and `test_connection`.
 Require connected `Embedded` references for Dataverse and every selected-mode
 connector. For WIF, the Key Vault connection principal—not the maker/sender
 app—must have secret read access.
-
-For Function mode, start from the handoff's exact
-`functionEndpoint.connection.referenceName` and `.resourceId`, find/test that
-connection, discover its operation, and require its exact endpoint and Entra
-audience. Never substitute generic unauthenticated HTTP, another maker-owned
-connection, pasted bearer tokens, or guessed operations. If not provable, stop
-and return to `/setup-push-service-account`; do not fall back to WIF.
 
 Verified Dataverse invariants:
 
@@ -185,12 +192,11 @@ and limits concurrency per row. It validates:
 Execute exactly one mode:
 
 - **WIF:** follow `push-flow-wif.md` exactly.
-- **Function endpoint:** invoke only the discovered secure operation/connection
-  with `topic`, approved generic `title`/`body`, string `schemaVersion`,
-  allowlisted semantic `destination`, canonical destination-specific `params`,
-  and `validateOnly:false`. Include no Key Vault,
-  Entra/Google token exchange, impersonation, direct FCM, service-account JSON,
-  generic HTTP, or fallback path.
+- **Customer-configured FCM authentication:** author the same FCM HTTP request,
+  topic, payload, idempotency, and terminal update structure, but leave the
+  action authentication unconfigured. Mark the flow incomplete and stopped.
+  Do not insert a fake connection, placeholder token, service-account key,
+  custom endpoint, Azure Function, or fallback branch.
 
 On success update to `Sent` with bounded provider message ID and UTC Sent On.
 On terminal failure update to `Failed` with bounded sanitized code/message.
@@ -202,21 +208,21 @@ supports clearing.
 
 The producer uses the confirmed Dataverse webhook and singular trigger table,
 resolves the recipient, and adds one row through the plural outbox entity set.
-Set `Audience=User`, lowercase OID, generic privacy-safe Title/Body, allowlisted
-Destination, canonical Navigation Parameters, Payload Version `1`, Status
-`Queued`, and Attempt Count `0`. Producer inputs are destination-specific safe
-fields; never accept an arbitrary route, URL, href, or complete contract JSON.
-The sender revalidates the destination/parameters before delivery. Legacy
-`deepLink` rows and branches are rejected rather than used as fallback.
+Set `Audience=User`, lowercase OID, user-approved Title/Body, canonical
+Additional Data, optional allowlisted Destination/Navigation Parameters,
+Payload Version `1`, Status `Queued`, and Attempt Count `0`. Additional Data
+must be a flat string map and cannot override `schemaVersion`, `destination`,
+`params`, or `deepLink`. Never accept an arbitrary route, URL, href, or
+complete contract JSON. The sender revalidates the destination/parameters
+before delivery and omits navigation fields when no deep link was selected.
+Legacy `deepLink` rows and branches are rejected rather than used as fallback.
 Invalid recipients terminate without queuing and expose only a bounded reason.
-Never place record text, names, email, confidential fields, tokens, or secrets
-in the notification.
+Credentials, tokens, private keys, authorization headers, and secret values
+are forbidden; user-approved business content is allowed.
 
-For the customer-owned route, FlowAgent authors only producer/outbox artifacts,
-but downstream routing still requires the safe sender handoff from Section 3.
-Do not discover customer authentication, create a placeholder/unauthenticated
-sender, edit/publish their sender, or claim it is plugin-validated. Reuse only
-the exact customer-supplied sender ID that already passed the safe read-back.
+For manual authentication, do not discover or inspect customer credentials.
+After authoring the stopped sender, show its exact ID and the exact action that
+needs FCM authentication, then stop until the customer completes it.
 
 ## 6. Validate, mutate, and read back
 
@@ -232,11 +238,9 @@ For **every** create, update, edit, copy, restore, publish, or disable:
    names, secure settings, selected mode, and every changed field.
 
 WIF read-back must prove only Key Vault -> Entra -> STS -> impersonation -> FCM.
-Function read-back must prove only the exact secure Function
-operation/connection. Reject mixed trees even when the extra mode is reachable
-only through failure handling. Customer-owned Power Automate mode has only
-exact sender identity/environment/state and observable-contract read-back; do
-not apply managed-mode authentication validation claims to it.
+Manual-auth mode has only exact sender identity/environment/state and
+observable-contract read-back; do not inspect secure authentication values or
+apply WIF validation claims to it.
 
 An acknowledged mutation is not persistence proof. If read-back differs, wait
 once and reread; if still different, stop instead of stacking another edit.
@@ -268,12 +272,12 @@ Require explicit publish confirmation. Publish sender first and require
 `Started` read-back, then producer and require `Started`. If publish reports
 enabled but read-back remains stopped, stop.
 
-For customer-owned Power Automate sending, never publish or mutate the sender. Immediately
-before producer publication, call `get_flow` again with the exact recorded
-sender ID and require the same ID in the proved environment with state
-`Started`. Publish the producer only after that read-back, the customer's
-operational statement under their own process, and explicit producer
-publication approval. Read both exact IDs back afterward. Keep sender status
+For manual-auth Power Automate sending, stop after creating the sender until
+the customer configures authentication. On resume, call `get_flow` again with
+the exact plugin-created sender ID, validate and preflight without reading
+secure values, and require explicit publication approval. Publish the sender
+first, then the producer, and read both exact IDs back afterward. Keep sender
+status
 `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`;
 identity/observable-contract continuity does not validate credentials or
 authentication design.
@@ -283,28 +287,21 @@ authentication design.
 Run non-delivery `smoke_test`/connection checks first. Do not create a live
 outbox row until the user confirms a matching physical-device build,
 notification consent, exact `allUsers` subscription, and permission for one
-non-confidential test.
+test notification whose content the user approves after the privacy warning.
 
-Then create one generic `allUsers` row with empty Target OID and an allowlisted
-test deep link. Read it back; inspect `get_run_history`, `get_run_details`, and
-`get_run_actions`; require `Sent` plus provider message ID. Preserve only
+Then create one `allUsers` row with empty Target OID and the approved optional
+navigation intent. Read it back; inspect `get_run_history`, `get_run_details`,
+and `get_run_actions`; require `Sent` plus provider message ID. Preserve only
 sanitized diagnostics and do not repeatedly resubmit. A user-targeted test
-needs separate consent from that user. Manual mode smoke tests cover only
-plugin-authored producer/outbox components.
+needs separate consent from that user.
 
-Finish with environment ID/URL, Firebase project, managed-mode connections,
-mutation read-backs, and whether delivery was skipped or verified. Report
-producer/sender flow IDs/states for flow-backed senders; for a non-Flow
-endpoint report only the producer ID/state, approved non-secret
-`Sender endpoint identifier`, and exact blocked status. Never print secrets,
-tokens, JWTs, Function bodies, or confidential payload data.
+Finish with environment ID/URL, Firebase project, connections, mutation
+read-backs, and whether delivery was skipped or verified. Report
+producer/sender flow IDs/states. Never print secrets, tokens, JWTs, secure
+action values, or raw payload data.
 
-Write exactly one stable `Push flow handoff` schema to `memory-bank.md` after
-the applicable read-backs succeed.
-
-### Flow-backed handoff schema
-
-Use for plugin-managed senders and customer-owned Power Automate senders:
+Write this stable `Push flow handoff` schema to `memory-bank.md` after the
+applicable read-backs succeed:
 
 - `Environment ID`
 - `Dataverse URL`
@@ -322,23 +319,3 @@ Do not add credentials, connection authentication details, endpoint secrets,
 or an authentication-verification result. Downstream verification consumes
 these exact IDs and rereads them through FlowAgent rather than selecting by
 display name.
-
-### Non-Flow blocked handoff schema
-
-Use only these fields:
-
-- `Environment ID`
-- `Dataverse URL`
-- `Producer flow ID`
-- `Producer flow state`
-- `Sender endpoint identifier`
-- `Sender authentication status`
-- `Flow read-back timestamp`
-
-The endpoint identifier must be customer-approved, immutable, and non-secret.
-The status is exactly
-`customer-owned non-Flow endpoint / plugin physical verification unavailable`.
-Do not include `Sender flow ID` or `Sender flow state`, even as empty or
-`not applicable` values: no sender flow exists to read back. This schema
-records the producer and blocked routing state; it is not a physical-
-verification handoff.

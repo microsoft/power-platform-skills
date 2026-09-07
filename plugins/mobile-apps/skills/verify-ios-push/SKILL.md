@@ -47,17 +47,12 @@ Require all of the following:
 - matching evaluated Expo bundle ID, Firebase project, immutable Firebase iOS
   app ID, plist, Apple Team ID, APNs environment, and build mode;
 - manual APNs upload recorded by `/setup-apns`;
-- either a currently valid project-local `sender-auth.json` for managed WIF or
-  Function auth, or the exact safe manual Power Automate sender handoff:
+- either a currently valid project-local `sender-auth.json` for managed WIF,
+  or the exact safe manual Power Automate sender handoff:
   `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`;
 - the exact producer and sender flow IDs created by
   `/create-push-notification-flow` or supplied by the customer under that safe
   manual handoff, both published and read back as `Started`.
-
-A recorded non-Flow endpoint identifier is not sufficient. Stop before live
-sends with `customer-owned non-Flow endpoint / plugin physical verification
-unavailable`; FlowAgent cannot read back or correlate that sender, so this
-skill cannot mark APNs or iOS physical delivery complete.
 
 Reject and stop for a simulator, Expo Go, a browser/web preview, Metro-only
 preview, configuration validation alone, Firebase Console send alone, a
@@ -174,14 +169,16 @@ remains the only supported flow inspection path in this workflow.
    drifted, disconnected, unpublished, or unreadable flow returns to
    `/create-push-notification-flow`.
 
-## 3. Establish privacy-safe correlation
+## 3. Establish user-approved correlation
 
-Before each live send, obtain explicit confirmation that a non-confidential
-test notification may be sent to the consenting physical device.
+Before each live send, explain that notification title/body may appear on a
+lock screen and data payload fields reach the device. Recommend using
+non-sensitive test values, then obtain explicit confirmation for the actual
+user-selected title, body, additional data, and optional navigation intent.
 
-Use a unique opaque case label such as `IOSPUSH-20260818-01`. The label and
-generic notification text must contain no person, customer, record, email,
-tenant, or business data. Correlate only:
+Use a unique opaque case label such as `IOSPUSH-20260907-01`. Keep the case
+label itself free of personal or business data. The notification content is the
+user's choice after the warning. Correlate only:
 
 - case label and UTC test window;
 - safe source-row ID when the producer requires a row-created event;
@@ -197,7 +194,7 @@ chain. Use `get_run_action_repetitions` only when the relevant action is inside
 a loop. Secure action inputs/outputs must remain protected. Inspect only safe
 metadata; never echo or persist trigger bodies, raw action inputs/outputs,
 headers, token exchanges, connector response bodies, identity values, raw
-target fields, or confidential fields. For routing, record only the case label
+target fields, or source content fields. For routing, record only the case label
 and safe topic category (`user` or `allUsers`).
 
 Reuse the live-send gates from `/create-push-notification-flow`: one confirmed
@@ -210,7 +207,8 @@ all-users contract with an allowlisted test route; do not read or record raw
 recipient fields. For a user-topic case, exercise the existing producer: use
 its actual trigger contract and discovered connector operation (or `run_flow`
 only when the read-back proves a manual trigger) to create one
-non-confidential test event owned by the consenting signed-in user. Do not
+user-approved test event owned by the consenting signed-in user. Warn that the
+title, body, and data may be visible on the device or lock screen. Do not
 bypass the producer by writing a user-targeted outbox row directly.
 
 ## 4. Execute the matrix in order
@@ -274,7 +272,7 @@ recipient target, or derived topic string. Prove the transition behaviorally:
    signed-in account;
 2. correlate the safe case label -> producer run -> outbox row ID -> sender run
    -> terminal result while recording only topic category `user`; and
-3. require the intended generic notification on the signed-in device and the
+3. require the intended user-approved notification on the signed-in device and the
    validated route.
 
 The producer-to-outbox-to-sender chain is mandatory. A direct Firebase Console
@@ -316,7 +314,7 @@ Stop immediately and keep the matrix incomplete when:
   build mode drifts;
 - managed auth is selected and `sender-auth.json` is invalid or expired, or
   manual auth lacks the canonical exact sender-flow handoff and observable
-  live-flow read-back, or a non-Flow endpoint handoff is selected;
+  live-flow read-back;
 - either flow is not the exact published/read-back `Started` definition;
 - a required connection is disconnected;
 - the expected topic-category receipt is missing, duplicated, or ambiguous;
