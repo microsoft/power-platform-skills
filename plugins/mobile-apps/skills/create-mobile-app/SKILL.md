@@ -2250,7 +2250,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 This skill launches the template's canonical `npm run dev` command. Its `predev` lifecycle runs schema generation followed by the final TypeScript gate before Expo starts, and logging is configured in `metro.config.js`.
 
-1. The native Metro URL is printed by Expo — the user can scan it immediately.
+1. Expo prints the native Metro URL and may also render a QR in its terminal. Capture the URL and generate the QR PNG below so the user always receives a scannable code even when Metro runs in a background terminal or the host does not expose terminal rendering.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
 3. `/debug-app` reads project-local `.powernative` logs regardless of whether the user or the agent started Metro. It never needs an opaque terminal ID.
 
@@ -2287,7 +2287,7 @@ Branch as follows:
 | No log exists yet | Wait for Expo's `Waiting on ...` line, then check the log directory once more. If still absent, print the terminal output and stop without guessing a URL. |
 | A stale log exists but no current Metro output appears | Tell the user to stop stale Metro processes and rerun `npm run dev`; do not diagnose from that log. |
 
-**When Expo prints a Metro URL:**
+**When Expo prints a Metro URL:** Do not rely on Expo's terminal-rendered QR as the only presentation path.
 
 1. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
   - Define `METRO_QR="<working_dir>/.expo/metro-qr.png"` and run `npx --yes qrcode -o "$METRO_QR" "<metro-url>"`. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
