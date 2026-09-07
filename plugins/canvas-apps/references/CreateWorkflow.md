@@ -16,6 +16,9 @@ Read:
 
 Determine:
 
+- Requested capability families from `${PLUGIN_ROOT}/references/BehaviorGuide.md`
+- Every user action, precondition, source-of-truth transition, and visible postcondition
+- Stable IDs, mutable fields, status values, relationships, and persistence semantics
 - Screen count, purpose, and navigation
 - Controls and layout strategy for each screen
 - Data sources, connectors, collections, or mock data
@@ -42,11 +45,18 @@ Use this format:
 | Create | [Additional] | [Name].pa.yaml | [purpose] | [controls] |
 
 ### Data Strategy
-[Data sources, connectors, collections, or mock data]
+[Data sources, connectors, collections, or mock data; stable IDs; mutable fields; status values; and session versus durable persistence]
+
+### Functional Scope
+| Capability | User path | Source transition | Visible success |
+|------------|-----------|-------------------|-----------------|
+| [Requested behavior] | [Reachable entry point and action] | [Source, stable ID, and exact postcondition] | [Bound receipt plus downstream observer] |
 
 ### Aesthetic Direction
 [Direction and exact RGBA palette]
 ```
+
+List every requested behavior in Functional Scope before decorative or optional screens. Do not present the plan as ready when a named action has only a control and no source transition or visible success state.
 
 Wait for user approval. Revise and re-present if requested.
 

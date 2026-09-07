@@ -19,7 +19,12 @@ test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, for
 
 // The Dataverse-shipped "Active <Entity>" default view: primary + the stock Created On column, in
 // both the query (fetchxml) and the grid (layoutxml). This is what enrichDefaultViews fetches live.
+// The `@odata.etag` is REQUIRED: the SDK refuses to push an artifact it holds no concurrency token
+// for (`ARTIFACT_UPDATE_NO_ETAG`) rather than issue an unconditional write that could silently
+// overwrite a concurrent Maker edit. Real Dataverse always returns one, so a fixture without it is
+// unrealistic — omitting it makes this test fail for a reason that has nothing to do with columns.
 const STOCK_VIEW = {
+  '@odata.etag': 'W/"4180012"',
   savedqueryid: '00000000-0000-0000-0000-0000000000aa',
   name: 'Active New Tasks',
   description: '',
@@ -73,7 +78,7 @@ test('#7 enriching a default view REPLACES the stock createdon column (dropped f
   const id = STOCK_VIEW.savedqueryid;
   // Exactly what provision.enrichDefaultViews does: fetch the live view, replace /columns, push.
   await sdk.fetchArtifact('view', id);
-  sdk.updateElement('view', id, '/columns', defaultViewColumns(spec, spec.entities[0]));
+  await sdk.updateElement('view', id, '/columns', defaultViewColumns(spec, spec.entities[0]));
   await sdk.pushArtifact('view', id);
 
   const patch = capture.find((c) => /\/savedqueries\(/.test(c.url) && c.body && (c.body.fetchxml || c.body.layoutxml));

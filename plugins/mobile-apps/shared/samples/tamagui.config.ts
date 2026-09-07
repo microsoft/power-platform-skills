@@ -1,22 +1,16 @@
-import { createTamagui } from '@tamagui/core'
-import { defaultConfig } from '@tamagui/config/v5'
+import { createPowerAppsTamaguiConfig } from '@microsoft/power-apps-native-host/config/tamaguiConfig'
 
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME
-// Replace or extend this Tamagui config value only.
-import { animations } from '@tamagui/config/v5-rn'
-
-const customConfig = {
-  ...defaultConfig,
-  animations,
-}
+// Add or replace Tamagui configuration values here.
+const customConfig = {}
 // CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 
-export const tamaguiConfig = createTamagui(customConfig)
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig)
 
 export default tamaguiConfig
 
 export type Conf = typeof tamaguiConfig
 
-declare module '@tamagui/core' {
+declare module 'tamagui' {
   interface TamaguiCustomConfig extends Conf {}
 }

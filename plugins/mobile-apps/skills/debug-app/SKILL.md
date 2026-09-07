@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, WebFetch, m
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Debug App — Monitor & Fix
 
@@ -80,7 +80,7 @@ For `help` / `--help` / `-h`, print the subcommands and monitoring-options table
 - **Never fix history** — the log is a record of the past, so an error in it is not proof of a current problem. Errors found in the baseline window must pass the Phase 0.2.1 supersession check before any code is edited. Editing working code to chase an already-resolved error is a worse outcome than reporting nothing.
 - **Host terminal APIs are optional only** — If the current host already exposes Metro terminal output, it may be consulted as a low-latency convenience. Never ask the user for a terminal ID, never persist one, and never make a diagnosis from host output without advancing the authoritative `.powernative` log cursor too.
 - **Context-first diagnosis** — Read `memory-bank.md` when present. Read `power.config.json` for environment, Dataverse, and connector context. Consult `native-app-plan.md` only when the failure concerns a planned screen, data model, connector, offline profile, or native capability; do not parse it for unrelated syntax/runtime errors.
-- **Reference resolution order** — For Dataverse/Power Platform errors: read [skills/add-dataverse/references/dataverse-reference.md](../add-dataverse/references/dataverse-reference.md) first, inspect generated services/models and project context, then query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` when behavior remains uncertain. For Expo/Expo Router/React Native errors: inspect installed versions and project code first, then use targeted `WebFetch` against official `https://docs.expo.dev/` documentation. Use package documentation next and general web search only as a last resort.
+- **Reference resolution order** — For Dataverse/Power Platform errors: read [skills/add-dataverse/references/dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) first, inspect generated services/models and project context, then query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` when behavior remains uncertain. For Expo/Expo Router/React Native errors: inspect installed versions and project code first, then use targeted `WebFetch` against official `https://docs.expo.dev/` documentation. Use package documentation next and general web search only as a last resort.
 
 ## Workflow — Task List First
 
@@ -258,6 +258,8 @@ Store `logPath` in `metro-cursor.json` relative to `<working_dir>` and resolve i
 
 ### 0.2 Verify Metro bundled and the app is running
 
+**Telemetry checkpoint: `validate_metro_session`**
+
 Read a bounded baseline window and return a real byte cursor:
 
 ```bash
@@ -333,6 +335,8 @@ first-hand evidence the problem is current, so a matching baseline error is
 treated as live even when a later line would otherwise look like supersession.
 
 ### 0.3 Capture baseline
+
+**Telemetry checkpoint: `capture_runtime_baseline`**
 
 Use the output from Phase 0.2. Note the most recently bundled native platform (iOS / Android) and any recent runtime log lines. Append to `fixes.md`:
 ```
@@ -531,6 +535,8 @@ Before every collection cycle and immediately after any fix verification, compar
 
 ### Step A — Collect logs
 
+**Telemetry checkpoint: `collect_runtime_logs`**
+
 Read `.powernative/debug-app/metro-cursor.json` and rediscover all live `.powernative` sessions using Phase 0.0's validation logic.
 
 - If the saved `logPath` + `pid` + `port` is still valid, keep monitoring it even when a newer valid session has appeared. Do not interrupt the current run or jump ports.
@@ -602,6 +608,8 @@ Interpretation rule for host diagnostic lines:
 
 ### Step B — Classify each new log entry
 
+**Telemetry checkpoint: `classify_runtime_failures`**
+
 Apply the 8-category table. Treat each unique stack trace / error message as one issue.
 
 | Priority | Pattern | Category |
@@ -642,6 +650,8 @@ Take `app/(tabs)/todos.tsx:47:12` as the fix site. The recipes in D3.1 below ope
 - Host lifecycle/info lines with no failure indicator, for example `[bridge] setupNativeHost: bridge ready`, `[PAHost] bridge registered`, `[PAHost] render: waiting for connection resolution (spinner)`
 
 ### Step C — If NO issues found
+
+**Telemetry checkpoint: `confirm_runtime_health`**
 
 Increment the consecutive-clean-cycle counter.
 
@@ -703,6 +713,8 @@ Exit the loop. Do NOT auto-resume.
 If counter is < 3 AND the cap hasn't tripped, return to Step A on the next monitoring beat. Do not run shell `sleep` or a host-specific wait command; ordinary tool execution provides the cadence and the cursor prevents duplicate reads.
 
 ### Step D — If issues ARE found
+
+**Telemetry checkpoint: `repair_and_verify_runtime_issue`**
 
 Reset the consecutive-clean counter to 0. For each issue, work through the sequence below **one at a time** before moving to the next.
 
@@ -805,7 +817,7 @@ These recipes apply to errors classified as "Import / Bundle" in Step B. They ar
 | `SyntaxError: <file>:<line>:<col>` in `app/`, `src/components/`, `src/hooks/`, `src/services/` | The cited line is in editable user code (NOT `src/generated/`, NOT `node_modules/`) | `Read` the file around the cited line (±10 lines), identify the syntactic issue (unclosed JSX tag, missing closing brace/paren, stray comma, missing `from` in import, unterminated string, missing semicolon between statements), apply a single minimal `Edit`. Do NOT reformat surrounding code. |
 | `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** Schema regen produced bad output. Hand-off: tell the user to re-run `npm run generate-schemas`; if the error reproduces, route to `/add-connector` or `/add-dataverse` to re-add the affected datasource. |
 | `Unable to resolve module <name>` from `<importer>` | `<name>` starts with `.` or `..` (relative import) | `Glob` the importer's directory for files matching `<name>` with any extension (`.ts`, `.tsx`, `.js`, `.jsx`, `.json`). If found with a different extension → fix the import to drop the extension OR match the actual one. If found with a typo (Levenshtein ≤ 2) → fix the typo. If not found at all → the file genuinely doesn't exist; surface to user and ask whether to create it or remove the import. |
-| `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](../../shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
+| `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
 | `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | Likely cache: ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload. Never kill an unowned process. |
 | `transform failed` referencing a babel plugin (e.g., `[BABEL] ... unknown plugin "react-native-reanimated/plugin"`) | Error references `babel.config.js` | **Hand-off.** `babel.config.js` is project config (same constraint that protects `app.config.js`). Print the cited plugin and suggested fix order (e.g., "`react-native-reanimated/plugin` MUST be the LAST plugin in `babel.config.js` `plugins` array"); skip to next issue. |
 | `transform failed` without a babel reference | Generic transform failure (often a TS feature Metro's transformer can't handle) | Read the cited file, look for syntax that requires a specific TS lib (e.g., decorators, top-level await). If the issue is a known-bad pattern, surface and ask before fixing. Otherwise hand-off. |

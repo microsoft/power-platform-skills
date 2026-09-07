@@ -57,19 +57,70 @@ function droppedSubareaDetail(sa) {
   };
 }
 
+function descriptionFromDataverse(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') return value.trim() ? value : undefined;
+  if (typeof value !== 'object') return undefined;
+  // Metadata descriptions arrive as a Dataverse Label, for example:
+  //   {
+  //     "LocalizedLabels": [{ "Label": "text", "LanguageCode": 1033 }],
+  //     "UserLocalizedLabel": { "Label": "text", "LanguageCode": 1033 }
+  //   }
+  // Prefer the user-localized text because it is the platform's chosen label for this caller, then
+  // fall back to the first localized label. A missing/null Label means "no description"; returning
+  // undefined (not "") keeps the hydrated spec valid and avoids blanking a maker-authored value on
+  // rebuild. Shape: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/label
+  const user = value.UserLocalizedLabel && value.UserLocalizedLabel.Label;
+  if (typeof user === 'string' && user.trim()) return user;
+  const first = Array.isArray(value.LocalizedLabels)
+    ? value.LocalizedLabels.find((l) => l && typeof l.Label === 'string' && l.Label.trim())
+    : null;
+  return first ? first.Label : undefined;
+}
+
+function withDescription(obj, rawDescription) {
+  const out = { ...obj };
+  delete out.description;
+  delete out.Description;
+  const description = descriptionFromDataverse(rawDescription);
+  if (description !== undefined) out.description = description;
+  return out;
+}
+
+function sanitizeDescriptionInventory(inv) {
+  if (!inv || typeof inv !== 'object' || Array.isArray(inv)) return undefined;
+  const out = {};
+  for (const key of ['views', 'charts', 'forms', 'businessRules', 'globalChoices']) {
+    if (!Array.isArray(inv[key])) continue;
+    out[key] = inv[key].map((item) => {
+      const { Description, description, ...rest } = item || {};
+      return withDescription(rest, description !== undefined ? description : Description);
+    });
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 async function hydrateSpec(read) {
   const app = (await read.app()) || { name: '', description: '', siteMap: { areas: [] } };
   const pages = (await read.pages()) || [];
-  const entities = (await read.entities()) || [];
-  const webResources = (await read.webResources()) || [];
-  const dashboards = (read.dashboards ? await read.dashboards() : []) || [];
+  const entities = ((await read.entities()) || []).map((e) => {
+    const columns = Array.isArray(e && e.columns)
+      ? e.columns.map((c) => withDescription(c || {}, (c && (c.description !== undefined ? c.description : c.Description))))
+      : [];
+    return withDescription({ ...(e || {}), columns }, e && (e.description !== undefined ? e.description : e.Description));
+  });
+  const webResources = ((await read.webResources()) || []).map((wr) => withDescription(wr || {}, wr && (wr.description !== undefined ? wr.description : wr.Description)));
+  const dashboards = ((read.dashboards ? await read.dashboards() : []) || [])
+    .map((d) => withDescription(d || {}, d && (d.description !== undefined ? d.description : d.Description)));
   // `prefixResolved` is a TRANSIENT download-time signal (whether recoverAppSolution trusted the publisher
   // prefix) consumed by iconWebResources BEFORE hydrate; strip it so it never leaks into the persisted,
   // user-facing spec — the build reads only uniqueName + publisherPrefix from solution.
-  const { prefixResolved, ...solution } = (await read.solution()) || { uniqueName: 'Default', publisherPrefix: 'new' };
+  const { prefixResolved, ...solutionRaw } = (await read.solution()) || { uniqueName: 'Default', publisherPrefix: 'new' };
+  const solution = withDescription(solutionRaw, solutionRaw.description !== undefined ? solutionRaw.description : solutionRaw.Description);
   void prefixResolved;
   // `design` is threaded through from the page manifest (§7.3) when present; undefined for legacy apps.
   const design = read.design ? await read.design() : undefined;
+  const descriptionInventory = read.descriptionInventory ? sanitizeDescriptionInventory(await read.descriptionInventory()) : undefined;
   // When downloaded pages carry stable keys (assigned by assignPageKeys), emit the v2 shape;
   // legacy callers without keys fall back to the name-based shape for back-compat.
   const hasKeys = pages.some((p) => p.key);
@@ -105,6 +156,36 @@ async function hydrateSpec(read) {
     })),
   };
 
+  // BACK-COMPAT: a page reconstructed from an app deployed BEFORE `directEntry` existed carries
+  // `pageInput` and no `directEntry`. App Spec validation requires the pair, and download validates
+  // BEFORE writing — so without a default, downloading such an app fails and writes NO spec file at
+  // all, leaving the author nothing to edit and no way back into the round-trip. That is precisely
+  // the "one unrelated nav entry blocks the whole download → edit → rebuild flow" failure #430 was
+  // filed for, and it would have been reintroduced by the rule that fixed a different hole.
+  //
+  // Default to the CONSERVATIVE behaviour. `emptyState` does not promise a picker the already-
+  // deployed `.tsx` never had, which `selector` would. It is a prospective intent for the NEXT
+  // rebuild, not a claim about what the deployed page does today — that is genuinely unknown here,
+  // since the page was written before the field existed and implements neither behaviour explicitly.
+  // The value is written into the spec visibly, with a note saying where it came from, so the author
+  // can decide rather than discover it later.
+  //
+  // This deliberately does NOT weaken the rule for hand-authored specs: those do not come through
+  // hydration, so an author writing a new page with `pageInput` still has to decide.
+  const directEntryDefaulted = [];
+  const directEntryOf = (p) => {
+    if (p.directEntry !== undefined) return { directEntry: p.directEntry };
+    // Match the validation condition exactly: only a pageInput that declares DATA keys requires it.
+    if (!Object.keys((p.pageInput && p.pageInput.data) || {}).length) return {};
+    directEntryDefaulted.push(p.key || p.name);
+    return {
+      directEntry: {
+        behavior: 'emptyState',
+        note: 'Defaulted on download: this app predates directEntry. Change to "selector" if opening this page from the navigation should show a record picker.',
+      },
+    };
+  };
+
   const spec = {
     // schemaVersion 2 only when pages carry keys (v2 shape); omitted for legacy back-compat.
     ...(hasKeys ? { schemaVersion: 2 } : {}),
@@ -123,14 +204,14 @@ async function hydrateSpec(read) {
     // SYSTEM "Inactive" view FALSE, so no `isdefault`/`querytype` filter isolates author views — it
     // grabbed the wrong one). Charts/forms/commands also need structured reads the SDK doesn't expose.
     // All four survive on the live app — a rebuild preserves them by discovery — but are absent from the
-    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-roadmap.
+    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-capabilities.
     charts: [],
     forms: [],
     commands: [],
     // Dashboards are reconstructed with id-passthrough tiles (each tile carries the deployed
     // view/chart ids), so a rebuild recreates the dashboard against the EXISTING views/charts
     // without needing views[]/charts[] declared (which would else duplicate them or fail validation).
-    dashboards: dashboards.map((d) => ({ name: d.name, tiles: d.tiles })),
+    dashboards: dashboards.map((d) => ({ name: d.name, ...(d.description ? { description: d.description } : {}), tiles: d.tiles })),
     pages: pages.map((p) => (hasKeys
       // v2 shape: key + name + optional semantics + source discriminant (kind:'tsx', codeFile)
       ? {
@@ -146,6 +227,7 @@ async function hydrateSpec(read) {
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
+          ...directEntryOf(p),
           ...(p.prompt ? { prompt: p.prompt } : {}),
           source: { kind: 'tsx', codeFile: p.codeFile },
         }
@@ -160,14 +242,23 @@ async function hydrateSpec(read) {
     appShell,
     // design from the page manifest (§7.3) — omit entirely when absent so the spec stays minimal.
     ...(design !== undefined ? { design } : {}),
+    // Views, charts, forms, business rules, and global choices are not structurally reconstructed by
+    // this hydrator today. Keep their descriptions in a read-only inventory so an inspecting agent can
+    // still see the deployed intent without pretending these partial records are rebuildable spec
+    // entries.
+    ...(descriptionInventory !== undefined ? { descriptionInventory } : {}),
   };
   // These diagnostics are intentionally non-enumerable: hydrateSpec returns them to the download CLI,
   // but `app-spec.json` must stay the user-facing contract rather than gaining transient loss metadata.
   Object.defineProperties(spec, {
     droppedSubareas: { value: droppedSubareaDetails.length, enumerable: false },
     droppedSubareaDetails: { value: droppedSubareaDetails, enumerable: false },
+    // Page keys that received a defaulted `directEntry` (see directEntryOf above). Surfaced so the
+    // download CLI can tell the author a value was chosen FOR them — a silently injected behaviour
+    // would be its own bug, quieter than the hard failure it replaces.
+    directEntryDefaulted: { value: directEntryDefaulted, enumerable: false },
   });
   return spec;
 }
 
-module.exports = { hydrateSpec, subAreaToSpec };
+module.exports = { hydrateSpec, subAreaToSpec, descriptionFromDataverse, withDescription };

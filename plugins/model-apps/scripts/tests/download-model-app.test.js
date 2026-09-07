@@ -1,10 +1,12 @@
 'use strict';
+// Also guards https://github.com/microsoft/power-platform-skills/issues/494 — download did not read
+// artifact descriptions back, so a downloaded spec silently lost every description on rebuild.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount } = require('../download-model-app.js');
+const { untypedColumnNames, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -177,6 +179,222 @@ test('entityFromMetadata builds a minimal (reuse-friendly) entity spec', () => {
   assert.strictEqual(e.existing, true, 'downloaded tables must be flagged existing:true (teardown data-loss guard)');
 });
 
+test('entityFromMetadata carries table and column descriptions, unwrapping Dataverse Labels', () => {
+  const e = entityFromMetadata({
+    schemaName: 'new_order',
+    displayName: 'Order',
+    primaryNameAttribute: 'new_name',
+    Description: {
+      UserLocalizedLabel: { Label: 'Tracks orders through fulfillment.', LanguageCode: 1033 },
+      LocalizedLabels: [{ Label: 'fallback table text', LanguageCode: 1033 }],
+    },
+    attributes: [
+      {
+        LogicalName: 'new_status',
+        Description: {
+          LocalizedLabels: [{ Label: 'Current fulfillment state.', LanguageCode: 1033 }],
+        },
+      },
+      { LogicalName: 'new_internal', Description: null },
+    ],
+  }, 'new_order');
+
+  assert.strictEqual(e.description, 'Tracks orders through fulfillment.');
+  assert.strictEqual(e.columns[0].schemaName, 'new_status');
+  assert.strictEqual(e.columns[0].description, 'Current fulfillment state.');
+  assert.strictEqual('description' in e.columns[1], false, 'null Label descriptions must be omitted, not emitted as ""');
+  assert.strictEqual(validateAppSpec({
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [e],
+    appShell: { areas: [] },
+  }).ok, true);
+});
+
+test('readEntityWithDescriptions reads descriptions through the RAW dataverse client, not queryRecords', async () => {
+  // `sdk.queryRecords` cannot serve a metadata path: it first resolves its argument to an entity SET
+  // name via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`, so a metadata path
+  // becomes a nested nonsense URL that 404s. This mock FAILS any queryRecords attempt so the test
+  // proves the raw client is used, rather than passing against a mock that models the wrong contract.
+  const gets = [];
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical,
+      schemaName: 'new_order',
+      displayName: 'Order',
+      primaryNameAttribute: 'new_name',
+      // The SDK supplies these; the description merge must PRESERVE them.
+      attributes: [
+        { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist' },
+        { logicalName: 'new_owner', displayName: 'Owner', attributeType: 'Lookup', targets: ['systemuser'] },
+      ],
+    }),
+    queryRecords: async (set) => { throw new Error(`queryRecords must not be used for metadata paths (got '${set}')`); },
+    dataverse: {
+      get: async (url) => {
+        gets.push(url);
+        if (/\/Attributes\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'new_status', Description: { LocalizedLabels: [{ Label: 'State shown to dispatchers.', LanguageCode: 1033 }] } },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: { Description: { UserLocalizedLabel: { Label: 'Order table purpose.', LanguageCode: 1033 }, LocalizedLabels: [] } } };
+      },
+    },
+  };
+
+  const meta = await readEntityWithDescriptions(sdk, 'new_order');
+  const e = entityFromMetadata(meta, 'new_order');
+
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  assert.strictEqual(e.description, 'Order table purpose.');
+  const status = e.columns.find((c) => c.schemaName === 'new_status');
+  assert.strictEqual(status.description, 'State shown to dispatchers.');
+  // The merge must not discard SDK-only attribute facts (a replace would drop `targets`, breaking
+  // lookup handling elsewhere) nor drop attributes the description read did not return.
+  const owner = meta.attributes.find((a) => a.logicalName === 'new_owner');
+  assert.ok(owner, 'an attribute with no description was dropped by the merge');
+  assert.deepStrictEqual(owner.targets, ['systemuser'], 'the merge clobbered SDK-only attribute fields');
+});
+
+test('readEntityWithDescriptions treats a non-2xx from the raw client as "no description", not a crash', async () => {
+  // dataverse.get RESOLVES with { status } on a 404 instead of throwing, so a bare try/catch would
+  // let the error body through. The body here deliberately CARRIES a `Description` key: dropping the
+  // status check must not be survivable just because a real 404 body usually lacks one.
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name', attributes: [{ logicalName: 'new_status' }] }),
+    dataverse: {
+      get: async () => ({
+        status: 404,
+        headers: {},
+        body: { error: { code: '0x80060888', message: 'Resource not found' }, Description: { UserLocalizedLabel: { Label: 'GARBAGE FROM AN ERROR BODY', LanguageCode: 1033 } } },
+      }),
+    },
+  };
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_order'), 'new_order');
+  assert.ok(!('description' in e), `a 404 body must never supply a description (got ${JSON.stringify(e.description)})`);
+  assert.ok(!('description' in e.columns[0]));
+});
+
+test('readEntityWithDescriptions survives a raw client that throws', async () => {
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name', attributes: [] }),
+    dataverse: { get: async () => { throw new Error('network down'); } },
+  };
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_order'), 'new_order');
+  assert.strictEqual(e.schemaName, 'new_order', 'a description read failure must not sink the download');
+  assert.ok(!('description' in e));
+});
+
+test('entityFromMetadata emits ONLY custom columns — a downloaded spec must not rewrite the org default views', async () => {
+  // `fetchEntityMetadata` returns the FULL attribute list. Emitting system attributes as spec
+  // columns is not merely noisy: `columns[]` feeds `defaultViewColumns`, and `enrichDefaultViews`
+  // REPLACES the Active/Inactive views' column set — so a `download -> rebuild` round trip would
+  // rewrite a customer's default views to Created On / Import Sequence Number, undoing fix #7.
+  const meta = {
+    logicalName: 'new_ticket', schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name',
+    attributes: [
+      { logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true },
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'Memo', isCustomAttribute: true },
+      { logicalName: 'new_owner', displayName: 'Owner', attributeType: 'Lookup', isCustomAttribute: true, targets: ['systemuser'] },
+      { logicalName: 'createdon', displayName: 'Created On', attributeType: 'DateTime', isCustomAttribute: false },
+      { logicalName: 'versionnumber', displayName: 'Version Number', attributeType: 'BigInt', isCustomAttribute: false },
+      { logicalName: 'importsequencenumber', displayName: 'Import Sequence Number', attributeType: 'Integer', isCustomAttribute: false },
+      { logicalName: 'owningbusinessunit', displayName: 'Owning Business Unit', attributeType: 'Lookup', isCustomAttribute: false },
+    ],
+  };
+  const e = entityFromMetadata(meta, 'new_ticket');
+  const names = e.columns.map((c) => c.schemaName);
+  for (const sys of ['createdon', 'versionnumber', 'importsequencenumber', 'owningbusinessunit']) {
+    assert.ok(!names.includes(sys), `system attribute '${sys}' leaked into columns[]: ${names.join(', ')}`);
+  }
+  // The primary name column is declared as `primaryAttribute`; it must not ALSO be a column.
+  assert.ok(!names.includes('new_name'), 'the primary column must not be duplicated into columns[]');
+  // A custom Lookup comes from relationships[], not columns[] — it has no App Spec column type.
+  assert.ok(!names.includes('new_owner'), 'a Lookup is not an authorable spec column');
+  assert.deepStrictEqual(names, ['new_status', 'new_notes']);
+  // The SDK projects `attributeType`, not `type`. Reading the wrong key made every column type-less,
+  // which silently disabled DEFAULT_VIEW_SKIP_TYPES and the auto-form-layout type filter.
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'new_notes').type, 'Memo');
+  // A Choice column is emitted WITHOUT a type: declaring `type: "Choice"` obliges the spec to carry
+  // `options[]` or a `globalChoice`, which this hydrator cannot read, and the resulting spec fails
+  // its own validation. Live-caught — the download errored with
+  // "column contoso_status: Choice needs options[] or a globalChoice reference".
+  assert.ok(!('type' in e.columns.find((c) => c.schemaName === 'new_status')),
+    'a Choice column must not claim a type it cannot substantiate');
+});
+
+test('a hydrated entity always survives validateAppSpec — a downloaded spec that cannot be validated is useless', () => {
+  const meta = {
+    logicalName: 'new_ticket', schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name',
+    attributes: [
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_choices', displayName: 'Choices', attributeType: 'MultiSelectPicklist', isCustomAttribute: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'Memo', isCustomAttribute: true },
+      { logicalName: 'new_big', displayName: 'Big', attributeType: 'BigInt', isCustomAttribute: true },
+    ],
+  };
+  const res = validateAppSpec({
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [entityFromMetadata(meta, 'new_ticket')],
+    appShell: { areas: [] },
+  }, { profile: 'deploy' });
+  assert.deepStrictEqual(res.errors, [], res.errors.join(' | '));
+});
+
+test('enrichesDefaultViews is FALSE for an existing:true table (download flags every recovered table that way)', () => {
+  const spec = {
+    entities: [{
+      schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, existing: true,
+      columns: [{ schemaName: 'new_status', type: 'Choice' }, { schemaName: 'new_tier', type: 'Choice' }],
+    }],
+    relationships: [],
+  };
+  // Enrichment REPLACES a view's column set, and `existing` means this build cannot prove it owns
+  // the table — the same reasoning that stops teardown from deleting it.
+  assert.strictEqual(enrichesDefaultViews(spec, spec.entities[0]), false);
+  const owned = { ...spec.entities[0], existing: false };
+  assert.strictEqual(enrichesDefaultViews({ ...spec, entities: [owned] }, owned), true, 'a table this build owns still enriches');
+  // The opt-in must remain reachable: judging "this reused table really is mine" is exactly the call
+  // an author can make and this code cannot, and the gate ran BEFORE the flag check at first.
+  const optedIn = { ...spec.entities[0], enrichDefaultViews: true };
+  assert.strictEqual(enrichesDefaultViews({ ...spec, entities: [optedIn] }, optedIn), true,
+    'an explicit enrichDefaultViews:true must override the existing:true skip');
+  const optedOut = { ...spec.entities[0], existing: false, enrichDefaultViews: false };
+  assert.strictEqual(enrichesDefaultViews({ ...spec, entities: [optedOut] }, optedOut), false, 'the opt-out still works');
+});
+
+test('untypedColumnNames names every column whose type could not be substantiated', () => {
+  // These are the columns a rebuild into a FRESH org would create as Text, because the data-model
+  // phase falls back to `SDK_COLUMN_TYPE[c.type || 'Text']`. Rebuilding into an org that already has
+  // the table reuses them and this is inert — which is why the loss has to be announced by name
+  // rather than left for someone to discover after a cross-environment rebuild.
+  assert.deepStrictEqual(untypedColumnNames([
+    { schemaName: 'new_ticket', columns: [
+      { schemaName: 'new_status' },                 // Choice — options not read, so no type
+      { schemaName: 'new_notes', type: 'Memo' },
+      { schemaName: 'new_choices' },                // MultiChoice
+    ] },
+    { schemaName: 'new_order', columns: [{ schemaName: 'new_total', type: 'Money' }] },
+  ]), ['new_ticket.new_status', 'new_ticket.new_choices']);
+  assert.deepStrictEqual(untypedColumnNames([]), []);
+  assert.deepStrictEqual(untypedColumnNames(undefined), []);
+});
+
+test('a downloaded Choice column is reported as untyped, so the Text downgrade is never silent', () => {
+  const meta = {
+    logicalName: 'new_ticket', schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name',
+    attributes: [
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'Memo', isCustomAttribute: true },
+    ],
+  };
+  assert.deepStrictEqual(untypedColumnNames([entityFromMetadata(meta, 'new_ticket')]), ['new_ticket.new_status']);
+});
+
 test('iconWebResources looks up web resources by NAME (not id) and maps type from webresourcetype', async () => {
   const calls = [];
   const sdk = {
@@ -227,19 +445,132 @@ test('readDashboards reconstructs supported tile shapes and skips unreadable das
         ],
       };
     },
-    queryRecords: async () => [{ name: 'Executive Dashboard' }],
+    queryRecords: async () => [{ name: 'Executive Dashboard', description: 'Leader view of revenue and work.' }],
   };
 
   const dashboards = await readDashboards(sdk, app);
 
   assert.strictEqual(dashboards.length, 1);
   assert.strictEqual(dashboards[0].name, 'Executive Dashboard');
+  assert.strictEqual(dashboards[0].description, 'Leader view of revenue and work.');
   assert.deepStrictEqual(dashboards[0].tiles, [
     { type: 'chart', name: 'Revenue', entity: 'account', viewId: '11111111-0000-4000-8000-000000000001', visualizationId: '22222222-0000-4000-8000-000000000002' },
     { type: 'list', name: 'Open Accounts', entity: 'account', viewId: '33333333-0000-4000-8000-000000000003' },
     { type: 'iframe', name: 'Portal', url: 'https://contoso.example' },
     { type: 'webresource', name: 'Help', webResource: 'new_help.htm' },
   ]);
+});
+
+test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {
+  const sdk = {
+    fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
+    queryRecords: async (_set, opts) => {
+      assert.ok(opts.select.includes('description'), 'dashboard name lookup also requests description');
+      return [{ name: 'Operations', description: null }];
+    },
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  });
+  assert.strictEqual('description' in dashboards[0], false, 'null descriptions are absent, not empty strings');
+});
+
+test('readDescriptionInventory captures view, chart, form, business-rule, and global-choice descriptions', async () => {
+  const APP_UNIQ_VALUE = '5111e0f2-0000-4000-8000-000000000001';
+  const VIEW_ID = '5111e0f2-0000-4000-8000-000000000002';
+  const CHART_ID = '5111e0f2-0000-4000-8000-000000000003';
+  const FORM_ID = '5111e0f2-0000-4000-8000-000000000004';
+  const RULE_ID = '5111e0f2-0000-4000-8000-000000000005';
+  const SOL_ID = '5111e0f2-0000-4000-8000-000000000006';
+  const FORM_ID_RESTRICTED = '5111e0f2-0000-4000-8000-000000000007';
+  const RULE_COPY_ID = '5111e0f2-0000-4000-8000-000000000008';
+  const CLASSIC_ID = '5111e0f2-0000-4000-8000-000000000009';
+  const calls = [];
+  const sdk = {
+    // A real table logical name is the ONLY thing queryRecords can take: it resolves its argument
+    // via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`. Anything else 404s. Fail
+    // loudly on a metadata collection so this mock cannot certify a call the real SDK rejects —
+    // which is exactly how the `GlobalOptionSetDefinitions` read passed review while always
+    // returning empty in production.
+    queryRecords: async (set, opts) => {
+      if (!/^[a-z_][a-z0-9_]*$/.test(String(set))) {
+        throw new Error(`queryRecords resolves an entity SET name and cannot take the metadata path '${set}' — use sdk.dataverse.get`);
+      }
+      calls.push({ set, opts });
+      const filter = (opts && opts.filter) || '';
+      if (set === 'appmodule') return [{ appmoduleidunique: APP_UNIQ_VALUE }];
+      if (set === 'appmodulecomponent' && /componenttype eq 26/.test(filter)) return [{ objectid: VIEW_ID }];
+      if (set === 'appmodulecomponent' && /componenttype eq 59/.test(filter)) return [{ objectid: CHART_ID }];
+      if (set === 'appmodulecomponent' && /componenttype eq 60/.test(filter)) return [{ objectid: FORM_ID }, { objectid: FORM_ID_RESTRICTED }];
+      if (set === 'savedquery') return [{ savedqueryid: VIEW_ID, name: 'Active Orders', returnedtypecode: 'new_order', description: 'Work queue.' }];
+      if (set === 'savedqueryvisualization') return [{ savedqueryvisualizationid: CHART_ID, name: 'Orders by Status', primaryentitytypecode: 'new_order', description: null }];
+      if (set === 'systemform') {
+        return [
+          { formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: 'Primary form.' },
+          // A form RESTRICTED to a security role. `formxml` is pulled purely to detect this, and the
+          // detection is what feeds the download's access-widening warning.
+          { formid: FORM_ID_RESTRICTED, name: 'Dispatcher', objecttypecode: 'new_order', description: 'Restricted.',
+            formxml: '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}" /></DisplayConditions></form>' },
+        ];
+      }
+      if (set === 'solution') return [{ solutionid: SOL_ID }];
+      if (set === 'solutioncomponent') return [{ objectid: RULE_ID, componenttype: 29 }];
+      if (set === 'workflow') {
+        return [
+          // A real business rule: category 2 (Business Rule), type 1 (the definition).
+          { workflowid: RULE_ID, name: 'Lock Closed', primaryentity: 'new_order', description: 'Closed rows are read-only.', category: 2, type: 1 },
+          // The platform's activated COPY of that same rule. Counting it would list every active
+          // rule twice.
+          { workflowid: RULE_COPY_ID, name: 'Lock Closed', primaryentity: 'new_order', description: 'Closed rows are read-only.', category: 2, type: 2 },
+          // A CLASSIC WORKFLOW. Solution component type 29 is every process kind, so without the
+          // category filter this would be mislabelled as a business rule in the inventory.
+          { workflowid: CLASSIC_ID, name: 'Nightly Recalc', primaryentity: 'new_order', description: 'A classic workflow.', category: 0, type: 1 },
+        ];
+      }
+      return [];
+    },
+    dataverse: {
+      get: async (url) => {
+        calls.push({ get: url });
+        if (/^\/GlobalOptionSetDefinitions\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [{ Name: 'new_priority', Description: { LocalizedLabels: [{ Label: 'Shared priority choices.', LanguageCode: 1033 }] } }] } };
+        }
+        return { status: 404, headers: {}, body: {} };
+      },
+    },
+  };
+
+  const inv = await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution');
+
+  assert.deepStrictEqual(inv.views[0], { id: VIEW_ID, name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
+  assert.strictEqual('description' in inv.charts[0], false, 'null chart descriptions are omitted');
+  assert.deepStrictEqual(inv.forms[0], { id: FORM_ID, name: 'Main', entity: 'new_order', description: 'Primary form.' });
+  // The role-restriction flag must NOT ride on the form entries: sanitizeDescriptionInventory spreads
+  // those into `app-spec.json`, and a diagnostic has no business in the user-facing spec.
+  assert.strictEqual('roleRestricted' in inv.forms[1], false,
+    'the flag belongs on the sibling key, not on each form entry');
+  // BEHAVIOURAL: only the restricted form is recorded, and it is recorded by (entity, name) so the
+  // warning can name it. A source regex could not catch dropping `formxml` from the $select —
+  // isRoleRestrictedFormXml(undefined) is false, so the list would be silently empty forever.
+  assert.deepStrictEqual(inv.roleRestrictedForms, [{ name: 'Dispatcher', entity: 'new_order' }],
+    'exactly the role-restricted form, and not the unrestricted one');
+  assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('formxml')),
+    'the form read must select formxml — without it the restriction can never be detected');
+  assert.deepStrictEqual(inv.businessRules[0], { id: RULE_ID, name: 'Lock Closed', entity: 'new_order', description: 'Closed rows are read-only.' });
+  // Solution component type 29 is EVERY process kind, so the rows must be narrowed after the fetch.
+  // A classic workflow listed as a business rule is misleading to any tool that reads the inventory,
+  // and the activated type-2 copy would list every active rule twice.
+  assert.strictEqual(inv.businessRules.length, 1,
+    `only the type-1 category-2 definition may be listed; got ${JSON.stringify(inv.businessRules.map((r) => r.name))}`);
+  assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('category') && c.opts.select.includes('type')),
+    'category and type must be REQUESTED, or the filter decides on undefined');
+  assert.deepStrictEqual(inv.globalChoices[0], { name: 'new_priority', description: 'Shared priority choices.' });
+  assert.ok(calls.some((c) => c.set === 'savedquery' && c.opts.select.includes('description')), 'view read selects description');
+  assert.ok(calls.some((c) => c.set === 'savedqueryvisualization' && c.opts.select.includes('description')), 'chart read selects description');
+  assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('description')), 'form read selects description');
+  assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('description')), 'business-rule read selects description');
+  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description'),
+    `global choices must be read through the RAW client (queryRecords cannot take a metadata path); calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
 });
 
 test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
@@ -258,6 +589,9 @@ const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, appCo
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
+// `enrichesDefaultViews` gates the destructive default-view rewrite; a DOWNLOADED table is flagged
+// `existing: true` because ownership is unprovable, so it must never trigger that rewrite.
+const { enrichesDefaultViews } = require('../lib/sdk-build.js');
 const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
 
@@ -446,7 +780,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
         // The app belongs to a real unmanaged solution — recoverAppSolution returns its uniquename, but the
         // publisher PREFIX must still come from the app uniquename ('test'), NOT this solution (Sol F2).
         if (logical === 'solutioncomponent') return [{ _solutionid_value: 'sol-x' }];
-        if (logical === 'solution') return [{ solutionid: 'sol-x', uniquename: 'ContosoSln', ismanaged: false }];
+        if (logical === 'solution') return [{ solutionid: 'sol-x', uniquename: 'ContosoSln', ismanaged: false, description: 'The Contoso field-operations solution.' }];
         return [];
       },
       fetchEntityMetadata: async (logical) => ({
@@ -486,6 +820,11 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
     // existing app even after a display-name rename) and the publisher prefix is derived FROM it.
     assert.strictEqual(spec.app.uniqueName, APP_UNIQUE, 'the app real uniquename round-trips into spec.app.uniqueName');
     assert.strictEqual(spec.solution.uniqueName, 'ContosoSln', 'the real unmanaged solution uniquename is recovered for teardown');
+    // `solution` is assembled field-by-field in runDownload (not spread from recoverAppSolution, so an
+    // unrecovered solution still gets its required defaults). That makes every field an explicit copy,
+    // and a field that is read but not copied is silently dropped — which is what happened here.
+    assert.strictEqual(spec.solution.description, 'The Contoso field-operations solution.',
+      'the recovered solution description must be carried into the spec, not dropped by the field-by-field copy');
     assert.strictEqual(spec.solution.publisherPrefix, 'test', 'this mock SDK exposes no getSolution, so the prefix falls back to the app uniquename (test_roundtrip → test); when getSolution IS available the solution publisher wins — see the recoverAppSolution tests');
     assert.strictEqual(appUniqueName(spec), APP_UNIQUE, 'appUniqueName resolves the REAL uniquename (identity lookup finds the existing app, no duplicate) even though the display name is "Test App"');
     assert.ok(!('prefixResolved' in spec.solution), 'the transient prefixResolved flag is stripped from the persisted spec');
@@ -599,12 +938,12 @@ test('recoverAppSolution recovers the publisher prefix from the SOLUTION, not th
   const sdk = {
     queryRecords: async (set) => {
       if (set === 'solutioncomponent') return [{ _solutionid_value: 'sol-1' }];
-      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false }];
+      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false, description: 'Customer management assets.' }];
       return [];
     },
     getSolution: async (uniqueName) => ({ uniqueName, publisherPrefix: 'contoso' }),
   };
-  assert.deepStrictEqual(await recoverAppSolution(sdk, 'app-1'), { uniqueName: 'ContosoCustomerManagement', publisherPrefix: 'contoso' });
+  assert.deepStrictEqual(await recoverAppSolution(sdk, 'app-1'), { uniqueName: 'ContosoCustomerManagement', description: 'Customer management assets.', publisherPrefix: 'contoso' });
 });
 
 test('recoverAppSolution degrades to uniqueName-only when the prefix cannot be recovered', async () => {
@@ -810,4 +1149,227 @@ test('a FOREIGN-prefix nav web resource is left as a bare reference, not re-decl
   } };
   const { webResources } = await iconWebResources(sdk, [], [], 'crba3', true, ['isv_page.html']);
   assert.strictEqual(webResources.length, 0, 'a foreign-prefix nav resource must not be re-declared');
+});
+
+// #456: download does NOT read languageCode from Dataverse, and that is deliberate — an LCID copied
+// out of the source org would be re-applied verbatim when the spec is rebuilt elsewhere, which is how
+// a spec starts failing in an org that lacks that language (#447). But dropping a value the AUTHOR
+// wrote is its own bug, and a silent one: the next build resolves the org default, so new columns get
+// one language while the pinned ones keep another. Mixed-language app, no error.
+test('a hand-pinned languageCode survives a download (#456)', () => {
+  const spec = { app: { name: 'A' }, entities: [] };
+  const prior = JSON.stringify({ app: { name: 'A' }, languageCode: 1031 });
+  const deps = { existsSync: () => true, readFileSync: () => prior };
+  preserveAuthoredLanguageCode(spec, 'app-spec.json', deps);
+  assert.strictEqual(spec.languageCode, 1031, 'the author-pinned LCID is restored');
+});
+
+test('the preserved value is CANONICAL, not the author\'s raw formatting', () => {
+  // A downloaded spec is a generated artifact. `"1031"` and `" 1031 "` both validate, but writing
+  // the string form back out makes the file's diff noisy and its type inconsistent with every other
+  // numeric field the download emits.
+  for (const raw of ['1031', ' 1031 ', '01031']) {
+    const spec = { app: { name: 'A' } };
+    preserveAuthoredLanguageCode(spec, 'app-spec.json', {
+      existsSync: () => true,
+      readFileSync: () => JSON.stringify({ languageCode: raw }),
+    });
+    assert.strictEqual(spec.languageCode, 1031, `${JSON.stringify(raw)} must normalize to the number 1031`);
+    assert.strictEqual(typeof spec.languageCode, 'number');
+  }
+});
+
+test('preserving never invents a languageCode where the author had none', () => {
+  const spec = { app: { name: 'A' }, entities: [] };
+  const deps = { existsSync: () => true, readFileSync: () => JSON.stringify({ app: { name: 'A' } }) };
+  preserveAuthoredLanguageCode(spec, 'app-spec.json', deps);
+  assert.strictEqual(spec.languageCode, undefined, 'no previous value means the field stays absent');
+
+  // A first-ever download has no previous spec at all.
+  const fresh = { app: { name: 'A' }, entities: [] };
+  preserveAuthoredLanguageCode(fresh, 'app-spec.json', { existsSync: () => false, readFileSync: () => { throw new Error('nope'); } });
+  assert.strictEqual(fresh.languageCode, undefined);
+});
+
+test('a downloaded languageCode is never overwritten by the previous file', () => {
+  // Defensive: if a future download ever DOES emit one, the live value wins over the stale file.
+  const spec = { app: { name: 'A' }, languageCode: 1036 };
+  const deps = { existsSync: () => true, readFileSync: () => JSON.stringify({ languageCode: 1031 }) };
+  preserveAuthoredLanguageCode(spec, 'app-spec.json', deps);
+  assert.strictEqual(spec.languageCode, 1036);
+});
+
+test('a corrupt or invalid previous spec is ignored rather than failing the download', () => {
+  for (const prior of ['{ not json', JSON.stringify({ languageCode: 'de-DE' }), JSON.stringify({ languageCode: true }), JSON.stringify({ languageCode: 0 }), JSON.stringify({ languageCode: 99999 })]) {
+    const spec = { app: { name: 'A' } };
+    preserveAuthoredLanguageCode(spec, 'app-spec.json', { existsSync: () => true, readFileSync: () => prior });
+    assert.strictEqual(spec.languageCode, undefined, 'must not carry forward ' + prior.slice(0, 30));
+  }
+  // A read that throws must not escape either.
+  const spec = { app: { name: 'A' } };
+  assert.doesNotThrow(() => preserveAuthoredLanguageCode(spec, 'x', { existsSync: () => true, readFileSync: () => { throw new Error('EACCES'); } }));
+  assert.strictEqual(spec.languageCode, undefined);
+});
+
+// --- a form restricted to security roles must not be lost SILENTLY ------------------------------
+//
+// Every other download gap loses a customization. This one WIDENS ACCESS: form security roles live
+// inside formxml as `<DisplayConditions>`, `forms[]` is not reconstructed by this download, and a
+// form with no DisplayConditions is offered to EVERY role. So a restricted form, downloaded and
+// rebuilt into a fresh environment, comes back visible to everyone.
+//
+// The fixtures below are the exact SHAPES measured on a live environment after a build — attribute
+// order, casing and the platform's own default block. The role GUID is synthetic: this repo is
+// public, and the test asserts nothing about the id's value.
+const { isRoleRestrictedFormXml } = require('../download-model-app.js');
+
+const XML_RESTRICTED = '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}" /></DisplayConditions></form>';
+const XML_EVERYONE = '<form><tabs /><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+const XML_NONE = '<form><tabs /></form>';
+
+test('a role-restricted form is detected', () => {
+  assert.strictEqual(isRoleRestrictedFormXml(XML_RESTRICTED), true);
+});
+
+test('the DEFAULT shapes are NOT reported as restricted', () => {
+  // Both of these mean "every role can see it". Warning on them would make the warning noise, and a
+  // warning that fires on every form is a warning nobody reads.
+  assert.strictEqual(isRoleRestrictedFormXml(XML_EVERYONE), false,
+    '<Everyone /> is the unrestricted default, not a restriction');
+  assert.strictEqual(isRoleRestrictedFormXml(XML_NONE), false,
+    'a form with no DisplayConditions at all is visible to every role');
+});
+
+test('detection does not depend on attribute order or element casing', () => {
+  // Platform-authored and SDK-authored formxml differ in both, so matching either exactly would make
+  // this fire on one source and not the other.
+  assert.strictEqual(isRoleRestrictedFormXml('<form><displayconditions fallbackform="false" order="2"><role id="{A}" /></displayconditions></form>'), true);
+  assert.strictEqual(isRoleRestrictedFormXml('<form><DisplayConditions><Role  Id = "{A}" /></DisplayConditions></form>'), true);
+});
+
+test('a <Role> OUTSIDE DisplayConditions does not count', () => {
+  // Scoped to the block deliberately: the word Role appears elsewhere in formxml (control names,
+  // labels), and matching it loosely would report every such form as restricted.
+  assert.strictEqual(isRoleRestrictedFormXml('<form><tabs><cell><control id="Role" /></cell></tabs></form>'), false);
+  assert.strictEqual(isRoleRestrictedFormXml('<form><labels><label description="Role" /></labels></form>'), false);
+});
+
+test('missing or malformed formxml is not a restriction', () => {
+  // Fail OPEN here, not closed: an unreadable form must not produce a spurious security warning that
+  // sends someone hunting for a restriction that does not exist.
+  for (const bad of [undefined, null, '', '<form', 123, {}]) {
+    assert.strictEqual(isRoleRestrictedFormXml(bad), false, `${JSON.stringify(bad)} must not read as restricted`);
+  }
+});
+
+test('runDownload WARNS on stderr about a role-restricted form, naming it', async () => {
+  // BEHAVIOURAL. The two source-regex guards this replaces both stayed green under two realistic
+  // edits — dropping `formxml` from the systemform $select, and collapsing the capturing
+  // descriptionInventory accessor — either of which silences the warning completely.
+  //
+  // This is the single guard against a silent access WIDENING: `forms[]` is not reconstructed by the
+  // download, so a restricted form rebuilt into another environment comes back visible to every role.
+  const APP_ID = '6222e0f2-0000-4000-8000-000000000001';
+  const APP_UNIQUE = 'new_rolewarn';
+  const FORM_OPEN = '6222e0f2-0000-4000-8000-000000000002';
+  const FORM_LOCKED = '6222e0f2-0000-4000-8000-000000000003';
+  const SM_ID = '6222e0f2-0000-4000-8000-000000000004';
+  const SM_XML = '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-rolewarn-'));
+
+  const sdk = {
+    fetchArtifact: async () => ({
+      id: APP_ID, name: 'Role Warn', uniquename: APP_UNIQUE, description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'new_order' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: APP_ID, uniquename: APP_UNIQUE }];
+      if (logical === 'appmodulecomponent') {
+        if (/componenttype eq 60/.test(filter)) return [{ objectid: FORM_OPEN, componenttype: 60 }, { objectid: FORM_LOCKED, componenttype: 60 }];
+        if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
+        return [];
+      }
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      if (logical === 'systemform') {
+        return [
+          { formid: FORM_OPEN, name: 'Everyone Form', objecttypecode: 'new_order', description: '',
+            formxml: '<form><tabs /><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>' },
+          { formid: FORM_LOCKED, name: 'Dispatcher Form', objecttypecode: 'new_order', description: '',
+            formxml: '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}" /></DisplayConditions></form>' },
+        ];
+      }
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name',
+      attributes: [{ logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true }],
+      relationships: [],
+    }),
+    dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
+  };
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+
+  // The warning goes to stderr (non-fatal), the pattern used elsewhere in this suite.
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const written = [];
+  process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
+  let res;
+  try {
+    res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+  } finally {
+    process.stderr.write = origWrite;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+
+  assert.strictEqual(res.ok, true, `the download itself must succeed; got ${res.error || ''}`);
+  const text = written.join('');
+  assert.match(text, /form\(s\) are restricted to specific security roles/, 'the warning must fire');
+  assert.match(text, /new_order\.Dispatcher Form/, 'and must NAME the restricted form');
+  assert.doesNotMatch(text, /Everyone Form/,
+    'the <Everyone /> form is the unrestricted DEFAULT — warning on it would make the warning noise');
+  assert.match(text, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
+});
+
+test('runDownload stays SILENT when no form is role-restricted', async () => {
+  // A warning that fires on every download is a warning nobody reads.
+  const APP_ID = '6333e0f2-0000-4000-8000-000000000001';
+  const SM_ID = '6333e0f2-0000-4000-8000-000000000002';
+  const FORM_ID = '6333e0f2-0000-4000-8000-000000000003';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-nowarn-'));
+  const sdk = {
+    fetchArtifact: async () => ({
+      id: APP_ID, name: 'No Warn', uniquename: 'new_nowarn', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'new_order' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: APP_ID, uniquename: 'new_nowarn' }];
+      if (logical === 'appmodulecomponent') {
+        if (/componenttype eq 60/.test(filter)) return [{ objectid: FORM_ID, componenttype: 60 }];
+        if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
+        return [];
+      }
+      if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>' }];
+      if (logical === 'systemform') return [{ formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: '', formxml: '<form><tabs /></form>' }];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name',
+      attributes: [{ logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true }],
+      relationships: [],
+    }),
+    dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
+  };
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const written = [];
+  process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
+  try {
+    await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'new_nowarn' });
+  } finally {
+    process.stderr.write = origWrite;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+  assert.doesNotMatch(written.join(''), /restricted to specific security roles/);
 });

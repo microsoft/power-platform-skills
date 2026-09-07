@@ -15,15 +15,23 @@
 //                      SDK reports them and the owner decides. Runs AFTER the app so the app's own
 //                      sitemap reference is already gone and the only dependency the platform can
 //                      still report is a GENUINE other consumer; such a page is SKIPPED, not deleted.
-//   1b. roles        — persona security roles. Deleted right after the app (BEFORE the data model): a
-//                      role holding a soon-to-be-deleted table's privileges could otherwise block that
-//                      table's delete. SEC-1: only roles the SDK itself authored (marked on the role
-//                      description) are deleted — never a hand-built or managed same-name role.
 //   2. dashboards    — systemform (type 0) rows, pinned as app components
 //   3. commands      — appactions per entity (they reference the web-resource JS; delete first).
 //                      The SDK's command delete is ENTITY-keyed (removes every appaction on that
 //                      entity's bar in one call), so this passes the entity logical name, not an id.
 //   4. forms         — systemform rows per entity (forms reference views/web-resources; deleted before tables)
+//   4b. roles        — persona security roles. Deleted AFTER the forms and BEFORE the data model, and
+//                      both halves of that are load-bearing:
+//                        * after forms, because `forms[].securityRoles` writes the role id into the
+//                          form's own `formxml` as a `<DisplayConditions>` entry, which the platform
+//                          treats as a real dependency. MEASURED: deleting the role first answered
+//                          `HTTP 400 … The Role(<id>) component cannot be deleted because it is
+//                          referenced by 1 other components`, and the identical delete returned 204
+//                          with zero reported dependencies once the forms were gone.
+//                        * before tables, because a role holding a soon-to-be-deleted table's
+//                          privileges could otherwise block that table's delete.
+//                      SEC-1: only roles the SDK itself authored (marked on the role description) are
+//                      deleted — never a hand-built or managed same-name role.
 //   5. charts        — savedqueryvisualization rows per entity (deleted before tables)
 //   6. views         — savedquery rows per entity (deleted before tables)
 //   7. relationships — OneToMany/ManyToMany relationships (deleted before tables)
@@ -307,6 +315,98 @@ const KIND_HANDLERS = {
     del: (sdk, item) => sdk.deleteSecurityRole(item.id),
     tolerateNotFound: true, // a role already deleted (e.g. by a prior teardown) is "gone"
   },
+  businessRules: {
+    // A business rule is a `workflows` row (category 2), not something the SDK models as a deletable
+    // artifact kind — so resolve and delete it over queryRecords/deleteRecord like the row it is.
+    //
+    // Scoped by (category, name, primaryentity) so a same-named rule on another table is never
+    // touched. An ACTIVE rule cannot be deleted, so it is deactivated first; that is a separate
+    // round trip and the platform runs it asynchronously (a WorkflowSetState job), which is why a
+    // solution uninstall immediately afterwards can transiently 429 — see the teardown notes.
+    async resolve(sdk, target) {
+      // Built explicitly rather than by string-patching `businessRuleFilter()`'s output. It used to
+      // be `businessRuleFilter(...).replace('type eq 1', '(type eq 1 or type eq 2)')`, which coupled
+      // teardown to that function's exact spelling: any reordering or whitespace change there would
+      // silently stop the widening, the type-2 row would survive, and #493's residue would come back
+      // with every test still green. Same `odataLit` escaping, stated once, visible in full.
+      const filter = `category eq 2 and (type eq 1 or type eq 2) and name eq '${odataLit(target.name)}' and primaryentity eq '${odataLit(String(target.entity).toLowerCase())}'`;
+      const rows = await sdk.queryRecords('workflow', {
+        select: ['workflowid', 'statecode', 'type', '_parentworkflowid_value'],
+        // Teardown deliberately widens businessRuleFilter from the build's definition-only query:
+        //
+        //   category eq 2 and (type eq 1 or type eq 2) and name eq '<rule>' and primaryentity eq '<entity>'
+        //
+        // Dataverse stores activated business rules as TWO `workflow` rows:
+        //   type=1, _parentworkflowid_value=(null) -> editable definition
+        //   type=2, _parentworkflowid_value=<def> -> activated copy
+        //
+        // Build/verify must ignore type 2 because it is platform-derived, but teardown owns both
+        // rows while the table still exists. If the type-2 row survives until the table delete, its
+        // entity ObjectTypeCode can no longer resolve and every later write fails with 400
+        // 0x80041102 ("The entity with ObjectTypeCode = N was not found in the MetadataCache...").
+        // Workflow row/type semantics: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow
+        //
+        // The copy is NOT removed with its parent — live-measured: after a full teardown the type-2
+        // row survives with `parent` pointing at the deleted definition, and once the table is gone
+        // it can no longer be deleted at all (400 0x80041102, "entity with ObjectTypeCode = N was
+        // not found in the MetadataCache"), because the platform cannot resolve the entity it
+        // references. So every teardown of an ACTIVE rule strands one row while still reporting
+        // `0 failed`. Tracking: https://github.com/microsoft/power-platform-skills/issues/493
+        filter,
+        top: 50,
+      });
+      const items = (rows || []).map((r) => ({
+        id: r.workflowid,
+        name: target.name,
+        statecode: r.statecode,
+        type: r.type,
+        parentDefinitionId: r._parentworkflowid_value,
+      }));
+      // ORDER MATTERS, and it is the opposite of the intuitive one. Live-measured on a real org:
+      //
+      //   * Deleting the type-2 copy FIRST is refused, because the definition still points at it:
+      //       405 "Cascade Delete failed due to cascade restrict relation. Restricting entity
+      //            Workflow has Id: <type-1> and is collected by Relationship with name:
+      //            workflow_active_workflow."
+      //   * Deactivating the definition does NOT remove the copy — it only flips the copy to Draft
+      //     (statecode 0 / statuscode 1) alongside its parent.
+      //   * Deleting the DEFINITION succeeds and leaves the copy behind, now unreferenced.
+      //   * That orphaned copy then deletes cleanly — but ONLY while its table still exists. Once
+      //     the table is dropped it is undeletable forever (400 0x80041102).
+      //
+      // So: definition first, activated copy second, and both strictly before the tables phase.
+      return [
+        ...items.filter((r) => r.type !== 2),
+        ...items.filter((r) => r.type === 2),
+      ];
+    },
+    async del(sdk, item) {
+      if (item.type === 2) {
+        // Reached only AFTER the definition above was deleted, so the workflow_active_workflow
+        // cascade-restrict no longer applies and the row deletes normally. A 404 here is success by
+        // another name (a platform version may cascade the copy away with its parent) and
+        // `tolerateNotFound` records it as already gone.
+        //
+        // There is deliberately NO 405 retry. An earlier version deactivated `parentDefinitionId`
+        // and re-issued the same delete, which reads like defence in depth but cannot work: by this
+        // point the definition row no longer EXISTS, so the deactivate 404s and the retry is
+        // byte-identical to the call that just failed. It only passed review because the test mock
+        // silently no-ops `updateRecord` on a missing row — a contract the real SDK does not have.
+        // A genuine 405 here is a real leftover that becomes PERMANENTLY undeletable once the table
+        // is dropped, so it must surface as a reported failure rather than be papered over by a
+        // retry that can only ever fail the same way. See issue #493.
+        return sdk.deleteRecord('workflow', item.id);
+      }
+      // Deactivate before delete. Dataverse refuses to delete an activated process, and the error it
+      // returns names neither the rule nor the reason clearly. This also flips the activated copy to
+      // Draft, which is what makes the copy deletable in the step that follows.
+      if (item.statecode === 1) {
+        try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
+      }
+      return sdk.deleteRecord('workflow', item.id);
+    },
+    tolerateNotFound: true,
+  },
   commands: {
     // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
     // resolveArtifact('command', { entity }) returns that single per-entity artifact and
@@ -324,9 +424,66 @@ const KIND_HANDLERS = {
         return { items: [], skipReason: "command bar on an existing/external table is not deleted — the SDK deletes the whole bar and cannot scope to this spec's buttons (per-button delete unsupported); remove it manually if intended" };
       }
       const items = await sdk.resolveArtifact('command', { entity: target.entity });
-      return (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity }));
+      const bar = (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity, kind: 'bar' }));
+
+      // The bar delete does NOT remove the individual `appaction` rows. LIVE-MEASURED: after a
+      // teardown that deleted the table itself, five appaction rows for that entity survived, and
+      // the three leaf buttons still referenced the form-JS web resource — which then could not be
+      // deleted ("referenced by 3 other components", componenttype 10344 = modern command). So the
+      // stranded rows are what blocked the web resource, not a platform dependency leak.
+      //
+      // Safe only because this branch already requires `ownsTable`: the table is one this spec
+      // creates, so no foreign app can own buttons on it. Scoped to `contextvalue` (the entity the
+      // command is bound to) for the same reason.
+      //
+      // CHILDREN FIRST: see the depth computation below — a flyout hierarchy is three levels deep,
+      // so ordering has to be by real ancestor depth, not by "has a parent".
+      let rows = [];
+      try {
+        rows = await sdk.queryRecords('appaction', {
+          select: ['appactionid', '_parentappactionid_value'],
+          filter: `contextvalue eq '${odataLit(target.entity)}'`,
+          top: 200,
+        });
+      } catch {
+        // Best-effort: if the rows cannot be listed, the bar delete below still runs and the web
+        // resource simply reports its dependency, which is the pre-existing behaviour.
+        rows = [];
+      }
+      // DEEPEST FIRST, by real ancestor depth. A flyout is three levels — anchor (no parent), an
+      // intervening group (parent = anchor), then the buttons (parent = group) — so
+      // `_parentappactionid_value` is set on BOTH the group and the leaves. Sorting merely by "has a
+      // parent" puts them in the same bucket in arbitrary order, which can delete the group while its
+      // buttons still hang off it; Dataverse rejects deleting a parent that still has children.
+      // (Observed while resetting a command bar by hand: a leaf came back 404 because its group had
+      // already gone — the platform happened to cascade, which is luck, not ordering.)
+      //
+      // So walk the parent pointers to a true depth and delete the deepest rows first.
+      const byId = new Map((rows || []).map((r) => [r.appactionid, r]));
+      const depthOf = (r) => {
+        let d = 0;
+        let cur = r;
+        // Bounded by the row count so a cyclic/self-referential pointer cannot spin forever.
+        for (let i = 0; i < byId.size + 1 && cur && cur._parentappactionid_value; i += 1) {
+          cur = byId.get(cur._parentappactionid_value);
+          d += 1;
+        }
+        return d;
+      };
+      const leaves = (rows || [])
+        .slice()
+        .sort((a, b) => depthOf(b) - depthOf(a))
+        .map((r) => ({ id: r.appactionid, entity: target.entity, kind: 'row' }));
+      // Rows BEFORE the bar: the individual rows are the ones holding the web-resource dependency,
+      // and deleting them first makes the outcome deterministic instead of depending on whatever the
+      // bar delete happens to cascade.
+      return [...leaves, ...bar];
     },
-    del: (sdk, item) => sdk.deleteRemoteArtifact('command', item.entity),
+    del: (sdk, item) => (item.kind === 'row'
+      ? sdk.deleteRecord('appaction', item.id)
+      : sdk.deleteRemoteArtifact('command', item.entity)),
+    // A row the bar delete already removed reads as gone, not as a failure.
+    tolerateNotFound: true,
   },
   form: {
     async resolve(sdk, target) {
@@ -387,6 +544,35 @@ const KIND_HANDLERS = {
       return (items || []).map((x) => ({ id: x.id, name: x.name }));
     },
     del: (sdk, item) => sdk.deleteWebResource(item.id),
+  },
+  // Clear a column visualization on a table that teardown deliberately KEEPS.
+  //
+  // FAIL-CLOSED on ownership. The configuration row is shared by every app that shows the column, and
+  // the build PATCHes an existing row rather than creating a private one — so blindly writing 'None'
+  // would erase a renderer another maker set after this spec built. The clear therefore only happens
+  // when the CURRENT value still equals what this spec authored; anything else (someone changed it,
+  // or the preview is not provisioned here) is left alone and reported as skipped.
+  columnVisualization: {
+    async resolve(sdk, target) {
+      let current;
+      try {
+        current = await sdk.getColumnVisualization(target.entityLogical, target.columnLogical);
+      } catch (err) {
+        // A 404 means the preview is not provisioned on this environment, so there is nothing to
+        // clear. Any other read failure means we cannot establish ownership — skip rather than guess.
+        const status = (err && (err.statusCode || err.status)) || 0;
+        return { items: [], skipReason: status === 404
+          ? 'grid-visualization preview is not provisioned on this environment — nothing to clear'
+          : `could not read the current visualization (${String((err && err.message) || err).slice(0, 120)}) — left alone rather than risk clearing another app's setting` };
+      }
+      if (current === 'None') return { items: [] };
+      if (current !== target.authored) {
+        return { items: [], skipReason: `column visualization on ${target.entityLogical}.${target.columnLogical} is now '${current}' but this spec authored '${target.authored}' — someone else changed it, so it is left as-is` };
+      }
+      return [{ id: `${target.entityLogical}.${target.columnLogical}`, entityLogical: target.entityLogical, columnLogical: target.columnLogical }];
+    },
+    del: (sdk, item) => sdk.setColumnVisualization(item.entityLogical, item.columnLogical, 'None'),
+    tolerateNotFound: true,
   },
   table: {
     // Only tear down tables THIS build created. Skip (never delete):
@@ -473,14 +659,15 @@ function planTeardown(spec) {
       target: { manifestName: manifestResourceName(appUniqueName(spec)) },
     });
   }
-  // Persona security roles — deleted right after the app, before the data model (a role holding a
-  // table's privileges could block that table's delete). The role handler is SEC-1 safe (marker-gated)
-  // and BU-scoped. Uses the TRIMMED (canonical) persona name so it matches the name the SDK created.
-  for (const p of spec.personas || []) {
-    const name = canonicalPersonaName(p);
-    if (!name) continue;
-    steps.push({ kind: 'role', phase: 'security', label: `security role "${name}"`, target: { name, businessUnitId: p.businessUnitId } });
-  }
+  // Persona security roles were once deleted right here, immediately after the app. They are now
+  // ordered AFTER the forms below, because `forms[].securityRoles` writes the role into the form's
+  // `formxml` as a `<DisplayConditions>` entry — which the platform treats as a real dependency.
+  // MEASURED live: deleting the role while its form still existed answered
+  //   HTTP 400 ... The Role(<id>) component cannot be deleted because it is referenced by 1 other
+  //   components
+  // and the same delete succeeded (204, zero dependencies) the moment the forms were gone. The
+  // original constraint that put roles early — a role holding a table's privileges can block that
+  // table's delete — is still satisfied, because forms are themselves deleted well before tables.
   for (const d of spec.dashboards || []) {
     steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name } });
   }
@@ -493,6 +680,13 @@ function planTeardown(spec) {
   const specCreatedTables = new Set((spec.entities || []).filter((e) => e.existing !== true).map((e) => String(e.schemaName).toLowerCase()));
   for (const entity of Object.keys(commandsByEntity(spec))) {
     steps.push({ kind: 'commands', phase: 'commands', label: `command bar for ${entity}`, target: { entity, ownsTable: specCreatedTables.has(String(entity).toLowerCase()) } });
+  }
+  // Business rules BEFORE forms and tables: a rule is a workflow row bound to the entity, and an
+  // ACTIVE one blocks changes to what it references. It is also its own artifact rather than
+  // something a table delete cascades away.
+  for (const r of spec.businessRules || []) {
+    const entity = String(r.entity).toLowerCase();
+    steps.push({ kind: 'businessRules', phase: 'business-rules', label: `business rule "${r.name}" (${entity})`, target: { entity, name: r.name } });
   }
   // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
   // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV
@@ -516,6 +710,16 @@ function planTeardown(spec) {
     // deleting (restoreStockMainForm), so flag them here.
     const isMain = String(f.formType || f.type || 'main').toLowerCase() === 'main';
     steps.push({ kind: 'form', phase: 'forms', label: `form "${f.name}" (${f.entity})`, target: { name: f.name, entity: String(f.entity).toLowerCase(), formType: f.formType, formId: f.formId, isMain } });
+  }
+  // Persona security roles — AFTER the forms, BEFORE the data model. See the note above the
+  // dashboards loop for why this moved: a form that names a role in its `<DisplayConditions>` holds a
+  // platform dependency on that role, so the role cannot be deleted until the form is. The role
+  // handler is SEC-1 safe (marker-gated) and BU-scoped. Uses the TRIMMED (canonical) persona name so
+  // it matches the name the SDK created.
+  for (const p of spec.personas || []) {
+    const name = canonicalPersonaName(p);
+    if (!name) continue;
+    steps.push({ kind: 'role', phase: 'security', label: `security role "${name}"`, target: { name, businessUnitId: p.businessUnitId } });
   }
   for (const c of spec.charts || []) {
     steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });
@@ -542,6 +746,30 @@ function planTeardown(spec) {
     for (const schema of selectSummaryTables(spec)) {
       const logical = String(schema).toLowerCase();
       steps.push({ kind: 'aiSummary', phase: 'ai-summaries', label: `row summary ${logical}`, target: { entityLogicalName: logical } });
+    }
+  }
+  // Column visualizations on tables that SURVIVE teardown. A visualization is a
+  // `controlconfiguration` row bound to the attribute, so it is removed with the column when the
+  // table is deleted — but a retained table keeps whatever renderer this spec applied, which is
+  // residue on somebody else's table.
+  //
+  // A table is retained when the spec flags it `existing: true` OR when it turns out to be a
+  // system/non-custom table (the table handler detects that live and skips the delete). Planning only
+  // on the flag missed the second case, so a spec that declares a visualization on `account` without
+  // the flag left the renderer behind. Plan a candidate for EVERY declared visualization; the
+  // resolver above establishes ownership and skips a table whose value we did not author, and a
+  // table this spec really does delete simply reports nothing left to clear.
+  for (const e of spec.entities || []) {
+    const logical = String(e.schemaName).toLowerCase();
+    for (const c of e.columns || []) {
+      if (!c || !c.schemaName || c.visualization === undefined || c.visualization === 'None') continue;
+      steps.push({
+        kind: 'columnVisualization',
+        phase: 'data-model',
+        label: `column visualization ${logical}.${String(c.schemaName).toLowerCase()}`,
+        // `authored` is what makes the clear safe: teardown only removes a value this spec set.
+        target: { entityLogical: logical, columnLogical: String(c.schemaName).toLowerCase(), authored: c.visualization },
+      });
     }
   }
   // Tables in REVERSE topological order: topoOrderEntities lists parents-before-children (build

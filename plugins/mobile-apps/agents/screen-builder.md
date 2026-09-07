@@ -715,7 +715,12 @@ Dynamic token values are not always type-checked; unknown aliases can render lit
 Read: <working_dir>/tamagui.config.ts
 ```
 
-Require Tamagui 2, `@tamagui/config/v5`, both customization markers, and marker-based `customConfig`. Otherwise return `BLOCKED: stale Tamagui template; expected Tamagui 2 with Config v5`.
+Require Tamagui 2, both customization markers,
+`createPowerAppsTamaguiConfig`, and marker-based `customConfig`. The default
+`customConfig` may be empty because the native host supplies Config v5,
+animations, semantic aliases, contrast handling, and the `fonts.mono`
+fallback. Otherwise return `BLOCKED: stale Tamagui template; expected the
+native-host Tamagui config factory`.
 
 Read the effective customizations:
 
@@ -724,7 +729,12 @@ Read the effective customizations:
 - `customConfig.fonts` — added families such as `heading`, `body`, and `mono`.
 - `customConfig.themes` — light/dark semantic overrides.
 
-Config v5 supplies the standard theme values listed below. Use custom token aliases only when `customConfig` defines them; never infer aliases from naming conventions.
+The native-host factory always supplies this semantic contract:
+`$surface0`-`$surface3`, `$mediaSurface`, `$accentDeep`, `$accentBase`,
+`$accentSoft`, `$accentOnAccent`, `$text0`-`$text3`, all documented
+`$status*` foreground/background pairs, and `$mono`. Config v5 supplies the
+standard numbered values. Use other custom aliases only when `customConfig`
+defines them; never infer additional aliases from naming conventions.
 
 **Forbidden — do NOT use any of these in your TSX, ever:**
 
@@ -733,7 +743,7 @@ Config v5 supplies the standard theme values listed below. Use custom token alia
 | `color="$color"` (no number) | Renders as literal string → invisible text | `color="$color12"` (text), `color="$color9"` (muted) |
 | `bg="$bg"` (no number) | Same — silently broken | `bg="$background"` or `bg="$color2"` |
 | `color="$primary"` | Stock Tamagui has no `$primary`; only brand configs may | `color="$accentBase"` if defined, else `color="$blue10"` |
-| Any `$<name>` you didn't see in `tamagui.config.ts` | Will render as the literal `'$<name>'` string | Read the config and pick a real token |
+| Any `$<name>` outside the native-host contract and not defined in `tamagui.config.ts` | Will render as the literal `'$<name>'` string | Use a host semantic token, a Config v5 standard value, or a visible app-defined token |
 | Raw hex (`#1a1a1a`, `#fff`) | Bypasses the design system; breaks dark mode | Always a token |
 
 **Config v5 props:** `onlyAllowShorthands` is enabled. Use v5 shorthands (`bg`, `items`, `justify`, `rounded`, `text`, `self`, `grow`/`shrink`, min/max, spacing, and edge shorthands) whenever defined. Keep unaliased longhands such as `flex`, `width`, `height`, `color`, `position`, `fontSize`, and `fontWeight`. Never use v4 aliases (`ai`, `jc`, `br`, `f`, `w`, `h`, `col`, `pos`, `ta`, `als`, `tt`, `ls`) or a longhand that v5 aliases.

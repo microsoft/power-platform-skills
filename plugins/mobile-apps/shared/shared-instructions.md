@@ -14,6 +14,28 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ---
 
+## Workflow Checkpoint Telemetry
+
+A workflow opts a step into telemetry with this marker directly below its heading:
+
+```markdown
+**Telemetry checkpoint: `<static_snake_case_name>`**
+```
+
+At a marked boundary, run this command with the current top-level skill name:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/emit-telemetry-checkpoint.js" "<skill-name>|<checkpoint-name>|<state>|<optional-info>"
+```
+
+Use `started` immediately before the work, then `completed` after success or `failed` before stopping on failure. A valid branch that bypasses the work emits only `skipped`. Omit the final `|<optional-info>` when no extra classification is needed.
+
+Checkpoint names and optional info must be fixed, author-written `snake_case` values of at most 64 characters. Optional info is for low-cardinality classifications such as `dependency_missing`; never interpolate prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data. Do not emit checkpoints for unmarked steps. Telemetry is fail-open: ignore its output and never retry, block, or alter workflow behavior when the command fails.
+
+Name checkpoints with a precise verb-object phrase that identifies the work being measured, such as `validate_fresh_template` or `generate_connector_data_source`. Do not use broad phase labels such as `planning`, `scaffold`, `screens`, or `app_ready`, and do not include a lifecycle suffix such as `_started`, `_completed`, `_skipped`, or `_failed`; the emitter appends that state.
+
+---
+
 ## Memory Bank
 
 **📋 [memory-bank.md](./memory-bank.md)**

@@ -98,7 +98,7 @@ test('Phase 6 webapi-settings-architect prompt branches for AI-only mode', () =>
   assert.match(wsSection, /AI-only read integration/);
   assert.match(wsSection, /Do \*\*not\*\* include the primary key column/);
   assert.match(wsSection, /`_<col>_value` OData read form/);
-  assert.match(wsSection, /Do NOT add the write form/);
+  assert.match(wsSection, /Navigation Property only when non-AI code uses it before `@odata.bind`/);
 });
 
 test('Phase 6.4.2 Path A defaults table permissions to read-only in AI mode', () => {
@@ -119,7 +119,7 @@ test('Phase 6.4.3 Path A tightens fields rules in AI mode', () => {
   assert.match(section, /AI-only read mode/);
   assert.match(section, /Do NOT include the primary key/);
   assert.match(section, /only the `_<col>_value` read form/);
-  assert.match(section, /Omit the LogicalName write form/);
+  assert.match(section, /Omit relationship Navigation Properties/);
 });
 
 test('backward compatibility: default CRUD prompts are still present unchanged', () => {

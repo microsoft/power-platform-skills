@@ -121,7 +121,20 @@ child-column contract, do not create a new grid for a local collection. It can c
 and still render "There are no fields in this data table." Use an explicit header row
 plus a Gallery row shell and implement sorting through the Gallery `Items` formula.
 
-## Selection controls — `ItemDisplayText` is a per-item formula
+## Selection controls and filters — `ItemDisplayText` is a per-item formula
+
+Choose the interaction before styling the control. These rules apply equally to form
+fields, filters, sort choices, periods, statuses, and category selectors:
+
+- For a short static required set, prefer `ModernRadio` or visible choice buttons when the options fit, then a `ModernDropdown` that selects an option by click or tap.
+- Use `ModernCombobox` only for a large set that benefits from search or when free-form entry is explicitly required. Do not use it for a short required set merely because modern controls are preferred.
+- Give a required short-choice field a valid initial selection when the business rule permits one. If an explicit choice is required, show a visible placeholder and validation, but keep selection independent of typed filtering or keyboard-only commitment.
+- A populated `Items` formula is not enough. The planned control must expose readable options and commit the selected record or value through its normal pointer interaction.
+- Record the exact selected-value property returned by `describe_control` and bind it into
+  the consumer formula. Never guess `Selected.Value`, invent a child listbox, or assume
+  that opening a popup commits a value.
+- For a filter, show the active choice and provide a reachable clear/reset action. Verify
+  the consumer against at least two matching records and one non-matching record.
 
 `ItemDisplayText` and `ItemKey` on `ModernDropdown`, `ModernCombobox` and similar controls
 are evaluated once per row with `ThisItem` in scope. They take an expression, not a column
@@ -176,17 +189,18 @@ the most common single-property mistake:
 `Gallery` has `Fill` but no text properties at all — style the labels inside it, not the
 container.
 
-### Trap 3 — writing a template version on `Control:`
+### Trap 3 — deriving creation keywords from `list_controls`
 
-Never write `Control: ModernText@1.5.0`. Use the bare name that `list_controls` returned.
+`list_controls` returns the name used to query `describe_control`; it is not the authored
+YAML contract. The `Control creation keywords` block in `describe_control` is
+authoritative. Copy its `Control:` value and any required `ComponentName`,
+`ComponentLibraryUniqueName`, `Variant`, and `Layout` keywords verbatim.
 
 ## Control template versions
 
-Every control type resolves to exactly one template version per app. You do not choose it
-and you do not need to: write the bare control name everywhere and the app stays
-consistent.
-
-Writing an explicit `@version` on even one control breaks that:
+Do not add, remove, or replace an `@version` suffix yourself. If compilation reports a
+template-version conflict, re-run `describe_control` and make every instance use the
+exact `Control:` value currently returned for that type:
 
 ```text
 Another instance of control type 'ModernText' has already been referenced using a
@@ -204,12 +218,9 @@ not the one you wrote:
 Unknown property 'Color' for control type 'Text'.
 ```
 
-Those properties are valid on `ModernText`. Nothing is wrong with them. The only defect is
-the version suffix, and removing every suffix clears the entire cascade in one compile.
-
-- ✅ `Control: ModernText`
-- ❌ `Control: ModernText@1.5.0`
-- ❌ mixing `Control: Badge` in one file with `Control: Badge@1.2.0` in another
+Those properties may be valid on `ModernText`; resolve the creation-keyword mismatch
+before changing them. Do not assume the bare or versioned form is correct without
+checking `describe_control`.
 
 ## Enum type names
 
@@ -397,8 +408,9 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 - **`Unknown property`:** run `describe_control` and use only the properties it returns
   for that exact control type.
 - **Many `Unknown property` errors naming a control type you never wrote** (e.g. `'Text'`
-  when your YAML says `ModernText`): a template version conflict. Strip every `@version`
-  suffix from every `Control:` value and re-compile.
+  when your YAML says `ModernText`): a template version conflict. Re-run
+  `describe_control`, copy its complete creation-keyword block to every instance of that
+  type, and re-compile.
 - **A property works on one control but not a similar one:** property support is per
   control type, and the modern React, FluentV9 and Classic families disagree. Check the
   per-control table above rather than reasoning by analogy.

@@ -306,6 +306,11 @@ function buildDeployedReader(spec) {
       ...(p.dataSources ? { dataSources: p.dataSources } : {}),
       ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
       ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
+      // The manifest carries `directEntry` alongside `pageInput` (page-manifest.js), so the synthetic
+      // reader must too. Omitting it let hydration's back-compat default silently rewrite an authored
+      // `selector` to `emptyState` while the losslessness assertion below stayed green — the eval
+      // proving a round-trip it was not actually checking.
+      ...(p.directEntry !== undefined ? { directEntry: p.directEntry } : {}),
       codeFile: `pages/gp-${p.key || p.name}/page.tsx`,
     })),
     entities: async () => (spec.entities || []).map((e) => ({ schemaName: e.schemaName, primaryAttribute: e.primaryAttribute, columns: [] })),
@@ -329,7 +334,22 @@ async function roundTripFacts(spec) {
     pageKeys: (hydrated.pages || []).map((p) => p.key || p.name).sort(),
     origSubareaTargets: subareaTargets(spec.appShell),
     hydratedSubareaTargets: subareaTargets(hydrated.appShell),
+    // Exposed so a losslessness assertion can actually SEE this field. Hydration defaults a missing
+    // `directEntry` for back-compat, so a fact set that never projected it could not tell a preserved
+    // value from a silently rewritten one.
+    origDirectEntry: directEntryByKey(spec.pages),
+    hydratedDirectEntry: directEntryByKey(hydrated.pages),
   };
+}
+
+// key -> directEntry.behavior, for pages that declare one. Sorted-key object so a comparison is
+// order-independent.
+function directEntryByKey(pages) {
+  const out = {};
+  for (const p of pages || []) {
+    if (p && p.directEntry && p.directEntry.behavior) out[p.key || p.name] = p.directEntry.behavior;
+  }
+  return out;
 }
 
 // security: per-persona role facts from the pure spec->SDK mapper (personaRoleSpecFor). For each persona

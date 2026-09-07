@@ -15,7 +15,7 @@ function caretVersionAtLeast(value, minimum) {
   return true;
 }
 
-test('template imports the host Metro logger at config startup', () => {
+test('template uses the host Metro factory that installs project-local logging', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const workflow = fs.readFileSync(
     path.resolve(pluginRoot, '..', '..', '.github', 'workflows', 'mobile-apps-script-tests.yml'),
@@ -27,9 +27,12 @@ test('template imports the host Metro logger at config startup', () => {
 
   assert.match(
     metroConfig,
-    /const \{ withPowerNativeMetroLogging \} = require\('@microsoft\/power-apps-native-host\/metro-logger'\);/,
+    /const \{ createPowerAppsMetroConfig \} = require\('@microsoft\/power-apps-native-host\/config\/metroConfig'\);/,
   );
-  assert.doesNotMatch(metroConfig, /SENSITIVE_LINE_PATTERN|appendMetroLog|process\.stdout\.write/);
+  assert.doesNotMatch(
+    metroConfig,
+    /power-apps-native-host\/metro-logger|SENSITIVE_LINE_PATTERN|appendMetroLog|process\.stdout\.write/,
+  );
   assert.ok(
     caretVersionAtLeast(packageJson.dependencies['@microsoft/power-apps-native-host'], [0, 2, 26]),
     'the host package must include the Metro logger introduced in 0.2.26',

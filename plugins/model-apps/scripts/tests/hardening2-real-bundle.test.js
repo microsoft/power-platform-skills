@@ -49,10 +49,10 @@ function freshSdk(capture, meta) {
 
 // Mirror the engine's createFormShell sequence: minimal create, append each compiled tab (ids minted
 // by addElement), drop the seed tab. Returns the form id.
-function buildFormShell(sdk, intent) {
+async function buildFormShell(sdk, intent) {
   const art = sdk.createArtifact('form', { name: intent.name, entityLogicalName: intent.entityLogicalName, formType: intent.formType, status: intent.status });
-  for (const tab of intent.tabs) sdk.addElement('form', art.id, '/tabs', tab);
-  sdk.removeElement('form', art.id, '/tabs/0');
+  for (const tab of intent.tabs) await sdk.addElement('form', art.id, '/tabs', tab);
+  await sdk.removeElement('form', art.id, '/tabs/0');
   return art.id;
 }
 
@@ -69,7 +69,7 @@ test('PARITY: the rewired form path reproduces the pre-swap golden facts (fields
   const cap = [];
   const sdk = freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
-  const id = buildFormShell(sdk, intent);
+  const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
   const formxml = (cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml;
   const facts = formFacts(formxml);
@@ -90,7 +90,7 @@ test('multi-tab / multi-section explicit layout serializes every tab, section an
   const sdk = freshSdk(cap);
   const intent = ai.compileFormIntent(spec, spec.forms[0], { notesClassId: NOTES_CLASS_ID });
   assert.strictEqual(intent.tabs.length, 2, 'two tabs compiled');
-  const id = buildFormShell(sdk, intent);
+  const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   for (const f of ['new_name', 'new_a', 'new_b', 'new_c']) assert.match(formxml, new RegExp(`datafieldname="${f}"`), `${f} present in formxml`);
@@ -122,7 +122,7 @@ test('#8 authored column width: a synthesized form column with NO explicit width
   const intent = ai.compileFormIntent(spec, spec.forms[0], { notesClassId: NOTES_CLASS_ID });
   // Remove the plugin-set width from every tab column so ONLY the SDK default can supply it.
   for (const tab of intent.tabs) for (const col of (tab.columns || [])) delete col.width;
-  const id = buildFormShell(sdk, intent);
+  const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   assert.ok((formxml.match(/<column\b[^>]*>/g) || []).length > 0, 'formxml has columns');
@@ -139,7 +139,7 @@ test('metadata-derived control types: passing only fieldName lets the adapter cl
   const cap = [];
   const sdk = freshSdk(cap, meta);
   const intent = ai.compileFormIntent(spec, spec.forms[0], {});
-  const id = buildFormShell(sdk, intent);
+  const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   // Lookup control classid (0d2c745a-…) differs from the single-line text control — the adapter picked
@@ -156,11 +156,11 @@ test('#5 sub-grid is added as its OWN full-width section and serializes relation
   const cap = [];
   const sdk = freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
-  const id = buildFormShell(sdk, intent);
+  const id = await buildFormShell(sdk, intent);
   // The engine now appends a whole sub-grid SECTION to a column's /sections (not a cell into an
   // existing field section's rows) — exercise that real path through the vendored serializer.
-  const secPtr = ai.firstColumnSectionsPointer(sdk.getArtifact('form', id));
-  sdk.addElement('form', id, secPtr, ai.subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: 'new_ticket', relationshipName: 'new_customer_new_ticket', viewId: '{00000000-0000-0000-0000-0000000000v1}', label: 'Tickets' }));
+  const secPtr = ai.firstColumnSectionsPointer(await sdk.getArtifact('form', id));
+  await sdk.addElement('form', id, secPtr, ai.subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: 'new_ticket', relationshipName: 'new_customer_new_ticket', viewId: '{00000000-0000-0000-0000-0000000000v1}', label: 'Tickets' }));
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   assert.match(formxml, /new_customer_new_ticket/, 'RelationshipName is serialized');
@@ -173,15 +173,15 @@ test('events author + MERGE at /bag/c: appending to an existing <events> region 
   const cap = [];
   const sdk = freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
-  const id = buildFormShell(sdk, intent);
+  const id = await buildFormShell(sdk, intent);
   // First handler -> new region.
-  let bagC = (sdk.getArtifact('form', id).bag.c) || [];
+  let bagC = ((await sdk.getArtifact('form', id)).bag.c) || [];
   const nextI = bagC.reduce((m, e) => Math.max(m, e.i), -1) + 1;
-  sdk.addElement('form', id, '/bag/c', { i: nextI, node: ai.formEventsRegionIntent([{ event: 'onload', library: 'a.js', function: 'A.onLoad' }]) });
+  await sdk.addElement('form', id, '/bag/c', { i: nextI, node: ai.formEventsRegionIntent([{ event: 'onload', library: 'a.js', function: 'A.onLoad' }]) });
   // Second handler -> append to the SAME region's children (the merge path the engine uses on rebuild).
-  bagC = sdk.getArtifact('form', id).bag.c;
+  bagC = (await sdk.getArtifact('form', id)).bag.c;
   const regionIdx = bagC.findIndex((e) => e.node && e.node.n === 'events');
-  sdk.addElement('form', id, `/bag/c/${regionIdx}/node/c`, ai.formEventsRegionIntent([{ event: 'onsave', library: 'a.js', function: 'A.onSave' }]).c[0]);
+  await sdk.addElement('form', id, `/bag/c/${regionIdx}/node/c`, ai.formEventsRegionIntent([{ event: 'onsave', library: 'a.js', function: 'A.onSave' }]).c[0]);
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   assert.match(formxml, /A\.onLoad/, 'first handler serialized');
@@ -193,10 +193,10 @@ test('field removal: removeElement on the cell pointer drops the field from the 
   const cap = [];
   const sdk = freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
-  const id = buildFormShell(sdk, intent);
-  const ptr = ai.findFieldCellPointer(sdk.getArtifact('form', id), 'new_tier');
+  const id = await buildFormShell(sdk, intent);
+  const ptr = ai.findFieldCellPointer(await sdk.getArtifact('form', id), 'new_tier');
   assert.ok(ptr, 'the new_tier cell is located');
-  sdk.removeElement('form', id, ptr);
+  await sdk.removeElement('form', id, ptr);
   await sdk.pushArtifact('form', id);
   const formxml = String((cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml);
   assert.match(formxml, /datafieldname="new_name"/, 'primary field kept');
@@ -219,8 +219,9 @@ test('412 conflict: pushArtifact resolves to { success:false, error } (the signa
   const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
   await sdk.fetchArtifact('form', FID);
-  sdk.updateElement('form', FID, '/tabs/0', { expanded: false });
+  await sdk.updateElement('form', FID, '/tabs/0', { expanded: false });
   const result = await sdk.pushArtifact('form', FID);
-  assert.strictEqual(result.success, false, 'a 412 is signalled by a failed PushResult, NOT a thrown error');
+  // `saved` is the renamed `success`; accept either so this pins the contract, not the bundle.
+  assert.strictEqual(result.saved !== undefined ? result.saved : result.success, false, 'a 412 is signalled by a failed PushResult, NOT a thrown error');
   assert.ok(result.error, 'the conflict carries an error the engine reports');
 });

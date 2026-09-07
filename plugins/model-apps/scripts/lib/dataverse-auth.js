@@ -5,6 +5,9 @@
 // All operation scripts (provision-entities.js, provision-solution.js, etc.) import from this module.
 
 const { execFileSync } = require('child_process');
+// Shared with the App Spec + CLI so the provisioned-language probe and the validator cannot disagree
+// about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
+const { normalizeLanguageCode } = require('./app-spec.js');
 
 /**
  * Gets an Azure CLI access token for the given Dataverse environment URL.
@@ -190,6 +193,93 @@ async function getDefaultPublisherPrefix(envUrl) {
 }
 
 /**
+ * The set of LCIDs this organization actually has provisioned.
+ *
+ * `RetrieveProvisionedLanguages` is an unbound OData *function*, so it is not something the maker SDK
+ * models — this is the sanctioned `dataverseRequest` hatch (see the "Dataverse Access From Scripts"
+ * policy), the same class of read as `WhoAmI`.
+ * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveprovisionedlanguages
+ *
+ * Fail-soft by design: this is a *diagnostic* used to turn a silently-ignored language override into
+ * a clear message, so every failure mode resolves to `null` ("unknown") rather than throwing. A build
+ * must never break because the diagnostic could not run.
+ *
+ * @param {string} envUrl
+ * @param {Function} [request=dataverseRequest] injectable transport, so the status gate below is
+ *   testable without a network or a live org
+ * @returns {Promise<number[]|null>} provisioned LCIDs, or null when they could not be determined
+ */
+async function readProvisionedLanguages(envUrl, request = dataverseRequest) {
+  try {
+    const res = await request(envUrl, 'GET', 'RetrieveProvisionedLanguages');
+    // `dataverseRequest` has TWO failure surfaces and both must land on null:
+    //   * an HTTP response, including 4xx/5xx, is RESOLVED as { status, data } — it does not throw.
+    //     Without this status gate an error envelope would parse as "zero languages provisioned",
+    //     indistinguishable from a real empty list, and would reject every otherwise-valid LCID.
+    //   * token acquisition, transport, and retry exhaustion THROW — handled by the catch below,
+    //     which is why that catch is load-bearing rather than defensive padding.
+    if (!res || res.status < 200 || res.status >= 300) return null;
+    // Live-verified shape:
+    //   { "@odata.context": ".../$metadata#Microsoft.Dynamics.CRM.RetrieveProvisionedLanguagesResponse",
+    //     "RetrieveProvisionedLanguages": [1033] }
+    const list = res.data && res.data.RetrieveProvisionedLanguages;
+    if (!Array.isArray(list)) return null;
+    // Parse with the SAME normalizer the App Spec and the CLI flag use, rather than `Number()`.
+    // `Number()` coerces far too much and every one of these previously produced a plausible LCID:
+    //   [null] -> 0      [true] -> 1        [[1033]] -> 1033      ['1e3'] -> 1000      [''] -> 0
+    // `normalizeLanguageCode` accepts only a real integer or a digits-only string (app-spec.js), so
+    // the probe and the validator cannot disagree about what an LCID is.
+    //
+    // ALL-OR-NOTHING on purpose. `checkProvisioned` treats any non-empty list as COMPLETE and
+    // authoritative (entity-provision.js), so silently dropping the elements we could not parse would
+    // hand it a SHORTER list and make it reject languages the organization may well have. A payload
+    // we do not fully understand is "unknown" — null — not "here is the subset I liked".
+    const lcids = [];
+    for (const raw of list) {
+      const lcid = normalizeLanguageCode(raw);
+      if (!lcid) return null;
+      lcids.push(lcid);
+    }
+    // An org always has at least its base language, so an empty array is a payload we did not
+    // understand too — "unknown", not "zero languages provisioned" (which would reject every LCID).
+    return lcids.length ? lcids : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The organization's base language (LCID), read at transport level.
+ *
+ * Needed *before* the maker SDK exists: `MakerSdkOptions.languageCode` is a construction-time
+ * option, but the SDK's own `queryRecords` is the usual way to read `organization.languagecode` —
+ * a chicken-and-egg the transport hatch resolves. Same class of read as `WhoAmI`.
+ *
+ * Fail-soft, for the same reason as {@link readProvisionedLanguages}: a caller that cannot learn the
+ * base language must fall back and say so, not fail the build.
+ *
+ * @param {string} envUrl
+ * @param {Function} [request=dataverseRequest] injectable transport for tests
+ * @returns {Promise<number|null>} the base LCID, or null when it could not be determined
+ */
+async function readOrgLanguageCode(envUrl, request = dataverseRequest) {
+  try {
+    const res = await request(envUrl, 'GET', 'organizations?$select=languagecode&$top=1');
+    // Status-gated for the same reason as readProvisionedLanguages: dataverseRequest resolves
+    // { status, data } for every HTTP response, so an error envelope would otherwise read as
+    // "no rows" and silently become the 1033 fallback.
+    if (!res || res.status < 200 || res.status >= 300) return null;
+    // Shape: { "@odata.context": "...", "value": [ { "organizationid": "...", "languagecode": 1033 } ] }
+    // NOTE the plural entity SET name: the singular 'organization' 404s on the Web API.
+    const row = res.data && Array.isArray(res.data.value) ? res.data.value[0] : null;
+    const lcid = row && Number(row.languagecode);
+    return Number.isInteger(lcid) && lcid > 0 && lcid <= 65535 ? lcid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parses CLI args. Accepts both space-separated (`--flag value`) and
  * equals-separated (`--flag=value`) forms, plus bare boolean flags (`--bool`).
  *   <positional> [--flag value] [--flag=value] [--bool]
@@ -221,6 +311,33 @@ function parseArgs(argv) {
     }
   }
   return { positional, flags };
+}
+
+/**
+ * Read a flag that has both kebab-case and camelCase spellings, rejecting a conflicting pair.
+ *
+ * `flags[kebab] ?? flags[camel]` silently prefers one and discards the other, which is the wrong
+ * answer when the two disagree — the user passed both and believes one is in effect, so guessing
+ * either way produces a build they did not ask for with no indication why.
+ *
+ * Comparison is on the TRIMMED string. Surrounding whitespace in a shell argument is never
+ * meaningful (`--language-code " 1031"` and `--languageCode 1031` are the same request), so
+ * treating it as a conflict would reject a pair the user got right.
+ *
+ * Value-domain equivalence is deliberately NOT collapsed: `1031` and `01031` stay a conflict even
+ * though both normalize to the same LCID downstream. This helper is domain-agnostic — it has no way
+ * to know whether a caller's flag is a number, a name, or an id where `007` differs from `7` — and
+ * the two outcomes are not symmetric. A false conflict is a loud error the user fixes in seconds; a
+ * wrong guess is a silent, wrong build. So it errs toward the loud one.
+ */
+function readAliasedFlag(flags, kebab, camel) {
+  const a = flags[kebab];
+  const b = flags[camel];
+  const same = (x, y) => String(x).trim() === String(y).trim();
+  if (a !== undefined && b !== undefined && !same(a, b)) {
+    throw new Error(`--${kebab} '${a}' and --${camel} '${b}' disagree — pass only one`);
+  }
+  return a !== undefined ? a : b;
 }
 
 /** Reads a JSON value either inline or from a file via @path syntax. */
@@ -270,7 +387,10 @@ module.exports = {
   label,
   requiredLevel,
   getDefaultPublisherPrefix,
+  readProvisionedLanguages,
+  readOrgLanguageCode,
   parseArgs,
+  readAliasedFlag,
   readJsonArg,
   emitResult,
 };

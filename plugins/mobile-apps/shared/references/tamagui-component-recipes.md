@@ -664,9 +664,12 @@ const bodyFont = createFont({
 })
 
 const customConfig = {
-  ...defaultConfig,
-  animations,
-  fonts: { ...defaultConfig.fonts, heading: headingFont, body: bodyFont },
+  fonts: {
+    ...defaultConfig.fonts,
+    heading: headingFont,
+    body: bodyFont,
+    mono: defaultConfig.fonts.body,
+  },
 }
 ```
 
@@ -727,13 +730,12 @@ When the plan specifies a custom palette, override Tamagui's default tokens. Ful
 
 ```tsx
 // Inside the tamagui.config.ts customization markers — warm ochre brand
+// Import withPowerAppsSemanticAliases from the native-host Tamagui config.
 const customConfig = {
-  ...defaultConfig,
-  animations,
   themes: {
     ...defaultConfig.themes,
     light: {
-      ...defaultConfig.themes.light,
+      ...withPowerAppsSemanticAliases(defaultConfig.themes.light),
       background: '#F7F3EC',       // default page background
       surface0: '#F7F3EC',         // semantic page background
       surface1: '#FBF8F2',         // lightly elevated
@@ -747,7 +749,7 @@ const customConfig = {
       blue10: '#A8763E',           // repurpose as brand accent
     },
     dark: {
-      ...defaultConfig.themes.dark,
+      ...withPowerAppsSemanticAliases(defaultConfig.themes.dark),
       background: '#0E0D0B',       // default page background
       surface0: '#0E0D0B',         // semantic page background
       surface1: '#14130F',         // lightly elevated
