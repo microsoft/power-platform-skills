@@ -19,7 +19,8 @@ function caretVersionAtLeast(value, minimum) {
 }
 
 function extractMetroCollector(debugSkill) {
-  const collector = /node - "\$LOG_PATH" <saved-cursor> 262144 5000 <<'NODE'\r?\n([\s\S]*?)\r?\nNODE/.exec(debugSkill);
+  const normalizedSkill = debugSkill.replace(/\r\n?/g, '\n');
+  const collector = /node - "\$LOG_PATH" <saved-cursor> 262144 5000 <<'NODE'\n([\s\S]*?)\nNODE/.exec(normalizedSkill);
   assert.ok(collector, 'expected the foreground Metro log collector snippet');
   return collector[1];
 }
