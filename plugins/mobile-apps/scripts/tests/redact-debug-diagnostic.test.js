@@ -30,6 +30,7 @@ test('does not relativize a sibling path that only shares the project prefix', (
 test('redacts headers, secrets, emails, and record identifiers', () => {
   const output = redact([
     'Authorization: Bearer abc.def.ghi',
+    'Proxy-Authorization \t: Basic dXNlcjpwYXNz',
     'transport failed for Bearer standalone-token',
     'claim=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature',
     'request?sig=secret&se=expiry&sp=read&sv=version&code=oauth;token=other',
@@ -39,12 +40,13 @@ test('redacts headers, secrets, emails, and record identifiers', () => {
   ].join('\n'), path.join(os.tmpdir(), 'project'));
 
   assert.match(output, /Authorization: \[REDACTED_HEADER\]/);
+  assert.match(output, /Proxy-Authorization: \[REDACTED_HEADER\]/);
   assert.match(output, /transport failed for Bearer \[REDACTED_SECRET\]/);
   assert.match(output, /claim=\[REDACTED_SECRET\]/);
   assert.match(output, /sig=\[REDACTED_SECRET\]&se=\[REDACTED_SECRET\]&sp=\[REDACTED_SECRET\]&sv=\[REDACTED_SECRET\]&code=\[REDACTED_SECRET\];token=\[REDACTED_SECRET\]/);
   assert.match(output, /my_password=\[REDACTED_SECRET\] _token=\[REDACTED_SECRET\] authToken=\[REDACTED_SECRET\] api_key=\[REDACTED_SECRET\]/);
   assert.match(output, /\[REDACTED_EMAIL\] \[REDACTED_ID\]/);
-  assert.doesNotMatch(output, /secret|expiry|read|version|oauth|other|hunter2|token-value|auth-value|key-value|owner@example\.com|11111111|ghp_/);
+  assert.doesNotMatch(output, /dXNlcjpwYXNz|secret|expiry|read|version|oauth|other|hunter2|token-value|auth-value|key-value|owner@example\.com|11111111|ghp_/);
 });
 
 test('bounds persisted diagnostics after redaction', () => {

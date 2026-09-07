@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const MAX_OUTPUT_LENGTH = 4096;
-const headerPattern = /^(\s*)(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|client-secret|x-ms-token[^:]*):[^\r\n]*$/gim;
+const headerPattern = /^(\s*)(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|client-secret|x-ms-token[^:\r\n]*)[ \t]*:[^\r\n]*$/gim;
 const bearerPattern = /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi;
 const jwtPattern = /\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g;
 const querySecretPattern = /([?&;](?:sig|se|sp|sv|code|token|access_token|refresh_token|id_token|client_secret)=)[^&#;\s]+/gi;
