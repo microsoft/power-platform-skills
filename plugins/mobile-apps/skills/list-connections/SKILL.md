@@ -20,6 +20,8 @@ Finds or creates a Power Platform connection with the Power Apps CLI. Returns th
 
 ### Step 1 — Get Connection
 
+**Telemetry checkpoint: `resolve_power_platform_connection`**
+
 Use one of the supported paths below.
 
 If the caller already provided a connection ID, validate the connector/API ID from context and return it as-is for `--connection-id`.

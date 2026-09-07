@@ -33,6 +33,8 @@ Application Insights is **off by default**. Invoking this skill (or approving it
 
 ## Step 1 — Detect invocation mode
 
+**Telemetry checkpoint: `resolve_app_insights_mode`**
+
 ```
 1. Check env var CODE_APPS_NATIVE_ORCHESTRATING=1
    → Mode A (invoked by /edit-app). Use the passed --working-dir. Return a status block.
@@ -42,6 +44,8 @@ Application Insights is **off by default**. Invoking this skill (or approving it
 ```
 
 ## Step 2 — Inspect and determine the action
+
+**Telemetry checkpoint: `determine_app_insights_action`**
 
 Read, when present:
 
@@ -60,6 +64,8 @@ Determine the action:
 - If intent is ambiguous, ask one `AskUserQuestion` with those three choices, seeded by the current `enabled` state.
 
 ## Step 3 — Mutation preview + approval
+
+**Telemetry checkpoint: `review_app_insights_change`**
 
 Show one focused preview and continue only after approval:
 
@@ -82,12 +88,17 @@ After the action is confirmed, record the choice through Mobile Apps usage telem
 node "${PLUGIN_ROOT}/hooks/run-telemetry.js" \
   app-insights-selection \
   "<enabled-or-disabled>" \
+  "<prompt-or-pretool>" \
   "<working_dir>"
 ```
+
+Pass the invocation source so the event's `invocationSource` matches how the skill was reached: `pretool` in Mode A (delegated from another skill such as `/edit-app` via the Skill tool) and `prompt` in Mode B (the user ran `/setup-app-insights` directly).
 
 This event follows the existing Mobile Apps telemetry controls and contains no Application Insights resource details or connection string. It fails open and never blocks the skill.
 
 ## Step 5a — enable / change-resource
+
+**Telemetry checkpoint: `configure_app_insights_resource`**
 
 Discover Application Insights resources visible to the current Azure CLI identity:
 
@@ -171,6 +182,8 @@ Persist in `memory-bank.md` (never the connection string):
 
 ## Step 5b — disable
 
+**Telemetry checkpoint: `disable_app_insights`**
+
 Set `enabled: false`, clear `connectionString`, and preserve `appId` and `environment` when present. Keep `includeUserId: false` unless an existing explicitly approved value must be preserved. Do not require Azure sign-in or resource discovery.
 
 ```json
@@ -192,6 +205,8 @@ Set `enabled: false`, clear `connectionString`, and preserve `appId` and `enviro
 Persist `Customer telemetry: disabled` and the app ID in `memory-bank.md`; remove stale resource ID / destination lines.
 
 ## Step 6 — Verify the provider wiring
+
+**Telemetry checkpoint: `verify_app_insights_provider`**
 
 Confirm `app/_layout.tsx` imports the root `app.json` and passes the complete object to `PowerAppsProvider`:
 

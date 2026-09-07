@@ -124,10 +124,16 @@ const HANDLERS = {
   pretool: skillStart('pretool'),
   'app-insights-selection': {
     stdin: false,
-    handle({ args: [selection, invocationCwd] }) {
+    handle({ args: [selection, source, invocationCwd] }) {
       const context = telemetry.createTelemetryContext({});
       if (!context) return;
-      telemetry.emitAppInsightsSelection(context, selection, { cwd: invocationCwd });
+      const opts = { cwd: invocationCwd };
+      // Only forward a recognized invocation source; anything else (including
+      // an absent arg) falls back to the `prompt` default in emitAppInsightsSelection.
+      if (source === 'prompt' || source === 'pretool' || source === 'checkpoint') {
+        opts.source = source;
+      }
+      telemetry.emitAppInsightsSelection(context, selection, opts);
     },
   },
 };

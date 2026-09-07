@@ -21,6 +21,24 @@ an environment that supports them**.
 
 ### Added
 
+- **Generated pages can report to the customer's Application Insights** — behind the new
+  default-OFF `custom-telemetry` feature flag. When enabled, `genpage-page-builder` may
+  instrument a page through an optional `props.appInsights` surface (`trackEvent`,
+  `trackMetric`, `trackTrace`, `trackException`, `trackDependency`, `startTrack` /
+  `stopTrack`), with built-in call-site throttling for rapid-fire handlers.
+
+  The flag is permission, not instruction. Even with it on, a page is instrumented **only**
+  when the maker asked to measure, track, monitor, or diagnose something in their own words —
+  the default output is still a page with zero telemetry, so nothing changes for existing
+  prompts. `/genpage` re-probes the flag at Phase 4.7 and passes the verbatim result as
+  `Telemetry: enabled|disabled` into every page-builder dispatch, the same contract
+  `Connectors:` already uses; the dispatch value wins over anything else.
+
+  The contract — when to instrument, the API, naming and privacy rules, known-good shapes and
+  anti-patterns — lives in `references/page-telemetry.md`, read only when both gates pass.
+  It ships OFF pending the host runtime, authoring control, agent prompt and ECS setting
+  reaching PROD. Not to be confused with the plugin's own usage telemetry
+  (`/model-apps:telemetry`), which is unrelated and unchanged.
 - **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
   `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form;
   undo with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)

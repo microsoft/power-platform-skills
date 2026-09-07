@@ -10,9 +10,15 @@ const { spawnSync } = require('node:child_process');
 const {
   createTelemetryContext,
   emitAppInsightsSelection,
+  emitCheckpoint: emitCheckpointEvent,
   emitSkillStarted,
 } = require('../lib/mobile-telemetry');
+const {
+  emitCheckpoint: emitCheckpointCommand,
+  parseCheckpointPayload,
+} = require('../emit-telemetry-checkpoint');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
+const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -23,6 +29,16 @@ const TELEMETRY_CLI = path.join(
 );
 const BUNDLED_TELEMETRY_LIB = path.join(PLUGIN_ROOT, 'scripts', 'lib', 'telemetry', 'lib');
 const SHARED_TELEMETRY_LIB = path.resolve(PLUGIN_ROOT, '..', '..', 'shared', 'telemetry', 'lib');
+const CHECKPOINT_EXEMPT_SKILLS = new Set(['telemetry']);
+const VAGUE_CHECKPOINT_NAMES = new Set([
+  'app_ready',
+  'data_model',
+  'planning',
+  'prerequisites',
+  'scaffold',
+  'screens',
+  'template_gate',
+]);
 
 function tempConfig(config) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-telemetry-'));
@@ -226,6 +242,198 @@ test('Application Insights prompt selections emit only the approved choice', (t)
       appInsightsSelection: selection,
       invocationSource: 'prompt',
     });
+  }
+});
+
+test('Application Insights selection honors an explicit invocation source', (t) => {
+  const context = contextFor(provisioned);
+  const event = emitAppInsightsSelection(context, 'enabled', {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    correlationId: 'correlation-1',
+    cwd: tempProject(t),
+    source: 'pretool',
+  });
+  assert.equal(event.data.eventName, 'app_insights_selection');
+  assert.deepEqual(event.data.eventInfo, {
+    appInstanceId: null,
+    appInsightsSelection: 'enabled',
+    invocationSource: 'pretool',
+  });
+});
+
+test('checkpoint payload accepts only tracked skills and static snake_case fields', () => {
+  assert.deepEqual(
+    parseCheckpointPayload('create-mobile-app|planning|completed|with_dataverse'),
+    {
+      skillName: 'create-mobile-app',
+      eventName: 'planning_completed',
+      severity: 'Info',
+      source: 'checkpoint',
+      additionalInfo: 'with_dataverse',
+    },
+  );
+
+  for (const payload of [
+    '',
+    'unknown-skill|planning|started',
+    'create-mobile-app|Planning|started',
+    'create-mobile-app|planning|finished',
+    'create-mobile-app|planning|started|',
+    'create-mobile-app|planning|failed|C:\\secret\\file.txt',
+    `create-mobile-app|${'a'.repeat(65)}|started`,
+    'create-mobile-app|planning|started|safe|extra',
+  ]) {
+    assert.equal(parseCheckpointPayload(payload), null, payload);
+  }
+});
+
+test('checkpoint command emits directly and remains fail-open', () => {
+  const context = { sessionId: 'checkpoint-session' };
+  let captured;
+  const result = emitCheckpointCommand(
+    'create-mobile-app|template_gate|started',
+    {
+      cwd: 'C:\\private-project',
+      createTelemetryContext: (payload) => {
+        assert.deepEqual(payload, {});
+        return context;
+      },
+      emitCheckpoint: (...args) => {
+        captured = args;
+        return 'emitted';
+      },
+    },
+  );
+
+  assert.equal(result, 'emitted');
+  assert.deepEqual(captured, [
+    context,
+    {
+      skillName: 'create-mobile-app',
+      eventName: 'template_gate_started',
+      severity: 'Info',
+      source: 'checkpoint',
+      additionalInfo: undefined,
+    },
+    { cwd: 'C:\\private-project' },
+  ]);
+  assert.equal(emitCheckpointCommand('invalid', {
+    createTelemetryContext: () => { throw new Error('must not run'); },
+  }), null);
+  assert.equal(emitCheckpointCommand('create-mobile-app|planning|started', {
+    createTelemetryContext: () => { throw new Error('telemetry unavailable'); },
+  }), null);
+});
+
+test('checkpoint event carries only static checkpoint enrichment', (t) => {
+  const context = contextFor(provisioned);
+  const event = emitCheckpointEvent(context, {
+    skillName: 'create-mobile-app',
+    eventName: 'planning_failed',
+    severity: 'Error',
+    source: 'checkpoint',
+    additionalInfo: 'dependency_missing',
+  }, {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    correlationId: 'correlation-1',
+    cwd: tempProject(t),
+  });
+
+  assert.equal(event.data.eventName, 'planning_failed');
+  assert.equal(event.data.severity, 'Error');
+  assert.equal(event.data.skillName, 'create-mobile-app');
+  assert.deepEqual(event.data.eventInfo, {
+    invocationSource: 'checkpoint',
+    additionalInfo: 'dependency_missing',
+    appInstanceId: null,
+  });
+  for (const forbidden of ['prompt', 'cwd', 'path', 'error', 'errorDescription']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(event.data, forbidden), false);
+  }
+});
+
+test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
+  const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
+  const workflow = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app', 'SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(shared, /node "\$\{CLAUDE_SKILL_DIR\}\/\.\.\/\.\.\/scripts\/emit-telemetry-checkpoint\.js"/);
+  assert.doesNotMatch(shared, /trigger-telemetry/);
+  assert.deepEqual(
+    [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
+      .map((match) => match[1]),
+    [
+      'validate_fresh_template',
+      'validate_development_toolchain',
+      'gather_app_requirements',
+      'plan_app_architecture',
+      'select_app_environment',
+      'prepare_template_files',
+      'initialize_power_apps_project',
+      'validate_scaffold_typescript',
+      'configure_native_authentication',
+      'apply_dataverse_data_model',
+      'configure_native_capabilities',
+      'install_approved_javascript_dependencies',
+      'generate_connector_data_sources',
+      'wire_app_navigation',
+      'generate_shared_code_and_screen_skeletons',
+      'build_and_validate_screens',
+      'validate_screen_design_quality',
+      'launch_metro_dev_server',
+    ],
+  );
+});
+
+test('every tracked operational skill has precise checkpoint markers', () => {
+  for (const skillName of TRACKED_SKILL_NAMES) {
+    const workflow = fs.readFileSync(
+      path.join(PLUGIN_ROOT, 'skills', skillName, 'SKILL.md'),
+      'utf8',
+    );
+    const matches = [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)];
+
+    if (CHECKPOINT_EXEMPT_SKILLS.has(skillName)) {
+      assert.deepEqual(matches, [], `${skillName} must remain checkpoint-free`);
+      continue;
+    }
+
+    assert.ok(matches.length > 0, `${skillName} must define at least one checkpoint`);
+    const names = matches.map((match) => match[1]);
+    assert.equal(new Set(names).size, names.length, `${skillName} checkpoint names must be unique`);
+
+    for (const match of matches) {
+      const checkpointName = match[1];
+      assert.equal(
+        VAGUE_CHECKPOINT_NAMES.has(checkpointName),
+        false,
+        `${skillName} uses vague checkpoint name ${checkpointName}`,
+      );
+      assert.doesNotMatch(
+        checkpointName,
+        /_(?:started|completed|skipped|failed)$/,
+        `${skillName} checkpoint names must not contain lifecycle state`,
+      );
+      assert.ok(
+        parseCheckpointPayload(`${skillName}|${checkpointName}|started`),
+        `${skillName} uses invalid checkpoint name ${checkpointName}`,
+      );
+
+      const precedingLine = workflow
+        .slice(0, match.index)
+        .trimEnd()
+        .split(/\r?\n/)
+        .at(-1);
+      assert.match(
+        precedingLine,
+        /^#{2,4}\s+\S/,
+        `${skillName}:${checkpointName} must appear directly below a heading`,
+      );
+    }
   }
 });
 

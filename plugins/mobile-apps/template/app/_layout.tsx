@@ -1,5 +1,7 @@
 import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useColorScheme } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PowerAppsProvider } from '@microsoft/power-apps-native-host';
 
 import appConfig from '../app.json';
@@ -27,17 +29,22 @@ try {
 }
 
 export default function RootLayout() {
+  const colorScheme = useColorScheme();
+
   return (
-    <PowerAppsProvider
-      appConfig={appConfig}
-      msalConfig={authConfig.msal}
-      powerConfig={powerConfig}
-      schemaMap={schemaMap}
-      tamaguiConfig={tamaguiConfig}
-      offlineProfile={offlineProfile}
-    >
-      <StatusBar style="auto" />
-      <Slot />
-    </PowerAppsProvider>
+    <SafeAreaProvider>
+      <PowerAppsProvider
+        appConfig={appConfig}
+        msalConfig={authConfig.msal}
+        powerConfig={powerConfig}
+        schemaMap={schemaMap}
+        tamaguiConfig={tamaguiConfig}
+        offlineProfile={offlineProfile}
+        defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
+      >
+        <StatusBar style="auto" />
+        <Slot />
+      </PowerAppsProvider>
+    </SafeAreaProvider>
   );
 }
