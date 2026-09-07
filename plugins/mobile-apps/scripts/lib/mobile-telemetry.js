@@ -266,6 +266,7 @@ function dispatch(context, event, opts = {}) {
       fakeProbe: context.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || '',
       ikeyJsonPath: context.ikeyPath,
       env: context.env,
+      projectRoot: opts.cwd || '',
     });
   } catch {
     // Telemetry is observational and must never affect a skill invocation.
