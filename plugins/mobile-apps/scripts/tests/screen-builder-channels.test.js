@@ -158,6 +158,12 @@ function project(context) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'screen-builder-channel-'));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'app'), { recursive: true });
+  for (const screenId of ['home', 'history']) {
+    fs.writeFileSync(
+      path.join(root, 'app', `${screenId}.tsx`),
+      `export default function ${screenId}() { return null; }\n`,
+    );
+  }
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
   fs.writeFileSync(path.join(root, 'brand', 'tokens.ts'), TOKENS_SOURCE);
@@ -220,6 +226,113 @@ test('direct-write and return-only channels consume the same sealed work order',
   assert.deepEqual(first.sealed, second.sealed);
 });
 
+test('work-order targets must implement their assigned Expo screen route', (context) => {
+  const root = project(context);
+  const order = workOrder(root);
+  for (const targetPath of [
+    path.join(root, 'README.md'),
+    path.join(root, 'src', 'Home.tsx'),
+    path.join(root, 'app', 'home.ts'),
+    path.join(root, 'app', '_layout.tsx'),
+    path.join(root, 'app', '+not-found.tsx'),
+    path.join(root, 'app', 'history.tsx'),
+  ]) {
+    assert.throws(
+      () => sealWorkOrder({ ...order, targetPath }, contractOptions(root)),
+      /targetPath/,
+    );
+  }
+  const planned = sealWorkOrder({
+    ...order,
+    targetPath: path.join(root, 'app', 'home', 'index.tsx'),
+  }, contractOptions(root)).sealed;
+  assert.throws(
+    () => createRunState('run-1', [planned]),
+    /requires a pre-created target file/,
+  );
+  fs.mkdirSync(planned.targetPath, { recursive: true });
+  assert.throws(
+    () => createRunState('run-1', [planned]),
+    /requires a pre-created target file/,
+  );
+});
+
+test('work-order targets preserve route groups, index screens, and dynamic routes', (context) => {
+  const root = project(context);
+  for (const [route, target] of [
+    ['/home', ['app', '(app)', '(tabs)', 'home', 'index.tsx']],
+    ['/', ['app', '(app)', 'index.tsx']],
+    ['/items/[id]', ['app', '(app)', 'items', '[id]', 'index.tsx']],
+    ['/index/items', ['app', '(app)', 'index', 'items.tsx']],
+  ]) {
+    const options = contractOptions(root);
+    const screen = options.compiledScreenBuildPack.screens[0];
+    screen.route = route;
+    const order = {
+      ...workOrder(root),
+      route,
+      targetPath: path.join(root, ...target),
+      pack: screen,
+      routeContract: { route, params: screen.implementationContract.routeParams },
+    };
+    fs.mkdirSync(path.dirname(order.targetPath), { recursive: true });
+    fs.writeFileSync(order.targetPath, order.typedSkeleton);
+    assert.equal(sealWorkOrder(order, options).sealed.targetPath, order.targetPath);
+  }
+});
+
+test('screen runs reject duplicate normalized targets and aliases of existing files', (context) => {
+  const root = project(context);
+  const home = sealWorkOrder(workOrder(root, 'home'), contractOptions(root)).sealed;
+  const history = sealWorkOrder(workOrder(root, 'history'), contractOptions(root)).sealed;
+  assert.throws(() => createRunState('run-1', [
+    home,
+    { ...history, targetPath: `${path.dirname(home.targetPath)}/./home.tsx` },
+  ]), /duplicate screen target/);
+
+  fs.writeFileSync(home.targetPath, 'export default null;\n');
+  fs.rmSync(history.targetPath);
+  fs.linkSync(home.targetPath, history.targetPath);
+  assert.throws(
+    () => createRunState('run-1', [home, history]),
+    /duplicate screen target file/,
+  );
+});
+
+test('run initialization revalidates sealed targets without overwriting state on failure', (context) => {
+  const root = project(context);
+  const orders = ['home', 'history'].map(
+    (id) => sealWorkOrder(workOrder(root, id), contractOptions(root)).sealed,
+  );
+  for (const order of orders) {
+    fs.writeFileSync(
+      path.join(root, '.tmp', `${order.screenId}.json`),
+      `${JSON.stringify(order)}\n`,
+    );
+  }
+  const cli = path.resolve(__dirname, '..', 'screen-builder-contract.js');
+  const args = [
+    cli,
+    '--project-root', root,
+    '--initialize-run', '--run-id', 'run-1',
+    '--work-order', '.tmp/home.json',
+    '--work-order', '.tmp/history.json',
+    '--state', '.tmp/screen-builder-state.json',
+  ];
+  const initialized = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  assert.equal(initialized.status, 0, initialized.stderr);
+  const statePath = path.join(root, '.tmp', 'screen-builder-state.json');
+  const stateBytes = fs.readFileSync(statePath);
+  fs.writeFileSync(path.join(root, '.tmp', 'history.json'), JSON.stringify({
+    ...orders[1],
+    targetPath: orders[0].targetPath,
+  }));
+  const rejected = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  assert.equal(rejected.status, 2);
+  assert.match(rejected.stderr, /targetPath does not implement the assigned route/);
+  assert.deepEqual(fs.readFileSync(statePath), stateBytes);
+});
+
 test('Product Experience directive reaches the sealed return-only builder input unchanged', (context) => {
   const root = project(context);
   const bundle = bundleFor('commerce');
@@ -246,6 +359,7 @@ test('Product Experience directive reaches the sealed return-only builder input 
     sharedDesignInputs: sharedDesignInputs(compiled.experienceDirective),
   };
   order.sharedDesignInputs = options.sharedDesignInputs;
+  fs.writeFileSync(order.targetPath, order.typedSkeleton);
   const { sealed } = sealWorkOrder(order, options);
 
   assert.deepEqual(sealed.experienceDirective, compiled.experienceDirective);

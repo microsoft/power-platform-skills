@@ -36,7 +36,7 @@ If any required template file is missing, STOP:
 If `node_modules/expo` is missing, STOP:
 > "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
 
-If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP:
+If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP. `native-app-plan.md` is expected here because Step 3 writes the approved plan before template preparation:
 > "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
 
 Run the deterministic preparation script once:
@@ -386,7 +386,20 @@ On rejection, revise only the owning layer and regenerate deterministically:
 - journey/screen composition → revise the Workflow Journey and recompile build
   packs
 - jobs, budgets, tables, or persistence → reopen Gate 1
-- capabilities/connectors → reopen Gate 2
+- capabilities/connectors → reopen Gate 1
+
+For a capability or connector revision, invalidate its owning approval before
+repairing architecture and persistence:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/mobile-plan-approval.js" invalidate \
+  --project-root "<working_dir>" --from-gate 1 --reason "architecture-changed"
+```
+
+The command invalidates the prior resume checkpoint without deleting canonical
+contracts or Dataverse execution evidence. Recompile the affected downstream
+artifacts, reapprove Gate 1, and repeat Gates 2-4; do not send the changed
+architecture directly to Gate 2.
 
 Return to `/design-system` to reauthor and revalidate `_plan_preview.html`
 before re-entering Gate 3. Start `userApproval` immediately before the question

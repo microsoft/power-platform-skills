@@ -19,6 +19,7 @@ const {
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
+const { recordState, verifyState } = require('../mobile-pipeline-state');
 
 const NOW = '2026-08-19T00:00:00.000Z';
 const SNAPSHOT_AT = '2026-08-18T23:55:00.000Z';
@@ -1625,6 +1626,16 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
     /one\s+fresh bounded reconciliation[\s\S]*ordinary typed columns[\s\S]*relationships[\s\S]*alternate keys/,
   );
   assert.match(createSkill, /--bind-plan "\$SCHEMA_CONTRACT"/);
+  assert.match(
+    dataPhase,
+    /--bind-plan "\$SCHEMA_CONTRACT"[\s\S]*?--output "\$EXECUTION_CONTRACT"/,
+  );
+  assert.doesNotMatch(dataPhase, /--output "\$SCHEMA_CONTRACT"|--contract "\$SCHEMA_CONTRACT"/);
+  assert.match(dataPhase, /--reconciliation-scope "\$EXECUTION_CONTRACT"/);
+  assert.equal((dataPhase.match(/--contract "\$EXECUTION_CONTRACT"/g) || []).length, 2);
+  for (const workflow of [dataPhase, skill]) {
+    assert.match(workflow, /--schema-contract <working_dir>\/\.tmp\/dataverse-execution-contract\.json/);
+  }
   assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
   assert.match(
     createSkill,
@@ -2020,7 +2031,43 @@ test('checkpoint roll-forward rejects removed completed columns, relationships, 
   });
 });
 
-test('CLI cannot self-mint approval receipts and still enforces publish checkpoints', (t) => {
+test('CLI plan binding rejects overwriting approved inputs or their aliases', (t) => {
+  const directory = fs.mkdtempSync(path.join(__dirname, '.manifest-scratch-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const contract = normalizedContract(createContract());
+  const prepared = buildInputs(contract, basePlanningSnapshot());
+  const files = {
+    contract: path.join(directory, 'contract.json'),
+    receipt: path.join(directory, 'receipt.json'),
+    plan: path.join(directory, 'plan.md'),
+  };
+  fs.writeFileSync(files.contract, stableJson(contract));
+  fs.writeFileSync(files.receipt, stableJson(prepared.approvalReceipt));
+  fs.writeFileSync(files.plan, prepared.planBytes);
+  const before = Object.fromEntries(Object.entries(files).map(
+    ([name, file]) => [name, fs.readFileSync(file)],
+  ));
+  const alias = path.join(directory, 'contract-alias.json');
+  fs.linkSync(files.contract, alias);
+  const script = path.join(__dirname, '../build-dataverse-operation-manifest.js');
+
+  for (const output of [...Object.values(files), alias]) {
+    const result = spawnSync(process.execPath, [
+      script,
+      '--bind-plan', files.contract,
+      '--approval-receipt', files.receipt,
+      '--plan', files.plan,
+      '--output', output,
+    ], { encoding: 'utf8' });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /must be a separate execution contract/);
+    for (const [name, file] of Object.entries(files)) {
+      assert.deepEqual(fs.readFileSync(file), before[name]);
+    }
+  }
+});
+
+test('CLI preserves approved checkpoints while binding execution and enforcing publish checkpoints', (t) => {
   const directory = fs.mkdtempSync(path.join(__dirname, '.manifest-scratch-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const planContent = '# Plan\n';
@@ -2029,17 +2076,28 @@ test('CLI cannot self-mint approval receipts and still enforces publish checkpoi
   const reconciliation = prepared.reconciliation;
   const files = {
     contract: path.join(directory, 'contract.json'),
+    executionContract: path.join(directory, 'execution-contract.json'),
     approvalReceipt: path.join(directory, 'mobile-plan-status.json'),
     selfMintedReceipt: path.join(directory, 'self-minted-receipt.json'),
     reconciliation: path.join(directory, 'reconciliation.json'),
     plan: path.join(directory, 'plan.md'),
     manifest: path.join(directory, 'manifest.json'),
     checkpoint: path.join(directory, 'publish.json'),
+    state: path.join(directory, 'pipeline-state.json'),
   };
   fs.writeFileSync(files.contract, stableJson(contract));
   fs.writeFileSync(files.approvalReceipt, stableJson(prepared.approvalReceipt));
   fs.writeFileSync(files.reconciliation, JSON.stringify(reconciliation, null, 2));
   fs.writeFileSync(files.plan, planContent);
+  const originalContractBytes = fs.readFileSync(files.contract);
+  const checkpointOptions = {
+    projectRoot: directory,
+    stateFile: files.state,
+    artifacts: ['dataverse-contract=contract.json'],
+    mutableArtifacts: ['plan=plan.md', 'approval=mobile-plan-status.json'],
+  };
+  recordState({ ...checkpointOptions, step: '3.9' });
+  recordState({ ...checkpointOptions, step: '6.75' });
   const script = path.join(__dirname, '../build-dataverse-operation-manifest.js');
   assert.equal(
     require('../build-dataverse-operation-manifest').createApprovalEnvelope,
@@ -2059,15 +2117,25 @@ test('CLI cannot self-mint approval receipts and still enforces publish checkpoi
     '--bind-plan', files.contract,
     '--approval-receipt', files.approvalReceipt,
     '--plan', files.plan,
-    '--output', files.contract,
+    '--output', files.executionContract,
   ], { encoding: 'utf8' });
   assert.equal(bound.status, 0, bound.stderr);
   assert.equal(
-    JSON.parse(fs.readFileSync(files.contract, 'utf8')).approvedPlanSha256,
+    JSON.parse(fs.readFileSync(files.executionContract, 'utf8')).approvedPlanSha256,
     sha256(Buffer.from(planContent)),
   );
+  assert.deepEqual(fs.readFileSync(files.contract), originalContractBytes);
+  assert.equal(verifyState({
+    projectRoot: directory,
+    stateFile: files.state,
+  }).valid, true);
+  recordState({ ...checkpointOptions, step: '10.8' });
+  assert.equal(verifyState({
+    projectRoot: directory,
+    stateFile: files.state,
+  }).resumeAfterStep, '10.8');
   const commonArgs = [
-    '--contract', files.contract,
+    '--contract', files.executionContract,
     '--approval-receipt', files.approvalReceipt,
     '--reconciliation', files.reconciliation,
     '--plan', files.plan,
@@ -2098,6 +2166,29 @@ test('CLI cannot self-mint approval receipts and still enforces publish checkpoi
   ], { encoding: 'utf8' });
   assert.equal(validation.status, 1);
   assert.match(validation.stderr, /persisted publish checkpoint is required/);
+
+  const unapprovedContract = structuredClone(contract);
+  unapprovedContract.tables[0].displayName = 'Unapproved name change';
+  fs.writeFileSync(files.contract, stableJson(unapprovedContract));
+  assert.equal(verifyState({
+    projectRoot: directory,
+    stateFile: files.state,
+  }).valid, false);
+  assert.throws(
+    () => recordState({ ...checkpointOptions, step: '11.4' }),
+    /immutable artifact changed.*dataverse-contract/,
+  );
+  const boundBytes = fs.readFileSync(files.executionContract);
+  const rejectedBinding = spawnSync(process.execPath, [
+    script,
+    '--bind-plan', files.contract,
+    '--approval-receipt', files.approvalReceipt,
+    '--plan', files.plan,
+    '--output', files.executionContract,
+  ], { encoding: 'utf8' });
+  assert.equal(rejectedBinding.status, 1);
+  assert.match(rejectedBinding.stderr, /Invalid mobile plan approval receipt/);
+  assert.deepEqual(fs.readFileSync(files.executionContract), boundBytes);
 });
 
 test('M:N adapt reruns match effective schema and intersect names', () => {

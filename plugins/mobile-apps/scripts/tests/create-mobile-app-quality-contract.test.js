@@ -66,6 +66,13 @@ test('template preparation is delegated to the deterministic script', () => {
   const end = skill.indexOf('### Step 6 — Initialize');
   const step = skill.slice(start, end);
 
+  const createdMarkers = step.match(/^If already-created markers appear \(([^)]+)\)/m);
+  assert.ok(createdMarkers, 'preparation must retain the created-app guard');
+  assert.doesNotMatch(createdMarkers[1], /native-app-plan\.md/);
+  for (const marker of ['memory-bank.md', '.datamodel-manifest.json', 'src/generated/services/*.ts']) {
+    assert.ok(createdMarkers[1].includes(marker), `preparation must still reject ${marker}`);
+  }
+  assert.match(setupWorkflow, /\| Already-created app \|[^\n]*`native-app-plan\.md`/);
   assert.match(step, /scripts\/prepare-mobile-template\.js/);
   assert.match(step, /must not create, reset, delete, or\s+write anything under `src\/generated\/`/);
   assert.doesNotMatch(step, /rm\s+-rf[\s\S]*src\/generated/);
@@ -138,6 +145,25 @@ test('planning checkpoints evolving approvals without weakening immutable contra
   assert.match(planningWorkflow, /--mutable-artifact "plan=/);
   assert.match(skill, /\.tmp\/pipeline-state\.json/);
   assert.doesNotMatch(skill, /\.tmp\/mobile-pipeline-state\.json/);
+});
+
+test('capability and connector revisions reopen their owning architecture gate', () => {
+  const scaffold = skill.slice(
+    skill.indexOf('# Scaffold and Experience Approval'),
+    skill.indexOf('# Data, Native Capabilities, and Connectors'),
+  );
+  assert.match(scaffold, /capabilities\/connectors[^\n]*reopen Gate 1/);
+  assert.doesNotMatch(scaffold, /capabilities\/connectors[^\n]*reopen Gate 2/);
+  assert.match(
+    scaffold,
+    /mobile-plan-approval\.js" invalidate[\s\S]*?--from-gate 1 --reason "architecture-changed"/,
+  );
+  const guidance = fs.readFileSync(path.join(pluginRoot, 'AGENTS.md'), 'utf8');
+  assert.match(
+    guidance,
+    /Gate 1 approves[\s\S]*?Scope, architecture\/capabilities\/connectors, and persistence ownership/,
+  );
+  assert.match(guidance, /Gate 2 approves the conditional data model, Workflow Journey, and build packs/);
 });
 
 test('live Build Plan starts after proceed and remains separate from design preview', () => {
@@ -484,7 +510,8 @@ test('Build Plan projects usage without becoming a second validator', () => {
     /never exposes the raw usage[\s\S]*never independently revalidates/,
   );
   assert.match(buildPlanProtocol, /Every schema edit also invalidates/);
-  assert.match(buildPlanProtocol, /Undo restores the exact prior file/);
+  assert.match(buildPlanProtocol, /dataverse-execution-contract\.json/);
+  assert.match(buildPlanProtocol, /Undo restores\s+their exact prior content/);
   assert.match(buildPlanProtocol, /reports the affected consumer IDs/);
   assert.match(buildPlanProtocol, /typed\s+system exemption alone is not a blocker/);
 });

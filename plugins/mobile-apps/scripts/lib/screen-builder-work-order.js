@@ -6,6 +6,7 @@ const path = require('node:path');
 const { validateGeneratedSourceIsolation } = require('./final-preview-isolation');
 const { canonicalJson, sha256Hex } = require('./product-experience-contracts');
 const { projectScreenFacts } = require('../validate-fixture-scenarios');
+const { fileToRoute } = require('../validate-navigation-layout');
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_MAX_INPUT_BYTES = 48 * 1024;
@@ -160,6 +161,19 @@ function normalizeWorkOrder(value, {
     throw new Error('scenarioFacts must be the assigned canonical screen projection');
   }
   const targetPath = safeTarget(projectRoot, requiredString(value.targetPath, 'targetPath'), fileSystem);
+  const appRoot = path.resolve(projectRoot, 'app');
+  const appRelativePath = path.relative(appRoot, targetPath);
+  if (!appRelativePath
+    || appRelativePath === '..'
+    || appRelativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(appRelativePath)
+    || path.extname(targetPath) !== '.tsx'
+    || path.basename(targetPath).startsWith('+')) {
+    throw new Error('targetPath must be a screen .tsx file inside app/');
+  }
+  if (fileToRoute(targetPath, appRoot) !== route) {
+    throw new Error(`targetPath does not implement the assigned route ${route}`);
+  }
   const normalized = {
     schemaVersion: SCHEMA_VERSION,
     runId,

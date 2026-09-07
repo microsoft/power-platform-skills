@@ -80,7 +80,12 @@ Sealing loads the current compiled screen build pack and rejects a missing
 directive, a mismatched `compiledRevision`, or any directive drift. Never
 reconstruct product-wide design intent from Markdown or an archetype shard. It
 also rejects missing or changed shared design inputs, so preview and React
-Native builders cannot silently diverge.
+Native builders cannot silently diverge. The target must be a screen `.tsx`
+file under `app/` whose Expo route matches the assigned compiled route, and it
+must exist before batch initialization;
+route-group directories and trailing `index.tsx` are normalized consistently
+with navigation validation. Layouts and special entry files are not screen
+targets.
 
 Initialize run-scoped per-screen channel state:
 
@@ -93,7 +98,9 @@ node "${PLUGIN_ROOT}/scripts/screen-builder-contract.js" \
 ```
 
 Repeat `--work-order` for every assigned screen in deterministic screen-ID
-order.
+order. Initialization revalidates every sealed work order and rejects duplicate
+normalized target paths or aliases of the same existing file. Stop and repair
+the foreground assignments before launching any builder if this check fails.
 
 Immediately before dispatching each screen on any channel, record its explicit
 Build Plan state:

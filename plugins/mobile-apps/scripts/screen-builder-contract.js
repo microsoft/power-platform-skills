@@ -11,6 +11,7 @@ const {
   parseReturnOnly,
   sealWorkOrder,
   validateDirectWrite,
+  validateSealedWorkOrder,
 } = require('./lib/screen-builder-work-order');
 const {
   canSkipValidation,
@@ -128,7 +129,9 @@ function loadCurrentBuilderInputs(root) {
 function run(args) {
   if (!args.projectRoot) throw new Error('--project-root is required');
   const root = path.resolve(args.projectRoot);
-  const needsCompiledPack = ['seal', 'parse-return', 'verify-direct'].includes(args.action);
+  const needsCompiledPack = [
+    'seal', 'parse-return', 'verify-direct', 'initialize-run',
+  ].includes(args.action);
   const options = {
     projectRoot: root,
     ...(needsCompiledPack ? loadCurrentBuilderInputs(root) : {}),
@@ -186,7 +189,10 @@ function run(args) {
   }
   const stateFile = args.state ? projectFile(root, args.state, '--state') : null;
   if (args.action === 'initialize-run') {
-    const workOrders = args.workOrders.map((file) => readJson(projectFile(root, file, '--work-order')));
+    const workOrders = args.workOrders.map((file) => validateSealedWorkOrder(
+      readJson(projectFile(root, file, '--work-order')),
+      options,
+    ));
     const state = createRunState(args.runId, workOrders);
     atomicWriteJson(stateFile, state);
     return state;

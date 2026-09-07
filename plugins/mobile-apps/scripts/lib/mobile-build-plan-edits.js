@@ -30,6 +30,7 @@ const STALE_DATA_MODEL_ARTIFACTS = [
   ARTIFACTS.pipeline,
   ARTIFACTS.dataModelUsage,
   ARTIFACTS.dataverseManifest,
+  '.tmp/dataverse-execution-contract.json',
   '.tmp/dataverse-reconciliation-scope.json',
   '.tmp/dataverse-execution-reconciliation.json',
 ];

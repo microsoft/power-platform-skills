@@ -27,6 +27,7 @@ const FORBIDDEN_NON_DATAVERSE_ARTIFACTS = [
   '.tmp/dataverse-foreground-planning-snapshot.json',
   '.tmp/dataverse-architect-evidence.json',
   '.tmp/dataverse-schema-contract.json',
+  '.tmp/dataverse-execution-contract.json',
   '.tmp/dataverse-reconciliation-scope.json',
   '.tmp/dataverse-execution-reconciliation.json',
   '.tmp/dataverse-operation-manifest.json',

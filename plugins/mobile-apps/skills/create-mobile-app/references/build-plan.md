@@ -125,9 +125,10 @@ for a table, column, or relationship. The local bridge:
 6. records whether the edit is schema-only or changes Product Scope/ownership,
    then invalidates the owning approval and downstream resume checkpoints.
 
-Every schema edit also invalidates `.tmp/data-model-usage.json`. The edit
-journal snapshots that compiled artifact with the other stale Data Model
-artifacts so Undo restores the exact prior file. Removal impact analysis reads
+Every schema edit also invalidates `.tmp/data-model-usage.json` and the derived
+`.tmp/dataverse-execution-contract.json` binding. The edit journal snapshots
+these artifacts with the other stale Data Model artifacts so Undo restores
+their exact prior content. Removal impact analysis reads
 the current compiled usage when present: a table, column, or relationship with
 canonical consumers is blocked and reports the affected consumer IDs. A typed
 system exemption alone is not a blocker; primary-name, relationship, key, and

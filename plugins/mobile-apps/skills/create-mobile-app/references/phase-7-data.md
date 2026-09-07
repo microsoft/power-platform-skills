@@ -192,14 +192,19 @@ The exact/proposed scope also includes every effective M:N intersect entity
 name, and 1:N reuse requires complete matching `CascadeConfiguration`
 evidence. An absent or colliding intersect name, or missing/mismatched cascade
 evidence, is non-executable.
-Step 8 also binds the structured artifact to the current fully approved plan
+Step 8 binds a separate execution copy to the current fully approved plan
 content hash and the gate-owned approval receipt's exact contract hash and
-service dependencies. Step 8 cannot create or refresh this receipt. Use
+service dependencies. Keep `.tmp/dataverse-schema-contract.json` byte-identical
+to its approved checkpoint; binding must never overwrite this planning
+authority. `.tmp/dataverse-execution-contract.json` is the bound input for
+reconciliation, manifest generation, validation, and the `/add-dataverse`
+handoff. Step 8 cannot create or refresh the approval receipt. Use
 resolved context and these structured artifacts, never values inferred from
 free-form Markdown:
 
 ```bash
 SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
+EXECUTION_CONTRACT="<working_dir>/.tmp/dataverse-execution-contract.json"
 APPROVAL_RECEIPT="<working_dir>/.tmp/mobile-plan-status.json"
 FOREGROUND_PLANNING_SNAPSHOT="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
 RECONCILIATION_SCOPE="<working_dir>/.tmp/dataverse-reconciliation-scope.json"
@@ -216,10 +221,10 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --bind-plan "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --plan "<working_dir>/native-app-plan.md" \
-  --output "$SCHEMA_CONTRACT"
+  --output "$EXECUTION_CONTRACT"
 
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
-  --reconciliation-scope "$SCHEMA_CONTRACT" \
+  --reconciliation-scope "$EXECUTION_CONTRACT" \
   --output "$RECONCILIATION_SCOPE"
 
 EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
@@ -243,7 +248,7 @@ node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
 node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage dataverseManifestPreparation --action start
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
-  --contract "$SCHEMA_CONTRACT" \
+  --contract "$EXECUTION_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
   --plan "<working_dir>/native-app-plan.md" \
@@ -271,7 +276,7 @@ loop or fall back to agent reconciliation. No operation may execute until:
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --validate "$OPERATION_MANIFEST" \
-  --contract "$SCHEMA_CONTRACT" \
+  --contract "$EXECUTION_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
   --plan "<working_dir>/native-app-plan.md" \
@@ -293,7 +298,7 @@ Invoke skill: /add-dataverse
 Arguments:
   --working-dir <working_dir>
   --plan-section <native-app-plan.md#data-model>
-  --schema-contract <working_dir>/.tmp/dataverse-schema-contract.json
+  --schema-contract <working_dir>/.tmp/dataverse-execution-contract.json
   --approval-receipt <working_dir>/.tmp/mobile-plan-status.json
   --execution-reconciliation <working_dir>/.tmp/dataverse-execution-reconciliation.json
   --operation-manifest <working_dir>/.tmp/dataverse-operation-manifest.json

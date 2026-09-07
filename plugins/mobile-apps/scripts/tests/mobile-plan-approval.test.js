@@ -15,6 +15,7 @@ const {
 const {
   validateApprovalReceipt,
 } = require('../build-dataverse-operation-manifest');
+const { recordState, verifyState } = require('../mobile-pipeline-state');
 
 const NOW = '2026-09-04T00:00:00.000Z';
 
@@ -232,4 +233,69 @@ test('Gate 1 can bind architecture before the human plan is rendered', (context)
   ]);
   assert.equal(receipt.gates.gate1.planSha256, undefined);
   assert.deepEqual(validateIntegrity(receipt), { valid: true, errors: [] });
+});
+
+test('architecture revisions reopen Gate 1 and replace superseded resume checkpoints', (context) => {
+  for (const kind of ['nativeCapabilities', 'connectors']) {
+    const root = project(context);
+    const planPath = path.join(root, 'native-app-plan.md');
+    fs.rmSync(planPath);
+    approveGate(root, 1, { now: NOW });
+    const stateFile = path.join(root, '.tmp', 'pipeline-state.json');
+    const stateOptions = {
+      projectRoot: root,
+      stateFile,
+      artifacts: ['architecture=.tmp/architecture-decisions.json'],
+      mutableArtifacts: ['approval=.tmp/mobile-plan-status.json'],
+    };
+    recordState({ ...stateOptions, step: '3.2' });
+    fs.writeFileSync(planPath, plan());
+    for (let gate = 2; gate <= 4; gate += 1) approveGate(root, gate, { now: NOW });
+    recordState({
+      ...stateOptions,
+      step: '6.75',
+      mutableArtifacts: [...stateOptions.mutableArtifacts, 'plan=native-app-plan.md'],
+    });
+    const architecturePath = path.join(root, '.tmp/architecture-decisions.json');
+    const architecture = JSON.parse(fs.readFileSync(architecturePath, 'utf8'));
+    architecture[kind] = kind === 'nativeCapabilities'
+      ? [{ id: 'location', displayName: 'Location', approved: true }]
+      : [{ apiName: 'contoso-api', displayName: 'Contoso API', approved: true }];
+    writeJson(root, '.tmp/architecture-decisions.json', architecture);
+    assert.throws(
+      () => approveGate(root, 2, { now: NOW }),
+      /Gate 1 artifact architecture changed and requires reapproval/,
+    );
+
+    const evidencePath = path.join(root, '.tmp/dataverse-metadata-execution-journal.json');
+    const evidence = '{"completed":{}}\n';
+    fs.writeFileSync(evidencePath, evidence);
+    const canonicalPath = path.join(root, '.tmp/dataverse-schema-contract.json');
+    const canonicalBytes = fs.readFileSync(canonicalPath);
+    const invalidated = spawnSync(process.execPath, [
+      path.resolve(__dirname, '..', 'mobile-plan-approval.js'),
+      'invalidate',
+      '--project-root', root,
+      '--from-gate', '1',
+      '--reason', 'architecture-changed',
+    ], { encoding: 'utf8' });
+    assert.equal(invalidated.status, 0, invalidated.stderr);
+    assert.equal(fs.existsSync(stateFile), false);
+    assert.equal(fs.readFileSync(evidencePath, 'utf8'), evidence);
+    assert.deepEqual(fs.readFileSync(canonicalPath), canonicalBytes);
+    const receipt = JSON.parse(fs.readFileSync(path.join(root, '.tmp/mobile-plan-status.json')));
+    assert.ok(Object.values(receipt.gates).every((gate) => gate.status === 'pending'));
+    assert.equal(receipt.implementation.status, 'pending');
+    assert.equal(receipt.approvedPlanSha256, undefined);
+
+    approveGate(root, 1, { now: NOW });
+    recordState({ ...stateOptions, step: '3.2' });
+    for (let gate = 2; gate <= 4; gate += 1) approveGate(root, gate, { now: NOW });
+    recordState({
+      ...stateOptions,
+      step: '6.75',
+      mutableArtifacts: [...stateOptions.mutableArtifacts, 'plan=native-app-plan.md'],
+    });
+    assert.equal(verifyState({ projectRoot: root, stateFile }).valid, true);
+  }
 });

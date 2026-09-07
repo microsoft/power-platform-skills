@@ -71,6 +71,8 @@ function main(argv = process.argv) {
         now: args.now,
       });
       atomicWrite(receiptPath, invalidated);
+      // Reapproved artifacts must not collide with hashes from the superseded approval.
+      fs.rmSync(path.join(projectRoot, '.tmp', 'pipeline-state.json'), { force: true });
       process.stdout.write(`${JSON.stringify({
         ok: true,
         fromGate: Number(args.fromGate),

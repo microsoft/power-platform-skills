@@ -41,8 +41,23 @@ function projectPath(projectRoot, candidate, label = 'path', { allowRoot = false
 function createRunState(runId, workOrders) {
   if (typeof runId !== 'string' || !runId.trim()) throw new Error('runId is required');
   const screens = {};
+  const targets = new Set();
+  const targetFiles = new Set();
   for (const workOrder of workOrders) {
     if (screens[workOrder.screenId]) throw new Error(`duplicate screen ${workOrder.screenId}`);
+    if (typeof workOrder.targetPath !== 'string' || !path.isAbsolute(workOrder.targetPath)) {
+      throw new Error(`screen ${workOrder.screenId} requires a sealed absolute targetPath`);
+    }
+    const target = path.normalize(workOrder.targetPath);
+    if (targets.has(target)) throw new Error(`duplicate screen target ${target}`);
+    targets.add(target);
+    const stat = fs.existsSync(target) ? fs.statSync(target, { bigint: true }) : null;
+    if (!stat?.isFile()) {
+      throw new Error(`screen ${workOrder.screenId} requires a pre-created target file ${target}`);
+    }
+    const identity = `${stat.dev}:${stat.ino}`;
+    if (targetFiles.has(identity)) throw new Error(`duplicate screen target file ${target}`);
+    targetFiles.add(identity);
     screens[workOrder.screenId] = {
       inputFingerprint: workOrder.inputFingerprint,
       channel: 'direct-write',

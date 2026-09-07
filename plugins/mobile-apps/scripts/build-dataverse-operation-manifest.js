@@ -3667,6 +3667,24 @@ function readJson(file) {
   return JSON.parse(readBytes(file).toString('utf8'));
 }
 
+function executionContractOutput(outputFile, inputFiles) {
+  const output = path.resolve(outputFile);
+  if (fs.existsSync(output)) {
+    const outputStat = fs.statSync(output, { bigint: true });
+    for (const inputFile of inputFiles) {
+      const inputStat = fs.statSync(path.resolve(inputFile), { bigint: true });
+      // Approved inputs are checkpointed byte-for-byte; aliases must not bypass this boundary.
+      if (outputStat.dev === inputStat.dev && outputStat.ino === inputStat.ino) {
+        throw new Error(
+          '--output must be a separate execution contract; cannot overwrite '
+          + 'the approved schema, plan, or approval receipt',
+        );
+      }
+    }
+  }
+  return output;
+}
+
 function contextFromArgs(args) {
   return {
     environmentId: args['environment-id'],
@@ -3685,8 +3703,8 @@ function usage() {
     '    [--publish-checkpoint <json>]',
     'Normalize a planner sidecar:',
     '  node build-dataverse-operation-manifest.js --normalize-contract <json> --output <json>',
-    'Bind a normalized sidecar to the fully approved plan:',
-    '  node build-dataverse-operation-manifest.js --bind-plan <json> --approval-receipt <json> --plan <md> --output <json>',
+    'Bind an execution copy without changing the approved sidecar:',
+    '  node build-dataverse-operation-manifest.js --bind-plan <json> --approval-receipt <json> --plan <md> --output <execution-json>',
     'Roll a collision checkpoint into a revised approved contract:',
     '  node build-dataverse-operation-manifest.js --roll-forward-checkpoint <json> --previous-manifest <json> \\',
     '    --journal <json> --contract <json> --approval-receipt <json> --plan <md> --output <json> --environment-id <id> \\',
@@ -3724,16 +3742,21 @@ function main() {
       if (!args.output || !args.plan || !args['approval-receipt']) {
         throw new Error('--plan, --approval-receipt, and --output are required');
       }
+      const output = executionContractOutput(args.output, [
+        args['bind-plan'],
+        args.plan,
+        args['approval-receipt'],
+      ]);
       const bound = bindContractToPlan(
         readJson(args['bind-plan']),
         readBytes(args.plan),
         readJson(args['approval-receipt']),
       );
-      atomicWriteJson(path.resolve(args.output), bound);
+      atomicWriteJson(output, bound);
       process.stdout.write(`${JSON.stringify({
         status: 'ok',
         mode: 'bind-plan',
-        output: path.resolve(args.output),
+        output,
         approvedPlanSha256: bound.approvedPlanSha256,
         approvedContractSha256: bound.approvedContractSha256,
       })}\n`);

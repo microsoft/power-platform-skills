@@ -147,13 +147,14 @@ test('connector-only and local projects reject Dataverse planning or mutation ar
       const contract = { mode };
       assert.deepEqual(validatePersistenceArtifacts(projectRoot, contract).errors, []);
       fs.mkdirSync(path.join(projectRoot, '.tmp'), { recursive: true });
-      fs.writeFileSync(
-        path.join(projectRoot, '.tmp', 'dataverse-schema-contract.json'),
-        '{}\n',
-      );
-      const result = validatePersistenceArtifacts(projectRoot, contract);
-      assert.equal(result.ok, false);
-      assert.match(result.errors[0].message, /dataverse-schema-contract/);
+      for (const artifact of ['dataverse-schema-contract.json', 'dataverse-execution-contract.json']) {
+        const file = path.join(projectRoot, '.tmp', artifact);
+        fs.writeFileSync(file, '{}\n');
+        const result = validatePersistenceArtifacts(projectRoot, contract);
+        assert.equal(result.ok, false);
+        assert.ok(result.errors.some((error) => error.message.includes(artifact)));
+        fs.rmSync(file);
+      }
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true });
     }

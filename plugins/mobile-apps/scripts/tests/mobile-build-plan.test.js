@@ -776,6 +776,7 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
       completedStep: '6.75',
     });
     writeJson(projectRoot, '.tmp/dataverse-operation-manifest.json', { stale: true });
+    writeJson(projectRoot, '.tmp/dataverse-execution-contract.json', { stale: true });
     writeJson(projectRoot, '.tmp/data-model-usage.json', {
       schemaVersion: 1,
       contractType: 'data-model-usage',
@@ -834,6 +835,10 @@ test('data-model edits validate, normalize, invalidate approvals, and clear stal
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/pipeline-state.json')), false);
     assert.strictEqual(
       fs.existsSync(path.join(projectRoot, '.tmp/dataverse-operation-manifest.json')),
+      false,
+    );
+    assert.strictEqual(
+      fs.existsSync(path.join(projectRoot, '.tmp/dataverse-execution-contract.json')),
       false,
     );
     assert.strictEqual(
@@ -1357,6 +1362,7 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
     };
     const pipeline = { schemaVersion: 2, completedStep: '6.75' };
     const manifest = { schemaVersion: 1, summary: { metadataOperationCount: 3 } };
+    const executionContract = { ...contract, approvedPlanSha256: 'c'.repeat(64) };
     const usage = {
       schemaVersion: 1,
       contractType: 'data-model-usage',
@@ -1368,6 +1374,7 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
     writeJson(projectRoot, '.tmp/mobile-plan-status.json', approval);
     writeJson(projectRoot, '.tmp/pipeline-state.json', pipeline);
     writeJson(projectRoot, '.tmp/dataverse-operation-manifest.json', manifest);
+    writeJson(projectRoot, '.tmp/dataverse-execution-contract.json', executionContract);
     writeJson(projectRoot, '.tmp/data-model-usage.json', usage);
     const command = {
       type: 'remove-column',
@@ -1392,6 +1399,10 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
     assert.strictEqual(invalidated.approvals.dataModel.status, 'pending');
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/pipeline-state.json')), false);
     assert.strictEqual(fs.existsSync(path.join(projectRoot, '.tmp/data-model-usage.json')), false);
+    assert.strictEqual(
+      fs.existsSync(path.join(projectRoot, '.tmp/dataverse-execution-contract.json')),
+      false,
+    );
 
     const undone = undoLastDataModelEdit(projectRoot, {
       expectedRevision: removed.revision,
@@ -1414,6 +1425,10 @@ test('Undo restores the exact prior unexecuted revision and approval checkpoints
       path.join(projectRoot, '.tmp/dataverse-operation-manifest.json'),
       'utf8',
     )), manifest);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(
+      path.join(projectRoot, '.tmp/dataverse-execution-contract.json'),
+      'utf8',
+    )), executionContract);
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(
       path.join(projectRoot, '.tmp/data-model-usage.json'),
       'utf8',

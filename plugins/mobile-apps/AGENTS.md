@@ -53,7 +53,8 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
 6. **Four-gate Product Experience flow** — Gate 1 approves UX DNA, Product
-   Scope, and data model; Gate 2 approves architecture/capabilities/connectors;
+   Scope, architecture/capabilities/connectors, and persistence ownership;
+   Gate 2 approves the conditional data model, Workflow Journey, and build packs;
    Gate 3 approves the materialized design and interactive HTML journey
    preview; Gate 4 confirms implementation. Graph/spec compilation does not
   create extra user gates. `_build_plan.html` is a separate live execution
