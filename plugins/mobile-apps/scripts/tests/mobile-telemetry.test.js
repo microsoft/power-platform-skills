@@ -315,6 +315,22 @@ test('checkpoint event carries only static checkpoint enrichment', (t) => {
   }
 });
 
+test('shared instructions own checkpoint execution and lifecycle rules', () => {
+  const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
+  const checkpointSection = shared.match(/## Workflow Checkpoints\r?\n([\s\S]*?)(?=\r?\n---)/)?.[1];
+  assert.ok(checkpointSection, 'shared instructions must define the checkpoint policy');
+  assert.match(checkpointSection, /frontmatter `name`/);
+  assert.match(checkpointSection, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js" "<skill-name>\|<checkpoint-name>\|<state>" \|\| true/);
+  for (const state of ['started', 'completed', 'failed', 'skipped']) {
+    assert.ok(checkpointSection.includes(`\`${state}\``), `shared policy must explain ${state}`);
+  }
+  assert.match(checkpointSection, /only `skipped`, without `started`/);
+  assert.match(checkpointSection, /author-written `snake_case` values of at most 64 characters/);
+  assert.match(checkpointSection, /never include prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data/);
+  assert.match(checkpointSection, /fail-open/);
+  assert.match(checkpointSection, /Do not duplicate emissions/);
+});
+
 test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
   const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
   const workflow = fs.readFileSync(
@@ -322,7 +338,8 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
     'utf8',
   );
 
-  assert.match(shared, /node "\$\{CLAUDE_SKILL_DIR\}\/\.\.\/\.\.\/scripts\/emit-telemetry-checkpoint\.js"/);
+  assert.match(shared, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js"/);
+  assert.doesNotMatch(shared, /node "\$\{CLAUDE_SKILL_DIR\}/);
   assert.doesNotMatch(shared, /trigger-telemetry/);
   assert.deepEqual(
     [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
@@ -364,6 +381,11 @@ test('every tracked operational skill has precise checkpoint markers', () => {
     }
 
     assert.ok(matches.length > 0, `${skillName} must define at least one checkpoint`);
+    assert.match(workflow.slice(0, matches[0].index),
+      /\[[^\]]+\]\((?:\.\.\/\.\.\/|\$\{PLUGIN_ROOT\}\/)shared\/shared-instructions\.md\)/,
+      `${skillName} must reference shared instructions before its first checkpoint`);
+    assert.doesNotMatch(workflow, /\*\*Checkpoint execution:\*\*|emit-telemetry-checkpoint\.js/,
+      `${skillName} must inherit checkpoint execution from shared instructions`);
     const names = matches.map((match) => match[1]);
     assert.equal(new Set(names).size, names.length, `${skillName} checkpoint names must be unique`);
 

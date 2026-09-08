@@ -14,6 +14,7 @@ const { fireAndForget } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
 const { ensureAppInstanceId } = require('./app-identity');
+const { resolveProcessSessionId } = require('./mobile-telemetry-session');
 
 function readPluginVersion() {
   const manifestPath = path.resolve(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
@@ -200,7 +201,12 @@ function resolveCopilotRootSessionId(hostSessionId, opts) {
 
 function resolveSessionId(payload, opts = {}) {
   const hostSessionId = session.resolveHostSessionId(payload);
-  return session.getSessionId(resolveCopilotRootSessionId(hostSessionId, opts));
+  const rootSessionId = resolveCopilotRootSessionId(hostSessionId, opts);
+  return session.getSessionId(resolveProcessSessionId(rootSessionId, {
+    ...opts,
+    cwd: opts.cwd || (payload && payload.cwd),
+    configDir: configDir(opts.env),
+  }));
 }
 
 function createTelemetryContext(payload, opts = {}) {
