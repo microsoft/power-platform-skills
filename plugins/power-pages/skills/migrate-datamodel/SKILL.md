@@ -700,6 +700,8 @@ This phase has **two completely different shapes** depending on the migration tr
 
    Where `<MODE>` is the value confirmed in step 1.7 (either `configurationData` or `all` for the Authoring Track).
 
+   > **If PAC's precheck flags a missing V2 template package here**, it is PAC's **environment-wide** prerequisite (`checkAllV1PackagesHasV2Packages`) — **not** a re-detection of this site's template. It fires for **any** V1 template solution installed in the environment that lacks its V2, even ones unrelated to the site being migrated (e.g. a Community site can be blocked because `PowerPortals_ProgramRegistrationCore` is installed env-wide). Install the flagged V2 via `pac application install --application-name "<V2>"` (or uninstall the stray V1 solution), then re-run. **Do not** relabel this site's template — the template was determined in step 1.3.
+
 2. **Monitor & Poll**
 
    Poll every 1 minute, up to 30 attempts (30 minutes total). **Use this exact PowerShell loop** — don't improvise a Bash equivalent. Bash subshells can silently fail if `pac` isn't on the Bash `$PATH` (different PATH from PowerShell on many Windows installs), which makes the `until / sleep` pattern spin forever without ever detecting completion.
