@@ -175,8 +175,8 @@ Do not fix unrelated pre-existing issues.
   `CountRows(<the same source/filter used by Items>)`. Never use `Self.AllItemsCount` or
   another rendered-item count to determine the gallery's own height.
 - The sole responsive root uses exact `Width: =Parent.Width`,
-`Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`; put
-breakpoint sizing on descendants.
+  `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`; put
+  breakpoint sizing on descendants.
 - Prefix every property value with `=`. A value without it fails the whole file at parse
   time and suppresses every other diagnostic in the screen.
 - Quote any value containing a colon followed by a space — `Text: '="Votes: " & n'`, not
