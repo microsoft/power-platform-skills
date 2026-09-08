@@ -398,7 +398,7 @@ the later screen-planning gates.
 ## Approval Status
 - [ ] Data model approved
 - [ ] Native capabilities approved
-- [ ] Design approved (via screen preview at Gate 4)
+- [ ] Design approved (during `/design-system`, or at Gate 4 only when HTML preview rendering is enabled)
 - [ ] Connectors approved
 - [ ] Screen plan approved
 - [ ] Cross-entity reads approved (Gate 2 addendum — auto-skipped for connector-only or when no `related_entity_fields` exist)

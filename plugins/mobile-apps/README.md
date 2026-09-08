@@ -161,7 +161,7 @@ What happens:
 1. **Wizard** (~30s) — confirms device class / aesthetic
 2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
 3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
-4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (with a visual `_plan_preview.html` before code is written)
+4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
 7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device

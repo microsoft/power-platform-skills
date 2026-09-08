@@ -66,6 +66,10 @@ test('connectivity wording is owned by the post-materialization offline flow', (
     /offline-first[\s\S]*limited or[\s\S]*intermittent connectivity[\s\S]*no connectivity/i,
   );
   assert.match(connectivityOwnership, /operating\s+context only/i);
+  assert.match(
+    connectivityOwnership,
+    /must not add offline-specific business tables[\s\S]*services[\s\S]*stores[\s\S]*routes[\s\S]*screens/i,
+  );
   assert.equal(
     typeof templatePackage.dependencies['@microsoft/power-apps-native-offline'],
     'string',

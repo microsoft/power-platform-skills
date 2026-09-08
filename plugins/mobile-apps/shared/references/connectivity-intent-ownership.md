@@ -6,6 +6,11 @@ context only. Requirements discovery and planning continue from the user's
 independently stated workflows, data, device capabilities, integrations, and
 explicit connectivity-diagnostic features.
 
+Planning and generation must not add offline-specific business tables, columns,
+status fields, services, hooks, stores, queues, routes, or screens solely from
+that connectivity wording. Offline storage and synchronization are runtime
+concerns owned by the bundled offline package and native host.
+
 After a Dataverse model is materialized, the create flow offers
 `/setup-offline-profile`. That skill owns which Dataverse tables and columns
 are available offline. The bundled `@microsoft/power-apps-native-offline`
