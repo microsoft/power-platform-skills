@@ -122,6 +122,12 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
   value is rejected by validation, and a caller that bypasses validation gets a warning naming the
   discarded value rather than a silent fall-through.
+  **It is build-wide.** One LCID is resolved and applied to every table, column, choice, status
+  value, relationship and alternate key in the spec. There is **no per-table language**: an
+  `entities[].languageCode` or `entities[].localizedLabels` is **rejected**
+  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)), because the
+  build cannot honour either — the SDK takes the language as a construction-time option and its
+  label serializer emits one label per name by design. Multi-language labelling is not supported.
   **Emitted by `download-model-app.js` only if you pinned it yourself.** It is deliberately never
   read from Dataverse: an LCID copied out of the source org would be re-applied verbatim when the
   spec is rebuilt somewhere else, which is exactly how a spec starts failing in an org that lacks
@@ -247,6 +253,11 @@ it exists is accepted by validation, builds green, and does not change the deplo
   ]
 }
 ```
+- **Unknown table keys are REJECTED, not ignored**
+  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)). A table accepts exactly the keys above
+  plus `statusReasons` / `alternateKeys`. Anything else — a misspelled `pluralname`, or a
+  `languageCode` / `localizedLabels` asking for a per-table or second language — fails validation
+  naming the alternative, rather than validating clean and being dropped from the build.
 - **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.

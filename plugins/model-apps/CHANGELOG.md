@@ -5,7 +5,28 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.6.0
+## [Unreleased] — 2.6.1
+
+### Fixed
+
+- **A table key the build cannot honour now fails instead of being dropped** ([#537]). `entities[]`
+  was the one authorable block with no allow-list, so `entities[].languageCode` and
+  `entities[].localizedLabels` — the two natural ways to ask for a per-table or multi-language
+  label — validated clean and were then silently ignored. Asking for one table in Spanish produced a
+  successful build with the request gone and nothing reporting the loss. Unknown table keys (a
+  misspelled `pluralname`, too) are now rejected, and the error names what to write instead: the
+  authoring language is **build-wide**, set by the spec-level `languageCode`. Multi-language labels
+  remain unsupported — the SDK's serializer emits one label per name by design. The same check runs
+  on the `/genpage` provisioning input, which is the other entry point that accepts tables; it still
+  accepts every App Spec table key, so entities copied from an `app-spec.json` keep validating.
+- **The `languageCode` error now says what to write.** It named the mistake but not the fix; it now
+  gives a concrete LCID (`1033`) and rejects a language tag explicitly. A tag is deliberately not
+  accepted as an alias: `es-ES` is 3082 or 1034 depending on sort order, and guessing wrong would
+  not fail — it would build every label in the wrong language.
+
+[#537]: https://github.com/microsoft/power-platform-skills/issues/537
+
+## [2.6.0]
 
 Business process flows, plus an SDK uptake that changes how business rules fail on an environment
 that cannot host them.

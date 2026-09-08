@@ -196,3 +196,128 @@ test('app.newLook must be a boolean', () => {
   // Absent is fine — the new look is opt-in.
   assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true);
 });
+
+// ---------------------------------------------------------------------------------------------
+// #537 — entities[] had no allow-list, so a key with no reader validated clean and was dropped.
+//
+// The two that motivated this are `languageCode` and `localizedLabels`: the natural ways to ask for
+// a per-table or multi-language label. Both were accepted and silently ignored, so an author asking
+// for one table in Spanish got a SUCCESSFUL build with the request gone. These pin the loud failure
+// AND the alternative each error names, because an error that does not say what to write instead
+// just moves the dead end.
+// ---------------------------------------------------------------------------------------------
+
+test('#537: entities[].languageCode is rejected and names the spec-level languageCode', () => {
+  for (const profile of ['plan', 'deploy']) {
+    const s = base();
+    s.entities[0].languageCode = 3082;
+    const r = validateAppSpec(s, { profile });
+    const hit = (r.errors || []).find((e) => /unknown key 'languageCode'/.test(e));
+    assert.ok(hit, `${profile}: ` + JSON.stringify(r.errors));
+    // Naming the supported alternative is the point of the error, not a nicety.
+    assert.match(hit, /spec-level `languageCode`/);
+    assert.match(hit, /build-wide, not per-table/);
+  }
+});
+
+test('#537: entities[].localizedLabels is rejected and says multi-language is unsupported', () => {
+  for (const profile of ['plan', 'deploy']) {
+    const s = base();
+    s.entities[0].localizedLabels = { 3082: 'Cliente', 1033: 'Customer' };
+    const r = validateAppSpec(s, { profile });
+    const hit = (r.errors || []).find((e) => /unknown key 'localizedLabels'/.test(e));
+    assert.ok(hit, `${profile}: ` + JSON.stringify(r.errors));
+    assert.match(hit, /multi-language labels are not supported/);
+  }
+});
+
+test('#537: a misspelled entity key fails loudly instead of being dropped', () => {
+  const s = base();
+  s.entities[0].pluralname = 'Orders'; // real key is `pluralName`
+  const r = validateAppSpec(s, { profile: 'plan' });
+  const hit = (r.errors || []).find((e) => /unknown key 'pluralname'/.test(e));
+  assert.ok(hit, JSON.stringify(r.errors));
+  assert.match(hit, /allowed: .*pluralName/); // the allowed list is what makes the typo obvious
+});
+
+// The counterpart that matters most: an allow-list that is too NARROW silently breaks valid specs,
+// which is a worse failure than the one being fixed. Every key the build reads must still validate.
+test('#537: every supported entity key still validates clean', () => {
+  const s = base();
+  s.webResources = [
+    { name: 'contoso_i', displayName: 'I', type: 'svg', content: '<svg/>' },
+    { name: 'contoso_p', displayName: 'P', type: 'png', contentBase64: 'AA==' },
+  ];
+  Object.assign(s.entities[0], {
+    displayName: 'Order', pluralName: 'Orders', description: 'An order.',
+    hasNotes: true, quickCreate: true, existing: false, enrichDefaultViews: true,
+    vectorIcon: 'contoso_i', iconDescription: 'a box', icon: 'contoso_p',
+    statusReasons: [], alternateKeys: [],
+  });
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// A malformed entity must not be re-described as a key problem: Object.keys('x') is ['0'], which
+// would report a bogus "unknown key '0'" on top of the real shape error.
+test('#537: a non-object entity does not produce a bogus index key error', () => {
+  const s = base();
+  s.entities.push('contoso_ghost');
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.ok(!(r.errors || []).some((e) => /unknown key '\d+'/.test(e)), JSON.stringify(r.errors));
+});
+
+// The bare "must be a positive integer LCID" named the mistake but not the fix, and a language TAG
+// is the likeliest thing an author writes. A tag is deliberately NOT accepted as an alias: es-ES is
+// 3082 (international sort) or 1034 (traditional), and guessing wrong would not fail — it would
+// build every label in the wrong language.
+test('#537: the languageCode error names an LCID and rejects a language tag', () => {
+  const s = base();
+  s.languageCode = 'es-ES';
+  const r = validateAppSpec(s, { profile: 'plan' });
+  const hit = (r.errors || []).find((e) => /languageCode must be a positive integer LCID/.test(e));
+  assert.ok(hit, JSON.stringify(r.errors));
+  assert.match(hit, /1033 \(en-US\)/);      // a concrete value to copy
+  assert.match(hit, /not a language tag/);
+  assert.match(hit, /"es-ES"/);              // echoes what was actually written
+
+  // The supported spelling still passes, in both profiles.
+  for (const profile of ['plan', 'deploy']) {
+    const ok = base();
+    ok.languageCode = 3082;
+    assert.strictEqual(validateAppSpec(ok, { profile }).ok, true, JSON.stringify(validateAppSpec(ok, { profile }).errors));
+  }
+});
+
+// The hint lookup is keyed by a name that comes from the SPEC, so an inherited Object.prototype
+// member must not become part of the message. Before the map was made prototype-less, a table with
+// a `constructor` key reported: unknown key 'constructor'function Object() { [native code] }
+test('#537: an entity key that collides with Object.prototype does not leak a native function', () => {
+  const s = base();
+  s.entities[0].constructor = 1;
+  s.entities[0].toString = 2;
+  const r = validateAppSpec(s, { profile: 'plan' });
+  const hits = (r.errors || []).filter((e) => /unknown key/.test(e));
+  assert.strictEqual(hits.length, 2, JSON.stringify(r.errors));
+  for (const h of hits) assert.ok(!/native code/.test(h), h);
+});
+
+// A validator's contract is to RETURN problems, not throw them. Both of these threw before the
+// guards went in: Object.prototype.toString throws on a revoked Proxy, and an entity Proxy whose
+// ownKeys trap throws escaped straight through the new key loop.
+test('#537: exotic values become validation errors, not raw crashes', () => {
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+
+  const s = base();
+  s.languageCode = revoked.proxy;
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /languageCode must be a positive integer LCID/.test(e)), JSON.stringify(r.errors));
+
+  const s2 = base();
+  s2.entities.push(new Proxy({ schemaName: 'contoso_ghost' }, { ownKeys() { throw new Error('trap'); } }));
+  const r2 = validateAppSpec(s2, { profile: 'plan' });
+  assert.strictEqual(r2.ok, false);
+  assert.ok(r2.errors.some((e) => /could not be inspected/.test(e)), JSON.stringify(r2.errors));
+});

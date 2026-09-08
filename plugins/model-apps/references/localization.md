@@ -1,5 +1,11 @@
 # Localization Reference
 
+> **Scope: generated PAGE code, not Dataverse metadata.** This file covers translating the React
+> pages `/genpage` writes — translation dictionaries, RTL, and user-settings-driven number/date
+> formatting. It does **not** cover Dataverse table, column or choice **labels**. Those are written
+> in a single build-wide authoring language set by the spec-level `languageCode`; there is no
+> per-table language and no multi-language labelling (see `app-spec-schema.md` → `languageCode`).
+
 Read this only when the planner has detected multiple configured languages OR any
 non-English language via `pac model list-languages`. English-only environments
 should skip this entire file — the page-builder will write the page without any
