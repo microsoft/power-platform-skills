@@ -413,6 +413,28 @@ test('blocks missing language selector and lang/dir behavior', (t) => {
   assert.match(result.stderr, /document language/);
 });
 
+test('accepts supported framework locale-navigation signals', (t) => {
+  const implementations = [
+    "setActiveLang('fr-FR');",
+    "setLocale('fr-FR');",
+    "getRelativeLocaleUrl('fr-FR');",
+    "const alternate = '<link rel=\"alternate\" hreflang=\"fr-FR\">';",
+  ];
+
+  for (const implementation of implementations) {
+    const projectRoot = createLocalizedReactProject(t);
+    writeProjectFile(
+      projectRoot,
+      'src/components/LanguageSelector.tsx',
+      `export function activateLocale(){ ${implementation} ` +
+      "document.documentElement.lang='fr-FR'; document.documentElement.dir='ltr'; }"
+    );
+
+    const result = runValidator(projectRoot);
+    assert.equal(result.status, 0, `${implementation}\n${result.stderr}`);
+  }
+});
+
 test('does not treat unrelated lang and dir identifiers as document configuration', (t) => {
   const projectRoot = createLocalizedReactProject(t);
   writeProjectFile(

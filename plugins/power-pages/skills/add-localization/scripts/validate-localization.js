@@ -15,6 +15,7 @@ const {
   MANIFEST_NAME,
   detectFramework,
   detectLocalization,
+  hasLocaleNavigationSignal,
   protectedTokenSignature,
   validateLocalizationManifestShape,
   validateLocales,
@@ -293,7 +294,7 @@ function validateLocalization(projectRoot) {
     .filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)))
     .map((relativePath) => fs.readFileSync(path.join(projectRoot, relativePath), 'utf8'))
     .join('\n');
-  if (!/LanguageSelector|language selector|locale-switcher|switchLanguage|changeLanguage/i.test(implementationText)) {
+  if (!hasLocaleNavigationSignal(implementationText)) {
     errors.push('Managed files do not contain a language selector or locale-navigation implementation.');
   }
   if (!configuresDocumentAttribute(implementationText, 'dir')) {
