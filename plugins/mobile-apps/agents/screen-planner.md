@@ -24,11 +24,9 @@ You will be invoked by `native-app-planner` in parallel with `data-model-archite
 - **Read-only.** You MUST NOT write TSX, install packages, or modify any project files except your output section file.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **No questions.** The planner runs the approval gate. Make confident decisions from the inputs provided. If a detail is genuinely ambiguous, list it under "Open Questions" in your output for the planner to surface.
-- **Offline-neutral UX.** Ignore offline wording in requirements and the prompt.
-  Do not create offline-specific screens, routes, actions, or UX, including
-  sync bars, status badges, filters, banners, queues, or offline-only states.
-  The foreground asks about a Mobile Offline Profile after data setup and the
-  runtime package owns offline behavior.
+- **Connectivity intent ownership.** Follow
+  [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md)
+  when deriving the screen graph and specifications.
 - **Return a section, not a doc.** Output is a markdown `## Screens` section the planner embeds verbatim.
 - **Screens only.** Do not design shared components, hooks, or services. The `screen-builder` writes shared UI inline first; refactoring happens later.
 - **MANDATORY progress reporting.** Every step in the workflow below has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
@@ -103,7 +101,7 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 ### Step 0 — Load Industry Patterns
 
-If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards or circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends. Never select an offline-specific pattern during `/create-mobile-app` planning.
+If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards or circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
 
 ### Step 0b — Load Design Direction (if present)
 

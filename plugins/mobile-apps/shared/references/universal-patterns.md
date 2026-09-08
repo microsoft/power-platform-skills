@@ -279,13 +279,11 @@ Used for: finance, enterprise, health — any app with auth sessions.
 
 ---
 
-## 8. Offline Sync Queue UI
+## 8. App-Owned Sync Queue UI
 
-Legacy/custom-edit reference only. Never select this pattern during `/create-mobile-app`,
-including when the prompt mentions offline or the app is used in the field.
-Mobile Offline Profile opt-in happens after Dataverse
-materialization and does not create generated UI. Use this pattern only for a
-later, explicit product requirement backed by a real app-owned sync queue API.
+Use this pattern only for an approved product requirement backed by a real
+app-owned sync queue API. Mobile Offline Profile configuration is governed by
+[`connectivity-intent-ownership.md`](connectivity-intent-ownership.md).
 
 ```tsx
 // Sync status bar — sticky at top of list screens

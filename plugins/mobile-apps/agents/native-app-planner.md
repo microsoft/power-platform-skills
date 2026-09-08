@@ -27,7 +27,9 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - The plugin root directory (`${PLUGIN_ROOT}`)
 - The foreground-generated normalized Dataverse planning snapshot path, when available
 - The deterministic Dataverse planning evidence appendix path, when available
-- Dataverse planning mode: `required` or `connector-only`
+- Dataverse planning mode: `required` or `connector-only` in `complete` phase
+- Architecture phase: `gate-only` or `complete`
+- Approved architecture artifact path for `complete` phase
 
 ## Hard Rules
 
@@ -40,16 +42,15 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   human plan or a source
   for free-form Markdown parsing. No HTML or other per-domain plan files.
   Mermaid for diagrams.
-- **Architecture-first approval.** Gate 1 approves the already confirmed data
-  platform choice together with native capabilities and connectors. Only then
-  may a `required` run dispatch `data-model-architect` and enter Gate 2. A
-  `connector-only` run never dispatches that architect and has no Dataverse
-  contract or data-model approval interaction.
+- **Architecture-first approval.** Gate 1 approves native capabilities,
+  connectors, and the data platform in that order. Only then may a `required`
+  run dispatch `data-model-architect` and enter Gate 2. A `connector-only` run
+  has no Dataverse contract or data-model approval interaction.
 - **Sequential then parallel.** Resolve and approve native capabilities,
-  connectors, and persistence first. Build the Dataverse model second only
-  when required. Spawn `screen-planner` last so it receives every approved
-  dependency.
-- **Dataverse planning forwarding is verbatim.** For every `required`
+  connectors, and persistence in `gate-only` phase. In `complete` phase, build
+  the Dataverse model only when required, then spawn `screen-planner` with every
+  approved dependency.
+- **Dataverse planning forwarding is verbatim.** In `complete` phase, for every `required`
   `data-model-architect` dispatch and revision, pass the planning mode and both
   planning-snapshot/evidence absolute paths unchanged. Never dispatch the
   architect in `connector-only` mode and never invent placeholder artifact
@@ -62,11 +63,9 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
   referenced artifact; do not paste candidate rankings, raw columns, or timing
   tables into `native-app-plan.md`.
-- **Offline is decided later.** Ignore offline wording in requirements and the
-  original prompt during data-platform, schema, native-capability, connector,
-  screen, and UX planning. Do not add offline-specific tables, screens, routes,
-  states, sync indicators, or actions. `/create-mobile-app` Step 8.85 is the
-  only offline opt-in; the runtime package owns behavior after profile setup.
+- **Connectivity intent ownership.** Follow
+  [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md)
+  throughout planning.
 - **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence between gates looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
 
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
@@ -97,6 +96,8 @@ Read these references once before doing anything else:
 
 - `${PLUGIN_ROOT}/AGENTS.md` — plugin conventions
 - `${PLUGIN_ROOT}/template/package.json` — **the native-code allowlist**. The set of modules with native code/config is fixed by the rewrap pipeline; you may NEVER propose a native capability whose module is not present here. Pure-JavaScript app dependencies are planned separately by `screen-planner` under `## Screens` and need not be bundled in this template.
+- `${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md` — owns
+  how offline and connectivity wording is handled during creation.
 
 Do NOT attempt to read `app.config.js` from the working directory — scaffolding has not run yet. Reading `template/package.json` from `${PLUGIN_ROOT}` IS allowed and IS required.
 
@@ -106,10 +107,6 @@ From the planner prompt extract:
 - **Pure-JavaScript dependency hints** — pass any explicit JavaScript-library request, or any feature that may benefit from an established JS-only package instead of custom code, to `screen-planner`. These are app dependencies, not native capabilities. The screen planner reuses suitable installed packages first; otherwise it follows the canonical candidate-selection workflow and records the selected package with an exact version under `## Screens → ### JavaScript Dependencies`.
 - **Industry confirmed** — if the prompt contains a line `Industry confirmed: <slug>`, the orchestrator already ran the industry-confidence check (see Step 3c). Treat that slug as the locked industry for Step 3c — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
 
-Ignore offline wording even when it appears in both the confirmed brief and the
-original prompt. It is not a native capability, persistence requirement,
-screen requirement, UX state, or industry/design signal in this planning pass.
-
 Carry each input into its owning planning step: native hints into `## Native Capabilities`, pure-JavaScript dependency hints into the `screen-planner` prompt, and the confirmed industry into design planning.
 
 ## Step 2 — Prepare Architecture Inputs
@@ -117,8 +114,15 @@ Carry each input into its owning planning step: native hints into `## Native Cap
 **Print before starting:**
 > "→ Preparing native capabilities and connector inputs before any data-model work…"
 
-Do not dispatch `data-model-architect` here. Complete Steps 3, 3c, and 3b,
-then run Gate 1. The data architect must receive the exact approved native
+If `Architecture phase: complete`, read the approved architecture artifact,
+restore its exact data-platform choice, native-capability section, and
+connector section, then continue at Step 5. Do not re-run or re-present Gate 1.
+
+For `Architecture phase: gate-only`, continue below. No Dataverse snapshot,
+evidence, publisher prefix, or schema contract is required in this phase.
+
+Complete native-capability planning, then connector planning, then run Gate 1.
+The data architect must receive the exact approved native
 capabilities and connectors because capture, file, location, identity, and
 external-system decisions can change schema and storage requirements.
 
@@ -127,7 +131,9 @@ external-system decisions can change schema and storage requirements.
 **Print before starting:**
 > "→ [2/4] Building native capabilities matrix from requirements (allowlist-bounded against template/package.json)…"
 
-Build the native capabilities matrix yourself (this is a small enough surface to keep in-house). Cross-reference the screen-planner output to know which screens use which capability.
+Build the native capabilities matrix yourself (this is a small enough surface
+to keep in-house). Screen planning has not run yet, so tie each capability to
+the confirmed workflow or use case that requires it.
 
 **Important:** the upstream template owns iOS Info.plist keys, Android permissions, and config plugins for every shipped module. Do NOT specify those here — the planner does not pick permission strings, and downstream `/add-native` helpers do not edit `app.config.js` or `package.json`. The matrix only records *which* capabilities the app uses and *why*.
 
@@ -211,57 +217,14 @@ For each capability the app needs **AND is in the allowlist**:
 |---|---|
 | Capability | `camera` |
 | Expo module | `expo-camera` |
-| Used by screens | `CaptureReceipt`, `ProfilePhoto` |
+| Required by workflow | `Capture receipts`, `Update profile photo` |
 | Justification | One-sentence rationale tied to a user need ("Capture receipts attached to expense reports") |
 | Storage/output target | `n/a`, `Dataverse Image`, `Dataverse File`, `child Evidence table`, `on-device/share-only`, `local file URI`, or `HTTPS URL` |
 | Add via | `/add-native camera` |
 
 If the app needs zero allowlisted native capabilities, include a `## Native Capabilities` section that says "None — this app uses only standard React Native components and Power Platform connectors." Transparency notes for dropped caps still appear under this header — "None proposed" is not the same as "nothing was considered."
 
-## Step 3c — Plan Design Inline
-
-**Print before starting:**
-> "→ Inferring design direction from industry signals (no gate — design is reviewed visually at Gate 4)…"
-
-Follow [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) exactly. The three steps are:
-
-1. **Detect** — scan requirements and wizard aesthetic answer for design keywords. Detect the industry and build a list of design decisions (even if all of them match the default stack).
-2. **Decide** — map the detected industry to its aesthetic direction, palette, copy tone, and visual language using the tables in `design-planning.md`. Always produce a full `## Design` section — never write just "default (Clean + Professional)".
-3. **Summarise** — do NOT ask a question here. Write the `## Design` section into the plan doc and move on. Design confirmation happens visually at Gate 4 when the user sees `_plan_preview.html` — not via a text question upfront.
-
-Store the design decision — you will pass it to `screen-planner` in Step 5b so per-screen specs use the right tokens.
-
-**Key rule:** Always describe the design with industry rationale, even when every decision matches the default. The user needs to see *why* — e.g. "Refined Minimal — standard for productivity/enterprise apps: neutral palette, dense layout, professional copy tone" — not just a label. Design approval happens at Gate 4 via the preview, not here.
-
-### Industry inference confidence
-
-After detection, classify the inference confidence and emit a signal so the orchestrator can ask the user only when the guess is shaky. **Skip this entirely when `Design vibe opt-in: yes` or `done`** — in those cases the user already drove the direction explicitly.
-
-| Confidence | When | Action |
-|---|---|---|
-| `high` | Wizard aesthetic answer was non-default OR user mentioned a hex color / brand / explicit aesthetic word ("warm", "playful", "minimal") OR exactly one industry keyword family matched | No signal. Proceed silently. |
-| `low` | Zero industry keywords matched (defaulted to Productivity) OR two or more industry families matched (ambiguity, e.g. "field inspections at car dealerships" hits Field/Ops + E-commerce) OR the wizard aesthetic conflicts with the inferred industry (e.g. wizard says "Warm+Organic" but keywords say Field/Ops) | Emit `INDUSTRY_CONFIRM_REQUESTED:` signal and STOP — do NOT continue to Step 3b yet |
-
-**When confidence is `low`**, return early with this single line as your final message (no prose, no preamble):
-
-```
-INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternatives-comma-sep>
-```
-
-Where:
-- `<inferred-industry>` — what you would have picked (e.g. `productivity`, `field-ops`)
-- `<reason-code>` — one of `no-keywords` / `ambiguous-match` / `wizard-conflict`
-- `<top-3-alternatives-comma-sep>` — the most plausible 3 other industries from the [`design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) table, ordered by relevance (e.g. `field-ops,healthcare,e-commerce`)
-
-Example signals:
-```
-INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-commerce
-INDUSTRY_CONFIRM_REQUESTED: field-ops|ambiguous-match|e-commerce,productivity,tech-iot
-```
-
-The orchestrator will surface a one-question picker, write the chosen industry into the working dir as a hint file, and re-spawn this planner with `Industry confirmed: <industry>` added to the prompt. On the re-spawn, treat that as the locked industry — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
-
-## Step 3b — Plan Connectors Inline (Gate 1 input)
+## Step 4 — Plan Connectors Inline (Gate 1 input)
 
 **Print before starting:**
 > "→ [3/4] Inferring connector needs from requirements…"
@@ -274,18 +237,17 @@ Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/referen
 
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
 
-Store the confirmed connector list — you will pass it to `screen-planner` in Step 4.
+Store the confirmed connector list — you will pass it to `screen-planner`
+after the architecture and optional data-model gates.
 
 ### Gate 1 — Data Platform + Device Capabilities + Integrations
 
-Always present this gate before any data-model architect dispatch. Include the
-foreground-confirmed Dataverse choice verbatim:
+Always present this gate before any data-model architect dispatch. Present the
+foreground's provisional Dataverse recommendation, but let this gate make the
+first user-visible data-platform decision:
 
 ```markdown
 ## Gate 1 of 4 — Architecture
-
-### Data platform
-<Dataverse | No Dataverse — connectors own data | No Dataverse — no persistent business records>
 
 ### Native Capabilities
 <capability matrix, or "None">
@@ -293,20 +255,24 @@ foreground-confirmed Dataverse choice verbatim:
 ### Connectors
 <connector table, or "None">
 
+### Data platform
+<Dataverse | No Dataverse — connectors own data | No Dataverse — no persistent business records>
+
 Approve this architecture before data modeling?
 ```
 
-- **Approved:** lock the Dataverse mode, native-capability section, and
-  connector section. Continue to Step 4.
+- **Approved:** write the exact selected mode, native-capability section, and
+  connector section to `<working_dir>/.tmp/approved-architecture.md`, then
+  return `NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>`.
+  The foreground creates Dataverse evidence only for `required` and
+  re-dispatches with `Architecture phase: complete`.
 - **Rejected capabilities:** revise only the capability matrix and re-present
   Gate 1.
 - **Rejected connectors:** revise only the connector list and re-present Gate 1.
-- **Changed data platform:** return
-  `NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>` so the
-  foreground can create or discard Dataverse evidence before re-dispatch. Do
-  not run an architect against evidence for the old mode.
+- **Changed data platform during review:** update the selection in the same
+  gate before writing the approved artifact.
 
-## Step 4 — Build Data Model
+## Step 5 — Build Data Model
 
 Branch on the Gate 1-approved data platform:
 
@@ -329,7 +295,7 @@ architecture inputs:
 > Target platforms: iOS and Android
 > Approved native capabilities: [paste the exact approved `## Native Capabilities` section]
 > Approved connectors: [paste the exact approved `## Connectors` section]
-> Offline policy: ignore offline wording; Step 8.85 owns Mobile Offline Profile opt-in
+> Connectivity intent policy: follow `${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md`
 > Target environment: use the foreground-resolved environment URL and tenant
 > Working directory: [absolute path]
 > Plugin root: ${PLUGIN_ROOT}
@@ -351,9 +317,46 @@ apply the standard status switch:
   same approved architecture sections.
 - `BLOCKED:` — propagate as a substantive planner block.
 
-## Step 4b — Assemble `native-app-plan.md`
+## Design Planning
 
-Write `<working_dir>/native-app-plan.md` with this structure. Use the architects' output verbatim for their sections. Leave `## Screens` empty for now — it is filled after Gate 3 approval (Step 5, screen-planner).
+**Print before starting:**
+> "→ Inferring design context for the later design-system phase…"
+
+Follow [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) exactly:
+
+1. **Detect** — scan requirements and the wizard aesthetic answer for design
+   keywords and industry signals.
+2. **Decide** — map the industry to aesthetic direction, palette, copy tone,
+   and visual language. Always produce a complete `## Design` section.
+3. **Summarise** — write the section without another confirmation. The
+   foreground design-system phase owns user-facing visual selection.
+
+Store the design decision for `screen-planner`.
+
+### Industry inference confidence
+
+After detection, classify confidence. Skip this check when
+`Design vibe opt-in` is `yes`, `done`, `deferred`, or `skip`.
+
+| Confidence | When | Action |
+|---|---|---|
+| `high` | The user supplied a non-default aesthetic, brand/color cue, or exactly one industry family matched | Proceed silently |
+| `low` | No industry matched, multiple industries matched, or the wizard aesthetic conflicts with the inferred industry | Return `INDUSTRY_CONFIRM_REQUESTED:` |
+
+For low confidence, return only:
+
+```
+INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<no-keywords|ambiguous-match|wizard-conflict>|<top-3-alternatives-comma-sep>
+```
+
+The foreground asks one industry question and re-dispatches with
+`Industry confirmed: <industry>`. Treat that value as locked.
+
+## Step 6 — Assemble `native-app-plan.md`
+
+Write `<working_dir>/native-app-plan.md` with this structure. Use the
+architects' output verbatim for their sections. Leave `## Screens` empty for
+the later screen-planning gates.
 
 **HARD RULES — plan structure (read before writing):**
 1. **Top-level headings are EXACTLY the eight below.** Do NOT invent a `## Brief` super-section that nests the data model, discovery notes, or sample notes under it. Each section is its own `## ` heading.
@@ -381,10 +384,10 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 <your matrix from Step 3>
 
 ## Design
-<your ## Design section from Step 3c — always a full block with all 8 decision fields; never just a label>
+<your ## Design section from Design Planning — always a full block with all 8 decision fields; never just a label>
 
 ## Connectors
-<your table from Step 3b — or "None">
+<your table from Step 4 — or "None">
 
 ## Screens
 <!-- populated after Gate 3 approval -->
@@ -403,7 +406,7 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 - Date: <today>
 ```
 
-## Step 5 — Remaining Approval Gates
+## Step 7 — Remaining Approval Gates
 
 Gate 1 already locked the data platform, native capabilities, and connectors.
 Run Gate 2 only for Dataverse-backed apps, then continue to the screen graph and
@@ -414,7 +417,7 @@ screen-spec gates. A rejection changes only its owning section.
 **Auto-skip rule:** in `connector-only` mode, do not enter plan mode, do not
 dispatch or re-dispatch `data-model-architect`, and do not create a schema
 contract or data-model approval receipt. Mark the Data Model section
-`not applicable — no Dataverse` and continue to Step 5b.
+`not applicable — no Dataverse` and continue to screen planning.
 
 For `required` mode, call `EnterPlanMode` and present:
 
@@ -434,7 +437,7 @@ Call `ExitPlanMode` to request approval.
   initialize/update `<working_dir>/.tmp/mobile-plan-status.json` with the
   normalized contract's exact content/hash and a `dataModel` approval record.
   This receipt is written by this gate-owning planner, never by the Step 8
-  manifest builder. Continue to Step 5b.
+  manifest builder. Continue to screen planning.
 - **Rejected:** re-spawn `data-model-architect` with the user's feedback and
   the original planning-snapshot/evidence paths verbatim, regenerate that section, and
   regenerate/normalize the structured sidecar, then re-enter plan mode. Loop
@@ -444,9 +447,9 @@ Call `ExitPlanMode` to request approval.
 
 ### Gates 3 and 4 — Screen Plan
 
-See Step 5b below. Gate 3 locks the graph; Gate 4 approves its expanded specs.
+Gate 3 locks the graph; Gate 4 approves its expanded specs.
 
-### Step 5b — Spawn `screen-planner` (two-phase: graph → specs)
+### Screen planning — spawn `screen-planner` in two phases
 
 **Print before spawning:**
 > "→ [4/4] Spawning screen-planner (phase 1/2: screen graph + shared conventions)…"
@@ -525,7 +528,7 @@ Approved data model: [paste ## Data Model section verbatim]
 Approved native capabilities: [paste ## Native Capabilities section verbatim]
 Approved design: [paste ## Design section verbatim]
 Approved connectors: [paste ## Connectors section verbatim]
-Offline policy: do not create offline-specific screens or UX; Step 8.85 owns profile opt-in
+Connectivity intent policy: follow `${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md`
 Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
 

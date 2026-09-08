@@ -1108,13 +1108,10 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     The large title collapses on scroll (iOS Settings / Mail / App Store). On Android it degrades to a standard toolbar. Pass `contentInsetAdjustmentBehavior="automatic"` to your `ScrollView` or `FlatList` so content scrolls under the collapsing header. Detail and Form screens pushed onto the stack do NOT use large title — they use `headerShown: true` with standard height.
 
-41. **Connectivity and offline UI are explicit-plan-only.** Do not add a
-    connectivity banner, pending-sync bar, offline icon, sync queue, retry-sync
-    action, or per-record sync status because the prompt says offline or because
-    the app is used in the field. `/create-mobile-app` Step 8.85 owns Mobile
-    Offline Profile opt-in, and the runtime package owns offline behavior. Only
-    implement connectivity diagnostics when the approved per-screen spec names
-    that exact UI for a separate product requirement; never infer it here.
+41. **Connectivity UI follows the approved specification.** Apply
+    [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md).
+    Implement connectivity diagnostics or app-owned sync UI only when the
+    approved per-screen specification names that product feature.
 
 42. **Layout animations on list add/remove.** Every `FlatList` that supports create or delete MUST animate insertions and removals. Wrap `renderItem` content in Reanimated `Animated.View` with `entering`, `exiting`, and `layout` props:
 

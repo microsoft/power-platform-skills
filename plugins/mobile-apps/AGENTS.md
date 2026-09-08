@@ -52,7 +52,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 3. **Fresh-template mode** — `/create-mobile-app` validates and prepares an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
-6. **Plan mode** — Enter plan mode before multi-file work; approve data platform, native capabilities, and connectors before conditional Dataverse modeling, then approve the screen plan.
+6. **Plan mode** — Confirm requirements first. Gate 1 then presents native
+   capabilities, connectors, and the data-platform choice before conditional
+   Dataverse modeling; later gates approve the applicable data model and screen
+   plan.
 7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.

@@ -26,8 +26,8 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`.
 - **Planning evidence path (preferred)** — an absolute path to the deterministic
   Markdown appendix rendered from that same foreground planning snapshot.
-- **Dataverse planning mode** — `required` or `connector-only`.
-  `connector-only` intentionally has no snapshot/evidence paths.
+- **Dataverse planning mode** — `required`. Connector-only planning is owned by
+  `native-app-planner` and must not dispatch this agent.
 - **Approved native capabilities** (create flow, when supplied) — the exact
   Gate 1-approved capability matrix, including capture/output and retention
   targets.
@@ -46,13 +46,12 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   foreground planning snapshot. Don't propose a `cr123_customer` table if a verified
   target `contact` table fits.
 - **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so every decision remains unverified and non-executable. Step 8 verifies approved decisions against fresh bounded metadata; it never invents `Adapt` or `Defer`.
-- **Mode fidelity.** `connector-only` means zero Dataverse tables and zero
-  Dataverse discovery. A Dataverse-required run with unreadable metadata is
-  blocked by the foreground orchestrator before this agent is dispatched.
-- **Offline-neutral schema.** Offline wording alone must not create a table,
-  column, relationship, key, or Dataverse requirement. Model only approved
-  product data and storage targets required independently of offline support;
-  `/create-mobile-app` asks about a Mobile Offline Profile later.
+- **Mode fidelity.** This agent runs only for Dataverse-required planning. A
+  run with unreadable metadata is blocked by the foreground orchestrator before
+  dispatch.
+- **Connectivity intent ownership.** Follow
+  [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md)
+  when deriving schema.
 - **Approved architecture is authoritative when supplied.** Account for
   approved native capture and retention targets when selecting Image, File,
   location, or child evidence storage. Do not create a Dataverse duplicate of a connector-owned entity;
@@ -95,12 +94,12 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 ## Planning-mode short circuits
 
-When `Dataverse planning mode: connector-only` is supplied, do not resolve an
-environment, read metadata, or request snapshot artifacts. Write
-`_dm_section.md` with an explicit zero-table `## Data Model` section (all
-summary counts zero, no ER entities or dependency tiers, and a note that the
-confirmed systems of record are the approved connectors), update the normal
-artifact milestone, and return `DONE`.
+When `Dataverse planning mode: connector-only` is supplied, return:
+
+`BLOCKED: data-model-architect must not be dispatched in connector-only mode`
+
+Do not read metadata or write planning artifacts. The native app planner owns
+the explicit zero-table connector-only section.
 
 ## Snapshot-only fast path
 

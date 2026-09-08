@@ -26,9 +26,9 @@ Scan the user's description and wizard answers for these signals, then confirm i
 
 Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; if a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical native allowlist.
 
-Ignore `offline`, `offline-first`, and `works without internet` during feature
-inference. Those phrases do not add a feature, Dataverse requirement, screen,
-state, or UX pattern. `/create-mobile-app` Step 8.85 owns offline opt-in.
+Apply the shared
+[`connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md)
+contract during feature inference.
 
 PDF/pen rules:
 - Do not infer `document-picker` from generic "PDF" alone; use the specific signal rows above.
