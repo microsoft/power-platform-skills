@@ -196,10 +196,25 @@ Write `.powerpages-localization.json` after implementation using this shape:
 }
 ```
 
-For Astro built-in routing, use `"packageName": "astro-built-in"`. For XLF,
-map each locale to its source/target XLF file. Keep paths repository-relative.
-Set `translationMethod` to `"agent"` or `"blank"` so validation can
-distinguish intentional empty targets from broken translations.
+For Astro built-in routing, record the capability without invoking the npm
+package validator:
+
+```json
+{
+  "packageName": "astro-built-in",
+  "packageVersion": "^6.1.0",
+  "packageVerification": {
+    "status": "verified",
+    "source": "known-capability"
+  }
+}
+```
+
+Use the project's declared `astro` dependency or devDependency value for
+`packageVersion`; the version above is illustrative. For XLF, map each locale
+to its source/target XLF file. Keep paths repository-relative. Set
+`translationMethod` to `"agent"` or `"blank"` so validation can distinguish
+intentional empty targets from broken translations.
 
 Schema version 1 includes `packageVerification`:
 
