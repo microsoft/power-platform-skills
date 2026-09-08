@@ -156,7 +156,9 @@ For new setup or relevant repair, use `AskUserQuestion`:
 |---|---|---|
 | Which localization package should be used? | Package | Framework recommendation (Recommended), Suggest a different package, Cancel |
 
-Skip for Astro built-in i18n and add-languages mode. Validate alternatives:
+Skip this question for Astro built-in i18n and add-languages mode. For every
+npm-backed package selected during a new setup or repair, including the
+framework recommendation and any alternative, run:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>"
@@ -290,6 +292,17 @@ when one was supplied. Record `initializationEvidence` when deterministic
 framework patterns do not recognize the selected package. Set `lastOperation` to `create`,
 `add-languages`, `repair`, or `reconfigure`, and set `translationMethod` to
 `agent` or `blank`.
+
+For Astro built-in i18n, no npm package-validator result exists. Record
+`packageName: "astro-built-in"`, set `packageVersion` to the non-empty declared
+`astro` dependency or devDependency value, and record:
+
+```json
+"packageVerification": {
+  "status": "verified",
+  "source": "known-capability"
+}
+```
 
 ---
 

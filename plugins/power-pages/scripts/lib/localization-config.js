@@ -256,7 +256,6 @@ function packageDependencies(projectRoot) {
   return {
     ...packageJson.dependencies,
     ...packageJson.devDependencies,
-    ...packageJson.peerDependencies,
   };
 }
 
