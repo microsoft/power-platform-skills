@@ -122,6 +122,19 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
   value is rejected by validation, and a caller that bypasses validation gets a warning naming the
   discarded value rather than a silent fall-through.
+  **It is a single, SPEC-LEVEL setting — one language for the whole build.** There is no per-table
+  language and no multi-language labelling:
+  - `languageCode` applies to **every** artifact the build creates. You cannot author one table in
+    Spanish and another in English. The LCID is baked into the SDK at construction time, so a second
+    language would need a second build.
+  - A Dataverse label carries **one** translation here, not several. You cannot give a table both
+    `Customer` and `Cliente` — the SDK's label serializer emits a single `LocalizedLabel`.
+
+  Writing `languageCode` or `localizedLabels` on an **entity** or a **column** is therefore rejected
+  by validation ([#537](https://github.com/microsoft/power-platform-skills/issues/537)). It used to
+  validate clean and then be silently discarded, which produced a successful build with the request
+  dropped and the table labelled in the org's base language — so the key is now refused with a
+  message naming this spec-level field instead.
   **Emitted by `download-model-app.js` only if you pinned it yourself.** It is deliberately never
   read from Dataverse: an LCID copied out of the source org would be re-applied verbatim when the
   spec is rebuilt somewhere else, which is exactly how a spec starts failing in an org that lacks

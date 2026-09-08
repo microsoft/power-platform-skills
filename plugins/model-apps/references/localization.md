@@ -1,5 +1,12 @@
 # Localization Reference
 
+> **Scope: generative-page CODE only.** This file covers localizing the React/TypeScript a
+> generative page renders — translation dictionaries, RTL layout, and user-settings-driven
+> date/number/currency formatting. It does **not** cover Dataverse **metadata labels** (table,
+> column and choice display names). Those come from the App Spec's single, spec-level
+> `languageCode`; there is no per-table language and no multi-language labelling. See
+> `references/app-spec-schema.md` → `languageCode`.
+
 Read this only when the planner has detected multiple configured languages OR any
 non-English language via `pac model list-languages`. English-only environments
 should skip this entire file — the page-builder will write the page without any

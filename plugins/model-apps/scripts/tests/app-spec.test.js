@@ -1176,3 +1176,64 @@ test('the value describer cannot itself throw (BigInt / a throwing getter)', () 
     assert.strictEqual(res.ok, false, `${label} must still be rejected`);
   }
 });
+
+// --- #537: a per-entity / per-column language key is a SILENT DROP ------------------------------
+//
+// `languageCode` is resolved ONCE per build and baked into the SDK at construction, so there is no
+// per-table language and no multi-language label. The trap is not that limitation — it is that the
+// intuitive authorings for it used to VALIDATE CLEAN and then be dropped: `entities[].languageCode`
+// and `entities[].localizedLabels` have no reader anywhere in the build, and entities carry no
+// unknown-key allow-list, so the author got a successful build with the request silently discarded
+// and the table labelled in the org's base language. That is the same class as the `newLook`
+// round-trip loss (#514) — an explicit instruction lost with nothing reporting it.
+//
+// Scoped deliberately to the two keys authors actually reach for rather than a full entity
+// allow-list: a strict allow-list would reject stray keys in specs that build fine today, which is
+// a breaking change this bug does not justify.
+
+test('#537: a per-ENTITY languageCode is rejected, not silently dropped', () => {
+  const spec = cloneDesk();
+  spec.entities[0].languageCode = 3082;
+  const r = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(r.ok, false, 'a per-entity languageCode must not validate clean');
+  const msg = (r.errors || []).join(' | ');
+  assert.match(msg, /languageCode/);
+  // The message must name the supported alternative, or it just moves the dead end earlier.
+  assert.match(msg, /spec-level|top-level/i, `error should point at the spec-level languageCode: ${msg}`);
+});
+
+test('#537: a per-ENTITY localizedLabels is rejected — multi-language labels are not supported', () => {
+  const spec = cloneDesk();
+  spec.entities[0].localizedLabels = { 1033: 'Customer', 3082: 'Cliente' };
+  const r = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /localizedLabels/);
+});
+
+test('#537: the same keys on a COLUMN are rejected too', () => {
+  for (const key of ['languageCode', 'localizedLabels']) {
+    const spec = cloneDesk();
+    spec.entities[0].columns[0][key] = key === 'languageCode' ? 3082 : { 1033: 'x' };
+    const r = validateAppSpec(spec, { profile: 'plan' });
+    assert.strictEqual(r.ok, false, `column ${key} must be rejected`);
+    assert.match((r.errors || []).join(' | '), new RegExp(key));
+  }
+});
+
+test('#537: the spec-level languageCode error names a concrete LCID, so a language TAG is actionable', () => {
+  const spec = cloneDesk();
+  spec.languageCode = 'es-ES';
+  const r = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  const msg = (r.errors || []).join(' | ');
+  // Previously: "languageCode must be a positive integer LCID" — true, but it does not tell an
+  // author who wrote 'es-ES' what to write instead.
+  assert.match(msg, /3082|1033/, `error should show an example LCID: ${msg}`);
+});
+
+test('#537: the SUPPORTED spec-level languageCode still validates (no regression)', () => {
+  const spec = cloneDesk();
+  spec.languageCode = 3082;
+  const r = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});

@@ -903,15 +903,21 @@ function validateAppSpec(spec, opts = {}) {
   if (spec.app && spec.app.headerNavigationRefresh !== undefined && typeof spec.app.headerNavigationRefresh !== 'boolean') {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
-  if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
-    errors.push('languageCode must be a positive integer LCID');
-  }
-  const entityNames = new Set();
-  const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
   // Describe a rejected value for an error message WITHOUT being able to throw doing it.
   // `JSON.stringify` throws on a BigInt and on a getter that throws, which would turn a structured
   // validation error into a raw crash — the exact outcome this validator exists to prevent.
+  // Declared BEFORE the first check that quotes a value: it is a `const` arrow, so a use above this
+  // line is a temporal-dead-zone ReferenceError, not a hoisted call.
   const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
+  if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
+    // Name a concrete LCID rather than only the rule. The most common wrong value is a BCP-47
+    // language TAG ('es-ES', 'de-DE') — the thing a person naturally writes — and "must be a
+    // positive integer LCID" is true but leaves that author with no idea what to type instead.
+    // LCID reference: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
+    errors.push(`languageCode must be a positive integer LCID up to 65535 — a NUMBER such as 1033 (en-US) or 3082 (es-ES), not a language tag like "es-ES" (got ${describeValue(spec.languageCode)})`);
+  }
+  const entityNames = new Set();
+  const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
   // A table reference an author writes becomes a Dataverse METADATA NAME, so it has to be a string
   // BEFORE it is compared. `String([["new_ticket"]])` is `"new_ticket"`, so a nested array passes an
   // entity-membership check and then throws a raw TypeError deep in the build, where the engine
@@ -923,6 +929,33 @@ function validateAppSpec(spec, opts = {}) {
     errors.push(`${where}: entity must be a table name (a string), got ${describeValue(value)}`);
     return true;
   };
+  // #537: `languageCode` and `localizedLabels` are meaningful ONLY at the top level of the spec.
+  // The authoring LCID is resolved once per build and baked into the SDK at CONSTRUCTION time, so
+  // there is no per-table language; and the SDK's label serializer emits a one-element
+  // `LocalizedLabels` array, so there is no multi-language label either.
+  //
+  // Neither key had a reader anywhere in the build and entities carry no unknown-key allow-list, so
+  // authoring one used to VALIDATE CLEAN and then be silently discarded — a successful build with
+  // the table labelled in the org's base language and nothing reporting the loss. That is the same
+  // class as the `newLook` round-trip loss (#514): an explicit instruction dropped in silence.
+  //
+  // Scoped to these two keys rather than a full entity/column allow-list on purpose. A strict
+  // allow-list would reject stray keys in specs that build correctly today, which is a breaking
+  // change this bug does not justify.
+  const LANGUAGE_ONLY_AT_SPEC_LEVEL = ['languageCode', 'localizedLabels'];
+  const rejectLanguageKeys = (obj, where) => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const key of LANGUAGE_ONLY_AT_SPEC_LEVEL) {
+      if (obj[key] === undefined) continue;
+      errors.push(
+        `${where}: '${key}' is not supported here — the authoring language is a single, spec-level `
+        + 'setting. Move it to the top-level "languageCode" (an LCID number, e.g. 3082), which labels '
+        + 'EVERY artifact this build creates. Per-table languages and multi-language labels are not '
+        + `supported (got ${describeValue(obj[key])}).`
+      );
+    }
+  };
+
   for (const e of spec.entities || []) {
     if (!e.schemaName) {
       errors.push('entity.schemaName is required');
@@ -937,10 +970,12 @@ function validateAppSpec(spec, opts = {}) {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
     }
     validateDescription(e.description, `entity ${e.schemaName}`, errors);
+    rejectLanguageKeys(e, `entity ${e.schemaName}`);
     for (const c of e.columns || []) {
       if (!c.schemaName) {
         errors.push(`entity ${e.schemaName}: a column is missing schemaName`);
       }
+      rejectLanguageKeys(c, `entity ${e.schemaName}: column ${c.schemaName}`);
       validateDescription(c.description, `entity ${e.schemaName}: column ${c.schemaName}`, errors);
       // A Customer column is created through `createCustomerColumn`, whose payload is only
       // { Lookup, OneToManyRelationships } — the SDK has nowhere to put a description, so one

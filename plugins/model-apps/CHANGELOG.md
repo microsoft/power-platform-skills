@@ -5,7 +5,23 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.6.0
+## [Unreleased] — 2.6.1
+
+### Fixed
+
+- **A per-table language is refused instead of silently ignored** ([#537]). `languageCode` and
+  `localizedLabels` on an **entity** or **column** used to validate clean and then be discarded, so
+  a spec asking for one table in a second language built successfully with the request dropped and
+  the table labelled in the organization's base language. Both keys are now rejected, naming the
+  spec-level `languageCode` — which is a single setting for the whole build. There is no per-table
+  language and no multi-language labelling; the schema doc now says so, and `references/localization.md`
+  states up front that it covers generative-page code, not Dataverse metadata labels.
+- **The invalid-`languageCode` error names a real LCID.** `"es-ES"` is the natural thing to write and
+  the old message ("must be a positive integer LCID") did not say what to write instead.
+
+[#537]: https://github.com/microsoft/power-platform-skills/issues/537
+
+## [2.6.0]
 
 Business process flows, plus an SDK uptake that changes how business rules fail on an environment
 that cannot host them.
