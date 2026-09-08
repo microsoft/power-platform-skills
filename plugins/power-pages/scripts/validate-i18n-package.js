@@ -105,12 +105,22 @@ function majorOf(versionRange) {
 }
 
 function resolveVersionsWithNpm(packageName, versionSpec = 'latest', execute = execFileSync) {
-  const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const output = execute(
-    npmExecutable,
-    ['view', `${packageName}@${versionSpec}`, 'version', '--json'],
-    { encoding: 'utf8', timeout: 30000, windowsHide: true }
-  );
+  const npmArgs = ['view', `${packageName}@${versionSpec}`, 'version', '--json'];
+  // Keep both executable names as fixed literals so package input can only
+  // populate argv. Windows resolves npm through npm.cmd; other platforms use npm.
+  const output = process.platform === 'win32'
+    ? execute('npm.cmd', npmArgs, {
+      encoding: 'utf8',
+      timeout: 30000,
+      windowsHide: true,
+      shell: false,
+    })
+    : execute('npm', npmArgs, {
+      encoding: 'utf8',
+      timeout: 30000,
+      windowsHide: true,
+      shell: false,
+    });
   const parsed = JSON.parse(output);
   return (Array.isArray(parsed) ? parsed : [parsed]).filter(Boolean);
 }

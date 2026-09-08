@@ -296,14 +296,37 @@ function validateLocalization(projectRoot) {
   if (!/LanguageSelector|language selector|locale-switcher|switchLanguage|changeLanguage/i.test(implementationText)) {
     errors.push('Managed files do not contain a language selector or locale-navigation implementation.');
   }
-  if (!/\bdir\b|documentElement\.dir|setAttribute\(['"]dir/i.test(implementationText)) {
+  if (!configuresDocumentAttribute(implementationText, 'dir')) {
     errors.push('Managed files do not configure document direction (dir).');
   }
-  if (!/\blang\b|documentElement\.lang|setAttribute\(['"]lang/i.test(implementationText)) {
+  if (!configuresDocumentAttribute(implementationText, 'lang')) {
     errors.push('Managed files do not configure document language (lang).');
   }
 
   return errors;
+}
+
+function configuresDocumentAttribute(source, attribute) {
+  // Accept concrete document updates such as:
+  //   document.documentElement.dir = 'rtl'
+  //   document.documentElement.setAttribute('lang', locale)
+  //   <html lang="en-US" dir="ltr">
+  // A bare `const dir = ...` or unrelated `lang` identifier is not evidence
+  // that the generated site updates its root document.
+  const propertyAssignment = new RegExp(
+    `document\\s*\\.\\s*documentElement\\s*` +
+    `(?:\\.\\s*${attribute}|\\[\\s*['"]${attribute}['"]\\s*\\])\\s*=`,
+    'i'
+  );
+  const setAttribute = new RegExp(
+    `document\\s*\\.\\s*documentElement\\s*\\.\\s*setAttribute\\s*` +
+    `\\(\\s*['"]${attribute}['"]`,
+    'i'
+  );
+  const staticHtmlAttribute = new RegExp(`<html\\b[^>]*\\b${attribute}\\s*=`, 'i');
+  return propertyAssignment.test(source) ||
+    setAttribute.test(source) ||
+    staticHtmlAttribute.test(source);
 }
 
 function validateFrameworkModePackage(projectRoot, manifest, dependencies, detected, errors) {

@@ -204,17 +204,23 @@ test('rejects alternatives with an incompatible react-dom peer', () => {
 test('delegates all valid npm version syntax to npm semver resolution', () => {
   const calls = [];
   const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const execute = (command, args) => {
-    calls.push([command, args]);
+  const execute = (command, args, options) => {
+    calls.push([command, args, options]);
     if (args[1].includes('16.2 - 16.4')) return '["16.2.0","16.4.3"]';
     return '"16.2.7"';
   };
 
   assert.equal(resolveVersionWithNpm('react-i18next', '16.2', execute), '16.2.7');
   assert.equal(resolveVersionWithNpm('react-i18next', '16.2 - 16.4', execute), '16.4.3');
+  const expectedOptions = {
+    encoding: 'utf8',
+    timeout: 30000,
+    windowsHide: true,
+    shell: false,
+  };
   assert.deepEqual(calls, [
-    [npmExecutable, ['view', 'react-i18next@16.2', 'version', '--json']],
-    [npmExecutable, ['view', 'react-i18next@16.2 - 16.4', 'version', '--json']],
+    [npmExecutable, ['view', 'react-i18next@16.2', 'version', '--json'], expectedOptions],
+    [npmExecutable, ['view', 'react-i18next@16.2 - 16.4', 'version', '--json'], expectedOptions],
   ]);
 });
 
