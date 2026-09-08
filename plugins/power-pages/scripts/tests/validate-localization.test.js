@@ -82,6 +82,43 @@ function createLocalizedReactProject(t, overrides = {}) {
   return projectRoot;
 }
 
+function createUnavailableLocaleProject(t, availabilitySource) {
+  const availabilityPath = 'src/i18n/localeAvailability.ts';
+  const projectRoot = createLocalizedReactProject(t, {
+    locales: ['en-US', 'ar-SA'],
+    resourcePaths: {
+      'en-US': 'src/i18n/locales/en-US.json',
+      'ar-SA': 'src/i18n/locales/ar-SA.json',
+    },
+    unavailableLocales: ['ar-SA'],
+    managedFiles: ['src/i18n/index.ts', availabilityPath],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      findings: [{ rule: 'directional-physical-css' }],
+    },
+  });
+  writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
+    greeting: 'مرحبا {{name}}',
+    navigation: { home: 'الرئيسية' },
+  }));
+  writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
+  writeProjectFile(projectRoot, availabilityPath, availabilitySource);
+  writeProjectFile(projectRoot, 'src/components/LanguageSelector.tsx', `
+    import { isLocaleAvailable } from '../i18n/localeAvailability';
+    export const LanguageSelector = () => {
+      document.documentElement.lang = 'en-US';
+      document.documentElement.dir = 'ltr';
+      return ['en-US', 'ar-SA'].filter(isLocaleAvailable);
+    };
+  `);
+  fs.appendFileSync(
+    path.join(projectRoot, 'src/i18n/index.ts'),
+    "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
+    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n"
+  );
+  return projectRoot;
+}
+
 test('approves when no localization manifest exists', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
@@ -311,6 +348,75 @@ test('allows a mixed-direction locale to remain unavailable pending remediation'
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('accepts equivalent unavailable-locale rejection forms', (t) => {
+  const implementations = [
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale) === false;
+    `,
+    `
+      const unavailableLocales = ['ar-SA'];
+      export function isLocaleAvailable(locale: string) {
+        if (unavailableLocales.includes(locale)) return false;
+        return true;
+      }
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale) ? false : true;
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        true !== unavailableLocales.has(locale);
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      const isLocaleUnavailable = (locale: string) =>
+        unavailableLocales.has(locale);
+      export const isLocaleAvailable = (locale: string) =>
+        !isLocaleUnavailable(locale);
+    `,
+  ];
+
+  for (const implementation of implementations) {
+    const projectRoot = createUnavailableLocaleProject(t, implementation);
+    const result = runValidator(projectRoot);
+    assert.equal(result.status, 0, `${implementation}\n${result.stderr}`);
+  }
+});
+
+test('rejects inverted unavailable-locale predicates', (t) => {
+  const implementations = [
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale);
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale) === true;
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export function isLocaleAvailable(locale: string) {
+        if (!unavailableLocales.has(locale)) return false;
+        return true;
+      }
+    `,
+  ];
+
+  for (const implementation of implementations) {
+    const projectRoot = createUnavailableLocaleProject(t, implementation);
+    const result = runValidator(projectRoot);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /must export isLocaleAvailable and reject entries/i);
+  }
 });
 
 test('does not let pending remediation hide an available opposite-direction locale', (t) => {

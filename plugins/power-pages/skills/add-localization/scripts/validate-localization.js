@@ -419,6 +419,54 @@ function configuresDocumentAttribute(source, attribute) {
     staticHtmlAttribute.test(source);
 }
 
+function rejectsUnavailableLocales(source) {
+  const membership = String.raw`unavailableLocales\.(?:has|includes)\s*\([^)]*\)`;
+  const returnedExpression = String.raw`(?:return\s+|=>\s*)`;
+
+  // Generated and subsequently refactored projects can express the same boolean
+  // contract in several forms. Keep this allowlist narrow so a direct, inverted
+  // membership result does not accidentally validate.
+  const directRejections = [
+    new RegExp(String.raw`${returnedExpression}!\s*${membership}`),
+    new RegExp(
+      String.raw`${returnedExpression}${membership}\s*` +
+      String.raw`(?:={2,3}\s*false|!={1,2}\s*true)`
+    ),
+    new RegExp(
+      String.raw`${returnedExpression}(?:false\s*={2,3}|true\s*!={1,2})\s*` +
+      membership
+    ),
+    new RegExp(
+      String.raw`${returnedExpression}${membership}\s*\?\s*false\s*:\s*true`
+    ),
+    new RegExp(
+      String.raw`if\s*\(\s*${membership}\s*\)\s*` +
+      String.raw`(?:return\s+false\b|\{[^{}]*\breturn\s+false\b[^{}]*\})`,
+      's'
+    ),
+  ];
+  if (directRejections.some((pattern) => pattern.test(source))) return true;
+
+  // Also allow the common refactor where membership is wrapped in a clearly named
+  // positive helper and isLocaleAvailable returns its negation.
+  for (const helper of ['isLocaleUnavailable', 'isUnavailableLocale']) {
+    const helperDefinition = new RegExp(
+      String.raw`(?:function\s+${helper}\s*\([^)]*\)\s*\{[^{}]*` +
+      String.raw`\breturn\s+${membership}|` +
+      String.raw`const\s+${helper}\s*=\s*(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*` +
+      String.raw`=>\s*${membership})`,
+      's'
+    );
+    const availabilityNegatesHelper = new RegExp(
+      String.raw`${returnedExpression}!\s*${helper}\s*\(`
+    );
+    if (helperDefinition.test(source) && availabilityNegatesHelper.test(source)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function validateLocaleAvailability(
   projectRoot,
   allManagedFiles,
@@ -441,7 +489,7 @@ function validateLocaleAvailability(
   const availabilitySource = fs.readFileSync(fullAvailabilityPath, 'utf8');
   let valid = true;
   if (!/\bexport\s+(?:function|const)\s+isLocaleAvailable\b/.test(availabilitySource) ||
-      !/!\s*unavailableLocales\.(?:has|includes)\s*\(/.test(availabilitySource)) {
+      !rejectsUnavailableLocales(availabilitySource)) {
     errors.push(
       'The locale availability module must export isLocaleAvailable and reject ' +
       'entries in unavailableLocales.'
