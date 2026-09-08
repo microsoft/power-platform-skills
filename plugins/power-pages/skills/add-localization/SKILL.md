@@ -82,6 +82,19 @@ file and use `AskUserQuestion`:
 If the maker stops, make no changes, list the files requiring review, explain
 that framework repair is outside localization scope, and end.
 
+After the maker selects an evidence-backed framework candidate, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" detect-site-language --projectRoot "<PROJECT_ROOT>" --framework "<SELECTED_FRAMEWORK>"
+```
+
+Use this result as `siteLanguage` for the rest of the workflow. Do not reuse the
+neutral `siteLanguage` result returned while framework evidence was ambiguous.
+
+If inspection returns no supported framework and no evidence-backed candidate
+can be selected, stop without making changes. Do not use root-document language
+attributes from an unsupported project as localization evidence.
+
 When no localization is detected and this is a direct invocation, display:
 
 > **Localization scope**

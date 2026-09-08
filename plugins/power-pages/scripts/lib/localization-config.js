@@ -924,13 +924,47 @@ function detectSiteLanguage(projectRoot, framework) {
   };
 }
 
+function unresolvedSiteLanguage(reason) {
+  return {
+    detected: false,
+    valid: false,
+    locale: null,
+    direction: null,
+    source: null,
+    conflicts: [],
+    reason,
+  };
+}
+
+function detectSiteLanguageForFramework(projectRoot, selectedFramework) {
+  const resolvedRoot = path.resolve(projectRoot);
+  if (!Object.hasOwn(LOCALIZATION_CAPABILITIES.frameworks, selectedFramework)) {
+    throw new Error(`Unsupported framework selection: ${selectedFramework || '<empty>'}.`);
+  }
+
+  const detection = detectFramework(resolvedRoot);
+  const evidenceBacked = detection.framework === selectedFramework ||
+    detection.candidates.includes(selectedFramework);
+  if (!evidenceBacked) {
+    throw new Error(
+      `Framework selection "${selectedFramework}" is not supported by the detected project evidence.`
+    );
+  }
+
+  return detectSiteLanguage(resolvedRoot, selectedFramework);
+}
+
 function inspectProject(projectRoot) {
   const resolvedRoot = path.resolve(projectRoot);
   const framework = detectFramework(resolvedRoot);
   return {
     projectRoot: resolvedRoot,
     framework,
-    siteLanguage: detectSiteLanguage(resolvedRoot, framework.framework),
+    siteLanguage: framework.framework
+      ? detectSiteLanguage(resolvedRoot, framework.framework)
+      : unresolvedSiteLanguage(
+        framework.ambiguous ? 'framework-ambiguous' : 'framework-unsupported'
+      ),
     localization: detectLocalization(resolvedRoot),
   };
 }
@@ -1109,6 +1143,11 @@ function runCli() {
     process.stdout.write(`${JSON.stringify(inspectProject(args.projectRoot), null, 2)}\n`);
     return;
   }
+  if (args.command === 'detect-site-language' && args.projectRoot && args.framework) {
+    const result = detectSiteLanguageForFramework(args.projectRoot, args.framework);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   if (args.command === 'validate-locales' && args.locales !== undefined) {
     const result = validateLocales(args.locales);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -1123,6 +1162,7 @@ function runCli() {
   }
   process.stderr.write(
     'Usage: localization-config.js inspect --projectRoot <path> | ' +
+    'detect-site-language --projectRoot <path> --framework <framework> | ' +
     'validate-locales --locales <comma-separated-tags> | ' +
     'resolve-locale --locale <language-tag>\n'
   );
@@ -1140,6 +1180,7 @@ module.exports = {
   detectFramework,
   detectLocalization,
   detectSiteLanguage,
+  detectSiteLanguageForFramework,
   getLocaleDirection,
   inspectProject,
   loadRegistry,
