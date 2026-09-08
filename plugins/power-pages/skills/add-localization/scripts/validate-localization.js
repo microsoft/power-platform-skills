@@ -419,8 +419,216 @@ function configuresDocumentAttribute(source, attribute) {
     staticHtmlAttribute.test(source);
 }
 
+function readIgnoredSourceSegment(source, index) {
+  const quote = source[index];
+  if (quote === '"' || quote === "'" || quote === '`') {
+    let escaped = false;
+    for (let cursor = index + 1; cursor < source.length; cursor += 1) {
+      if (escaped) {
+        escaped = false;
+      } else if (source[cursor] === '\\') {
+        escaped = true;
+      } else if (source[cursor] === quote) {
+        return cursor + 1;
+      }
+    }
+    return source.length;
+  }
+  if (source.startsWith('//', index)) {
+    const newline = source.indexOf('\n', index + 2);
+    return newline < 0 ? source.length : newline;
+  }
+  if (source.startsWith('/*', index)) {
+    const end = source.indexOf('*/', index + 2);
+    return end < 0 ? source.length : end + 2;
+  }
+  return index;
+}
+
+function maskStringsAndComments(source) {
+  let result = '';
+  for (let index = 0; index < source.length;) {
+    const end = readIgnoredSourceSegment(source, index);
+    if (end > index) {
+      // Preserve line breaks and source offsets while preventing examples in
+      // comments or strings from satisfying executable-code validation.
+      result += source.slice(index, end).replace(/[^\r\n]/g, ' ');
+      index = end;
+    } else {
+      result += source[index];
+      index += 1;
+    }
+  }
+  return result;
+}
+
+function skipWhitespaceAndComments(source, start) {
+  let index = start;
+  while (index < source.length) {
+    if (/\s/.test(source[index])) {
+      index += 1;
+      continue;
+    }
+    const end = readIgnoredSourceSegment(source, index);
+    if (end === index || !source.startsWith('/', index)) break;
+    index = end;
+  }
+  return index;
+}
+
+function findMatchingDelimiter(source, openIndex, open, close) {
+  let depth = 0;
+  for (let index = openIndex; index < source.length; index += 1) {
+    const end = readIgnoredSourceSegment(source, index);
+    if (end > index) {
+      index = end - 1;
+      continue;
+    }
+    if (source[index] === open) depth += 1;
+    if (source[index] === close) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function findAssignmentOperator(source, start) {
+  for (let index = start; index < source.length; index += 1) {
+    const end = readIgnoredSourceSegment(source, index);
+    if (end > index) {
+      index = end - 1;
+      continue;
+    }
+    if (source[index] !== '=') continue;
+    const previous = source[index - 1] || '';
+    const next = source[index + 1] || '';
+    if (next !== '=' && next !== '>' && !/[=!<>]/.test(previous)) return index;
+  }
+  return -1;
+}
+
+function findArrowOperator(source, start) {
+  for (let index = start; index < source.length - 1; index += 1) {
+    const end = readIgnoredSourceSegment(source, index);
+    if (end > index) {
+      index = end - 1;
+      continue;
+    }
+    if (source.startsWith('=>', index)) return index;
+  }
+  return -1;
+}
+
+function findStatementEnd(source, start) {
+  const delimiters = { '(': ')', '[': ']', '{': '}' };
+  const stack = [];
+  for (let index = start; index < source.length; index += 1) {
+    const end = readIgnoredSourceSegment(source, index);
+    if (end > index) {
+      index = end - 1;
+      continue;
+    }
+    const character = source[index];
+    if (delimiters[character]) {
+      stack.push(delimiters[character]);
+    } else if (stack.at(-1) === character) {
+      stack.pop();
+    } else if (character === ';' && stack.length === 0) {
+      return index + 1;
+    }
+  }
+  return source.length;
+}
+
+function extractLocaleAvailabilityImplementation(source) {
+  const masked = maskStringsAndComments(source);
+  const functionDeclaration =
+    /\bexport\s+function\s+isLocaleAvailable\b/.exec(masked);
+  if (functionDeclaration) {
+    const parameters = masked.indexOf('(', functionDeclaration.index);
+    if (parameters < 0) return null;
+    const parametersEnd = findMatchingDelimiter(source, parameters, '(', ')');
+    if (parametersEnd < 0) return null;
+    const body = masked.indexOf('{', parametersEnd + 1);
+    if (body < 0) return null;
+    const bodyEnd = findMatchingDelimiter(source, body, '{', '}');
+    if (bodyEnd < 0) return null;
+    return source.slice(functionDeclaration.index, bodyEnd + 1);
+  }
+
+  const constDeclaration =
+    /\bexport\s+const\s+isLocaleAvailable\b/.exec(masked);
+  if (!constDeclaration) return null;
+  const assignment = findAssignmentOperator(
+    source,
+    constDeclaration.index + constDeclaration[0].length
+  );
+  if (assignment < 0) return null;
+  const arrow = findArrowOperator(source, assignment + 1);
+  if (arrow < 0) return null;
+  const body = skipWhitespaceAndComments(source, arrow + 2);
+  const end = source[body] === '{'
+    ? findMatchingDelimiter(source, body, '{', '}') + 1
+    : findStatementEnd(source, body);
+  if (end <= body) return null;
+  return source.slice(constDeclaration.index, end);
+}
+
+function normalizeMembershipCalls(source) {
+  const masked = maskStringsAndComments(source);
+  let result = '';
+  for (let index = 0; index < source.length;) {
+    const identifier = 'unavailableLocales';
+    const startsMembership =
+      masked.startsWith(identifier, index) &&
+      !/[\w$]/.test(masked[index - 1] || '') &&
+      !/[\w$]/.test(masked[index + identifier.length] || '');
+    if (!startsMembership) {
+      result += masked[index];
+      index += 1;
+      continue;
+    }
+
+    let cursor = skipWhitespaceAndComments(source, index + identifier.length);
+    if (source[cursor] !== '.') {
+      result += masked[index];
+      index += 1;
+      continue;
+    }
+    cursor = skipWhitespaceAndComments(source, cursor + 1);
+    const method = source.startsWith('includes', cursor) ? 'includes'
+      : source.startsWith('has', cursor) ? 'has'
+        : null;
+    if (!method || /[\w$]/.test(source[cursor + method.length] || '')) {
+      result += masked[index];
+      index += 1;
+      continue;
+    }
+    cursor = skipWhitespaceAndComments(source, cursor + method.length);
+    if (source[cursor] !== '(') {
+      result += masked[index];
+      index += 1;
+      continue;
+    }
+    const callEnd = findMatchingDelimiter(source, cursor, '(', ')');
+    if (callEnd < 0) {
+      result += masked[index];
+      index += 1;
+      continue;
+    }
+    result += ' __UNAVAILABLE_MEMBERSHIP__ ';
+    index = callEnd + 1;
+  }
+  return result;
+}
+
 function rejectsUnavailableLocales(source) {
-  const membership = String.raw`unavailableLocales\.(?:has|includes)\s*\([^)]*\)`;
+  const implementation = extractLocaleAvailabilityImplementation(source);
+  if (!implementation) return false;
+  const normalizedImplementation = normalizeMembershipCalls(implementation);
+  const normalizedSource = normalizeMembershipCalls(source);
+  const membership = '__UNAVAILABLE_MEMBERSHIP__';
   const returnedExpression = String.raw`(?:return\s+|=>\s*)`;
 
   // Generated and subsequently refactored projects can express the same boolean
@@ -445,7 +653,9 @@ function rejectsUnavailableLocales(source) {
       's'
     ),
   ];
-  if (directRejections.some((pattern) => pattern.test(source))) return true;
+  if (directRejections.some((pattern) => pattern.test(normalizedImplementation))) {
+    return true;
+  }
 
   // Also allow the common refactor where membership is wrapped in a clearly named
   // positive helper and isLocaleAvailable returns its negation.
@@ -460,7 +670,8 @@ function rejectsUnavailableLocales(source) {
     const availabilityNegatesHelper = new RegExp(
       String.raw`${returnedExpression}!\s*${helper}\s*\(`
     );
-    if (helperDefinition.test(source) && availabilityNegatesHelper.test(source)) {
+    if (helperDefinition.test(normalizedSource) &&
+        availabilityNegatesHelper.test(normalizedImplementation)) {
       return true;
     }
   }

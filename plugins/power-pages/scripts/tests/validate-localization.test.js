@@ -381,6 +381,42 @@ test('accepts equivalent unavailable-locale rejection forms', (t) => {
       export const isLocaleAvailable = (locale: string) =>
         !isLocaleUnavailable(locale);
     `,
+    "const unavailableLocales = new Set(['ar-SA']);\r\n" +
+      "export const isLocaleAvailable = (locale: string) =>\r\n" +
+      "  !unavailableLocales.has(\r\n" +
+      "    locale\r\n" +
+      "  );\r\n",
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      const normalizeLocale = (locale: string) => locale;
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(
+          normalizeLocale(locale)
+        ) === false;
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has /* set membership */ (
+          locale
+        ) ? false : true;
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale.replace(')', '')) === false;
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      const isLocaleUnavailable = (locale: string) =>
+        unavailableLocales.has(
+          locale
+        );
+      export const isLocaleAvailable = (locale: string) =>
+        !isLocaleUnavailable(
+          locale
+        );
+    `,
   ];
 
   for (const implementation of implementations) {
@@ -408,6 +444,26 @@ test('rejects inverted unavailable-locale predicates', (t) => {
         if (!unavailableLocales.has(locale)) return false;
         return true;
       }
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      function unrelated(locale: string) {
+        return !unavailableLocales.has(locale);
+      }
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale);
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      // Example only: return !unavailableLocales.has(locale);
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale);
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      const example = 'return !unavailableLocales.has(locale)';
+      export const isLocaleAvailable = (locale: string) =>
+        unavailableLocales.has(locale);
     `,
   ];
 
