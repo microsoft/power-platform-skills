@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -26,6 +26,16 @@ function validateProvisionInput(input) {
     if (!input.solution.publisherPrefix || typeof input.solution.publisherPrefix !== 'string' || !input.solution.publisherPrefix.trim()) {
       errors.push('solution.publisherPrefix is required and must be a non-empty string');
     }
+  }
+
+  // An LCID supplied here must be validated at the SAME strictness as the `--language-code` flag and
+  // the App Spec `languageCode` field. Without this the input-file path fails OPEN: resolveLanguageCode
+  // maps anything non-conforming to null and silently falls through to the org default, so a typo like
+  // "1O33" (capital O) produces `ok: true` with every label in the wrong language and nothing on stderr.
+  // The other two entry points hard-error on the identical string; this gate keeps all three consistent
+  // and runs before any SDK write.
+  if (input.languageCode !== undefined && normalizeLanguageCode(input.languageCode) === null) {
+    errors.push('languageCode must be a positive integer LCID');
   }
 
   // Entities validation

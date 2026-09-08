@@ -6,7 +6,7 @@ const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, cl
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
 
 // REAL `pac model genpage list` output — a fixed-width TABLE (header + GUID/Name/Published rows), captured
-// LIVE from env aurorabapenv03468 (2026-07). Columns auto-size to the longest name. `listText` reproduces
+// LIVE from a Dataverse test environment (2026-07). Columns auto-size to the longest name. `listText` reproduces
 // that exact shape; `countOverride` lets a test set the "Found N" summary independently of the rows (to
 // exercise the count-mismatch fail-closed path). NOTE (live): pac lists only SITEMAP-reachable pages.
 function listText(rows, countOverride) {

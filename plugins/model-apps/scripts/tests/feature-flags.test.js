@@ -35,6 +35,12 @@ test('custom-api flag is OFF by default (no env override)', () => {
   assert.equal(isCustomApiEnabled({ env: {} }), false);
 });
 
+test('custom-telemetry flag is OFF by default (no env override)', () => {
+  // custom-telemetry has no helper of its own (it gates code generation, not scripts), so
+  // the generic probe is the contract the skill markdown actually calls.
+  assert.equal(isEnabled('custom-telemetry', { env: {} }), false);
+});
+
 test('unknown flags are OFF (fail-closed)', () => {
   assert.equal(isEnabled('does-not-exist', { env: {} }), false);
 });
@@ -112,6 +118,13 @@ test('committed feature-flags.json ships custom-api: false', () => {
     fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
   );
   assert.equal(json['custom-api'], false);
+});
+
+test('committed feature-flags.json ships custom-telemetry: false', () => {
+  const json = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '..', 'feature-flags.json'), 'utf8')
+  );
+  assert.equal(json['custom-telemetry'], false);
 });
 
 // --- CLI probe (deterministic gate for the skill markdown) ------------------
@@ -194,6 +207,10 @@ test('KNOWN_FLAGS includes connectors', () => {
 
 test('KNOWN_FLAGS includes custom-api', () => {
   assert.ok(KNOWN_FLAGS.includes('custom-api'));
+});
+
+test('KNOWN_FLAGS includes custom-telemetry', () => {
+  assert.ok(KNOWN_FLAGS.includes('custom-telemetry'));
 });
 
 test('describe reports effective state and source per known flag', () => {

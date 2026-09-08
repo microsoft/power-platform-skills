@@ -63,6 +63,34 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 
 ---
 
+## Generative Page Fails to Render
+
+Dialog: **"Failed to load generative page"**, carrying a Dataverse OData error such as:
+
+> A binary operator with incompatible types was detected. Found operand types 'Edm.Guid' and 'Edm.String' for operator kind 'Equal'.
+
+The page itself deployed correctly — this is a **runtime data** failure, so `pac model genpage list` and the sitemap both still look right. Diagnose from the failing request, never from the dialog:
+
+- **Capture the query first**: F12 → Network → filter `api/data` → find the 4xx response. Copy its `$filter` (or the request body for an `Execute`/action call). That one string decides which cause below applies; the dialog alone cannot distinguish them.
+
+**Cause 1 — a GUID compared as a string.** Dataverse types record ids as `Edm.Guid`, and OData v4 GUID literals are **unquoted**. `accountid eq '<guid>'` raises the error above; `accountid eq <guid>` succeeds.
+
+- Prefer `dataApi.retrieveRecord({ id })` over a hand-built `$filter` — it types the id for you (see `samples/10-detail-with-pageinput.tsx`)
+- The same applies to lookup columns (`_ownerid_value`), which are also `Edm.Guid`
+
+**Cause 2 — a Custom API parameter whose declared kind is missing or wrong.** The host stamps the OData type from the *declared* kind, so an undeclared or mistyped parameter is serialized untyped and fails the same way.
+
+- Declare every parameter in `parameterKinds` (see `references/custom-api.md`)
+- Pass a plain GUID-formatted string for a `Guid` kind — the platform wraps it into its typed form; do **not** wrap it yourself
+
+**Cause 3 — a GUID carrying braces.** Some Dataverse surfaces return `{xxxxxxxx-xxxx-…}`. Strip the braces before using the value in a filter or as a parameter.
+
+If the failing request comes from the page-**load** path rather than from code in the `.tsx`, this is a platform issue: capture the request and report it rather than editing the page.
+
+See: <https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-data-web-api>
+
+---
+
 ## RuntimeTypes Issues
 
 - Generate schema BEFORE uploading: `pac model genpage generate-types --data-sources "entity1" --output-file RuntimeTypes.ts`

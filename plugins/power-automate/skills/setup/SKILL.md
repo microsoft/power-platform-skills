@@ -51,13 +51,38 @@ az account show --output json 2>&1
   This will open their browser. Tell them: "A browser window should open. Sign in with your work account — the one you use for Power Automate."
   After login completes, confirm it worked by running `az account show` again.
 
-**Verify token access** — this catches permission issues early:
+**Verify token access** — this catches permission issues early.
+
+First find out which Azure cloud they're on, because the Power Automate
+resource URL differs per cloud and the commercial one cannot be assumed
+(GCC High / DoD tenants will fail against it):
+```bash
+az cloud show --query name -o tsv
+```
+
+| `az cloud show` | Power Automate resource |
+|---|---|
+| `AzureCloud` (commercial) | `https://service.flow.microsoft.com` |
+| `AzureCloud` + GCC tenant | `https://gov.service.flow.microsoft.us` |
+| `AzureUSGovernment` (GCC High) | `https://high.service.flow.microsoft.us` |
+| `AzureUSGovernment` (DoD) | `https://dod.service.flow.microsoft.us` |
+
+`az cloud show` cannot distinguish commercial from GCC, or GCC High from DoD —
+for those, set `PA_CLOUD=gcc` / `PA_CLOUD=dod` explicitly.
+
+Then request a token for the matching resource, e.g. for commercial:
 ```bash
 az account get-access-token --resource https://service.flow.microsoft.com --output json 2>&1
 ```
+FlowAgent itself auto-detects the cloud the same way; you can override the
+detection with `PA_CLOUD=commercial|gcc|gcchigh|dod`.
 - **If it works**: Move on.
 - **If it fails with "AADSTS"**: The user's account may not have Power Automate access. Tell them: "Your Azure account doesn't seem to have access to Power Automate. Check with your IT admin that you have a Power Automate license."
 - **If it fails with other errors**: Show the error and suggest they contact IT support.
+- **If they're on a sovereign cloud and connection-management commands fail**: the
+  PAC CLI app registration isn't preauthorized in those tenants. They need to
+  register their own Azure AD app with Power Platform Connectivity scopes and set
+  `PA_CLIENT_ID=<app-id>`. Flow management (list/create/run) works without it.
 
 ## Step 4: Check the FlowAgent tools are wired
 

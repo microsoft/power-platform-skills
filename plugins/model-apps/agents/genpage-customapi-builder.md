@@ -35,7 +35,7 @@ You will be invoked via `Task` with a prompt that includes:
 - **Mode:** `create` or `edit`.
 - **Working directory** — where to write outputs and read/write logs.
 - **Plugin root** (`${PLUGIN_ROOT}`) — where the JS scripts live.
-- **Environment URL** — e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`.
+- **Environment URL** — e.g. `https://contoso.crm.dynamics.com`.
 - **Page tables** — the Dataverse table logical name(s) the page is bound to (from the plan's
   `## Existing Entities` / `pageInput`), or "none" for a mock/global-only page.
 - **Intent** — the server-side operation(s) the request implies (e.g. "approve the order",

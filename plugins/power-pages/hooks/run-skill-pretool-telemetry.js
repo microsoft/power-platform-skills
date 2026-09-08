@@ -28,6 +28,18 @@ try {
   process.exit(0);
 }
 
+// Loaded separately and NON-fatally: the framework signal is one optional field
+// inside `eventInfo`, so it must not be able to take the whole event down with
+// it. Bundling optional enrichment into the block above would widen the blast
+// radius of any packaging slip or syntax error from "no framework" to
+// "no telemetry".
+let detectFramework = null;
+try {
+  detectFramework = require(path.join(PLUGIN_ROOT, "scripts", "lib", "detect-site-framework"));
+} catch {
+  detectFramework = null;
+}
+
 function readPluginVersion() {
   try {
     const manifest = JSON.parse(
@@ -132,6 +144,23 @@ function readStdin() {
     agentInfo = {};
   }
 
+  // Which SPA framework the site under work uses. Resolved AFTER the hard-off /
+  // isProvisioned gates above so a disabled or unprovisioned plugin pays nothing
+  // for it. User opt-out still builds the event for the local diagnostic mirror.
+  // Claude Code supplies the host session's working directory on the hook payload
+  // (same field run-skill-posttool-validation.js reads); fall back to this
+  // process's cwd for hosts that don't.
+  let framework = null;
+  try {
+    framework = detectFramework
+      ? detectFramework.detectSiteFramework(
+          typeof parsed.cwd === "string" && parsed.cwd ? parsed.cwd : process.cwd()
+        )
+      : null;
+  } catch {
+    framework = null;
+  }
+
   const fields = {
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
@@ -144,7 +173,15 @@ function readStdin() {
   };
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
-  if (pacAuth && pacAuth.objectId) fields.eventInfo = { aadObjectId: pacAuth.objectId };
+  // `eventInfo` carries two INDEPENDENT signals, so it is assembled up front and
+  // assigned only when non-empty. Creating it inside the objectId guard instead
+  // would drop `framework` on every unauthenticated run (`pac auth who` surfaces
+  // no object id), and mutating the undefined would throw — a throw the
+  // fail-closed wrapper swallows, silently degrading the run to no event at all.
+  const eventInfo = {};
+  if (framework) eventInfo.framework = framework;
+  if (pacAuth && pacAuth.objectId) eventInfo.aadObjectId = pacAuth.objectId;
+  if (Object.keys(eventInfo).length > 0) fields.eventInfo = eventInfo;
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;

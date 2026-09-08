@@ -1,7 +1,7 @@
 # App-Builder Offline Structural Eval Harness — Guide
 
 > Companion to `evals/model-apps/genpage/EVAL_GUIDE.md`.  
-> Source of truth: `plugins/model-apps/docs/app-builder-staged-flow-design.md` §13.
+> Source of truth: `plugins/model-apps/docs/app-builder-design.md` §13.
 
 ## What we evaluate
 
@@ -117,5 +117,5 @@ The live tier (`plugins/model-apps/scripts/smoke-eval.js`) is the thin live smok
 ## Cross-links
 
 - Plugin `AGENTS.md` → *Eval Suite*
-- `plugins/model-apps/docs/app-builder-staged-flow-design.md` §13 — structural eval oracles
+- `plugins/model-apps/docs/app-builder-design.md` §13 — structural eval oracles
 - `evals/model-apps/genpage/EVAL_GUIDE.md` — the parallel eval suite for `/genpage`

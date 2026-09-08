@@ -12,8 +12,8 @@
 - (Commands run separately, not chained with &&)
 
 ### Auth check
-- `pac auth list` → active profile `aurora365-user1@auroratstgeo.onmicrosoft.com`
-- Active environment: https://aurorabapenv4ab3f.crm10.dynamics.com/ (reported to user)
+- `pac auth list` → active profile `contoso-user001@contosotest1.onmicrosoft.com`
+- Active environment: https://contosobapenv0002.crm10.dynamics.com/ (reported to user)
 
 ### Discovery questions (AskUserQuestion)
 - Question 1 (new or edit): user answered "Create new page(s)"

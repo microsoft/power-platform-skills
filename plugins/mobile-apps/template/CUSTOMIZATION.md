@@ -50,8 +50,8 @@ In `app.config.js`, use `CUSTOMER APP SETTINGS` for app identity, package names,
 icon, and version defaults. Use `CUSTOMIZATION` for additional Expo config
 overrides.
 
-Do not edit, move, or delete `.powerapps-native/version.json`. It records which
-template upgrades have been applied.
+Do not edit or delete `expo.extra.powerappsNative` in `app.json`. It records
+which template upgrades have been applied.
 
 The upgrader does not change `android/` or `ios/`. If you maintain native
 projects, update them separately when required.

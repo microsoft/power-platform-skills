@@ -10,7 +10,7 @@ D:/temp/recruitment-app
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://aurorabapenv610b3.crmtest.dynamics.com
+- URL: https://contosobapenv0001.crmtest.dynamics.com
 - App: create new: Recruitment App
 - Languages: English (1033) only
 - Solution: Crdec34

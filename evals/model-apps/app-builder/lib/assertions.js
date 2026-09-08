@@ -279,6 +279,17 @@ ASSERTIONS.set('round-trip: the sitemap round-trips with the same subareas', ({ 
     : fail(`sitemap drift: authored [${facts.roundTrip.origSubareaTargets}] hydrated [${facts.roundTrip.hydratedSubareaTargets}]`);
 });
 
+// Hydration DEFAULTS a missing `directEntry` for back-compat with apps deployed before the field
+// existed. That default must never overwrite an AUTHORED value — otherwise a round-trip silently
+// changes app behaviour while every other losslessness assertion stays green, which is exactly what
+// this eval exists to catch.
+ASSERTIONS.set('round-trip: authored directEntry survives unchanged', ({ facts }) => {
+  if (facts.roundTrip.error) return fail(`hydrate threw: ${facts.roundTrip.error}`);
+  const before = JSON.stringify(facts.roundTrip.origDirectEntry || {});
+  const after = JSON.stringify(facts.roundTrip.hydratedDirectEntry || {});
+  return before === after ? PASS : fail(`directEntry drift: authored ${before} hydrated ${after}`);
+});
+
 ASSERTIONS.set('round-trip: generative pages preserve their keys', ({ facts, spec }) => {
   if (facts.roundTrip.error) return fail(`hydrate threw: ${facts.roundTrip.error}`);
   const expKeys = sorted((spec.pages || []).map((p) => p.key || p.name));

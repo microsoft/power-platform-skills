@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Adds a connector-bound GenPage and its connection references to a solution so it
-// travels cross-environment. Verified live 2026-07-10 on AuroraBAPEnv03468:
+// travels cross-environment. Verified live 2026-07-10 on a Dataverse test environment:
 //   - The appmodule (type 80, AddRequiredComponents=true) pulls the sitemap (62) and
 //     appmodulecomponent (10097) but does NOT pull the GenPage — so the GenPage's
 //     uxagentproject row MUST be added explicitly (type 10372); adding it pulls its
@@ -43,14 +43,14 @@ function connectionRefsToAdd(refs, connectorsEnabled) {
 
 const APPMODULE_COMPONENT_TYPE = 80;
 // Solution component type for the GenPage itself. uxagentproject IS a registered
-// component type (10372 = its ObjectTypeCode), verified live 2026-07-10 on
-// AuroraBAPEnv03468. It does NOT auto-travel with the appmodule, so it is added
+// component type (10372 = its ObjectTypeCode), verified live 2026-07-10 on a
+// Dataverse test environment. It does NOT auto-travel with the appmodule, so it is added
 // explicitly; AddRequiredComponents=true then pulls its uxagentprojectfile rows
 // (10373: page.tsx, page.compiled, config.json, firstPrompt.json).
 const UXAGENTPROJECT_COMPONENT_TYPE = 10372;
 // Solution component type for connectionreference. Verified live (2026-07-10) by
 // reading solutioncomponent.componenttype for an existing connection reference in the
-// Default/Active solutions on AuroraBAPEnv03468 (= 10158). Note: 371 is "Connector"
+// Default/Active solutions of a test environment (= 10158). Note: 371 is "Connector"
 // (msdyn_Connector), NOT a connection reference — AddSolutionComponent with 371 fails
 // with "entity ... 'msdyn_Connector' ... not found in MetadataCache".
 const CONNECTION_REFERENCE_COMPONENT_TYPE = 10158;

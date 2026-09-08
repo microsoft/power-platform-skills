@@ -6,7 +6,7 @@
 // inline `content`/`contentBase64`. So editing the .tsx (or the referenced web-resource file) while
 // leaving the spec JSON identical was INVISIBLE to diffPhases — a real content change reported as "no
 // change since last apply". That false negative is exactly what makes a naive partial apply unsafe, so
-// the changed-only design (docs/changed-only-design.md) fixes it by hashing the on-disk content and
+// the changed-only design (docs/app-builder-design.md) fixes it by hashing the on-disk content and
 // folding the hash into the diffed slice.
 //
 // annotateContentHashes returns a SHALLOW-CLONED spec (the pages/webResources arrays are re-mapped;

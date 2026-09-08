@@ -124,61 +124,63 @@ Whenever a UI field on a screen displays data sourced from an entity OTHER than 
 - Inspection detail shows "Inspector email" → email lives on `systemuser`, screen fetches `cr3e9_inspection` → cross-entity read
 - Order detail shows "Customer phone" → phone lives on `contact`, screen fetches `salesorder` → cross-entity read
 
-### Why two patterns exist (calculated column AND chained fetch)
+### Supported read paths
 
 The Power Apps SDK's `IGetAllOptions` / `IGetOptions` interfaces have **no `expand` field**. Passing `$expand` is silently dropped at runtime — the related fields come back `undefined`, the screen renders `—`, and the user thinks the data is missing. So the standard OData answer ("just expand the lookup") doesn't work.
 
-Two patterns remain. Their cost profiles are very different, so the right pick depends on **screen archetype × relationship cardinality**:
+Use one of these supported paths:
 
-- **Calculated column** — denormalize the related field onto the parent table at the data-model layer. One round trip per page load, no N+1, no per-row jank. Best for hot paths (lists, dashboards, tab roots).
-- **Chained fetch** — call a second `Service.get(...)` inside the screen's load step. One extra network round trip per screen load. Acceptable for cold paths (a single detail screen). Disastrous on lists (one extra fetch per row × 50 rows = N+1 fetch storm).
+- **Formatted lookup annotation** — when the UI needs only the primary display
+  name of a direct lookup already present on the fetched record, use
+  `lookupName(record, '<lookupLogicalName>')` / `formattedValue(...)`. This
+  adds no schema mutation and no additional request.
+- **Chained fetch** — call a second `Service.get(...)` once in a detail load, or
+  `Service.getAll(...)` for a bounded related collection.
+- **External projection required** — for a hot list/dashboard field that is not
+  the direct lookup display name. Omit the field until the user creates a
+  supported server-owned projection outside this workflow.
+
+Dataverse exposes formula metadata, but Microsoft does not support defining
+calculated, rollup, or formula expressions through code. Never synthesize
+workflow XAML or formula serialization.
 
 ### Decision table (the rule)
 
 | Screen archetype | Relationship | Action |
 |---|---|---|
-| **List** (`top ≥ 5`), **Tab-root**, **Dashboard** | 1:1 (N:1 lookup chain) | **REFUSE to scaffold the field.** Recommend the user re-run `/setup-datamodel` (or `/add-dataverse` for existing apps) to add a calc column on the parent entity. Do NOT scaffold N+1 chained fetches on list screens — visible jank on a list of 50. |
+| **List** (`top ≥ 5`), **Tab-root**, **Dashboard** | Direct N:1 lookup primary display name | Use the formatted lookup annotation. |
+| **List** (`top ≥ 5`), **Tab-root**, **Dashboard** | Any other related field | Mark `external-projection-required` and omit it. Do NOT scaffold N+1 reads or synthesize a formula definition. |
 | **Detail** (single record, cold path) | 1:1 (N:1 lookup chain) | Scaffold a chained fetch in the screen's load step. One extra round trip is fine for a single record. |
-| **Any screen** | 1:many or M:N | Scaffold a chained `*Service.getAll(...)` with `_<parentid>_value eq '${id}'` filter. **Calc columns CANNOT traverse 1:many or M:N** — Dataverse only supports calc-column formulas across N:1 (single-valued) navigation properties. |
+| **List**, **Tab-root**, **Dashboard** | 1:many or M:N per-row field/aggregate | Mark `external-projection-required`; never fetch once per row. |
+| **Detail/Form/Modal** | 1:many | Scaffold a bounded chained `*Service.getAll(...)` with `_<parentid>_value eq '${id}'` filter. |
+| **Detail/Form/Modal** | M:N | Mark `external-projection-required` unless the plan names a generated intersect-table service and its exact bounded query contract. Never apply an N:1 lookup filter to an M:N table. |
 
-Verification: every UI field on a screen spec must end up with EITHER a `select` entry (covered by primary fetch or calc column) OR a chained fetch path (separate `Service.get` / `Service.getAll`). If neither, fail with `BLOCKED: <field> on <screen> has no fetch path`.
+Verification: every UI field must have a primary `select`, formatted lookup, or
+bounded chained fetch. Otherwise return
+`BLOCKED: <field> on <screen> requires an external projection`.
 
-### Pattern A: Calculated column (preferred for list / hot path)
+### Pattern A: Formatted lookup annotation
 
-A calculated column lives on the parent entity and resolves its value via a dotted-path formula traversing N:1 lookups. The Dataverse server computes it at read time, so the screen sees it as an ordinary column in `select: [...]`.
-
-**Naming convention:** `<prefix>_<resolved_field>_calc` — e.g. `cr3e9_gatename_calc`, `cr3e9_flightnumber_calc`. The `_calc` suffix is mandatory; it tells the screen-builder this is a denormalized read-only field (never write to it, never put it in a create/update payload).
-
-**Adding the column:** done by the data-model-architect in its Step 6a Cross-entity Read Audit (writes a row to the `### Cross-entity Reads` subsection of `_dm_section.md`), then created by `/setup-datamodel` Phase 6.1b (or `/add-dataverse` Phase 6.1b for existing apps) via `scripts/create-calculated-column.js`.
-
-**Screen-builder consumption** — once the calc column exists in `src/generated/models/<Entity>Model.ts`, just add it to `select`:
+For the primary display value of a direct lookup, select the lookup ID and read
+the formatted annotation already returned by Dataverse:
 
 ```typescript
-// Before — gate name unavailable, renders "—"
 const res = await Cr3e9_inspectionsService.getAll({
   select: ['cr3e9_inspectionid', 'cr3e9_status', '_cr3e9_flightid_value'],
   top: 50,
 });
 
-// After — calc column added at data-model layer, one round trip
-const res = await Cr3e9_inspectionsService.getAll({
-  select: [
-    'cr3e9_inspectionid',
-    'cr3e9_status',
-    '_cr3e9_flightid_value',
-    'cr3e9_gatename_calc',      // ← from calc column
-    'cr3e9_flightnumber_calc',  // ← from calc column
-  ],
-  top: 50,
-});
-
-// In renderItem
-<Text>{record.cr3e9_gatename_calc ?? '—'}</Text>
+import { lookupName } from '@/utils';
+<Text>{lookupName(record, 'cr3e9_flightid') ?? '—'}</Text>
 ```
 
-### Pattern B: Chained fetch (preferred for detail / cold path)
+### Pattern B: Chained fetch
 
-A chained fetch is a second `Service.get(...)` (for 1:1) or `Service.getAll(...)` (for 1:many / M:N) inside the screen's load step. Use only on detail screens (one record on screen) or for collections that genuinely need a parent-id filter.
+A chained fetch is a second `Service.get(...)` (for 1:1) or
+`Service.getAll(...)` (for 1:many) inside the screen's load step. Use only on
+detail screens (one record on screen) or for collections that genuinely have a
+parent lookup field. M:N reads require an explicit intersect-table service
+contract; otherwise they are blocked as `external-projection-required`.
 
 **1:1 chain (detail screen only):**
 
@@ -198,7 +200,7 @@ import { lookupName } from '@/utils';
 <Text>{lookupName(flightResult?.data, 'cr3e9_gateid') ?? '—'}</Text>
 ```
 
-**1:many or M:N chain (any screen — calc columns can't traverse this):**
+**1:many chain:**
 
 ```typescript
 // app/(app)/inspections/[id]/index.tsx — list defects belonging to this inspection
@@ -209,23 +211,31 @@ const defectsResult = await Cr3e9_defectsService.getAll({
 });
 ```
 
-**Hard rule — NEVER chain inside a list `map()` / `FlatList renderItem`.** That's the N+1 trap: 50 list rows × 1 extra fetch each = 50 extra network calls per page load. Visible scroll jank. Battery drain on mobile. If a list needs cross-entity data, it needs a calc column — not a chained fetch.
+**Hard rule — NEVER chain inside a list `map()` / `FlatList renderItem`.**
+That is the N+1 trap. Use the direct lookup annotation or omit the field until
+an external projection exists.
 
 ### Limits
 
-- **Calc columns can only traverse N:1** (single-valued navigation properties). 1:many and M:N must use chained fetch.
-- **Calc columns cannot reference other calc columns** in the same formula chain (Dataverse limitation — a calc on a calc is rejected at create time).
-- **Calc columns are read-only** — never include them in a create/update payload (Dataverse 400s on write).
-- **`$filter` on calc columns is restricted** — some operators (`contains`, `startswith`) work, others may not. If a screen needs to filter / sort on a calc-resolved field, query the `microsoft-learn` MCP server first to confirm the exact operator support, or fall back to a chained fetch + client-side filter.
-- **Don't denormalize fields that change frequently** — the resolution happens at read time so the value is technically live, but indexes on calc columns may not refresh as fast as the source.
+- Formatted lookup annotations expose only the direct lookup's primary display
+  value, not arbitrary related columns.
+- Chained reads must be bounded and executed once per screen load, never per row.
+- A formula/calculated column created manually in Power Apps can be reused only
+  when Step 4a validates its source type and exact `FormulaDefinition`.
+- This workflow never creates or updates formula definitions through code.
 
 ### How the screen-builder applies this
 
-The screen-builder's "Cross-entity Field Resolution" rule (in `agents/screen-builder.md`) walks every UI field in its assigned spec, checks for a `<prefix>_<field>_calc` column on the primary entity model, and either selects the calc column OR scaffolds a chained fetch OR returns `BLOCKED` based on the decision table above. See `agents/screen-builder.md` for the exact algorithm.
+The screen-builder walks every cross-entity field and selects a formatted
+lookup, scaffolds one bounded chained fetch, or returns `BLOCKED` for an
+external projection.
 
 ### How the data-model-architect proposes this
 
-The screen-planner emits a `related_entity_fields` block in each per-screen spec (in `_screens_section.md`) with cardinality + archetype + recommendation. The data-model-architect's Step 6a Cross-entity Read Audit reads that block, derives calc columns for every entry tagged `recommends: calc-column`, and adds them to the `### Cross-entity Reads` subsection of `_dm_section.md`. The orchestrator presents this to the user at Gate 1. See `agents/data-model-architect.md` Step 6a and `agents/screen-planner.md` Step 4 (per-screen spec shape).
+The screen-planner emits a `related_entity_fields` block with cardinality,
+archetype, and one of `formatted-lookup`, `chained-fetch`, or
+`external-projection-required`. The data-model architect audits that every
+field has a supported read path; it does not synthesize formula metadata.
 
 ---
 
@@ -238,9 +248,10 @@ The screen-planner emits a `related_entity_fields` block in each per-screen spec
 | Filter server-side | `filter` | `contains(name, 'foo')` |
 | Sort | `orderBy` | `['createdon desc', 'cr123_id asc']` |
 | Reduce payload | `select` | `['id', 'name', 'status']` |
-| Cross-entity field (list / hot) | calc column | `cr3e9_gatename_calc` in `select` |
+| Direct lookup display (list / hot) | formatted lookup annotation | `lookupName(record, 'cr3e9_gateid')` |
+| Other cross-entity field (list / hot) | external projection required | omit until supplied |
 | Cross-entity field (detail / cold) | chained `Service.get` | `Cr3e9_flightsService.get(flightId)` after primary fetch |
-| expand/join fields | NOT SUPPORTED in current generated options | use calc column or chained fetch — see Cross-entity Reads above |
+| expand/join fields | NOT SUPPORTED in current generated options | use formatted lookup or bounded chained fetch |
 
 ---
 
@@ -249,5 +260,5 @@ The screen-planner emits a `related_entity_fields` block in each per-screen spec
 - `shared/references/mobile-ui-patterns.md` — pagination is a required rule for List screens that query unbounded tables
 - `screen-planner` — flags `pagination: cursor` in per-screen spec for List archetypes with unbounded data; emits `related_entity_fields` block per screen
 - `screen-builder` — applies pagination pattern when spec says `pagination: cursor`; applies the Cross-entity Field Resolution rule on every UI field
-- `data-model-architect` — Step 6a Cross-entity Read Audit reads planner's `related_entity_fields` blocks and proposes calc columns
-- `/setup-datamodel` and `/add-dataverse` — Phase 6.1b creates calc columns via `scripts/create-calculated-column.js`
+- `data-model-architect` — Step 6a verifies every related field has a supported read path
+- `/setup-datamodel` and `/add-dataverse` — never synthesize formula definitions; they validate any user-supplied computed dependency before reuse

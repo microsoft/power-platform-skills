@@ -5,7 +5,7 @@
 // createColumn / createRelationship — entity-provision.js:167-291) into stable, comparable facts the
 // offline eval harness diffs per build. Pure (no I/O, no SDK): it derives everything deterministically
 // from the App Spec, reusing the SAME naming/value rules the engine uses, so a fact equals what WOULD
-// be provisioned — not a naive spec echo. See docs/app-builder-staged-flow-design.md §13.2, §14.
+// be provisioned — not a naive spec echo. See docs/app-builder-design.md §13.2, §14.
 const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName, quickCreateEnabledFor } = require('./app-spec.js');
 
 const lc = (s) => String(s || '').toLowerCase();

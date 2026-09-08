@@ -6,7 +6,7 @@ First real capture taken after the v2.2 planner-spec tightening landed.
 ## Source
 
 Captured from a real `/genpage` session against
-`https://aurorabapenv610b3.crmtest.dynamics.com`. Driven by
+`https://contosobapenv0001.crmtest.dynamics.com`. Driven by
 `claude-sonnet-4-6` under the v2.1 plugin + v2.2 Phase 0.5 manifest generator
 + v2.2 spec-tightening. Working dir was `D:/temp/recruitment-app/`.
 

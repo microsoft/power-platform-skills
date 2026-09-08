@@ -3,7 +3,7 @@
 // symbolic token — pageId: "PAGEREF_<key>" — because the real GenPageId is minted by the server at
 // deploy time and differs per environment (SDK opaque-identity rule T5: never bake a resolved GUID into
 // canonical source, or a cross-env recreate ships a dead link). See references/rules.md "Generative Page
-// Navigation" and docs/app-builder-staged-flow-design.md §9. The ENGINE reads/writes files; this module
+// Navigation" and docs/app-builder-design.md §9. The ENGINE reads/writes files; this module
 // only shapes/parses strings (pure, offline).
 //
 // THE SINGLE NAV ORACLE. `extractNavTargets` parses the ACTUAL

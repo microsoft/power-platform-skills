@@ -10,7 +10,7 @@ D:/temp/support-tickets
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://aurorabapenv610b3.crmtest.dynamics.com
+- URL: https://contosobapenv0001.crmtest.dynamics.com
 - App: Genpage Publish Test (3fc905b9-7854-f111-a821-70a8a59ce7bc)
 - Languages: English (1033) only
 - Solution: Crdec34

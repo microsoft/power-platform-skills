@@ -6,8 +6,8 @@ The **wiring / flow reference** for both skills, as one page of ASCII diagrams. 
 stage of the other; document order is not a pipeline. For **per-component behavioral specs**, the canonical file tree, conventions, and
 build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
 [`../references/app-spec-schema.md`](../references/app-spec-schema.md); the app-builder skill is
-[`../skills/app-builder/SKILL.md`](../skills/app-builder/SKILL.md); the roadmap/TODO is
-[`app-builder-roadmap.md`](app-builder-roadmap.md).
+[`../skills/app-builder/SKILL.md`](../skills/app-builder/SKILL.md); the capabilities doc/TODO is
+[`app-builder-capabilities.md`](app-builder-capabilities.md).
 
 ## /genpage — high-level flow
 

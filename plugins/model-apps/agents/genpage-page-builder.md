@@ -155,6 +155,21 @@ empty, is missing entirely, or contains no binding row, the page has **no Custom
 do not read custom-api.md and do not emit any `executeAction` / `executeFunction` /
 `listBoundActions` code.
 
+Only when your dispatch says **`Telemetry: enabled`** *and* the maker's own request
+asks to measure, track, monitor, or diagnose something do you instrument the page and
+also read:
+
+```
+${PLUGIN_ROOT}/references/page-telemetry.md
+```
+
+If your dispatch says `Telemetry: disabled` (or omits the line), or the request never
+asked for measurement, the page emits **no telemetry at all** — do not read
+page-telemetry.md, do not add an `appInsights` prop, and do not emit any `trackEvent` /
+`trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` /
+`stopTrack` call. `Telemetry: enabled` is permission, not instruction: the default
+output for an instrumentation-enabled run is still a page with zero telemetry.
+
 Read the relevant sample file identified in the plan:
 
 ```
@@ -275,6 +290,7 @@ export default GeneratedComponent;
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **WCAG AA accessibility** — ARIA labels, keyboard navigation, semantic HTML
 - **Error handling** — all async `dataApi` calls wrapped in try-catch
+- **No telemetry by default** — never emit `props.appInsights` calls unless your dispatch says `Telemetry: enabled` **and** the maker asked to measure or track something. Absence of a request means zero telemetry, not "instrument the obvious things". See references/page-telemetry.md.
 - **Lookup fields** — read display names via `@OData.Community.Display.V1.FormattedValue`; *set* a lookup on create/update with `_<field>_value: "/logicalSingular(guid)"`, never `@odata.bind` (the DataAPI silently drops it → orphaned row). See rules.md DataAPI Rule 13.
 - **All hooks above early returns** — every `useMemo`/`useState`/`useEffect`/`useCallback` must precede any loading/empty `return`, or detail pages crash with React error #310 on first open. See rules.md Critical Rule 19.
 - **Entity logical names** — singular lowercase (e.g., `"account"`)

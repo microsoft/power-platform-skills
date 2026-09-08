@@ -10,7 +10,7 @@ D:/temp/sales-dashboard
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://aurorabapenv610b3.crmtest.dynamics.com/
+- URL: https://contosobapenv0001.crmtest.dynamics.com/
 - App: DSTest-A-WithDataSources (35913103-4e59-f111-a821-000d3a37616d)
 - Languages: English (1033) only
 - Solution: Default
