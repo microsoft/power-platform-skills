@@ -19,10 +19,11 @@ ready, it must:
 1. Obtain an OAuth 2.0 access token authorized for FCM HTTP v1 without
    embedding credentials in the flow definition.
 2. Send only to the Firebase project already bound to the active mobile client.
-3. Send the user-approved notification title, body, additional string data,
-   and optional semantic navigation fields. The skill must explain that
-   notification text can appear on a lock screen and that topic membership is
-   not authorization, but the user decides which business fields to include.
+3. Send the user-approved notification title and body plus optional validated
+   semantic navigation fields. Do not collect or merge arbitrary extra FCM
+   data. The skill must explain that notification text can appear on a lock
+   screen, navigation parameters reach the device, and topic membership is not
+   authorization.
 4. Protect secret-bearing inputs/outputs and never log tokens, authorization
    headers, credentials, confidential payloads, or raw provider responses.
 5. Map success and bounded sanitized failures back to the outbox, preserving

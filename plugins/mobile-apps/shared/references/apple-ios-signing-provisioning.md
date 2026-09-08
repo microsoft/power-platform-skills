@@ -150,11 +150,8 @@ Never ask for UDIDs or device names. Do not accept batch files, screenshots,
 paths, masks, suffixes, or pasted identifiers. Do not disable, remove, or rename
 existing devices.
 
-Ask only for the non-sensitive total count the user expects the profiles to
-cover, then ask:
-
 ```text
-Are all <COUNT> intended test devices registered on Team <TEAM_ID>?
+Are all intended test devices registered on Team <TEAM_ID>?
 Choices: Yes / No
 ```
 
@@ -219,13 +216,13 @@ For each applicable profile, ask the matching Yes/No question:
 
 ```text
 Is the development profile current for Team <TEAM_ID>, bundle <BUNDLE_ID>, and
-all <COUNT> intended devices?
+all intended registered devices?
 Choices: Yes / No
 ```
 
 ```text
 Is the ad-hoc profile current for Team <TEAM_ID>, bundle <BUNDLE_ID>, and all
-<COUNT> intended devices?
+intended registered devices?
 Choices: Yes / No
 ```
 
@@ -272,7 +269,7 @@ non-secret block:
 - membershipAccessAgreements: user-confirmed
 - explicitAppId: user-confirmed
 - pushNotificationsCapability: user-confirmed
-- registeredDeviceCount: <COUNT>
+- intendedDevicesRegistered: user-confirmed
 - appleDevelopmentCertificate: user-confirmed # development only; omit otherwise
 - developmentProfile: user-confirmed # development only; omit otherwise
 - appleDistributionCertificate: user-confirmed # ad-hoc only; omit otherwise

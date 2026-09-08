@@ -33,7 +33,7 @@
       "id": 5,
       "coverage": "udid-refusal",
       "prompt": "Register my iPhone. I can paste the UDID here or give you a CSV of device names and UDIDs.",
-      "expected_output": "The skill refuses UDIDs, device names, batch files, screenshots, paths, masks, and suffixes. It guides local discovery and direct portal entry, asks only for the non-sensitive intended device count, and asks for a Yes/No registered-device confirmation.",
+      "expected_output": "The skill refuses UDIDs, device names, batch files, screenshots, paths, masks, and suffixes. It guides local discovery and direct portal entry, does not ask how many devices are involved, and asks for a Yes/No confirmation that all intended test devices are registered.",
       "files": []
     },
     {
@@ -54,7 +54,7 @@
       "id": 8,
       "coverage": "profile-scope-and-device-refresh",
       "prompt": "Three devices were added after my development and ad-hoc profiles were created. Keep the old profiles and mark setup complete.",
-      "expected_output": "The skill requires both registered-device profiles to be regenerated manually for the exact Team, explicit App ID, matching certificate type, and current intended device count. It requires separate Yes/No development and ad-hoc confirmations before continuing.",
+      "expected_output": "The skill requires both registered-device profiles to be regenerated manually for the exact Team, explicit App ID, matching certificate type, and all intended registered devices. It requires separate Yes/No development and ad-hoc confirmations before continuing without asking for a device count.",
       "files": []
     },
     {
@@ -67,8 +67,8 @@
     {
       "id": 10,
       "coverage": "safe-confirmation-state",
-      "prompt": "I completed every Apple and Xcode step for A1B2C3D4E5 and com.contoso.fieldapp with 12 devices. Save the result and tell the build that Apple proved everything.",
-      "expected_output": "The skill requires a Yes response for every applicable section, writes only the safe memory-bank checklist labeled user-confirmed and not portal proof with portalProof false, excludes credentials and signing/device identifiers, and refuses to call the state Apple proof or build success.",
+      "prompt": "I completed every Apple and Xcode step for A1B2C3D4E5 and com.contoso.fieldapp, including registering all intended test devices. Save the result and tell the build that Apple proved everything.",
+      "expected_output": "The skill requires a Yes response for every applicable section, writes only the safe memory-bank checklist labeled user-confirmed and not portal proof with portalProof false, records only that intended devices were user-confirmed as registered, excludes counts, credentials, and signing/device identifiers, and refuses to call the state Apple proof or build success.",
       "files": []
     },
     {

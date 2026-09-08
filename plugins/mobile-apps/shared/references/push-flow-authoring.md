@@ -133,17 +133,17 @@ Ask one grouped producer question:
 - source Dataverse table, event, and optional filter;
 - recipient rule;
 - title and body templates;
-- additional data payload fields;
 - suggested internal navigation;
 - requested artifacts; and
 - whether created flows remain stopped.
 
-Before asking for content mappings, explain that title/body may appear on a
-lock screen and all data fields reach the device. Explain that topic membership
-is not authorization and recommend minimizing personal, confidential, or
-regulated data. The user chooses the business content. Do not reject it solely
-on privacy grounds after explicit selection. Always reject credentials,
-tokens, private keys, authorization headers, and secret values.
+Before asking for title/body or navigation mappings, explain that title/body
+may appear on a lock screen and navigation parameters reach the device.
+Explain that topic membership is not authorization and recommend minimizing
+personal, confidential, or regulated data. The user chooses the title/body
+business content. Do not reject it solely on privacy grounds after explicit
+selection. Always reject credentials, tokens, private keys, authorization
+headers, and secret values.
 
 For navigation, inspect `native-app-plan.md` and the generated destination
 registry. Based on the trigger table, suggest a detail screen backed by that
@@ -226,17 +226,18 @@ supports clearing.
 
 The producer uses the confirmed Dataverse webhook and singular trigger table,
 resolves the recipient, and adds one row through the plural outbox entity set.
-Set `Audience=User`, lowercase OID, user-approved Title/Body, canonical
-Additional Data, optional allowlisted Destination/Navigation Parameters,
-Payload Version `1`, Status `Queued`, and Attempt Count `0`. Additional Data
-must be a flat string map and cannot override `schemaVersion`, `destination`,
-`params`, or `deepLink`. Never accept an arbitrary route, URL, href, or
+Set `Audience=User`, lowercase OID, user-approved Title/Body, optional
+allowlisted Destination/Navigation Parameters, Payload Version `1`, Status
+`Queued`, and Attempt Count `0`. Do not create or populate an arbitrary
+user-authored extra-data field. Never accept an arbitrary route, URL, href, or
 complete contract JSON. The sender revalidates the destination/parameters
-before delivery and omits navigation fields when no deep link was selected.
-Legacy `deepLink` rows and branches are rejected rather than used as fallback.
-Invalid recipients terminate without queuing and expose only a bounded reason.
-Credentials, tokens, private keys, authorization headers, and secret values
-are forbidden; user-approved business content is allowed.
+before delivery and limits FCM `message.data` to `schemaVersion`,
+`destination`, and `params` when navigation was selected; it omits all three
+when no deep link was selected. Legacy `deepLink` rows and branches are
+rejected rather than used as fallback. Invalid recipients terminate without
+queuing and expose only a bounded reason. Credentials, tokens, private keys,
+authorization headers, and secret values are forbidden; user-approved
+title/body business content is allowed.
 
 For manual authentication, do not discover or inspect customer credentials.
 After authoring the stopped sender, show its exact ID and the exact action that

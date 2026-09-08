@@ -310,11 +310,11 @@ The flow stage shows an informed comparison of two choices—**WIF (Recommended)
 or customer-configured FCM authentication in the plugin-created Power Automate
 sender. The producer defaults to a Dataverse
 row-created trigger and resolves the row owner to a lowercase Entra OID topic.
-It warns about lock-screen/device exposure but lets the user choose title,
-body, and additional payload mappings. Based on the trigger table, it suggests
-a matching detail or list destination and lets the user change it or choose no
-deep link. When Microsoft-side semantics are uncertain, use Microsoft Learn
-docs rather than guessed contracts.
+It warns about lock-screen/device exposure but lets the user choose title and
+body mappings. Based on the trigger table, it suggests a matching detail or
+list destination and lets the user change it or choose no deep link. The flow
+does not solicit arbitrary extra FCM data. When Microsoft-side semantics are
+uncertain, use Microsoft Learn docs rather than guessed contracts.
 
 #### Push notification cloud prerequisites
 

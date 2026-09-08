@@ -157,6 +157,41 @@ test('push flow presents informed managed and customer-owned sender auth choices
   assert.match(agents, /presents two sender-auth choices/);
 });
 
+test('push flow omits arbitrary extra data while preserving navigation and lifecycle fields', () => {
+  const fs = require('node:fs');
+  const flow = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/SKILL.md'),
+    'utf8',
+  );
+  const authoring = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-flow-authoring.md'),
+    'utf8',
+  );
+  const outbox = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-notification-outbox.md'),
+    'utf8',
+  );
+  const wif = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-flow-wif.md'),
+    'utf8',
+  );
+  const evals = require(path.join(
+    PLUGIN_ROOT,
+    'skills/create-push-notification-flow/evals/evals.json',
+  )).evals;
+
+  assert.doesNotMatch(outbox, /\| Additional Data \|/);
+  assert.doesNotMatch(authoring, /additional data payload fields/i);
+  assert.doesNotMatch(wif, /merges? approved Additional Data/i);
+  assert.match(flow, /Do not solicit, store, or merge arbitrary extra FCM data/i);
+  assert.match(authoring, /limits FCM `message\.data` to `schemaVersion`,\s+`destination`, and `params`/i);
+  assert.match(outbox, /Payload Version/);
+  assert.match(outbox, /Provider Message ID/);
+  assert.match(outbox, /Navigation Parameters/);
+  assert.match(evals.find(({ id }) => id === 33).expected_output, /does not ask for or construct arbitrary extra FCM fields/i);
+  assert.match(evals.find(({ id }) => id === 33).expected_output, /lifecycle and correlation fields/i);
+});
+
 test('push flow recovery keeps the tool surface non-destructive', () => {
   const fs = require('node:fs');
   const flow = fs.readFileSync(

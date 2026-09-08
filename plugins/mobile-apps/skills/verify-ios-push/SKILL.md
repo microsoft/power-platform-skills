@@ -207,10 +207,9 @@ remains the only supported flow inspection path in this workflow.
 ## 3. Establish user-approved correlation
 
 Before the live verification sequence, explain that notification title/body
-may appear on a lock screen and data payload fields reach the device. Recommend
-using non-sensitive test values, then obtain explicit confirmation for the
-actual user-selected title, body, additional data, and optional navigation
-intent.
+may appear on a lock screen and navigation parameters reach the device.
+Recommend using non-sensitive test values, then obtain explicit confirmation
+for the actual user-selected title, body, and optional navigation intent.
 
 Immediately before the first live case in the verification sequence, rerun:
 
@@ -262,8 +261,9 @@ recipient fields. For a user-topic case, exercise the existing producer: use
 its actual trigger contract and discovered connector operation (or `run_flow`
 only when the read-back proves a manual trigger) to create one
 user-approved test event owned by the consenting signed-in user. Warn that the
-title, body, and data may be visible on the device or lock screen. Do not
-bypass the producer by writing a user-targeted outbox row directly.
+title, body, and navigation parameters may be visible on the device or lock
+screen. Do not bypass the producer by writing a user-targeted outbox row
+directly.
 
 Never use `run_flow` as evidence for an `OpenApiConnectionWebhook`; synthetic
 runs may have null trigger bodies and do not prove the organic callback chain.

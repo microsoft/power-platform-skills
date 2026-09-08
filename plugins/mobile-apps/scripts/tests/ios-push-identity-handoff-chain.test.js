@@ -55,6 +55,34 @@ test('iOS push chain: setup-fcm handles Google credentials safely', () => {
   assert.match(skill, /Only after that guidance is complete, hand off to `\/setup-apns`/);
 });
 
+test('iOS push chain: Apple setup does not collect a device count', () => {
+  const setupSkill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/SKILL.md'),
+    'utf8',
+  );
+  const provisioningGuide = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/apple-ios-signing-provisioning.md'),
+    'utf8',
+  );
+  const evals = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/evals/evals.json'),
+    'utf8',
+  );
+  const setupContract = `${setupSkill}\n${provisioningGuide}\n${evals}`;
+
+  assert.doesNotMatch(
+    setupContract,
+    /<COUNT>|registeredDeviceCount|non-sensitive total count|intended device count|scope\/count|with \d+ devices/i,
+  );
+  assert.match(
+    provisioningGuide,
+    /Are all intended test devices registered on Team <TEAM_ID>\?/,
+  );
+  assert.match(provisioningGuide, /all intended registered devices/);
+  assert.match(provisioningGuide, /intendedDevicesRegistered: user-confirmed/);
+  assert.match(setupSkill, /physical registered-device development and\/or ad-hoc/);
+});
+
 test('iOS push chain: setup-apns consumes setup-fcm handoff', () => {
   const skill = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'),

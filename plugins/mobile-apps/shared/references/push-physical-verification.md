@@ -92,10 +92,9 @@ Dataverse routing. Use it only when read-back proves a manual trigger.
 ## Privacy-safe correlation
 
 Obtain explicit confirmation before every live notification. Explain that
-title/body may appear on a lock screen and data payload fields reach the
+title/body may appear on a lock screen and navigation parameters reach the
 device. Recommend non-sensitive test content, but let the user approve the
-actual title, body, additional data, and whether to include an allowlisted
-internal route.
+actual title, body, and whether to include an allowlisted internal route.
 
 Create a unique opaque case label, for example
 `PUSH-20260824-01`. The label must not contain a person's name, email, tenant,

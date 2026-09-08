@@ -129,8 +129,8 @@
     },
     {
       "id": 33,
-      "prompt": "Add source fields to the additional FCM data payload.",
-      "expected_output": "The skill warns that data reaches the device, lets the user select business fields, canonicalizes them as a flat string map, and rejects reserved navigation keys and authentication secrets.",
+      "prompt": "Include several unrelated source fields as arbitrary extra FCM payload data.",
+      "expected_output": "The skill does not ask for or construct arbitrary extra FCM fields. It keeps the user-approved title/body plus optional validated semantic navigation fields and preserves system-managed outbox lifecycle and correlation fields.",
       "files": []
     },
     {

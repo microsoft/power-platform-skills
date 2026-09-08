@@ -111,19 +111,19 @@ Use `message.topic`, never a condition assembled from untrusted text. `User`
 delivery requires a GUID-validated lowercase Entra OID topic. `AllUsers`
 requires an empty Target OID and exact case-sensitive `allUsers`.
 
-Send the user-approved notification title/body and Additional Data string
-fields. Additional Data cannot override reserved `schemaVersion`,
-`destination`, `params`, or `deepLink` keys. When navigation is selected, add
-the validated string-valued `data.schemaVersion`, allowlisted semantic
+Send the user-approved notification title/body. Do not collect or merge
+arbitrary user-authored extra data. When navigation is selected, add the
+validated string-valued `data.schemaVersion`, allowlisted semantic
 `data.destination`, and canonical destination-specific `data.params`; omit all
 three when no deep link is selected. Include the discovered Android/APNs
 fields and never retain a legacy `deepLink` fallback.
 
 Before content is approved, explain that notification text may appear on a lock
-screen and data fields reach the device, and that OID topics are routing
-convenience rather than an authorization boundary. Recommend minimizing
-sensitive data, but honor the user's business-content choice. Credentials,
-tokens, private keys, and authentication headers remain prohibited.
+screen and navigation parameters reach the device, and that OID topics are
+routing convenience rather than an authorization boundary. Recommend
+minimizing sensitive title/body content, but honor the user's business-content
+choice. Credentials, tokens, private keys, and authentication headers remain
+prohibited.
 
 ## Action security and failure handling
 

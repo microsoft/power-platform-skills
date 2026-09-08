@@ -110,7 +110,7 @@ portalProof: false
 ```
 
 Store only Team ID, bundle ID, selected mode scope, registered-device
-scope/count, applicable section statuses, and confirmation timestamp. Omit
+confirmation, applicable section statuses, and confirmation timestamp. Omit
 certificate/profile fields for unselected modes. Do not store account identity,
 UDIDs/device names, certificate/profile identifiers, paths, credentials,
 screenshots, or copied portal output.

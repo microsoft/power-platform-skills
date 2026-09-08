@@ -189,7 +189,7 @@ navigation is selected, it omits all three fields. WIF and manually
 authenticated Power Automate sender paths must use the same observable
 contract and must not retain a `deepLink` fallback.
 
-The skill must warn that navigation parameters and additional notification
-data reach the device and that topic membership is routing convenience, not
-authorization. The user chooses which business values to include. Credentials,
+The skill must warn that navigation parameters reach the device and that topic
+membership is routing convenience, not authorization. Do not collect arbitrary
+extra FCM data alongside the validated navigation contract. Credentials,
 tokens, private keys, and authentication material remain prohibited.

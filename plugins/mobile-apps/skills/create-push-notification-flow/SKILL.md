@@ -108,12 +108,13 @@ Execute Section 3 of the authoring reference. Create a missing outbox only via
 logical names, plural entity sets, actual choice integers, and `systemusers`;
 never guess them.
 
-Ask the grouped producer question from the reference. For title, body, and
-additional data, explain lock-screen/device exposure and that topic membership
-is not authorization, recommend minimizing sensitive data, then let the user
-choose source fields and templates. Reject only credentials, tokens, private
-keys, authentication headers, or technically invalid payload shapes; do not
-override the user's business-content choice on privacy grounds.
+Ask the grouped producer question from the reference. For title, body, and any
+selected navigation parameters, explain lock-screen/device exposure and that
+topic membership is not authorization, recommend minimizing sensitive data,
+then let the user choose title/body source fields and templates. Reject
+credentials, tokens, private keys, authentication headers, or technically
+invalid payload shapes; do not override the user's title/body business-content
+choice on privacy grounds.
 
 Based on the selected Dataverse trigger table, inspect the screen plan and
 navigation registry and suggest a relevant detail destination with the trigger
@@ -142,21 +143,21 @@ placeholder credential or secret.
 
 Execute Section 5 exactly. The sender is idempotent and concurrency-safe.
 `User` uses a validated lowercase OID topic; `AllUsers` uses empty Target OID
-plus exact `allUsers`. Before authoring payload mappings, warn that
-title/body/data can be visible on the device and that topic membership is not
-authorization. Use the user's approved content mappings, including business
-data if they explicitly choose it, while continuing to prohibit credentials
-and authentication material.
+plus exact `allUsers`. Before authoring title/body and navigation mappings,
+warn that title/body/navigation parameters can be visible on the device and
+that topic membership is not authorization. Use the user's approved title/body
+templates and validated navigation mapping while continuing to prohibit
+credentials and authentication material.
 
 The producer uses `OpenApiConnectionWebhook`, singular trigger `entityname`,
 plural action `entityName`, and plural `systemusers` for owner lookup. It
-validates selected parameter and Additional Data fields, constructs canonical
-sorted JSON, and queues Payload Version `1`, optional allowlisted
-Destination/Navigation Parameters, Status `Queued`, and Attempt Count `0`.
-The sender revalidates the same contract, merges approved Additional Data
-without reserved keys, and includes `schemaVersion`, `destination`, and
-`params` only when navigation was selected; a legacy `deepLink` branch is a
-blocker.
+validates selected title/body and navigation parameter fields, constructs
+canonical navigation JSON, and queues Payload Version `1`, optional
+allowlisted Destination/Navigation Parameters, Status `Queued`, and Attempt
+Count `0`. The sender revalidates the same navigation contract and includes
+`schemaVersion`, `destination`, and `params` only when navigation was selected.
+Do not solicit, store, or merge arbitrary extra FCM data; a legacy `deepLink`
+branch is a blocker.
 
 For lookup expressions, follow live metadata targets. A fixed single-target
 lookup uses its GUID value directly and must not depend on the optional

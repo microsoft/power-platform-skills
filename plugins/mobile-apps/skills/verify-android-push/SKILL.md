@@ -209,7 +209,8 @@ scripts to inspect or mutate flows.
    state `Started`. Retain the separate Dataverse Workflow IDs for callback
    diagnosis; do not compare the two ID roles for equality.
 3. Read back the producer trigger, recipient resolution, lowercase OID
-   expression, user-approved payload mapping, and queued outbox create action.
+   expression, user-approved title/body and validated navigation mapping, and
+   queued outbox create action.
 4. Read back the sender's queued guard, atomic/idempotent transition,
    `allUsers` versus user-topic routing, secure settings, one FCM delivery
    branch, bounded failure handling, and `Sent`/`Failed` updates.
