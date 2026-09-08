@@ -59,6 +59,21 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /Neither automates Apple configuration or emits an Apple proof artifact/);
   assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
   assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
+  assert.match(lifecycle, /Firebase authentication, project selection\/creation, activation, and\s+read-back stay serial/);
+  assert.match(lifecycle, /at most two\s+`mobile-app:firebase-platform-worker` tracks/);
+  assert.match(lifecycle, /at most three independent tracks/);
+  assert.match(lifecycle, /exactly one parseable `WORKER_RESULT`/);
+  assert.match(lifecycle, /recompute the SHA-256 and stop on drift/);
+  assert.match(lifecycle, /Every `Task` capability check carries `operation: preflight` in the prompt/);
+  assert.match(lifecycle, /Preflight is mutation-free/);
+  assert.match(lifecycle, /existing dedicated Entra identity:\s+read-only `plan` -> explicit approval -> final `execute`/);
+  assert.match(lifecycle, /fresh claim-driven read-only plan -> second explicit approval/);
+  assert.match(lifecycle, /first approval never authorizes the remaining plan/);
+  assert.match(lifecycle, /resolves them against the canonical absolute project root/);
+  assert.match(lifecycle, /report both scratch cleanup and\s+ownership release on every return/);
+  assert.match(lifecycle, /applies `\/setup-apns` once as the\s+combined Apple-first\/APNs owner/);
+  assert.match(lifecycle, /one final iOS result/);
+  assert.match(lifecycle, /FlowAgent authoring, wrapped builds, installation handoffs, and physical\s+verification remain sequential/);
 });
 
 test('add-push owns runtime integration and orchestrates platform owners', () => {
@@ -122,7 +137,7 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
 
   assert.deepStrictEqual(
     addPush.evals.map(({ id }) => id),
-    Array.from({ length: 21 }, (_, index) => index + 1),
+    Array.from({ length: 29 }, (_, index) => index + 1),
   );
   assert.match(addPush.evals[14].expected_output, /invokes build-android/);
   assert.match(addPush.evals[14].expected_output, /invokes verify-android-push/);
@@ -135,6 +150,24 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.match(addPush.evals[18].expected_output, /never makes the user manually chain slash commands/);
   assert.match(addPush.evals[19].expected_output, /scheduleNotificationAsync/);
   assert.match(addPush.evals[20].expected_output, /same channel ID/);
+  assert.strictEqual(addPush.evals[21].coverage, 'parallel-success-both-platforms');
+  assert.match(addPush.evals[21].expected_output, /max-three wave/);
+  assert.strictEqual(addPush.evals[22].coverage, 'single-track-single-platform');
+  assert.strictEqual(addPush.evals[23].coverage, 'task-unavailable-serial-fallback');
+  assert.strictEqual(addPush.evals[24].coverage, 'malformed-worker-result');
+  assert.strictEqual(addPush.evals[25].coverage, 'memory-sha-drift');
+  assert.strictEqual(addPush.evals[26].coverage, 'platform-specific-partial-blocker');
+  assert.strictEqual(
+    addPush.evals[27].coverage,
+    'worker-contract-preflight-plan-paths-and-ios-fallback',
+  );
+  assert.match(addPush.evals[27].expected_output, /mutation-free capability result/);
+  assert.match(addPush.evals[27].expected_output, /read-only proposed diff/);
+  assert.match(addPush.evals[27].expected_output, /project-relative result paths/);
+  assert.match(addPush.evals[27].expected_output, /setup-apns exactly once/);
+  assert.strictEqual(addPush.evals[28].coverage, 'cold-wif-identity-bootstrap-reapproval');
+  assert.match(addPush.evals[28].expected_output, /null Entra client ID/);
+  assert.match(addPush.evals[28].expected_output, /second explicit approval/);
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),

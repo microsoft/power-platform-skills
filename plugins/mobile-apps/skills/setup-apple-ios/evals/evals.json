@@ -91,6 +91,20 @@
       "prompt": "I only need physical-device development builds for Team A1B2C3D4E5 and com.contoso.fieldapp. Require the ad-hoc setup anyway so we are future-proof.",
       "expected_output": "The skill keeps the approved scope development-only, requires Apple Development plus a development profile and local Xcode confirmation for development, and does not require or create Apple Distribution or ad-hoc profile assets. The safe memory state omits unselected-mode fields.",
       "files": []
+    },
+    {
+      "id": 14,
+      "coverage": "orchestrated-parent-confirmations",
+      "prompt": "Apply setup-apple-ios through the iOS prerequisites worker using a complete parent-collected confirmation envelope for one exact Team, bundle, and mode.",
+      "expected_output": "The worker validates the immutable envelope without asking questions or performing Apple/Xcode actions, invokes no nested worker or skill, writes no memory, preserves user-confirmed; not portal proof, and returns safe proposed memory fields only in the single WORKER_RESULT for the parent merge.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "coverage": "combined-ios-fallback-no-intermediate-result",
+      "prompt": "Task dispatch is unavailable while the parent has a complete Apple and APNs confirmation envelope.",
+      "expected_output": "The parent does not invoke setup-apple-ios as a separate fallback and does not accept an intermediate Apple WORKER_RESULT. It invokes setup-apns exactly once as the combined fallback owner, applies Apple identity/capability/signing semantics before APNs semantics, and accepts one final iOS WORKER_RESULT.",
+      "files": []
     }
   ]
 }

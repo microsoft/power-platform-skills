@@ -126,6 +126,62 @@
       "prompt": "Create Android channel general in app code, use urgent in foreground local notifications, and omit messaging_android_notification_channel_id from firebase.json.",
       "expected_output": "The skill rejects the inconsistent channel configuration. It creates one non-silent channel before permission and uses the same channel ID for Android channel creation, the foreground local notification trigger, and Firebase's messaging_android_notification_channel_id.",
       "files": []
+    },
+    {
+      "id": 22,
+      "coverage": "parallel-success-both-platforms",
+      "prompt": "Add Android and iOS push through delivery flows. Firebase is not configured, all required runtime, WIF, Apple, and APNs decisions are already explicit, and every worker preflight succeeds.",
+      "expected_output": "The parent runs Firebase authentication/project activation serially, lets /setup-fcm use at most two platform workers, waits for its complete parent join, then dispatches the qualified runtime, WIF, and iOS-prerequisite workers in one max-three wave. It joins and revalidates every result, performs one SHA-guarded parent memory update, and only then invokes FlowAgent flow authoring sequentially.",
+      "files": []
+    },
+    {
+      "id": 23,
+      "coverage": "single-track-single-platform",
+      "prompt": "Android Firebase and WIF are already valid, iOS is not selected, and only Android runtime integration is incomplete. Continue to app configuration.",
+      "expected_output": "The skill dispatches one synchronous mobile-app:push-runtime-worker, does not manufacture iOS or WIF tasks, preserves the worker's exclusive runtime files, validates its single WORKER_RESULT, and applies the one-track parent memory merge after the SHA drift check.",
+      "files": []
+    },
+    {
+      "id": 24,
+      "coverage": "task-unavailable-serial-fallback",
+      "prompt": "Task execution is unavailable, but the parent has already collected complete Android+iOS runtime, WIF, and Apple/APNs decisions. Continue safely.",
+      "expected_output": "No execution worker starts. The skill prints one concise fallback notice and runs the deterministic serial owner/inline path with the same identities, exclusive files, validations, WORKER_RESULT parsing, and parent-only memory rule. It does not silently skip work or claim that all setup can run concurrently.",
+      "files": []
+    },
+    {
+      "id": 25,
+      "coverage": "malformed-worker-result",
+      "prompt": "The WIF worker returns DONE but omits WORKER_RESULT, while the runtime worker succeeds with a valid result.",
+      "expected_output": "The parent joins all started tracks, accepts and revalidates the independent runtime result, treats the malformed WIF return as BLOCKED without inferring success from sender-auth.json, preserves safe runtime progress, and does not retry or enter fallback after execution began.",
+      "files": []
+    },
+    {
+      "id": 26,
+      "coverage": "memory-sha-drift",
+      "prompt": "All parallel workers succeed, but memory-bank.md changes after dispatch and before the parent merge.",
+      "expected_output": "The skill recomputes memory-bank.md SHA-256, detects drift from the pre-wave hash, preserves worker-created files, blocks the memory merge without overwriting or three-way guessing, and reports the accepted stage results as pending reconciliation rather than rerunning successful workers.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "coverage": "platform-specific-partial-blocker",
+      "prompt": "Android and shared WIF/runtime work succeed, but the iOS prerequisite worker blocks on Apple Team identity drift. Continue toward the Android build stopping point.",
+      "expected_output": "The parent joins all workers, preserves and revalidates successful Android/runtime/WIF progress, records iOS as blocked without promoting Apple/APNs state, then runs FlowAgent authoring and the Android build sequentially when shared prerequisites are ready. It does not start the iOS build or let the iOS blocker erase Android progress.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "coverage": "worker-contract-preflight-plan-paths-and-ios-fallback",
+      "prompt": "Exercise the bounded worker contract with an existing dedicated Entra identity that needs WIF repair plus iOS prerequisites, then assume Task preflight is unavailable.",
+      "expected_output": "Every Task preflight carries operation: preflight in the prompt and accepts only a mutation-free capability result. Existing-identity WIF first returns a read-only proposed diff, then executes only the unchanged explicitly approved plan and echoes all pinned identities, route, mutation/API lists, role decisions, and approvals. The parent resolves project-relative result paths against the absolute project root before checking exclusive files. The deterministic iOS fallback invokes setup-apns exactly once as the combined Apple-first/APNs owner and accepts one final WORKER_RESULT rather than separate Apple and APNs results.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "coverage": "cold-wif-identity-bootstrap-reapproval",
+      "prompt": "Configure push through delivery flows with WIF, but the exact dedicated Entra sender identity is genuinely absent and no client ID exists yet. Keep unrelated runtime and iOS work safe.",
+      "expected_output": "The parent accepts a null Entra client ID only for initial read-only absence inventory. It asks first for only the exact Entra identity/credential and secret-safe Key Vault bootstrap, runs identity-bootstrap serially outside the execution wave, validates the safe server-generated client ID receipt, and does not accept sender-auth.json or Google mutations from that stage. It then requires a fresh claim-driven sender-auth plan using that client ID, presents the exact remaining Google/API/RBAC actions for a second explicit approval, and only then allows final WIF execute to join eligible independent runtime/iOS work. The parent accepts identity-bootstrap-plan, identity-bootstrap, sender-auth-plan, and sender-auth results only in order, preserves the same run ID, never silently falls back or replays an uncertain mutating bootstrap, and writes memory only once after final join and SHA validation.",
+      "files": []
     }
   ]
 }

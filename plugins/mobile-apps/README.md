@@ -216,6 +216,26 @@ Choose whether to stop after app configuration, Power Automate delivery flows,
 a wrapped device build, or end-to-end physical-device verification. You do not
 need to remember or manually chain the individual push commands.
 
+Setup is faster when independent work is available: Firebase project setup
+stays serial, then Android and iOS client configuration may run together.
+After Firebase joins, independent runtime, WIF, and iOS-prerequisite work may
+also run in a bounded wave. The workflow falls back to one worker or serial
+execution when needed. Flow authoring, wrapped builds, installation handoffs,
+and physical verification still run in their required order, so not every
+push step runs concurrently.
+
+Each bounded worker first completes a no-read/no-write capability preflight.
+Workers receive fixed identities and files, never write the memory bank, and
+return project-relative paths that the parent checks against its absolute
+allowlist. WIF reuse/repair requires a read-only plan and approval before
+execution. Truly cold WIF uses two approvals: first only for creating the
+absent dedicated Entra identity/credential and storing it safely in Key Vault,
+then—after a fresh claim-driven plan using the generated client ID—for the
+remaining Google/API/RBAC work and final proof. The bootstrap never writes
+`sender-auth.json`. If iOS worker dispatch is unavailable, one combined
+`/setup-apns` fallback validates Apple setup first and returns one Apple/APNs
+result.
+
 The workflow configures `expo-notifications`, React Native Firebase Messaging,
 permission UX, auth/topic lifecycle, and a typed semantic navigation contract.
 That contract uses Expo Router and is shared by in-app actions, the configured
@@ -464,6 +484,10 @@ Example edit flows:
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
+| `firebase-platform-worker` | Bounded Android-or-iOS Firebase client worker; `/setup-fcm` may run at most two after serial project activation |
+| `push-runtime-worker` | Bounded runtime integration worker with exclusive app-file ownership |
+| `push-wif-worker` | Bounded staged WIF worker; cold identity bootstrap writes no local file, and only final execute may write `sender-auth.json` |
+| `push-ios-prerequisites-worker` | Read-only validator for parent-collected Apple/APNs confirmations |
 
 ## Telemetry and privacy
 

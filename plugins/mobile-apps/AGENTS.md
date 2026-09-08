@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 35 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 35 skills + 9 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -23,7 +23,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
 .claude-plugin/plugin.json     ← Legacy metadata mirror
 AGENTS.md                      ← This file
 README.md                      ← Plugin overview
-agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
+agents/                        ← planners, builders, and bounded push workers
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /add-dataverse, /add-connector, /add-native, ...
 scripts/                       ← shared helpers, including validate-mobile-files.js and bundled telemetry
@@ -58,7 +58,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
-12. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
+12. **Sub-agent return-status protocol** — Every agent in this plugin MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
 
     | Code | Meaning | Orchestrator action |
     |---|---|---|
@@ -73,6 +73,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
+13. **Bounded push parallelism** — Push setup keeps Firebase authentication/project activation serial, then `/setup-fcm` may run at most two qualified `mobile-app:firebase-platform-worker` tracks. After their parent join, `/add-push-notifications` may run at most three qualified workers: `mobile-app:push-runtime-worker`, `mobile-app:push-wif-worker`, and `mobile-app:push-ios-prerequisites-worker`. Every worker first receives `operation: preflight` in its prompt and must return a mutation-free capability result. The parent collects every decision first, assigns disjoint absolute exclusive files, supplies one pre-wave `memory-bank.md` SHA-256, resolves project-relative result paths against the project root, parses the literal status plus one `WORKER_RESULT`, groups `NEEDS_CONTEXT` questions, and writes memory once after a drift check. Firebase workers may hash memory bytes but never read them semantically or write memory, and must explicitly release ownership and clean scratch state. Cold WIF keeps the reuse/repair plan→approval→execute fast path. A truly absent Entra sender identity instead requires initial read-only inventory with a null client ID, approval for only the serial Entra/credential/Key Vault bootstrap, a safe generated-identity receipt, a fresh claim-driven remaining plan, and a second approval before final execute; bootstrap never mutates Google or writes `sender-auth.json`. Task/preflight failure uses the same staged deterministic owner fallback; iOS fallback runs one combined `/setup-apns` owner result, not separate Apple and APNs results. FlowAgent authoring, wrapped builds, and physical verification remain sequential owner boundaries.
 ## Telemetry
 
 Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.
@@ -146,7 +147,7 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
   `/verify-android-push` or `/verify-ios-push`; stale build or platform
   credential ownership then routes onward to the corresponding build/setup
   owner.
-- ✅ WIF is the preferred sender authentication: Power Automate exchanges a dedicated Entra app token through Google Workload Identity Federation, impersonates a least-privilege Firebase sender service account, and calls FCM HTTP v1. `/setup-push-wif` validates/reuses, repairs, or provisions resources through the official gcloud MCP plus Azure MCP read-back coverage, derives trust from observed `iss` plus `appid`/`azp`, proves the full exchange, and writes a non-secret `sender-auth.json`. The gcloud MCP requires Node.js 20+ and Google Cloud CLI; the skill may install the CLI only after explicit user approval through a supported package manager already present.
+- ✅ WIF is the preferred sender authentication: Power Automate exchanges a dedicated Entra app token through Google Workload Identity Federation, impersonates a least-privilege Firebase sender service account, and calls FCM HTTP v1. `/setup-push-wif` validates/reuses, repairs, or provisions resources through the official gcloud MCP plus Azure MCP read-back coverage, derives trust from observed `iss` plus `appid`/`azp`, proves the full exchange, and writes a non-secret `sender-auth.json`. Truly cold provisioning splits absent Entra identity/credential + secret-safe Key Vault bootstrap from the freshly planned Google/API/RBAC stage, with separate explicit approvals and no handoff before the final proof. The gcloud MCP requires Node.js 20+ and Google Cloud CLI; the skill may install the CLI only after explicit user approval through a supported package manager already present.
 - ✅ `/create-push-notification-flow` presents two sender-auth choices: WIF is recommended, or the plugin authors stopped Power Automate producer/sender flows and the customer configures FCM authentication manually. Azure Function and custom endpoint options are not offered.
 - ✅ Notification privacy guidance is advisory for business content. The skill explains lock-screen and device exposure plus topic-authorization limits, but the user chooses title, body, and validated navigation parameters; it does not solicit arbitrary extra FCM data. Credentials, tokens, private keys, authorization headers, and secret values remain prohibited.
 - ✅ For Dataverse-triggered notifications, the skill inspects the trigger table and navigation registry, suggests the matching detail screen with row ID, otherwise a matching list screen or no deep link, and lets the user accept or change the choice.

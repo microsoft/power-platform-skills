@@ -42,7 +42,19 @@ test('iOS push chain: setup-fcm handles Google credentials safely', () => {
     'utf8',
   );
 
-  assert.match(skill, /Record\s+non-secret setup state/, 'documents state recording');
+  assert.match(
+    skill,
+    /parent runs[\s\S]*update `memory-bank\.md` exactly once with the combined\s+non-secret state/i,
+    'documents the parent-owned single memory update',
+  );
+  assert.match(
+    skill,
+    /Workers may read\s+only the raw `memory-bank\.md` bytes needed to compare that hash/,
+  );
+  assert.match(
+    skill,
+    /must\s+never parse, display, search, summarize, edit, replace, append, create, or\s+delete the file/,
+  );
   assert.ok(skill.includes('memory-bank.md'), 'uses memory-bank.md');
   assert.match(skill, /Do not record Google\s+account details/, 'blocks credential storage');
   assert.ok(skill.includes('mcp__firebase__firebase_get_environment'), 'uses Firebase MCP environment readback');
@@ -241,4 +253,55 @@ test('iOS push chain: guided orchestration and manual boundaries stay explicit',
   assert.match(addPush, /owner-required installation handoff/);
   assert.match(shared, /Apple setup is manual and user-owned/);
   assert.match(shared, /Do not automate Apple\s+configuration, generate a proof contract, inspect signing assets/);
+});
+
+test('iOS fallback has one combined setup-apns owner and one terminal result', () => {
+  const addPush = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
+    'utf8',
+  );
+  const apple = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/SKILL.md'),
+    'utf8',
+  );
+  const apns = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'),
+    'utf8',
+  );
+  const appleEvals = JSON.parse(fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/evals/evals.json'),
+    'utf8',
+  )).evals;
+  const apnsEvals = JSON.parse(fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apns/evals/evals.json'),
+    'utf8',
+  )).evals;
+
+  const fallback = addPush.match(
+    /use this deterministic serial fallback[\s\S]*?(?=\n#### 4\.3)/,
+  )?.[0] || '';
+  assert.match(fallback, /apply the iOS combined envelope through the internal orchestrated owner\s+mode of `\/setup-apns` once/);
+  assert.match(fallback, /do not invoke\s+`\/setup-apple-ios` separately/);
+  assert.match(fallback, /one final iOS `WORKER_RESULT`/);
+  assert.strictEqual(
+    (fallback.match(/apply the iOS combined envelope[\s\S]*?`\/setup-apns` once/g) || []).length,
+    1,
+    'fallback invokes one combined setup-apns owner',
+  );
+
+  assert.match(apple, /do not emit an intermediate Apple `WORKER_RESULT`/i);
+  assert.match(apple, /returns exactly one final iOS result/i);
+  assert.match(apns, /do not emit or accept an intermediate Apple result|do not invoke `\/setup-apple-ios` separately and do\s+not emit or accept an intermediate Apple result/i);
+  assert.match(apns, /return exactly one\s+final iOS `WORKER_RESULT`/i);
+
+  assert.match(
+    appleEvals.find(({ coverage }) => coverage === 'combined-ios-fallback-no-intermediate-result')
+      ?.expected_output || '',
+    /invokes setup-apns exactly once/,
+  );
+  assert.match(
+    apnsEvals.find(({ coverage }) => coverage === 'single-combined-fallback-result')
+      ?.expected_output || '',
+    /exactly one final iOS WORKER_RESULT/,
+  );
 });

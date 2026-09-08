@@ -212,6 +212,48 @@
       "prompt": "Set up FCM in an older generated app with no firebase.json. firebase_update_environment says the active project was updated, but firebase_get_environment still reports no active project.",
       "expected_output": "Before retrying project activation, the skill creates a regular project-root firebase.json with the exact consent-first React Native Messaging settings, or safely merges those settings while preserving unrelated keys. It then calls firebase_update_environment with both project_dir and active_project, reruns firebase_get_environment, and proceeds only when both values persist before calling firebase_get_project.",
       "files": []
+    },
+    {
+      "id": 26,
+      "coverage": "parallel-platform-success",
+      "prompt": "Configure both Android and iOS. The Firebase project is active and read back, both exact app decisions are frozen, and the qualified platform-worker preflight succeeds.",
+      "expected_output": "The parent keeps authentication and project activation serial, launches exactly two mobile-app:firebase-platform-worker tasks in one bounded batch with disjoint Android/iOS exclusive files, joins both, validates each status plus WORKER_RESULT, performs fresh combined identity/config validation, and updates memory-bank.md once.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "coverage": "single-platform-worker",
+      "prompt": "Only iOS is selected and its Firebase app decision is complete. Configure the iOS client.",
+      "expected_output": "After serial Firebase foundation work, the skill runs one synchronous mobile-app:firebase-platform-worker for iOS, does not create a dummy Android task, validates the immutable iOS result, and retains the same parent-only final validation and single memory update.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "coverage": "task-unavailable-inline-fallback",
+      "prompt": "Both native platforms need Firebase client configuration, but Task or the qualified firebase platform worker is unavailable.",
+      "expected_output": "The skill starts no worker, prints one concise fallback notice, and executes the same frozen Android-then-iOS algorithm inline with identical Firebase MCP-only, exclusive-path, validation, retry, and result rules before the combined parent validation and one memory update.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "coverage": "malformed-platform-result",
+      "prompt": "The Android worker reports DONE with a duplicated or wrong-project WORKER_RESULT while the iOS worker succeeds.",
+      "expected_output": "The parent joins both tracks, rejects Android as blocked, accepts and revalidates the independent iOS result, does not infer Android success from files, does not enter fallback after execution started, and records platform states separately.",
+      "files": []
+    },
+    {
+      "id": 30,
+      "coverage": "partial-platform-dispatch",
+      "prompt": "A two-platform Firebase task batch starts Android, but iOS is definitely undispatched.",
+      "expected_output": "The parent does not run iOS inline while Android owns its files. It joins and validates Android first, then runs only iOS synchronously by worker or inline fallback after ownership release, never reruns Android, and never permits concurrent ownership of one platform.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "coverage": "firebase-worker-executable-contract",
+      "prompt": "Preflight and then execute one Firebase platform worker while memory-bank.md exists and result paths are project-relative.",
+      "expected_output": "The Task prompt carries operation: preflight and accepts only the exact mutation-free capability result. Execution receives the pre-wave SHA-256, may read only raw memory-bank.md bytes to compare that hash, never writes memory, and returns project-relative paths that the parent resolves against absolute exclusive files. Every return must explicitly report scratchCleanupComplete true and ownershipReleased true before fallback, retry, or parent file access.",
+      "files": []
     }
   ]
 }

@@ -98,6 +98,20 @@
       "prompt": "The APNs .p12 certificates are already uploaded to Firebase. Resume setup for a development and ad-hoc app.",
       "expected_output": "The skill treats this as the .p12 resume path, re-establishes the exact recorded project/app/Team/bundle identity, requires a bounded Yes/No confirmation that Firebase accepted both development and production certificate entries, runs the canonical push validator rather than comparing the plist to itself, and records configured, device verification pending without requesting credential files, passwords, paths, identifiers, or screenshots.",
       "files": []
+    },
+    {
+      "id": 15,
+      "coverage": "orchestrated-parent-upload-attestation",
+      "prompt": "Apply setup-apns through the iOS prerequisites worker after the parent collected the exact credential route and Firebase Console upload attestation.",
+      "expected_output": "The worker validates Apple-before-APNs ordering and exact Firebase/Team/bundle/mode identity, asks no questions, handles no credential, invokes no nested worker or skill, writes no memory, and returns configured, device verification pending plus safe proposed memory fields only in one WORKER_RESULT.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "coverage": "single-combined-fallback-result",
+      "prompt": "Use the no-Task iOS fallback with complete parent confirmations for Apple setup and APNs upload.",
+      "expected_output": "setup-apns acts as the single combined fallback owner, consumes setup-apple-ios semantics first without separately invoking it, emits no intermediate Apple result, resolves the project-relative plist result against the absolute project root, writes no memory, and returns exactly one final iOS WORKER_RESULT.",
+      "files": []
     }
   ]
 }

@@ -43,6 +43,12 @@ const EXPECTED_COVERAGE = [
   'firebase-admin-key-forbidden',
   'apns-manual-handoff',
   'missing-firebase-json-project-activation',
+  'parallel-platform-success',
+  'single-platform-worker',
+  'task-unavailable-inline-fallback',
+  'malformed-platform-result',
+  'partial-platform-dispatch',
+  'firebase-worker-executable-contract',
 ].sort();
 const EXPECTED = {
   projectId: 'field-ops-prod',
@@ -346,6 +352,12 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(skill, /Never request, download, copy, or commit a Firebase Admin/);
   assert.match(skill, /regular,\s+non-symlink project-root `firebase\.json`/);
   assert.match(skill, /both the\s+exact project root as `project_dir` and the selected ID as `active_project`/);
+  assert.match(skill, /authentication, project selection\/creation, project activation, and both\s+activation read-backs in the parent and strictly serial/);
+  assert.match(skill, /launch exactly two\s+`mobile-app:firebase-platform-worker` execution tasks/);
+  assert.match(skill, /If only one platform needs work, use one synchronous worker/);
+  assert.match(skill, /exactly\s+one parseable `WORKER_RESULT`/);
+  assert.match(skill, /Cap at 2 retries per platform/);
+  assert.match(skill, /Treat dispatch as potentially partial/);
   assert.match(provisioning, /## 1\. Verify Firebase MCP authentication/);
   assert.match(provisioning, /firebase_get_environment/);
   assert.match(provisioning, /firebase_login/);
@@ -381,4 +393,41 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(apnsSkill, /user-confirmed; not portal proof/);
   assert.doesNotMatch(apnsSkill, /npx firebase-tools/);
   assert.doesNotMatch(apnsSkill, /apps:create IOS/);
+});
+
+test('Firebase worker contract hashes memory without owning it and releases every file', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/setup-fcm/SKILL.md'), 'utf8');
+  const worker = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'agents/firebase-platform-worker.md'),
+    'utf8',
+  );
+  const evaluation = JSON.parse(fs.readFileSync(EVAL_PATH, 'utf8')).evals
+    .find(({ coverage }) => coverage === 'firebase-worker-executable-contract');
+
+  assert.ok(evaluation, 'setup-fcm has an executable worker-contract eval');
+  assert.match(skill, /operation: preflight/);
+  assert.match(skill, /memory_bank_sha256: <pre-wave SHA-256>/);
+  assert.match(skill, /only the raw `memory-bank\.md` bytes needed to compare that hash/);
+  assert.match(
+    skill,
+    /must\s+never parse, display, search, summarize, edit, replace, append, create, or\s+delete the file/,
+  );
+  assert.match(worker, /\*\*Hash-only memory access\.\*\*/);
+  assert.match(worker, /only permitted access to\s+`memory-bank\.md` is reading its raw bytes to compute and compare SHA-256/);
+  assert.match(worker, /Never edit, replace, append, create, or delete it/);
+  assert.match(worker, /"executeMemoryAccess":"sha256-only"/);
+
+  for (const content of [skill, worker]) {
+    assert.match(content, /scratchCleanupComplete/);
+    assert.match(content, /ownershipReleased/);
+    assert.match(content, /project-relative paths/i);
+    assert.match(content, /resolve[\s\S]{0,160}(?:against|with) `?working_dir`?/i);
+    assert.match(content, /absolute[\s\S]{0,160}`?exclusive_files`|`?exclusive_files`[\s\S]{0,160}absolute/i);
+  }
+  assert.match(skill, /including `NEEDS_CONTEXT` and `BLOCKED`/);
+  assert.match(skill, /false\/missing cleanup or release\s+flag is `BLOCKED`/);
+  assert.match(worker, /Set `scratchCleanupComplete` explicitly on every return/);
+  assert.match(worker, /Set `ownershipReleased` explicitly on every return/);
+  assert.match(evaluation.expected_output, /may read only raw memory-bank\.md bytes/);
+  assert.match(evaluation.expected_output, /never writes memory/);
 });

@@ -11,6 +11,177 @@ generated Apple proof files.
 The agent coordinates identity, sequencing, and safe confirmations; it does not
 claim portal proof.
 
+## Internal orchestrated owner contract
+
+The existing direct mode remains interactive and user-owned. Internal push
+orchestration validates the combined Apple-before-APNs envelope through the
+exact internal `mobile-app:push-ios-prerequisites-worker` contract below. When
+worker dispatch is unavailable, `/setup-apns` is the single combined fallback
+owner: it applies this `/setup-apple-ios` guide first, then its APNs guide, and
+returns one final iOS worker result. Do not invoke `/setup-apple-ios`
+separately in that fallback or emit an intermediate Apple result. This is not
+a new user-facing command.
+
+The operation is a normal prompt field, never a `Task` API mode. Every prompt
+starts with:
+
+```yaml
+contract_version: 1
+run_id: <opaque parent-generated id>
+working_dir: <canonical absolute project root>
+plugin_root: <absolute plugin root>
+worker_name: mobile-app:push-ios-prerequisites-worker
+operation: preflight|execute
+```
+
+For `operation: preflight`, that common envelope is complete. It must inspect
+no project state, access no memory, make no network/cloud call, acquire no
+ownership, and read/write no file.
+
+For `operation: execute`, also require:
+
+```yaml
+memory_bank_path: <working_dir>/memory-bank.md
+memory_bank_sha256: <pre-wave hash>
+exclusive_files: []
+decision_envelope:
+  firebase_project_id: <exact>
+  firebase_ios_app_id: <exact>
+  bundle_identifier: <exact>
+  plist_path: <exact absolute active plist path>
+  apple_team_id: <10 uppercase ASCII letters/digits>
+  selected_modes: development|ad-hoc|development,ad-hoc
+  apple_confirmations:
+    identity: true
+    membership_access_agreements: true
+    explicit_app_id: true
+    push_capability: true
+    intended_devices_registered: true
+    development_certificate: true|not-applicable
+    development_profile: true|not-applicable
+    distribution_certificate: true|not-applicable
+    ad_hoc_profile: true|not-applicable
+    local_xcode_signing: true
+  apns_method: p8|p12
+  apns_key_id: <safe id or null>
+  certificate_environments: development|production|development,production|null
+  firebase_console_upload_confirmed: true
+  apple_confirmed_at: <UTC timestamp>
+  apns_confirmed_at: <UTC timestamp>
+```
+
+Resolve `working_dir` and `plist_path` with `realpath`; require the first to be
+the current project and the second to be the exact regular non-symlink active
+plist inside it. Require Firebase project/app/plist identity, evaluated Expo
+bundle, Apple Team, selected mode set, and safe existing handoff state to
+remain exact. Do not substitute a convenient project, same-bundle Firebase
+app, active Xcode Team, portal default, remembered value, or newly typed
+identity. Verify `memory_bank_sha256` at start and before return; the hash is a
+concurrency guard, not permission to source missing decisions from memory.
+
+The iOS prerequisite worker is credential-blind and read-only.
+`exclusive_files` must be empty. It may read bounded local non-secret identity,
+run the existing local identity/config validator, and consume parent-supplied
+safe confirmations. It must not mutate project files, `memory-bank.md`,
+Apple/Firebase portals, cloud resources, Keychain, Xcode signing state,
+credentials, profiles, or devices. All manual Apple and Firebase Console
+actions remain user-operated and parent-coordinated.
+
+Worker-mode protocol:
+
+1. Never call `AskUserQuestion`. If a required decision or user attestation is
+   absent, ambiguous, stale, or newly required, return
+   `NEEDS_CONTEXT: <exact missing parent decision>` as the literal first line.
+   Never infer Yes, choose a credential route, or expand the selected modes.
+2. Return `BLOCKED: <safe identity mismatch>` for project/environment,
+   Firebase app/plist, Team, bundle, or mode drift. Do not repair identity.
+3. Preserve all direct-mode manual-action, privacy, credential, ordering,
+   static-check, and proof boundaries. Parent confirmation remains
+   user-confirmed, not portal proof.
+4. Return exactly one terminal result for the combined Apple-before-APNs
+   validation. Never emit a setup-Apple intermediate result. The parent alone
+   joins this result and merges its safe memory sections.
+
+### Exact worker return protocol
+
+Every operation returns a literal first line, one blank line, and exactly one
+single-line `WORKER_RESULT: {...}` with no additional prose. Status mapping is
+exact:
+
+| Literal first line | JSON `status` | Required matching array |
+|---|---|---|
+| `DONE` | `done` | `concerns`, `contextRequests`, and `blockers` are empty |
+| `DONE_WITH_CONCERNS: <comma-separated concerns>` | `done_with_concerns` | `concerns` is the same non-empty ordered list; the other two are empty |
+| `NEEDS_CONTEXT: <stable reason code>` | `needs_context` | `contextRequests` is exactly `[<stable reason code>]`; the other two are empty |
+| `BLOCKED: <reason>` | `blocked` | `blockers` is exactly `[<reason>]`; the other two are empty |
+
+Do not use another JSON status spelling.
+
+A successful `preflight` is exactly:
+
+```text
+DONE
+
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-ios-prerequisites-worker","runId":"<id>","operation":"preflight","stage":"preflight","status":"done","capabilities":{"supportedOperations":["preflight","execute"],"preflightRequiresExecutionEnvelope":false,"preflightCloudCalls":false,"preflightFileReads":false,"preflightFileWrites":false,"mayPrompt":false,"mayDelegate":false,"memoryWrites":false,"executeSupported":true,"executeCloudAccess":"none","executeWriteScope":"none"},"identities":{},"decisions":{},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"capability-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Push iOS prerequisites worker capability preflight succeeded."}
+```
+
+A successful `execute` uses this exact shape:
+
+```text
+DONE
+
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-ios-prerequisites-worker","runId":"<id>","operation":"execute","stage":"ios-prerequisites","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","firebaseIosAppId":"<id>","bundleIdentifier":"<id>","appleTeamId":"<id>"},"decisions":{"plistPath":"<project-relative plist path>","selectedModes":"development,ad-hoc","appleConfirmations":{"identity":true,"membershipAccessAgreements":true,"explicitAppId":true,"pushCapability":true,"intendedDevicesRegistered":true,"developmentCertificate":true,"developmentProfile":true,"distributionCertificate":true,"adHocProfile":true,"localXcodeSigning":true},"apnsMethod":"p8","apnsKeyId":"<safe id>","certificateEnvironments":null,"firebaseConsoleUploadConfirmed":true,"appleConfirmedAt":"<UTC timestamp>","apnsConfirmedAt":"<UTC timestamp>"},"changedFiles":[],"validatedFiles":["<project-relative plist path>"],"validations":[{"name":"ios-identity","ok":true},{"name":"apple-confirmation-envelope","ok":true},{"name":"apns-confirmation-envelope","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","appleState":{"status":"user-confirmed; not portal proof"},"apnsState":{"status":"configured, device verification pending"},"selectedModes":"development,ad-hoc","credentialType":"apns-auth-key"}
+```
+
+The JSON status must agree with the first line. Require exact `contractVersion`,
+worker, run ID, operation, stage, Firebase project/iOS app, bundle, Team,
+selected modes, all mode-aware Apple confirmations, APNs method, safe
+conditional Key ID/environments, upload attestation, and timestamps. All
+result paths are normalized `/`-separated project-relative paths, never
+absolute. Resolve `decisions.plistPath` and every `validatedFiles` entry
+against `working_dir` before comparing them with the absolute active plist
+path; never compare raw relative and absolute strings. `changedFiles` must
+remain empty. `memoryPatch.sections` may contain only the safe Apple and APNs
+templates derived from the supplied confirmations. Never return credentials,
+paths to credentials, account identity, device data, signing-asset
+identifiers, screenshots, or raw config/portal output.
+
+### `setup-apple-ios` worker decisions
+
+The envelope must carry the identity-continuity decision plus every applicable
+manual section attestation from this guide. If a missing explicit App ID would
+need creation, the parent must also supply the user's exact create/do-not-create
+decision before the user performs that action and dispatches the worker. The
+worker checks `apple_confirmations` in canonical order and returns the safe
+Apple memory block in `WORKER_RESULT.memoryPatch.sections`; it does not write
+the block itself.
+
+### `setup-apns` worker decisions and prerequisite
+
+Within the combined worker or the single `/setup-apns` fallback owner, apply
+all `/setup-apple-ios` identity, capability, device, signing, profile, and
+Xcode semantics before applying `/setup-apns` semantics. Every applicable
+`apple_confirmations` field must be complete and mode-correct before APNs state
+is considered. Missing, false, contradictory, or mode-inapplicable Apple state
+returns
+`NEEDS_CONTEXT: setup-apple-ios-confirmation-required`; an APNs confirmation
+cannot compensate for it.
+
+The APNs envelope must also carry the user-selected `.p8`/`.p12` route, every
+applicable readiness and Firebase Console acceptance attestation, and the exact
+certificate environments required by the selected modes. For `p8`, require
+`certificate_environments: null`; include the safe Key ID only when the owner
+handoff needs it. For `p12`, require no Key ID and exact development/production
+environment coverage for the selected modes. Credential material and local
+credential paths remain prohibited. Return the safe APNs memory block in
+`WORKER_RESULT.memoryPatch.sections`; never write it.
+
+Direct behavior remains unchanged unless all worker contract markers are
+present and `worker_name` is exactly
+`mobile-app:push-ios-prerequisites-worker`. Direct use remains
+`/setup-apple-ios` followed by `/setup-apns`, each with its existing
+interactive completion and safe memory write.
+
 Official references:
 
 - Apple Developer Program enrollment:
@@ -90,6 +261,10 @@ For each section:
    **Yes** and **No** choices.
 5. Continue only after **Yes**. On **No**, remain at the current section and
    provide safe remediation or the correct owner.
+
+In orchestrated worker mode, the parent-supplied decision and attestation for
+each section replaces only the corresponding question. Missing or changed
+decisions return `NEEDS_CONTEXT`; the worker never calls `AskUserQuestion`.
 
 These confirmations are attestations from the user, not portal read-back,
 machine validation, or proof. Never describe them as verified, validated, or
@@ -285,6 +460,10 @@ Do not store account identity, device data, certificate/profile identifiers,
 paths, screenshots, credentials, or diagnostics. This state is a resumable
 checklist and continuity handoff only. It is not evidence from Apple and must
 not be used to claim that a build or physical delivery succeeded.
+
+In orchestrated worker mode, return this allowlisted block under
+`WORKER_RESULT.memoryPatch.sections` for the parent to merge serially. Do not
+write `memory-bank.md` or any other file.
 
 Route next to `/setup-apns`, where the user may choose a manually uploaded APNs
 authentication key (`.p8`) or APNs certificate (`.p12`). `/build-ios` must

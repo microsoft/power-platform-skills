@@ -20,6 +20,44 @@ uploading it manually in Firebase Console. FCM on iOS depends on Firebase
 Messaging mapping the APNs device token to an FCM registration token;
 `expo-notifications` alone is insufficient.
 
+## Internal orchestrated worker mode
+
+Direct user invocation remains the interactive workflow below. A parent may
+apply the combined Apple/APNs owner through the immutable
+`mobile-app:push-ios-prerequisites-worker` contract defined by
+`apple-ios-signing-provisioning.md`. When Task dispatch is unavailable, this
+skill is the single combined fallback owner: consume
+`/setup-apple-ios` semantics first, then APNs semantics, and return exactly one
+final iOS `WORKER_RESULT`. Do not invoke `/setup-apple-ios` separately and do
+not emit or accept an intermediate Apple result.
+
+Enter worker mode only when the prompt has the exact `contract_version: 1`,
+run/project fields, `worker_name:
+mobile-app:push-ios-prerequisites-worker`, `operation: execute`, pre-wave
+memory hash, empty `exclusive_files`, and complete `decision_envelope`.
+`operation` is a normal prompt field, not a `Task` API mode.
+
+In worker mode, remain credential-blind and read-only:
+
+- require every applicable `apple_confirmations` field for the same pinned
+  project, Firebase app/plist, Team, bundle, and mode scope before considering
+  any APNs state; missing, false, contradictory, or mode-inapplicable Apple
+  state returns `NEEDS_CONTEXT: setup-apple-ios-confirmation-required`;
+- never call `AskUserQuestion`; the parent envelope must contain the user's
+  credential-route choice and every required readiness/upload attestation, and
+  any missing or newly required decision returns `NEEDS_CONTEXT`;
+- do not perform portal actions, handle credentials, mutate cloud/local state,
+  or write `memory-bank.md`; verify its raw-byte SHA-256 at start and again
+  before return;
+- preserve every manual `.p8`/`.p12` action, identity check, static gate,
+  privacy rule, and user-confirmed-not-portal-proof boundary;
+- apply the exact literal-status/JSON-status mapping in the shared reference
+  and return exactly one safe single-line `WORKER_RESULT`, including only
+  allowlisted Apple/APNs `memoryPatch.sections`.
+
+The worker may consume only safe parent attestations; it never receives or
+examines the APNs credential.
+
 Official references:
 
 - Apple account keys:
@@ -65,8 +103,11 @@ certificates, or provisioning profiles. Route those to `/setup-apple-ios`.
 
 **Telemetry checkpoint: `validate_apns_identity`**
 
-1. Read the `/setup-fcm` handoff and the `Apple iOS manual setup
-   (user-confirmed; not portal proof)` block from `memory-bank.md`.
+1. In direct mode, read the `/setup-fcm` handoff and the `Apple iOS manual
+   setup (user-confirmed; not portal proof)` block from `memory-bank.md`. In
+   orchestrated worker mode, do not parse memory or use it for decisions;
+   consume the complete parent envelope and use the raw-byte hash only as the
+   concurrency guard.
 2. Require the Firebase project ID, immutable selected Firebase iOS app ID,
    Firebase iOS bundle identifier, evaluated plist path, Apple Team ID, and
    explicit App ID/Push user confirmations. Do not reconstruct missing values.
@@ -116,6 +157,10 @@ Continue only on **Yes**. On **No**, stop and route the mismatched identity to
 its owning setup skill. This is a user confirmation of continuity, not
 Firebase or Apple portal proof.
 
+In orchestrated worker mode, do not ask this question. Require the matching
+identity-continuity decision and complete mode-aware `apple_confirmations` in
+the immutable envelope.
+
 ## Phase 2 — Choose the APNs credential route
 
 ### Resume an already completed manual upload
@@ -150,6 +195,9 @@ Choices:
 ```
 
 Do not block or warn as an error merely because the user selects `.p12`.
+
+In orchestrated worker mode, never select or ask for a route. Consume the exact
+parent-supplied user choice or return `NEEDS_CONTEXT`.
 
 ### Route A — APNs authentication key (`.p8`)
 
@@ -247,6 +295,10 @@ with non-secret error text that the user chooses to summarize. This attests
 that the user completed the Console action. It is not portal read-back or
 physical delivery evidence.
 
+In orchestrated worker mode, require this exact parent-supplied user
+attestation for the pinned identity and all required environments. Do not ask
+for troubleshooting text or perform/upload anything.
+
 ## Phase 4 — Static app checks and safe state
 
 Verify local, non-secret app configuration includes:
@@ -297,6 +349,10 @@ The comments above describe conditional fields; do not copy them into
 credential contents/paths/passwords, browser evidence, account identity,
 credentials, or diagnostics.
 
+In orchestrated worker mode, do not update `memory-bank.md`; return the same
+allowlisted fields under `WORKER_RESULT.memoryPatch.sections` for serial parent
+merge.
+
 ## Completion and separation
 
 End with exactly:
@@ -314,3 +370,15 @@ Only `/verify-ios-push` may mark physical delivery verified after its complete
 physical-device matrix. Firebase Console upload, static checks, simulator,
 Expo Go, Metro, accepted FCM request, or foreground-only receipt are not
 delivery proof.
+
+In orchestrated worker mode, finish with one literal protocol status line, one
+blank line, and one exact single-line `WORKER_RESULT` after Apple-before-APNs
+validation. Require `operation: "execute"`, `stage: "ios-prerequisites"`,
+the exact status-array mapping, all pinned Firebase/app/bundle/Team identities
+and parent decisions, no changed files, the normalized project-relative active
+plist path, and only the safe states `user-confirmed; not portal proof` and
+`configured, device verification pending`. Resolve result paths against the
+project before comparing them with absolute prompt paths. Never compare raw
+relative and absolute strings. Direct mode keeps the exact user-facing
+completion text above and preserves the separate `/setup-apple-ios` then
+`/setup-apns` sequence and each direct owner's safe memory behavior.
