@@ -8,6 +8,7 @@ full tier before release.
 - **Skill:** `plugins/mcp-apps/skills/generate-codeful-mcp-tool/SKILL.md`
 - **Host contract:** `plugins/mcp-apps/references/codeful-tool-host-data-api.d.ts`
 - **Known-good sample:** `plugins/mcp-apps/samples/account-summary.tool.js`
+- **Known-good metadata:** `plugins/mcp-apps/samples/account-summary.tool.json`
 - **Eval definitions:** `evals.json`
 
 ## Eval data
@@ -20,23 +21,28 @@ Each case contains:
 - `expected_result_sample`: an expected result shape, when result-channel behavior matters;
 - `assertions`: behavior specific to that case.
 
-Apply every `common_assertions` entry to every generated tool.
+Apply every `common_assertions` entry to every generated tool pair.
 
 ## Layer 1: Static source assertions
 
 Inspect the generated output and verify:
 
-1. Exactly one final `.tool.js` exists.
+1. Exactly one final `.tool.js` and one matching `.tool.json` exist.
 2. The module exports an async `runTool({ toolInput, dataApi })`.
-3. There are no imports, `require` calls, package references, host transports, direct HTTP,
+3. The sidecar parses as JSON, contains exactly `name`, `description`, `inputSchema`, and
+   `outputSchema`, and its name matches both file basenames.
+4. The description is concise and model-actionable. Both schemas have object roots;
+   `inputSchema` captures all accepted fields and constraints; and `outputSchema`
+   describes only the `structuredContent` business payload.
+5. There are no imports, `require` calls, package references, host transports, direct HTTP,
    filesystem calls, environment reads, or top-level side effects.
-4. Input validation occurs before data access.
-5. Every Dataverse table, column, lookup, and choice value appears in the generated
+6. Input validation occurs before data access.
+7. Every Dataverse table, column, lookup, and choice value appears in the generated
    `RuntimeTypes.ts` used during the run.
-6. Queries use `page.rows`; pagination guards both `hasMoreRows` and `loadMoreRows`.
-7. Result objects follow either the plain-object or intentional-envelope contract.
-8. Reserved business keys are wrapped in `structuredContent`.
-9. There are no placeholders, credentials, real environment identifiers, or temporary
+8. Queries use `page.rows`; pagination guards both `hasMoreRows` and `loadMoreRows`.
+9. Result objects follow either the plain-object or intentional-envelope contract.
+10. Reserved business keys are wrapped in `structuredContent`.
+11. There are no placeholders, credentials, real environment identifiers, or temporary
    schema files.
 
 ## Layer 2: Execute with a mock dataApi
@@ -55,10 +61,15 @@ The mock should:
 
 Assert:
 
+- representative valid input conforms to `inputSchema`;
+- representative invalid input is rejected by `inputSchema` and the runtime;
 - calls use the expected singular table names and exact options;
 - invalid input produces no data API calls;
 - pagination stops at the requested bound;
 - result values are JSON-serializable;
+- the plain return or envelope `structuredContent` conforms to `outputSchema`;
+- `outputSchema` excludes result-channel transport fields while retaining any same-named
+  business fields nested inside the structured payload;
 - errors reject with actionable messages;
 - plain objects match the expected structured payload;
 - envelopes partition `content`, `structuredContent`, and `meta` correctly.
@@ -76,6 +87,7 @@ Score each output from 1-5 on:
 | Input safety | Are types, required fields, bounds, GUIDs, and OData strings validated? |
 | Schema safety | Are all Dataverse names and values verified instead of inferred? |
 | Runtime compatibility | Is the file self-contained ESM with the exact host entry point? |
+| Metadata contract | Does the sidecar accurately describe the tool and match runtime validation and structured output? |
 | Result visibility | Is data placed intentionally in model-visible or widget-private channels? |
 | Error behavior | Do failures throw without leaking internals or pretending success? |
 | UI handoff | When requested, does the widget receive the normalized complete result? |
@@ -92,6 +104,6 @@ below 4.
 
 ## Recording results
 
-For each run, record the eval id, generated file names, assertion failures, runtime error
-output, review scores, and whether temporary schema artifacts were removed. Do not commit
-generated eval outputs or environment-specific `RuntimeTypes.ts` files.
+For each run, record the eval id, generated runtime and sidecar names, assertion failures,
+runtime error output, review scores, and whether temporary schema artifacts were removed.
+Do not commit generated eval outputs or environment-specific `RuntimeTypes.ts` files.

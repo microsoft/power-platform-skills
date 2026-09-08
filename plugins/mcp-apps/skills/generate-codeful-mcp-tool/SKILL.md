@@ -2,7 +2,8 @@
 name: generate-codeful-mcp-tool
 version: 1.0.0
 description: >
-  Generate a self-contained JavaScript server runtime for an MCP codeful tool.
+  Generate a self-contained JavaScript server runtime and registration metadata
+  for an MCP codeful tool.
   Use when the user asks to create a codeful MCP tool, generate server logic for
   an MCP tool, write a runTool function, build a Dataverse-backed MCP tool, or
   pair MCP server logic with an MCP App widget.
@@ -22,12 +23,18 @@ Dataverse MCP tool, server logic for MCP App
 **References:**
 - Host API types: [codeful-tool-host-data-api.d.ts](../../references/codeful-tool-host-data-api.d.ts)
 - Known-good tool: [account-summary.tool.js](../../samples/account-summary.tool.js)
+- Known-good metadata: [account-summary.tool.json](../../samples/account-summary.tool.json)
 - Widget generation: [generate-mcp-app-ui](../generate-mcp-app-ui/SKILL.md)
 
 ---
 
-You generate one complete JavaScript module that runs as the server implementation of
-an MCP tool. The host imports the module and calls:
+You generate a matched pair of files for one MCP tool:
+
+- `<tool-name>.tool.js`: the complete JavaScript server implementation.
+- `<tool-name>.tool.json`: declarative registration metadata containing the tool name,
+  description, input schema, and output schema.
+
+The host imports the JavaScript module and calls:
 
 ```javascript
 await runTool({ toolInput, dataApi });
@@ -37,7 +44,8 @@ await runTool({ toolInput, dataApi });
 
 Before generating, establish:
 
-1. The tool's purpose and kebab-case tool name.
+1. The tool's purpose and kebab-case tool name. Use the purpose to write a concise,
+   model-actionable tool description; ask only when the intended behavior is ambiguous.
 2. Its input fields, types, required fields, and constraints. Accept a JSON Schema, a
    representative input object, or an exact field description. Never guess the input shape.
 3. The expected result, preferably as a representative output object.
@@ -47,17 +55,18 @@ Before generating, establish:
 Ask only for information that is missing. A sample input/output is preferred but not
 mandatory when the user has supplied an equally precise contract.
 
-## Phase 1: Read the runtime contract
+## Phase 1: Read the runtime and metadata contracts
 
 Read:
 
 ```text
 ${PLUGIN_ROOT}/references/codeful-tool-host-data-api.d.ts
 ${PLUGIN_ROOT}/samples/account-summary.tool.js
+${PLUGIN_ROOT}/samples/account-summary.tool.json
 ```
 
-The generated runtime is plain ESM JavaScript. Type files are generation-time references
-only and MUST NOT be imported by the output.
+The generated runtime is plain ESM JavaScript, and the sidecar is plain JSON. Type files
+are generation-time references only and MUST NOT be imported by the output.
 
 ## Phase 2: Verify Dataverse schema when needed
 
@@ -88,12 +97,16 @@ For a Dataverse-backed tool:
 
 If discovery or type generation fails, stop and report the error. Do not fall back to
 invented tables or columns. Delete the temporary types and directory after validation so
-the final output remains one JavaScript file.
+the final output contains only the requested `.tool.js`, `.tool.json`, and optional
+widget files.
 
-## Phase 3: Generate the server runtime
+## Phase 3: Generate the paired tool artifacts
 
-Write `<tool-name>.tool.js` in the user's working directory unless they requested another
-file name. The file MUST:
+Write `<tool-name>.tool.js` and `<tool-name>.tool.json` in the user's working directory
+unless they requested another output directory. Both files MUST use the same basename,
+which MUST equal the confirmed kebab-case tool name.
+
+The JavaScript file MUST:
 
 - Export exactly one MCP entry point named `runTool`, preferably:
 
@@ -123,6 +136,40 @@ file name. The file MUST:
   instances, or cyclic objects.
 - Emit telemetry only when the user explicitly asks for it, and never include tool inputs,
   row contents, identifiers, or other user data in telemetry properties.
+
+The JSON sidecar MUST be valid JSON with exactly these top-level fields:
+
+```json
+{
+  "name": "account-summary",
+  "description": "Search accounts and return revenue and status summaries.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+```
+
+- `name`: exactly the confirmed tool name and the shared file basename.
+- `description`: concise, model-actionable guidance explaining what the tool does and when
+  to call it. Do not copy the user's prompt verbatim or include implementation details.
+- `inputSchema`: the complete JSON Schema for `toolInput`. Use an object root, list every
+  accepted field under `properties`, identify required fields with `required`, encode
+  runtime constraints such as bounds, formats, enums, and array item shapes, and set
+  `additionalProperties: false` unless the user explicitly requires extensible input.
+- `outputSchema`: the JSON Schema for the model-visible `structuredContent` business
+  payload. For a plain-object return, describe the complete returned object because the
+  host promotes it to `structuredContent`. For an envelope return, describe only its
+  `structuredContent` property. Never include `content`, authored `meta`, or runtime
+  `_meta` in `outputSchema`.
+
+Use standard JSON Schema keywords only. Do not include credentials, environment
+identifiers, Dataverse discovery artifacts, host configuration, JavaScript expressions,
+comments, or placeholders in the sidecar.
 
 ## Result-channel contract
 
@@ -167,37 +214,46 @@ Do not mix envelope keys with unrelated top-level business fields.
 
 Before reporting completion:
 
-1. Confirm exactly one final `.tool.js` was created for this skill.
+1. Confirm exactly one final `.tool.js` and one matching `.tool.json` were created for
+   this skill.
 2. Import the file as an ESM data URL with Node.js and assert that `runTool` is a function.
    Importing MUST NOT execute data access or other top-level side effects.
-3. Grep the output for imports, `require`, placeholders, guessed columns, and unsupported
+3. Parse the sidecar with `JSON.parse`. Confirm it has exactly `name`, `description`,
+   `inputSchema`, and `outputSchema`; the name matches both filenames; both schemas have
+   object roots; and every input constraint enforced by the runtime is represented in
+   `inputSchema`.
+4. Grep the output for imports, `require`, placeholders, guessed columns, and unsupported
    host access.
-4. When representative input/output was supplied, invoke `runTool` with an in-memory mock
+5. When representative input/output was supplied, invoke `runTool` with an in-memory mock
    `dataApi` from an inline Node script. Do not create a persistent test file.
-5. Confirm the returned value matches the requested result contract and contains no
-   functions or non-serializable values.
-6. Delete all temporary schema artifacts.
+6. Confirm the returned value matches the requested result contract, contains no
+   functions or non-serializable values, and its structured payload conforms to
+   `outputSchema`. Confirm the representative input conforms to `inputSchema`.
+7. Delete all temporary schema artifacts.
 
 ## Optional MCP App handoff
 
 When the user asks for a widget:
 
-1. Finish and validate the `.tool.js` first.
+1. Finish and validate the paired `.tool.js` and `.tool.json` first.
 2. Build a representative result sample:
    - Plain tool return -> treat it as `structuredContent`.
    - Envelope return -> pass `content`, `structuredContent`, and `_meta` (renamed from the
      authored `meta` field).
 3. Invoke `generate-mcp-app-ui` with the visual requirements, tool name, input sample, and
    representative full result.
-4. Keep the outputs separate: one `.tool.js` and one self-contained `.html`.
+4. Keep the outputs separate: one `.tool.js`, one `.tool.json`, and one self-contained
+   `.html`.
 
 ## Refinement
 
-When editing an existing codeful tool, read the file and change only the requested
-behavior. Re-run schema verification if the edit introduces a table, column, lookup, or
-choice value not already verified for the file.
+When editing an existing codeful tool, read both paired files and change only the
+requested behavior. Keep runtime validation and metadata schemas synchronized. Re-run
+schema verification if the edit introduces a table, column, lookup, or choice value not
+already verified for the file.
 
 ## Completion response
 
-State the generated file path and summarize its input and result contracts. If a widget
-was requested, also state the HTML path and which result channels it consumes.
+State both generated tool file paths and summarize the description, input contract, and
+structured result contract. If a widget was requested, also state the HTML path and which
+result channels it consumes.

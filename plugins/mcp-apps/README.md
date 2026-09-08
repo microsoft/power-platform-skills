@@ -1,7 +1,7 @@
 # MCP Apps Tool and Widget Generator
 
-Generate JavaScript server runtimes for codeful MCP tools and self-contained HTML widgets
-that visualize their results.
+Generate JavaScript server runtimes and JSON Schema registration metadata for codeful MCP
+tools, plus self-contained HTML widgets that visualize their results.
 
 ## Installation
 
@@ -33,8 +33,12 @@ accounts, and returns their names, revenue, and status.
 
 For Dataverse-backed tools, the skill uses PAC CLI to discover exact table logical names
 and generates a temporary `RuntimeTypes.ts` for verified columns, lookup shapes, and choice
-values. The type file is removed after generation. The final output is one
-`<tool-name>.tool.js` file with:
+values. The type file is removed after generation. The final output is a matched pair:
+
+- `<tool-name>.tool.js` contains the self-contained runtime.
+- `<tool-name>.tool.json` contains the tool registration metadata.
+
+The JavaScript file exports:
 
 ```javascript
 export async function runTool({ toolInput, dataApi }) {
@@ -44,6 +48,27 @@ export async function runTool({ toolInput, dataApi }) {
 
 The runtime is self-contained: no packages, imports, network access, filesystem access,
 environment variables, or persistent state.
+
+The JSON sidecar keeps registration concerns out of executable code:
+
+```json
+{
+  "name": "account-summary",
+  "description": "Search accounts by name and return revenue and status summaries.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {}
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {}
+  }
+}
+```
+
+`inputSchema` describes the complete `toolInput` object and its validation constraints.
+`outputSchema` describes only the model-visible `structuredContent` business payload. It
+does not include conversational `content`, authored `meta`, or runtime `_meta`.
 
 ### Generate an MCP App widget
 
@@ -77,8 +102,9 @@ The UI skill accepts:
 ### Generate both
 
 Ask `/generate-codeful-mcp-tool` for a widget in the same request. After validating the
-server file, it invokes the UI skill with a representative normalized result. The outputs
-remain separate: one `.tool.js` server runtime and one `.html` widget.
+paired tool files, it invokes the UI skill with a representative normalized result. The
+outputs remain separate: one `.tool.js` server runtime, one `.tool.json` metadata
+sidecar, and one `.html` widget.
 
 ## Codeful tool result contract
 
@@ -104,12 +130,14 @@ The envelope keys are reserved. If business data itself contains `content`,
 
 ## What it produces
 
-- A single self-contained `.tool.js` for codeful server logic.
+- A self-contained `.tool.js` for codeful server logic and a matching `.tool.json`
+  registration sidecar.
 - Optionally, a single self-contained `.html` widget using
   `@modelcontextprotocol/ext-apps` and Fluent UI Web Components.
 
-See [`samples/account-summary.tool.js`](samples/account-summary.tool.js) for a complete
-server example, [`samples/flight-status-widget.html`](samples/flight-status-widget.html)
+See [`samples/account-summary.tool.js`](samples/account-summary.tool.js) and
+[`samples/account-summary.tool.json`](samples/account-summary.tool.json) for a complete
+paired tool example, [`samples/flight-status-widget.html`](samples/flight-status-widget.html)
 for a read-only widget, and
 [`samples/weather-refresh-widget.html`](samples/weather-refresh-widget.html) for an
 interactive widget.
@@ -123,6 +151,7 @@ references/codeful-tool-host-data-api.d.ts       - Injected server API contract
 references/mcp-apps-reference.md                 - MCP Apps result and lifecycle patterns
 references/design-guidelines.md                  - Visual design defaults
 samples/account-summary.tool.js                  - Codeful tool example
+samples/account-summary.tool.json                - Tool registration metadata example
 samples/flight-status-widget.html                - Read-only widget example
 samples/weather-refresh-widget.html              - Interactive widget example
 ```
