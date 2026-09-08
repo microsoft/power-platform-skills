@@ -55,3 +55,48 @@ test("persists correlation state without storing the project path", (t) => {
     null
   );
 });
+
+test("requires identity unless latest fallback is explicitly allowed", (t) => {
+  const original = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-state-"));
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = original;
+    }
+  });
+
+  const firstRoot = path.join(configDir, "first-project");
+  const secondRoot = path.join(configDir, "second-project");
+  const now = Date.now();
+  state.recordStart("add-localization", "first-session", firstRoot, now);
+  state.recordStart("add-localization", "second-session", secondRoot, now + 1);
+
+  assert.equal(state.findActive("add-localization", undefined), null);
+  assert.equal(state.findActive("add-localization", { invalid: true }), null);
+  assert.equal(
+    state.findActive(
+      "add-localization",
+      path.join(configDir, "unrelated-project")
+    ),
+    null
+  );
+  assert.equal(
+    state.findActive(
+      "add-localization",
+      path.join(configDir, "unrelated-project"),
+      { allowLatestFallback: true }
+    ).sessionId,
+    "second-session"
+  );
+  assert.equal(
+    state.findActive(
+      "add-localization",
+      undefined,
+      { sessionId: "first-session" }
+    ).sessionId,
+    "first-session"
+  );
+});

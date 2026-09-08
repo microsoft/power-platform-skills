@@ -321,7 +321,21 @@ function emit(
 }
 
 function emitSkillConfigured(skillName, projectRoot, eventInfo) {
-  const emitted = emit("configured", skillName, projectRoot, eventInfo);
+  // create-site starts before its target directory exists, so its configured
+  // event is the only caller allowed to use the latest unmatched start.
+  const active = skillName === "create-site"
+    ? invocationState.findActive(skillName, projectRoot, {
+      allowLatestFallback: true,
+    })
+    : undefined;
+  const emitted = emit(
+    "configured",
+    skillName,
+    projectRoot,
+    eventInfo,
+    {},
+    { active }
+  );
   if (emitted && skillName === "add-localization") {
     invocationState.markConfigured(skillName, projectRoot);
   }
@@ -364,8 +378,20 @@ function emitLocalizationCompleted(projectRoot, input) {
   return Boolean(emitted);
 }
 
+function abandonLocalizationInvocation(projectRoot, sessionId) {
+  const active = invocationState.findActive(
+    "add-localization",
+    projectRoot,
+    { sessionId }
+  );
+  if (!active) return false;
+  invocationState.removeState(active);
+  return true;
+}
+
 module.exports = {
   PACKAGE_FAILURE_CODES,
+  abandonLocalizationInvocation,
   buildCreateSiteEventInfo,
   buildLocalizationCompletionEventInfo,
   buildLocalizationEventInfo,
