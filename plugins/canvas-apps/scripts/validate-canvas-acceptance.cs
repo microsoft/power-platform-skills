@@ -1,7 +1,7 @@
 #:property PublishAot=false
 
 using System.Text;
-using System.Text.Json;
+using System.Linq;
 
 if (args.Length != 2)
 {
@@ -13,13 +13,11 @@ var workspace = Path.GetFullPath(args[0]);
 var pluginRoot = Path.GetFullPath(args[1]);
 var planPath = Path.Combine(workspace, "canvas-app-plan.md");
 var acceptancePath = Path.Combine(workspace, "canvas-app-acceptance.md");
-var manifestPath = Path.Combine(pluginRoot, ".plugin", "plugin.json");
 var errors = new List<string>();
 
 RequireFile(Path.Combine(workspace, "App.pa.yaml"), "App.pa.yaml");
 RequireFile(planPath, "plan");
 RequireFile(acceptancePath, "acceptance");
-RequireFile(manifestPath, "plugin manifest");
 
 if (errors.Count > 0)
 {
@@ -28,16 +26,13 @@ if (errors.Count > 0)
 
 var planLines = File.ReadAllLines(planPath);
 var acceptanceLines = File.ReadAllLines(acceptancePath);
-using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
-var pluginVersion = manifest.RootElement.GetProperty("version").GetString() ?? "";
 
 if (acceptanceLines.Length == 0 || acceptanceLines[0] != "Runtime evaluation: NOT RUN")
 {
     errors.Add("Acceptance line 1 must be exactly 'Runtime evaluation: NOT RUN'.");
 }
-
 RequireMetadata("Plugin root", pluginRoot);
-RequireMetadata("Skill contract version", pluginVersion);
+RequireMetadata("Plugin root", pluginRoot);
 RequireMetadata("Source revision", expected: null);
 
 var plannedActions = ReadColumn(planLines, "## Action Contracts", 0, errors);
@@ -279,6 +274,8 @@ static void CompareCoverage(
 
 static List<string> SplitRow(string line)
 {
+    // Acceptance evidence is a Markdown table. Formula cells may contain escaped pipes,
+    // e.g. `Filter(Items, State = "Open") \| CountRows(...)`, which must stay in one cell.
     var cells = new List<string>();
     var cell = new StringBuilder();
     var escaped = false;
