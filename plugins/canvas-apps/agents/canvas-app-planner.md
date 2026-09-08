@@ -80,8 +80,6 @@ failure, and the complete intended contents of the plan index, shared plan, ever
 brief, and CREATE-mode `App.pa.yaml` as labeled inline payloads. The orchestrator writes
 those payloads verbatim. Do not return a successful-looking handoff or claim that no write
 tool exists without attempting `apply_patch`.
-
-
 Plan in functional-first order: shared state and stable identity, complete executable
 workflows, observable evidence, responsive/accessibility behavior, then visual polish.
 When a control or screen budget is tight, remove decorative complexity before omitting,

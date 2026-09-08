@@ -207,11 +207,9 @@ Write the result to `[working directory]/canvas-app-acceptance.md`:
 
 ```markdown
 Runtime evaluation: NOT RUN
-
-
 Plugin root: [exact plugin root]
+Skill contract version: [version read from SKILL.md]
 Source revision: [git revision, package version, or "unavailable"]
-
 
 ## Action Contract Acceptance
 
@@ -232,11 +230,9 @@ Source revision: [git revision, package version, or "unavailable"]
 | [screen] | 1-44 COMPLETE | [QACHK-NAME FIXED(n), or none] | [QACHK names, or none] |
 ```
 
-
-Record the exact `${PLUGIN_ROOT}` and the plugin repository's short Git revision. If the
-installed plugin is not in a Git worktree, record source revision `unavailable`; never
-substitute the app workspace revision.
-
+Record the exact `${PLUGIN_ROOT}`, the verified skill version, and the plugin repository's
+short Git revision. If the installed plugin is not in a Git worktree, record source
+revision `unavailable`; never substitute the app workspace revision.
 
 The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN` is
 required because symbolic inspection is not browser execution. Replace it only when a
@@ -253,19 +249,17 @@ into an action summary.
 Do not replace `NOT RUN` with another value unless a runtime evaluator actually executed
 against this app and the artifact records its run ID or result URL and score.
 
-
 After writing the artifact, run:
 
 ```text
 dotnet run --file "${PLUGIN_ROOT}/scripts/validate-canvas-acceptance.cs" -- \
-  "/app" "${PLUGIN_ROOT}"
+  "[working directory]" "${PLUGIN_ROOT}"
 ```
 
 The validator compares the acceptance rows with the plan's Action Contracts, Functional
 Test Matrix, and dispatch screens. A nonzero exit blocks completion. Repair the artifact
 and rerun the validator until it passes; never summarize success without its `PASS`
 result.
-
 
 For mutations, also compare the handler, write set, proof set, receipt bindings, and
 downstream observer one-for-one. For filters, verify the concrete selector value is
@@ -355,10 +349,7 @@ For CREATE:
 **Functional readiness:** [passed]/[total] scenarios passed static conformance.
 **Acceptance evidence:** `[working directory]/canvas-app-acceptance.md`.
 **Runtime evaluation:** NOT RUN.
-
-
 **Plugin provenance:** [exact plugin root] · version [version] · revision [revision or unavailable].
-
 ```
 
 For EDIT:
@@ -374,10 +365,7 @@ For EDIT:
 **Functional readiness:** [passed]/[total] scenarios passed static conformance.
 **Acceptance evidence:** `[working directory]/canvas-app-acceptance.md`.
 **Runtime evaluation:** NOT RUN.
-
-
 **Plugin provenance:** [exact plugin root] · version [version] · revision [revision or unavailable].
-
 ```
 
 If diagnostics remain after the convergence budget is exhausted, report them explicitly

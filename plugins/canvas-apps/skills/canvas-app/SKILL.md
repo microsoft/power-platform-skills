@@ -22,9 +22,10 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
-   `QACHK-SHARED-SOURCE-DERIVATION`. If the check fails, stop with the observed path; do
-   not mix prompt generations.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.8`.
+   Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
+   `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
+   observed paths and versions; do not mix prompt generations.
 3. Reuse the current directory when it already contains `App.pa.yaml` and every existing
    file in that directory is a `.pa.yaml` file.
 4. Otherwise, reuse the single immediate child directory containing `App.pa.yaml`, when
@@ -114,12 +115,12 @@ CREATE and complex EDIT workflows return here after the planner finishes.
    compiling them against a stale `App.pa.yaml` produces a flood of false name errors.
 9. Confirm the planner reported a clean `compile_canvas` for `[working directory]/App.pa.yaml`. If it
    did not, compile now and resolve every `App`-level diagnostic before dispatching.
-    For EDIT mode, compile after applying the before-builder app changes and resolve
-    App-level diagnostics before dispatching.
+   For EDIT mode, compile after applying the before-builder app changes and resolve
+   App-level diagnostics before dispatching.
 10. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
-and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
-assignment. Run these workers in waves of **at most three**. Fire each wave together,
-wait for it to return, then dispatch the next.
+   and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
+   assignment. Run these workers in waves of **at most three**. Fire each wave together,
+   wait for it to return, then dispatch the next.
 
 Never dispatch more than three builders at once. Larger fan-outs have hung without
 returning, and waves of three get you the first compile sooner, which is where systemic
@@ -241,17 +242,17 @@ report the loaded guide path and highest defined check.
 - Reject `QACHK-CARD-PLACEHOLDER` `PASS` when a ModernCard displays Title, Subtitle and
   Description with `Height < 180`; send that screen back for self-QA.
 - If a builder returns `Status: Blocked`, re-invoke the planner to correct that screen
-brief, then rerun only the affected builder. Never ask a builder to guess missing
-definitions.
+  brief, then rerun only the affected builder. Never ask a builder to guess missing
+  definitions.
 - If a general-purpose screen worker cannot write its target, stop and report the exact
   tooling failure. Do not retry with a custom screen builder whose write restriction is
   already known.
 - If a builder returns `Status: Provenance Blocked`, stop the wave without a fallback and
   report the mismatched plugin root or contract version.
 - `Status: Blocked` is the **only** reason to repair a brief and rerun its specialist
-generation. Tooling failures stop the run. Compile diagnostics trigger neither path.
-Once a screen file exists, repair it in place with targeted edits; regenerating it
-discards prior fixes and does not converge.
+  generation. Tooling failures stop the run. Compile diagnostics trigger neither path.
+  Once a screen file exists, repair it in place with targeted edits; regenerating it
+  discards prior fixes and does not converge.
 - In EDIT mode, apply the `### After builders` group of `## App Changes` in
   `[working directory]/canvas-app-plan.md` to `[working directory]/App.pa.yaml`. The `### Before builders` group was
   already applied at pre-dispatch. If a group says `None`, do not edit the file for it.
