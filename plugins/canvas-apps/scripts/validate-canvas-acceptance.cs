@@ -65,7 +65,7 @@ CompareCoverage("dispatch screen", plannedScreens, acceptedScreens, errors);
 
 foreach (var row in acceptedActions.Values)
 {
-    if (row.Count < 7)
+    if (row.Count != 7)
     {
         errors.Add($"Action '{row[0]}' must have seven acceptance columns.");
         continue;
@@ -84,7 +84,7 @@ foreach (var row in acceptedActions.Values)
 
 foreach (var row in acceptedScenarios.Values)
 {
-    if (row.Count < 3 || !string.Equals(Clean(row[1]), "PASS", StringComparison.OrdinalIgnoreCase))
+    if (row.Count != 3 || !string.Equals(Clean(row[1]), "PASS", StringComparison.OrdinalIgnoreCase))
     {
         errors.Add($"Scenario '{row[0]}' does not contain a passing static trace.");
     }
@@ -92,7 +92,7 @@ foreach (var row in acceptedScenarios.Values)
 
 foreach (var row in acceptedScreens.Values)
 {
-    if (row.Count < 4 || !string.Equals(Clean(row[1]), "1-44 COMPLETE", StringComparison.OrdinalIgnoreCase))
+    if (row.Count != 4 || !string.Equals(Clean(row[1]), "1-44 COMPLETE", StringComparison.OrdinalIgnoreCase))
     {
         errors.Add($"Screen '{row[0]}' does not report complete Q1-Q44 coverage.");
         continue;
