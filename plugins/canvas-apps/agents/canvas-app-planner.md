@@ -67,7 +67,6 @@ exactly, record an explicit approximation and reason; never silently rename butt
 "drag-style", call buttons "handles", or put copy in the app that promises an interaction
 the controls do not provide.
 
-
 Before discovery, read the supplied plugin root's `references/QAChecks.md`. Stop with
 `Status: Provenance Blocked` unless the QA guide defines
 `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the
@@ -80,7 +79,6 @@ failure, and the complete intended contents of the plan index, shared plan, ever
 brief, and CREATE-mode `App.pa.yaml` as labeled inline payloads. The orchestrator writes
 those payloads verbatim. Do not return a successful-looking handoff or claim that no write
 tool exists without attempting `apply_patch`.
-
 
 Plan in functional-first order: shared state and stable identity, complete executable
 workflows, observable evidence, responsive/accessibility behavior, then visual polish.
