@@ -37,21 +37,34 @@ function stateDir(skillName) {
   );
 }
 
-function stateFile(skillName, sessionId) {
-  const sessionHash = crypto
+function stateFile(skillName, sessionId, projectHashValue) {
+  const invocationHash = crypto
     .createHash("sha256")
-    .update(String(sessionId || "nosession"))
+    .update(`${String(sessionId || "nosession")}\0${projectHashValue}`)
     .digest("hex");
-  return path.join(stateDir(skillName), `${sessionHash}.json`);
+  return path.join(stateDir(skillName), `${invocationHash}.json`);
 }
 
 function writeState(skillName, state) {
-  const file = stateFile(skillName, state.sessionId);
+  const { file: previousFile, ...persistedState } = state;
+  if (!persistedState.projectHash) return null;
+  const file = stateFile(
+    skillName,
+    persistedState.sessionId,
+    persistedState.projectHash
+  );
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp.${process.pid}`;
-    fs.writeFileSync(tmp, JSON.stringify(state), "utf8");
+    fs.writeFileSync(tmp, JSON.stringify(persistedState), "utf8");
     fs.renameSync(tmp, file);
+    if (previousFile && path.resolve(previousFile) !== path.resolve(file)) {
+      try {
+        fs.unlinkSync(previousFile);
+      } catch {
+        // A legacy timing record may already have been removed.
+      }
+    }
     return file;
   } catch {
     return null;
@@ -60,11 +73,13 @@ function writeState(skillName, state) {
 
 function recordStart(skillName, sessionId, projectRoot, now = Date.now()) {
   if (!skillName || !sessionId) return null;
+  const hash = projectHash(projectRoot);
+  if (!hash) return null;
   prune(skillName, now);
   return writeState(skillName, {
     sessionId,
     startedAt: now,
-    projectHash: projectHash(projectRoot),
+    projectHash: hash,
   });
 }
 
@@ -84,6 +99,7 @@ function readStates(skillName, now = Date.now()) {
       if (
         typeof state.sessionId !== "string" ||
         typeof state.startedAt !== "number" ||
+        !/^[a-f0-9]{64}$/.test(state.projectHash) ||
         now - state.startedAt > MAX_AGE_MS
       ) {
         continue;
@@ -103,15 +119,27 @@ function findActive(
     requireConfigured = false,
     sessionId = "",
     allowLatestFallback = false,
+    allowSessionOnly = false,
   } = {}
 ) {
   const states = readStates(skillName).filter(
     (state) => !requireConfigured || typeof state.configuredAt === "number"
   );
-  if (sessionId) {
-    return states.find((state) => state.sessionId === sessionId) || null;
-  }
   const hash = projectHash(projectRoot);
+  if (sessionId && hash) {
+    return states.find(
+      (state) =>
+        state.sessionId === sessionId &&
+        state.projectHash === hash
+    ) || null;
+  }
+  if (sessionId) {
+    if (!allowSessionOnly) return null;
+    const sessionMatches = states.filter(
+      (state) => state.sessionId === sessionId
+    );
+    return sessionMatches.length === 1 ? sessionMatches[0] : null;
+  }
   if (!hash) return null;
   return states.find((state) => state.projectHash === hash) ||
     (allowLatestFallback ? states[0] : null);
@@ -120,8 +148,7 @@ function findActive(
 function markConfigured(skillName, projectRoot, now = Date.now()) {
   const active = findActive(skillName, projectRoot);
   if (!active) return null;
-  const { file, ...state } = active;
-  return writeState(skillName, { ...state, configuredAt: now });
+  return writeState(skillName, { ...active, configuredAt: now });
 }
 
 function removeState(state) {

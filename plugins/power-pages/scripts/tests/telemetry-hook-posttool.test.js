@@ -151,7 +151,7 @@ test("emits localization-only completion with duration and stable failure class"
   assert.equal(eventInfo.translationMethod, "agent");
 });
 
-test("unexpected hook errors do not emit a false completion", (t) => {
+test("unexpected hook errors do not emit or remove ambiguous state", (t) => {
   const configDir = mkConfigDir();
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-localized-"));
   const probePath = path.join(configDir, "probe.json");
@@ -187,12 +187,9 @@ test("unexpected hook errors do not emit a false completion", (t) => {
   assert.equal(result.status, 0);
   assert.match(result.stderr, /Unexpected error/);
   assert.equal(fs.existsSync(probePath), false);
-  assert.equal(
-    invocationState.findActive(
-      "add-localization",
-      projectRoot,
-      { sessionId: "hook-error-session" }
-    ),
-    null
-  );
+  assert.ok(invocationState.findActive(
+    "add-localization",
+    projectRoot,
+    { sessionId: "hook-error-session" }
+  ));
 });
