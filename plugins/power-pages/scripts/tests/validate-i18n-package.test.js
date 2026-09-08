@@ -2,11 +2,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 
 const {
   assessModeSupport,
   evaluatePackage,
   packageSupportsFramework,
+  parseTelemetryErrorContext,
   peerRangeAllowsMajor,
   resolveInstalledVersion,
   resolveVersionWithNpm,
@@ -41,6 +43,36 @@ function evaluationOptions(overrides = {}) {
     ...overrides,
   };
 }
+
+test('requires complete, usable context before emitting error telemetry', () => {
+  assert.equal(parseTelemetryErrorContext([]), null);
+  assert.equal(
+    parseTelemetryErrorContext([
+      '--projectRoot', '--package',
+      '--mode', 'runtime',
+    ]),
+    null
+  );
+  assert.equal(
+    parseTelemetryErrorContext([
+      '--projectRoot', '.',
+      '--package', 'react-i18next',
+    ]),
+    null
+  );
+  assert.deepEqual(
+    parseTelemetryErrorContext([
+      '--projectRoot', '.',
+      '--package', 'react-i18next',
+      '--mode', 'runtime',
+    ]),
+    {
+      projectRoot: path.resolve('.'),
+      package: 'react-i18next',
+      mode: 'runtime',
+    }
+  );
+});
 
 test('accepts a stable, maintained, compatible runtime package', () => {
   const result = evaluatePackage(metadata(), evaluationOptions());

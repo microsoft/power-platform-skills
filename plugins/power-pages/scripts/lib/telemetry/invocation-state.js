@@ -99,7 +99,11 @@ function readStates(skillName, now = Date.now()) {
 function findActive(
   skillName,
   projectRoot,
-  { requireConfigured = false, sessionId = "" } = {}
+  {
+    requireConfigured = false,
+    sessionId = "",
+    allowLatestFallback = false,
+  } = {}
 ) {
   const states = readStates(skillName).filter(
     (state) => !requireConfigured || typeof state.configuredAt === "number"
@@ -108,7 +112,9 @@ function findActive(
     return states.find((state) => state.sessionId === sessionId) || null;
   }
   const hash = projectHash(projectRoot);
-  return states.find((state) => hash && state.projectHash === hash) || states[0] || null;
+  if (!hash) return null;
+  return states.find((state) => state.projectHash === hash) ||
+    (allowLatestFallback ? states[0] : null);
 }
 
 function markConfigured(skillName, projectRoot, now = Date.now()) {
