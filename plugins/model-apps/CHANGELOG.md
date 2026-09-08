@@ -39,6 +39,11 @@ that cannot host them.
 - **`views[].columns` rejects a non-string entry** ([#525]). An object was accepted by validation and
   written into the view's fetchxml as `[object object]`; the build then failed at the platform and
   left behind a view row that could not be read or deleted, so every later build failed the same way.
+- **A business process flow whose derived unique name is already taken is refused up front.** That
+  name is a *table* name — activation creates a backing table from it — and the derivation ignores
+  both the table and your publisher prefix, so a flow named after its own table collided silently and
+  failed late, mid-build. Now rejected at the plan gate against declared tables, and at build time
+  against anything already in the environment.
 
 [#513]: https://github.com/microsoft/power-platform-skills/issues/513
 [#514]: https://github.com/microsoft/power-platform-skills/issues/514

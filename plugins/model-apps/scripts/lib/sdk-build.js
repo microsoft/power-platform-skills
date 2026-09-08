@@ -34,6 +34,7 @@ const {
   FORM_GUID_RE,
   canonicalPersonaName,
   BUSINESS_RULE_VALUELESS_OPERATORS,
+  bpfUniqueName,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -2119,6 +2120,36 @@ async function runSdkBuild(spec, opts = {}) {
       }
       const stageCount = (flow.stages || []).length;
       await runner.run('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (${stageCount} stage${stageCount === 1 ? '' : 's'})`, async () => {
+        // The reuse query above keys on (name, entity). The SERVER key does not: it is the DERIVED
+        // unique name, which strips case and punctuation and ignores the table entirely. So two
+        // situations are invisible to that query and fail inside the create instead:
+        //   * a RENAME that preserves the derived name — "Ticket Handling" -> "ticket-handling";
+        //   * a flow with the same derived name on a DIFFERENT table, including one this spec did
+        //     not author.
+        // Both then fail with a platform error about a backing TABLE the author never mentioned,
+        // because activation creates an org-owned table with that logical name. Naming the real
+        // conflict here is the difference between a two-minute rename and an afternoon.
+        //
+        // The in-spec cases (two flows colliding, or a flow colliding with a declared table) are
+        // rejected at the plan gate; this covers only what the spec cannot see.
+        //
+        // Best-effort: a DIAGNOSTIC must never be the thing that breaks a build, so a query that
+        // fails or is unsupported proceeds and lets the platform speak for itself.
+        const unique = bpfUniqueName(flow.name);
+        let clash = null;
+        try {
+          const rows = await provision.queryRecords('workflow', {
+            select: ['workflowid', 'name', 'primaryentity'],
+            filter: `uniquename eq '${odataLit(unique)}'`,
+            top: 5,
+          });
+          clash = (rows || [])[0] || null;
+        } catch { /* diagnostic only — fall through to the create */ }
+        if (clash) {
+          throw new BuildHalt(
+            `business process flow "${flow.name}" on ${flow.entity} cannot be created: the Dataverse unique name it derives ('${unique}') is already used by the flow "${clash.name}"${clash.primaryentity ? ` on ${clash.primaryentity}` : ''}. The derivation lower-cases the name, strips punctuation and always uses the 'new_' prefix, so two differently-spelled names can collide — and activation creates a backing table with that name, so only one can exist. Rename this flow, or remove the existing one.`,
+            { phase: 'business-process-flows', code: 'bpf-unique-name-conflict', recoverable: false });
+        }
         // The whole flow — including its stages and steps — is carried on the CREATE payload. The
         // adapter normalizes and id-stamps the stage/step tree there, so unlike a business rule's
         // condition tree there is no element-surface follow-up to make.

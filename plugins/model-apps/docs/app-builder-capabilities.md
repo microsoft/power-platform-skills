@@ -195,6 +195,14 @@ apart deliberately.
   an activated flow cascades a **backing-table** drop and regularly runs past the client's 60s HTTP
   timeout, so teardown polls the row rather than reporting a failure for work the server completed.
   A new `business-process-flows` build phase sits next to `business-rules` (16 now).
+- **The derived unique name is a TABLE name, and it is guarded on both sides.** Dataverse stores the
+  flow as `new_<name lower-cased, non-alphanumerics stripped>` — the derivation ignores the table
+  *and* the solution's publisher prefix — and activation creates an org-owned backing table with that
+  logical name. So the name collides with three things, not one: another flow, a table the spec
+  declares, and anything already in the environment. The first two are rejected at the plan gate; the
+  third is a build-time probe on the derived name that **halts** naming the conflicting flow, instead
+  of letting the create fail with a platform error about a table the author never mentioned. The
+  probe is best-effort, because a diagnostic must never be the thing that breaks a build.
 - **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching,
   stage actions and security-role grants; the spec gate **rejects** those keys — as an allow-list at
   flow, stage *and* step level — rather than ignoring them, so a flow never quietly deploys as

@@ -826,3 +826,125 @@ test('REAL BUNDLE: the 30-stage / 30-step ceilings match the SDK rule, not a mag
   assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: steps(30) }]), []);
   assert.ok(errorsFor([{ ...FLOW, stages: steps(31) }]).some((e) => /at most 30 per stage/.test(e)));
 });
+
+// --- the derived unique name is a TABLE name, not just a flow name (peer-review finding) ---------
+//
+// Activating a flow makes the platform create an org-owned BACKING TABLE whose logical name is the
+// flow's derived unique name (`new_` + the display name lower-cased with punctuation stripped —
+// note the `new_` is fixed, it is NOT the solution's publisher prefix). The spec already rejects two
+// flows that derive the same name, for exactly that reason.
+//
+// But the same collision exists against a TABLE, and that axis was unchecked: a flow named "Ticket"
+// on a spec that also creates `new_ticket` derives `new_ticket`, validates clean, and then fails in
+// the business-process-flows phase — after the solution, tables, columns, views, forms and the app
+// have all been created. The maker is left with a half-built app and a platform error naming a
+// table they did not think they were creating.
+test('a flow whose derived unique name collides with a DECLARED TABLE is rejected', () => {
+  const { bpfUniqueName } = require('../lib/app-spec.js');
+  // Guard the premise, so this test cannot quietly stop testing anything if the derivation changes.
+  assert.strictEqual(bpfUniqueName('Ticket'), 'new_ticket',
+    'the premise of this test is that the derivation can produce a declared table name');
+
+  const res = validateAppSpec(specWith([{ ...FLOW, name: 'Ticket' }]), { profile: 'plan' });
+  assert.strictEqual(res.ok, false, 'this collision must not validate clean');
+  const err = (res.errors || []).find((e) => /new_ticket/.test(e) && /table/i.test(e));
+  assert.ok(err, `expected a table-collision error; got ${JSON.stringify(res.errors)}`);
+  // The message has to say what to do — the maker cannot rename the derivation, only the flow.
+  assert.match(err, /rename/i, `the error must tell the author how to resolve it; got: ${err}`);
+});
+
+test('the table collision is case- and punctuation-insensitive, like the derivation itself', () => {
+  for (const name of ['ticket', 'Ticket!', 'T I C K E T']) {
+    const res = validateAppSpec(specWith([{ ...FLOW, name }]), { profile: 'plan' });
+    assert.strictEqual(res.ok, false, `${JSON.stringify(name)} derives new_ticket and must be rejected`);
+  }
+});
+
+test('a flow name that does NOT collide still validates (the guard adds no false positive)', () => {
+  const res = validateAppSpec(specWith([{ ...FLOW, name: 'Ticket Handling' }]), { profile: 'plan' });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+});
+
+test('an EXISTING (not-created) table still collides — the backing table clashes either way', () => {
+  // `existing: true` means the build does not create the table, but it is still there in the org,
+  // and activation would still try to create a table with that logical name.
+  const spec = specWith([{ ...FLOW, name: 'Ticket' }]);
+  spec.entities[0].existing = true;
+  const res = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(res.ok, false, 'a referenced table collides exactly like a created one');
+});
+
+// --- the derived unique name can collide with something the SPEC CANNOT SEE ---------------------
+//
+// The reuse query keys on (name, entity); the server keys on the derived unique name, which ignores
+// the entity and strips case and punctuation. A rename that preserves the derived name, or a flow of
+// the same derived name on another table, is therefore invisible to reuse and fails inside the
+// create — with a platform error about a BACKING TABLE the author never mentioned.
+function provisionWithUniqueClash({ clashRows, failUniqueQuery = false }) {
+  const calls = [];
+  return {
+    calls,
+    provision: {
+      queryRecords: async (entity, opts) => {
+        if (entity !== 'workflow') return entity === 'solution' ? [] : [{ publisherid: 'pub-1' }];
+        calls.push(['queryRecords', opts.filter]);
+        // The uniquename probe is the ONLY workflow query that filters on uniquename; the reuse
+        // query filters on name+primaryentity and must keep returning nothing so the create path runs.
+        if (/uniquename eq /.test(opts.filter || '')) {
+          if (failUniqueQuery) throw new Error('uniquename is not filterable here');
+          return clashRows;
+        }
+        return [];
+      },
+      updateRecord: async () => undefined,
+      deleteRecord: async () => undefined,
+      createArtifact: (kind, def) => { calls.push(['createArtifact', kind, def]); return { id: 'bpf-new' }; },
+      updateElement: async () => undefined,
+      pushArtifact: async (kind, id) => { calls.push(['pushArtifact', kind, id]); return { id: 'bpf-new', saved: true, publish: { kind: 'notRequested' } }; },
+      addSolutionComponent: async () => undefined,
+    },
+  };
+}
+
+test('a flow whose derived unique name is already taken HALTS instead of failing inside the create', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithUniqueClash({
+    clashRows: [{ workflowid: 'other-1', name: 'ticket-handling', primaryentity: 'new_other' }],
+  });
+  const err = await runSdkBuild(specWith([FLOW]), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-process-flows'], warn: () => {},
+  }).then(() => null, (e) => e);
+
+  assert.ok(err, 'the collision must stop the build rather than be attempted');
+  assert.match(err.message, /ticket-handling/, `the halt must name the conflicting flow; got: ${err.message}`);
+  assert.match(err.message, /new_tickethandling/, 'and the derived name that actually collides');
+  assert.match(err.message, /new_other/, 'and the table it is on, so the author can find it');
+  assert.match(err.message, /[Rr]ename/, 'and what to do about it');
+  assert.strictEqual(calls.some((c) => c[0] === 'createArtifact'), false,
+    'nothing may be written once the collision is known');
+});
+
+test('the uniquename probe is BEST-EFFORT: a query it cannot run does not block the build', async () => {
+  // A diagnostic must never be the thing that breaks a build. If the probe cannot run, the create
+  // proceeds and the platform gets to speak for itself.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithUniqueClash({ clashRows: [], failUniqueQuery: true });
+  await runSdkBuild(specWith([FLOW]), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-process-flows'], warn: () => {},
+  });
+  assert.ok(calls.some((c) => c[0] === 'createArtifact'), 'the flow is still created');
+  assert.ok(calls.some((c) => c[0] === 'pushArtifact'), 'and still pushed');
+});
+
+test('no clash means no interference — the create path is unchanged', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithUniqueClash({ clashRows: [] });
+  await runSdkBuild(specWith([FLOW]), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-process-flows'], warn: () => {},
+  });
+  assert.ok(calls.some((c) => c[0] === 'createArtifact'), 'the flow is created');
+  // The probe must query the DERIVED name, not the display name — that is the whole point.
+  const probe = calls.find((c) => c[0] === 'queryRecords' && /uniquename eq /.test(c[1] || ''));
+  assert.ok(probe, `expected a uniquename probe; got ${JSON.stringify(calls.filter((c) => c[0] === 'queryRecords'))}`);
+  assert.match(probe[1], /uniquename eq 'new_tickethandling'/);
+});

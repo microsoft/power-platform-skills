@@ -1347,6 +1347,23 @@ function validateAppSpec(spec, opts = {}) {
       } else {
         bpfUniques.set(unique, p.name);
       }
+      // The derived name is a TABLE name, so it collides with tables too — not only with other
+      // flows. Activation creates an org-owned backing table called `unique`, and a table with that
+      // logical name cannot be created twice.
+      //
+      // This axis is easy to hit precisely because the derivation ignores the solution's publisher
+      // prefix and always emits `new_`: on a spec using the default `new` prefix, a flow named after
+      // its own table ("Ticket" on `new_ticket`) derives exactly that table's logical name. Without
+      // this check it validates clean and then fails in the business-process-flows phase — after the
+      // solution, tables, columns, views, forms and the app already exist — with a platform error
+      // naming a table the author never meant to create.
+      //
+      // `existing: true` tables are included deliberately: the build does not create them, but they
+      // are still in the org, so the backing table clashes just the same.
+      const tableClash = entityByLower.get(unique);
+      if (tableClash) {
+        errors.push(`${label}: derives the Dataverse unique name '${unique}', which is already the logical name of the table '${tableClash.schemaName}' in this spec. Activating a flow creates a backing table with that name (the derivation lower-cases the name, strips punctuation, and always uses the 'new_' prefix regardless of your publisher prefix), so the flow cannot deploy. Rename the flow, e.g. "${p.name} Process".`);
+      }
     }
     if (!p.entity || !entityNames.has(p.entity)) { errors.push(`${label}: references unknown entity '${p.entity}'`); continue; }
     if (p.status !== undefined && !BPF_STATUSES.includes(p.status)) {
