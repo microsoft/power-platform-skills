@@ -1146,7 +1146,7 @@ Do not omit keys or fall back to English for individual labels.
       "principalDoubt": "Principal doubt",
       "proofStrategy": "Proof strategy",
       "brandSource": "Brand source",
-      "audience": "Audience"
+      "audience": "Audience and job"
     },
     "typography": "Typography",
     "palette": "Color palette",
