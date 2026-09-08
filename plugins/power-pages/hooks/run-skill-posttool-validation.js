@@ -172,7 +172,8 @@ process.stdin.on('end', () => {
           : '';
     if (unexpectedHookError) {
       // A fail-open hook cannot truthfully classify the workflow outcome.
-      // Remove its timing state so it cannot be reused by a later invocation.
+      // Remove only an exactly identified timing record; ambiguous state is
+      // safer to leave for normal expiry than to delete another project's run.
       try {
         telemetry.abandonLocalizationInvocation(cwd, sessionId);
       } catch {
