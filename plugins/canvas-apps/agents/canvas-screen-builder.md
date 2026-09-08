@@ -7,15 +7,10 @@ description: >-
 color: green
 user-invocable: false
 tools:
-    # #if( CanvasPlugin )
     - Read
     - Write
     - Edit
     - apply_patch
-    # #endif
-    - view
-    - create
-    - edit
 ---
 
 # Canvas Screen Builder

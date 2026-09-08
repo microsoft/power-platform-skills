@@ -8,24 +8,10 @@ description: >-
 color: cyan
 user-invocable: false
 tools:
-    # #if( CanvasPlugin )
     - Read
     - Write
     - Edit
     - apply_patch
-    # #endif
-    - view
-    - create
-    - edit
-    # #if( StudioAgent )
-    - compile_canvas
-    - list_controls
-    - describe_control
-    - list_apis
-    - describe_api
-    - list_data_sources
-    - get_data_source_schema
-    # #elseif( CanvasPlugin )
     - mcp__canvas-authoring__compile_canvas
     - mcp__canvas-authoring__list_controls
     - mcp__canvas-authoring__describe_control
@@ -33,17 +19,6 @@ tools:
     - mcp__canvas-authoring__describe_api
     - mcp__canvas-authoring__list_data_sources
     - mcp__canvas-authoring__get_data_source_schema
-    - canvas-authoring/compile_canvas
-    - canvas-authoring/list_controls
-    - canvas-authoring/describe_control
-    - canvas-authoring/list_apis
-    - canvas-authoring/describe_api
-    - canvas-authoring/list_data_sources
-    - canvas-authoring/get_data_source_schema
-    # #endif
-    # #if( StockImageSearch )
-    - search_stock_images
-    # #endif
 ---
 
 # Canvas App Plan Writer
@@ -413,9 +388,6 @@ Each brief contains only what that builder needs:
 - Action, logical screen, target file, YAML key, and control name prefix
 - Screen specification or exact edit list
 - Relevant portions of data source schemas and API details
-- The exact imagery assignments for that screen, copied from the shared plan: target
-control or purpose, selected title, concrete URL or media asset name, fit/crop intent,
-and accessible label
 - For every control type used on that screen: the complete list of valid input
   property names, plus the full `Enum name:` and the **compile-ready enum literal** for
   each enum property the screen actually sets
@@ -484,10 +456,6 @@ Functional scenarios: [N total; all assigned to screen briefs / defects]
   chase screen-file diagnostics; the orchestrator owns full-app validation.
 - Do not edit `[working directory]/_EditorState.pa.yaml`; record ordering work in `## Editor State Changes` for the top-level orchestrator.
 - Do not embed all discovery output in the index or shared plan.
-- Never write image-bearing component specifications before stock-image discovery.
-- For multi-section or card-based interfaces, collect 8-10 viable image results, never fewer than 8,
-and assign concrete selected assets; do not replace imagery with blanket `Blank()`
-formulas.
 - Every screen brief must be self-sufficient when read with the shared plan.
 - Never assign two screens the same control name prefix.
 - Never derive or normalize control creation keywords from `list_controls`; copy them
