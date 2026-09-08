@@ -412,3 +412,30 @@ test('blocks missing language selector and lang/dir behavior', (t) => {
   assert.match(result.stderr, /document direction/);
   assert.match(result.stderr, /document language/);
 });
+
+test('does not treat unrelated lang and dir identifiers as document configuration', (t) => {
+  const projectRoot = createLocalizedReactProject(t);
+  writeProjectFile(
+    projectRoot,
+    'src/components/LanguageSelector.tsx',
+    "export function LanguageSelector(){ const lang='fr-FR'; const dir='ltr'; changeLanguage(lang); return dir; }"
+  );
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.doesNotMatch(result.stderr, /language selector/);
+  assert.match(result.stderr, /document direction/);
+  assert.match(result.stderr, /document language/);
+});
+
+test('accepts setAttribute document language configuration', (t) => {
+  const projectRoot = createLocalizedReactProject(t);
+  writeProjectFile(
+    projectRoot,
+    'src/components/LanguageSelector.tsx',
+    "export function LanguageSelector(){ document.documentElement.setAttribute('lang','fr-FR'); document.documentElement.setAttribute('dir','ltr'); changeLanguage('fr-FR'); }"
+  );
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
