@@ -34,6 +34,19 @@ function writePackage(projectRoot, dependencies) {
   writeProjectFile(projectRoot, 'package.json', JSON.stringify({ dependencies }, null, 2));
 }
 
+function verifiedNpmArtifact(packageName, version) {
+  return {
+    license: 'MIT',
+    licenseReview: { status: 'automatically-accepted' },
+    artifact: {
+      version,
+      registry: 'https://registry.npmjs.org/',
+      tarballUrl: `https://registry.npmjs.org/${packageName}/-/${packageName}-${version}.tgz`,
+      integrity: 'sha512-dGVzdA==',
+    },
+  };
+}
+
 test('centralizes framework modes, recommendations, packages, and peers', () => {
   assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.react.supportedModes, ['runtime']);
   assert.equal(
@@ -430,6 +443,7 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
     packageVerification: {
       status: 'verified',
       source: 'known-capability',
+      ...verifiedNpmArtifact('i18next', '25.0.0'),
     },
     unavailableLocales: ['ar-SA'],
     bidirectionalReadiness: {
