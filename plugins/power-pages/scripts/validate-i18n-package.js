@@ -468,6 +468,21 @@ function parseArgs(argv) {
   return args;
 }
 
+function parseTelemetryErrorContext(argv) {
+  const args = parseArgs(argv);
+  for (const required of ['projectRoot', 'package', 'mode']) {
+    const value = args[required];
+    if (typeof value !== 'string' || !value.trim() ||
+        value.startsWith('--')) {
+      return null;
+    }
+  }
+  return {
+    ...args,
+    projectRoot: path.resolve(args.projectRoot),
+  };
+}
+
 async function runCli() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.projectRoot || !args.package || !args.mode) {
@@ -512,7 +527,13 @@ async function runCli() {
       projectDependencies[peerName]
     );
   }
-  const metadata = await resolvePackage(args.package, args.version || 'latest');
+  let metadata;
+  try {
+    metadata = await resolvePackage(args.package, args.version || 'latest');
+  } catch (error) {
+    error.telemetryFailureCode = 'npm-resolution-failed';
+    throw error;
+  }
   let modeEvidenceText = '';
   let modeEvidenceUrl = null;
   let modeEvidenceError = null;
@@ -566,21 +587,25 @@ async function runCli() {
 if (require.main === module) {
   runCli().catch((error) => {
     try {
-      const args = parseArgs(process.argv.slice(2));
-      telemetry.emitPackageValidation(
-        args.projectRoot,
-        telemetry.buildPackageValidationEventInfo({
-          framework: args.framework,
-          operation: args.telemetryOperation,
-          intendedLocales: args.telemetryLocales,
-          packageName: args.package,
-          packageSelection: args.telemetryPackageSelection,
-          mode: args.mode,
-          validationStatus: 'error',
-          failureCodes: ['npm-resolution-failed'],
-          unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
-        })
-      );
+      const args = parseTelemetryErrorContext(process.argv.slice(2));
+      if (args) {
+        telemetry.emitPackageValidation(
+          args.projectRoot,
+          telemetry.buildPackageValidationEventInfo({
+            framework: args.framework,
+            operation: args.telemetryOperation,
+            intendedLocales: args.telemetryLocales,
+            packageName: args.package,
+            packageSelection: args.telemetryPackageSelection,
+            mode: args.mode,
+            validationStatus: 'error',
+            failureCodes: error.telemetryFailureCode
+              ? [error.telemetryFailureCode]
+              : [],
+            unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
+          })
+        );
+      }
     } catch {
       // Preserve the original validation failure.
     }
@@ -600,6 +625,7 @@ module.exports = {
   modeSupported,
   normalizeLicense,
   packageSupportsFramework,
+  parseTelemetryErrorContext,
   peerRangeAllowsMajor,
   resolveInstalledVersion,
   resolveVersionsWithNpm,

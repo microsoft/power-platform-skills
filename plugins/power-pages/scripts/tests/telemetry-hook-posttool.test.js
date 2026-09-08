@@ -150,3 +150,49 @@ test("emits localization-only completion with duration and stable failure class"
   assert.equal(eventInfo.configuredLocaleCount, 2);
   assert.equal(eventInfo.translationMethod, "agent");
 });
+
+test("unexpected hook errors do not emit a false completion", (t) => {
+  const configDir = mkConfigDir();
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-localized-"));
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+
+  const originalConfigDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (originalConfigDir === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = originalConfigDir;
+    }
+  });
+  invocationState.recordStart(
+    "add-localization",
+    "hook-error-session",
+    projectRoot
+  );
+  invocationState.markConfigured("add-localization", projectRoot);
+
+  const result = runHook({
+    input: JSON.stringify({
+      cwd: { invalid: true },
+      session_id: "hook-error-session",
+      tool_input: { skill: "add-localization" },
+    }),
+    configDir,
+    ikeyPath,
+    fakeProbe: probePath,
+  });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /Unexpected error/);
+  assert.equal(fs.existsSync(probePath), false);
+  assert.equal(
+    invocationState.findActive(
+      "add-localization",
+      projectRoot,
+      { sessionId: "hook-error-session" }
+    ),
+    null
+  );
+});

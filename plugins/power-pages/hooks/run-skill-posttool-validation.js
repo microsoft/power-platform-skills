@@ -34,6 +34,7 @@ process.stdin.on('end', () => {
   let skillName = null;
   let input = null;
   let localizationFailureClass = '';
+  let unexpectedHookError = false;
   let cwd = process.cwd();
 
   try {
@@ -157,12 +158,28 @@ process.stdin.on('end', () => {
   } catch (err) {
     process.stderr.write(`[power-pages hook] Unexpected error: ${err.message}\n`);
     if (skillName === 'add-localization') {
-      localizationFailureClass = 'posttool-hook-failed';
+      unexpectedHookError = true;
     }
     validatorStatus = 0;
   }
 
   if (skillName === 'add-localization') {
+    const sessionId =
+      typeof input?.session_id === 'string'
+        ? input.session_id
+        : typeof input?.sessionId === 'string'
+          ? input.sessionId
+          : '';
+    if (unexpectedHookError) {
+      // A fail-open hook cannot truthfully classify the workflow outcome.
+      // Remove its timing state so it cannot be reused by a later invocation.
+      try {
+        telemetry.abandonLocalizationInvocation(cwd, sessionId);
+      } catch {
+        // Telemetry cleanup must never affect the hook's fail-open status.
+      }
+      process.exit(validatorStatus);
+    }
     try {
       const manifestPath = path.join(cwd, '.powerpages-localization.json');
       let manifest = null;
@@ -177,12 +194,7 @@ process.stdin.on('end', () => {
         validatorStatus === 0 && !localizationFailureClass ? 'success' : 'failure';
       const readiness = manifest?.bidirectionalReadiness?.status;
       telemetry.emitLocalizationCompleted(cwd, {
-        sessionId:
-          typeof input?.session_id === 'string'
-            ? input.session_id
-            : typeof input?.sessionId === 'string'
-              ? input.sessionId
-              : '',
+        sessionId,
         outcome,
         errorClass: localizationFailureClass,
         eventInfo: telemetry.buildLocalizationCompletionEventInfo({
