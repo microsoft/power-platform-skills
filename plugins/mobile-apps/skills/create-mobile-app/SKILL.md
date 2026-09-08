@@ -14,7 +14,14 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements (iOS + Android fixed) → 2b. Requirements and data-platform confirmation → 2c. Plan preview (rough cost + abort gate) → 3. Plan (architecture-first gates; Dataverse model only when selected) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.75 lock design system** → 7. Auth config → 8. Apply data model → 8.5 seed sample data → **8.85 Offline profile opt-in (Dataverse only)** → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Apply design system (integrate tokens) → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+Resume/template checks → prerequisites → requirements (iOS + Android fixed) →
+rough plan preview → Gate 1 architecture (native capabilities, connectors,
+then data platform) → Gate 2 Dataverse model when selected → Gates 3 and 4
+screen graph/specifications → environment and template preparation → app
+initialization → design system → conditional Dataverse materialization and
+sample data → Mobile Offline Profile offer for Dataverse apps → native
+capabilities and connectors → navigation and screens → validation, preview,
+and summary.
 
 ---
 
@@ -337,7 +344,7 @@ Infer a provisional Dataverse planning mode before Step 2c:
   connector-only merely because the brief names a connector.
 
 Apply
-[`shared/references/connectivity-intent-ownership.md`](${CLAUDE_SKILL_DIR}/../../shared/references/connectivity-intent-ownership.md)
+[`shared/references/connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md)
 while classifying the brief.
 
 Store the recommendation as `<recommended_dataverse_planning_mode>`. The first
@@ -467,7 +474,7 @@ Prompt:
   Target platforms: iOS and Android
   Recommended Dataverse planning mode: <recommended_dataverse_planning_mode>
   Working directory: <absolute path>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
+  Plugin root: ${PLUGIN_ROOT}
   Dataverse planning snapshot: NOT SUPPLIED
   Dataverse planning evidence: NOT SUPPLIED
 ```
@@ -1561,7 +1568,7 @@ retry.
 
 Mobile Offline Profiles let the runtime package continue against Dataverse
 when connectivity is unavailable and synchronize queued changes later. This phase owns Mobile Offline Profile opt-in. Apply
-[`shared/references/connectivity-intent-ownership.md`](${CLAUDE_SKILL_DIR}/../../shared/references/connectivity-intent-ownership.md).
+[`shared/references/connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md).
 
 Before asking, parse `.datamodel-manifest.json` and require at least one
 Dataverse table. A missing, malformed, or empty manifest is
