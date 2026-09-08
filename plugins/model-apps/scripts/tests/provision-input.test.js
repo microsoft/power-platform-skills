@@ -159,3 +159,19 @@ test('#537: provision input still accepts every App Spec table key', () => {
   }));
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
+
+test('#537 review: provision-input reports the SAME invalid-LCID message as the App Spec validator', () => {
+  // The entity-key rule is already shared between these two entry points; the top-level LCID message
+  // was not, so the same bad value produced a helpful error on one path and a terse one on the other.
+  const { validateProvisionInput } = require('../lib/provision-input.js');
+  const r = validateProvisionInput({
+    solution: { uniqueName: 'S', displayName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_t', displayName: 'T', pluralName: 'Ts', primaryAttribute: { schemaName: 'new_n', displayName: 'N' }, columns: [] }],
+    relationships: [],
+    languageCode: 'es-ES',
+  });
+  assert.strictEqual(r.ok, false);
+  const msg = (r.errors || []).join(' | ');
+  assert.match(msg, /1033|1031/, `should name a concrete LCID: ${msg}`);
+  assert.match(msg, /language tag/, `should name the language-tag mistake: ${msg}`);
+});

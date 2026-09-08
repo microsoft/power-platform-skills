@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, ENTITY_KEYS, ENTITY_KEY_HINTS } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -35,7 +35,10 @@ function validateProvisionInput(input) {
   // The other two entry points hard-error on the identical string; this gate keeps all three consistent
   // and runs before any SDK write.
   if (input.languageCode !== undefined && normalizeLanguageCode(input.languageCode) === null) {
-    errors.push('languageCode must be a positive integer LCID');
+    // Shares the App Spec validator's wording — the entity-key rule is already shared between these
+    // two entry points, and the same bad value must not produce a helpful error on one path and a
+    // terse one on the other.
+    errors.push(invalidLanguageCodeMessage(input.languageCode));
   }
 
   // Entities validation

@@ -588,6 +588,19 @@ function describeSpecValue(v) {
   try { return Object.prototype.toString.call(v); } catch { return '<unprintable>'; }
 }
 
+// The single wording for a rejected LCID, shared by every entry point that accepts one.
+//
+// It is a function rather than a constant because the offending value is quoted back: the most
+// common wrong input is a BCP-47 language TAG ("es-ES", "de-DE") — the thing a person naturally
+// writes — and "must be a positive integer LCID" is true but leaves that author with nothing to act
+// on. Shared for the same reason `ENTITY_KEYS` is: two entry points that disagree about what a bad
+// LCID *is* teach the author two different rules for one field.
+// LCID reference: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
+function invalidLanguageCodeMessage(value) {
+  return `languageCode must be a positive integer LCID up to ${MAX_LCID} — e.g. 1033 (en-US) or 1031 (de-DE), `
+    + `not a language tag like "de-DE" (got ${describeSpecValue(value)})`;
+}
+
 // Normalize a page's implementation source into a discriminated shape:
 //   { kind: 'tsx', codeFile } | { kind: 'intent' } | null
 // A legacy top-level `codeFile` (schemaVersion < 2) is treated as an implemented tsx page. `null`
@@ -962,7 +975,7 @@ function validateAppSpec(spec, opts = {}) {
     // wrong guess would not fail — it would build every label in the wrong language, which is the
     // same silent-corruption class this validator exists to prevent. Naming the LCID is safe;
     // inferring one is not.
-    errors.push(`languageCode must be a positive integer LCID up to ${MAX_LCID} — e.g. 1033 (en-US) or 1031 (de-DE), not a language tag like "de-DE" (got ${describeSpecValue(spec.languageCode)})`);
+    errors.push(invalidLanguageCodeMessage(spec.languageCode));
   }
   const entityNames = new Set();
   const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
@@ -991,6 +1004,16 @@ function validateAppSpec(spec, opts = {}) {
     // caller can pass a Proxy whose `ownKeys` trap throws, and this validator's contract is to
     // RETURN problems, not to throw them.
     if (e && typeof e === 'object' && !Array.isArray(e)) {
+      // The label is resolved BEFORE `schemaName` is validated, and reading it can itself fail (a
+      // getter that throws). Without a fallback a malformed entity reported `entity undefined:
+      // unknown key ...` next to the real `entity.schemaName is required` — two errors for one
+      // problem, one of them naming a table that does not exist.
+      let label;
+      try {
+        label = typeof e.schemaName === 'string' && e.schemaName.trim() ? `entity ${e.schemaName}` : 'an entity with no schemaName';
+      } catch {
+        label = 'an entity whose schemaName could not be read';
+      }
       let keys;
       try {
         keys = Object.keys(e);
@@ -1000,7 +1023,7 @@ function validateAppSpec(spec, opts = {}) {
       }
       for (const k of keys || []) {
         if (ENTITY_KEYS.has(k)) continue;
-        errors.push(`entity ${e.schemaName}: unknown key '${k}'${ENTITY_KEY_HINTS[k] || ''} (allowed: ${[...ENTITY_KEYS].join(', ')})`);
+        errors.push(`${label}: unknown key '${k}'${ENTITY_KEY_HINTS[k] || ''} (allowed: ${[...ENTITY_KEYS].join(', ')})`);
       }
     }
     if (!e.schemaName) {
@@ -2273,6 +2296,7 @@ module.exports = {
   canonicalPersonaName,
   VALIDATION_PROFILES,
   ENTITY_KEYS,
+  invalidLanguageCodeMessage,
   ENTITY_KEY_HINTS,
   DIRECT_ENTRY_BEHAVIORS,
   COLUMN_VISUALIZATIONS,

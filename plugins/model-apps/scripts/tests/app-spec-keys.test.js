@@ -321,3 +321,29 @@ test('#537: exotic values become validation errors, not raw crashes', () => {
   assert.strictEqual(r2.ok, false);
   assert.ok(r2.errors.some((e) => /could not be inspected/.test(e)), JSON.stringify(r2.errors));
 });
+
+// --- review follow-ups on the #537 entity-key allow-list ----------------------------------------
+
+test('#537 review: an unknown key on an entity with NO schemaName does not say "entity undefined"', () => {
+  // The unknown-key message interpolates the entity's schemaName, which is validated AFTERWARDS. A
+  // malformed entity therefore produced `entity undefined: unknown key ...` alongside the real
+  // `entity.schemaName is required` — two errors for one problem, one of them naming a table that
+  // does not exist. The label must degrade to something stable instead.
+  const r = validateAppSpec({
+    solution: { uniqueName: 'S', displayName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A', description: '' },
+    entities: [{ languageCode: 3082, primaryAttribute: { schemaName: 'new_n', displayName: 'N' } }],
+    appShell: { areas: [] },
+  }, { profile: 'plan' });
+  const msg = (r.errors || []).join(' | ');
+  assert.match(msg, /unknown key 'languageCode'/, 'the unknown key must still be reported');
+  assert.doesNotMatch(msg, /entity undefined/, `no "entity undefined" label: ${msg}`);
+});
+
+// PRE-EXISTING, deliberately NOT fixed here: `validateAppSpec` still THROWS instead of returning
+// errors when an entity's `schemaName` is a non-string or a getter that throws. Verified against
+// `origin/main`, which fails identically — `e.schemaName.toLowerCase is not a function` and the
+// getter's own error — so it is not a regression from the allow-list change. The entity loop reads
+// `e.schemaName` at 19 further sites this PR does not touch; fixing it properly means resolving the
+// name ONCE into a local and threading it through, which is its own change with its own tests.
+// The label guard above covers the case the review actually raised: a MISSING schemaName.
