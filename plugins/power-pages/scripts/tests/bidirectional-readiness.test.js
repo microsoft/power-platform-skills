@@ -152,6 +152,50 @@ test('ignores physical-property examples inside multiline comments', (t) => {
   assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
 });
 
+test('ignores line-comment findings without requiring whitespace before the comment', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/example.ts', `
+    const count = 1// margin-left: 1rem;
+    const ready = true// direction: 'ltr';
+    const step = 2// track.scrollLeft += 100;
+    retry: // padding-right: 1rem;
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+  assert.equal(result.summary.review, 0, JSON.stringify(result.findings));
+});
+
+test('preserves URL double slashes without hiding later findings', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    .cdn { background: url(//cdn.example.com/a//b/image.png); margin-left: 1rem; }
+    .remote { background: url(https://example.com/a//b/*/image.png); padding-right: 1rem; }
+  `);
+  writeProjectFile(
+    projectRoot,
+    'index.html',
+    '<p>https://example.com/a//b</p><img src=//cdn.example.com/image.png><div style="margin-left: 1rem"></div>'
+  );
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 3, JSON.stringify(result.findings));
+});
+
+test('carries quote state across lines so literal comment markers cannot hide code', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/example.ts', `
+    const marker = \`
+      /*
+    \`;
+    const styles = { marginLeft: '1rem' };
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 1, JSON.stringify(result.findings));
+  assert.equal(result.findings[0].rule, 'directional-physical-css');
+});
+
 test('audit CLI exits nonzero when blocking findings exist', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'src/theme.css', '.card { margin-left: 1rem; }');

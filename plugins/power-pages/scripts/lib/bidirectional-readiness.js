@@ -56,12 +56,12 @@ function auditBidirectionalReadiness(projectRoot) {
     const relativePath = path.relative(projectRoot, filePath).replaceAll('\\', '/');
     const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
     let pendingDirective = null;
-    let commentState = { blockEnd: null };
+    let commentState = { blockEnd: null, quote: null };
 
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       const trimmed = line.trim();
-      const directiveMatch = commentState.blockEnd
+      const directiveMatch = commentState.blockEnd || commentState.quote
         ? null
         : trimmed.match(PHYSICAL_DIRECTIVE_RE);
       if (directiveMatch) {
@@ -82,7 +82,7 @@ function auditBidirectionalReadiness(projectRoot) {
         };
         continue;
       }
-      if (!commentState.blockEnd && /bidi-physical:/i.test(trimmed)) {
+      if (!commentState.blockEnd && !commentState.quote && /bidi-physical:/i.test(trimmed)) {
         findings.push(finding(
           relativePath,
           index + 1,
@@ -206,10 +206,22 @@ function auditBidirectionalReadiness(projectRoot) {
   };
 }
 
+function isInsideUnquotedUrl(value, index) {
+  const prefix = value.slice(0, index);
+
+  // Preserve comment-looking sequences anywhere in an unquoted URL token, for example:
+  //   background: url(https://cdn.example.com/a//b/*/image.png)
+  //   <img src=//cdn.example.com/image.png>
+  // Restrict bare schemes to common URL protocols so `retry: // comment` remains a comment.
+  return /\burl\(\s*[^)]*$/i.test(prefix) ||
+    /\b(?:action|background|cite|data|formaction|href|manifest|poster|src|srcset)\s*=\s*[^\s"'`<>]*$/i.test(prefix) ||
+    /\b(?:https?|ftp|wss?|file):[^\s"'`<>]*$/i.test(prefix);
+}
+
 function stripSourceComments(value, initialState) {
   const state = { ...initialState };
   let result = '';
-  let quote = null;
+  let quote = state.quote || null;
   let escaped = false;
 
   for (let index = 0; index < value.length; index += 1) {
@@ -242,18 +254,21 @@ function stripSourceComments(value, initialState) {
       result += character;
       continue;
     }
+    // JavaScript permits a line comment immediately after a token (`value// comment`).
+    // Quoted strings are handled above; URL-like unquoted forms need a separate guard.
     const startsLineComment =
-      value.startsWith('//', index) &&
-      (index === 0 || /[\s;{}]/.test(value[index - 1]));
+      value.startsWith('//', index) && !isInsideUnquotedUrl(value, index);
     if (startsLineComment) {
       result += ' '.repeat(value.length - index);
       break;
     }
-    const blockEnd = value.startsWith('<!--', index)
-      ? '-->'
-      : value.startsWith('/*', index)
-        ? '*/'
-        : null;
+    const blockEnd = isInsideUnquotedUrl(value, index)
+      ? null
+      : value.startsWith('<!--', index)
+        ? '-->'
+        : value.startsWith('/*', index)
+          ? '*/'
+          : null;
     if (blockEnd) {
       state.blockEnd = blockEnd;
       result += ' '.repeat(blockEnd === '-->' ? 4 : 2);
@@ -263,6 +278,9 @@ function stripSourceComments(value, initialState) {
     result += character;
   }
 
+  // Backticks routinely span lines in JavaScript, and quoted HTML attributes may also
+  // be multiline. Carry quote state so comment-looking text inside them stays source.
+  state.quote = quote;
   return { value: result, state };
 }
 
