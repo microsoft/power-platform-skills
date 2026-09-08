@@ -8,6 +8,8 @@
     "generate-schemas": "generate-connector-schemas",
     "predev": "npm run generate-schemas",
     "type-check": "tsc --noEmit",
+    "build:android": "wrap android",
+    "build:ios": "wrap ios",
     "bundle:android": "build-codegen-package android",
     "bundle:ios": "build-codegen-package ios",
     "bundle:web": "js-bundle web",
