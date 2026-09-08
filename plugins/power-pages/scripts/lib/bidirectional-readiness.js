@@ -56,11 +56,14 @@ function auditBidirectionalReadiness(projectRoot) {
     const relativePath = path.relative(projectRoot, filePath).replaceAll('\\', '/');
     const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
     let pendingDirective = null;
+    let commentState = { blockEnd: null };
 
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       const trimmed = line.trim();
-      const directiveMatch = trimmed.match(PHYSICAL_DIRECTIVE_RE);
+      const directiveMatch = commentState.blockEnd
+        ? null
+        : trimmed.match(PHYSICAL_DIRECTIVE_RE);
       if (directiveMatch) {
         const reason = directiveMatch[1].trim();
         if (reason.length < 12 || /^(?:needed|intentional|required|exception)$/i.test(reason)) {
@@ -79,7 +82,7 @@ function auditBidirectionalReadiness(projectRoot) {
         };
         continue;
       }
-      if (/bidi-physical:/i.test(trimmed)) {
+      if (!commentState.blockEnd && /bidi-physical:/i.test(trimmed)) {
         findings.push(finding(
           relativePath,
           index + 1,
@@ -90,8 +93,13 @@ function auditBidirectionalReadiness(projectRoot) {
         continue;
       }
 
-      if (!trimmed || trimmed.startsWith('//') ||
-          (trimmed.startsWith('/*') && trimmed.endsWith('*/'))) {
+      // Preserve string literals while removing code comments so documented
+      // physical-property examples cannot become blocking audit findings.
+      const stripped = stripSourceComments(line, commentState);
+      const scanLine = stripped.value;
+      const scanTrimmed = scanLine.trim();
+      commentState = stripped.state;
+      if (!scanTrimmed) {
         if (pendingDirective && !trimmed) {
           findings.push(finding(
             relativePath,
@@ -108,7 +116,7 @@ function auditBidirectionalReadiness(projectRoot) {
         continue;
       }
 
-      const physicalMatches = collectPhysicalMatches(line);
+      const physicalMatches = collectPhysicalMatches(scanLine);
       if (pendingDirective) {
         if (physicalMatches.length > 0) {
           // An exception is deliberately declaration-scoped. Minified CSS can
@@ -135,7 +143,7 @@ function auditBidirectionalReadiness(projectRoot) {
             index + 1,
             'directional-physical-css',
             'error',
-            `Use a logical CSS property, or add an adjacent validated bidi-physical exception: ${trimmed}`
+            `Use a logical CSS property, or add an adjacent validated bidi-physical exception: ${scanTrimmed}`
           ));
         } else {
           findings.push(finding(
@@ -148,7 +156,7 @@ function auditBidirectionalReadiness(projectRoot) {
         }
       }
 
-      if (VISUAL_ORDER_RE.test(line)) {
+      if (VISUAL_ORDER_RE.test(scanLine)) {
         findings.push(finding(
           relativePath,
           index + 1,
@@ -157,7 +165,7 @@ function auditBidirectionalReadiness(projectRoot) {
           'Confirm visual reversal does not diverge from DOM reading and focus order.'
         ));
       }
-      if (GEOMETRY_RE.test(line)) {
+      if (GEOMETRY_RE.test(scanLine)) {
         findings.push(finding(
           relativePath,
           index + 1,
@@ -166,7 +174,7 @@ function auditBidirectionalReadiness(projectRoot) {
           'Review this physical geometry, animation, gradient, clipping, or mask in both directions.'
         ));
       }
-      if (FIXED_TEXT_SIZE_RE.test(line)) {
+      if (FIXED_TEXT_SIZE_RE.test(scanLine)) {
         findings.push(finding(
           relativePath,
           index + 1,
@@ -196,6 +204,66 @@ function auditBidirectionalReadiness(projectRoot) {
     summary: summarizeFindings(findings),
     findings,
   };
+}
+
+function stripSourceComments(value, initialState) {
+  const state = { ...initialState };
+  let result = '';
+  let quote = null;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (state.blockEnd) {
+      const end = value.indexOf(state.blockEnd, index);
+      if (end < 0) {
+        result += ' '.repeat(value.length - index);
+        break;
+      }
+      result += ' '.repeat(end + state.blockEnd.length - index);
+      index = end + state.blockEnd.length - 1;
+      state.blockEnd = null;
+      continue;
+    }
+
+    const character = value[index];
+    if (quote) {
+      result += character;
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'" || character === '`') {
+      quote = character;
+      result += character;
+      continue;
+    }
+    const startsLineComment =
+      value.startsWith('//', index) &&
+      (index === 0 || /[\s;{}]/.test(value[index - 1]));
+    if (startsLineComment) {
+      result += ' '.repeat(value.length - index);
+      break;
+    }
+    const blockEnd = value.startsWith('<!--', index)
+      ? '-->'
+      : value.startsWith('/*', index)
+        ? '*/'
+        : null;
+    if (blockEnd) {
+      state.blockEnd = blockEnd;
+      result += ' '.repeat(blockEnd === '-->' ? 4 : 2);
+      index += blockEnd === '-->' ? 3 : 1;
+      continue;
+    }
+    result += character;
+  }
+
+  return { value: result, state };
 }
 
 function finding(file, line, rule, severity, message) {

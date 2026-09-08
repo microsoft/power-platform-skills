@@ -430,7 +430,7 @@ function validateLocaleAvailability(
   );
   if (availabilityPaths.length !== 1) {
     errors.push(
-      'Pending bidirectional remediation requires one managed locale availability module.'
+      'Unavailable locales require one managed locale availability module.'
     );
     return false;
   }

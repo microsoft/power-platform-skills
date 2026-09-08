@@ -15,7 +15,9 @@ function parseArgs(argv) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const projectRoot = path.resolve(args.projectRoot || process.cwd());
-  process.stdout.write(`${JSON.stringify(auditBidirectionalReadiness(projectRoot), null, 2)}\n`);
+  const result = auditBidirectionalReadiness(projectRoot);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (result.summary.error > 0) process.exitCode = 1;
 }
 
 if (require.main === module) main();
