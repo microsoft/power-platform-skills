@@ -1446,6 +1446,50 @@ test('#514: readAppShellSettings decodes the header tri-state, where 1 means DIS
   assert.deepStrictEqual(await readAppShellSettings(sdk('0', 'false'), 'app-1'), { newLook: false }, '0 = platform default, so no header key');
 });
 
+test('#514: the appsetting read is bound by setting DEFINITION, so $top cannot decide the answer', async () => {
+  // `$top` is a hard cap in Dataverse and no `@odata.nextLink` is returned, so a row-limited read can
+  // come back partial. Here a partial page is not a visible truncation but a WRONG ANSWER: an absent
+  // row means "inherits the environment", so a shell override pushed off the page round-trips as
+  // inheritance and the rebuilt app silently reverts to the classic shell — the exact loss #514 fixed.
+  // Bounding the query by the two definitions makes the result at most one row each, whatever the cap.
+  const { readAppShellSettings } = require('../download-model-app.js');
+  let appsettingOpts = null;
+  const sdk = {
+    queryRecords: async (entity, opts) => {
+      if (entity === 'settingdefinition') {
+        return [
+          { settingdefinitionid: 'D1', uniquename: 'NewLookAlwaysOn' },
+          { settingdefinitionid: 'D2', uniquename: 'HeaderAndNavigationRefresh' },
+        ];
+      }
+      appsettingOpts = opts;
+      return [{ _settingdefinitionid_value: 'd1', value: 'true' }];
+    },
+  };
+  assert.deepStrictEqual(await readAppShellSettings(sdk, 'app-1'), { newLook: true });
+  assert.match(appsettingOpts.filter, /_parentappmoduleid_value eq app-1/);
+  assert.match(appsettingOpts.filter, /_settingdefinitionid_value eq d1/, 'the read must name the NewLookAlwaysOn definition');
+  assert.match(appsettingOpts.filter, /_settingdefinitionid_value eq d2/, 'and the HeaderAndNavigationRefresh one');
+});
+
+test('#514: a brace-wrapped id on either side of the join still resolves the setting', async () => {
+  // The join is FAIL-QUIET — an unrecognized id just `continue`s and the setting disappears from the
+  // spec with no error — so both sides are normalized. Measured live, Dataverse returns these ids
+  // bare, so this guards the caller-supplied `appId` and any future formatting drift, not an observed
+  // mismatch.
+  const { readAppShellSettings } = require('../download-model-app.js');
+  let appsettingOpts = null;
+  const sdk = {
+    queryRecords: async (entity, opts) => {
+      if (entity === 'settingdefinition') return [{ settingdefinitionid: '{D1}', uniquename: 'NewLookAlwaysOn' }];
+      appsettingOpts = opts;
+      return [{ _settingdefinitionid_value: '{d1}', value: 'true' }];
+    },
+  };
+  assert.deepStrictEqual(await readAppShellSettings(sdk, '{app-1}'), { newLook: true });
+  assert.ok(!/[{}]/.test(appsettingOpts.filter), `no braces reach the OData filter: ${appsettingOpts.filter}`);
+});
+
 test('#514: a tenant without the setting definitions still downloads cleanly', async () => {
   // Best-effort: losing an optional shell setting must never fail a download.
   const { readAppShellSettings } = require('../download-model-app.js');

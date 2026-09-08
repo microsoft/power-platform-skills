@@ -601,7 +601,11 @@ const { classifyChanges } = require('../lib/classify-changes.js');
 
 test('a flow-only edit is a real change, not a no-op', () => {
   const prior = specWith([FLOW]);
-  const current = specWith([{ ...FLOW, stages: [...FLOW.stages, { name: 'Close', steps: [{ name: 'Sign off' }] }] }]);
+  // The added stage binds a real column. A field-less step is not a valid spec (the platform rejects
+  // an empty `datafieldname`), and a diff fixture that the validator would reject is a trap: it makes
+  // the test pass on input a build could never carry. Assert the fixture's validity so it stays honest.
+  const current = specWith([{ ...FLOW, stages: [...FLOW.stages, { name: 'Close', steps: [{ name: 'Sign off', field: 'new_status' }] }] }]);
+  assert.strictEqual(validateAppSpec(current, { profile: 'plan' }).ok, true, 'the diff fixture must itself be a valid spec');
   assert.deepStrictEqual(diffPhases(current, prior), ['business-process-flows']);
 });
 

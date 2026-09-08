@@ -18,6 +18,7 @@ const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode } = require('./lib/app-spec.js');
+const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -273,15 +274,27 @@ async function readAppShellSettings(sdk, appId) {
       filter: Object.keys(SHELL_SETTINGS).map((n) => `uniquename eq '${n}'`).join(' or '),
       top: 10,
     });
-    const byId = new Map((defs || []).map((d) => [String(d.settingdefinitionid).toLowerCase(), d.uniquename]));
+    const byId = new Map((defs || []).map((d) => [odataGuid(d.settingdefinitionid).toLowerCase(), d.uniquename]));
     if (!byId.size) return out;
+    // Bound the read by the two DEFINITIONS, not by `$top`. Dataverse honours `$top` as a hard cap and
+    // omits `@odata.nextLink` (see COMPONENT_PAGE_CAP above), so an app-scoped read that leans on a row
+    // limit can return a partial page — and here a partial page is not a visible truncation but a WRONG
+    // ANSWER, because an absent row is indistinguishable from "inherits the environment". The app would
+    // round-trip without its override and rebuild into the classic shell, silently, which is the exact
+    // loss this function exists to stop. Filtering server-side makes the result at most one row per
+    // definition, so no number of unrelated settings on the app can push the shell rows off the page.
+    const defFilter = [...byId.keys()].map((id) => `_settingdefinitionid_value eq ${id}`).join(' or ');
     const rows = await sdk.queryRecords('appsetting', {
       select: ['value', '_settingdefinitionid_value'],
-      filter: `_parentappmoduleid_value eq ${appId}`,
-      top: 50,
+      filter: `_parentappmoduleid_value eq ${odataGuid(appId)} and (${defFilter})`,
+      top: 10,
     });
     for (const r of rows || []) {
-      const name = byId.get(String(r && r._settingdefinitionid_value).toLowerCase());
+      // Both sides of this join are normalized because a miss here is SILENT — an unrecognized id just
+      // `continue`s and the setting vanishes from the spec. Measured live, Dataverse returns both
+      // `settingdefinitionid` and `_settingdefinitionid_value` as bare lower-case GUIDs, so this is
+      // belt-and-braces on a fail-quiet path rather than a fix for an observed mismatch.
+      const name = byId.get(odataGuid(r && r._settingdefinitionid_value).toLowerCase());
       const spec = name && SHELL_SETTINGS[name];
       if (!spec) continue;
       const decoded = spec.decode(r.value);
@@ -678,7 +691,7 @@ const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
 //   genuinely IS 'new': when the prefix is UNVERIFIED we cannot trust `startsWith(ownPrefix)`, so a genuine
 //   own custom icon (e.g. `crba3_nav.svg` while the fallback prefix is `new`) would fail the own-prefix test
 //   and — without this guard — be silently skipped with NO warning, re-introducing the exact broken-icon bug
-//   this fix exists to prevent . So when `prefixResolved` is false we do NOT re-declare
+//   this fix exists to prevent. So when `prefixResolved` is false we do NOT re-declare
 //   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
 //   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
 //   ref is a system icon present in every env, so it stays silent (no false alarm).
