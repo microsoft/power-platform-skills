@@ -16,13 +16,13 @@ Application Insights is **off by default**. Invoking this skill (or approving it
 
 ## When to use
 
-- `/setup-app-insights` — enable, change, or disable customer Application Insights on an existing app.
+- `/setup-app-insights` — enable, change, or disable Application Insights on an existing app.
 - Invoked by `/edit-app` when the request is only an Application Insights change (its Step 0.5 fast path delegates here).
 - Examples: "Enable Application Insights for this app", "Change the Application Insights resource this app uses", "Disable Application Insights for this app".
 
 ## When NOT to use
 
-- Adding or changing customer-defined events in app screens → configure Application Insights here first, then continue through `/edit-app` for those source changes.
+- Adding or changing custom events in app screens → configure Application Insights here first, then continue through `/edit-app` for those source changes.
 - Data model / connector / native / design / screen changes → the respective `/add-*`, `/setup-*`, `/edit-app`, or `/design-system` skills.
 - Provisioning a new Azure Application Insights resource → out of scope; this skill discovers or accepts an **existing** resource.
 
@@ -60,7 +60,7 @@ Determine the action:
 
 - `enable` — `appInsightsConfig.enabled` is absent or `false` and the user wants it on.
 - `change-resource` — already `enabled: true` and the user wants a different destination.
-- `disable` — the user wants customer Application Insights turned off.
+- `disable` — the user wants Application Insights turned off.
 - If intent is ambiguous, ask one `AskUserQuestion` with those three choices, seeded by the current `enabled` state.
 
 ## Step 3 — Mutation preview + approval
@@ -166,18 +166,18 @@ import {
 } from '@microsoft/power-apps-native-host';
 ```
 
-- `getAppLogger()` is the host/runtime logger; its events continue to Microsoft OneDS and also fan out to the configured customer resource.
-- `getCustomerTelemetryLogger()` is for customer-defined app events; it goes only to the configured customer resource and is a no-op when customer telemetry is disabled.
-- Generate customer event calls only when the user explicitly requested those events or an approved screen spec has a `Customer telemetry` entry. Never use `getAppLogger()` for customer-defined events.
+- `getAppLogger()` is the host/runtime logger; its events continue to Microsoft OneDS and also fan out to the configured Application Insights resource.
+- `getCustomerTelemetryLogger()` is for the app's custom events; it goes only to the configured Application Insights resource and is a no-op when custom events are disabled.
+- Generate custom event calls only when the user explicitly requested those events or an approved screen spec has a `Custom events` entry. Never use `getAppLogger()` for custom events.
 - Telemetry properties must be approved scalar values (result codes, durations, counts, screen identifiers, operation names). Never include form values, free text, record titles, names, emails, phone numbers, tokens, precise coordinates, nested objects, or complete URLs.
 
 Persist in `memory-bank.md` (never the connection string):
 
 ```markdown
-- Customer telemetry: enabled
-- Customer telemetry app ID: <appId>
-- Customer telemetry resource ID: <selected-resource-id or admin-provided>
-- Customer telemetry destination: one customer-owned workspace-based Application Insights resource
+- Custom events: enabled
+- Custom events app ID: <appId>
+- Custom events resource ID: <selected-resource-id or admin-provided>
+- Custom events destination: one customer-owned workspace-based Application Insights resource
 ```
 
 ## Step 5b — disable
@@ -202,7 +202,7 @@ Set `enabled: false`, clear `connectionString`, and preserve `appId` and `enviro
 }
 ```
 
-Persist `Customer telemetry: disabled` and the app ID in `memory-bank.md`; remove stale resource ID / destination lines.
+Persist `Custom events: disabled` and the app ID in `memory-bank.md`; remove stale resource ID / destination lines.
 
 ## Step 6 — Verify the provider wiring
 
@@ -227,13 +227,13 @@ Parse `app.json` with Node after the mutation and assert:
 
 **Telemetry checkpoint: `offer_operation_instrumentation`**
 
-This skill only wires the telemetry pipeline; it never edits screens or generated services. Enabling Application Insights emits host-level signals (app load, unhandled errors, navigation) automatically, but **domain events like `todo_created` or `order_deleted` are customer-defined and require source changes**. Those changes belong to `/edit-app` → screen-planner → screen-builder, which emit named events through `getCustomerTelemetryLogger` under the existing scalar-only, no-PII allowlist. Offer that follow-up here; never instrument operations from this skill.
+This skill only wires the telemetry pipeline; it never edits screens or generated services. Enabling Application Insights emits host-level signals (app load, unhandled errors, navigation) automatically, but **domain events like `todo_created` or `order_deleted` are custom events and require source changes**. Those changes belong to `/edit-app` → screen-planner → screen-builder, which emit named events through `getCustomerTelemetryLogger` under the existing scalar-only, no-PII allowlist. Offer that follow-up here; never instrument operations from this skill.
 
 Run this step only after a successful `enable` or `change-resource`. Skip it entirely for `disable`.
 
 - **Mode B (standalone):** ask one `AskUserQuestion`, defaulting to **No** (instrumentation is opt-in, mirroring Application Insights being off by default):
 
-  > Application Insights is on. Want me to add custom telemetry to your app's major operations (create / update / delete)?
+  > Application Insights is on. Want me to add custom events for your app's major operations (create / update / delete)?
 
   - **Yes** → invoke `/edit-app` with a scoped instrumentation brief and let its normal edit flow discover the entities, screens, and operation boundaries (this skill does not read the data model or screens):
 
@@ -241,7 +241,7 @@ Run this step only after a successful `enable` or `change-resource`. Skip it ent
     Invoke skill: /edit-app
 
     Arguments:
-      Add customer telemetry events at each successful create, update, and
+      Add custom events at each successful create, update, and
       delete boundary for the app's main entities. Emit named events through
       getCustomerTelemetryLogger with approved scalar properties only — no
       operation results, response payloads, form values, free text, record
@@ -255,7 +255,7 @@ Run this step only after a successful `enable` or `change-resource`. Skip it ent
 
 ## Support boundary
 
-This skill discovers or accepts an **existing** Application Insights resource; it does not provision Azure resources. If the user lacks Azure access and has no administrator-provided connection string, leave telemetry disabled without blocking — the app runs fine with customer telemetry off.
+This skill discovers or accepts an **existing** Application Insights resource; it does not provision Azure resources. If the user lacks Azure access and has no administrator-provided connection string, leave telemetry disabled without blocking — the app runs fine with custom events off.
 
 ## Return
 
