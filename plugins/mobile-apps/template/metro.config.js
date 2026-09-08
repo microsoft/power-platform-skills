@@ -1,4 +1,3 @@
-const { getDefaultConfig } = require('expo/metro-config');
 const { withPowerNativeMetroLogging } = require('@microsoft/power-apps-native-host/config/metroLogger');
 const { createPowerAppsMetroConfig } = require('@microsoft/power-apps-native-host/config/metroConfig');
 
