@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** | **Connector reference: [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)** — read both first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** | **Connector reference: [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)** — read both first.
 
 # Add Connector (Generic)
 
@@ -27,7 +27,7 @@ The native host runtime (`@microsoft/power-apps-native-host`) handles connector 
 
 ### Step 1 — Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 Also confirm we're inside a Power Apps mobile app:
 
@@ -38,6 +38,8 @@ test -f power.config.json && test -f app.config.js
 If either is missing, instruct the user to run `/create-mobile-app` first and stop.
 
 ### Step 2 — Identify Connector
+
+**Telemetry checkpoint: `resolve_connector_request`**
 
 **If `$ARGUMENTS` is provided or the caller already specified the connector**, use it directly and skip the question below.
 
@@ -76,7 +78,9 @@ After `add-flow`, continue at Step 4 and inspect the generated service/model fil
 
 ### Step 3 — Add Connector
 
-**First, get the connection ID or connection reference** (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
+**Telemetry checkpoint: `generate_connector_data_source`**
+
+**First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 Run the `/list-connections` skill with the connector API ID (for example `shared_office365users`). Capture the exact `connectionId` from `create-connection`, or the `connectionRef` from `list-connection-references` if the caller is solution-aware. If creation cannot complete in the CLI, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` `environmentId` or a prior step):
 `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
@@ -162,6 +166,8 @@ For each method the user needs:
 Help the user write code using the generated service methods.
 
 ### Step 5 — Build
+
+**Telemetry checkpoint: `validate_connector_integration`**
 
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify the new connector wires in cleanly (~10–20 seconds)."

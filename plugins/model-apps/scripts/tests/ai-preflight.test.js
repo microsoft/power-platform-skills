@@ -298,3 +298,31 @@ test('an unresolvable --app makes effective values INDETERMINATE, not environmen
   assert.ok(!/in effect via/.test(out), 'no feature may be reported as in effect when app scope is unknown');
   assert.match(out, /Admin actions required/, 'genuine admin actions must NOT be suppressed');
 });
+
+test('a platform-default value is reported as UNKNOWN, not as off', () => {
+  // For the AI form-fill family `0` means "defer to service flighting", not "disabled". Printing ✗
+  // asserts something the environment does not say — and it is exactly why a user saw form fill
+  // working while an earlier report called it off across every org.
+  const readiness = { formFill: { enabled: false, setting: 'FormFillBarUXEnabled', value: '0' } };
+  const r = runPreflight(readiness, { formFill: { value: '0', scope: 'default', on: undefined } });
+  const f = r.features.find((x) => x.feature === 'formFill');
+  assert.strictEqual(f.effectiveDefault, true, 'a codec default must be flagged as the platform default');
+  assert.ok(!f.effectiveIndeterminate, 'a known default is not the same as an unrecognised value');
+  assert.ok(!f.inEffect, 'unknown is not a claim that it runs');
+  // Still actionable: leaving it to flighting is not a deterministic choice.
+  assert.strictEqual(r.adminActions.length, 1);
+});
+
+test('a codec DISABLED value is off, not on', () => {
+  // The bug this replaces: any non-zero value counted as on, so `1` (DISABLED) reported as enabled.
+  const { settingIsOn } = require('../lib/ai-app-settings.js');
+  assert.strictEqual(settingIsOn('1', 'formFill'), false, "'1' is DISABLED for the form-fill family");
+  assert.strictEqual(settingIsOn('2', 'formFill'), true, "'2' is ENABLED");
+  assert.strictEqual(settingIsOn('0', 'formFill'), undefined, "'0' is the platform default, not off");
+  // A feature with no codec keeps the plain numeric convention.
+  assert.strictEqual(settingIsOn('1', 'nlSearch'), true);
+  assert.strictEqual(settingIsOn('2', 'nlSearch'), true);
+  assert.strictEqual(settingIsOn('0', 'nlSearch'), false);
+  // And with no feature key at all, the old convention still applies for existing callers.
+  assert.strictEqual(settingIsOn('1'), true);
+});

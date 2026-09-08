@@ -106,6 +106,9 @@ test('data platform and integrations are approved before Dataverse modeling', ()
   const screenSpecsGate = planner.indexOf('### Gate 4 — Screen Specs Review');
   assert.ok(nativePlanning > 0 && nativePlanning < connectorPlanning);
   assert.ok(connectorPlanning < architectureGate);
+  const connectorSection = planner.slice(connectorPlanning, architectureGate);
+  assert.doesNotMatch(connectorSection, /AskUserQuestion|ask cold/i);
+  assert.match(connectorSection, /Approve in Gate 1/i);
   assert.ok(architectureGate > 0 && architectureGate < architectDispatch);
   assert.ok(architectDispatch < dataModelGate);
   assert.ok(dataModelGate < screenGraphGate && screenGraphGate < screenSpecsGate);

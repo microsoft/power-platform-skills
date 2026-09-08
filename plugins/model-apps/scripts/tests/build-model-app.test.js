@@ -165,11 +165,25 @@ test('language resolution warns when org-language discovery fails but still fall
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
   const { sdk } = mockSdk();
   let received = null;
-  const verify = async (s) => { received = s; return { ok: true, checks: [{ kind: 'entity', name: 'a', present: true }, { kind: 'form', name: 'b', present: true }], missing: [] }; };
+  let receivedOpts = null;
+  const verify = async (s, o) => { received = s; receivedOpts = o; return { ok: true, checks: [{ kind: 'entity', name: 'a', present: true }, { kind: 'form', name: 'b', present: true }], missing: [] }; };
   const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify });
   assert.strictEqual(r.ok, true);
   assert.strictEqual(received, desk, 'the injected verifier received the spec');
   assert.deepStrictEqual(r.verify, { ok: true, present: 2, total: 2, missing: [] });
+
+  // The CALL SITE, which nothing covered until a reviewer pointed it out. Dropping the second
+  // argument here leaves every other test green while verify goes back to reporting an
+  // environment-gated business rule as `not deployed` — which drives verify.ok false, which withholds
+  // the exit code, `.last-applied.json` and the `--changed-only` snapshot. The whole fix would be
+  // inert and nothing would say so.
+  assert.ok(receivedOpts, 'the caller must SUPPLY verify options, not just be able to forward them');
+  assert.ok('environmentSkipped' in receivedOpts,
+    'the build must tell verify what this environment could not host');
+  assert.deepStrictEqual(receivedOpts.environmentSkipped, r.skipped,
+    'and it must be the build result\'s own record, so the two cannot drift');
+  assert.ok('phases' in receivedOpts,
+    'and which phases ran — a --changed-only fast apply produces an EMPTY skip list, so the skip list alone is not enough');
 });
 
 test('auto-verify surfaces a silent partial build (verify FAIL) in r.verify and the log; the build itself still succeeded', async () => {
@@ -549,10 +563,18 @@ test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)
 // the exact regression at zero cost.
 test('build --verify wires the role-privilege readers (httpClient + envUrl)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  const call = src.split(/\r?\n/).find((l) => l.includes('verify: (s) => verifySpec'));
+  // Matched on the wiring, not the exact arity: the deps.verify lambda gained a second parameter so
+  // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
+  // business-rule skip must not read as "not deployed"). Pinning `(s)` exactly made this test fail
+  // for a change that did not touch what it is actually guarding.
+  const call = src.split(/\r?\n/).find((l) => /verify: \([^)]*\) => verifySpec/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
   assert.match(call, /httpClient/, 'entityPrivileges needs the raw client');
   assert.match(call, /envUrl: env/, 'entityPrivileges needs the org url to build an absolute request');
+  // And the second argument must actually be forwarded, or the environment-skip list is silently
+  // dropped and verify keeps failing on rules the build already reported it could not create.
+  assert.match(call, /verifySpec\(\s*s\s*,[\s\S]*\)\s*,\s*verifyOpts\s*\)/,
+    'the caller-supplied verify options must reach verifySpec');
 });
 
 test('makeSdk returns the httpClient so the caller can wire verify', () => {
@@ -1131,4 +1153,66 @@ test('--language-code only warns "no effect" for phases that genuinely create no
   for (const phase of ['publish', 'sample-data', 'pages']) {
     assert.ok(!listed.includes(phase), `'${phase}' creates no labels and must not suppress the warning`);
   }
+});
+
+test('the verify options carry the ACTUAL phase list, not a constant', () => {
+  // The previous assertion was `'phases' in receivedOpts`, which any value satisfies — including a
+  // hardcoded constant or an explicit undefined. A reviewer showed the --changed-only fast path
+  // could be broken again with the suite green by replacing `opts.phases` with a literal.
+  //
+  // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
+  // merely passes a phase list through would still accept `phases: PHASES`.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases \}\)/,
+    'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
+});
+
+test('a phase-limited build forwards its phase subset to verify', async () => {
+  // The behavioural half: drive a real phase-limited build and confirm the subset arrives.
+  // `--stage data` is used because `--apply` refuses arbitrary partial ranges — only a full build,
+  // exactly `STAGES.data`, or the `--changed-only` pages fast apply are sanctioned (design §14), and
+  // a refused build never reaches verify at all.
+  const { STAGES } = require('../lib/stages.js');
+  const { sdk } = mockSdk();
+  let receivedOpts = null;
+  const verify = async (s, o) => { receivedOpts = o; return { ok: true, checks: [], missing: [] }; };
+  await buildModelApp(desk, { apply: true, env: 'https://x', verify: true, phases: STAGES.data }, { sdk, verify });
+  assert.ok(receivedOpts, 'verify must run');
+  assert.deepStrictEqual(receivedOpts.phases, STAGES.data,
+    'verify cannot tell which checks are inapplicable without the real phase list');
+});
+
+test('verify NARRATES an environment-gated skip — a green PASS must never hide one', async () => {
+  // The guarantee that makes "not a check at all" safe rather than a lie. Without this line a gated
+  // build prints "✓ verify PASS (14/14 present)" with no hint that a declared rule was never checked,
+  // and the JSON result carries no trace either.
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  const verify = async () => ({
+    ok: true, checks: [{ kind: 'entity', name: 'a', present: true }], missing: [],
+    environmentSkipped: ['business-rule:new_ticket.Lock notes'],
+  });
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify, log: cap.log });
+  assert.match(cap.logs.join('\n'), /not applicable on this environment/, 'the human channel');
+  assert.match(cap.logs.join('\n'), /business-rule:new_ticket\.Lock notes/, 'and it must NAME what was skipped');
+  assert.deepStrictEqual(r.verify.environmentSkipped, ['business-rule:new_ticket.Lock notes'],
+    'the machine channel — this is what emitResult serializes');
+});
+
+test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated one', async () => {
+  // Both used to share one message. On a HEALTHY environment every --changed-only fast apply runs
+  // `phases: ['pages']`, so every business rule was reported as "not applicable on this environment"
+  // — telling an operator whose environment works fine that it does not. Wrong 100% of the time on
+  // the normal fast-apply path.
+  const { sdk } = mockSdk();
+  const cap = logCapture();
+  const verify = async () => ({
+    ok: true, checks: [{ kind: 'entity', name: 'a', present: true }], missing: [],
+    phaseSkipped: ['business-rule:new_ticket.Lock notes'],
+  });
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify, log: cap.log });
+  assert.match(cap.logs.join('\n'), /phase did not run/, 'it must say the PHASE did not run');
+  assert.doesNotMatch(cap.logs.join('\n'), /not applicable on this environment/,
+    'and must NOT blame the environment, which is working fine');
+  assert.deepStrictEqual(r.verify.phaseSkipped, ['business-rule:new_ticket.Lock notes']);
 });

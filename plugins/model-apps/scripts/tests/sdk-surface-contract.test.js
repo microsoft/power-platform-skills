@@ -69,6 +69,7 @@ const SKILL_SDK_SURFACE = [
   'getSolution',
   'initWorkspace',
   'insertStatusValue',
+  'moveElement',
   'publishArtifact',
   'pushArtifact',
   'queryRecords',
@@ -79,6 +80,11 @@ const SKILL_SDK_SURFACE = [
   'seedRecordGraph',
   'setAppAiFeatures',
   'setColumnVisualization',
+  // Offers a form to specific security roles (AB#6648526). The roles are NOT a relationship —
+  // `systemform` reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }` and there is no
+  // `systemformrole` entity — they live inside `formxml` as `<DisplayConditions>`, so this dedicated
+  // call is the only way to write them.
+  'setFormSecurityRoles',
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',
@@ -87,6 +93,7 @@ const SKILL_SDK_SURFACE = [
   // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted
   // by the API and silently fails to enable the feature. The SDK owns that encoding.
   'setHeaderAndNavigationRefresh',
+  'updateColumn',
   'updateElement',
   'updateRecord',
   'updateTable',

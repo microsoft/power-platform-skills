@@ -153,7 +153,7 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 |---|---|---|
 | `camera` | `expo-camera` | `/add-native camera` |
 | `image-picker` | `expo-image-picker` | `/add-native image-picker` |
-| `document-picker` | `expo-document-picker` | — |
+| `document-picker` | `expo-document-picker` | `/add-native document-picker` |
 | `pdf-report` | `expo-print` (+ `expo-sharing` when local share is needed and present) | `/add-native pdf-report` |
 | `native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `/add-native pdf-viewer` |
 | `pen-input` | `@microsoft/power-apps-native-pen-input` | `/add-native pen-input` |
@@ -165,12 +165,13 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 | `biometrics` / `local-authentication` | `expo-local-authentication` | `/add-native biometrics` |
 | `clipboard` | `expo-clipboard` | `/add-native clipboard` |
 | `mail-composer` / `email-draft` | `expo-mail-composer` | `/add-native mail-composer` |
-| `media-library` | `expo-media-library` | `/add-native media-library` |
 | `audio` | `expo-audio` | `/add-native audio` |
 | `video` | `expo-video` | `/add-native video` |
 | `sensors` | `expo-sensors` | `/add-native sensors` |
 | `screen-orientation` | `expo-screen-orientation` | `/add-native screen-orientation` |
 | `date-time-picker` | `@react-native-community/datetimepicker` | screen-builder form component rule |
+
+For custom workflows outside Dataverse File/Image form fields, plan `image-picker` with `/add-native image-picker` for user-selected photos and videos, or `document-picker` with `/add-native document-picker` for documents and other files. For Dataverse-bound File/Image fields, plan host `<FilePicker>` / `<ImagePicker>` controls instead. Do not plan broad media-library access when either scoped picker path satisfies the workflow.
 
 Do not propose `native-pdf-viewer` or `pen-input` unless the exact extension package is present in the template allowlist output (`@microsoft/power-apps-native-pdf-viewer` and `@microsoft/power-apps-native-pen-input`). Do not propose `geolocation` unless `@microsoft/power-apps-native-bglocation` is present, and only for continuous/background tracking or durable Dataverse upload — use one-shot `location` (`expo-location`) for a single foreground coordinate read. When proposing `geolocation`, record that its Dataverse target table must already exist and must be verified by `/add-native geolocation` (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). Do not propose `pdf-report` unless `expo-print` is present. Do not propose local sharing for generated PDFs unless `expo-sharing` is present. If neither package path is present, drop the PDF capability and add a transparency note.
 
@@ -229,16 +230,18 @@ If the app needs zero allowlisted native capabilities, include a `## Native Capa
 **Print before starting:**
 > "→ [3/4] Inferring connector needs from requirements…"
 
-Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md) exactly. The three steps are:
+Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md)
+for inference and connector metadata. Gate 1 owns the only user interaction:
 
-1. **Infer** — scan requirements and wizard answers for connector keywords. Build a candidate list without asking the user yet.
-2. **Confirm** — present the inferred list via `AskUserQuestion`. Let the user add, remove, or confirm. If nothing was inferred, ask cold ("Does your app need any external services?").
-3. **Record** — build the `## Connectors` section (table or "None" line).
+1. **Infer** — scan requirements and wizard answers for connector keywords.
+2. **Draft** — build the candidate `## Connectors` section (table or "None"
+   line) without asking a separate question.
+3. **Approve in Gate 1** — let the user add, remove, or confirm connectors while
+   reviewing the complete architecture.
 
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
 
-Store the confirmed connector list — you will pass it to `screen-planner`
-after the architecture and optional data-model gates.
+Store the Gate 1-approved connector list for the data-model and screen planners.
 
 ### Gate 1 — Data Platform + Device Capabilities + Integrations
 
@@ -775,7 +778,7 @@ Sections approved:
 
 Next steps for the orchestrator:
   1. Auth + environment selection
-  2. Use the user-prepared fresh template folder materialized from `pa-wrap-tools/templates/expo-app-standalone` with `degit`
+  2. Use the user-prepared fresh template folder materialized from `microsoft/power-platform-skills/plugins/mobile-apps/template#main` with `degit`
   3. npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
   4. If Dataverse was approved, apply data model via /add-dataverse using the plan
   5. Apply native capabilities via /add-native using the plan

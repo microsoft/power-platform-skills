@@ -136,15 +136,39 @@ async function resolveLanguageCode({ provision, spec, languageCode, warn, provis
 // name -> its metadataId (so a column can bind to a shared option set).
 function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
   const o = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'], required: REQUIRED(c), languageCode };
+  // Description is the maker-facing "what is this column for". Written at CREATE time rather than
+  // backfilled: `createColumn` accepts it, and a later PATCH is a second round trip that is easy to
+  // skip and easy to forget — so the only reliable moment is the one where the column is authored.
+  // Omitted when absent, so an existing column's description is never blanked by a rebuild.
+  if (c.description) o.description = String(c.description);
   switch (c.type) {
     case 'Text': if (c.maxLength) o.maxLength = c.maxLength; if (c.format) o.stringFormat = c.format; break;
     case 'Memo': if (c.maxLength) o.maxLength = c.maxLength; break;
     case 'Integer': case 'BigInt': case 'Decimal': case 'Double': case 'Money':
       if (c.minValue !== undefined) o.minValue = c.minValue;
       if (c.maxValue !== undefined) o.maxValue = c.maxValue;
-      if (c.precision !== undefined) o.precision = c.precision; break;
+      if (c.precision !== undefined) o.precision = c.precision;
+      // AB#6648522: Whole Number display Format (e.g. a raw integer count of minutes rendered as a
+      // Duration picker). Gated on the EXACT 'Integer' type, not the whole shared case: BigInt/
+      // Decimal/Double/Money share this case only for min/max/precision, but the SDK's `integerFormat`
+      // option is Integer-only and throws InvalidArgumentError for any of the others (app-spec.js's
+      // spec-gate validation rejects that combination earlier, so this should never fire in practice —
+      // but the gate is Integer-only for the same reason, so keep both narrow together).
+      if (c.type === 'Integer' && c.integerFormat !== undefined) o.integerFormat = c.integerFormat;
+      break;
     case 'DateTime': if (c.dateFormat) o.dateFormat = c.dateFormat; break;
-    case 'Boolean': if (c.trueLabel) o.trueLabel = c.trueLabel; if (c.falseLabel) o.falseLabel = c.falseLabel; break;
+    case 'Boolean':
+      if (c.trueLabel) o.trueLabel = c.trueLabel;
+      if (c.falseLabel) o.falseLabel = c.falseLabel;
+      // AB#6648523: an explicit `false` must reach the SDK exactly like an explicit `true` does.
+      // `!== undefined`, NOT a truthy check — `if (c.defaultValue)` would silently drop the one value
+      // (`false`) a maker-authored spec is most likely to set on purpose. Measured against the
+      // vendored bundle: omitting the option sends no `DefaultValue` key different from an explicit
+      // `false` (both resolve to the SDK's own `?? false`), so passing it through has no wire-visible
+      // effect on create today — but the SAME `!== undefined` guard is reused for the update reconcile
+      // below, where a bare truthy check would be an outright bug (see the reconcile block).
+      if (c.defaultValue !== undefined) o.defaultValue = c.defaultValue;
+      break;
     case 'Choice': case 'MultiChoice':
       if (c.globalChoice && globalChoiceIds[c.globalChoice]) { o.globalChoiceMetadataId = globalChoiceIds[c.globalChoice]; }
       // Defensive fallback: the global choice exists but its metadataId wasn't captured. With the now
@@ -159,6 +183,19 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
     case 'AutoNumber': if (c.autoNumberFormat) o.autoNumberFormat = c.autoNumberFormat; break;
   }
   if (c.source === 'Calculated' || c.source === 'Rollup') { o.sourceType = c.source; if (c.formula) o.formulaDefinition = c.formula; }
+  // AB#6651276: per-verb write/read permissions. Lives after the per-type switch, not inside it,
+  // because the SDK accepts these on every buildable column type — this function is simply never
+  // called for a Customer column (its caller routes those through createCustomerColumn instead,
+  // whose options have no such fields; see the call site in provisionDataModel).
+  //
+  // `!== undefined`, NOT a truthy check, for each flag: measured against the vendored bundle, the
+  // wire key is only sent when the option is explicitly set (unlike DefaultValue/Format above, which
+  // the SDK always sends with its own default). `isValidForUpdate: false` — making a column read-only
+  // after creation — is the ENTIRE POINT of this feature, so a naive `if (c.isValidForUpdate)` guard
+  // would silently make every "lock this down" spec a no-op.
+  if (c.isValidForCreate !== undefined) o.isValidForCreate = c.isValidForCreate;
+  if (c.isValidForUpdate !== undefined) o.isValidForUpdate = c.isValidForUpdate;
+  if (c.isValidForRead !== undefined) o.isValidForRead = c.isValidForRead;
   return o;
 }
 
@@ -216,6 +253,68 @@ function isVisualizationUnsupported(err) {
   return /not found for the segment\s+'?controlconfigurations/i.test(msg);
 }
 
+function hasExplicitRequired(c) {
+  return c && Object.prototype.hasOwnProperty.call(c, 'required');
+}
+
+function requiredLevelValue(raw) {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw.Value === 'string') return raw.Value;
+  if (raw && typeof raw.value === 'string') return raw.value;
+  return undefined;
+}
+
+function columnRequiredLevel(c) {
+  if (!c) return undefined;
+  return requiredLevelValue(c.RequiredLevel) || requiredLevelValue(c.requiredLevel);
+}
+
+async function readAttributeRequiredLevels({ sdk, provision, logical }) {
+  const client = (provision && provision.dataverse) || (sdk && sdk.dataverse);
+  if (!client || typeof client.get !== 'function') return new Map();
+
+  // The public SDK discovery methods currently project RequiredLevel away: `findColumns` returns
+  // name/type/display fields, and `fetchEntityMetadata` returns its cached `attributes[]` in the
+  // same reduced shape. `updateColumn` can write RequiredLevel but does not expose its internal GET,
+  // so this is the narrow transport read that lets us avoid a blind metadata PUT. Dataverse returns:
+  //   {
+  //     "value": [{
+  //       "LogicalName": "contoso_title",
+  //       "RequiredLevel": { "Value": "ApplicationRequired", "CanBeChanged": true, ... }
+  //     }]
+  //   }
+  // `RequiredLevel.Value` is the same AttributeRequiredLevelManagedProperty enum value accepted by
+  // the SDK (`ApplicationRequired` | `Recommended` | `None`).
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributerequiredlevelmanagedproperty
+  const path = `/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes?$select=LogicalName,RequiredLevel`;
+  const res = await client.get(path);
+  if (!res || res.status < 200 || res.status >= 300) {
+    const msg = res && res.body && res.body.error && res.body.error.message
+      ? res.body.error.message
+      : `HTTP ${res && res.status}`;
+    throw new Error(`could not read RequiredLevel for ${logical}: ${msg}`);
+  }
+  const out = new Map();
+  for (const a of (res.body && res.body.value) || []) {
+    const name = a && (a.LogicalName || a.logicalName);
+    const level = columnRequiredLevel(a);
+    if (name && level) out.set(String(name).toLowerCase(), level);
+  }
+  return out;
+}
+
+async function runBestEffort(runner, phase, label, fn, warn, warning) {
+  try {
+    return await runner.run(phase, label, fn, { recoverable: true });
+  } catch (err) {
+    if (typeof warn === 'function') {
+      const cause = err && err.cause ? err.cause : err;
+      warn(`${warning}: ${(cause && cause.message) || cause}`);
+    }
+    return undefined;
+  }
+}
+
 // Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which
 // raises SQL-deadlock risk). Preserves input order in the result.
 async function mapLimit(items, limit, fn) {
@@ -246,7 +345,17 @@ function makeRunner({ emit, total }) {
     } catch (err) {
       // Idempotency escape hatch: a create that fails only because the component already
       // exists is a skip, not a halt (used where the SDK offers no check-first lister).
-      if (skipIf && skipIf(err)) { emit({ phase, status: 'skip', label: `${label} (exists)`, n: myN, total }); return undefined; }
+      //
+      // `skipIf` may answer `true` (the original contract — the reason is "exists") or a REASON
+      // STRING. The string form exists because not every recoverable skip is an already-exists
+      // collision: an environment that does not declare a platform member cannot host the artifact
+      // at all, and labelling that "(exists)" would tell the operator the exact opposite of what
+      // happened. Boolean callers are unaffected.
+      const why = skipIf && skipIf(err);
+      if (why) {
+        emit({ phase, status: 'skip', label: `${label} (${typeof why === 'string' ? why : 'exists'})`, n: myN, total });
+        return undefined;
+      }
       emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
       throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
     }
@@ -326,7 +435,7 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
     const pubs = await provision.queryRecords('publisher', { select: ['publisherid'], filter: `customizationprefix eq '${odataLit(solution.publisherPrefix)}'`, top: 1 });
     if (pubs && pubs[0] && pubs[0].publisherid) publisherId = pubs[0].publisherid;
     else publisherId = (await provision.createPublisher({ uniqueName: `${solution.publisherPrefix}publisher`, friendlyName: `${solution.publisherPrefix} publisher`, prefix: solution.publisherPrefix })).id;
-    await provision.createSolution({ uniqueName: solution.uniqueName, friendlyName: solution.displayName || solution.uniqueName, publisherId });
+    await provision.createSolution({ uniqueName: solution.uniqueName, friendlyName: solution.displayName || solution.uniqueName, publisherId, ...(solution.description ? { description: solution.description } : {}) });
   }, { recoverable: true });
 }
 
@@ -375,10 +484,10 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // that construct the SDK themselves and for the existing unit tests.
   const resolvedLanguageCode = preResolvedLanguageCode
     || await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
-  
+
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
-  
+
   // 2a. Global option sets (shared choices) — built before columns that bind to them. The SDK's
   // createGlobalOptionSet is now IDEMPOTENT: it probes by Name and REUSES an existing set (returning
   // its MetadataId) instead of failing a duplicate-Name POST. So a rerun captures the existing set's
@@ -388,27 +497,32 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // runner.run instead of being silently swallowed.
   for (const gc of spec.globalChoices || []) {
     await runner.run('data-model', `global choice ${gc.name}`, async () => {
-      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
+      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, ...(gc.description ? { description: gc.description } : {}), options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
       globalChoiceIds[gc.name] = r.metadataId;
     });
   }
-  
+
   // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
   for (const e of spec.entities) {
     const logical = e.schemaName.toLowerCase();
     const hits = await provision.findTables(e.schemaName, { top: 50 });
     const existingTable = (hits || []).find((t) => t.logicalName === logical);
     let existingCols = new Set();
+    let existingColRows = [];
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-      existingCols = new Set(((await provision.findColumns(logical)) || []).map((c) => c.logicalName));
+      existingColRows = (await provision.findColumns(logical)) || [];
+      existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {
         const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
+        // Same reasoning as columns: set the description at CREATE time, and omit it when absent so
+        // a rebuild never blanks a description someone added in the maker.
+        if (e.description) createOpts.description = String(e.description);
         try {
           const t = await sdk.createTable(createOpts);
           result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
@@ -448,6 +562,99 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode })
         : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode)),
       { skipIf: isAlreadyExists }));
+    if (existingTable) {
+      const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
+      const requiredTargets = [
+        e.primaryAttribute,
+        ...buildable,
+      ].filter((c) => c && c.schemaName && hasExplicitRequired(c) && existingCols.has(c.schemaName.toLowerCase()));
+      const requiredLevels = new Map();
+      for (const c of requiredTargets) {
+        const current = columnRequiredLevel(existingColMeta.get(c.schemaName.toLowerCase()));
+        if (current) requiredLevels.set(c.schemaName.toLowerCase(), current);
+      }
+      const missingLevels = requiredTargets.filter((c) => !requiredLevels.has(c.schemaName.toLowerCase()));
+      if (missingLevels.length) {
+        try {
+          for (const [name, level] of await readAttributeRequiredLevels({ sdk, provision, logical })) {
+            requiredLevels.set(name, level);
+          }
+        } catch (err) {
+          if (typeof warn === 'function') {
+            warn(`could not read required levels for ${logical}: ${(err && err.message) || err} — existing columns with explicit required values were left unchanged`);
+          }
+        }
+      }
+      const toUpdateRequired = [];
+      for (const c of requiredTargets) {
+        const columnLogical = c.schemaName.toLowerCase();
+        const desired = REQUIRED(c);
+        const current = requiredLevels.get(columnLogical);
+        // Omitted `required` is intentionally NOT reconciled. REQUIRED(c) maps an absent property to
+        // `None` for the CREATE payload, but applying that same default to an existing column would
+        // demote a maker-authored Business Required field on a rebuild — a destructive surprise. Only
+        // an explicit spec value owns the existing column's RequiredLevel.
+        if (!current) {
+          runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (current level unknown — skipped)`);
+        } else if (current === desired) {
+          runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (already ${desired})`);
+        } else {
+          toUpdateRequired.push({ schemaName: c.schemaName, logicalName: columnLogical, required: desired });
+        }
+      }
+      await runner.mapLimit(toUpdateRequired, 1, (c) => runBestEffort(
+        runner,
+        'data-model',
+        `required ${e.schemaName}.${c.schemaName} -> ${c.required}`,
+        () => sdk.updateColumn(logical, c.logicalName, { required: c.required }),
+        warn,
+        `could not update required level for ${logical}.${c.logicalName} to ${c.required} — the rest of the build continues`
+      ));
+      // AB#6648523 / AB#6648522 / AB#6651276: reconcile the three new column capabilities
+      // (defaultValue, integerFormat, isValidForCreate/Update/Read) on an EXISTING table, so a
+      // rebuild converges a column that already exists, not only one just created above.
+      //
+      // Deliberately a SEPARATE block from the `required` reconcile above rather than folded into
+      // it, and with a DIFFERENT strategy: `required` reads the column's CURRENT level first so it
+      // can skip a no-op update and, more importantly, avoid demoting an omitted value (a maker may
+      // have set Business Required by hand, and the spec staying silent must not undo that). These
+      // three have no equivalent maker-authored surface to protect, and `updateColumn` performs its
+      // own GET-mutate-PUT round trip per call (measured against the vendored bundle — replaying an
+      // already-correct value is a harmless no-op on the wire), so they are simply RE-ASSERTED
+      // whenever the spec sets them explicitly — the same no-pre-read-diff strategy already used by
+      // `setColumnVisualization` below for the same reason.
+      //
+      // Customer columns are excluded outright, not merely skipped for these three fields:
+      // `updateColumn` refuses ANY change to a Customer column (measured — it throws "type
+      // 'Customer' not supported"), because Customer has no entry in the SDK's attribute-type ->
+      // OData-cast table (it is created through the wholly separate createCustomerColumn instead).
+      const capabilityTargets = buildable.filter((c) => c.type !== 'Customer' && existingCols.has(c.schemaName.toLowerCase())
+        && (c.defaultValue !== undefined || c.integerFormat !== undefined
+          || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
+      await runner.mapLimit(capabilityTargets, 1, (c) => {
+        const columnLogical = c.schemaName.toLowerCase();
+        const opts = {};
+        // Same type gates as columnOptions() above (Boolean-only / Integer-only): the SDK's update
+        // path throws the identical InvalidArgumentError as create for a type mismatch, and
+        // app-spec.js's validation already rejects an impossible combination at the spec gate — this
+        // just keeps the two call sites from drifting off that shared rule.
+        if (c.type === 'Boolean' && c.defaultValue !== undefined) opts.defaultValue = c.defaultValue;
+        if (c.type === 'Integer' && c.integerFormat !== undefined) opts.integerFormat = c.integerFormat;
+        // `!== undefined`, not truthy — same reasoning as columnOptions(): an explicit `false` is the
+        // whole point of isValidForUpdate/Create/Read, and of `defaultValue` too.
+        if (c.isValidForCreate !== undefined) opts.isValidForCreate = c.isValidForCreate;
+        if (c.isValidForUpdate !== undefined) opts.isValidForUpdate = c.isValidForUpdate;
+        if (c.isValidForRead !== undefined) opts.isValidForRead = c.isValidForRead;
+        return runBestEffort(
+          runner,
+          'data-model',
+          `column capabilities ${e.schemaName}.${c.schemaName}`,
+          () => sdk.updateColumn(logical, columnLogical, opts),
+          warn,
+          `could not update column capabilities for ${logical}.${columnLogical} — the rest of the build continues`
+        );
+      });
+    }
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {
       const res = colResults[i];
@@ -512,7 +719,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         { recoverable: true, skipIf: isAlreadyExists });
     }
   }
-  
+
   // 2c. Relationships — 1:N and N:N; skip those already present. The publisher prefix is threaded
   //     into the schema-name defaulting so a relationship to a standard/system table gets a valid,
   //     prefixed name Dataverse accepts (see prefixedRelationshipName).
@@ -547,7 +754,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       }, { skipIf: isAlreadyExists });
     }
   }
-  
+
   return result;
 }
 

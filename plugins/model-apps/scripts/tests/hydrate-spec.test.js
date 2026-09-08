@@ -47,6 +47,83 @@ test('hydrateSpec reconstructs a valid, complete spec (entities + appShell + pag
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('hydrateSpec unwraps Dataverse Label descriptions and omits absent descriptions', async () => {
+  const spec = await hydrateSpec({
+    app: async () => ({ name: 'A', description: null, siteMap: { areas: [] } }),
+    pages: async () => [],
+    entities: async () => [{
+      schemaName: 'new_order',
+      displayName: 'Order',
+      description: {
+        LocalizedLabels: [{ Label: 'fallback table text', LanguageCode: 1033 }],
+        UserLocalizedLabel: null,
+      },
+      primaryAttribute: { schemaName: 'new_name', displayName: 'Name' },
+      columns: [
+        {
+          schemaName: 'new_score',
+          displayName: 'Score',
+          type: 'Integer',
+          description: {
+            LocalizedLabels: [{ Label: 'fallback column text', LanguageCode: 1033 }],
+          },
+        },
+        { schemaName: 'new_notes', displayName: 'Notes', type: 'Memo', description: null },
+      ],
+    }],
+    webResources: async () => [],
+    dashboards: async () => [
+      { id: 'd-1', name: 'Ops', description: 'Daily operating view.', tiles: [{ type: 'iframe', name: 'Portal', url: 'https://contoso.example' }] },
+      { id: 'd-2', name: 'Empty Desc', description: null, tiles: [{ type: 'iframe', name: 'Portal', url: 'https://contoso.example' }] },
+    ],
+    solution: async () => ({
+      uniqueName: 'S',
+      publisherPrefix: 'new',
+      description: {
+        UserLocalizedLabel: { Label: 'solution label wins', LanguageCode: 1033 },
+        LocalizedLabels: [{ Label: 'fallback solution text', LanguageCode: 1033 }],
+      },
+    }),
+  });
+
+  assert.strictEqual(spec.solution.description, 'solution label wins');
+  assert.strictEqual(spec.entities[0].description, 'fallback table text');
+  assert.strictEqual(spec.entities[0].columns[0].description, 'fallback column text');
+  assert.strictEqual('description' in spec.entities[0].columns[1], false, 'null column descriptions must be omitted, not blanked');
+  assert.strictEqual(spec.dashboards[0].description, 'Daily operating view.');
+  assert.strictEqual('description' in spec.dashboards[1], false, 'null dashboard descriptions must be omitted, not blanked');
+
+  const v = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v.ok, true, JSON.stringify(v.errors));
+});
+
+test('hydrateSpec carries description inventory for artifacts it does not structurally round-trip', async () => {
+  const spec = await hydrateSpec({
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [] } }),
+    pages: async () => [],
+    entities: async () => [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+    webResources: async () => [],
+    dashboards: async () => [],
+    solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+    descriptionInventory: async () => ({
+      views: [{ id: 'v-1', name: 'Active Orders', entity: 'new_order', description: 'Work queue.' }],
+      charts: [{ id: 'c-1', name: 'Orders by Status', entity: 'new_order', description: null }],
+      forms: [{ id: 'f-1', name: 'Main', entity: 'new_order', description: { UserLocalizedLabel: { Label: 'Main form context.', LanguageCode: 1033 } } }],
+      businessRules: [{ id: 'br-1', name: 'Lock Closed', entity: 'new_order', description: 'Closed orders are read-only.' }],
+      globalChoices: [{ name: 'new_priority', description: { LocalizedLabels: [{ Label: 'Shared priority choices.', LanguageCode: 1033 }] } }],
+    }),
+  });
+
+  assert.deepStrictEqual(spec.descriptionInventory.views[0], { id: 'v-1', name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
+  assert.strictEqual('description' in spec.descriptionInventory.charts[0], false, 'null chart descriptions must be omitted, not blanked');
+  assert.strictEqual(spec.descriptionInventory.forms[0].description, 'Main form context.');
+  assert.strictEqual(spec.descriptionInventory.businessRules[0].description, 'Closed orders are read-only.');
+  assert.strictEqual(spec.descriptionInventory.globalChoices[0].description, 'Shared priority choices.');
+
+  const v = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v.ok, true, JSON.stringify(v.errors));
+});
+
 test('hydrateSpec maps a GenPage subarea back to a page target by name (case-insensitive id match)', async () => {
   const spec = await hydrateSpec(deployedRead());
   const subs = spec.appShell.areas[0].groups[0].subAreas;

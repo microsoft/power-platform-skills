@@ -142,10 +142,19 @@ test('REAL BUNDLE: a business rule goes through the SUPPORTED bound member first
   assert.strictEqual(activate.body.statuscode, 2);
 });
 
-test('REAL BUNDLE: 0x80040216 falls back to the classic XAML row, and the XAML names the authored columns', async () => {
-  // This is the whole point of the uptake: the bound member faults with a server-side plugin error on
-  // our tenants, so business rules were unauthorable. The fallback compiles the same typed rule to WWF
-  // XAML and writes a plain `workflows` row, which works.
+test('REAL BUNDLE: a qualifying 400 no longer falls back — it throws, and writes nothing else', async () => {
+  // This USED to be the point of the uptake: the bound member faulted with a server-side plugin error
+  // on our tenants, and the SDK compiled the same typed rule to WWF XAML and wrote a plain
+  // `workflows` row instead.
+  //
+  // That fallback has been DELETED upstream, deliberately. It covered 4 of the 7 action types, a
+  // single clause and no else-if, so it silently narrowed a rule into something the platform accepted
+  // but that did not say what the author wrote. A loud refusal is strictly better than a rule that
+  // quietly means something else.
+  //
+  // Pinned here because the failure mode of losing this is invisible: a re-vendored bundle that
+  // resurrected the fallback would make every one of these pushes "succeed" again, with narrowed
+  // rules nobody asked for.
   const { sdk, calls } = sdkWith({
     post: (url) => (/WithWfomJson/i.test(url)
       ? { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'System failure in WorkflowService' } } }
@@ -153,23 +162,10 @@ test('REAL BUNDLE: 0x80040216 falls back to the classic XAML row, and the XAML n
   });
   const art = authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
-  const res = await sdk.pushArtifact('businessRule', art.id);
-  assert.strictEqual(res.saved, true, 'the fallback makes the push succeed');
+  await assert.rejects(() => sdk.pushArtifact('businessRule', art.id), 'the 400 must propagate, not be papered over');
 
-  const classic = calls.find((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url)));
-  assert.ok(classic, 'the classic row is written; urls: ' + JSON.stringify(calls.map((c) => c.url)));
-  assert.strictEqual(classic.body.category, 2, 'category 2 = Business Rule');
-  assert.strictEqual(classic.body.type, 1);
-  assert.strictEqual(classic.body.primaryentity, BR_ENTITY);
-  assert.strictEqual(classic.body.iscrmuiworkflow, true);
-
-  // The DECISIVE assertion. A compiler that emitted well-formed but EMPTY XAML would satisfy every
-  // structural check above and still produce a rule that does nothing — which is exactly what a
-  // wrongly-shaped condition silently produces (see the next test).
-  const xaml = classic.body.xaml;
-  assert.ok(typeof xaml === 'string' && xaml.length > 500, 'the row carries compiled XAML');
-  assert.match(xaml, /lvz_status/, 'the condition column reaches the XAML');
-  assert.match(xaml, /lvz_notes/, 'the action column reaches the XAML');
+  assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
+    'no classic XAML row may be written; calls: ' + JSON.stringify(calls.map((c) => `${c.verb} ${c.url}`)));
 });
 
 test('REAL BUNDLE: a NON-qualifying failure must NOT fall back (a second write could duplicate the rule)', async () => {
@@ -212,32 +208,42 @@ test('REAL BUNDLE: a NON-qualifying failure must NOT fall back (a second write c
     'a 412 must not trigger the very write the caller\'s stale token exists to prevent');
 });
 
-test('REAL BUNDLE: a 404 on the bound member DOES qualify for the classic fallback', async () => {
-  // The other qualifying trigger: an org where the member is not declared at all. Kept separate from
-  // the 0x80040216 case so a change that narrowed the trigger to only one of them is caught.
+test('REAL BUNDLE: a 404 on the bound member is refused with a STABLE, matchable code', async () => {
+  // The plugin degrades gracefully on an environment that does not declare the member (it skips the
+  // rules and builds the rest of the app rather than halting 90% of the way through). That branch is
+  // selected by `err.code`, so the code is a contract, not an implementation detail.
+  //
+  // It must NOT be selected by `err.name`: the bundle is minified, so the class name is a
+  // rebuild-unstable two-letter string that also happens to be the shared base error. Matching it
+  // would silently disarm the branch on the next re-vendor.
+  //
+  // MEASURED live: `$metadata` on a real environment (16.5 MB) does not mention the member, and every
+  // POST to it answers 404. The SDK's own message reports 18 of 20 environments in the same state.
   const { sdk, calls } = sdkWith({
     post: (url) => (/WithWfomJson/i.test(url) ? { status: 404, headers: {}, body: {} } : undefined),
   });
   const art = authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
-  const res = await sdk.pushArtifact('businessRule', art.id);
-  assert.strictEqual(res.saved, true);
-  assert.ok(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))),
-    'an undeclared member falls back to the classic row');
+
+  const err = await sdk.pushArtifact('businessRule', art.id).then(() => null, (e) => e);
+  assert.ok(err, 'an undeclared member must be refused, not silently substituted');
+  assert.strictEqual(err.code, 'BUSINESS_RULE_API_UNAVAILABLE',
+    `the plugin branches on this exact code; got ${JSON.stringify(err.code)}`);
+  assert.match(err.message, /does not expose/i, 'the message must name the cause for the operator');
+  assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
+    'and nothing else may be written in its place');
 });
 
-test('REAL BUNDLE: a wrongly-shaped condition compiles an EMPTY rule rather than erroring', async () => {
+test('REAL BUNDLE: a wrongly-shaped condition produces an EMPTY rule rather than erroring', async () => {
   // Recorded because it cost real time and would cost it again. `operator`/`lhs`/`rhs`/`thenActions`
-  // is the natural guess at the shape; `updateElement` merges those keys onto the node, the compiler
-  // ignores them, and the push SUCCEEDS with XAML that mentions none of the author's columns.
+  // is the natural guess at the shape; `updateElement` merges those keys onto the node, the
+  // serializer ignores them, and the push SUCCEEDS with a workflow object model that mentions none of
+  // the author's columns.
   //
-  // So a caller CANNOT rely on an error to tell them the shape is wrong. Any future plugin-side
-  // business-rule support must validate `clauses`/`trueBranch` itself before pushing.
-  const { sdk, calls } = sdkWith({
-    post: (url) => (/WithWfomJson/i.test(url)
-      ? { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'fault' } } }
-      : undefined),
-  });
+  // So a caller CANNOT rely on an error to tell them the shape is wrong. The plugin's App Spec
+  // validation exists precisely because of this: it checks `conditions`/`actions` itself before
+  // anything is pushed.
+  const { sdk, calls } = sdkWith();
   const art = authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', {
     operator: 'Equal',
@@ -248,10 +254,11 @@ test('REAL BUNDLE: a wrongly-shaped condition compiles an EMPTY rule rather than
   const res = await sdk.pushArtifact('businessRule', art.id);
   assert.strictEqual(res.saved, true, 'the push succeeds — that is the trap');
 
-  const classic = calls.find((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url)));
-  assert.ok(classic, 'a row is still written');
-  assert.doesNotMatch(classic.body.xaml, /lvz_status/, 'the guessed shape contributes NO condition');
-  assert.doesNotMatch(classic.body.xaml, /lvz_notes/, 'and NO action');
+  const bound = calls.find((c) => c.verb === 'POST' && /CreateProcessWithWfomJson/i.test(String(c.url)));
+  assert.ok(bound, 'a rule is still written');
+  const wfom = String(bound.body.WfomJson);
+  assert.doesNotMatch(wfom, /lvz_status/, 'the guessed shape contributes NO condition');
+  assert.doesNotMatch(wfom, /lvz_notes/, 'and NO action');
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -267,14 +274,15 @@ test('REAL BUNDLE: a wrongly-shaped condition compiles an EMPTY rule rather than
 // guarded if something compares it to the BUNDLE.
 test('REAL BUNDLE: AI_APP_SETTING matches the SDK per-app setting map exactly', () => {
   const src = fs.readFileSync(BUNDLE, 'utf8');
-  // The map is emitted as, e.g.:
-  //   var xV={formFill:"FormFillBarUXEnabled",nlSearch:"NLGridSearchSetting",
-  //           nlChart:"NLChartDataVisualizationSetting",m365:"m365copilotmodelappenabled"}
-  // The GATE map carries an extra `summaries` key between nlChart and m365 (the per-app map has no
-  // summaries entry — row summaries are configured through configureRowSummary, not a flag), so the
-  // optional group is required to match BOTH. Anchor on the `formFill` key rather than the minified
-  // variable name, which changes every build.
-  const m = /\{formFill:"[^"]+",nlSearch:"[^"]+",nlChart:"[^"]+",(?:summaries:"[^"]+",)?m365:"[^"]+"\}/g;
+  // The maps are emitted as, e.g.:
+  //   {formFill:"FormFillBarUXEnabled",formFillSuggestions:"FormPredictEnabled",
+  //    formFillSmartPaste:"FormPredictSmartPasteEnabledOnByDefault",formFillFiles:"...",
+  //    nlSearch:"NLGridSearchSetting",nlChart:"...",m365:"..."}
+  // The GATE map additionally carries `summaries` (the per-app map has none — row summaries are
+  // configured through configureRowSummary, not a flag). Anchor on the `formFill` key rather than
+  // the minified variable name, which changes every build, and accept any key set after it so a new
+  // capability is caught by the deepEqual below rather than silently skipped by the regex.
+  const m = /\{formFill:"[^"]+"(?:,[A-Za-z0-9_]+:"[^"]+")+\}/g;
   const maps = [...src.matchAll(m)].map((x) => x[0]);
   assert.ok(maps.length >= 2, `expected both the gate and per-app maps in the bundle, found ${maps.length}`);
 
@@ -302,89 +310,71 @@ test('REAL BUNDLE: AI_APP_SETTING matches the SDK per-app setting map exactly', 
 });
 
 // ---------------------------------------------------------------------------------------------
-// 4. The #482 double-write fix, pinned against the bundle.
+// 4. There is exactly ONE write path, so #482 cannot recur.
 //
-// The platform COMMITS the workflow row and only then faults generating its UiData, raising the
-// qualifying 400. The old bundle treated that status as "nothing was written" and its fallback
-// wrote a SECOND copy — measured live as 4 rows for 2 authored rules, both Active, both firing.
+// #482 was a DOUBLE WRITE. The platform commits the workflow row and only then faults generating its
+// UiData, raising a 400; the old bundle read that status as "nothing was written" and its XAML
+// fallback wrote a SECOND copy. Measured live as 4 rows for 2 authored rules, both Active, both
+// firing. The SDK then grew an orphan-probe-and-delete dance to compensate.
 //
-// The fix probes for the committed row on that 400 and DELETES it before writing its own. Pinning
-// it here because a future re-vendor that loses this reverts to silently duplicating every rule,
-// and the resulting rows are not always deletable afterwards.
-test('REAL BUNDLE: a qualifying 400 makes the SDK remove the committed row before the classic write', async () => {
-  const COMMITTED = '77777777-7777-7777-7777-777777777777';
-  const { sdk, calls } = sdkWith({
-    // The bound member faults AFTER committing.
-    post: (url) => (/CreateProcessWithWfomJson/i.test(url)
-      ? { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'Error generating UiData for workflow' } } }
-      : { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} }),
-    // The probe for the orphan finds exactly one candidate.
-    get: (url) => (/workflows\?/i.test(String(url))
-      ? { status: 200, headers: {}, body: { value: [{ workflowid: COMMITTED }] } }
-      : { status: 200, headers: {}, body: { value: [] } }),
-  });
-
+// The fallback — and with it the entire dance — has been deleted upstream. A business rule is now
+// written through the bound member or not at all, which removes the second writer rather than
+// coordinating it. That is a stronger guarantee, but only while it holds, so it is pinned here: any
+// re-vendor that reintroduces ANY second write path fails these tests.
+//
+// https://github.com/microsoft/power-platform-skills/issues/482
+test('REAL BUNDLE: the happy path writes the rule EXACTLY once', async () => {
+  const { sdk, calls } = sdkWith();
   const res = await authorDupGuard(sdk);
-  assert.strictEqual(res.saved, true, 'the fallback still succeeds');
+  assert.strictEqual(res.saved, true);
 
-  // The committed orphan must be DELETED — not adopted. Its content is unverified (the fault
-  // happened while generating UiData), so promoting it would activate a half-built definition.
-  const del = calls.find((c) => c.verb === 'DELETE' && String(c.url).includes(COMMITTED));
-  assert.ok(del, 'the committed row must be deleted; calls: ' + JSON.stringify(calls.map((c) => `${c.verb} ${c.url}`)));
+  const writes = calls.filter((c) => c.verb === 'POST' && /workflow/i.test(String(c.url)));
+  assert.strictEqual(writes.length, 1, 'exactly one POST may create the rule; got ' + JSON.stringify(writes.map((c) => c.url)));
+  assert.match(String(writes[0].url), /CreateProcessWithWfomJson/, 'and it must be the bound member');
+});
 
-  // And the delete must precede the classic POST, or the row it removes could be the new one.
-  const delIdx = calls.indexOf(del);
-  const classicIdx = calls.findIndex((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url)));
-  assert.ok(classicIdx > -1, 'the classic fallback write must still happen');
-  assert.ok(delIdx < classicIdx, 'the orphan is removed BEFORE the replacement is written');
+test('REAL BUNDLE: no failure of the bound member produces a second write', async () => {
+  // The qualifying 400 (0x80040216) and the 404 are the two statuses that USED to trigger the
+  // fallback, so they are the two that would resurrect the duplicate. The rest are included because
+  // "nothing else writes twice either" is the actual invariant, and a partial check would let a
+  // narrower fallback back in unnoticed.
+  const FAILURES = [
+    [400, '0x80040216'],  // committed-then-faulted: the exact #482 trigger
+    [404, null],          // member not declared on this environment
+    [400, '0x80040265'],  // an unrelated 400
+    [401, null],
+    [403, null],
+    [429, null],
+    [500, null],
+  ];
+  for (const [status, code] of FAILURES) {
+    const { sdk, calls } = sdkWith({
+      post: (url) => (/CreateProcessWithWfomJson/i.test(url)
+        ? { status, headers: {}, body: code ? { error: { code, message: 'fault' } } : {} }
+        : undefined),
+    });
+    await assert.rejects(() => authorDupGuard(sdk), `HTTP ${status} ${code || ''} must surface, not be absorbed`);
 
-  // The PROBE must be narrow. A broad probe would delete somebody else's rule, which is far worse
-  // than the duplicate it exists to prevent. Measured shape:
-  //   workflows?$select=workflowid,createdon&$filter=category eq 2 and type eq 1 and
-  //     name eq 'Dup Guard' and primaryentity eq 'account' and createdon ge <watermark>
-  //     &$orderby=createdon desc&$top=2
-  const probe = calls.find((c) => c.verb === 'GET' && /workflows\?/i.test(String(c.url)));
-  assert.ok(probe, 'the orphan probe must run');
-  const probeUrl = decodeURIComponent(String(probe.url));
-  for (const needle of ['category eq 2', 'type eq 1', "name eq 'Dup Guard'", "primaryentity eq 'account'", 'createdon ge', '$top=2']) {
-    assert.ok(probeUrl.includes(needle), `the probe must constrain on ${needle}; got ${probeUrl}`);
+    // The decisive assertion: no classic row, and no retry of the member either. Either one would be
+    // a second rule on the table for a single authored rule.
+    assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
+      `HTTP ${status} ${code || ''} must not write a classic row`);
+    const memberPosts = calls.filter((c) => c.verb === 'POST' && /CreateProcessWithWfomJson/i.test(String(c.url)));
+    assert.strictEqual(memberPosts.length, 1,
+      `HTTP ${status} ${code || ''} must not retry the member; got ${memberPosts.length} posts`);
   }
 });
 
-test('REAL BUNDLE: orphan cleanup FAILS CLOSED — no replacement is written when it cannot be trusted', async () => {
-  // "Best-effort fall-through" is how the duplicate comes back. Both of these are measured, not
-  // assumed: a failed DELETE and an ambiguous probe each rethrow, and crucially neither goes on to
-  // write the classic row — which would leave the orphan AND a new copy.
-  const COMMITTED = '77777777-7777-7777-7777-777777777777';
-  const faultingPost = (url) => (/CreateProcessWithWfomJson/i.test(url)
-    ? { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'Error generating UiData for workflow' } } }
-    : { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} });
-
-  // 1. The delete itself fails (the wedged-row case seen live: 405 0x80040227).
-  {
-    const { sdk, calls } = sdkWith({
-      post: faultingPost,
-      get: (url) => (/workflows\?/i.test(String(url))
-        ? { status: 200, headers: {}, body: { value: [{ workflowid: COMMITTED }] } }
-        : { status: 200, headers: {}, body: { value: [] } }),
-      del: () => ({ status: 405, headers: {}, body: { error: { code: '0x80040227', message: 'cannot be deleted' } } }),
-    });
-    await assert.rejects(() => authorDupGuard(sdk), 'a failed cleanup must not resolve as success');
-    assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
-      'no classic write may follow a failed cleanup — that is how BOTH rows end up present');
-  }
-
-  // 2. The probe is ambiguous (more than one candidate) — deleting either could destroy a real rule.
-  {
-    const { sdk, calls } = sdkWith({
-      post: faultingPost,
-      get: (url) => (/workflows\?/i.test(String(url))
-        ? { status: 200, headers: {}, body: { value: [{ workflowid: COMMITTED }, { workflowid: '88888888-8888-8888-8888-888888888888' }] } }
-        : { status: 200, headers: {}, body: { value: [] } }),
-    });
-    await assert.rejects(() => authorDupGuard(sdk), 'an ambiguous probe must not resolve as success');
-    assert.strictEqual(calls.some((c) => c.verb === 'DELETE'), false, 'an ambiguous probe must delete NOTHING');
-    assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
-      'and must not write a replacement either');
-  }
+test('REAL BUNDLE: the deleted fallback leaves no trace in the bundle', async () => {
+  // Deliberately NOT a grep for XAML fingerprints. That was tried and was wrong twice over:
+  // `iscrmuiworkflow` is still in the bundle because it is part of the BOUND MEMBER's own create
+  // payload, and the WWF activities namespace is still there because the BUSINESS PROCESS FLOW
+  // compiler — an unrelated feature — emits it. A sentinel that fires on either would fail for a
+  // reason that has nothing to do with business rules.
+  //
+  // The one string that WAS unique to the deleted compiler is its null-parameter emission, the exact
+  // shape of the #481 fix. Its return would mean the compiler is back.
+  const src = fs.readFileSync(BUNDLE, 'utf8');
+  assert.ok(!src.includes('x:Null x:Key="Parameters"'),
+    'the business-rule XAML compiler\'s null-parameter emission is back — the fallback has been reintroduced');
 });

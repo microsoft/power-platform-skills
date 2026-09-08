@@ -1,6 +1,34 @@
 {
-  "instrumentationKey": "5c3a61f48d7c4522912765ae7465ab5c-fb3d6606-fe59-4d6b-9bb1-5e993d889672-7138",
-  "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/",
+  "regions": {
+    "us": {
+      "instrumentation_key": "5c3a61f48d7c4522912765ae7465ab5c-fb3d6606-fe59-4d6b-9bb1-5e993d889672-7138",
+      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "eu": {
+      "instrumentation_key": "5c3a61f48d7c4522912765ae7465ab5c-fb3d6606-fe59-4d6b-9bb1-5e993d889672-7138",
+      "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "gov": {
+      "instrumentation_key": "0d7685a948a140789ac92933d3dc2d87-2dd0c1ce-8f10-41f0-a70a-2f9e51a851c8-6823",
+      "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "high": {
+      "instrumentation_key": "d31229fb23b0406790b9332e5f465dfc-a6b19a0e-170d-4570-bda5-f35e3668e162-7067",
+      "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "dod": {
+      "instrumentation_key": "41cc10dad35043adbcdace2896484ab4-5ebbc1d6-04c9-486d-a6b6-e5963cd778da-7542",
+      "collector_url": "https://pf.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "mooncake": {
+      "instrumentation_key": "1c1d139788f74386bd95e752dd781371-04b4424b-e5c1-46ae-8312-28e9fa5832c0-6923",
+      "collector_url": "https://collector.azure.cn/OneCollector/1.0/"
+    },
+    "internal": {
+      "instrumentation_key": "3fb21f3df5c44380bf452fd710f4d50c-0e3f82aa-6d27-41d8-b727-c96b28f99992-7504",
+      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    }
+  },
   "event_stream_name": "event",
   "disabled": false
 }
