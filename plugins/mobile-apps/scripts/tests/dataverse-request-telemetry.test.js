@@ -37,7 +37,7 @@ test('request telemetry reports retries, bytes, and auth counts without sensitiv
   const events = [];
   let tokenCalls = 0;
   let requests = 0;
-  let clock = 100;
+  const clock = [100, 115];
   const request = createDataverseRequestExecutor({
     environmentUrl: 'https://example.crm.dynamics.com',
     tenantId: 'tenant-1',
@@ -51,10 +51,7 @@ test('request telemetry reports retries, bytes, and auth counts without sensitiv
         ? { statusCode: 401, body: '{"error":"expired"}', headers: {} }
         : { statusCode: 200, body: '{"value":[]}', headers: {} };
     },
-    nowMs: () => {
-      clock += 5;
-      return clock;
-    },
+    nowMs: () => clock.shift(),
     onTelemetry: (event) => events.push(event),
   });
 

@@ -42,7 +42,6 @@ node plugins/mobile-apps/scripts/create-dataverse-snapshot.js \
   --tables "<same-exact-names>" \
   --proposed-tables "<same-proposed-names>" \
   --progressive-detail \
-  --combined-base-read \
   --read-concurrency <1|2|3|4> \
   --output ".tmp/live-c<level>-r<repeat>.json" \
   --telemetry-output ".tmp/live-c<level>-r<repeat>-telemetry.json"

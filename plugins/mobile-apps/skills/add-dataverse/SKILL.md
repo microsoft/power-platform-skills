@@ -504,6 +504,8 @@ computed dependencies have already crossed the exact derived-metadata barrier;
 unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and invalidate the planning-only inventory cache:
 
 ```bash
+node -e "require('node:fs').rmSync(process.argv[1], { force: true })" \
+  "$PUBLISH_CHECKPOINT"
 node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
   --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
 ```

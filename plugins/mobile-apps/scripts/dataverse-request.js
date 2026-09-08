@@ -1095,7 +1095,6 @@ async function runOneMetadataOperation(
   getToken = getAuthToken,
   sendRequest = doRequest,
   {
-    nowMs = () => Date.now(),
     sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
     onRateLimited = () => {},
   } = {},
@@ -1119,11 +1118,9 @@ async function runOneMetadataOperation(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     // Response headers are always needed internally for Retry-After handling.
     // The caller-facing result still honors includeHeaders below.
-    const attemptStartedAt = nowMs();
     const res = await sendRequest(envUrl, method, apiPath, body, token, true, solution);
     attempts += 1;
     responseBytes += Buffer.byteLength(String(res.body || ''), 'utf8');
-    void attemptStartedAt;
     if (res.error) {
       if (isMutationMethod(method)) {
         return finish({
