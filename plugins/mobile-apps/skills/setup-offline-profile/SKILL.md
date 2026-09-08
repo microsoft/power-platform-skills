@@ -18,13 +18,13 @@ model: opus
 
 End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (and any other compatible Power Apps client) can use to download data for offline access.
 
-**Scope of v0**: configuration only. This skill creates the Dataverse entities
-(`mobileofflineprofile`, `mobileofflineprofileitem`,
-`mobileofflineprofileitemassociation`) and writes the full app-level offline
-config — profile metadata, per-table scope, and the temporary SDK-workaround
-fields — to `offline-profile.json`. **This skill does NOT modify
-`power.config.json`** (that file is owned by `npx power-apps init` and its
-schema is controlled upstream). The template already bundles
+**Scope of v0**: configuration only. This skill creates records in the existing
+Dataverse Mobile Offline Profile tables (`mobileofflineprofile`,
+`mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes
+the full app-level offline config — profile metadata, per-table scope, and the
+temporary SDK-workaround fields — to `offline-profile.json`. **This skill does
+NOT modify `power.config.json`** (that file is owned by `npx power-apps init`
+and its schema is controlled upstream). The template already bundles
 `@microsoft/power-apps-native-offline`; `@microsoft/power-apps-native-host`
 consumes the profile and owns local SQLite access, queued synchronization,
 reconnect behavior, and status UX. This skill does not scaffold duplicate
