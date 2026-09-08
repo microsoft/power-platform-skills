@@ -175,9 +175,6 @@ every instance of that type. Do not independently add or strip an `@version` suf
 Run this check against composed whole-screen text before its first save as well as against
 the persisted file. A rejected first write leaves no target file for normal self-QA.
 
-Run this check against composed whole-screen text before its first save as well as against
-the persisted file. A rejected first write leaves no target file for normal self-QA.
-
 ---
 
 ## Check 2 — `QACHK-MISSING-FORMULA-PREFIX` (property value without `=`)

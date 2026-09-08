@@ -13,11 +13,13 @@ var workspace = Path.GetFullPath(args[0]);
 var pluginRoot = Path.GetFullPath(args[1]);
 var planPath = Path.Combine(workspace, "canvas-app-plan.md");
 var acceptancePath = Path.Combine(workspace, "canvas-app-acceptance.md");
+var skillPath = Path.Combine(pluginRoot, "skills", "canvas-app", "SKILL.md");
 var errors = new List<string>();
 
 RequireFile(Path.Combine(workspace, "App.pa.yaml"), "App.pa.yaml");
 RequireFile(planPath, "plan");
 RequireFile(acceptancePath, "acceptance");
+RequireFile(skillPath, "canvas-app skill");
 
 if (errors.Count > 0)
 {
@@ -26,13 +28,18 @@ if (errors.Count > 0)
 
 var planLines = File.ReadAllLines(planPath);
 var acceptanceLines = File.ReadAllLines(acceptancePath);
+var skillVersion = ReadSkillVersion(skillPath, errors);
 
 if (acceptanceLines.Length == 0 || acceptanceLines[0] != "Runtime evaluation: NOT RUN")
 {
     errors.Add("Acceptance line 1 must be exactly 'Runtime evaluation: NOT RUN'.");
 }
+
 RequireMetadata("Plugin root", pluginRoot);
-RequireMetadata("Plugin root", pluginRoot);
+if (skillVersion.Length > 0)
+{
+    RequireMetadata("Skill contract version", skillVersion);
+}
 RequireMetadata("Source revision", expected: null);
 
 var plannedActions = ReadColumn(planLines, "## Action Contracts", 0, errors);
@@ -304,6 +311,21 @@ static List<string> SplitRow(string line)
 }
 
 static string Clean(string value) => value.Trim().Trim('`');
+
+static string ReadSkillVersion(string skillPath, List<string> errors)
+{
+    const string prefix = "version:";
+    var line = File.ReadLines(skillPath)
+        .FirstOrDefault(candidate => candidate.StartsWith(prefix, StringComparison.Ordinal));
+    var version = line?[prefix.Length..].Trim().Trim('"', '\'');
+    if (string.IsNullOrWhiteSpace(version))
+    {
+        errors.Add($"Canvas app skill has no frontmatter version: {skillPath}");
+        return "";
+    }
+
+    return version;
+}
 
 static string PathOrValue(string value)
 {

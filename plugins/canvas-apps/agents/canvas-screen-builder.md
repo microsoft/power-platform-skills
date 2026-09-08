@@ -248,7 +248,7 @@ Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
 QA coverage: 1-44 COMPLETE
-QA repairs: [QACHK-NAME FIXED(n), or "none"]
+QA repairs: [defined QACHK identifier followed by FIXED(n), for example QACHK-MISSING-FORMULA-PREFIX FIXED(7), or "none"]
 QA N/A: [QACHK identifiers, or "none"]
 Functional:
 

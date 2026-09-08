@@ -230,7 +230,7 @@ Source revision: [git revision, package version, or "unavailable"]
 
 | Screen   | Coverage      | Repairs                        | N/A                    |
 | -------- | ------------- | ------------------------------ | ---------------------- |
-| [screen] | 1-44 COMPLETE | [QACHK-NAME FIXED(n), or none] | [QACHK names, or none] |
+| [screen] | 1-44 COMPLETE | [defined QACHK identifier followed by FIXED(n), or none] | [QACHK names, or none] |
 ```
 
 

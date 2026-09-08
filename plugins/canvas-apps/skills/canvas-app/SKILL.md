@@ -182,7 +182,7 @@ After all builders finish:
   the screen back for self-QA only — not a rebuild — before you compile:
     - missing `QA coverage: 1-44 COMPLETE`, repair, or N/A lines;
     - any legacy `QA: 1 PASS` checklist or repair entry that does not use
-      `QACHK-NAME FIXED(n)`;
+      a defined `QACHK-*` identifier followed by `FIXED(n)`;
     - an outcome that contradicts the screen structure — for example,
       `QACHK-CROSS-AXIS-ALIGNMENT` is `N/A` despite AutoLayout children,
       `QACHK-ACCESSIBLE-LABEL-MISSING` is `N/A` despite content or input controls,
