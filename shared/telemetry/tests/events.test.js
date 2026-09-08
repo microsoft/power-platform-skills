@@ -4,8 +4,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   buildSkillStarted,
+  buildSkillEvent,
   buildSkillConfigured,
-  buildLocalizationPackageValidation,
   buildSkillCompleted,
 } = require("../lib/events");
 
@@ -50,24 +50,19 @@ test("buildSkillConfigured carries approved configuration in eventInfo", () => {
   assert.deepEqual(ev.data.eventInfo, eventInfo);
 });
 
-test("localization package validation uses Error severity unless supported", () => {
-  const supported = buildLocalizationPackageValidation(ENVELOPE, {
+test("buildSkillEvent applies a caller-owned event name and severity", () => {
+  const eventInfo = {
+    validationStatus: "unsupported",
+    failureCodes: ["mode-unsupported"],
+  };
+  const event = buildSkillEvent(ENVELOPE, "skill_validation", {
     ...common,
     skillName: "add-localization",
-    eventInfo: { validationStatus: "supported" },
-  });
-  const rejected = buildLocalizationPackageValidation(ENVELOPE, {
-    ...common,
-    skillName: "add-localization",
-    eventInfo: {
-      validationStatus: "unsupported",
-      failureCodes: ["mode-unsupported"],
-    },
-  });
-  assert.equal(supported.data.eventName, "localization_package_validation");
-  assert.equal(supported.data.severity, "Info");
-  assert.equal(rejected.data.severity, "Error");
-  assert.deepEqual(rejected.data.eventInfo.failureCodes, ["mode-unsupported"]);
+    eventInfo,
+  }, "Error");
+  assert.equal(event.data.eventName, "skill_validation");
+  assert.equal(event.data.severity, "Error");
+  assert.deepEqual(event.data.eventInfo, eventInfo);
 });
 
 test("buildSkillCompleted with success outcome → severity Info", () => {
