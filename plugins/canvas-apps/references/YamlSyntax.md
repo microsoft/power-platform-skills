@@ -28,7 +28,7 @@ Each `*.pa.yaml` file should contain a single top-level object, specified using 
 - `ComponentDefinitions` - A named-object-mapping of local component definitions. Use filename `<the component's name>.pa.yaml`.
 - `Screens` - A named-object-mapping of screens in the app. Use filename `<the screen's name>.pa.yaml`.
 
-You should ensure each top-level object is placed into its own `pa.yaml` file, using the correct top-level keyword.
+You should ensure each top-level object is placed into its own `.pa.yaml` file, using the correct top-level keyword.
 
 ```yaml
 Screens:
