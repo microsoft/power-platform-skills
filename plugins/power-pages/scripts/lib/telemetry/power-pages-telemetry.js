@@ -45,6 +45,8 @@ const PACKAGE_FAILURE_CODES = new Set([
   "package-deprecated",
   "prerelease-not-approved",
   "license-not-approved",
+  "license-review-required",
+  "license-unknown",
   "package-stale",
   "framework-not-supported",
   "framework-peer-incompatible",
@@ -303,7 +305,7 @@ function emit(
   const context = commonFields(skillName, projectRoot, eventInfo, active);
   const builders = {
     configured: events.buildSkillConfigured,
-    packageValidation: events.buildLocalizationPackageValidation,
+    packageValidation: buildLocalizationPackageValidationEvent,
     completed: events.buildSkillCompleted,
   };
   const builder = builders[kind];
@@ -318,6 +320,17 @@ function emit(
     }
   );
   return { active: context.active };
+}
+
+function buildLocalizationPackageValidationEvent(envelopeName, input) {
+  const severity =
+    input?.eventInfo?.validationStatus === "supported" ? "Info" : "Error";
+  return events.buildSkillEvent(
+    envelopeName,
+    "localization_package_validation",
+    input,
+    severity
+  );
 }
 
 function emitSkillConfigured(skillName, projectRoot, eventInfo) {
@@ -393,6 +406,7 @@ module.exports = {
   PACKAGE_FAILURE_CODES,
   abandonLocalizationInvocation,
   buildCreateSiteEventInfo,
+  buildLocalizationPackageValidationEvent,
   buildLocalizationCompletionEventInfo,
   buildLocalizationEventInfo,
   buildPackageValidationEventInfo,
