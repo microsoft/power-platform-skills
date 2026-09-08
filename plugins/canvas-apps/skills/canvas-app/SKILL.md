@@ -198,8 +198,6 @@ After all builders finish:
     app ships broken while reporting clean.
 - If any builder says checks 42-44 are undefined, stop instead of rerunning self-QA.
 Report the guide path and highest defined check as `Status: Provenance Blocked`.
-- If any builder says checks 42-44 are undefined, stop instead of rerunning self-QA and
-report the loaded guide path and highest defined check.
 - A self-QA follow-up is not a rebuild or a screen-generation re-dispatch. Tell the
   builder to inspect and repair the existing target file, then return the corrected QA
   coverage, repairs, and N/A lines without regenerating the screen.
