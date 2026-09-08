@@ -74,9 +74,14 @@ generative pages for an app that already exists. Use either independently — ne
 
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
 
-Generate interactive MCP App widgets for MCP tools.
+Generate self-contained JavaScript server runtimes for codeful MCP tools and interactive
+MCP App widgets for their results.
 
-**Stack**: HTML widgets using the MCP Apps protocol
+**Skills**: `/generate-codeful-mcp-tool` creates a named `runTool` server entry point with
+verified Dataverse access; `/generate-mcp-app-ui` creates a self-contained HTML widget and
+can consume model-visible content, structured output, and widget-private metadata.
+
+**Stack**: JavaScript codeful tools + HTML widgets using the MCP Apps protocol
 
 ### [Code Apps](plugins/code-apps/AGENTS.md) (`plugins/code-apps`)
 
@@ -213,7 +218,7 @@ power-platform-skills/
 │   |   ├── skills/
 │   |   ├── shared/           # Shared references + samples
 │   |   └── github/           # GitHub Copilot instructions
-│   ├── mcp-apps/             # MCP Apps widget generator plugin
+│   ├── mcp-apps/             # MCP codeful tool + widget generator plugin
 │   │   ├── .plugin/
 │   │   │   └── plugin.json
 │   │   ├── references/

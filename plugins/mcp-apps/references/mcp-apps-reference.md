@@ -18,14 +18,31 @@ import App from 'https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps/+es
 
 ### Receiving tool data
 
-Set `app.ontoolresult` BEFORE calling `app.connect()`. When the host delivers the tool result, the callback fires with a `result` object. The data you need is **always** at `result.structuredContent`:
+Set `app.ontoolresult` BEFORE calling `app.connect()`. The callback receives the full MCP
+tool result:
 
 ```javascript
 app.ontoolresult = (result) => {
-  const data = result.structuredContent; // <-- YOUR DATA IS HERE
-  // NOT result.data (wrong), NOT result itself (wrong), NOT result.content (wrong)
+  const toolResult = {
+    content: result.content ?? [],
+    structuredContent: result.structuredContent ?? {},
+    _meta: result._meta ?? {},
+  };
+  renderData(toolResult);
 };
 ```
+
+The result channels have different visibility:
+
+| Runtime field | Model-visible | Widget-visible | Purpose |
+| --- | --- | --- | --- |
+| `content` | Yes | Yes | Conversational text/content blocks |
+| `structuredContent` | Yes | Yes | Machine-readable tool output |
+| `_meta` | No | Yes | Widget-private data and presentation hints |
+
+A codeful tool authors the private field as `meta`; the host maps it to runtime `_meta`.
+Never read `result.meta` in a widget. A plain object returned by a codeful tool is promoted
+to `structuredContent`.
 
 ### Theme
 
@@ -39,7 +56,7 @@ For user-initiated actions (buttons, interactive controls):
 ```javascript
 const result = await app.callServerTool({ name: 'tool_name', arguments: { key: 'value' } });
 // Check result.isError for failures
-// result.structuredContent contains the response data
+// Preserve result.content, result.structuredContent, and result._meta.
 ```
 
 ### Lifecycle
@@ -49,8 +66,11 @@ All event handlers (`ontoolresult`, `onhostcontextchanged`, `onteardown`) MUST b
 ```javascript
 const app = new App({ name: "widget", version: "1.0.0" });
 app.ontoolresult = (result) => {
-  const data = result.structuredContent; // always .structuredContent
-  renderData(data);
+  renderData({
+    content: result.content ?? [],
+    structuredContent: result.structuredContent ?? {},
+    _meta: result._meta ?? {},
+  });
 };
 app.onhostcontextchanged = (ctx) => { /* handle theme changes */ };
 app.onteardown = () => ({});

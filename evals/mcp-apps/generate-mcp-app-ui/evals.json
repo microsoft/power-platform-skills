@@ -7,7 +7,7 @@
     "Sets app.ontoolresult before calling app.connect()",
     "Sets app.onhostcontextchanged before calling app.connect()",
     "Sets app.onteardown before calling app.connect()",
-    "Uses result.structuredContent to access tool data (not result.data, not result directly)",
+    "Preserves result.content, result.structuredContent, and result._meta and does not use result.meta",
     "Defines an escapeHtml function and uses it for user data in innerHTML",
     "Does not contain window.openai",
     "Does not use max-width on the main container",
@@ -3717,6 +3717,74 @@
         "Leads with valid string coordinates (e.g. '36.1627') are parsed and placed correctly",
         "Uses parseFloat or equivalent for coordinate parsing, not Number()",
         "Does not use != null as the sole guard for coordinate presence"
+      ]
+    },
+    {
+      "id": 54,
+      "tier": "full",
+      "prompt": "Create an account revenue chart. The supplied test output is an authoring envelope; use its structured account data and private presentation hints.",
+      "data": {
+        "content": "Found 2 accounts.",
+        "structuredContent": {
+          "accounts": [
+            { "name": "Contoso", "revenue": 1500000 },
+            { "name": "Fabrikam", "revenue": 2300000 }
+          ]
+        },
+        "meta": {
+          "preferredView": "bar-chart",
+          "categoryField": "name",
+          "valueField": "revenue"
+        }
+      },
+      "assertions": [
+        "Normalizes authoring meta to runtime _meta",
+        "Uses structuredContent for account data",
+        "Uses the private preferredView hint without exposing it as conversational content",
+        "Does not read result.meta at runtime"
+      ]
+    },
+    {
+      "id": 55,
+      "tier": "full",
+      "prompt": "Create a warehouse occupancy heatmap. The summary is model-visible while detailed cell values are widget-private runtime metadata.",
+      "data": {
+        "content": [
+          { "type": "text", "text": "Warehouse occupancy is 72 percent." }
+        ],
+        "structuredContent": {
+          "facility": "North Warehouse",
+          "occupancyPercent": 72
+        },
+        "_meta": {
+          "cells": [
+            { "zone": "A1", "occupancyPercent": 92 },
+            { "zone": "A2", "occupancyPercent": 68 },
+            { "zone": "B1", "occupancyPercent": 55 },
+            { "zone": "B2", "occupancyPercent": 73 }
+          ]
+        }
+      },
+      "assertions": [
+        "Reads heatmap cells from result._meta",
+        "Reads the model-visible summary from content or structuredContent",
+        "Keeps private cell values out of generated conversational text",
+        "Handles content as an array of text blocks"
+      ]
+    },
+    {
+      "id": 56,
+      "tier": "full",
+      "prompt": "Create a compact success banner from a content-only tool result.",
+      "data": {
+        "content": [
+          { "type": "text", "text": "The deployment completed successfully." }
+        ]
+      },
+      "assertions": [
+        "Renders a meaningful state when structuredContent and _meta are absent",
+        "Extracts text safely from content blocks",
+        "Does not report No data received for a content-only result"
       ]
     }
   ]

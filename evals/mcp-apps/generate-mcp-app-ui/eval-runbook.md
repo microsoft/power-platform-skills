@@ -13,9 +13,13 @@ How to evaluate the `generate-mcp-app-ui` skill. Three layers, run in order.
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
 - `common_assertions`: 13 assertions every generated widget must pass
-- `evals`: 53 test cases, each with a `prompt`, inline `data`, per-widget `assertions`, and a `tier` field
+- `evals`: 56 test cases, each with a `prompt`, inline `data`, per-widget `assertions`, and a `tier` field
 
-The `data` field on each eval is the JSON object that an MCP tool would return at runtime. During widget generation, you paste it into the conversation as "the tool's test output." During rendering tests, it becomes the value of `result.structuredContent` in the JSON-RPC `toolResult` message that the host sends to the widget's iframe.
+The `data` field is the tool's test output. Most cases contain a plain object, which is
+treated as `result.structuredContent`. Result-channel cases contain a full authoring
+envelope (`content`, `structuredContent`, `meta`) or runtime result (`content`,
+`structuredContent`, `_meta`). During rendering tests, authoring `meta` is renamed to
+runtime `_meta`.
 
 ### Tiers
 
@@ -24,7 +28,7 @@ Each eval has a `tier` to support selective running:
 | Tier     | Count | Purpose                                                                                                  |
 | -------- | ----- | -------------------------------------------------------------------------------------------------------- |
 | `smoke`  | 7     | Diverse representatives (map, chart, table, cards, complex layout, structured, stress). Run on every PR. |
-| `full`   | 44    | All remaining core widget types. Run nightly or pre-release.                                             |
+| `full`   | 47    | All remaining core widget types and result-channel cases. Run nightly or pre-release.                    |
 | `stress` | 2     | Type-mismatch edge cases (string booleans, empty-string coordinates). Run with full suite.               |
 
 Eval id 51 is tagged `smoke` (not `stress`) so quick runs still exercise type coercion. Its assertions are stress-style (string-to-number parsing), but it runs with the smoke set rather than requiring the full suite.
@@ -88,7 +92,7 @@ Check each generated HTML file against the `common_assertions` (13 checks) plus 
 4. `app.ontoolresult` set before `app.connect()`
 5. `app.onhostcontextchanged` set before `app.connect()`
 6. `app.onteardown` set before `app.connect()`
-7. Uses `result.structuredContent` to access data
+7. Preserves `result.content`, `result.structuredContent`, and `result._meta` without reading `result.meta`
 8. Defines and uses `escapeHtml` for user data in innerHTML
 9. No `window.openai`
 10. No `max-width` on the main container (responsive `@media (max-width:...)` is fine)
@@ -112,7 +116,10 @@ Load each widget in a browser to verify it actually runs.
 
 **Important:** Widgets import ES modules from CDN, so they must be served over HTTP (e.g., `npx serve .` or `python -m http.server`). Opening via `file://` will fail due to CORS restrictions on module imports.
 
-This can be done manually or automated with Playwright / Puppeteer. The widget needs a host page that simulates the MCP Apps JSON-RPC protocol, sending the eval's `data` as the `structuredContent` in a `toolResult` message.
+This can be done manually or automated with Playwright / Puppeteer. The widget needs a host page that simulates the MCP Apps JSON-RPC protocol. For plain eval
+data, send it as `structuredContent`. For an envelope, send `content`,
+`structuredContent`, and `_meta` as separate `toolResult` parameters, renaming authoring
+`meta` to `_meta`.
 
 To build a minimal test host: create an HTML page that loads the widget in an iframe and posts JSON-RPC messages via `postMessage`. The key message to send after the widget connects:
 

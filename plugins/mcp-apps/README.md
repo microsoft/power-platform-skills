@@ -1,6 +1,7 @@
-# MCP Apps Widget Generator
+# MCP Apps Tool and Widget Generator
 
-Generate interactive MCP App widgets for MCP tools using Claude Code or Visual Studio Code.
+Generate JavaScript server runtimes for codeful MCP tools and self-contained HTML widgets
+that visualize their results.
 
 ## Installation
 
@@ -17,52 +18,123 @@ Generate interactive MCP App widgets for MCP tools using Claude Code or Visual S
 claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
 ```
 
-## What it does
+## Skills
 
-Describe the visual you want, paste your tool's JSON output, and get a self-contained HTML widget that uses the [MCP Apps protocol](https://modelcontextprotocol.io/extensions/apps/overview). The widget works in any MCP Apps host (Claude, ChatGPT, VS Code, Microsoft 365 Copilot).
+### Generate a codeful MCP tool
 
-## Usage
+Run `/generate-codeful-mcp-tool` with the tool's purpose, inputs, expected result, and any
+Dataverse data it needs:
 
-1. Test your custom tool and copy the JSON output (make sure your tool's output is set to JSON)
-2. Run `/generate-mcp-app-ui` and describe the visual you want, pasting your tool's test output
-
-### Example
-
-```
-/generate-mcp-app-ui Show travel attractions on an interactive map
-
-Here's my tool's test output:
-{"attractions":[{"name":"Space Needle","latitude":47.6205,"longitude":-122.3493,"description":"Observation tower"},{"name":"Pike Place Market","latitude":47.6097,"longitude":-122.3425,"description":"Historic public market"}]}
+```text
+/generate-codeful-mcp-tool Create a tool named account-summary.
+It accepts nameContains (string) and limit (integer, maximum 100), queries matching
+accounts, and returns their names, revenue, and status.
 ```
 
-### Refining
+For Dataverse-backed tools, the skill uses PAC CLI to discover exact table logical names
+and generates a temporary `RuntimeTypes.ts` for verified columns, lookup shapes, and choice
+values. The type file is removed after generation. The final output is one
+`<tool-name>.tool.js` file with:
 
-After generating, describe changes in the chat:
-- "Make it more colorful"
-- "Add a chart"
-- "Switch to a card layout"
+```javascript
+export async function runTool({ toolInput, dataApi }) {
+  // Complete server implementation.
+}
+```
+
+The runtime is self-contained: no packages, imports, network access, filesystem access,
+environment variables, or persistent state.
+
+### Generate an MCP App widget
+
+Run `/generate-mcp-app-ui`, describe the visual, and provide the tool's test output:
+
+```text
+/generate-mcp-app-ui Show account revenue as a bar chart.
+
+Here is the tool's test output:
+{
+  "content": "Found 2 accounts.",
+  "structuredContent": {
+    "accounts": [
+      { "name": "Contoso", "revenue": 1500000 },
+      { "name": "Fabrikam", "revenue": 2300000 }
+    ]
+  },
+  "meta": { "preferredView": "bar-chart" }
+}
+```
+
+The UI skill accepts:
+
+- a plain object representing `structuredContent`;
+- an authoring envelope with `content`, `structuredContent`, and `meta`; or
+- a runtime MCP result with `content`, `structuredContent`, and `_meta`.
+
+`content` and `structuredContent` are visible to the model. Authored `meta` becomes runtime
+`_meta`, which is available to the widget but excluded from model context.
+
+### Generate both
+
+Ask `/generate-codeful-mcp-tool` for a widget in the same request. After validating the
+server file, it invokes the UI skill with a representative normalized result. The outputs
+remain separate: one `.tool.js` server runtime and one `.html` widget.
+
+## Codeful tool result contract
+
+For a simple structured result, return a plain object. The host promotes it to
+`structuredContent`:
+
+```javascript
+return { records, totalCount: records.length };
+```
+
+Use an envelope when the result channels need different visibility:
+
+```javascript
+return {
+  content: `Found ${records.length} records.`,
+  structuredContent: { records },
+  meta: { preferredView: "table" },
+};
+```
+
+The envelope keys are reserved. If business data itself contains `content`,
+`structuredContent`, or `meta`, wrap the payload explicitly in `structuredContent`.
 
 ## What it produces
 
-A single HTML file that:
-- Uses the MCP Apps protocol (`@modelcontextprotocol/ext-apps`)
-- Includes Fluent UI components for a polished look
-- Supports light and dark themes automatically
-- Loads everything from CDN (no build step, no dependencies)
+- A single self-contained `.tool.js` for codeful server logic.
+- Optionally, a single self-contained `.html` widget using
+  `@modelcontextprotocol/ext-apps` and Fluent UI Web Components.
+
+See [`samples/account-summary.tool.js`](samples/account-summary.tool.js) for a complete
+server example, [`samples/flight-status-widget.html`](samples/flight-status-widget.html)
+for a read-only widget, and
+[`samples/weather-refresh-widget.html`](samples/weather-refresh-widget.html) for an
+interactive widget.
 
 ## Skill structure
 
-```
-skills/generate-mcp-app-ui/SKILL.md    - Main skill
-references/mcp-apps-reference.md    - MCP Apps API, Fluent UI components, CDN patterns
-references/design-guidelines.md     - Visual design defaults, theme tokens
-samples/flight-status-widget.html   - Example widget (read-only)
-samples/weather-refresh-widget.html - Example widget with callServerTool (interactive)
+```text
+skills/generate-codeful-mcp-tool/SKILL.md       - Server runtime generator
+skills/generate-mcp-app-ui/SKILL.md              - Widget generator
+references/codeful-tool-host-data-api.d.ts       - Injected server API contract
+references/mcp-apps-reference.md                 - MCP Apps result and lifecycle patterns
+references/design-guidelines.md                  - Visual design defaults
+samples/account-summary.tool.js                  - Codeful tool example
+samples/flight-status-widget.html                - Read-only widget example
+samples/weather-refresh-widget.html              - Interactive widget example
 ```
 
 ## Evals
 
-53 eval test cases covering different widget types (maps, charts, dashboards, tables, cards, etc.) plus type-mismatch stress tests. See [`evals/mcp-apps/generate-mcp-app-ui/`](../../evals/mcp-apps/generate-mcp-app-ui/) for the eval definitions and [eval-runbook.md](../../evals/mcp-apps/generate-mcp-app-ui/eval-runbook.md) for how to run them.
+- [`evals/mcp-apps/generate-codeful-mcp-tool/`](../../evals/mcp-apps/generate-codeful-mcp-tool/)
+  covers server generation, Dataverse access, result channels, errors, and UI handoff.
+- [`evals/mcp-apps/generate-mcp-app-ui/`](../../evals/mcp-apps/generate-mcp-app-ui/)
+  covers widget types, result envelopes, private metadata, and type-mismatch stress cases.
+
+Each suite includes `evals.json` and an `eval-runbook.md`.
 
 ## License
 

@@ -1,7 +1,7 @@
 ---
 name: generate-mcp-app-ui
 version: 1.0.0
-description: Generate an MCP App widget (self-contained HTML) for an MCP tool. Describe the visual you want and paste your tool's test output. Use when user asks to create an MCP App, widget, or visual for a tool.
+description: Generate an MCP App widget (self-contained HTML) for an MCP tool. Describe the visual you want and provide a plain structured payload or a full tool result with content, structuredContent, and meta. Use when user asks to create an MCP App, widget, or visual for a tool.
 author: Microsoft Corporation
 argument-hint: <description of what the widget should display>
 user-invocable: true
@@ -25,14 +25,31 @@ You are an MCP App widget generator. You create focused, single-purpose widgets 
 ## What you need from the user
 
 1. **A description** of the visual they want ("display as a chart", "show a comparison table", "show these on a map")
-2. **The tool's test output** - the actual JSON from testing their tool. They can paste it directly.
+2. **The tool's test output** - the actual JSON from testing their tool. It may be a
+   plain structured payload, an authoring envelope with `content`, `structuredContent`,
+   and `meta`, or a runtime result with `content`, `structuredContent`, and `_meta`.
 
 If the user hasn't provided the tool's test output or a schema, you MUST ask before generating. Do NOT guess the data shape. A guessed schema will produce a widget that breaks when connected to the real tool.
 
 Ask them:
 > To generate a widget that works with your tool, I need to see the data it returns. Could you test your tool and paste the JSON output here? Your tool's output must be set to JSON.
 
-The tool's test JSON is always required. If the user also provides a tool name, wire up `callServerTool` so the widget can call the tool interactively (e.g., refresh buttons). If no tool name is given, the widget renders the data read-only. See `samples/weather-refresh-widget.html` for a `callServerTool` example.
+The tool's test JSON is always required. Normalize it before designing:
+
+- A plain object with none of the reserved result keys represents `structuredContent`.
+- An object containing `content`, `structuredContent`, or `meta` is an authoring result
+  envelope. Rename `meta` to runtime `_meta`.
+- An object containing `_meta` is already in runtime MCP result form.
+
+`content` and `structuredContent` are model-visible. `_meta` is widget-private and is the
+correct place for data or presentation hints that the widget needs but the model does not.
+The widget may use any combination of these channels. Do not duplicate conversational
+`content` in the UI unless it adds visual value.
+
+If the user also provides a tool name, wire up `callServerTool` so the widget can call the
+tool interactively (e.g., refresh buttons). If no tool name is given, the widget renders
+the data read-only. See `samples/weather-refresh-widget.html` for a `callServerTool`
+example.
 
 ## How to think about widgets
 
@@ -48,7 +65,8 @@ A widget is a card in a conversation, not a standalone app. Keep these principle
 
 1. Read [mcp-apps-reference.md](../../references/mcp-apps-reference.md) for the MCP Apps API, CDN libraries, and technical patterns.
 2. Read [design-guidelines.md](../../references/design-guidelines.md) for visual design defaults.
-3. Look at the tool's test output to understand the data shape.
+3. Normalize the test output into the runtime `{ content, structuredContent, _meta }`
+   shape and inspect every channel relevant to the requested visual.
 4. When reading numeric, boolean, or optional fields, use type-safe checks. See "Data type safety" in mcp-apps-reference.md. Do not assume runtime types match the sample.
 5. Choose the visual that best represents the data.
 6. Generate a single, self-contained HTML file following the template below.
@@ -104,9 +122,27 @@ ALL widget logic goes in a single `<script type="module">` block. Use the MCP Ap
         : 'var(--colorNeutralForeground1, #242424)';
     }
 
+    // Keep all result channels so the widget can intentionally use model-visible
+    // content/structuredContent and widget-private _meta.
+    function normalizeToolResult(result) {
+      return {
+        content: result?.content ?? [],
+        structuredContent: result?.structuredContent ?? {},
+        _meta: result?._meta ?? {}
+      };
+    }
+
+    function hasToolResultData(result) {
+      return result.content.length > 0
+        || Object.keys(result.structuredContent).length > 0
+        || Object.keys(result._meta).length > 0;
+    }
+
     // --- Your render functions go here ---
     function renderLoading() { /* ... */ }
-    function renderData(data) { /* ... */ }
+    function renderData(toolResult) {
+      // Read toolResult.content, toolResult.structuredContent, and/or toolResult._meta.
+    }
     function renderError(message) { /* ... */ }
 
     // --- Show loading immediately ---
@@ -116,11 +152,9 @@ ALL widget logic goes in a single `<script type="module">` block. Use the MCP Ap
     const app = new App({ name: "widget", version: "1.0.0" });
 
     app.ontoolresult = (result) => {
-      // IMPORTANT: The tool data is ALWAYS in result.structuredContent
-      // NOT result.data, NOT result itself, NOT result.content
-      const data = result.structuredContent;
-      if (data) {
-        renderData(data);
+      const toolResult = normalizeToolResult(result);
+      if (hasToolResultData(toolResult)) {
+        renderData(toolResult);
       } else {
         renderError('No data received.');
       }
@@ -154,6 +188,8 @@ If the user asks to change an existing widget ("make it more colorful", "add a c
 
 - Output a complete, self-contained HTML page starting with `<!DOCTYPE html>`
 - Write the HTML to a file, don't just print it in the chat
+- Preserve all result channels in the `ontoolresult` and `callServerTool` paths. Read
+  widget-private metadata from runtime `result._meta`, never `result.meta`.
 - Tell the user where the file is
 - Let the user know they can ask for changes: "If you'd like changes, just describe them in the chat (e.g. 'make the map bigger', 'add a chart', 'use a card layout')."
 - Keep the file self-contained (all CSS inline, all JS in the module block, CDN imports for libraries)
