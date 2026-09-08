@@ -25,15 +25,11 @@ telemetry for this plugin. Default to `status` when no argument is given.
   is signed in.
   Power Pages can also include the signed-in user's Entra object ID as
   `eventInfo.aadObjectId` when PAC exposes it; Model Apps excludes it.
-  Power Pages also records approved create-site/localization choices, canonical
-  locales, public localization package names/versions, stable validation
-  outcomes, and localization completion.
   When plugin telemetry is enabled, the local diagnostic mirror retains the same
   event fields even when transmission is off.
   A plugin whose committed telemetry config has `disabled: true` writes no mirror.
 - Events do not include file paths, prompts, tool inputs, site names, Dataverse
-  URLs, credentials, usernames, hostnames, free-text requirements, private-use
-  locale subtags, evidence URLs, or raw errors.
+  URLs, credentials, usernames, or hostnames.
 - **Automation/CI** can disable telemetry by setting the opt-out env var
   `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT=1` instead of running this
   command. The value can be `1` or `true` (the dotnet `*_TELEMETRY_OPTOUT`

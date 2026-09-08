@@ -114,34 +114,20 @@ function buildEvent(envelopeName, eventName, info, severity) {
 }
 
 function buildSkillStarted(envelopeName, input) {
+  return buildSkillEvent(envelopeName, "skill_started", input, "Info");
+}
+
+function buildSkillEvent(envelopeName, eventName, input, severity = "Info") {
   return buildEvent(
     envelopeName,
-    "skill_started",
+    eventName,
     pick(input, [...COMMON_FIELDS, ...SKILL_FIELDS]),
-    "Info"
+    severity
   );
 }
 
 function buildSkillConfigured(envelopeName, input) {
-  return buildEvent(
-    envelopeName,
-    "skill_configured",
-    pick(input, [...COMMON_FIELDS, ...SKILL_FIELDS]),
-    "Info"
-  );
-}
-
-function buildLocalizationPackageValidation(envelopeName, input) {
-  const severity =
-    input && input.eventInfo && input.eventInfo.validationStatus === "supported"
-      ? "Info"
-      : "Error";
-  return buildEvent(
-    envelopeName,
-    "localization_package_validation",
-    pick(input, [...COMMON_FIELDS, ...SKILL_FIELDS]),
-    severity
-  );
+  return buildSkillEvent(envelopeName, "skill_configured", input, "Info");
 }
 
 function buildSkillCompleted(envelopeName, input) {
@@ -156,8 +142,8 @@ function buildSkillCompleted(envelopeName, input) {
 
 module.exports = {
   buildSkillStarted,
+  buildSkillEvent,
   buildSkillConfigured,
-  buildLocalizationPackageValidation,
   buildSkillCompleted,
   FIELD_TYPES,
   pick,

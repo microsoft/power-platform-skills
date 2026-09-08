@@ -100,6 +100,37 @@ test("package validation telemetry accepts only standardized failure codes", () 
   });
 });
 
+test("Power Pages owns localization package event name and severity", () => {
+  const supported = telemetry.buildLocalizationPackageValidationEvent(
+    "PagesAIPluginEvent",
+    {
+      pluginName: "power-pages",
+      skillName: "add-localization",
+      eventInfo: { validationStatus: "supported" },
+    }
+  );
+  const rejected = telemetry.buildLocalizationPackageValidationEvent(
+    "PagesAIPluginEvent",
+    {
+      pluginName: "power-pages",
+      skillName: "add-localization",
+      eventInfo: {
+        validationStatus: "unsupported",
+        failureCodes: ["mode-unsupported"],
+      },
+    }
+  );
+
+  assert.equal(supported.data.eventName, "localization_package_validation");
+  assert.equal(supported.data.severity, "Info");
+  assert.equal(rejected.data.eventName, "localization_package_validation");
+  assert.equal(rejected.data.severity, "Error");
+  assert.deepEqual(
+    rejected.data.eventInfo.failureCodes,
+    ["mode-unsupported"]
+  );
+});
+
 test("private-use-only locale identifiers are not collected", () => {
   assert.equal(telemetry.sanitizeLocale("x-contoso"), null);
 });
