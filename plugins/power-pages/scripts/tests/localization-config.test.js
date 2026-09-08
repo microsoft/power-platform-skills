@@ -12,6 +12,7 @@ const {
   discoverLocalizationImplementation,
   protectedTokenSignature,
   verifyInitializationEvidence,
+  validateLocalizationManifestShape,
   validateLocales,
 } = require('../lib/localization-config');
 const { createTempProject, writeProjectFile } = require('./test-utils');
@@ -36,6 +37,34 @@ test('centralizes framework modes, recommendations, packages, and peers', () => 
   );
 });
 
+test('accepts the documented Astro built-in manifest package metadata', () => {
+  const errors = validateLocalizationManifestShape({
+    schemaVersion: 1,
+    framework: 'astro',
+    mode: 'static',
+    packageName: 'astro-built-in',
+    packageVersion: '^6.1.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/i18n/en-US.json',
+      'fr-FR': 'src/i18n/fr-FR.json',
+    },
+    generatedFiles: ['src/pages/en/index.astro', 'src/pages/fr/index.astro'],
+    managedFiles: ['astro.config.mjs'],
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-09-08T00:00:00.000Z',
+  });
+
+  assert.deepEqual(errors, []);
+});
+
 test('detects each supported framework from primary dependency evidence', (t) => {
   const cases = [
     ['react', { react: '^19.0.0', 'react-dom': '^19.0.0' }],
@@ -49,6 +78,28 @@ test('detects each supported framework from primary dependency evidence', (t) =>
     writePackage(projectRoot, dependencies);
     assert.equal(detectFramework(projectRoot).framework, expected);
   }
+});
+
+test('uses development dependencies but ignores peer-only installation evidence', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    devDependencies: {
+      astro: '^6.1.0',
+    },
+    peerDependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      'react-i18next': '^16.0.0',
+    },
+  }, null, 2));
+
+  const framework = detectFramework(projectRoot);
+  assert.equal(framework.framework, 'astro');
+  assert.deepEqual(framework.candidates, ['astro']);
+
+  const localization = detectLocalization(projectRoot);
+  assert.equal(localization.detected, false);
+  assert.deepEqual(localization.packages, []);
 });
 
 test('reports ambiguous primary framework evidence instead of guessing', (t) => {
