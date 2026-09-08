@@ -336,9 +336,7 @@ Infer a provisional Dataverse planning mode before Step 2c:
 - `required` for every other case, including ambiguity. Do not infer
   connector-only merely because the brief names a connector.
 
-Apply
-[`shared/references/connectivity-intent-ownership.md`](${CLAUDE_SKILL_DIR}/../../shared/references/connectivity-intent-ownership.md)
-while classifying the brief.
+Apply [`shared/references/connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md) while classifying the brief.
 
 Store the recommendation as `<recommended_dataverse_planning_mode>`. The first
 user-visible data-platform choice happens in the planner's architecture gate
