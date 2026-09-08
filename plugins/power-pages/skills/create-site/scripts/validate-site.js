@@ -6,8 +6,8 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findPath } = require('../../../scripts/lib/validation-helpers');
+const { detectFramework } = require('../../../scripts/lib/framework-detection');
 const {
-  detectFramework,
   detectSiteLanguage,
 } = require('../../../scripts/lib/localization-config');
 
