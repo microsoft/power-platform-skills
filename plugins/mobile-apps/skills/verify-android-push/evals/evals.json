@@ -70,6 +70,20 @@
       "prompt": "I independently provide the customer-managed signer certificate SHA-256. validate-android-build-handoff.js returns exit 0/status valid with that fingerprint and the exact APK is installed on a physical Android 13 device. Both exact flows are Started/read back and I approve the test notification content after reviewing the device-exposure warning. Run complete verification.",
       "expected_output": "The skill passes the independent expected signer to every handoff validation, consumes returned app minSdk/targetSdk and inputs.digest/counts/timestamps, requires the pre-send rerun to return the same digest and signer-bound fresh metadata proof, executes A-H with safely bounded FlowAgent correlation, and only then reports Android push physically verified.",
       "files": []
+    },
+    {
+      "id": 11,
+      "coverage": "producer-callback-backlog",
+      "prompt": "A new source row exists, but the producer Callback Registration Expander job is Ready or Waiting For Resources and has no started time. Start the Android foreground observation timeout now.",
+      "expected_output": "The skill runs the bounded callback-health diagnostic, classifies a Dataverse async-service backlog, records queue latency separately, and does not start a device-observation window or mutate the healthy flow until the producer runtime run is dispatched.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "coverage": "sender-callback-backlog",
+      "prompt": "The producer created a Queued outbox row, but the sender has no runtime run and its callback-expander job has not started. Diagnose the Android device and FCM payload.",
+      "expected_output": "The skill classifies the queued sender callback as an upstream Dataverse backlog, avoids blaming the device or payload and avoids repeated sends, then starts physical observation only after a sender runtime run reaches a terminal delivery action.",
+      "files": []
     }
   ]
 }

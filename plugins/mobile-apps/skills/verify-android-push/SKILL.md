@@ -47,15 +47,18 @@ Stop before any live send unless all of these are available and consistent:
 3. The active evaluated Firebase Android client identity:
    `firebase/google-services.json`, its evaluated Expo config path, Firebase
    project ID, immutable Android app ID, and Android application ID.
-4. The exact recorded producer and sender flow IDs from
-   `/create-push-notification-flow`, plus their environment handoff.
+4. The exact recorded producer and sender PPAPI/FlowAgent runtime resource IDs
+   plus their separate Dataverse Workflow IDs from
+   `/create-push-notification-flow`, with the environment handoff. Runtime IDs
+   are for FlowAgent definitions/run history; Workflow IDs are for Dataverse
+   callback jobs. Never swap them or require equality.
 5. Either:
    - a fresh valid project-local `sender-auth.json` for a plugin-managed
      `wif` sender; or
    - the exact recorded status `customer-owned Power Automate sender /
      observable contract read back; authentication not plugin-validated`, with
-     the customer-supplied exact sender flow ID and safe FlowAgent read-back
-     evidence.
+     the exact customer-supplied sender flow ID (the runtime resource ID),
+     separate Dataverse Workflow ID, and safe FlowAgent read-back evidence.
 6. User confirmation that the exact APK named by `android-build.json` is
    installed on a physical Android 8+ device.
 
@@ -201,9 +204,10 @@ scripts to inspect or mutate flows.
 
 1. Resolve the recorded environment, then use `set_current_env` and
    `get_current_env` to prove environment ID and Dataverse URL continuity.
-2. Use the exact recorded producer and sender flow IDs. Never select by a
-   similar display name. Call `get_flow` for both and require live state
-   `Started`.
+2. Use the exact recorded producer and sender runtime resource IDs. Never
+   select by a similar display name. Call `get_flow` for both and require live
+   state `Started`. Retain the separate Dataverse Workflow IDs for callback
+   diagnosis; do not compare the two ID roles for equality.
 3. Read back the producer trigger, recipient resolution, lowercase OID
    expression, user-approved payload mapping, and queued outbox create action.
 4. Read back the sender's queued guard, atomic/idempotent transition,
@@ -223,13 +227,14 @@ scripts to inspect or mutate flows.
 
 7. For `customer-owned Power Automate sender / observable contract read back;
    authentication not plugin-validated`, require that exact recorded status
-   and the exact customer-supplied sender flow ID. Refetch that ID with
-   `get_flow`, require `Started`, and read back only its observable queued
-   guard, idempotent claim, audience/topic routing, one delivery invocation,
-   and terminal outbox updates. Do not run the sender-auth validator, inspect
-   credentials or authorization configuration, request secure inputs/outputs,
-   or claim credential security, rotation, least privilege, or authentication
-   design was validated.
+   and the exact customer-supplied sender flow ID (the runtime resource ID)
+   plus Dataverse Workflow ID. Refetch that ID with `get_flow`, require `Started`,
+   and read back only its observable queued guard, idempotent claim,
+   audience/topic routing, one delivery invocation, and terminal outbox
+   updates. Do not run the sender-auth validator, inspect credentials or
+   authorization configuration, request secure inputs/outputs, or claim
+   credential security, rotation, least privilege, or authentication design
+   was validated.
 Do not call any flow create, update, edit, publish, disable, copy, or delete
 tool. A stopped, drifted, disconnected, unpublished, or unreadable flow
 returns to `/create-push-notification-flow`.
@@ -267,6 +272,38 @@ Use FlowAgent `invoke_operation` for the discovered Dataverse operation, or
 tests must enter through the recorded producer; never bypass it with a direct
 user-targeted outbox insert. An `allUsers` case may create one approved queued
 outbox row through the discovered live Dataverse add-row operation.
+
+Never use `run_flow` as evidence for an `OpenApiConnectionWebhook`; synthetic
+runs may have null trigger bodies and do not prove the organic callback chain.
+If the organic row does not yield the expected producer/sender run, execute
+`scripts/diagnose-dataverse-callback-health.js` with the exact environment,
+tenant, source/outbox entity sets, actual outbox status column/choice values,
+both runtime resource IDs, both Dataverse Workflow IDs, the exact approved
+organic source record ID, the correlated outbox record ID when one exists,
+the actual explicit `--source-event created|updated|deleted`, and the case UTC
+`--since`. Never substitute an arbitrary latest row. Mark
+`--*-runtime-run-state absent` only after bounded FlowAgent
+history for that exact runtime ID shows no run.
+
+Accept only relationship-bound results: callback registration exact `name`
+matches the runtime resource ID and exact `entityname`. Its documented numeric
+`message` must include the actual `--source-event`; the sender registration
+must include outbox `created`. Classify an incompatible message as
+`registration-event-mismatch`. The operation-type `79` job
+`workflowactivationid` matches the Dataverse Workflow ID and
+`regardingobjectid` matches the exact source/outbox row. Ignore unrelated
+interleaved jobs. Consume only sanitized IDs, timestamps, statuses,
+numeric registration message/normalized compatible events, classifications,
+and queue/execution latency; either latency must be `null` when its required
+timestamp endpoint is absent. Failed, Canceled, and Suspended callback jobs
+must classify as `callback-job-failed`, `callback-job-canceled`, or
+`callback-job-suspended`, never as healthy/insufficient. The callback job's `createdon`
+defines the diagnostic window, so an updated source row may have an older
+`createdon`; a deleted source may be queried-missing when its exact callback
+job correlates. Outbox evidence is unknown when no exact outbox ID was queried,
+queried-missing after an exact `404`, or present. Never classify
+`producer-no-outbox` from unknown evidence. An unreadable, expired, or
+unauthorized `az` login blocks the diagnostic.
 
 Use `get_run_history`, `get_run_details`, and `get_run_actions` for safe
 status-only correlation. Use `get_run_action_repetitions` only for a relevant

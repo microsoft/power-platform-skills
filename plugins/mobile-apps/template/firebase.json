@@ -1,6 +1,7 @@
 {
   "react-native": {
     "messaging_auto_init_enabled": false,
-    "messaging_ios_auto_register_for_remote_messages": false
+    "messaging_ios_auto_register_for_remote_messages": false,
+    "messaging_android_notification_channel_id": "default"
   }
 }

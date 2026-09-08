@@ -22,7 +22,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   ));
   const ids = evals.map(({ id }) => id).sort((left, right) => left - right);
 
-  assert.deepStrictEqual(ids, Array.from({ length: 48 }, (_, index) => index + 1));
+  assert.deepStrictEqual(ids, Array.from({ length: 53 }, (_, index) => index + 1));
   for (const evaluation of evals) {
     assert.ok(evaluation.prompt.trim(), `scenario ${evaluation.id} needs a prompt`);
     assert.ok(evaluation.expected_output.trim(), `scenario ${evaluation.id} needs expected output`);
@@ -179,13 +179,18 @@ test('push flow recovery keeps the tool surface non-destructive', () => {
   assert.match(authoring, /use `disable_flow`[\s\S]*disabled\/`Stopped`/i);
   assert.match(authoring, /make cleanup explicitly user-owned/i);
   assert.match(flow, /leave cleanup explicitly user-owned; do not delete it/i);
-  assert.deepStrictEqual(evals.slice(-3).map(({ id }) => id), [46, 47, 48]);
+  assert.deepStrictEqual(evals.slice(-8, -5).map(({ id }) => id), [46, 47, 48]);
   assert.match(evals.find(({ id }) => id === 46).expected_output, /exact producer and sender IDs\/states/i);
   assert.match(evals.find(({ id }) => id === 47).expected_output, /does not use delete_flow/i);
   assert.match(
     evals.find(({ id }) => id === 48).expected_output,
     /does not offer or record a custom endpoint route/i,
   );
+  assert.match(evals.find(({ id }) => id === 49).expected_output, /rejects the synthetic webhook run/i);
+  assert.match(evals.find(({ id }) => id === 50).expected_output, /asynchronous-service backlog/i);
+  assert.match(evals.find(({ id }) => id === 51).expected_output, /sender.*Dataverse callback queue/i);
+  assert.match(evals.find(({ id }) => id === 52).expected_output, /without requiring equality/i);
+  assert.match(evals.find(({ id }) => id === 53).expected_output, /fixed lookup/i);
 });
 
 test('WIF sender auth pins MCP versions and gcloud prerequisites', () => {
@@ -240,7 +245,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
   assert.deepStrictEqual(
     orchestration.evals.map(({ id }) => id),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+    Array.from({ length: 21 }, (_, index) => index + 1),
   );
 
   const skill = require('node:fs').readFileSync(
@@ -266,6 +271,8 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.match(agents, /WIF is the preferred sender authentication/);
   assert.match(agents, /Azure Function and custom endpoint options are not offered/);
   assert.match(orchestration.evals[17].expected_output, /shared parser\/dispatcher for all four sources/);
+  assert.match(orchestration.evals[19].expected_output, /scheduleNotificationAsync/);
+  assert.match(orchestration.evals[20].expected_output, /same channel ID/);
 });
 
 test('iOS push orchestration invokes owners without duplicating their workflows', () => {

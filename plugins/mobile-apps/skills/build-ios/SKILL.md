@@ -23,7 +23,8 @@ Build a registered-device `.ipa` through the template's supported
 Do not use this skill for a simulator, TestFlight, App Store Connect, enterprise
 distribution, or App Store export.
 
-This skill ends after creating, validating, and recording the fresh artifact.
+This skill ends after creating, validating, and recording the fresh artifact
+in project-local `ios-build.json`.
 It does not install, launch, or test the IPA. Installation is a
 user/operator-owned handoff consumed by `/verify-ios-push`, which alone owns
 physical delivery verification.
@@ -207,6 +208,11 @@ sanitized filter between its combined output and the terminal:
 
 ```bash
 mkdir -p .tmp
+node "${PLUGIN_ROOT}/scripts/write-ios-build-handoff.js" \
+  --project-root . \
+  --mode "<development|ad-hoc>" \
+  --expected-team-id "<APNS_HANDOFF_TEAM_ID>" \
+  --write-input-snapshot .tmp/ios-build-inputs.json
 touch .tmp/ios-build-start
 set +e
 set -o pipefail
@@ -218,6 +224,11 @@ set +o pipefail
 set -e
 test "$BUILD_STATUS" -eq 0
 ```
+
+The snapshot must complete before `.tmp/ios-build-start` is created. Preserve
+both files unchanged through the external `npm run build:ios` command and
+artifact handoff. The snapshot is a strict, non-secret declaration of the
+build-affecting inputs; it is not inserted into the IPA.
 
 Never add verbose/debug flags that could expose signing command lines or
 environment details. Do not inspect signing assets, silently retry, or attempt
@@ -243,18 +254,67 @@ Do not auto-repair, install tooling, invoke signing helpers, or request asset
 details. Non-signing failures also stop at their failing type-check, push,
 bundle, Wrap, or export stage without retry.
 
-## Phase 5 — Artifact verification
+## Phase 5 — Artifact discovery and lightweight handoff
 
 Rerun `validate-ios-wrap-build.js` immediately before artifact discovery and
 resolve `outputPath` from that fresh result; a new symlink or identity drift
-blocks discovery. Require at least one regular, non-symlink `.ipa` created
-after `.tmp/ios-build-start`, inside that directory. Do not traverse symlinks.
-Print only project-relative path, byte size, and modification time. Do not
-inspect the archive, embedded profile, signature, entitlements, certificate
-chain, or any signing asset.
+blocks discovery. Require a regular, non-symlink `.ipa` created after
+`.tmp/ios-build-start`, inside that directory. Do not traverse symlinks. If
+more than one fresh IPA exists, show only project-relative path, byte size, and
+modification time and require the user to identify the one exact artifact from
+this export; do not guess by name. Do not inspect the archive, embedded profile,
+signature, entitlements, certificate chain, or any signing asset.
 
 If no fresh `.ipa` exists, report the build as failed even when the command
-exited zero. Clean up `.tmp/ios-build-start`.
+exited zero.
+
+After selecting the exact fresh IPA, write and immediately validate the
+lightweight build handoff:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/write-ios-build-handoff.js" \
+  --project-root . --file ios-build.json \
+  --mode "<development|ad-hoc>" \
+  --expected-team-id "<APNS_HANDOFF_TEAM_ID>" \
+  --artifact "<PROJECT_RELATIVE_IPA_PATH>" \
+  --build-start .tmp/ios-build-start \
+  --input-snapshot .tmp/ios-build-inputs.json &&
+node "${PLUGIN_ROOT}/scripts/validate-ios-build-handoff.js" \
+  --project-root . --file ios-build.json --max-age-hours 24
+```
+
+Both commands must exit 0, and the validator must return JSON `status: valid`.
+Before writing `ios-build.json`, the writer requires the current declared
+inputs to equal the snapshot captured before `npm run build:ios`, then checks
+them again while hashing and recording the fresh IPA. Any input mutation by,
+during, or after the external build blocks the handoff and requires a new
+snapshot and build.
+`ios-build.json` uses a strict non-secret schema with:
+
+- `status: ready`, `purpose: registered-physical-device-testing`, and iOS
+  platform/schema identity;
+- project-relative IPA path, SHA-256, byte size, and modification time;
+- app/bundle/version, Firebase project/app/bundle/plist, auth client/tenant,
+  mode/Team/export/APNs, and installed Wrap tooling identity;
+- pre-build-input, build-start, generated, and valid-until timestamps with no
+  more than 24 hours of handoff validity; and
+- a deterministic digest plus sorted file list for the regular non-symlink
+  app/push inputs under `app/`, `src/`, and `firebase/`; optional `assets/` and
+  `brand/`; the exact package entry point and one lockfile; the active Firebase
+  plist; referenced Expo icons, splash images, and local config plugins; and
+  supported build-affecting root configuration when present, including
+  `app.json`, Babel, Metro, TypeScript, Tamagui, Expo/native plugin,
+  fingerprint, native-runtime, offline, Power Apps environment, and React
+  Native config files.
+
+This handoff proves only pre/post-build project-input continuity plus the
+selected fresh IPA's project-local identity and freshness (path, SHA-256, size,
+modification time, and build-start ordering). It is explicitly **not** signing,
+certificate, provisioning-profile, entitlement, embedded-profile, or
+IPA-signature attestation, and it does not cryptographically embed the input
+digest in the IPA. Neither script opens the IPA as an archive or inspects any
+signing asset. Missing, stale, malformed, unknown-field, credential-shaped,
+symlinked, escaped, replaced, or input-drifted handoffs block readiness.
 
 ## Phase 6 — Safe memory and changed-file validation
 
@@ -275,9 +335,14 @@ Validate only files changed by this skill:
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root . \
   --file wrap.config.json \
+  --file ios-build.json \
   --file memory-bank.md
 ```
 
-Omit `wrap.config.json` when unchanged. Report the artifact as ready for manual
-installation only on a registered physical device; do not claim push delivery
-is verified until the separate physical-device verification workflow passes.
+Omit `wrap.config.json` when unchanged. Delete `.tmp/ios-build-inputs.json` and
+`.tmp/ios-build-start` only after the handoff validator and changed-file
+validation both succeed. Report the artifact as ready for manual installation
+only on a registered physical device; do not claim signing attestation,
+cryptographic input-digest embedding, or push delivery verification. The
+separate physical-device workflow must validate `ios-build.json` again before
+installation confirmation and before the live verification sequence.

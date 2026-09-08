@@ -124,6 +124,15 @@ test('iOS push chain: owned orchestration keeps Wrap and signing user-managed', 
   assert.match(lifecycle, /manual Apple Developer\/Xcode guidance with Yes\/No confirmations/);
   assert.match(lifecycle, /signing assets and Xcode configuration are user-managed/);
   assert.match(lifecycle, /`\/build-ios` runs the direct Wrap command only after exact confirmation/);
+  assert.match(lifecycle, /strict project-local `ios-build\.json`/);
+  assert.match(lifecycle, /pre\/post-build project-input continuity plus artifact identity\/freshness/);
+  assert.match(lifecycle, /not signing\/profile\/certificate\/entitlement\/IPA-signature attestation/);
+  assert.match(lifecycle, /does not cryptographically embed the input digest in the IPA/);
+  assert.match(
+    lifecycle,
+    /before installation confirmation and again immediately\s+before the live verification sequence/,
+  );
+  assert.match(lifecycle, /Do not repeat it before every send/);
   assert.match(deploy, /directly confirmed `npm run build:ios` Wrap path/);
   assert.match(deploy, /user owns Xcode signing, registered devices, profiles, and\s+credentials/);
   assert.match(deploy, /`\/build-ios` runs the command after exact confirmation/);
@@ -158,12 +167,16 @@ test('iOS push chain: build-ios and verify-ios-push are non-overlapping', () => 
   // build-ios creates IPA
   assert.ok(buildSkill.includes('Build a registered-device'), 'builds iOS artifacts');
   assert.ok(buildSkill.includes('npm run build:ios'), 'uses wrap build command');
+  assert.ok(buildSkill.includes('write-ios-build-handoff.js'), 'writes lightweight build handoff');
+  assert.ok(buildSkill.includes('validate-ios-build-handoff.js'), 'validates build handoff');
 
   // verify-ios-push tests on physical device
   assert.ok(verifySkill.includes('does not') && verifySkill.includes('build an IPA'),
     'verify does not build');
   assert.ok(verifySkill.includes('physical iPhone or iPad'), 'requires physical device');
   assert.ok(verifySkill.includes('manually installed on that device'), 'user installs');
+  assert.match(verifySkill, /Immediately before the first live case in the verification sequence/);
+  assert.match(verifySkill, /Do not rerun this validator before every individual send/);
 });
 
 test('iOS push chain: credentials remain user-owned throughout', () => {

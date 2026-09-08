@@ -14,7 +14,7 @@ const SCRIPT = path.join(__dirname, '..', 'validate-push-flow-fixtures.js');
 
 test('all sanitized fixtures produce exactly their intended reasons', () => {
   const loaded = loadFixtures();
-  assert.strictEqual(loaded.length, 12);
+  assert.strictEqual(loaded.length, 15);
 
   for (const { fixturePath, fixture } of loaded) {
     assert.deepStrictEqual(
@@ -40,8 +40,53 @@ test('the fixture validator runs deterministically without network access', () =
   });
 
   assert.strictEqual(result.status, 0, result.stderr);
-  assert.strictEqual(result.stdout.trim().split('\n').length, 12);
+  assert.strictEqual(result.stdout.trim().split('\n').length, 15);
   assert.doesNotMatch(`${result.stdout}${result.stderr}`, /https?:\/\/|token|secret/i);
+});
+
+test('flow identity validation enforces roles rather than ID equality', () => {
+  const base = {
+    expected: { valid: true, reasons: [] },
+    requested: {
+      state: 'Stopped',
+      connectionReferences: {},
+      definition: { triggers: {}, actions: {} },
+    },
+    contract: {
+      flowIdentities: [{
+        dataverseWorkflowId: '11111111-1111-4111-8111-111111111111',
+        runtimeResourceId: '22222222-2222-4222-8222-222222222222',
+        callbackWorkflowId: '11111111-1111-4111-8111-111111111111',
+        callbackRegistrationName: '22222222-2222-4222-8222-222222222222',
+        runtimeReadbackResourceId: '22222222-2222-4222-8222-222222222222',
+      }],
+    },
+  };
+
+  assert.deepStrictEqual(validateFixture(base), []);
+});
+
+test('polymorphic lookup annotations remain permitted', () => {
+  const fixture = {
+    expected: { valid: true, reasons: [] },
+    contract: { lookupTargets: { Resolve_Owner: 'polymorphic' } },
+    requested: {
+      state: 'Stopped',
+      connectionReferences: {},
+      definition: {
+        triggers: {},
+        actions: {
+          Resolve_Owner: {
+            type: 'Compose',
+            inputs: "@triggerBody()?['_ownerid_value@Microsoft.Dynamics.CRM.lookuplogicalname']",
+            runAfter: {},
+          },
+        },
+      },
+    },
+  };
+
+  assert.deepStrictEqual(validateFixture(fixture), []);
 });
 
 test('WIF passes only with its secure action tree and no fallback', () => {

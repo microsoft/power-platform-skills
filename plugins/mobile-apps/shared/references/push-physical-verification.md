@@ -26,16 +26,22 @@ Before a live test, require:
 - the platform build owner's exact successful handoff and artifact identity;
 - active evaluated Firebase project, immutable platform app ID, and native
   application/bundle ID continuity;
-- the exact recorded environment, producer flow ID, and sender flow ID;
+- the exact recorded environment, producer and sender PPAPI/FlowAgent runtime
+  resource IDs, and their separate Dataverse Workflow IDs;
 - either a currently valid plugin-managed sender-auth handoff or the recorded
   status `customer-owned Power Automate sender / observable contract read
   back; authentication not plugin-validated`, including the exact
-  customer-supplied sender flow ID and safe FlowAgent read-back evidence;
+  customer-supplied sender flow ID (the runtime resource ID), its separate
+  Dataverse Workflow ID, and safe FlowAgent read-back evidence;
 - explicit confirmation of the exact artifact installed on a supported
   physical device.
 
 Never select an artifact, Firebase app, environment, or flow by a similar
-display name. Missing, conflicting, or stale identity stops the test.
+display name. Use runtime resource IDs for FlowAgent definitions/run history
+and exact callback-registration `name` correlation. Use Dataverse Workflow IDs
+for Workflow rows and callback-expander async jobs. Do not substitute one role
+for the other or require the two IDs to be equal. Missing,
+conflicting, or stale identity stops the test.
 
 ## FlowAgent-only flow boundary
 
@@ -43,7 +49,9 @@ Use FlowAgent for every flow definition, connection, trigger/action discovery,
 test-event, and run-history operation. Do not use Power Automate portal
 automation, direct Flow REST calls, `curl`, PAC/PowerShell, or shell-authored
 flow mutation. Local shell commands may validate project files and artifact
-metadata only.
+metadata only. The bundled Dataverse callback-health script is the one
+read-only exception for allowlisted callback registration/job and source/outbox
+metadata; it uses `dataverse-request.js` and never mutates rows.
 
 Verification is read-only with respect to flow definitions. Never create,
 copy, edit, update, publish, disable, or delete a flow. Creating one generic
@@ -54,8 +62,9 @@ flow authoring, and still requires explicit send consent.
 
 1. Resolve and set the recorded environment; read it back and compare both
    environment ID and Dataverse URL.
-2. Fetch producer and sender by exact recorded IDs and require live state
-   `Started`.
+2. Fetch producer and sender by exact recorded IDs: specifically, their
+   PPAPI/FlowAgent runtime resource IDs. Require
+   live state `Started`.
 3. Read back the producer's actual trigger, recipient resolution, approved
    payload construction, lowercase-OID expression, and queued outbox action.
 4. Read back the sender's queued guard, atomic/idempotent claim, audience/topic
@@ -67,14 +76,18 @@ flow authoring, and still requires explicit send consent.
    Firebase project and require exactly the same mode in the sender read-back.
 7. For `customer-owned Power Automate sender / observable contract read back;
    authentication not plugin-validated`, refetch the exact customer-supplied
-   sender flow ID and inspect only the observable queued guard, idempotent
-   claim, audience/topic routing, one delivery invocation, and terminal outbox
-   updates. Do not inspect credentials, authorization configuration, secure
-   inputs/outputs, headers, token exchanges, or endpoint secret material. Do
-   not claim credential storage, rotation, least privilege, or authentication
-   design was validated.
+   sender flow ID (the PPAPI/FlowAgent runtime resource ID) and inspect only
+   the observable queued guard, idempotent claim, audience/topic routing, one
+   delivery invocation, and terminal outbox updates. Do not inspect credentials, authorization configuration,
+   secure inputs/outputs, headers, token exchanges, or endpoint secret
+   material. Do not claim credential storage, rotation, least privilege, or
+   authentication design was validated.
 FlowAgent `smoke_test` proves connectivity only. It does not prove a specific
 flow definition, topic subscription, provider delivery, or device receipt.
+FlowAgent `run_flow` is also never webhook proof for an
+`OpenApiConnectionWebhook`: a synthetic invocation may have a null trigger
+body and does not prove callback registration, expander processing, or organic
+Dataverse routing. Use it only when read-back proves a manual trigger.
 
 ## Privacy-safe correlation
 
@@ -91,7 +104,8 @@ customer, record content, or business data.
 Correlate only this allowlist:
 
 - case label and bounded UTC test window;
-- exact environment, producer flow ID, sender flow ID, and their run IDs;
+- exact environment, producer/sender runtime resource IDs, their separate
+  Dataverse Workflow IDs, and their run IDs;
 - safe source-row ID when the producer contract requires one;
 - outbox row ID and `Queued -> Sending -> Sent|Failed` timestamps;
 - action names, status, start/end times, and bounded sanitized error category;
@@ -146,6 +160,63 @@ discovered connector operation, or `run_flow` only when read-back proves a
 manual trigger. Never bypass the producer with a direct user-targeted outbox
 insert.
 
+### Organic callback-chain classification
+
+When an organic Dataverse event does not produce the expected run, diagnose
+the first boundary without reading trigger bodies or business payloads:
+
+- missing Workflow/callback registration, or no expander job after the event:
+  `missing-registration` / `missing-job`;
+- callback registration `message` excludes the actual producer event, or the
+  sender registration excludes outbox `created`:
+  `registration-event-mismatch`;
+- `Callback Registration Expander` Ready/Waiting with no start timestamp:
+  `dataverse-async-backlog`;
+- callback-expander job Failed, Canceled, or Suspended:
+  `callback-job-failed` / `callback-job-canceled` /
+  `callback-job-suspended`;
+- completed callback job with no bounded run history for the exact runtime
+  resource ID: `identity-routing`;
+- producer run with an exact queried outbox ID returning missing:
+  `producer-no-outbox`;
+- `Queued` outbox with no sender callback job/run:
+  `queued-outbox-no-sender`;
+- `Sent` or bounded `Failed` outbox: `terminal-sender`.
+
+Run `scripts/diagnose-dataverse-callback-health.js` only with the exact
+environment URL, tenant, plural source/outbox entity sets, Dataverse Workflow
+IDs, PPAPI/FlowAgent runtime resource IDs, actual outbox status column/choice
+values, the exact approved organic `--source-record-id`, the explicit actual
+`--source-event created|updated|deleted`, the correlated
+`--outbox-record-id` when one exists, and a UTC `--since` within its bounded
+window. Never select a latest row as a substitute. Add
+`--*-runtime-run-state absent` only after checking bounded FlowAgent history by
+the corresponding runtime resource ID. The script output is limited to
+sanitized IDs, timestamps, normalized statuses, and classifications. An
+unreadable, expired, or unauthorized Azure CLI login blocks this diagnostic;
+do not try another tenant implicitly.
+
+Require exact relationship correlation in its read-back: callback
+registration `name` equals the runtime resource ID and `entityname` equals the
+trigger table. Require its documented numeric `message` choice to include the
+actual producer event (`1` Added, `2` Deleted, `3` Modified, or combinations
+`4`-`7`), and require the sender registration to include Added/`created`.
+Treat an incompatible choice as `registration-event-mismatch`. The sanitized
+output may contain only the numeric choice and normalized compatible event
+names, never filter expressions or trigger data. The operation-type `79` job
+`workflowactivationid` equals the
+Dataverse Workflow ID and `regardingobjectid` equals the exact organic row ID.
+Ignore unrelated interleaved jobs. The callback job's `createdon` defines the
+diagnostic window; source/outbox row creation timestamps do not. An update of
+an older row is therefore valid, and a deleted source row may be absent when
+the exact job remains correlated. Outbox evidence is `unknown` when no exact
+outbox ID was queried, `queried-missing` after an exact `404`, or `present`;
+never emit `producer-no-outbox` for `unknown`. Queue latency is present only for
+`createdAt -> startedAt`; execution latency is present only for
+`startedAt -> completedAt`; either is `null` when an endpoint is absent.
+Failed, Canceled, and Suspended jobs are explicit callback-job
+classifications and are never healthy/insufficient fallthroughs.
+
 ## Stop and retry rules
 
 Stop the current case immediately when:
@@ -181,8 +252,11 @@ passes in order against one unchanged evidence boundary:
 - exact fresh installed artifact;
 - active matching Firebase client;
 - exact published/read-back producer and sender;
+- both runtime resource IDs used for FlowAgent and callback-registration names,
+  and both Dataverse Workflow IDs used for Workflow/async-job correlation,
+  without an equality requirement;
 - recorded managed auth or the exact customer-owned Power Automate sender
-  status and exact read-back flow ID;
+  status and exact read-back runtime resource ID;
 - privacy-safe outbox/run/device correlation;
 - all app states, topic transitions, negative tests, positive controls, and
   recovery cases required by the platform matrix.

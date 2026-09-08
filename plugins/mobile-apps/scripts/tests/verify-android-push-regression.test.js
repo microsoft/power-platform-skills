@@ -49,11 +49,13 @@ test('verify-android-push evals cover the physical Android boundary and matrix',
       'opt-out-and-reregistration-control',
       'customer-owned-sender-routing',
       'full-managed-physical-success',
+      'producer-callback-backlog',
+      'sender-callback-backlog',
     ],
   );
   assert.deepStrictEqual(
     document.evals.map(({ id }) => id),
-    Array.from({ length: 10 }, (_, index) => index + 1),
+    Array.from({ length: 12 }, (_, index) => index + 1),
   );
   for (const evaluation of document.evals) {
     assert.ok(evaluation.prompt.trim(), `${evaluation.coverage} needs a prompt`);

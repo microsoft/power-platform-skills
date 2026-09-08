@@ -186,8 +186,14 @@ types from the push contract. It must:
   markers, export names, hardcoded result objects, constant-false branches, or
   calls placed after an unconditional return as implementation proof
 - preserve the template `firebase.json` settings that disable native Messaging
-  auto-init and iOS automatic remote-message registration before consent
-- create the Android channel before requesting permission
+  auto-init and iOS automatic remote-message registration before consent, plus
+  its Android default notification channel ID
+- create the Android channel before requesting permission, using visible,
+  non-silent importance such as `Notifications.AndroidImportance.DEFAULT` or
+  `HIGH`; use the same app-owned channel ID in `setNotificationChannelAsync`,
+  foreground schedule triggers, and
+  `firebase.json` `messaging_android_notification_channel_id` rather than
+  inventing a validator-specific fixed ID
 - on iOS, sequence granted permission -> remote-message registration when
   required -> enable auto-init -> token acquisition -> exact topic sync
 - treat permission denial and missing remote-message registration as explicit,
@@ -197,6 +203,19 @@ types from the push contract. It must:
 - persist consent + last topic only; never persist an FCM registration token
 - keep foreground/token-refresh/response listeners idempotent in the single
   React provider and clean up every subscription exactly once
+- inside the `messaging().onMessage` callback, validate `message.data` and
+  explicitly `await Notifications.scheduleNotificationAsync(...)` for visible
+  immediate local foreground presentation; use an Android trigger whose
+  top-level `channelId` is the shared app-owned channel and which has no time or
+  calendar fields, keep the schedule inside a non-throwing `try`/`catch`, and
+  preserve `message.data ?? {}` in notification content for later response
+  navigation
+- configure `Notifications.setNotificationHandler` and `messaging().onMessage`
+  on Android-reachable paths; the handler must return both
+  `shouldShowBanner: true` and `shouldShowList: true` to allow banner/heads-up
+  presentation and notification-center/list retention. Parsing alone,
+  scheduling elsewhere, or merely installing a handler that suppresses either
+  presentation surface is not proof
 - export a non-throwing `handleBackgroundNotification` for the early entry
   point; it validates data and never navigates
 - parse every notification navigation intent through

@@ -85,11 +85,22 @@ must repair it. A manual-auth route has no plugin-managed authentication handoff
 FCM authentication remains intentionally incomplete until the customer
 configures it.
 
-For manual authentication, retain the exact sender flow ID created by this
-workflow. After the customer configures FCM authentication and asks to resume,
-call `get_flow` with that exact ID in the already-proved current environment.
-A display name, screenshot, checkbox, or verbal "it works" is not a flow
-identity.
+For manual authentication, retain the exact sender PPAPI/FlowAgent runtime
+resource ID created by this workflow. After the customer configures FCM
+authentication and asks to resume, call `get_flow` with that exact runtime
+resource ID in the already-proved current environment. A display name, screenshot, checkbox, or verbal "it works" is not a flow identity.
+
+Treat the flow's two IDs as separate roles:
+
+- **PPAPI/FlowAgent runtime resource ID**: the ID used with `get_flow`,
+  validation, mutation, publication, run-history tools, and the exact GUID
+  stored in `callbackregistration.name`.
+- **Dataverse Workflow (Process) ID**: the `workflowid` used to read the
+  Workflow row and correlate `Callback Registration Expander` async jobs.
+
+Record and use both IDs for both producer and sender. Never substitute one for
+the other, and never require them to be equal. Equality, when observed, is not
+the identity proof; using each ID against its owning surface is.
 
 Read back only its observable, non-secret contract: queued-outbox
 trigger/guard, idempotent claim, `allUsers` versus lowercase-OID routing, one
@@ -144,6 +155,13 @@ Default to Dataverse row created. For owner-based delivery, read `ownerid`, get
 the row from plural `systemusers`, GUID-validate
 `azureactivedirectoryobjectid`, and lowercase it. A team owner, absent OID, or
 ambiguity must skip/fail explicitly; never guess a topic.
+
+Lookup target shape is part of discovery. A fixed single-target lookup, such as
+a custom lookup whose metadata target is only `systemuser`, must use its GUID
+value directly and must not require the optional
+`@Microsoft.Dynamics.CRM.lookuplogicalname` annotation. A polymorphic lookup,
+such as `ownerid`, may use that annotation to distinguish valid target types.
+Do not copy a polymorphic guard onto a fixed-target lookup.
 
 ## 4. Discover schemas and connections
 
@@ -242,6 +260,11 @@ Manual-auth mode has only exact sender identity/environment/state and
 observable-contract read-back; do not inspect secure authentication values or
 apply WIF validation claims to it.
 
+Use the PPAPI/FlowAgent runtime resource ID for every FlowAgent read-back. After
+publication, separately resolve and record the Dataverse Workflow ID used by
+the webhook registration. A successful read on one surface does not prove the
+other identity, and ID inequality is not drift.
+
 An acknowledged mutation is not persistence proof. If read-back differs, wait
 once and reread; if still different, stop instead of stacking another edit.
 Inspect full nesting and `runAfter`, not action counts. Publish performs
@@ -274,10 +297,11 @@ enabled but read-back remains stopped, stop.
 
 For manual-auth Power Automate sending, stop after creating the sender until
 the customer configures authentication. On resume, call `get_flow` again with
-the exact plugin-created sender ID, validate and preflight without reading
-secure values, and require explicit publication approval. Publish the sender
-first, then the producer, and read both exact IDs back afterward. Keep sender
-status
+the exact plugin-created sender flow ID (its PPAPI/FlowAgent runtime resource
+ID), validate and preflight
+without reading secure values, and require explicit publication approval.
+Publish the sender first, then the producer, read both exact runtime resource
+IDs back, and resolve both Dataverse Workflow IDs afterward. Keep sender status
 `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`;
 identity/observable-contract continuity does not validate credentials or
 authentication design.
@@ -289,33 +313,145 @@ outbox row until the user confirms a matching physical-device build,
 notification consent, exact `allUsers` subscription, and permission for one
 test notification whose content the user approves after the privacy warning.
 
+`run_flow` is never proof that an `OpenApiConnectionWebhook` trigger works.
+Synthetic invocation can create a run whose trigger body is null and bypasses
+the organic Dataverse callback-registration/expander path. Use `run_flow` only
+when read-back proves the flow has a manual trigger. A Dataverse webhook must
+be tested with one consented organic Dataverse row event through its discovered
+connector operation.
+
 Then create one `allUsers` row with empty Target OID and the approved optional
 navigation intent. Read it back; inspect `get_run_history`, `get_run_details`,
 and `get_run_actions`; require `Sent` plus provider message ID. Preserve only
 sanitized diagnostics and do not repeatedly resubmit. A user-targeted test
 needs separate consent from that user.
 
+### Organic Dataverse callback diagnosis
+
+For a bounded organic test window, correlate the allowlisted Dataverse facts
+with run history from the exact PPAPI/FlowAgent runtime resource ID. Classify
+the first failed boundary:
+
+| Observed state | Classification / owner |
+|---|---|
+| Dataverse Workflow or callback registration absent, or no expander job after the organic row | `missing-registration` / `missing-job`; callback setup |
+| exact callback registration exists, but `message` does not include the expected event | `registration-event-mismatch`; trigger event configuration |
+| `Callback Registration Expander` is Ready/Waiting and has no start timestamp | `dataverse-async-backlog`; Dataverse asynchronous processing |
+| callback-expander job is Failed, Canceled, or Suspended | `callback-job-failed` / `callback-job-canceled` / `callback-job-suspended`; Dataverse callback execution |
+| callback job completed, but bounded history for the exact runtime resource ID has no run | `identity-routing`; wrong ID role, environment, registration, or runtime route |
+| producer runtime run exists, but no outbox row was created | `producer-no-outbox`; producer definition/action path |
+| outbox remains `Queued`, but no sender callback job/run exists | `queued-outbox-no-sender`; sender trigger/callback path |
+| outbox reaches `Sent` or bounded `Failed` | `terminal-sender`; sender completed and physical receipt is still a separate gate |
+
+Use the read-only helper when direct Dataverse evidence is needed:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/diagnose-dataverse-callback-health.js" \
+  --environment-url "<Dataverse URL>" \
+  --tenant-id "<tenant GUID>" \
+  --source-entity-set "<plural source entity set>" \
+  --source-record-id "<exact approved organic source row GUID>" \
+  --source-event "<created|updated|deleted>" \
+  --outbox-entity-set "<plural outbox entity set>" \
+  --outbox-record-id "<exact correlated outbox row GUID, when one exists>" \
+  --outbox-status-column "<status logical name>" \
+  --outbox-queued-statuses "<actual Queued choice integer>" \
+  --outbox-terminal-statuses "<actual Sent integer>,<actual Failed integer>" \
+  --producer-callback-workflow-id "<Dataverse producer workflowid>" \
+  --producer-runtime-resource-id "<FlowAgent producer resource ID>" \
+  --sender-callback-workflow-id "<Dataverse sender workflowid>" \
+  --sender-runtime-resource-id "<FlowAgent sender resource ID>" \
+  --since "<bounded UTC timestamp>"
+```
+
+After checking bounded FlowAgent run history, pass
+`--producer-runtime-run-state observed|absent` and
+`--sender-runtime-run-state observed|absent`; an observed state also requires
+the corresponding sanitized `--*-runtime-run-id`. Do not mark a runtime run
+absent merely because `run_flow` produced a null trigger body.
+
+The source record ID is required so the helper never selects an arbitrary
+latest row. Pass the outbox record ID only after bounded producer evidence
+identifies the correlated row; without it, sender-stage diagnosis remains
+pending and outbox evidence is `unknown`. An exact outbox ID that was queried
+and returned `404` is `queried-missing`; an exact returned row is `present`.
+The helper emits `producer-no-outbox` only for `queried-missing`, never when no
+outbox was queried. The helper performs only allowlisted `GET` requests through
+`dataverse-request.js`. It emits IDs, timestamps, normalized statuses, and
+classifications only. It never selects or prints OIDs, recipient/title/body,
+payload/provider values, callback URLs, runtime integration properties, or
+authentication values. If Azure CLI authentication is unreadable, expired, or
+unauthorized, stop and refresh `az` authentication for the target tenant;
+never fall back to another cached tenant.
+
+Correlation is relationship-bound, not timestamp-assigned. For a row webhook,
+the callback registration must have exact GUID `name` equal to the recorded
+runtime resource ID, exact trigger-table `entityname`, and
+`softdeletestatus=0`. Its `message` must include the requested source event;
+the sender registration must include `created` because its expected input is a
+new outbox row:
+
+| `callbackregistration.message` | Compatible `--source-event` values |
+|---|---|
+| `1` Added | `created` |
+| `2` Deleted | `deleted` |
+| `3` Modified | `updated` |
+| `4` Added or Modified | `created`, `updated` |
+| `5` Added or Deleted | `created`, `deleted` |
+| `6` Modified or Deleted | `updated`, `deleted` |
+| `7` Added or Modified or Deleted | `created`, `updated`, `deleted` |
+
+These are the documented Dataverse `callbackregistration_message` choices.
+See:
+https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/callbackregistration.
+The helper selects only the numeric choice and emits that number plus
+normalized compatible event names; no trigger body or filter expression is
+read. An exact registration with no compatible event is
+`registration-event-mismatch`, not a healthy registration.
+
+The operation-type `79` job must then have
+`workflowactivationid` equal to the recorded Dataverse Workflow ID and
+`regardingobjectid` equal to the exact source/outbox row ID. Ignore interleaved
+jobs whose relationship IDs do not match. The async job's `createdon`, not the
+source or outbox row's `createdon`, determines whether evidence is in the
+bounded diagnostic window. Therefore an `updated` event remains valid when
+the source row was created earlier, and a `deleted` event may have a
+`queried-missing` source row when the exact callback job still correlates it.
+Report queue latency only when both
+`createdAt` and `startedAt` exist, and execution latency only when both
+`startedAt` and `completedAt` exist; otherwise report `null`.
+Failed, Canceled, and Suspended callback-expander jobs must be reported as
+`callback-job-failed`, `callback-job-canceled`, or
+`callback-job-suspended`; none may fall through to
+`insufficient-or-healthy-snapshot`.
+
 Finish with environment ID/URL, Firebase project, connections, mutation
-read-backs, and whether delivery was skipped or verified. Report
-producer/sender flow IDs/states. Never print secrets, tokens, JWTs, secure
-action values, or raw payload data.
+read-backs, and whether delivery was skipped or verified. Report both ID roles
+and producer/sender states. Never print secrets, tokens, JWTs, secure action
+values, or raw payload data.
 
 Write this stable `Push flow handoff` schema to `memory-bank.md` after the
 applicable read-backs succeed:
 
 - `Environment ID`
 - `Dataverse URL`
-- `Producer flow ID`
+- `Producer PPAPI/FlowAgent runtime resource ID`
+- `Producer Dataverse Workflow ID`
 - `Producer flow state`
-- `Sender flow ID`
+- `Sender flow ID (PPAPI/FlowAgent runtime resource ID)`
+- `Sender Dataverse Workflow ID`
 - `Sender flow state`
 - `Sender authentication status`
 - `Flow read-back timestamp`
 
 For a customer-owned Power Automate sender, both exact IDs must read back by ID
-as `Started`, and the status is exactly
+as `Started`; use their PPAPI/FlowAgent runtime resource IDs through FlowAgent,
+use those same runtime resource IDs for exact callback-registration `name`
+correlation, and record both Dataverse Workflow IDs for Workflow/async-job
+correlation. The status is exactly
 `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`.
 Do not add credentials, connection authentication details, endpoint secrets,
 or an authentication-verification result. Downstream verification consumes
-these exact IDs and rereads them through FlowAgent rather than selecting by
-display name.
+the runtime resource IDs through FlowAgent and the Dataverse Workflow IDs
+through the callback diagnostic rather than selecting by display name or
+requiring cross-surface equality.

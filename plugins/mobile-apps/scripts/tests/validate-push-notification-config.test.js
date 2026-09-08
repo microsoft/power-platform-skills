@@ -169,6 +169,8 @@ import messaging from '@react-native-firebase/messaging';
 import { Linking, Platform } from 'react-native';
 import { parsePushNavigationIntent } from '../navigation/linkContract';
 
+const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';
+
 export type PushResult =
   | { ok: true; value?: string }
   | {
@@ -200,6 +202,12 @@ export async function getPushPermissionState(): Promise<PushResult> {
 export async function requestPushPermission(): Promise<PushResult> {
   if (Platform.OS === 'web') return { ok: false, reason: 'unsupported' };
   try {
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL_ID, {
+        name: 'Notifications',
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }
     const permission = await Notifications.requestPermissionsAsync();
     if (!permission.granted) return { ok: false, reason: 'permission-denied' };
     if (!messaging().isDeviceRegisteredForRemoteMessages) {
@@ -256,6 +264,20 @@ export function registerNotificationHandlers(): () => void {
     });
     const unsubscribeForeground = messaging().onMessage(async (message) => {
       parsePushNavigationIntent(message.data);
+      try {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: message.notification?.title ?? 'Notification',
+            body: message.notification?.body ?? '',
+            data: message.data ?? {},
+          },
+          trigger: Platform.OS === 'android'
+            ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
+            : null,
+        });
+      } catch {
+        return;
+      }
     });
     const unsubscribeRefresh = messaging().onTokenRefresh(async () => {
       await syncPushTopic(null);
@@ -610,6 +632,28 @@ test('strict mode accepts reachable result-dependent native operation variants',
   );
 });
 
+test('strict mode accepts a custom consistent HIGH-importance Android channel', () => {
+  const root = projectFixture();
+  completeClientIntegration(root);
+  replaceInFile(
+    path.join(root, 'src/native/pushNotifications.ts'),
+    "const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';",
+    "const ANDROID_NOTIFICATION_CHANNEL_ID = 'important-updates';",
+  );
+  replaceInFile(
+    path.join(root, 'src/native/pushNotifications.ts'),
+    'Notifications.AndroidImportance.DEFAULT',
+    'Notifications.AndroidImportance.HIGH',
+  );
+  mutateJson(path.join(root, 'firebase.json'), (config) => {
+    config['react-native'].messaging_android_notification_channel_id = 'important-updates';
+  });
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', root, '--strict-client-integration'])),
+    0,
+  );
+});
+
 test('strict mode rejects every missing critical push integration category', () => {
   const wrapperPath = (root) => path.join(root, 'src/native/pushNotifications.ts');
   const cases = [
@@ -625,6 +669,13 @@ test('strict mode rejects every missing critical push integration category', () 
     }],
     ['permission request', (root) => {
       replaceInFile(wrapperPath(root), 'Notifications.requestPermissionsAsync()', 'askPermission()');
+    }],
+    ['Android notification channel creation', (root) => {
+      replaceInFile(
+        wrapperPath(root),
+        'Notifications.setNotificationChannelAsync(',
+        'Notifications.configureNotificationChannel(',
+      );
     }],
     ['remote registration before token', (root) => {
       replaceInFile(
@@ -665,6 +716,16 @@ test('strict mode rejects every missing critical push integration category', () 
         'Notifications.setNotificationHandler(',
         'Notifications.configurePresentation(',
       );
+    }],
+    ['foreground local presentation', (root) => {
+      replaceInFile(
+        wrapperPath(root),
+        'Notifications.scheduleNotificationAsync(',
+        'Notifications.prepareNotificationAsync(',
+      );
+    }],
+    ['foreground response data preservation', (root) => {
+      replaceInFile(wrapperPath(root), 'data: message.data ?? {},', 'data: {},');
     }],
     ['background handling', (root) => {
       replaceInFile(
@@ -730,6 +791,376 @@ test('strict mode rejects every missing critical push integration category', () 
       category,
     );
   }
+});
+
+test('strict mode rejects parse-only, unsafe, and mis-scoped foreground presentation', () => {
+  const parseOnly = projectFixture();
+  completeClientIntegration(parseOnly);
+  replaceInFile(
+    path.join(parseOnly, 'src/native/pushNotifications.ts'),
+    `      try {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: message.notification?.title ?? 'Notification',
+            body: message.notification?.body ?? '',
+            data: message.data ?? {},
+          },
+          trigger: Platform.OS === 'android'
+            ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
+            : null,
+        });
+      } catch {
+        return;
+      }
+`,
+    '',
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', parseOnly, '--strict-client-integration'])),
+    2,
+    'parse-only foreground listener',
+  );
+
+  const unsafe = projectFixture();
+  completeClientIntegration(unsafe);
+  replaceInFile(
+    path.join(unsafe, 'src/native/pushNotifications.ts'),
+    'await Notifications.scheduleNotificationAsync({',
+    'void Notifications.scheduleNotificationAsync({',
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', unsafe, '--strict-client-integration'])),
+    2,
+    'foreground presentation must be awaited',
+  );
+
+  const throwing = projectFixture();
+  completeClientIntegration(throwing);
+  replaceInFile(
+    path.join(throwing, 'src/native/pushNotifications.ts'),
+    `      } catch {
+        return;
+      }
+    });`,
+    `      } catch {
+        throw new Error('foreground presentation failed');
+      }
+    });`,
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', throwing, '--strict-client-integration'])),
+    2,
+    'foreground presentation callback must not throw',
+  );
+
+  const misScoped = projectFixture();
+  completeClientIntegration(misScoped);
+  replaceInFile(
+    path.join(misScoped, 'src/native/pushNotifications.ts'),
+    `    const unsubscribeForeground = messaging().onMessage(async (message) => {
+      parsePushNavigationIntent(message.data);
+      try {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: message.notification?.title ?? 'Notification',
+            body: message.notification?.body ?? '',
+            data: message.data ?? {},
+          },
+          trigger: Platform.OS === 'android'
+            ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
+            : null,
+        });
+      } catch {
+        return;
+      }
+    });`,
+    `    void Notifications.scheduleNotificationAsync({
+      content: { data: {} },
+      trigger: { channelId: ANDROID_NOTIFICATION_CHANNEL_ID },
+    });
+    const unsubscribeForeground = messaging().onMessage(async (message) => {
+      parsePushNavigationIntent(message.data);
+    });`,
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', misScoped, '--strict-client-integration'])),
+    2,
+    'foreground presentation must be inside onMessage',
+  );
+
+  const iosOnly = projectFixture();
+  completeClientIntegration(iosOnly);
+  replaceInFile(
+    path.join(iosOnly, 'src/native/pushNotifications.ts'),
+    '      try {\n        await Notifications.scheduleNotificationAsync({',
+    "      try {\n        if (Platform.OS === 'ios') {\n          await Notifications.scheduleNotificationAsync({",
+  );
+  replaceInFile(
+    path.join(iosOnly, 'src/native/pushNotifications.ts'),
+    `          trigger: Platform.OS === 'android'
+            ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
+            : null,
+        });
+      } catch {`,
+    `          trigger: { channelId: ANDROID_NOTIFICATION_CHANNEL_ID },
+          });
+        }
+      } catch {`,
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', iosOnly, '--strict-client-integration'])),
+    2,
+    'foreground presentation must be reachable on Android',
+  );
+
+  const contentChannel = projectFixture();
+  completeClientIntegration(contentChannel);
+  replaceInFile(
+    path.join(contentChannel, 'src/native/pushNotifications.ts'),
+    '            data: message.data ?? {},',
+    '            data: message.data ?? {},\n            channelId: ANDROID_NOTIFICATION_CHANNEL_ID,',
+  );
+  replaceInFile(
+    path.join(contentChannel, 'src/native/pushNotifications.ts'),
+    `          trigger: Platform.OS === 'android'
+            ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
+            : null,`,
+    '          trigger: null,',
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', contentChannel, '--strict-client-integration'])),
+    2,
+    'channelId must be in the Android notification trigger',
+  );
+
+  const delayed = projectFixture();
+  completeClientIntegration(delayed);
+  replaceInFile(
+    path.join(delayed, 'src/native/pushNotifications.ts'),
+    '? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }',
+    '? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID, seconds: 1 }',
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', delayed, '--strict-client-integration'])),
+    2,
+    'foreground presentation must schedule immediately',
+  );
+});
+
+test('strict mode requires Android-reachable channel creation and foreground handlers', () => {
+  const channel = projectFixture();
+  completeClientIntegration(channel);
+  replaceInFile(
+    path.join(channel, 'src/native/pushNotifications.ts'),
+    "    if (Platform.OS === 'android') {",
+    "    if (Platform.OS === 'ios') {",
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', channel, '--strict-client-integration'])),
+    2,
+    'channel creation must be reachable on Android',
+  );
+
+  const presentationHandler = projectFixture();
+  completeClientIntegration(presentationHandler);
+  replaceInFile(
+    path.join(presentationHandler, 'src/native/pushNotifications.ts'),
+    '    Notifications.setNotificationHandler({',
+    "    if (Platform.OS === 'ios') Notifications.setNotificationHandler({",
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main([
+      '--project-root',
+      presentationHandler,
+      '--strict-client-integration',
+    ])),
+    2,
+    'presentation handler must be reachable on Android',
+  );
+
+  const foregroundListener = projectFixture();
+  completeClientIntegration(foregroundListener);
+  replaceInFile(
+    path.join(foregroundListener, 'src/native/pushNotifications.ts'),
+    '    const unsubscribeForeground = messaging().onMessage(async (message) => {',
+    `    if (Platform.OS === 'ios') {
+    const unsubscribeForeground = messaging().onMessage(async (message) => {`,
+  );
+  replaceInFile(
+    path.join(foregroundListener, 'src/native/pushNotifications.ts'),
+    `      }
+    });
+    const unsubscribeRefresh`,
+    `      }
+    });
+    }
+    const unsubscribeRefresh`,
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main([
+      '--project-root',
+      foregroundListener,
+      '--strict-client-integration',
+    ])),
+    2,
+    'foreground listener must be reachable on Android',
+  );
+
+  const helperGuard = projectFixture();
+  completeClientIntegration(helperGuard);
+  replaceInFile(
+    path.join(helperGuard, 'src/native/pushNotifications.ts'),
+    "const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';",
+    `const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';
+const isIOS = () => Platform.OS === 'ios';`,
+  );
+  replaceInFile(
+    path.join(helperGuard, 'src/native/pushNotifications.ts'),
+    "    if (Platform.OS === 'android') {",
+    '    if (isIOS()) {',
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main([
+      '--project-root',
+      helperGuard,
+      '--strict-client-integration',
+    ])),
+    2,
+    'helper-based platform guards must not prove Android reachability',
+  );
+
+  const logicalHelperGuard = projectFixture();
+  completeClientIntegration(logicalHelperGuard);
+  replaceInFile(
+    path.join(logicalHelperGuard, 'src/native/pushNotifications.ts'),
+    "const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';",
+    `const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';
+const isIOS = () => Platform.OS === 'ios';`,
+  );
+  replaceInFile(
+    path.join(logicalHelperGuard, 'src/native/pushNotifications.ts'),
+    `    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL_ID, {
+        name: 'Notifications',
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }`,
+    `    isIOS() && await Notifications.setNotificationChannelAsync(
+      ANDROID_NOTIFICATION_CHANNEL_ID,
+      {
+        name: 'Notifications',
+        importance: Notifications.AndroidImportance.DEFAULT,
+      },
+    );`,
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main([
+      '--project-root',
+      logicalHelperGuard,
+      '--strict-client-integration',
+    ])),
+    2,
+    'helper-based logical guards must not prove Android reachability',
+  );
+
+  const platformSelect = projectFixture();
+  completeClientIntegration(platformSelect);
+  replaceInFile(
+    path.join(platformSelect, 'src/native/pushNotifications.ts'),
+    "    if (Platform.OS === 'android') {",
+    '    Platform.select({ ios: () => {',
+  );
+  replaceInFile(
+    path.join(platformSelect, 'src/native/pushNotifications.ts'),
+    `      });
+    }
+    const permission`,
+    `      });
+    }, android: () => {} })?.();
+    const permission`,
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main([
+      '--project-root',
+      platformSelect,
+      '--strict-client-integration',
+    ])),
+    2,
+    'Platform.select must not prove Android reachability',
+  );
+});
+
+test('strict mode requires banner and notification-center foreground presentation', () => {
+  for (const propertyName of ['shouldShowBanner', 'shouldShowList']) {
+    const root = projectFixture();
+    completeClientIntegration(root);
+    replaceInFile(
+      path.join(root, 'src/native/pushNotifications.ts'),
+      `${propertyName}: true`,
+      `${propertyName}: false`,
+    );
+    assert.strictEqual(
+      withEnvironment({}, () => main(['--project-root', root, '--strict-client-integration'])),
+      2,
+      `${propertyName} must allow visible foreground presentation`,
+    );
+  }
+});
+
+test('strict mode requires each native operation to be caught by its own try statement', () => {
+  const root = projectFixture();
+  completeClientIntegration(root);
+  replaceFunctionBody(root, 'openPushSettings', `
+  try {
+    await Linking.openSettings();
+  } finally {
+    void 0;
+  }
+  try {
+    JSON.parse('{}');
+  } catch {
+    return { ok: false, reason: 'notification-error' };
+  }
+  return { ok: true };`);
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', root, '--strict-client-integration'])),
+    2,
+    'a try/finally plus unrelated try/catch must not protect the native operation',
+  );
+
+  const duplicateCall = projectFixture();
+  completeClientIntegration(duplicateCall);
+  replaceFunctionBody(duplicateCall, 'openPushSettings', `
+  try {
+    await Linking.openSettings();
+  } catch {
+    return { ok: false, reason: 'notification-error' };
+  }
+  await Linking.openSettings();
+  return { ok: true };`);
+  assert.strictEqual(
+    withEnvironment({}, () => main([
+      '--project-root',
+      duplicateCall,
+      '--strict-client-integration',
+    ])),
+    2,
+    'every reachable occurrence of a native operation must be caught',
+  );
+});
+
+test('strict mode rejects inconsistent Android notification channel IDs', () => {
+  const root = projectFixture();
+  completeClientIntegration(root);
+  replaceInFile(
+    path.join(root, 'src/native/pushNotifications.ts'),
+    '? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }',
+    "? { channelId: 'foreground-mismatch' }",
+  );
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', root, '--strict-client-integration'])),
+    2,
+  );
 });
 
 test('strict identity validation blocks wrong package, bundle, project, and memory handoff', () => {
@@ -931,6 +1362,15 @@ test('blocks missing or malformed consent-first RNFirebase configuration', () =>
     delete config['react-native'].messaging_ios_auto_register_for_remote_messages;
   });
   assert.strictEqual(withEnvironment({}, () => main(['--project-root', autoRegister])), 2);
+
+  const missingDefaultChannel = projectFixture();
+  mutateJson(path.join(missingDefaultChannel, 'firebase.json'), (config) => {
+    delete config['react-native'].messaging_android_notification_channel_id;
+  });
+  assert.strictEqual(
+    withEnvironment({}, () => main(['--project-root', missingDefaultChannel])),
+    2,
+  );
 });
 
 test('requires a safe package main entry that registers before Expo Router', () => {

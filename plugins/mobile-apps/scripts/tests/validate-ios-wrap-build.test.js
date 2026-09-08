@@ -108,12 +108,27 @@ test('build-ios uses manual Xcode signing confirmation and direct Wrap execution
   assert.doesNotMatch(skill, /manage-apple-signing-keychain/);
   assert.doesNotMatch(skill, /verify-apple-ios-build-signing/);
   assert.doesNotMatch(skill, /dedicated keychain/i);
+  assert.match(skill, /write-ios-build-handoff\.js/);
+  assert.match(skill, /validate-ios-build-handoff\.js/);
+  assert.match(skill, /--write-input-snapshot \.tmp\/ios-build-inputs\.json/);
+  assert.match(skill, /--build-start \.tmp\/ios-build-start \\\n\s+--input-snapshot \.tmp\/ios-build-inputs\.json &&/);
+  assert.match(skill, /--file ios-build\.json/);
+  assert.match(skill, /\*\*not\*\* signing,\s+certificate, provisioning-profile/);
+  assert.match(skill, /pre\/post-build project-input continuity/);
+  assert.match(skill, /does not cryptographically embed the input\s+digest in the IPA/);
+  assert.match(skill, /--file ios-build\.json \\\n\s+--file memory-bank\.md/);
 });
 
-test('verify-ios-push preserves IPA continuity without generated signing proof', () => {
+test('verify-ios-push validates lightweight IPA continuity without signing attestation', () => {
   const skill = fs.readFileSync(VERIFY_SKILL_PATH, 'utf8');
-  assert.match(skill, /same size and modification time/);
+  assert.match(skill, /validate-ios-build-handoff\.js/);
+  assert.match(skill, /Immediately before the first live case in the verification sequence/);
+  assert.match(skill, /Do not rerun this validator before every individual send/);
+  assert.match(skill, /if the sequence crosses the handoff's\s+valid-until time/);
+  assert.match(skill, /IPA SHA-256\/size\/modification-time drift/);
   assert.match(skill, /manual `\/setup-apple-ios` and `\/setup-apns` Team, bundle,\s*\n\s*mode/);
+  assert.match(skill, /does not attest signing, certificates,\s+provisioning profiles/);
+  assert.match(skill, /does not cryptographically embed the input digest in the IPA/);
   assert.doesNotMatch(skill, /apple-ios-provisioning\.json/);
   assert.doesNotMatch(skill, /validate-apple-ios-provisioning/);
 });

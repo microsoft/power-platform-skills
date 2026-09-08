@@ -114,6 +114,18 @@
       "prompt": "Add push notifications for Android and take me all the way through a physical-device test. I do not know which setup commands to run.",
       "expected_output": "The skill uses one guided workflow: it infers Android and end-to-end verification as the stopping point, resumes each existing handoff, invokes setup-fcm only if needed, implements runtime integration, invokes create-push-notification-flow for sender auth and flows, invokes build-android, and invokes verify-android-push after installation. It asks only stage-specific safety and business questions and never makes the user manually chain slash commands.",
       "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "The React Native Firebase onMessage listener parses navigation data and setNotificationHandler is configured, but foreground Android messages never show a banner. Treat receipt by onMessage as complete foreground support.",
+      "expected_output": "The skill rejects parse-only foreground handling. It requires an Android-reachable onMessage callback to validate data, await an immediate Notifications.scheduleNotificationAsync call inside try/catch, preserve only safe notification data for response navigation, use the configured visible Android channel in trigger.channelId, and configure setNotificationHandler with shouldShowBanner and shouldShowList enabled so foreground notifications may appear as a banner and remain in the notification center.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "Create Android channel general in app code, use urgent in foreground local notifications, and omit messaging_android_notification_channel_id from firebase.json.",
+      "expected_output": "The skill rejects the inconsistent channel configuration. It creates one non-silent channel before permission and uses the same channel ID for Android channel creation, the foreground local notification trigger, and Firebase's messaging_android_notification_channel_id.",
+      "files": []
     }
   ]
 }

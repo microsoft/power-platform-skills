@@ -122,7 +122,7 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
 
   assert.deepStrictEqual(
     addPush.evals.map(({ id }) => id),
-    Array.from({ length: 19 }, (_, index) => index + 1),
+    Array.from({ length: 21 }, (_, index) => index + 1),
   );
   assert.match(addPush.evals[14].expected_output, /invokes build-android/);
   assert.match(addPush.evals[14].expected_output, /invokes verify-android-push/);
@@ -133,15 +133,19 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.match(addPush.evals[17].expected_output, /without fallback navigation/);
   assert.match(addPush.evals[18].expected_output, /one guided workflow/);
   assert.match(addPush.evals[18].expected_output, /never makes the user manually chain slash commands/);
+  assert.match(addPush.evals[19].expected_output, /scheduleNotificationAsync/);
+  assert.match(addPush.evals[20].expected_output, /same channel ID/);
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),
-    Array.from({ length: 10 }, (_, index) => index + 1),
+    Array.from({ length: 15 }, (_, index) => index + 1),
   );
   assert.strictEqual(verifyIos.evals[8].coverage, 'manual-auth-downstream');
   assert.match(verifyIos.evals[8].prompt, /exact manual Power Automate sender flow ID/);
   assert.match(verifyIos.evals[8].expected_output, /does not require or fabricate sender-auth\.json/);
   assert.strictEqual(verifyIos.evals[9].coverage, 'unsupported-custom-endpoint');
+  assert.strictEqual(verifyIos.evals[10].coverage, 'missing-ios-build-handoff');
+  assert.strictEqual(verifyIos.evals[14].coverage, 'valid-lightweight-ios-handoff');
 });
 
 test('manual Power Automate sender handoff stays aligned with flow authoring', () => {

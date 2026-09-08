@@ -43,6 +43,17 @@ function hasSecureInputsAndOutputs(action) {
     && properties.includes('outputs');
 }
 
+function collectStrings(value, result = []) {
+  if (typeof value === 'string') {
+    result.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectStrings(item, result);
+  } else if (isObject(value)) {
+    for (const item of Object.values(value)) collectStrings(item, result);
+  }
+  return result;
+}
+
 function validateFixture(fixture) {
   const reasons = new Set();
   const requested = fixture.requested || {};
@@ -85,6 +96,43 @@ function validateFixture(fixture) {
       if (!Object.hasOwn(actions, dependency)) {
         reasons.add('run-after-target-not-found');
       }
+    }
+  }
+
+  if (contract.webhookProof) {
+    const trigger = triggers[contract.webhookProof.triggerName];
+    if (
+      trigger
+      && trigger.type === 'OpenApiConnectionWebhook'
+      && contract.webhookProof.evidenceSource === 'run_flow'
+    ) {
+      reasons.add('webhook-proof-must-use-organic-callback');
+    }
+  }
+
+  for (const identity of contract.flowIdentities || []) {
+    const callbackJobRoleMisused = identity.callbackWorkflowId
+      && identity.dataverseWorkflowId
+      && String(identity.callbackWorkflowId).toLowerCase()
+        !== String(identity.dataverseWorkflowId).toLowerCase();
+    const callbackRegistrationRoleMisused = identity.callbackRegistrationName
+      && identity.runtimeResourceId
+      && String(identity.callbackRegistrationName).toLowerCase()
+        !== String(identity.runtimeResourceId).toLowerCase();
+    const runtimeRoleMisused = identity.runtimeReadbackResourceId
+      && identity.runtimeResourceId
+      && String(identity.runtimeReadbackResourceId).toLowerCase()
+        !== String(identity.runtimeResourceId).toLowerCase();
+    if (callbackJobRoleMisused || callbackRegistrationRoleMisused || runtimeRoleMisused) {
+      reasons.add('flow-id-role-misuse');
+    }
+  }
+
+  for (const [actionName, targetKind] of Object.entries(contract.lookupTargets || {})) {
+    if (targetKind !== 'fixed' || !Object.hasOwn(actions, actionName)) continue;
+    const strings = collectStrings(actions[actionName]);
+    if (strings.some((value) => /Microsoft\.Dynamics\.CRM\.lookuplogicalname/i.test(value))) {
+      reasons.add('fixed-target-lookup-must-not-depend-on-logical-name-annotation');
     }
   }
 

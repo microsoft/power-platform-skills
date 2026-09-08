@@ -5,7 +5,7 @@
       "id": 1,
       "coverage": "simulator-rejected",
       "prompt": "Verify iOS push using the iOS simulator. The notification packages are installed and Expo config looks correct.",
-      "expected_output": "The skill stops before live sends, rejects the simulator and configuration-only proof, requires the exact registered-device IPA installed on a physical iPhone or iPad, and keeps APNs physical verification pending.",
+      "expected_output": "The skill stops before the live verification sequence, rejects the simulator and configuration-only proof, requires the exact registered-device IPA installed on a physical iPhone or iPad, and keeps APNs physical verification pending.",
       "files": []
     },
     {
@@ -69,6 +69,41 @@
       "coverage": "unsupported-custom-endpoint",
       "prompt": "The current IPA is installed and the producer flow is Started, but we want to use a hosted custom endpoint instead of the Power Automate sender. Run plugin iOS physical verification.",
       "expected_output": "The skill explains that custom endpoint sender handoffs are not supported and requires the exact plugin-created Power Automate sender flow or a WIF-authenticated sender before physical verification.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "coverage": "missing-ios-build-handoff",
+      "prompt": "A registered iPhone has an IPA installed, but the project has no ios-build.json. The file name and visible app version look current, so continue.",
+      "expected_output": "The skill blocks before the live verification sequence because source-to-artifact continuity is unproven, routes to build-ios to create a fresh lightweight ios-build.json, and does not claim signing attestation.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "coverage": "stale-ios-build-handoff",
+      "prompt": "ios-build.json is older than its valid-until timestamp and max-age window, but the IPA still exists at the recorded path.",
+      "expected_output": "The skill rejects the stale handoff before installation confirmation or live sends and requires a fresh Wrap build handoff rather than relying on path, size, or visible version.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "coverage": "changed-ios-input",
+      "prompt": "After ios-build.json was written, pushNotifications.ts and tamagui.config.ts changed but the IPA and handoff JSON were not updated.",
+      "expected_output": "The skill reruns validate-ios-build-handoff.js, detects declared-input content drift across app or supported root config, blocks installation or the live verification sequence, and routes to build-ios for a new pre-build snapshot, IPA, and handoff.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "coverage": "changed-ios-ipa",
+      "prompt": "Replace the recorded IPA with another file having the same name and modification time, then continue using the existing ios-build.json.",
+      "expected_output": "The skill rejects the substituted IPA because its SHA-256 and size no longer match the handoff, even if the path and timestamp match, and performs no live send.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "coverage": "valid-lightweight-ios-handoff",
+      "prompt": "validate-ios-build-handoff.js reports valid immediately before installation confirmation and again immediately before the live verification sequence. The IPA hash, pre-build declared-input snapshot, app/Firebase/auth/build identities, and freshness window are unchanged, and no mutation can occur during the uninterrupted sequence.",
+      "expected_output": "The skill accepts proof of pre/post-build project-input continuity plus the selected fresh IPA identity/freshness, does not rerun the validator before every individual send unless mutation could occur, clearly states that signing, certificate, provisioning-profile, entitlement, embedded-profile, IPA-signature, and cryptographic input-digest embedding attestation were not performed, and proceeds with the complete physical A-H matrix.",
       "files": []
     }
   ]

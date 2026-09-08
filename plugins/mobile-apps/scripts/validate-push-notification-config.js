@@ -291,8 +291,8 @@ function findClosingDelimiter(source, openIndex, openCharacter, closeCharacter) 
 }
 
 // This deliberately small lexer/control-flow pass avoids adding a parser dependency to
-// the shipped plugin. It is conservative: only statically certain dead paths are removed,
-// while unknown branches and callback bodies remain eligible implementation evidence.
+// the shipped plugin. General validation keeps unknown branches, while Android-specific
+// proof can exclude them so helper-based platform guards are never assumed to reach Android.
 function tokenizeJavaScript(source) {
   const tokens = [];
   let index = 0;
@@ -420,7 +420,7 @@ function constantBoolean(tokens, constants = new Map()) {
   return undefined;
 }
 
-function reachableJavaScript(source) {
+function reachableJavaScript(source, { includeUnknownBranches = true } = {}) {
   const tokens = tokenizeJavaScript(source);
   const pairs = pairJavaScriptDelimiters(tokens);
 
@@ -484,6 +484,13 @@ function reachableJavaScript(source) {
       }
       if (condition === true) {
         return { next, rendered: consequent.rendered, terminates: consequent.terminates };
+      }
+      if (!includeUnknownBranches) {
+        return {
+          next,
+          rendered: tokens.slice(start, conditionClose + 1),
+          terminates: false,
+        };
       }
       return {
         next,
@@ -605,6 +612,151 @@ function reachableJavaScript(source) {
   return output;
 }
 
+function specializeAndroidPlatformChecks(source) {
+  return source
+    .replace(/\bPlatform\.OS\s*={2,3}\s*(['"])android\1/g, 'true')
+    .replace(/\bPlatform\.OS\s*!={1,2}\s*(['"])android\1/g, 'false')
+    .replace(/\bPlatform\.OS\s*={2,3}\s*(['"])(?:ios|web)\1/g, 'false')
+    .replace(/\bPlatform\.OS\s*!={1,2}\s*(['"])(?:ios|web)\1/g, 'true')
+    .replace(/(['"])android\1\s*={2,3}\s*Platform\.OS\b/g, 'true')
+    .replace(/(['"])android\1\s*!={1,2}\s*Platform\.OS\b/g, 'false')
+    .replace(/(['"])(?:ios|web)\1\s*={2,3}\s*Platform\.OS\b/g, 'false')
+    .replace(/(['"])(?:ios|web)\1\s*!={1,2}\s*Platform\.OS\b/g, 'true');
+}
+
+function rejectConditionallyGuardedAndroidEvidence(source) {
+  const specialized = specializeAndroidPlatformChecks(source);
+  const masked = maskJavaScriptStrings(specialized);
+  const requiredCall = /\b(?:Notifications\.(?:setNotificationChannelAsync|setNotificationHandler)|messaging\s*\(\s*\)\.(?:onMessage|onTokenRefresh))\s*\(/g;
+  let match;
+
+  while ((match = requiredCall.exec(masked)) !== null) {
+    const statementStart = Math.max(
+      masked.lastIndexOf(';', match.index),
+      masked.lastIndexOf('{', match.index),
+      masked.lastIndexOf('}', match.index),
+    ) + 1;
+    const prefix = specialized.slice(statementStart, match.index);
+    const tokens = tokenizeJavaScript(prefix);
+    const pairs = pairJavaScriptDelimiters(tokens);
+    let conditionalIndex = -1;
+    for (let index = 0; index < tokens.length; index += 1) {
+      const value = tokens[index].value;
+      if (['(', '[', '{'].includes(value) && pairs.has(index)) {
+        index = pairs.get(index);
+      } else if (value === '?' || value === '&&' || value === '||') {
+        conditionalIndex = index;
+      }
+    }
+    if (conditionalIndex < 0) continue;
+
+    const operator = tokens[conditionalIndex].value;
+    if (operator === '?') {
+      throw new Error(
+        'Android-required implementation evidence must not be ternary-guarded; use an explicit Platform.OS Android branch.',
+      );
+    }
+
+    const condition = constantBoolean(tokens.slice(0, conditionalIndex));
+    const guaranteed =
+      (operator === '&&' && condition === true) ||
+      (operator === '||' && condition === false);
+    if (!guaranteed) {
+      throw new Error(
+        'Android-required implementation evidence must not use an unknown logical guard; use an explicit Platform.OS Android branch.',
+      );
+    }
+  }
+}
+
+function androidReachableJavaScript(source) {
+  const specialized = specializeAndroidPlatformChecks(source);
+  if (/\bPlatform\.select\s*\(/.test(maskJavaScriptStrings(specialized))) {
+    throw new Error(
+      'Android-required implementation evidence must not use Platform.select; use an explicit Platform.OS Android branch.',
+    );
+  }
+  rejectConditionallyGuardedAndroidEvidence(source);
+  return reachableJavaScript(specialized, { includeUnknownBranches: false });
+}
+
+function androidReachableExpression(source) {
+  let expression = specializeAndroidPlatformChecks(source).trim();
+  if (/\bPlatform\.select\s*\(/.test(maskJavaScriptStrings(expression))) {
+    throw new Error(
+      'Android-required implementation evidence must not use Platform.select; use an explicit Platform.OS Android branch.',
+    );
+  }
+  while (expression.startsWith('(')) {
+    const closeParenthesis = findClosingDelimiter(expression, 0, '(', ')');
+    if (closeParenthesis !== expression.length - 1) break;
+    expression = expression.slice(1, closeParenthesis).trim();
+  }
+
+  const masked = maskJavaScriptStrings(expression);
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let braceDepth = 0;
+  let questionIndex = -1;
+  for (let index = 0; index < masked.length; index += 1) {
+    const character = masked[index];
+    if (character === '(') roundDepth += 1;
+    else if (character === ')') roundDepth -= 1;
+    else if (character === '[') squareDepth += 1;
+    else if (character === ']') squareDepth -= 1;
+    else if (character === '{') braceDepth += 1;
+    else if (character === '}') braceDepth -= 1;
+    else if (
+      character === '?'
+      && roundDepth === 0
+      && squareDepth === 0
+      && braceDepth === 0
+    ) {
+      questionIndex = index;
+      break;
+    }
+  }
+  if (questionIndex < 0) return expression;
+
+  const condition = expression.slice(0, questionIndex).trim();
+  if (condition !== 'true' && condition !== 'false') return expression;
+  roundDepth = 0;
+  squareDepth = 0;
+  braceDepth = 0;
+  let nestedTernaryDepth = 0;
+  for (let index = questionIndex + 1; index < masked.length; index += 1) {
+    const character = masked[index];
+    if (character === '(') roundDepth += 1;
+    else if (character === ')') roundDepth -= 1;
+    else if (character === '[') squareDepth += 1;
+    else if (character === ']') squareDepth -= 1;
+    else if (character === '{') braceDepth += 1;
+    else if (character === '}') braceDepth -= 1;
+    else if (
+      character === '?'
+      && roundDepth === 0
+      && squareDepth === 0
+      && braceDepth === 0
+    ) {
+      nestedTernaryDepth += 1;
+    } else if (
+      character === ':'
+      && roundDepth === 0
+      && squareDepth === 0
+      && braceDepth === 0
+    ) {
+      if (nestedTernaryDepth > 0) {
+        nestedTernaryDepth -= 1;
+        continue;
+      }
+      return condition === 'true'
+        ? expression.slice(questionIndex + 1, index).trim()
+        : expression.slice(index + 1).trim();
+    }
+  }
+  return expression;
+}
+
 function exportedFunctionBody(source, name) {
   const masked = maskJavaScriptStrings(source);
   const functionMatch = new RegExp(
@@ -664,7 +816,7 @@ function requireAwaitedCall(source, pattern, description, label) {
   if (!awaitedPattern.test(source)) {
     throw new Error(`${label} must await ${description} so native failures influence its result.`);
   }
-  requireCallInsideTry(source, awaitedPattern, description, label);
+  requireCallInsideTryCatch(source, awaitedPattern, description, label);
 }
 
 function requireAssignedCallInfluence(source, pattern, description, label) {
@@ -674,7 +826,12 @@ function requireAssignedCallInfluence(source, pattern, description, label) {
   if (!assignment) {
     throw new Error(`${label} must assign and await ${description}.`);
   }
-  requireCallInsideTry(source, new RegExp(assignment[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), description, label);
+  requireCallInsideTryCatch(
+    source,
+    new RegExp(assignment[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+    description,
+    label,
+  );
   const tail = source.slice(assignment.index + assignment[0].length);
   const variable = assignment[1].replace(/\$/g, '\\$');
   const influencesControlOrReturn = new RegExp(
@@ -687,20 +844,38 @@ function requireAssignedCallInfluence(source, pattern, description, label) {
   }
 }
 
-function requireCallInsideTry(source, pattern, description, label) {
-  let searchFrom = 0;
-  while (searchFrom < source.length) {
-    const tryIndex = source.indexOf('try{', searchFrom);
-    if (tryIndex < 0) break;
-    const openBrace = tryIndex + 3;
+function requireCallInsideTryCatch(source, pattern, description, label) {
+  const caughtRanges = [];
+  const tryPattern = /\btry\s*\{/g;
+  let tryMatch;
+  while ((tryMatch = tryPattern.exec(source)) !== null) {
+    const openBrace = source.indexOf('{', tryMatch.index);
     const closeBrace = findClosingBrace(source, openBrace);
-    if (closeBrace < 0) break;
-    if (pattern.test(source.slice(openBrace + 1, closeBrace))) return;
-    searchFrom = closeBrace + 1;
+    if (closeBrace < 0) continue;
+    if (/^\s*catch\b/.test(source.slice(closeBrace + 1))) {
+      caughtRanges.push({ start: openBrace + 1, end: closeBrace });
+    }
   }
-  throw new Error(
-    `${label} must catch ${description} failures and map them to a discriminated result.`,
-  );
+
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const allMatches = new RegExp(pattern.source, flags);
+  let matched = false;
+  let callMatch;
+  while ((callMatch = allMatches.exec(source)) !== null) {
+    matched = true;
+    const isCaught = caughtRanges.some(
+      ({ start, end }) => callMatch.index >= start && callMatch.index < end,
+    );
+    if (!isCaught) {
+      throw new Error(
+        `${label} must catch every ${description} failure inside the same callback.`,
+      );
+    }
+    if (callMatch[0].length === 0) allMatches.lastIndex += 1;
+  }
+  if (!matched) {
+    throw new Error(`${label} is missing ${description}.`);
+  }
 }
 
 function requireDiscriminatedOutcome(source, label, delegated = []) {
@@ -711,6 +886,176 @@ function requireDiscriminatedOutcome(source, label, delegated = []) {
   if (!/\bok\s*:\s*true\b/.test(source) && !delegates) {
     throw new Error(`${label} must expose a reachable success result or return a validated operation result.`);
   }
+}
+
+function extractCallArguments(source, pattern, label) {
+  const masked = maskJavaScriptStrings(source);
+  const match = pattern.exec(masked);
+  if (!match) {
+    throw new Error(`${label} is missing the required call.`);
+  }
+  const open = masked.indexOf('(', match.index + match[0].length);
+  const close = findClosingDelimiter(masked, open, '(', ')');
+  if (open < 0 || close < 0) {
+    throw new Error(`${label} must use a statically analyzable call.`);
+  }
+  return source.slice(open + 1, close);
+}
+
+function extractInlineCallbackBody(source, pattern, label) {
+  const argumentsSource = extractCallArguments(source, pattern, label);
+  const masked = maskJavaScriptStrings(argumentsSource);
+  const arrow = masked.indexOf('=>');
+  const open = arrow >= 0 ? masked.indexOf('{', arrow + 2) : -1;
+  const close = open >= 0 ? findClosingBrace(masked, open) : -1;
+  if (arrow < 0 || open < 0 || close < 0) {
+    throw new Error(`${label} must use an inline callback with a block body.`);
+  }
+  return argumentsSource.slice(open + 1, close);
+}
+
+function extractArrowReturnedObject(expression, label) {
+  const masked = maskJavaScriptStrings(expression);
+  const arrow = masked.indexOf('=>');
+  if (arrow < 0) {
+    throw new Error(`${label} must use an inline arrow callback.`);
+  }
+
+  let cursor = arrow + 2;
+  while (/\s/.test(masked[cursor] || '')) cursor += 1;
+  if (masked[cursor] === '(') {
+    cursor += 1;
+    while (/\s/.test(masked[cursor] || '')) cursor += 1;
+  } else if (masked[cursor] === '{') {
+    const bodyClose = findClosingBrace(masked, cursor);
+    const body = masked.slice(cursor + 1, bodyClose);
+    const returnedObject = /\breturn\s*(?:\(\s*)?\{/.exec(body);
+    if (!returnedObject) {
+      throw new Error(`${label} must return a statically analyzable presentation object.`);
+    }
+    cursor += 1 + returnedObject.index + returnedObject[0].lastIndexOf('{');
+  }
+
+  if (masked[cursor] !== '{') {
+    throw new Error(`${label} must return a statically analyzable presentation object.`);
+  }
+  const close = findClosingBrace(masked, cursor);
+  if (close < 0) {
+    throw new Error(`${label} must return a complete presentation object.`);
+  }
+  return expression.slice(cursor, close + 1);
+}
+
+function firstCallArgument(argumentsSource) {
+  const masked = maskJavaScriptStrings(argumentsSource);
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let braceDepth = 0;
+  for (let index = 0; index < masked.length; index += 1) {
+    const character = masked[index];
+    if (character === '(') roundDepth += 1;
+    else if (character === ')') roundDepth -= 1;
+    else if (character === '[') squareDepth += 1;
+    else if (character === ']') squareDepth -= 1;
+    else if (character === '{') braceDepth += 1;
+    else if (character === '}') braceDepth -= 1;
+    else if (
+      character === ',' &&
+      roundDepth === 0 &&
+      squareDepth === 0 &&
+      braceDepth === 0
+    ) {
+      return argumentsSource.slice(0, index).trim();
+    }
+
+  }
+  return argumentsSource.trim();
+}
+
+function extractTopLevelObjectProperty(objectSource, propertyName, label) {
+  let normalizedSource = objectSource.trim();
+  let normalizedMasked = maskJavaScriptStrings(normalizedSource);
+  while (normalizedMasked.startsWith('(')) {
+    const closeParenthesis = findClosingDelimiter(normalizedMasked, 0, '(', ')');
+    if (closeParenthesis !== normalizedMasked.length - 1) break;
+    normalizedSource = normalizedSource.slice(1, closeParenthesis).trim();
+    normalizedMasked = maskJavaScriptStrings(normalizedSource);
+  }
+  const masked = normalizedMasked;
+  const open = masked.indexOf('{');
+  const close = open >= 0 ? findClosingBrace(masked, open) : -1;
+  if (open < 0 || close < 0 || masked.slice(0, open).trim() !== '') {
+    throw new Error(`${label} must use a statically analyzable object literal.`);
+  }
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let braceDepth = 1;
+  for (let index = open + 1; index < close; index += 1) {
+    const character = masked[index];
+    if (character === '(') roundDepth += 1;
+    else if (character === ')') roundDepth -= 1;
+    else if (character === '[') squareDepth += 1;
+    else if (character === ']') squareDepth -= 1;
+    else if (character === '{') braceDepth += 1;
+    else if (character === '}') braceDepth -= 1;
+    if (
+      roundDepth !== 0
+      || squareDepth !== 0
+      || braceDepth !== 1
+      || !masked.startsWith(propertyName, index)
+      || /[\w$]/.test(masked[index - 1] || '')
+      || /[\w$]/.test(masked[index + propertyName.length] || '')
+    ) {
+      continue;
+    }
+    let colon = index + propertyName.length;
+    while (/\s/.test(masked[colon] || '')) colon += 1;
+    if (masked[colon] !== ':') continue;
+    const expressionStart = colon + 1;
+    let expressionRound = 0;
+    let expressionSquare = 0;
+    let expressionBrace = 0;
+    for (let end = expressionStart; end <= close; end += 1) {
+      const current = masked[end];
+      if (current === '(') expressionRound += 1;
+      else if (current === ')') expressionRound -= 1;
+      else if (current === '[') expressionSquare += 1;
+      else if (current === ']') expressionSquare -= 1;
+      else if (current === '{') expressionBrace += 1;
+      else if (current === '}') {
+        if (expressionBrace === 0 && expressionRound === 0 && expressionSquare === 0) {
+          return normalizedSource.slice(expressionStart, end).trim();
+        }
+        expressionBrace -= 1;
+      } else if (
+        current === ','
+        && expressionRound === 0
+        && expressionSquare === 0
+        && expressionBrace === 0
+      ) {
+        return normalizedSource.slice(expressionStart, end).trim();
+      }
+    }
+  }
+  throw new Error(`${label} must define a top-level ${propertyName} property.`);
+}
+
+function literalStringConstants(source) {
+  const constants = new Map();
+  const pattern = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])([^'"]+)\2\s*;/g;
+  let match;
+  while ((match = pattern.exec(source))) constants.set(match[1], match[3]);
+  return constants;
+}
+
+function resolveStaticString(expression, constants, label) {
+  const trimmed = expression.trim();
+  const literal = /^(['"])([^'"]+)\1$/.exec(trimmed);
+  if (literal) return literal[2];
+  if (/^[A-Za-z_$][\w$]*$/.test(trimmed) && constants.has(trimmed)) {
+    return constants.get(trimmed);
+  }
+  throw new Error(`${label} must resolve to one non-empty static string.`);
 }
 
 function validateEntryPoint(root, pkg, strictClientIntegration = false) {
@@ -897,6 +1242,10 @@ function validateStrictClientIntegration(root) {
 
   const permissionRequest = requireNonThrowingBody(wrapperSource, 'requestPushPermission');
   requireEvidence(permissionRequest.masked, [
+    {
+      pattern: /\bNotifications\.setNotificationChannelAsync\s*\(/,
+      description: 'Android notification channel creation',
+    },
     { pattern: /\bNotifications\.requestPermissionsAsync\s*\(/, description: 'permission request' },
     {
       pattern: /\bmessaging\s*\(\s*\)\.registerDeviceForRemoteMessages\s*\(/,
@@ -909,6 +1258,7 @@ function validateStrictClientIntegration(root) {
     { pattern: /\bmessaging\s*\(\s*\)\.getToken\s*\(/, description: 'token acquisition' },
   ], 'requestPushPermission');
   const requestOrder = [
+    permissionRequest.masked.search(/\bNotifications\.setNotificationChannelAsync\s*\(/),
     permissionRequest.masked.search(/\bNotifications\.requestPermissionsAsync\s*\(/),
     permissionRequest.masked.search(/\bmessaging\s*\(\s*\)\.registerDeviceForRemoteMessages\s*\(/),
     permissionRequest.masked.search(/\bmessaging\s*\(\s*\)\.setAutoInitEnabled\s*\(\s*true\s*\)/),
@@ -916,7 +1266,7 @@ function validateStrictClientIntegration(root) {
   ];
   if (!requestOrder.every((index, position) => position === 0 || index > requestOrder[position - 1])) {
     throw new Error(
-      'requestPushPermission must request consent, register remote messages, enable auto-init, then acquire the token in that order.',
+      'requestPushPermission must create the Android channel, request consent, register remote messages, enable auto-init, then acquire the token in that order.',
     );
   }
   if (!/\bif\s*\(/.test(permissionRequest.masked) || !/['"]permission-denied['"]/.test(permissionRequest.body)) {
@@ -928,6 +1278,32 @@ function validateStrictClientIntegration(root) {
     'permission request',
     'requestPushPermission',
   );
+  requireAwaitedCall(
+    permissionRequest.masked,
+    /Notifications\.setNotificationChannelAsync\s*\(/,
+    'Android notification channel creation',
+    'requestPushPermission',
+  );
+  const androidPermissionRequest = androidReachableJavaScript(permissionRequest.body);
+  const androidPermissionMasked = maskJavaScriptStrings(androidPermissionRequest);
+  requireEvidence(androidPermissionMasked, [{
+    pattern: /\bNotifications\.setNotificationChannelAsync\s*\(/,
+    description: 'Android-reachable notification channel creation',
+  }], 'requestPushPermission');
+  const channelArguments = extractCallArguments(
+    androidPermissionRequest,
+    /\bNotifications\.setNotificationChannelAsync\b/,
+    'requestPushPermission Android notification channel creation',
+  );
+  if (
+    !/\bimportance\s*:\s*Notifications\.AndroidImportance\.(?:DEFAULT|HIGH|MAX)\b/.test(
+      maskJavaScriptStrings(channelArguments),
+    )
+  ) {
+    throw new Error(
+      'requestPushPermission must create the Android channel with visible, non-silent DEFAULT, HIGH, or MAX importance.',
+    );
+  }
   requireAwaitedCall(
     permissionRequest.masked,
     /messaging\s*\(\s*\)\.registerDeviceForRemoteMessages\s*\(/,
@@ -1027,12 +1403,176 @@ function validateStrictClientIntegration(root) {
     },
     { pattern: /\breturn\s*\(\s*\)\s*=>\s*\{/, description: 'listener cleanup function' },
   ], 'registerNotificationHandlers');
+  for (const [pattern, description] of [
+    [/\bNotifications\.setNotificationHandler\s*\(/, 'foreground presentation handler registration'],
+    [/\bmessaging\s*\(\s*\)\.onMessage\s*\(/, 'foreground message listener registration'],
+    [/\bmessaging\s*\(\s*\)\.onTokenRefresh\s*\(/, 'token-refresh listener registration'],
+    [
+      /\bNotifications\.addNotificationResponseReceivedListener\s*\(/,
+      'notification-response listener registration',
+    ],
+  ]) {
+    requireCallInsideTryCatch(handlers.masked, pattern, description, 'registerNotificationHandlers');
+  }
   const handlerValidationCount = (
     handlers.masked.match(/\bparsePushNavigationIntent\s*\(/g) || []
   ).length;
   if (handlerValidationCount < 2) {
     throw new Error(
       'registerNotificationHandlers must validate both foreground and notification-response payloads.',
+    );
+  }
+  const androidHandlers = androidReachableJavaScript(handlers.body);
+  requireEvidence(androidHandlers, [
+    {
+      pattern: /\bNotifications\.setNotificationHandler\s*\(/,
+      description: 'Android-reachable foreground presentation handler',
+    },
+    {
+      pattern: /\bmessaging\s*\(\s*\)\.onMessage\s*\(/,
+      description: 'Android-reachable foreground message listener',
+    },
+  ], 'registerNotificationHandlers');
+  const presentationArguments = extractCallArguments(
+    androidHandlers,
+    /\bNotifications\.setNotificationHandler\b/,
+    'Android foreground presentation handler',
+  );
+  const presentationConfig = firstCallArgument(presentationArguments);
+  const presentationCallback = extractTopLevelObjectProperty(
+    presentationConfig,
+    'handleNotification',
+    'Android foreground presentation handler',
+  );
+  const presentationResult = extractArrowReturnedObject(
+    presentationCallback,
+    'Android foreground presentation handler handleNotification',
+  );
+  for (const propertyName of ['shouldShowBanner', 'shouldShowList']) {
+    const value = extractTopLevelObjectProperty(
+      presentationResult,
+      propertyName,
+      'Android foreground presentation result',
+    );
+    if (value.trim() !== 'true') {
+      throw new Error(
+        `Android foreground presentation result must set ${propertyName}: true.`,
+      );
+    }
+  }
+
+  const foregroundCallback = androidReachableJavaScript(extractInlineCallbackBody(
+    androidHandlers,
+    /\bmessaging\s*\(\s*\)\.onMessage\b/,
+    'messaging().onMessage foreground listener',
+  ));
+  const foregroundMasked = maskJavaScriptStrings(foregroundCallback);
+  requireEvidence(foregroundMasked, [
+    {
+      pattern: /\bparsePushNavigationIntent\s*\(\s*message\s*\.\s*data\s*\)/,
+      description: 'foreground message.data validation',
+    },
+    {
+      pattern: /\bNotifications\.scheduleNotificationAsync\s*\(/,
+      description: 'visible foreground local notification scheduling',
+    },
+  ], 'messaging().onMessage foreground callback');
+  if (
+    !/\btry\s*\{/.test(foregroundMasked) ||
+    !/\bcatch\b/.test(foregroundMasked) ||
+    /\bthrow\b|\bPromise\.reject\s*\(/.test(foregroundMasked)
+  ) {
+    throw new Error(
+      'messaging().onMessage must catch foreground presentation failures and must not throw.',
+    );
+  }
+  requireAwaitedCall(
+    foregroundMasked,
+    /Notifications\.scheduleNotificationAsync\s*\(/,
+    'foreground local notification scheduling',
+    'messaging().onMessage foreground callback',
+  );
+  requireCallInsideTryCatch(
+    foregroundMasked,
+    /\bawait\s+Notifications\.scheduleNotificationAsync\s*\(/,
+    'foreground local notification scheduling',
+    'messaging().onMessage foreground callback',
+  );
+  const scheduleArguments = extractCallArguments(
+    foregroundCallback,
+    /\bNotifications\.scheduleNotificationAsync\b/,
+    'messaging().onMessage foreground presentation',
+  );
+  if (
+    !/\bcontent\s*:\s*\{[\s\S]*?\bdata\s*:\s*message\s*\.\s*data\s*\?\?\s*\{\s*\}/.test(
+      maskJavaScriptStrings(scheduleArguments),
+    )
+  ) {
+    throw new Error(
+      'foreground local notification content must preserve safe message.data with data: message.data ?? {} for response navigation.',
+    );
+  }
+  const scheduleObject = firstCallArgument(scheduleArguments);
+  const triggerExpression = androidReachableExpression(extractTopLevelObjectProperty(
+    scheduleObject,
+    'trigger',
+    'messaging().onMessage foreground presentation',
+  ));
+  const scheduledChannelExpression = extractTopLevelObjectProperty(
+    triggerExpression,
+    'channelId',
+    'messaging().onMessage foreground presentation trigger',
+  );
+  for (const delayedProperty of [
+    'date',
+    'day',
+    'hour',
+    'minute',
+    'month',
+    'repeats',
+    'seconds',
+    'type',
+    'weekday',
+    'year',
+  ]) {
+    try {
+      extractTopLevelObjectProperty(
+        triggerExpression,
+        delayedProperty,
+        'messaging().onMessage foreground presentation trigger',
+      );
+      throw new Error(
+        'foreground local notification trigger must be immediate and contain only the Android channelId.',
+      );
+    } catch (error) {
+      if (!String(error.message).includes(`top-level ${delayedProperty} property`)) throw error;
+    }
+  }
+  const constants = literalStringConstants(wrapperSource);
+  const createdChannelId = resolveStaticString(
+    firstCallArgument(channelArguments),
+    constants,
+    'setNotificationChannelAsync channel ID',
+  );
+  const scheduledChannelId = resolveStaticString(
+    scheduledChannelExpression,
+    constants,
+    'scheduleNotificationAsync trigger channelId',
+  );
+  const firebaseConfig = readJson(path.join(root, 'firebase.json'), 'firebase.json');
+  const firebaseChannelId =
+    firebaseConfig['react-native']?.messaging_android_notification_channel_id;
+  if (typeof firebaseChannelId !== 'string' || firebaseChannelId.trim() === '') {
+    throw new Error(
+      'firebase.json must define a non-empty messaging_android_notification_channel_id.',
+    );
+  }
+  if (
+    createdChannelId !== scheduledChannelId ||
+    createdChannelId !== firebaseChannelId
+  ) {
+    throw new Error(
+      'Android notification channel ID must match setNotificationChannelAsync, the foreground schedule trigger, and firebase.json.',
     );
   }
   const refreshIndex = handlers.masked.search(/\bmessaging\s*\(\s*\)\.onTokenRefresh\s*\(/);
@@ -1358,11 +1898,20 @@ function validateProjectConfiguration(root, { strictClientIntegration = false } 
     throw new Error('firebase.json is required for consent-first Messaging initialization.');
   }
   const firebaseConfig = readJson(firebaseConfigPath, 'firebase.json');
+  const firebaseReactNative = firebaseConfig['react-native'];
   if (
-    firebaseConfig['react-native']?.messaging_auto_init_enabled !== false ||
-    firebaseConfig['react-native']?.messaging_ios_auto_register_for_remote_messages !== false
+    firebaseReactNative?.messaging_auto_init_enabled !== false ||
+    firebaseReactNative?.messaging_ios_auto_register_for_remote_messages !== false
   ) {
     throw new Error('firebase.json must disable Messaging auto-init and iOS auto-registration.');
+  }
+  if (
+    typeof firebaseReactNative.messaging_android_notification_channel_id !== 'string' ||
+    firebaseReactNative.messaging_android_notification_channel_id.trim() === ''
+  ) {
+    throw new Error(
+      'firebase.json must define a non-empty messaging_android_notification_channel_id.',
+    );
   }
 
   const androidClient = configuredFirebaseFile(

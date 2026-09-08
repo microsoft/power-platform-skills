@@ -85,13 +85,21 @@ checkbox or verbal confirmation cannot promote authentication to
 plugin-validated.
 
 After the customer says authentication is configured, fetch the exact
-plugin-created sender flow ID and read back only the observable
+plugin-created sender flow ID (its PPAPI/FlowAgent runtime resource ID) and
+read back only the observable
 queued-outbox trigger/guard, idempotent claim, `allUsers` versus lowercase-OID
 routing, one delivery invocation, and terminal `Sent`/`Failed` updates. Do not
 request or inspect credentials, secure values, authentication headers,
 connection secrets, or raw delivery bodies; do not validate
 `sender-auth.json` or claim the customer's authentication, least privilege, or
 rotation design was technically validated.
+
+For each producer and sender, retain two separately named identities: the
+PPAPI/FlowAgent runtime resource ID used for flow read-back/mutation/run
+history and exact callback-registration `name` correlation, and the Dataverse
+Workflow (Process) ID used for Workflow-row and callback-expander async-job
+correlation. Record and use both. Never swap their roles and never require
+equality between them.
 
 ### 3. Resolve the outbox and producer intent
 
@@ -150,12 +158,23 @@ without reserved keys, and includes `schemaVersion`, `destination`, and
 `params` only when navigation was selected; a legacy `deepLink` branch is a
 blocker.
 
+For lookup expressions, follow live metadata targets. A fixed single-target
+lookup uses its GUID value directly and must not depend on the optional
+`lookuplogicalname` annotation. A polymorphic lookup such as `ownerid` may use
+`@Microsoft.Dynamics.CRM.lookuplogicalname` to distinguish supported target
+types.
+
 ### 6. Validate, mutate, read back, and recover
 
 Apply Sections 6–7 to **every** create, update, edit, copy, restore, publish,
 or disable: `validate_flow`, `preflight_flow`, `preview_update` when updating,
 one mutation, then full `get_flow` comparison. An acknowledged response is not
 proof of persistence.
+
+Use only the runtime resource ID with FlowAgent. Resolve and retain the
+Dataverse Workflow ID separately after publication for callback diagnostics.
+A successful runtime read-back does not prove callback registration, and
+unequal IDs are not drift.
 
 Create new flows stopped. Before existing-flow changes, prove a backup or make
 a stopped recovery copy. Prefer surgical `edit_flow`; never use state-only
@@ -169,8 +188,8 @@ For WIF, publish/read back the sender as `Started` before the producer. For
 manual-auth mode, stop after authoring until the customer configures FCM
 authentication in the sender. Then validate/preflight and read back the same
 exact sender flow without inspecting secure values, require explicit approval,
-publish the sender before the producer, and read both exact IDs back after
-publication.
+publish the sender before the producer, read both exact runtime resource IDs
+back after publication, and resolve both Dataverse Workflow IDs separately.
 
 ### 7. Gate delivery testing and hand off
 
@@ -179,15 +198,33 @@ Run non-delivery checks first. Follow Section 8's physical-device, consent,
 history/actions back; do not repeatedly resubmit failures or retain raw
 diagnostics.
 
+Never use `run_flow` as proof for an `OpenApiConnectionWebhook`. Synthetic runs
+can have null trigger bodies and bypass the organic Dataverse callback chain.
+Use one consented organic Dataverse event, then classify the bounded chain as
+missing registration/job, Dataverse async backlog, identity/routing, producer
+without outbox, queued outbox without sender, or terminal sender using the
+reference's read-only diagnostic. Pass the actual explicit source event and
+let callback-job `createdon` define the window; do not reject an update merely
+because the row was created earlier. Treat unqueried outbox evidence as
+unknown, not as proof of `producer-no-outbox`. Validate the producer
+callback-registration `message` against the actual event and the sender
+registration against outbox `created`; classify incompatible choices as
+`registration-event-mismatch`. Classify Failed, Canceled, and Suspended
+callback-expander jobs explicitly rather than treating them as
+healthy/insufficient. `run_flow` remains permitted only when read-back proves
+a manual trigger.
+
 Report environment, Firebase project, connections, read-back results, and
-whether delivery was skipped or verified. Report producer/sender IDs and
-states. Never print secrets, tokens, JWTs, secure action values, or raw
+whether delivery was skipped or verified. Report both producer/sender ID roles
+and states. Never print secrets, tokens, JWTs, secure action values, or raw
 payloads.
 
 Persist the authoring reference's flow-backed `Push flow handoff` schema in
-`memory-bank.md`. Record the exact environment, producer ID/state, sender
+`memory-bank.md`. Record the exact environment, producer runtime resource
+ID/Dataverse Workflow ID/state, sender runtime resource ID/Dataverse Workflow
 ID/state, read-back timestamp, and sender authentication status. In manual
-Power Automate mode, both IDs must read back as `Started`; record exactly
+Power Automate mode, both runtime resource IDs must read back as `Started`;
+record exactly
 `customer-owned Power Automate sender / observable contract read back;
 authentication not plugin-validated` and no authentication-validation result.
 

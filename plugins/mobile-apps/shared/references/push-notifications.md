@@ -48,7 +48,8 @@ registration in the project-root `firebase.json`:
 {
   "react-native": {
     "messaging_auto_init_enabled": false,
-    "messaging_ios_auto_register_for_remote_messages": false
+    "messaging_ios_auto_register_for_remote_messages": false,
+    "messaging_android_notification_channel_id": "<app-owned channel ID>"
   }
 }
 ```
@@ -57,6 +58,9 @@ These are React Native Firebase's supported native configuration keys. They
 must be present before the native build; a JavaScript call after app mount is
 too late to guarantee consent-first initialization. This avoids creating a
 Firebase installation or APNs/FCM registration token during cold launch.
+Replace the channel placeholder with the same non-empty app-owned ID used by
+the generated Android channel and foreground local-notification trigger. The
+contract does not prescribe a validator-specific channel ID.
 
 Permission denial is a normal, non-throwing state. Do not register for remote
 messages, enable auto-init, call `getToken`, or sync a topic after denial.
@@ -92,6 +96,43 @@ owned by the single React provider/hook. Make registration idempotent and
 return/execute every native unsubscribe exactly once, including across Fast
 Refresh. Background registration in the entry point is separate and must not
 be duplicated by the provider.
+
+### Android foreground presentation and channel
+
+`messaging().onMessage` delivers data to JavaScript while the app is in the
+foreground, but it does not itself create visible notification UI. Parsing the
+payload or installing `Notifications.setNotificationHandler` alone is
+insufficient. Inside the `onMessage` callback, explicitly `await
+Notifications.scheduleNotificationAsync(...)` to create a visible local
+notification immediately. Its Android trigger must contain the channel ID and
+no time or calendar fields. Keep that awaited call inside a `try`/`catch`; the
+callback must swallow package failures rather than reject or throw into the
+listener.
+
+Configure `Notifications.setNotificationHandler` on an Android-reachable path.
+Its `handleNotification` result must set both `shouldShowBanner: true` and
+`shouldShowList: true`: the first allows foreground banner/heads-up
+presentation, while the second allows the notification to remain in the
+notification center/list. Channel importance, device settings, and user choices
+still control whether Android actually displays a heads-up banner.
+
+Preserve the safe FCM data payload in the scheduled notification content, for
+example `data: message.data ?? {}`, so the later Expo notification-response
+listener can run the same semantic navigation parser. Continue to validate the
+foreground payload immediately; presentation does not authorize navigation.
+
+Use one app-owned Android channel ID consistently:
+
+1. Create it with `Notifications.setNotificationChannelAsync(...)` before the
+   permission request.
+2. Give it visible, non-silent importance such as
+   `Notifications.AndroidImportance.DEFAULT` or `HIGH`.
+3. Use the same ID in the local schedule trigger's `channelId`.
+4. Set the same ID in `firebase.json` as
+   `messaging_android_notification_channel_id`.
+
+The ID is app-defined; validators compare these three sites instead of
+requiring a newly invented fixed value.
 
 ## Topic lifecycle
 
@@ -175,14 +216,17 @@ import messaging from '@react-native-firebase/messaging';
 Strict completed-client validation requires real static call paths behind the
 exports: permission query/request; consent-gated remote registration before
 token acquisition; auto-init after consent; token acquisition and refresh;
-topic subscribe/unsubscribe; foreground, background, warm-response, and
-cold-start handling; shared deep-link validation; and explicit non-throwing
-discriminated results. Export names, comments, markers, hardcoded objects, and
-empty/no-op bodies are not implementation proof. The validator analyzes each
-required function body independently, removes constant-false branches and code
-after unconditional returns, and checks the remaining call order. Never hide
-required calls behind `if (false)`, a `const enabled = false` guard, or place
-them after a canned return.
+topic subscribe/unsubscribe; awaited and caught foreground local presentation
+inside an Android-reachable `onMessage`; an Android-reachable notification
+handler that allows both banner and notification-center presentation;
+background, warm-response, and cold-start handling; shared deep-link
+validation; and explicit non-throwing discriminated results. Export names,
+comments, markers, hardcoded objects, and empty/no-op bodies are not
+implementation proof. The validator analyzes each required function body
+independently, removes constant-false branches and code after unconditional
+returns, specializes platform branches for Android checks, and checks the
+remaining call order. Never hide required calls behind `if (false)`, a `const
+enabled = false` guard, an iOS-only branch, or place them after a canned return.
 
 Native operations must determine the returned discriminant:
 

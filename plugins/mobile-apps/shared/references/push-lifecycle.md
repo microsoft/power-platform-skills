@@ -27,7 +27,7 @@ real blocker.
 | 3. Runtime integration | The selected platform runtime contains the required native modules, and the app implements consent/permissions, registration-token lifecycle, exact topic transitions, foreground/background/response listeners, and one typed semantic navigation contract shared by in-app, custom-scheme, HTTPS, and push entry points. | `/add-push-notifications` |
 | 4. Sender authentication | The Power Automate sender uses either a valid keyless WIF handoff or customer-configured FCM authentication that remains plugin-unvalidated. | `/setup-push-wif` or the customer's manual configuration in the plugin-created sender |
 | 5. Power Automate flows | The exact producer and sender flow IDs are recorded, published, and read back from the live environment. | `/create-push-notification-flow` |
-| 6. Wrapped build | A fresh platform artifact is created from the current app and push inputs and recorded by the platform build owner. For iOS, signing assets and Xcode configuration are user-managed; `/build-ios` runs the direct Wrap command only after exact confirmation. Artifact creation does not include installation or delivery proof. | iOS: `/build-ios`. Android: `/build-android`. |
+| 6. Wrapped build | A fresh platform artifact is created from the current app and push inputs and recorded by the platform build owner. For iOS, signing assets and Xcode configuration are user-managed; `/build-ios` runs the direct Wrap command only after exact confirmation. It captures a deterministic declared-input snapshot before `npm run build:ios`, preserves it through the external build, requires current inputs to equal that snapshot before writing strict project-local `ios-build.json`, and records the fresh IPA's project-relative path/hash/size/mtime plus safe app/Firebase/auth/mode/Team/export/APNs/tooling identity and a validity window no longer than 24 hours. This proves pre/post-build project-input continuity plus artifact identity/freshness. It is not signing/profile/certificate/entitlement/IPA-signature attestation, does not cryptographically embed the input digest in the IPA, and never inspects signing assets or embedded profiles. Artifact creation does not include installation or delivery proof. | iOS: `/build-ios`. Android: `/build-android`. |
 | 7. Physical delivery | The exact current wrapped artifact is installed on a supported physical device and end-to-end delivery is correlated through the live flows, provider, device states, topic transitions, and validated semantic navigation intents. HTTPS App Link/Universal Link activation is verified separately on an installed build. | iOS: `/verify-ios-push`. Android: `/verify-android-push`. |
 
 The Android build and verification entries are routing names only for
@@ -57,6 +57,15 @@ define those details.
    the shared sender-auth/flow stages 4-5 are ready. Route to physical
    verification only after that platform's exact current build is ready and
    installed through the user/operator-owned installation process.
+7. For iOS, `scripts/validate-ios-build-handoff.js` must accept
+   `ios-build.json` before installation confirmation and again immediately
+   before the live verification sequence. Do not repeat it before every send
+   while the sequence is uninterrupted and mutation cannot occur; revalidate
+   before the next send after an interruption, validity-window crossing, or
+   possible project/input/artifact/tooling mutation. A missing, expired,
+   malformed, symlinked, escaped, artifact-drifted, identity-drifted, or
+   declared-input-drifted handoff returns to `/build-ios`; manual timestamps or
+   file-name comparison cannot replace the validator.
 
 ## Canonical reporting states
 

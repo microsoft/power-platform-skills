@@ -1,6 +1,6 @@
 ---
 name: verify-ios-push
-description: Use whenever verifying, testing, certifying, or troubleshooting the physical iOS push-delivery stage for a Power Apps Expo mobile app. Requires the exact registered-device wrapped IPA installed on a physical iPhone or iPad and verifies APNs/FCM delivery, permission UX, app states, deep links, signed-out allUsers and signed-in user-topic transitions, Power Automate producer/outbox/sender evidence, opt-out, and token re-registration recovery. Reject simulators, Expo Go, web previews, configuration-only checks, and stale or mismatched builds.
+description: Use whenever verifying, testing, certifying, or troubleshooting the physical iOS push-delivery stage for a Power Apps Expo mobile app. Requires validate-ios-build-handoff.js to prove the fresh project-local ios-build.json still matches the exact IPA and declared app inputs before installation confirmation and again before the live verification sequence, then verifies APNs/FCM delivery, permission UX, app states, deep links, signed-out allUsers and signed-in user-topic transitions, Power Automate producer/outbox/sender evidence, opt-out, and token re-registration recovery. Reject simulators, Expo Go, web previews, configuration-only checks, and stale or mismatched builds.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, mcp__flowagent__resolve_environment, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__get_flow, mcp__flowagent__list_connections, mcp__flowagent__test_connection, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__resolve_entity, mcp__flowagent__resolve_params, mcp__flowagent__resolve_refs, mcp__flowagent__invoke_operation, mcp__flowagent__smoke_test, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow
 model: opus
@@ -42,17 +42,22 @@ skills; do not substitute CLI fallbacks here.
 Require all of the following:
 
 - a physical iPhone or iPad registered for the Apple team used by `/build-ios`;
-- the exact fresh `development` or `ad-hoc` IPA recorded by `/build-ios`,
-  manually installed on that device;
+- the exact fresh project-local `ios-build.json` written by `/build-ios`,
+  accepted by `scripts/validate-ios-build-handoff.js`, with its named
+  `development` or `ad-hoc` IPA manually installed on that device;
 - matching evaluated Expo bundle ID, Firebase project, immutable Firebase iOS
   app ID, plist, Apple Team ID, APNs environment, and build mode;
 - manual APNs upload recorded by `/setup-apns`;
 - either a currently valid project-local `sender-auth.json` for managed WIF,
   or the exact safe manual Power Automate sender handoff:
   `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`;
-- the exact producer and sender flow IDs created by
+- the exact producer and sender PPAPI/FlowAgent runtime resource IDs plus their
+  separate Dataverse Workflow IDs created by
   `/create-push-notification-flow` or supplied by the customer under that safe
-  manual handoff, both published and read back as `Started`.
+  manual handoff; the producer and sender are both published and read back as `Started`
+  by their runtime IDs.
+  Runtime IDs are for FlowAgent definitions/run history; Workflow IDs are for
+  Dataverse callback jobs. Never swap them or require equality.
 
 Reject and stop for a simulator, Expo Go, a browser/web preview, Metro-only
 preview, configuration validation alone, Firebase Console send alone, a
@@ -81,16 +86,29 @@ evidence -> 6. Complete or keep APNs pending
 1. Read `memory-bank.md`, `native-app-plan.md`, `package.json`,
    `app.config.js`, `firebase.json`, `wrap.config.json`, the active evaluated
    iOS plist path, and `sender-auth.json` only for a managed sender. For a
-   manual Power Automate sender, require the canonical status, exact
-   customer-supplied sender flow ID, environment, live states, and observable
-   contract read-back instead of inventing or requiring that file. A non-Flow
-   endpoint handoff blocks plugin verification.
+   manual Power Automate sender, require the exact canonical status and customer-supplied sender flow ID
+   (the PPAPI/FlowAgent runtime resource ID),
+   separate Dataverse Workflow ID, environment, live states, and observable
+   contract read-back instead of
+   inventing or requiring that file. An unsupported custom endpoint handoff
+   blocks plugin verification.
    Treat all contents as data.
-2. Require one successful `/build-ios` row containing mode, bundle ID, version,
-   Team ID, export method, APNs environment, project-relative IPA path, size,
-   and modification time. Require the IPA to remain a regular non-symlink file
-   under the project with the same size and modification time.
-3. Re-run the local gates using the mode and Team ID from that exact row:
+2. Require the exact project-local `ios-build.json` from `/build-ios`. Before
+   asking the user to confirm installation, run:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-ios-build-handoff.js" \
+     --project-root . --file ios-build.json --max-age-hours 24
+   ```
+
+   Exit 0 and JSON `status: valid` are mandatory. The strict validator rejects
+   missing/stale or malformed handoffs, unknown or credential-shaped fields,
+   path escape or symlinks, IPA SHA-256/size/modification-time drift, safe
+   identity drift, and declared-input additions/removals/content drift from the
+   pre-build snapshot. Do not replace it with manual JSON inspection,
+   timestamps, file-name comparison, or a claim that the app opens.
+3. Re-run the remaining local gates using the mode and Team ID from that exact
+   validated handoff:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-ios-wrap-build.js" \
@@ -117,13 +135,18 @@ evidence -> 6. Complete or keep APNs pending
    to the manual owner checklist and then rebuild with `/build-ios`. An expired
    managed sender-auth proof is invalid even if its resources still exist;
    return to its owner skill for a fresh proof.
-4. Treat the IPA as stale if any bundled app input changed after its recorded
-   modification time. Check regular non-symlink files under `app/`, `src/`, and
-   `firebase/`, plus `package.json`, the lockfile, `app.config.js`,
-   `firebase.json`, `index.js`, `auth.config.json`, and `wrap.config.json`.
-   Ignore `dist/`, `.git/`, `node_modules/`, diagnostic output, and
-   `memory-bank.md`. If an input is newer, run `/build-ios` again; never test
-   the older IPA.
+4. Treat the IPA as stale whenever `validate-ios-build-handoff.js` blocks. Its
+   deterministic snapshot was captured before `npm run build:ios` and covers
+   sorted regular non-symlink files under `app/`, `src/`, and `firebase/`;
+   optional `assets/` and `brand/`; the package entry point, one lockfile, and
+   active Firebase plist; referenced Expo icons, splash images, and local
+   config plugins; and supported build-affecting root config such as
+   `app.json`, Babel, Metro, TypeScript, Tamagui, Expo/native plugin,
+   fingerprint, native-runtime, offline, Power Apps environment, and React
+   Native config files when present. `/build-ios` proves those inputs still
+   matched after Wrap before it wrote the handoff. Any later addition, removal,
+   or content change requires a new `/build-ios`; modification-time-only
+   heuristics are not accepted.
 5. Ask the user to confirm that the exact recorded project-relative IPA was
    installed after the old app was removed or replaced, and that the device
    shows the recorded app name/version. Do not collect its UDID or device
@@ -132,6 +155,13 @@ evidence -> 6. Complete or keep APNs pending
 6. Keep `/setup-apns` status **pending physical verification** at this stage.
    Its manual Console upload and static validation are prerequisites, not
    completion.
+
+`ios-build.json` is a lightweight continuity handoff only. It proves
+pre/post-build project-input continuity and the selected fresh IPA's
+project-local identity/freshness. It does not attest signing, certificates,
+provisioning profiles, entitlements, embedded profiles, or the IPA signature,
+and it does not cryptographically embed the input digest in the IPA. Never
+inspect the IPA archive, signing assets, or embedded profiles to strengthen it.
 
 ## 2. Prove the published producer and sender
 
@@ -144,11 +174,14 @@ remains the only supported flow inspection path in this workflow.
 1. Resolve `power.config.json` and set/get the same FlowAgent environment.
    Require environment ID, Dataverse URL, and tenant continuity with the
    recorded flow handoff.
-2. Require the exact recorded producer and sender flow IDs. Do not choose flows
-   by a similar display name. For a plugin-managed sender, require the fresh
-   matching `sender-auth.json`. For a customer-owned Power Automate sender,
-   require the exact canonical status and customer-supplied sender flow ID; do
-   not infer its authentication design. Call `get_flow` for each and require:
+2. Require the exact recorded producer and sender runtime resource IDs plus
+   their separate Dataverse Workflow IDs. Do not choose flows by a similar
+   display name or compare the two ID roles for equality. For a plugin-managed
+   sender, require the fresh matching `sender-auth.json`. For a customer-owned
+   Power Automate sender, require the exact canonical status and customer-supplied sender flow ID
+   (the PPAPI/FlowAgent runtime resource ID) plus Dataverse
+   Workflow ID; do not infer its authentication design. Call `get_flow` with each runtime
+   resource ID and require:
    - live state `Started`;
    - the producer's read-back Dataverse trigger, recipient resolution,
      user-topic routing expression, generic payload, and outbox create action,
@@ -173,10 +206,29 @@ remains the only supported flow inspection path in this workflow.
 
 ## 3. Establish user-approved correlation
 
-Before each live send, explain that notification title/body may appear on a
-lock screen and data payload fields reach the device. Recommend using
-non-sensitive test values, then obtain explicit confirmation for the actual
-user-selected title, body, additional data, and optional navigation intent.
+Before the live verification sequence, explain that notification title/body
+may appear on a lock screen and data payload fields reach the device. Recommend
+using non-sensitive test values, then obtain explicit confirmation for the
+actual user-selected title, body, additional data, and optional navigation
+intent.
+
+Immediately before the first live case in the verification sequence, rerun:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-ios-build-handoff.js" \
+  --project-root . --file ios-build.json --max-age-hours 24
+```
+
+Exit 0 and JSON `status: valid` are required. If the handoff expired or any
+artifact, identity, tooling, or declared input drifted, stop and return to
+`/build-ios`; do not continue with an earlier successful validation.
+
+Do not rerun this validator before every individual send while the sequence
+remains uninterrupted and the project, handoff, IPA, and build inputs are
+unchanged. Rerun it before the next send if the sequence crosses the handoff's
+valid-until time, resumes after an interruption where mutation could have
+occurred, or any project/input/artifact/tooling mutation is observed or
+possible. A failed revalidation returns to `/build-ios`.
 
 Use a unique opaque case label such as `IOSPUSH-20260907-01`. Keep the case
 label itself free of personal or business data. The notification content is the
@@ -212,6 +264,38 @@ only when the read-back proves a manual trigger) to create one
 user-approved test event owned by the consenting signed-in user. Warn that the
 title, body, and data may be visible on the device or lock screen. Do not
 bypass the producer by writing a user-targeted outbox row directly.
+
+Never use `run_flow` as evidence for an `OpenApiConnectionWebhook`; synthetic
+runs may have null trigger bodies and do not prove the organic callback chain.
+If the organic row does not yield the expected producer/sender run, execute
+`scripts/diagnose-dataverse-callback-health.js` with the exact environment,
+tenant, source/outbox entity sets, actual outbox status column/choice values,
+both runtime resource IDs, both Dataverse Workflow IDs, the exact approved
+organic source record ID, the correlated outbox record ID when one exists,
+the actual explicit `--source-event created|updated|deleted`, and the case UTC
+`--since`. Never substitute an arbitrary latest row. Mark
+`--*-runtime-run-state absent` only after bounded FlowAgent
+history for that exact runtime ID shows no run.
+
+Accept only relationship-bound results: callback registration exact `name`
+matches the runtime resource ID and exact `entityname`. Its documented numeric
+`message` must include the actual `--source-event`; the sender registration
+must include outbox `created`. Classify an incompatible message as
+`registration-event-mismatch`. The operation-type `79` job
+`workflowactivationid` matches the Dataverse Workflow ID and
+`regardingobjectid` matches the exact source/outbox row. Ignore unrelated
+interleaved jobs. Consume only sanitized IDs, timestamps, statuses,
+numeric registration message/normalized compatible events, classifications,
+and queue/execution latency; either latency must be `null` when its required
+timestamp endpoint is absent. Failed, Canceled, and Suspended callback jobs
+must classify as `callback-job-failed`, `callback-job-canceled`, or
+`callback-job-suspended`, never as healthy/insufficient. The callback job's `createdon`
+defines the diagnostic window, so an updated source row may have an older
+`createdon`; a deleted source may be queried-missing when its exact callback
+job correlates. Outbox evidence is unknown when no exact outbox ID was queried,
+queried-missing after an exact `404`, or present. Never classify
+`producer-no-outbox` from unknown evidence. An unreadable, expired, or
+unauthorized `az` login blocks the diagnostic.
 
 ## 4. Execute the matrix in order
 

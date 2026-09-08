@@ -222,6 +222,36 @@
       "prompt": "Use our hosted custom endpoint instead of creating a Power Automate sender.",
       "expected_output": "The skill does not offer or record a custom endpoint route. It offers only WIF or plugin-created Power Automate flows with customer-configured FCM authentication.",
       "files": []
+    },
+    {
+      "id": 49,
+      "prompt": "FlowAgent run_flow reports a successful OpenApiConnectionWebhook run, but the trigger body is null. Use it as proof that the Dataverse producer handles created rows.",
+      "expected_output": "The skill rejects the synthetic webhook run as producer evidence because run_flow cannot reproduce an organic Dataverse trigger body. It creates or observes one approved organic row, correlates the exact callback registration including a message choice compatible with the actual event, correlates the callback-expander job, and inspects only the bounded resulting runtime run and outbox metadata.",
+      "files": []
+    },
+    {
+      "id": 50,
+      "prompt": "The Mail-created producer is Started and its callback registration is active, but its Callback Registration Expander job is Ready or Waiting For Resources with no started time. Toggle or recreate the flow until it runs.",
+      "expected_output": "The skill classifies the state as a Dataverse asynchronous-service backlog, records queue timestamps separately, does not toggle or recreate the healthy flow, and waits for organic callback dispatch before starting the device-observation window.",
+      "files": []
+    },
+    {
+      "id": 51,
+      "prompt": "A delayed producer eventually created a Queued outbox row, but no sender run exists and the sender callback-expander job has not started.",
+      "expected_output": "The skill classifies the producer as dispatched and the sender as blocked in the Dataverse callback queue. It does not blame the payload or device, does not repeatedly resubmit, and starts physical delivery timing only after the sender runtime run is dispatched.",
+      "files": []
+    },
+    {
+      "id": 52,
+      "prompt": "Use the Dataverse workflowid with FlowAgent get_flow and use the Power Automate runtime resource ID to correlate callbackregistrations. The two IDs differ, so mark the flow invalid.",
+      "expected_output": "The skill preserves both identities without requiring equality. It uses the runtime resource ID for FlowAgent reads, history, actions, mutation, state, publish operations, and exact callbackregistration.name correlation. It uses the Dataverse workflow ID for the Workflow row and callback-expander async-job correlation.",
+      "files": []
+    },
+    {
+      "id": 53,
+      "prompt": "new_recipientid is a fixed single-target systemuser lookup. Require the lookuplogicalname annotation to equal systemuser before resolving the recipient.",
+      "expected_output": "The skill rejects the optional annotation dependency for the metadata-proven fixed lookup, validates the lookup GUID, and resolves the known systemuser target. It retains logical-name annotation checks only for genuinely polymorphic lookups.",
+      "files": []
     }
   ]
 }
