@@ -1026,15 +1026,16 @@ npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
 
-After generation, verify the actual PAC output rather than guessing a JSON path
-or service filename. PAC currently writes Dataverse under the literal
-`databaseReferences["default.cds"].dataSources` key and derives service filenames
-from each entry's `entitySetName`, which may differ from the table logical name.
-The verifier also accepts the legacy nested `databaseReferences.default.cds`
-shape:
+After generation, verify the output created by
+`npx power-apps add-data-source` rather than guessing a JSON path or service
+filename. The command writes Dataverse configuration under the literal
+`databaseReferences["default.cds"].dataSources` key and derives service
+filenames from each entry's `entitySetName`, which may differ from the table
+logical name. The verifier also accepts the legacy nested
+`databaseReferences.default.cds` shape:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/verify-dataverse-services.js" \
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-services.js" \
   --project-root "<working_dir>" \
   --manifest "$OPERATION_MANIFEST"
 ```
