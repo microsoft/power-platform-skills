@@ -629,7 +629,7 @@ test('an ADDED flow forces a full build with NO debt — a full build creates it
   assert.deepStrictEqual(r.debt, []);
 });
 
-// --- 6. regressions found by live testing and multi-model review ---------------------------------
+// --- 6. regressions found by live-testing the feature ------------------------------------------
 // Each block below guards a defect that ALREADY SHIPPED in the first cut of this feature. They are
 // grouped here rather than scattered so the provenance stays attached to the assertion.
 
@@ -827,7 +827,7 @@ test('REAL BUNDLE: the 30-stage / 30-step ceilings match the SDK rule, not a mag
   assert.ok(errorsFor([{ ...FLOW, stages: steps(31) }]).some((e) => /at most 30 per stage/.test(e)));
 });
 
-// --- the derived unique name is a TABLE name, not just a flow name (peer-review finding) ---------
+// --- the derived unique name is a TABLE name, not just a flow name ------------------------------
 //
 // Activating a flow makes the platform create an org-owned BACKING TABLE whose logical name is the
 // flow's derived unique name (`new_` + the display name lower-cased with punctuation stripped —
@@ -947,4 +947,55 @@ test('no clash means no interference — the create path is unchanged', async ()
   const probe = calls.find((c) => c[0] === 'queryRecords' && /uniquename eq /.test(c[1] || ''));
   assert.ok(probe, `expected a uniquename probe; got ${JSON.stringify(calls.filter((c) => c[0] === 'queryRecords'))}`);
   assert.match(probe[1], /uniquename eq 'new_tickethandling'/);
+});
+
+// --- the derived name can also be owned by a TABLE, not only by another flow --------------------
+test('the build-time probe also refuses when a TABLE already owns the derived name', async () => {
+  // Activation creates a real table called `new_<derived>`. An unrelated table already holding that
+  // logical name blocks the flow just as surely as a rival flow does — and that table need not have
+  // come from any flow at all, so querying only `workflows` missed the commonest environment-side
+  // collision. Reported by peer review; the workflows-only probe let this reach the push and fail
+  // as an opaque "Entity ... already exists".
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithUniqueClash({ clashRows: [] });
+  provision.findTables = async () => ([{ logicalName: 'new_unrelated' }, { logicalName: 'new_tickethandling' }]);
+
+  const err = await runSdkBuild(specWith([FLOW]), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-process-flows'], warn: () => {},
+  }).then(() => null, (e) => e);
+
+  assert.ok(err, 'a table owning the derived name must stop the build');
+  assert.match(err.message, /new_tickethandling/, `the halt must name the derived value; got: ${err.message}`);
+  assert.match(err.message, /table/i, 'and say it is a TABLE that owns it, not a flow');
+  assert.strictEqual(calls.some((c) => c[0] === 'createArtifact'), false, 'nothing may be written');
+});
+
+test('the table probe is best-effort and absent-safe (an older transport has no findTables)', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  for (const [label, mutate] of [
+    ['absent', (p) => { delete p.findTables; }],
+    ['throws', (p) => { p.findTables = async () => { throw new Error('metadata read refused'); }; }],
+    ['no match', (p) => { p.findTables = async () => ([{ logicalName: 'new_something_else' }]); }],
+  ]) {
+    const { provision, calls } = provisionWithUniqueClash({ clashRows: [] });
+    mutate(provision);
+    await runSdkBuild(specWith([FLOW]), {
+      sdk, provisionSdk: provision, apply: true, phases: ['business-process-flows'], warn: () => {},
+    });
+    assert.ok(calls.some((c) => c[0] === 'createArtifact'), `findTables ${label}: the flow is still created`);
+  }
+});
+
+test('a flow clash is reported as a FLOW and a table clash as a TABLE — the remedy differs', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionWithUniqueClash({
+    clashRows: [{ workflowid: 'other-1', name: 'ticket-handling', primaryentity: 'new_other' }],
+  });
+  // Both owners present: the flow is the more actionable one to name, and it is found first.
+  provision.findTables = async () => ([{ logicalName: 'new_tickethandling' }]);
+  const err = await runSdkBuild(specWith([FLOW]), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-process-flows'], warn: () => {},
+  }).then(() => null, (e) => e);
+  assert.ok(err);
+  assert.match(err.message, /the flow "ticket-handling"/, `got: ${err.message}`);
 });

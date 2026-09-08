@@ -43,7 +43,17 @@ that cannot host them.
   name is a *table* name — activation creates a backing table from it — and the derivation ignores
   both the table and your publisher prefix, so a flow named after its own table collided silently and
   failed late, mid-build. Now rejected at the plan gate against declared tables, and at build time
-  against anything already in the environment.
+  against any flow or table already in the environment.
+- **A reused business rule rejoins its solution on every build.** Solution membership was reconciled
+  only on the create path, so a rule that already existed — because an earlier component add failed,
+  or because it came from a different solution — stayed outside the solution permanently and never
+  travelled on export/import, with nothing saying so.
+- **A push that fails with the SDK's `VERSION_CONFLICT` still tells you to re-download.** Reporting
+  unrecognised SDK codes verbatim had dropped that remedy from a real 412.
+- **A table reference that is not a string is rejected instead of being coerced.** `charts[].entity`,
+  a subgrid's `childEntity`, a sitemap subarea's `entity` and a dashboard tile's `entity` were
+  stringified before the check, so a nested array passed validation and then crashed the build with a
+  raw `TypeError`.
 
 [#513]: https://github.com/microsoft/power-platform-skills/issues/513
 [#514]: https://github.com/microsoft/power-platform-skills/issues/514

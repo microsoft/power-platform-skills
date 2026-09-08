@@ -424,9 +424,15 @@ function requireSuccessfulPush(result, what, warn) {
     if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
       throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`, { ...opts, code: 'already-exists' });
     }
-    // No code at all is the bare 412 this guard was originally written for, where re-downloading
-    // genuinely IS the remedy.
-    if (!sdkCode) {
+    // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
+    // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
+    // re-downloading genuinely IS the remedy.
+    //
+    // `VERSION_CONFLICT` has to be named explicitly. Routing it to the generic branch below silently
+    // DROPPED the re-download instruction from a real 412, and nothing caught that: the unit
+    // fixtures here use a code-less error, and the real-bundle test never routes its result through
+    // this function.
+    if (!sdkCode || sdkCode === 'VERSION_CONFLICT') {
       throw new BuildHalt(`push ${label} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`, { ...opts, code: 'version-conflict' });
     }
     throw new BuildHalt(`push ${label} failed: ${detail}`, { ...opts, code: sdkCode });

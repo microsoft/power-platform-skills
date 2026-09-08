@@ -486,7 +486,7 @@ test('REAL BUNDLE: the validator accepts EVERY shape this spec surface can autho
   // App Spec already allows. So the assertion is over the spec surface's OWN declared sets rather
   // than a hand-picked sample — a future operator or action type added to app-spec.js is covered the
   // day it is added, without anyone remembering to extend this test.
-  const { BUSINESS_RULE_OPERATORS, BUSINESS_RULE_VALUELESS_OPERATORS, BUSINESS_RULE_ACTION_TYPES, BUSINESS_RULE_SCOPES } = require('../lib/app-spec.js');
+  const { BUSINESS_RULE_OPERATORS, BUSINESS_RULE_VALUELESS_OPERATORS, BUSINESS_RULE_ACTION_TYPES, BUSINESS_RULE_SCOPES, BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
   const { createMakerSdk } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brval-'));
   dirs.push(dir);
@@ -510,6 +510,16 @@ test('REAL BUNDLE: the validator accepts EVERY shape this spec surface can autho
   }
   for (const scope of BUSINESS_RULE_SCOPES) {
     shapes.push([`scope ${scope}`, { entity: 'new_ticket', name: `Sc ${scope}`, scope, conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }], actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }] }]);
+  }
+  // `status` and `dataType` are separately-accepted axes, and the build's comment claims BOTH are
+  // covered — so iterate them here rather than leave the claim resting on a hand-picked sample. A
+  // future validator that started rejecting `Draft`, or one literal type, would otherwise stay green.
+  for (const status of ['Active', 'Draft']) {
+    shapes.push([`status ${status}`, { entity: 'new_ticket', name: `St ${status}`, status, conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }], actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }] }]);
+  }
+  for (const dataType of BUSINESS_RULE_DATA_TYPES) {
+    shapes.push([`dataType ${dataType} (condition)`, { entity: 'new_ticket', name: `Dt ${dataType}`, conditions: [{ field: 'new_owner', operator: 'Equals', value: '1', dataType }], actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }] }]);
+    shapes.push([`dataType ${dataType} (SetFieldValue)`, { entity: 'new_ticket', name: `Dv ${dataType}`, conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }], actions: [{ type: 'SetFieldValue', field: 'new_notes', value: '1', dataType }] }]);
   }
   shapes.push(['multi-condition + multi-action', { entity: 'new_ticket', name: 'Multi', conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }, { field: 'new_notes', operator: 'ContainsData' }], actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }, { type: 'LockUnlock', field: 'new_owner', lock: true }] }]);
 
@@ -1095,4 +1105,41 @@ test('a phase list that INCLUDES business-rules still demands the rule', async (
   const r = await verifySpec(ruleSpec(), baseReader([]), { phases: ['business-rules'] });
   assert.strictEqual(ruleCheck(r).present, false);
   assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+});
+
+// --- a REUSED business rule must still join the solution ----------------------------------------
+//
+// `addSolutionComponent` used to be reached only by the create branch, so a rule that already
+// existed was recorded and skipped. Two ordinary situations then left it permanently outside the
+// solution, with nothing in the output saying so: a run where the rule was written but the
+// component add failed (the retry reuses and reports success), and a rule created by an earlier
+// build of a DIFFERENT solution. Neither is visible afterwards — the rule works, it just never
+// travels on export/import.
+test('a reused business rule is re-added to the solution on every run', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithRules([{ workflowid: 'existing-1', statecode: 1, createdon: '2026-01-01T00:00:00Z' }]);
+  const adds = [];
+  provision.addSolutionComponent = async (a) => { adds.push(a); };
+  const res = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(adds.length, 1, `the reused rule must be re-added; got ${JSON.stringify(adds)}`);
+  assert.strictEqual(adds[0].componentId, 'existing-1', 'and it must be the EXISTING id, not a new one');
+  assert.strictEqual(calls.some((c) => c[0] === 'deleteRecord'), false, 'reuse must not delete anything');
+});
+
+test('a failed solution add on the reuse path WARNS — it never fails an otherwise-good build', async () => {
+  // The rule itself is correct and running; blocking the build over solution bookkeeping is worse
+  // than reporting it. Mirrors the business-process-flows policy exactly.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionWithRules([{ workflowid: 'existing-1', statecode: 1, createdon: '2026-01-01T00:00:00Z' }]);
+  provision.addSolutionComponent = async () => { throw new Error('component add refused'); };
+  const warnings = [];
+  const res = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m),
+  });
+  assert.strictEqual(res.ok, true, 'the build must still complete');
+  assert.ok(warnings.some((w) => /could not be added to solution/.test(w)),
+    `the operator must be told; got ${JSON.stringify(warnings)}`);
 });

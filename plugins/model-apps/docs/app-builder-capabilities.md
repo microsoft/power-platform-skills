@@ -200,9 +200,10 @@ apart deliberately.
   *and* the solution's publisher prefix — and activation creates an org-owned backing table with that
   logical name. So the name collides with three things, not one: another flow, a table the spec
   declares, and anything already in the environment. The first two are rejected at the plan gate; the
-  third is a build-time probe on the derived name that **halts** naming the conflicting flow, instead
-  of letting the create fail with a platform error about a table the author never mentioned. The
-  probe is best-effort, because a diagnostic must never be the thing that breaks a build.
+  third is a build-time probe that checks **both** `workflows` (by `uniquename`) and table metadata
+  (by logical name) and **halts** naming whichever owns it, instead of letting the create fail with a
+  platform error about a table the author never mentioned. It runs only on the create path, never on
+  reuse, and is best-effort — a diagnostic must never be the thing that breaks a build.
 - **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching,
   stage actions and security-role grants; the spec gate **rejects** those keys — as an allow-list at
   flow, stage *and* step level — rather than ignoring them, so a flow never quietly deploys as

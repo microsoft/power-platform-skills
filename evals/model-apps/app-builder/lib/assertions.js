@@ -2,6 +2,9 @@
 // Maps each assertion text in evals.json to a check function receiving { facts, spec, eval } and
 // returning { status: 'pass'|'fail'|'skip', reason? }. Mirrors evals/model-apps/genpage/lib/assertions-*.js.
 // Register every text in common_stage_assertions here; any unregistered text gets a SKIP.
+const path = require('node:path');
+// Same reach as facts.js: 4 levels up to the repo root. Pure, offline plugin primitives only.
+const { declaredColumnLogicals } = require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', 'lib', 'app-spec.js'));
 const PASS = { status: 'pass' };
 const fail = (reason) => ({ status: 'fail', reason });
 const skip = (reason) => ({ status: 'skip', reason });
@@ -323,21 +326,22 @@ ASSERTIONS.set('teardown: every declared command bar has a teardown step', ({ fa
 // the engine pushes. Each skips when the fixture declares none, so they are safe as common
 // assertions across every fixture.
 
-// Resolve the column names an entity legitimately offers a rule or a flow: its own columns, its
-// primary name, and the lookup columns its relationships create.
-const lcName = (s) => String(s || '').toLowerCase();
-function boundColumnsFor(spec, entityLogical) {
-  const ent = (spec.entities || []).find((e) => e && lcName(e.schemaName) === entityLogical);
+// Resolve the column names an entity legitimately offers a rule or a flow.
+//
+// This delegates to the plugin's own `declaredColumnLogicals` rather than re-deriving the set here.
+// The first version of this helper did re-derive it, and guessed the lookup column as
+// `rel.lookupName || '<referenced>id'` — but the App Spec stores the authored name at
+// `rel.lookup.schemaName`. The consequence was the worst kind for an eval: with a custom lookup name
+// it REJECTED correct builder output, and it ACCEPTED the default-named column the builder had not
+// emitted. An oracle that can be wrong in both directions is worse than no oracle, so it now shares
+// the production definition and cannot drift from it.
+const boundColumnsFor = (spec, entityLogical) => {
+  // `declaredColumnLogicals` keys on the spec's EXACT `schemaName`, while the facts carry the
+  // lower-cased Dataverse logical name — so resolve back to the declared spelling first.
+  const ent = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === entityLogical);
   if (!ent) return null;
-  const cols = new Set((ent.columns || []).map((c) => lcName(c && c.schemaName)));
-  if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(lcName(ent.primaryAttribute.schemaName));
-  for (const r of spec.relationships || []) {
-    if (r && r.type !== 'ManyToMany' && lcName(r.referencing) === entityLogical) {
-      cols.add(lcName(r.lookupName || `${String(r.referenced || '').toLowerCase()}id`));
-    }
-  }
-  return cols;
-}
+  return declaredColumnLogicals(spec, ent.schemaName);
+};
 
 ASSERTIONS.set('process: every business rule binds only columns the spec creates', ({ facts, spec }) => {
   const rules = (facts.process && facts.process.rules) || [];
@@ -417,14 +421,15 @@ ASSERTIONS.set('the BPF stage order is Intake, Investigate, Resolve and every st
   return unbound.length ? fail(`step(s) with no field: ${unbound.join(', ')}`) : PASS;
 });
 
-ASSERTIONS.set('the BPF binds the relationship lookup new_customerid, not just the case table’s own columns', ({ facts }) => {
+ASSERTIONS.set('the BPF binds the relationship lookup new_accountref, not just the case table’s own columns', ({ facts }) => {
   // A lookup column exists only because a relationship creates it, so it is absent from the
-  // entity's `columns[]`. A binding check that consulted only `columns[]` would reject this
-  // perfectly valid step — the guard has to know where lookups come from.
+  // entity's `columns[]`. The fixture deliberately gives it a NON-DEFAULT name: an oracle that
+  // guessed `<referenced>id` would agree with `new_customerid` here and so could neither reject a
+  // builder that emitted the wrong column nor accept the right one.
   const flow = (facts.process.flows || [])[0];
   if (!flow) return fail('no business process flow fact');
   const fields = flow.steps.map((s) => s.field);
-  return fields.includes('new_customerid') ? PASS : fail(`bound fields = [${fields}]`);
+  return fields.includes('new_accountref') ? PASS : fail(`bound fields = [${fields}]`);
 });
 
 ASSERTIONS.set('a rule with two conditions compiles both, ANDed, and neither is dropped', ({ facts }) => {

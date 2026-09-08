@@ -36,7 +36,7 @@
       "type": "OneToMany",
       "referenced": "new_customer",
       "referencing": "new_case",
-      "lookup": { "schemaName": "new_CustomerId", "displayName": "Customer" }
+      "lookup": { "schemaName": "new_AccountRef", "displayName": "Customer" }
     }
   ],
   "businessRules": [
@@ -80,7 +80,7 @@
           "name": "Intake",
           "steps": [
             { "name": "Subject", "field": "new_subject", "required": true },
-            { "name": "Customer", "field": "new_customerid", "required": true },
+            { "name": "Customer", "field": "new_accountref", "required": true },
             { "name": "Summary", "field": "new_summary" }
           ]
         },

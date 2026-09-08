@@ -157,7 +157,7 @@
       },
       "expectations": [
         "the BPF stage order is Intake, Investigate, Resolve and every step binds a declared column",
-        "the BPF binds the relationship lookup new_customerid, not just the case table’s own columns",
+        "the BPF binds the relationship lookup new_accountref, not just the case table’s own columns",
         "a rule with two conditions compiles both, ANDed, and neither is dropped",
         "every business rule and the process flow each get exactly one teardown step"
       ]

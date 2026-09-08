@@ -1942,6 +1942,22 @@ async function runSdkBuild(spec, opts = {}) {
           runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists — reuse; rule edits aren't applied on rebuild, recreate to change)`);
         }
         result.created.businessRules[`${entityLogical}|${rule.name}`] = existingId;
+        // Reconcile solution membership on the REUSE path too, for the same reason the BPF phase
+        // does. `addSolutionComponent` is otherwise only reached by the create branch, so a run
+        // where the rule was written but the component add failed — or a rule created by an earlier
+        // build of a DIFFERENT solution — is reused forever and never joins this one, leaving it out
+        // of export/import with nothing in the output saying so. The SDK treats an already-present
+        // component as success, so re-issuing it every build is safe.
+        //
+        // A failure here warns rather than halts: the rule itself is correct and running, and
+        // blocking an otherwise-good build over solution bookkeeping would be the worse outcome.
+        try {
+          await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
+        } catch (e) {
+          if (typeof opts.warn === 'function') {
+            opts.warn(`business rule "${rule.name}" on ${rule.entity} exists but could not be added to solution '${sol.uniqueName}' (${e && e.message}). The rule works, but it will not travel on solution export until it is added.`);
+          }
+        }
         continue;
       }
       await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
@@ -2143,11 +2159,27 @@ async function runSdkBuild(spec, opts = {}) {
             filter: `uniquename eq '${odataLit(unique)}'`,
             top: 5,
           });
-          clash = (rows || [])[0] || null;
+          const row = (rows || [])[0];
+          if (row) clash = `the flow "${row.name}"${row.primaryentity ? ` on ${row.primaryentity}` : ''}`;
         } catch { /* diagnostic only — fall through to the create */ }
+        // A flow is only ONE of the things that can own that name. Activation creates a real TABLE
+        // called `unique`, so an unrelated table already holding that logical name blocks the flow
+        // just as surely — and that table need not have come from any flow at all. Checking only
+        // `workflows` left the commonest environment-side collision undetected.
+        //
+        // `findTables` is the SDK's only table-existence surface and takes no server-side filter, so
+        // the match is made here. It runs ONLY on the create path (never on reuse), and the SDK
+        // caches the metadata read, so this does not add a per-build enumeration.
+        if (!clash && typeof provision.findTables === 'function') {
+          try {
+            const tables = await provision.findTables();
+            const owner = (tables || []).find((t) => t && String(t.logicalName || '').toLowerCase() === unique);
+            if (owner) clash = `the table '${owner.logicalName}'`;
+          } catch { /* diagnostic only */ }
+        }
         if (clash) {
           throw new BuildHalt(
-            `business process flow "${flow.name}" on ${flow.entity} cannot be created: the Dataverse unique name it derives ('${unique}') is already used by the flow "${clash.name}"${clash.primaryentity ? ` on ${clash.primaryentity}` : ''}. The derivation lower-cases the name, strips punctuation and always uses the 'new_' prefix, so two differently-spelled names can collide — and activation creates a backing table with that name, so only one can exist. Rename this flow, or remove the existing one.`,
+            `business process flow "${flow.name}" on ${flow.entity} cannot be created: the Dataverse unique name it derives ('${unique}') is already used by ${clash}. The derivation lower-cases the name, strips punctuation and always uses the 'new_' prefix, so two differently-spelled names can collide — and activation creates a backing TABLE with that name, so only one owner can exist. Rename this flow, or remove the existing one.`,
             { phase: 'business-process-flows', code: 'bpf-unique-name-conflict', recoverable: false });
         }
         // The whole flow — including its stages and steps — is carried on the CREATE payload. The

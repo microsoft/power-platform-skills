@@ -908,6 +908,21 @@ function validateAppSpec(spec, opts = {}) {
   }
   const entityNames = new Set();
   const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
+  // Describe a rejected value for an error message WITHOUT being able to throw doing it.
+  // `JSON.stringify` throws on a BigInt and on a getter that throws, which would turn a structured
+  // validation error into a raw crash — the exact outcome this validator exists to prevent.
+  const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
+  // A table reference an author writes becomes a Dataverse METADATA NAME, so it has to be a string
+  // BEFORE it is compared. `String([["new_ticket"]])` is `"new_ticket"`, so a nested array passes an
+  // entity-membership check and then throws a raw TypeError deep in the build, where the engine
+  // calls `.toLowerCase()` on the array itself. It is the same trap as `views[].columns` (#525):
+  // coercing during validation makes the validator agree with a value the builder cannot use.
+  // Returns true when it reported a problem, so callers can `continue`.
+  const badEntityRef = (value, where) => {
+    if (typeof value === 'string' && value.trim()) return false;
+    errors.push(`${where}: entity must be a table name (a string), got ${describeValue(value)}`);
+    return true;
+  };
   for (const e of spec.entities || []) {
     if (!e.schemaName) {
       errors.push('entity.schemaName is required');
@@ -1109,6 +1124,7 @@ function validateAppSpec(spec, opts = {}) {
             errors.push(`form ${f.entity}: a subgrid is missing childEntity`);
             continue;
           }
+          if (badEntityRef(sg.childEntity, `form ${f.entity}: subgrid childEntity`)) continue;
           if (!entityByLower.has(String(sg.childEntity).toLowerCase())) {
             errors.push(`form ${f.entity}: subgrid references unknown childEntity '${sg.childEntity}'`);
             continue;
@@ -1145,7 +1161,8 @@ function validateAppSpec(spec, opts = {}) {
   }
   for (const ch of spec.charts || []) {
     validateDescription(ch && ch.description, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`, errors);
-    if (!ch || !ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
+    if (!ch || badEntityRef(ch.entity, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`)) continue;
+    if (!ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
       errors.push(`chart references unknown entity '${ch && ch.entity}'`);
       continue;
     }
@@ -1187,7 +1204,7 @@ function validateAppSpec(spec, opts = {}) {
     // fields, so an author moving between the two surfaces writes it naturally.
     const attrRef = (value, where) => {
       if (typeof value !== 'string' || !value.trim()) {
-        errors.push(`${vlabel}: ${where} must be a non-empty column name (a string), got ${JSON.stringify(value)}`);
+        errors.push(`${vlabel}: ${where} must be a non-empty column name (a string), got ${describeValue(value)}`);
       }
     };
     if (v && v.columns !== undefined) {
@@ -1488,6 +1505,7 @@ function validateAppSpec(spec, opts = {}) {
         if (byId) {
           if (!t.viewId) errors.push(`dashboard '${d.name}': chart tile with visualizationId also needs viewId`);
           if (!t.entity) errors.push(`dashboard '${d.name}': id-based chart tile needs entity`);
+          else badEntityRef(t.entity, `dashboard '${d.name}': chart tile`);
         } else {
           if (!t.chart || !chartNamesSet.has(t.chart)) errors.push(`dashboard '${d.name}': chart tile references unknown chart '${t.chart}'`);
           if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': chart tile needs a declared view for its data — '${t.view}' not found`);
@@ -1495,6 +1513,7 @@ function validateAppSpec(spec, opts = {}) {
       } else if (t.type === 'list') {
         if (byId) {
           if (!t.entity) errors.push(`dashboard '${d.name}': id-based list tile needs entity`);
+          else badEntityRef(t.entity, `dashboard '${d.name}': list tile`);
         } else if (!t.view || !viewNamesSet.has(t.view)) {
           errors.push(`dashboard '${d.name}': list tile references unknown view '${t.view}'`);
         }
@@ -1741,7 +1760,7 @@ function validateAppSpec(spec, opts = {}) {
         // (`Account`), and a sitemap subarea's `entity` comes from the deployed sitemap XML as a
         // LOGICAL name. A downloaded spec therefore legitimately pairs `schemaName: "Account"` with
         // `entity: "account"`. Matches the chart check above, which already uses `entityByLower`.
-        if (sa.entity && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
+        if (sa.entity && !badEntityRef(sa.entity, 'sitemap subArea') && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
         // A sitemap URL subarea is EITHER a real link OR a web-resource reference —
         // `$webresource:<name>` (what the Site Map Designer writes for a "custom page backed by an

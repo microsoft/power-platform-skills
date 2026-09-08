@@ -762,10 +762,11 @@ works through.
   `"Ticket"` derives `new_ticket`; if the spec declares a table `new_ticket`, the flow cannot
   deploy — and because the prefix is always `new_`, this is easy to hit on a spec using the default
   `new` publisher prefix. Validation rejects that too, naming both. A collision the spec cannot see
-  (a rename between builds that preserves the derived name, or a flow already in the environment)
-  is caught at build time by a probe on the derived name, which **halts** naming the conflicting
-  flow rather than letting the create fail with a platform error about a table you never mentioned.
-  The probe is best-effort — if it cannot run, the build proceeds.
+  (a rename between builds that preserves the derived name, or a flow — or a table — already in the
+  environment) is caught at build time by a probe that checks both `workflows` and table metadata,
+  and **halts** naming whichever owns the name rather than letting the create fail with a platform
+  error about a table you never mentioned. The probe is best-effort — if it cannot run, the build
+  proceeds.
 - **Every step must bind a `field`**, and it must be a column on the flow's own `entity` (its own
   columns, its primary name, or a lookup a relationship creates). The platform rejects a step with no
   column outright — `datafieldname of ControlStep cannot be null or empty` — so there is no such

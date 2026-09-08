@@ -896,3 +896,20 @@ test('without a pre-resolved language the data-model phase still resolves one it
   assert.ok(withLang.length > 0 && withLang.every((o) => o.languageCode === 1031),
     'the org base language is still resolved when nothing was pre-resolved');
 });
+
+test('requireSuccessfulPush keeps the re-download remedy for the SDK\u0027s own VERSION_CONFLICT code', () => {
+  // The regression this pins: the "report an unrecognised code verbatim" branch swallowed the 412
+  // remedy, because the REAL bundle attaches `code: "VERSION_CONFLICT"` to a version conflict while
+  // every fixture here used a code-less error. So the guard still halted, but the one instruction
+  // the operator needs — re-download, never overwrite a concurrent edit — silently disappeared.
+  const err = Object.assign(new Error('Version conflict'), { code: 'VERSION_CONFLICT' });
+  assert.throws(
+    () => requireSuccessfulPush({ type: 'form', id: 'f1', saved: false, error: err }, 'form F'),
+    (e) => {
+      assert.strictEqual(e.name, 'BuildHalt');
+      assert.strictEqual(e.code, 'version-conflict', `got ${e.code}`);
+      assert.match(e.message, /re-download the app and rebuild/, 'the remedy must survive');
+      return true;
+    }
+  );
+});
