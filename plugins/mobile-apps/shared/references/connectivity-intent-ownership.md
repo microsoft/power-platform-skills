@@ -8,7 +8,11 @@ explicit connectivity-diagnostic features.
 
 After a Dataverse model is materialized, the create flow offers
 `/setup-offline-profile`. That skill owns which Dataverse tables and columns
-are available offline. Mobile Offline Profile setup does not add generated
+are available offline. The bundled `@microsoft/power-apps-native-offline`
+package is consumed by `@microsoft/power-apps-native-host`: a valid
+`offline-profile.json` activates local SQLite reads/writes, queued
+synchronization, reconnect behavior, and the host-rendered status overlay.
+Mobile Offline Profile setup therefore does not add duplicate generated
 screens, routes, sync controls, queues, banners, or record-status UI.
 
 An explicit product requirement for a custom connectivity diagnostic or an

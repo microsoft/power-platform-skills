@@ -38,6 +38,9 @@ const connectivityOwnership = fs.readFileSync(
   path.join(pluginRoot, 'shared', 'references', 'connectivity-intent-ownership.md'),
   'utf8',
 );
+const templatePackage = JSON.parse(
+  fs.readFileSync(path.join(pluginRoot, 'template', 'package.json'), 'utf8'),
+);
 
 function section(source, start, end) {
   const startIndex = source.indexOf(start);
@@ -63,6 +66,14 @@ test('connectivity wording is owned by the post-materialization offline flow', (
     /offline-first[\s\S]*limited or[\s\S]*intermittent connectivity[\s\S]*no connectivity/i,
   );
   assert.match(connectivityOwnership, /operating\s+context only/i);
+  assert.equal(
+    typeof templatePackage.dependencies['@microsoft/power-apps-native-offline'],
+    'string',
+  );
+  assert.match(
+    connectivityOwnership,
+    /power-apps-native-host[\s\S]*local SQLite[\s\S]*status overlay/i,
+  );
   assert.match(universalPatterns, /approved product requirement.*app-owned sync queue/is);
   assert.doesNotMatch(requirementsDiscovery, /Camera capability \+ image column/);
 });
