@@ -28,20 +28,31 @@ function readPriorEvents(projectRoot, env = process.env) {
   if (!appInstanceId || !cfg || cfg.disabled === true || isTransmissionOptedOut(configDir, 'mobile-app', env)) return [];
   const records = [];
   const sessionsRoot = pluginLogDir(configDir, 'mobile-app');
-  try {
-    for (const file of fs.readdirSync(sessionsRoot, { recursive: true, withFileTypes: true })) {
-      if (!file.isFile() || !/^events(?:\.jsonl|\.\d{14}\.old)$/.test(file.name)) continue;
-      let contents;
-      try { contents = fs.readFileSync(path.join(file.parentPath || file.path, file.name), 'utf8'); } catch { continue; }
-      for (const line of contents.split('\n')) {
-        try {
-          const record = JSON.parse(line);
-          if (record.data?.pluginName === 'mobile-app' && record.data?.eventInfo?.appInstanceId === appInstanceId &&
-              Number.isFinite(Date.parse(record.time))) records.push(record);
-        } catch { /* Skip malformed or incomplete JSONL records. */ }
+  // Carry each parent directory explicitly so nested logs do not depend on
+  // Dirent.parentPath or the deprecated Dirent.path metadata.
+  const directories = [sessionsRoot];
+  while (directories.length) {
+    const directory = directories.pop();
+    try {
+      for (const file of fs.readdirSync(directory, { withFileTypes: true })) {
+        const filePath = path.join(directory, file.name);
+        if (file.isDirectory()) {
+          directories.push(filePath);
+          continue;
+        }
+        if (!file.isFile() || !/^events(?:\.jsonl|\.\d{14}\.old)$/.test(file.name)) continue;
+        let contents;
+        try { contents = fs.readFileSync(filePath, 'utf8'); } catch { continue; }
+        for (const line of contents.split('\n')) {
+          try {
+            const record = JSON.parse(line);
+            if (record.data?.pluginName === 'mobile-app' && record.data?.eventInfo?.appInstanceId === appInstanceId &&
+                Number.isFinite(Date.parse(record.time))) records.push(record);
+          } catch { /* Skip malformed or incomplete JSONL records. */ }
+        }
       }
-    }
-  } catch { /* Missing or pruned logs must not block environment resolution. */ }
+    } catch { /* Missing or pruned logs must not block environment resolution. */ }
+  }
   return records.sort((first, second) => Date.parse(first.time) - Date.parse(second.time));
 }
 

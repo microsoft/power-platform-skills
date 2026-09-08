@@ -13,6 +13,42 @@ const { readPriorEvents } = require('../lib/mobile-telemetry-dispatcher');
 const appInstanceId = '11111111-1111-4111-8111-111111111111';
 const environmentId = '22222222-2222-4222-8222-222222222222';
 
+test('prior event scan reads nested and rotated logs without Dirent path metadata', (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-replay-paths-'));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const configDir = path.join(root, 'config');
+  const env = { POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+    POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '' };
+  fs.writeFileSync(path.join(root, 'app.json'), JSON.stringify({
+    expo: { extra: { telemetry: { appInstanceId, cluster: null } } },
+  }));
+  const makeRecord = (sessionId, time) => ({
+    time, name: 'event',
+    data: { pluginName: 'mobile-app', eventName: 'skill_started', sessionId,
+      eventInfo: { appInstanceId } },
+  });
+  const records = [
+    makeRecord('older', '2026-09-07T01:00:00.000Z'),
+    makeRecord('newer', '2026-09-07T02:00:00.000Z'),
+  ];
+  for (const record of records) appendLocal(record, { configDir });
+  const history = path.join(configDir, 'telemetry', 'mobile-app', 'sessions', 'older');
+  fs.renameSync(path.join(history, 'events.jsonl'), path.join(history, 'events.20260907010000.old'));
+
+  const readDirectory = fs.readdirSync;
+  context.mock.method(fs, 'readdirSync', (directory, options) => {
+    const entries = readDirectory(directory, options);
+    if (!options?.withFileTypes) return entries;
+    return entries.map((entry) => ({
+      name: entry.name,
+      isFile: () => entry.isFile(),
+      isDirectory: () => entry.isDirectory(),
+    }));
+  });
+
+  assert.deepEqual(readPriorEvents(root, env), records);
+});
+
 test('first resolution replays this app across sessions without duplicating logs or replaying twice', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-replay-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
