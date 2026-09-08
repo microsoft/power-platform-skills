@@ -6,6 +6,13 @@ const path = require('path');
 
 const MANIFEST_NAME = '.powerpages-localization.json';
 const REGISTRY_PATH = path.join(__dirname, '..', '..', 'references', 'bcp47-subtags.json');
+const LOCALE_NAVIGATION_PATTERN =
+  /LanguageSelector|language selector|locale-switcher|switchLanguage|changeLanguage|setActiveLang|setLocale|getRelativeLocaleUrl|hreflang/i;
+
+function hasLocaleNavigationSignal(text) {
+  return LOCALE_NAVIGATION_PATTERN.test(String(text || ''));
+}
+
 const LOCALIZATION_CAPABILITIES = Object.freeze({
   frameworks: Object.freeze({
     react: Object.freeze({
@@ -772,7 +779,7 @@ function discoverLocalizationImplementation(
     bytesRead += fileBytes;
     files.push(relativePath);
     signals.initialization ||= Boolean(initializationPatterns[framework]?.test(text));
-    signals.selector ||= /LanguageSelector|language selector|locale-switcher|switchLanguage|changeLanguage|setActiveLang|setLocale|getRelativeLocaleUrl|hreflang/i.test(text);
+    signals.selector ||= hasLocaleNavigationSignal(text);
     signals.lang ||= /\bhtmlLang\b|documentElement\.lang|setAttribute\(['"]lang|<html\b[^>]*\blang=/i.test(text);
     signals.dir ||= /\bhtmlDir\b|documentElement\.dir|setAttribute\(['"]dir|<html\b[^>]*\bdir=/i.test(text);
     if (Object.values(signals).every(Boolean)) break;
@@ -996,6 +1003,7 @@ module.exports = {
   LOCALIZATION_CAPABILITIES,
   MANIFEST_NAME,
   KNOWN_PACKAGES,
+  hasLocaleNavigationSignal,
   detectFramework,
   detectLocalization,
   inspectProject,
