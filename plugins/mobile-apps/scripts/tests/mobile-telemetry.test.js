@@ -18,6 +18,7 @@ const {
 } = require('../emit-telemetry-checkpoint');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
+const { readProcessScope } = require('../lib/mobile-telemetry-session');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -134,6 +135,40 @@ test('provisioned context uses host session and isolated config paths', () => {
   assert.ok(context);
   assert.equal(context.sessionId, 'session-1');
   assert.equal(context.eventStreamName, 'MobileAppsTestEvent');
+});
+
+test('Windows session lookup requests only identity fields within the hook deadline', () => {
+  let command;
+  const scope = readProcessScope({
+    platform: 'win32',
+    parentPid: 300,
+    exec: (executable, args, options) => {
+      command = { executable, args, options };
+      return JSON.stringify([
+        { ProcessId: 300, ParentProcessId: 200, CreationDate: '/Date(1788850001000)/', Name: 'cmd.exe' },
+        { ProcessId: 200, ParentProcessId: 100, CreationDate: '/Date(1788850000000)/', Name: 'C:\\Program Files\\nodejs\\node.exe' },
+      ]);
+    },
+  });
+
+  assert.equal(scope, '200:/Date(1788850000000)/');
+  assert.equal(command.executable, 'powershell.exe');
+  assert.ok(command.args.includes('-NoProfile'));
+  assert.ok(command.args.includes('-NonInteractive'));
+  assert.match(command.args.at(-1), /Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate,Name/);
+  assert.doesNotMatch(command.args.at(-1), /CommandLine|ExecutablePath/);
+  assert.ok(command.options.timeout >= 5000 && command.options.timeout < 10000,
+    'allow bounded PowerShell startup time while staying below the ten-second hook deadline');
+});
+
+test('Windows session lookup remains fail-open when process metadata is unavailable', () => {
+  for (const code of ['ETIMEDOUT', 'ENOENT']) {
+    assert.equal(readProcessScope({
+      platform: 'win32',
+      exec: () => { throw Object.assign(new Error('Process metadata unavailable'), { code }); },
+    }), '');
+  }
+  assert.equal(readProcessScope({ platform: 'win32', exec: () => '{incomplete' }), '');
 });
 
 test('nested Copilot call resolves to its owning root session', (t) => {

@@ -15,15 +15,18 @@ function readProcessScope(opts = {}) {
   let scope = '';
   try {
     const commandOptions = {
-      encoding: 'utf8', timeout: 2000, maxBuffer: 2 * 1024 * 1024,
+      // PowerShell/CIM cold starts can exceed two seconds on busy Windows hosts.
+      // Keep the lookup bounded below the telemetry hook's ten-second deadline.
+      encoding: 'utf8', timeout: platform === 'win32' ? 5000 : 2000, maxBuffer: 2 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
       env: { ...process.env, LC_ALL: 'C' },
     };
     let rows;
     if (platform === 'win32') {
+      // Request only identity fields from CIM, not unused command lines or paths.
       const output = exec('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-Command',
-        'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate,Name | ConvertTo-Json -Compress',
+        'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate,Name | Select-Object ProcessId,ParentProcessId,CreationDate,Name | ConvertTo-Json -Compress',
       ], commandOptions);
       rows = [].concat(JSON.parse(output)).map((row) => ({
         pid: Number(row.ProcessId), parent: Number(row.ParentProcessId),
