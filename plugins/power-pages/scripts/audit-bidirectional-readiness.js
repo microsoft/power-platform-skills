@@ -3,14 +3,14 @@
 
 const path = require('path');
 const { auditBidirectionalReadiness } = require('./lib/bidirectional-readiness');
+const {
+  parseOptionalProjectRootArgs,
+} = require('./lib/cli-arguments');
 
-function parseArgs(argv) {
-  const args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === '--projectRoot') args.projectRoot = argv[index + 1];
-  }
-  return args;
-}
+const USAGE =
+  'Usage: audit-bidirectional-readiness.js [--projectRoot <path>]';
+
+const parseArgs = (argv) => parseOptionalProjectRootArgs(argv, USAGE);
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -20,6 +20,13 @@ function main() {
   if (result.summary.error > 0) process.exitCode = 1;
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 2;
+  }
+}
 
 module.exports = { parseArgs };

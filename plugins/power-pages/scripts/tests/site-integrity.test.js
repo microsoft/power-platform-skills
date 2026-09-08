@@ -8,11 +8,52 @@ const {
   validateSiteIntegrity,
 } = require('../lib/site-integrity');
 const {
+  parseArgs,
+} = require('../validate-site-integrity');
+const {
   createTempProject,
   writeProjectFile,
 } = require('./test-utils');
 
 const CLI_PATH = path.join(__dirname, '..', 'validate-site-integrity.js');
+
+test('parses an optional project root without consuming other options', () => {
+  assert.deepEqual(parseArgs([]), {});
+  assert.equal(parseArgs(['--projectRoot', '.']).projectRoot, path.resolve('.'));
+  assert.throws(
+    () => parseArgs(['--projectRoot']),
+    /"--projectRoot" requires a value/
+  );
+  assert.throws(
+    () => parseArgs(['--projectRoot', '--unexpected']),
+    /"--projectRoot" requires a value/
+  );
+  assert.throws(
+    () => parseArgs(['--projectRoot', '']),
+    /"--projectRoot" requires a value/
+  );
+  assert.throws(
+    () => parseArgs(['--projectRoot', '.', '--projectRoot', '..']),
+    /"--projectRoot" may be specified only once/
+  );
+  assert.throws(
+    () => parseArgs(['--unexpected']),
+    /Unknown or misplaced argument "--unexpected"/
+  );
+});
+
+test('CLI reports malformed project-root usage without validating another path', () => {
+  const result = spawnSync(
+    process.execPath,
+    [CLI_PATH, '--projectRoot', '--unexpected'],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /"--projectRoot" requires a value/);
+  assert.match(result.stderr, /Usage: validate-site-integrity/);
+});
 
 test('skips declarative Power Pages projects', (t) => {
   const projectRoot = createTempProject(t);
