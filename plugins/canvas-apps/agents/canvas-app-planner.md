@@ -19,6 +19,13 @@ tools:
     - mcp__canvas-authoring__describe_api
     - mcp__canvas-authoring__list_data_sources
     - mcp__canvas-authoring__get_data_source_schema
+    - canvas-authoring/compile_canvas
+    - canvas-authoring/list_controls
+    - canvas-authoring/describe_control
+    - canvas-authoring/list_apis
+    - canvas-authoring/describe_api
+    - canvas-authoring/list_data_sources
+    - canvas-authoring/get_data_source_schema
 ---
 
 # Canvas App Plan Writer
