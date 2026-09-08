@@ -142,7 +142,7 @@ test('data platform and integrations are approved before Dataverse modeling', ()
   assert.doesNotMatch(`${planner}\n${architect}\n${screenPlanner}`, /Gate 4a|Gate 4b/);
   assert.match(
     architect,
-    /BLOCKED: data-model-architect must not be dispatched in connector-only mode/i,
+    /BLOCKED: This step only applies when Dataverse is selected/i,
   );
 });
 
@@ -171,6 +171,8 @@ test('offline profile opt-in runs after Dataverse materialization and before nat
   const native = createSkill.indexOf('### Step 9 — Apply native capabilities');
   assert.ok(sampleData > 0 && sampleData < offline);
   assert.ok(offline < native);
+  assert.match(createSkill, /→ \[Offline profile\] Asking whether/i);
+  assert.doesNotMatch(createSkill, /Step 8\.6 — Offline profile/);
   assert.match(
     createSkill,
     /missing, malformed, or contains no Dataverse[\s\S]*BLOCKED: Dataverse materialization/i,

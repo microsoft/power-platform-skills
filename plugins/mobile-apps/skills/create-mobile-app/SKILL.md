@@ -1564,7 +1564,7 @@ retry.
 ### Offline profile (Dataverse-backed apps)
 
 **Print before starting:**
-> "→ Asking whether to set up a Mobile Offline Profile…"
+> "→ [Offline profile] Asking whether to set up a Mobile Offline Profile…"
 
 Mobile Offline Profiles let the runtime package continue against Dataverse
 when connectivity is unavailable and synchronize queued changes later. This phase owns Mobile Offline Profile opt-in. Apply

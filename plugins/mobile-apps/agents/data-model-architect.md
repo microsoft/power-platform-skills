@@ -96,7 +96,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 When `Dataverse planning mode: connector-only` is supplied, return:
 
-`BLOCKED: data-model-architect must not be dispatched in connector-only mode`
+`BLOCKED: This step only applies when Dataverse is selected. Continue the connector-based app plan without data-model planning.`
 
 Do not read metadata or write planning artifacts. The native app planner owns
 the explicit zero-table connector-only section.
