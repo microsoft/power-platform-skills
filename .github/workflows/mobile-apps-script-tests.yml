@@ -1,0 +1,104 @@
+# Functional unit tests for the mobile-apps plugin across supported operating
+# systems and Node versions. These scripts spawn Azure CLI shims and manipulate
+# filesystem paths, so cross-platform coverage protects real behavior.
+name: mobile-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/mobile-apps/**"
+            - ".github/workflows/mobile-apps-script-tests.yml"
+
+jobs:
+    test-mobile-apps-scripts:
+        name: test-mobile-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: ${{ matrix.node }}
+
+            - name: run-mobile-apps-script-tests
+              shell: bash
+              working-directory: plugins/mobile-apps
+              run: node --test scripts/tests/*.test.js
+
+    test-mobile-apps-template:
+        name: test-mobile-apps-template (ubuntu, node 22)
+        runs-on: ubuntu-latest
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: 22
+
+            - name: install-template-dependencies
+              shell: bash
+              working-directory: plugins/mobile-apps/template
+              run: npm install --no-audit --no-fund
+
+            - name: prepare-and-type-check-template
+              shell: bash
+              working-directory: plugins/mobile-apps/template
+              run: |
+                  node - <<'NODE'
+                  for (const specifier of [
+                    '@microsoft/power-apps-native-host/config/expoConfig',
+                    '@microsoft/power-apps-native-host/config/babelConfig',
+                    '@microsoft/power-apps-native-host/config/metroConfig',
+                    '@microsoft/power-apps-native-host/config/tamaguiConfig',
+                    '@microsoft/power-apps-native-host/config/tsconfig',
+                  ]) {
+                    require.resolve(specifier);
+                  }
+                  NODE
+                  node ../scripts/prepare-mobile-template.js \
+                    --working-dir . \
+                    --display-name "Template Quality Probe" \
+                    --slug "template-quality-probe"
+                  node - <<'NODE'
+                  const fs = require('fs');
+                  const files = {
+                    'src/components/AliasProbe.ts': 'export const componentAliasProbe = 1;\n',
+                    'src/native/aliasProbe.ts': 'export const nativeAliasProbe = 2;\n',
+                    'src/generated/services/AliasProbe.ts': 'export const generatedAliasProbe = 3;\n',
+                    'src/alias-resolution-probe.ts': [
+                      "import { componentAliasProbe } from '@/components/AliasProbe';",
+                      "import { nativeAliasProbe } from '@/native/aliasProbe';",
+                      "import { generatedAliasProbe } from '@/generated/services/AliasProbe';",
+                      'export const aliasProbe = componentAliasProbe + nativeAliasProbe + generatedAliasProbe;',
+                      '',
+                    ].join('\n'),
+                  };
+                  for (const [file, content] of Object.entries(files)) {
+                    fs.mkdirSync(require('path').dirname(file), { recursive: true });
+                    fs.writeFileSync(file, content);
+                  }
+                  NODE
+                  npx tsc --noEmit
+                  node ../scripts/validate-mobile-files.js \
+                    --project-root . \
+                    --all-source

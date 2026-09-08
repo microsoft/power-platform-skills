@@ -149,17 +149,37 @@ function getAzAccessToken(resourceUrl, tenantId = null) {
  * Gets an Azure CLI access token for the given resource URL.
  * Targets the env's tenant from Dataverse auth challenge when available.
  * Falls back to the active az tenant and then unqualified az token lookup.
+ * @param {string} resourceUrl Dataverse resource URL to request a token for
+ * @param {string|null} explicitTenantId Resolved environment tenant; skips tenant discovery when valid
  * @returns {Promise<string|null>} Access token, or null if unavailable
  */
-async function getAuthToken(resourceUrl) {
-  const tenantCandidates = [
-    process.env.POWER_PLATFORM_TENANT_ID,
-    process.env.DATAVERSE_TENANT_ID,
-    await getDataverseTenantFromChallenge(resourceUrl),
-    getAzAccountTenantId(),
-  ].filter(Boolean);
+async function getAuthToken(resourceUrl, explicitTenantId = null) {
+  // Candidates are produced LAZILY, in priority order. This used to be an array
+  // literal, and an array literal evaluates every element before `.filter()`
+  // runs — so each call paid for the WWW-Authenticate probe AND an
+  // `az account show` spawn even when an env var already supplied the tenant.
+  // `az account show` measured ~4.9s on a warm macOS box (it resolves the whole
+  // subscription context, not just the tenant), and a single data-model run
+  // issues dozens of Dataverse calls, so that dominated wall-clock time.
+  // Short-circuiting preserves the exact preference order and fallback below —
+  // it only skips work once a candidate has already minted a token.
+  const candidateProducers = [
+    () => explicitTenantId,
+    () => process.env.POWER_PLATFORM_TENANT_ID,
+    () => process.env.DATAVERSE_TENANT_ID,
+    () => getDataverseTenantFromChallenge(resourceUrl),
+    () => getAzAccountTenantId(),
+  ];
 
-  for (const tenantId of [...new Set(tenantCandidates)]) {
+  // Mirrors the previous `.filter(Boolean)` + `new Set(...)` de-duplication:
+  // skip empty candidates, and never re-attempt a tenant an earlier producer
+  // already tried (common when the env var and the az account agree).
+  const attempted = new Set();
+  for (const produce of candidateProducers) {
+    // Producers are a mix of sync and async; `await` normalizes both.
+    const tenantId = await produce();
+    if (!tenantId || attempted.has(tenantId)) continue;
+    attempted.add(tenantId);
     const token = getAzAccessToken(resourceUrl, tenantId);
     if (token) return token;
   }

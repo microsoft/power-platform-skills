@@ -2,6 +2,62 @@
 
 Critical patterns for working with Dataverse in Power Apps code apps. **Read this before writing any Dataverse code.**
 
+## Approved operation manifests
+
+Fast-v2 create flows use
+`scripts/build-dataverse-operation-manifest.js` to reconcile the normalized
+schema contract against a fresh bounded execution reconciliation performed in
+Step 8. The foreground planning snapshot is evidence only and never authorizes
+writes. The manifest is bound to the environment, tenant when available,
+publisher, solution, plan hash, structured-schema hash, reconciliation
+hash/timestamp, approved-contract hash, gate-owned approval-receipt hash, and
+manifest version. The planner/orchestrator initializes
+`.tmp/mobile-plan-status.json` when data-model approval is accepted and
+advances it only as the existing later gates approve the final plan and
+screen/service dependencies. Step 8 can only consume and verify this receipt;
+the manifest tool exposes no receipt-creation/restamping mode. Any changed plan
+or contract must return through the affected existing approval gate before the
+orchestrator refreshes the receipt. Validate it with
+`--require-executable` immediately before writes. Validation deterministically
+rebuilds the expected manifest and compares all decisions, services, aliases,
+phases, API paths, and bodies; a recomputed integrity hash cannot legitimize
+tampering. Step 8 verifies both the fully approved plan content hash and
+approved contract content hash before recording their binding in the
+normalized schema artifact; no free-form Markdown semantic parser is used.
+This assumes the existing non-adversarial local-filesystem workflow trust
+model: hashes detect stale, accidental, or out-of-workflow replacement, but
+are not signatures against a malicious local process able to rewrite every
+artifact.
+
+Its phases are fixed and sequential: table creates with ordinary columns
+inline → extensions → relationships/lookups → alternate keys → publish.
+Execution uses `BATCH-METADATA`, which is one-process sequential HTTP, never
+OData `$batch`. Service generation remains separate and sequential. Any stale,
+mismatched, incomplete, or `unverified` supplied manifest is non-executable
+and fails closed. Only an absent fast-path handoff uses standalone
+reconciliation. A non-executable candidate permits no writes. Approved
+`Reuse`, `Adapt`, and `Defer` decisions come only from the structured schema;
+the script verifies them mechanically and never parses free-form Markdown into
+operations. Calculated/rollup/formula creation remains unsupported.
+Lookup/1:N and M:N creation also requires fresh managed-property evidence for
+the relevant endpoint relationship capabilities; missing evidence is not
+treated as permission to write.
+File and Image attributes are canonicalized from Dataverse's base
+`AttributeType=Virtual` plus `AttributeTypeName=FileType|ImageType` before
+compatibility checks. Their typed size/dimension evidence must still match;
+another virtual type remains incompatible.
+
+Before schema writes, persist the manifest's bound
+`.tmp/dataverse-publish-pending.json`. Keep it on any failure and delete it
+only after `PublishXml` succeeds. A rerun may therefore contain zero schema
+creates but still execute one required publish retry; after successful publish
+and checkpoint deletion, a fully applied rerun emits zero metadata POSTs.
+`BATCH-METADATA` also journals `inFlight` and completed operation fingerprints
+atomically. An uncertain resume requires a new bounded reconciliation and a
+fully regenerated manifest before the runner will continue. All request paths
+share the awaited `Retry-After` parser for both numeric seconds and HTTP-date
+values, with a bounded fallback for malformed or missing headers.
+
 ## Choice/Picklist Fields - CRITICAL
 
 Choice fields (`PicklistType`) store **integer values**, not string labels. The schema defines both:
@@ -239,16 +295,26 @@ The lookup POST will 404 unless **both** endpoint tables already exist. Ensure:
 Lookup properties (`_fieldname_value`) are **read-only**. To set a relationship, use the **single-valued navigation property** with `@odata.bind`:
 
 ```typescript
-// CORRECT - Use @odata.bind for lookup fields
-const newRecord: any = {
+// CORRECT for generated services: copy the exact key from the generated model.
+type CreateFields = Pick<
+  Parameters<typeof ExampleService.create>[0],
+  'prefix_name' | 'prefix_parentaccountid@odata.bind' | 'prefix_status'
+>;
+const newRecord: CreateFields = {
   'prefix_name': 'My Record',
-  'prefix_ParentAccount@odata.bind': `/accounts(${accountGuid})`,
+  'prefix_parentaccountid@odata.bind': `/accounts(${accountGuid})`,
   'prefix_status': 100000000
 };
 
 // WRONG - _value properties are read-only, cannot be set
 { '_prefix_parentaccountid_value': accountGuid }  // May fail on create
 ```
+
+Raw Dataverse Web API examples often use a case-sensitive navigation-property schema name. Generated Power Apps services instead expose their accepted write key in `src/generated/models/<Entity>Model.ts`. For generated services, that model declaration is authoritative; never convert it to PascalCase or hide an unverified key inside `Record<string, unknown>`.
+
+For filtering across lookups, avoid `lookupNavigation/relatedColumn eq ...` in generated mobile-service options. Resolve the related row through its generated service, then open the source generated model and copy the exact declared read lookup property corresponding to the planned lookup logical column (for example `_new_systemuserid_value` for `new_systemuserid`). Never substitute generic placeholders such as `_lookup_value` or `_systemuserlookup_value` into generated code.
+
+Dynamic route IDs used in Dataverse calls must be normalized with the shared `normalizeDataverseGuid` helper from `@/utils`. Do not generate an inline RFC UUID regex: Dataverse sequential GUIDs may not contain RFC version bits even though their hexadecimal `8-4-4-4-12` structure is valid.
 
 The `@odata.bind` value must be an entity set path with the GUID: `/<entitysetname>(<guid>)`
 

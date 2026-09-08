@@ -1,6 +1,6 @@
-# Canvas App YAML — Layout and Responsive Behaviour
+# Canvas App YAML — Layout and Responsive Behavior
 
-Sizing, positioning, scrolling, and the narrow-width behaviour that decides whether a
+Sizing, positioning, scrolling, and the narrow-width behavior that decides whether a
 screen works on a phone. The defects in this guide are invisible at the width you author
 and are reported by no compile diagnostic.
 
@@ -13,7 +13,7 @@ and are reported by no compile diagnostic.
 - Galleries are Classic — their rows do not reflow
 - Horizontal rows must reflow at narrow widths
 - Give labelled controls room for their longest value
-- Text colour must be set wherever you set a background
+- Text color must be set wherever you set a background
 - Never hard-code a layout width
 - The screen root must be able to scroll
 - Layout rules of thumb
@@ -74,7 +74,7 @@ For flexible, responsive designs:
 ```
 
 1. **Dynamic gallery height:**
-   `Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)`
+   `Height: =With({rowCount: CountRows(<same source/filter used by Items>)}, rowCount * Self.TemplateHeight + ((rowCount + 1) * Self.TemplatePadding))`
 2. **Container scrolling:** `LayoutOverflowY: =LayoutOverflow.Scroll`
 3. **AutoLayout child properties:** `AlignInContainer`, `FillPortions`,
    `LayoutMinWidth/Height`, `LayoutMaxWidth/Height`
@@ -102,8 +102,8 @@ layout scopes.
 
 GridLayout needs coordinated column, row and height math; a stale row count can produce a
 valid but visibly wrong screen. When planning a `GroupContainer` with
-`Variant: GridLayout`, use `${PLUGIN_ROOT}/references/GridLayoutGuide.md` and put its exact
-formulas in the screen brief. Builders do not read that conditional reference.
+`Variant: GridLayout`, use `${PLUGIN_ROOT}/references/GridLayoutGuide.md` and put its exact formulas in
+the screen brief. Builders do not read that conditional reference.
 
 ## Galleries are Classic — their rows do not reflow
 
@@ -207,11 +207,16 @@ directly.
 
 Small bounded lists should not create a second hidden scroll region. For a local roster
 of roughly ten or fewer rows inside a scrollable root, include every row and its template
-padding in the gallery height, then let the root scroll:
+padding in the gallery height, then let the root scroll. Count the gallery's source
+expression, not `Self.AllItemsCount`: rendered-item counts depend on the gallery having a
+non-zero height and can create a zero-height cycle.
 
 ```yaml
-Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)
+Height: =With({rowCount: CountRows(<same source/filter used by Items>)}, rowCount * Self.TemplateHeight + ((rowCount + 1) * Self.TemplatePadding))
 ```
+
+Use that same source count for empty-state visibility. Do not derive either property from
+`Self.AllItems`, `Self.AllItemsCount`, or another rendered gallery property.
 
 ## Give labelled controls room for their longest value
 
@@ -220,9 +225,9 @@ control sits in a horizontal row, set `FillPortions: =0` plus a `Width` (or
 `LayoutMinWidth`) that fits the longest value it can display, and set `Wrap: =false` on
 single-line text so it cannot silently become two lines.
 
-## Text colour must be set wherever you set a background
+## Text color must be set wherever you set a background
 
-Text controls do not inherit a contrasting colour from their container. A dark `Fill` with
+Text controls do not inherit a contrasting color from their container. A dark `Fill` with
 an unset `Color` renders near-black text on a near-black surface — technically valid and
 completely unreadable:
 

@@ -6,7 +6,7 @@ allowed-tools: Read, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Deploy
 
@@ -62,6 +62,8 @@ Platform.OS !== 'web' && !isDevPlayer && !hasConfiguredValue(powerConfig.appId)
 Web is **exempt**, and so is Dev Player. The Code App, `npm run dev`, and the browser preview all look perfectly healthy. The failure appears only in the **wrapped native app**, as a full-screen red *"App ID is missing — Push the mobile app to the Power Platform environment, rebuild it, and try again."* That is after a base-package wrap, a signed build, and a device install — the most expensive possible place to discover a one-line config gap.
 
 ### Step 2 — Build
+
+**Telemetry checkpoint: `build_power_apps_bundle`**
 
 **Print before starting:**
 > "→ Building production web bundle via `npm run build` (= `expo export --platform web`). ~30–90 seconds."
@@ -171,15 +173,17 @@ If a `package:*` step fails, surface the error and STOP. If the app renders bund
 
 ### Step 2.5 — Offline profile coverage gate
 
+**Telemetry checkpoint: `validate_offline_profile_coverage`**
+
 This is the final chance to catch schema that never made it into the Mobile Offline Profile before it ships — a table added to the data model but not the profile never syncs to devices, and a new column arrives blank offline. Validate that every schema change is covered **before** pushing.
 
 Run the local, no-network delta check (`.datamodel-manifest.json` vs `offline-profile.json`):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 ```
 
-Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md)):
+Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md)):
 
 | `status` | Action |
 |---|---|
@@ -201,12 +205,14 @@ Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md
 
 Options:
 
-- **Update the offline profile now (recommended)** — read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for each `missingTables[]` entry (or once with `--all-new`), then read and execute `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>` for each `tablesWithNewColumns[]` entry. Follow the ordering in the reconciliation reference, then re-run the delta check; when it reports `in-sync`, continue to Step 3.
+- **Update the offline profile now (recommended)** — read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for each `missingTables[]` entry (or once with `--all-new`), then read and execute `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>` for each `tablesWithNewColumns[]` entry. Follow the ordering in the reconciliation reference, then re-run the delta check; when it reports `in-sync`, continue to Step 3.
 - **Deploy anyway** — requires an explicit override. Wait for the exact phrase `deploy without offline` (case-insensitive); a bare `y`/`yes` is not enough, mirroring the environment-mismatch gate in Step 3. Then continue to Step 3 and note the skipped reconciliation in the Step 4 build-history row.
 
 Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly overridden).
 
 ### Step 3 — Deploy
+
+**Telemetry checkpoint: `push_app_to_power_platform`**
 
 **Resolve and confirm the target environment FIRST.** `npx power-apps push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
 
@@ -214,7 +220,7 @@ Run:
 
 ```bash
 ENV_ID=$(node -e "console.log(require('./power.config.json').environmentId)")
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ENV_ID"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ENV_ID"
 ```
 
 From `resolve-environment.js` capture the **Environment URL** (e.g. `https://contoso.crm.dynamics.com/`), **Environment ID**, and **Tenant ID**. Cross-check against `memory-bank.md` / `power.config.json`:
@@ -303,6 +309,6 @@ If they want to compile a native binary locally, they run the platform-specific 
 
 ## Reference
 
-- [`shared/version-check.md`](${CLAUDE_SKILL_DIR}/../../shared/version-check.md) — min versions (only Always-required tier matters here)
-- [`shared/memory-bank.md`](${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md) — Build history schema
-- [`shared/references/offline-profile-reconciliation.md`](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Step 2.5 offline coverage gate
+- [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — min versions (only Always-required tier matters here)
+- [`shared/memory-bank.md`](${PLUGIN_ROOT}/shared/memory-bank.md) — Build history schema
+- [`shared/references/offline-profile-reconciliation.md`](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md) — Step 2.5 offline coverage gate

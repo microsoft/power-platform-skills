@@ -11,7 +11,7 @@ The two design records the `/app-builder` engine cites, in one file. They were p
   partial-apply mode built on top of Part I. Read it before touching that mode.
 
 Current status of shipped/pending capabilities lives in
-[`app-builder-roadmap.md`](./app-builder-roadmap.md) — this file is the "why", the roadmap is the
+[`app-builder-capabilities.md`](./app-builder-capabilities.md) — this file is the "why", the capabilities doc is the
 "what/where". Wiring and flow diagrams live in [`architecture.md`](./architecture.md).
 
 ---
@@ -27,8 +27,8 @@ Current status of shipped/pending capabilities lives in
 > when trimming (§16 and §17 were removed without shifting anything else, which is why the numbering
 > skips them).
 >
-> **Current status of shipped/pending capabilities lives in [`app-builder-roadmap.md`](./app-builder-roadmap.md)**
-> (the canonical roadmap), not here — this doc is the "why", the roadmap is the "what/where". The
+> **Current status of shipped/pending capabilities lives in [`app-builder-capabilities.md`](./app-builder-capabilities.md)**
+> (the canonical capability record), not here — this doc is the "why", the capabilities doc is the "what/where". The
 > `--changed-only` partial-apply mode built ON TOP of this staged flow has its own contract in
 > **Part II** below.
 >
@@ -38,7 +38,7 @@ Current status of shipped/pending capabilities lives in
 ## 1. Why
 
 > *This section is the original motivation (pre-implementation). All five problems below were
-> addressed by the design that landed — see the roadmap for current status.*
+> addressed by the design that landed — see the capabilities doc for current status.*
 
 The build engine is sound — spec-driven, idempotent, `create == edit`, a large regression suite, a
 parity oracle. But the **flow around it** had five concrete problems:
@@ -542,7 +542,7 @@ four and additive-SKIPS the rest, which then incur sticky debt). The user-facing
   fast path re-uploads only the *changed* pages, so an unchanged page is never clobbered; a page you edit
   in both the spec and Maker is overwritten by the spec (the intended deploy). Documented as a follow-up.
 
-## Deferred to follow-ups (v1 does NOT implement; tracked in the roadmap)
+## Deferred to follow-ups (v1 does NOT implement; tracked in the capabilities doc)
 Pre-mutation live page-content drift verifier; `expectedSitemap` population + pre/post sitemap projection
 equality (sitemap fast shape unwired in v1); a `clearDebtMatching` production caller (v1 clears debt only
 via teardown+rebuild); unifying `contentPath` confinement between hashing and the build; view/form/sitemap
@@ -640,7 +640,7 @@ contract/deferred sections). 8. ✅ **Live regression PASSED** (a scratch enviro
 UPDATE, new measured deployedSha, verify 9/9, snapshot **re-blessed eligible**); (3) chart edit →
 `--apply --changed-only` → **full-build fallback**, verify 9/9, snapshot **INELIGIBLE** with sticky
 `chart-edit-not-convergent` + `uncertified-baseline` debt; (4) `teardown --apply` → app cascade removed,
-snapshot **tombstoned then deleted** (0 leftovers). 9. ✅ Docs — design + roadmap + CHANGELOG + AGENTS.md.
+snapshot **tombstoned then deleted** (0 leftovers). 9. ✅ Docs — design + capabilities + CHANGELOG + AGENTS.md.
 
 ## Build-time notes (from the final Sol pass)
 - Live-absence verification covers the UNION of prior-snapshot identities, current spec, generated

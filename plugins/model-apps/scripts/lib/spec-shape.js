@@ -45,6 +45,11 @@ const COLLECTIONS = {
   charts: {},
   forms: { children: { subgrids: {}, events: {}, quickViews: {}, tabs: { children: { sections: {} } } } },
   commands: { children: { buttons: { children: { children: {} } } } },
+  // Business rules and their nested collections. Omitted when `businessRules[]` was introduced, so
+  // an object-valued `businessRules`, `conditions` or `actions` reached a raw `for...of` and threw a
+  // TypeError instead of producing a validation error naming the field — the exact failure this map
+  // exists to prevent.
+  businessRules: { children: { conditions: {}, actions: {} } },
   dashboards: { children: { tiles: {} } },
   pages: { children: { navigatesTo: {}, dataSources: { scalar: true } } },
   personas: { children: { jobs: { children: { privileges: {} } }, additionalPrivileges: {} } },

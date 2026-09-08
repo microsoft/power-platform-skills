@@ -179,3 +179,51 @@ test('apply seeds requested sample data and returns created record ids', async (
   assert.strictEqual(seedGroup.matchOn, 'cr_name', 'a single-column alternate key makes sample seeding idempotent');
   assert.deepStrictEqual(r.records, { cr_parent: ['id-a', 'id-b'] });
 });
+
+// #447: this CLI is the genpage create flow's data-model path, so it must resolve the organization's
+// base language exactly as build-model-app.js does. It builds its own `spec` object from `input`,
+// which is easy to leave a field out of -- and because resolveLanguageCode degrades to 1033 rather
+// than throwing, a dropped field is invisible until a non-English org fails on a DateTime column.
+test('provision-entities resolves the org base language for labels (#447)', async () => {
+  const d = mockDeps();
+  d.provision.queryRecords = async (set) => (set === 'organization' ? [{ languagecode: 1031 }] : [{ solutionid: 's' }]);
+  const seen = [];
+  d.sdk.createColumn = async (l, o) => { seen.push(o); return { logicalName: o.schemaName.toLowerCase(), metadataId: 'c' }; };
+  const r = await provisionEntities(input, { apply: true }, { sdk: d.sdk, provision: d.provision });
+  assert.strictEqual(r.ok, true);
+  assert.ok(seen.length > 0, 'a column was created');
+  assert.strictEqual(seen[0].languageCode, 1031, 'the org language reached the column create');
+});
+
+test('provision-entities honors an explicit language override and an input languageCode', async () => {
+  const d = mockDeps();
+  d.provision.queryRecords = async (set) => (set === 'organization' ? [{ languagecode: 1031 }] : [{ solutionid: 's' }]);
+  const seen = [];
+  d.sdk.createColumn = async (l, o) => { seen.push(o); return { logicalName: o.schemaName.toLowerCase(), metadataId: 'c' }; };
+  await provisionEntities(input, { apply: true, languageCode: 3082 }, { sdk: d.sdk, provision: d.provision });
+  assert.strictEqual(seen[0].languageCode, 3082, 'opts.languageCode wins over the org base language');
+
+  const seen2 = [];
+  const d2 = mockDeps();
+  d2.provision.queryRecords = async (set) => (set === 'organization' ? [{ languagecode: 1031 }] : [{ solutionid: 's' }]);
+  d2.sdk.createColumn = async (l, o) => { seen2.push(o); return { logicalName: o.schemaName.toLowerCase(), metadataId: 'c' }; };
+  await provisionEntities({ ...input, languageCode: 1036 }, { apply: true }, { sdk: d2.sdk, provision: d2.provision });
+  assert.strictEqual(seen2[0].languageCode, 1036, 'input.languageCode is carried into the spec, not dropped');
+});
+
+test('provision-entities surfaces a language fallback through deps.warn', async () => {
+  // Without this the genpage path would fall back to 1033 in silence and the user would see only an
+  // opaque Dataverse 400 later -- the build path would explain itself and this one would not.
+  const d = mockDeps();
+  d.provision.queryRecords = async (set) => {
+    if (set === 'organization') throw new Error('org read blocked');
+    return [{ solutionid: 's' }];
+  };
+  const warnings = [];
+  const r = await provisionEntities(input, { apply: true }, { sdk: d.sdk, provision: d.provision, warn: (m) => warnings.push(m) });
+  assert.strictEqual(r.ok, true, 'a failed language read must not fail provisioning');
+  assert.ok(
+    warnings.some((w) => /base language/i.test(w) && /--language-code/.test(w)),
+    'the fallback must reach deps.warn; got: ' + JSON.stringify(warnings)
+  );
+});
