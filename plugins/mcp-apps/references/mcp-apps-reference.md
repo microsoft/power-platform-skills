@@ -1,12 +1,45 @@
 # MCP Apps Technical Reference
 
+## Delivery modes
+
+Every generated widget is one HTML file, but there are two ways to provide its runtime:
+
+| Mode | Runtime source | Additional libraries | Use when |
+| --- | --- | --- | --- |
+| No CDNs / self-contained | Embedded `McpAppsRuntime` bundle | Native HTML, CSS, SVG, and Canvas only | The host blocks public URLs, including MCP Inspector deployments with restrictive CSP |
+| CDNs allowed | Public ESM/script URLs | Public visualization libraries may be used when justified | The user explicitly permits runtime network dependencies |
+
+Self-contained mode is the default. The generator writes the marker from
+`samples/self-contained-widget.template.html`, then runs:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/inline-self-contained-runtime.js" --input "./widget.html"
+```
+
+The script replaces the marker with the committed runtime from
+`assets/self-contained/mcp-app-runtime.min.js`. The bundle exposes:
+
+```javascript
+const { App, webLightTheme, webDarkTheme } = globalThis.McpAppsRuntime;
+```
+
+Do not manually reproduce or edit the minified runtime. It is generated from pinned
+packages by `scripts/_vendor-build/`, and its provenance and hash are committed beside
+the asset. To refine an existing self-contained widget, first restore the source marker:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/inline-self-contained-runtime.js" --prepare --input "./widget.html" --output "./widget.draft.html"
+```
+
+Edit the draft, then run the normal inlining command on it.
+
 ## MCP Apps API
 
 The widget uses the `App` class from `@modelcontextprotocol/ext-apps` to communicate with the chat host.
 
-### Importing App
+### Accessing App
 
-`App` is a **named export**, not a default export. You must use curly braces:
+In CDN mode, `App` is a **named export**, not a default export. You must use curly braces:
 
 ```javascript
 // CORRECT — named import with curly braces
@@ -14,6 +47,12 @@ import { App } from 'https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps
 
 // WRONG — default import, App will be undefined and "App is not a constructor" at runtime
 import App from 'https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps/+esm';
+```
+
+In self-contained mode, there is no import:
+
+```javascript
+const { App } = globalThis.McpAppsRuntime;
 ```
 
 ### Receiving tool data
@@ -79,6 +118,8 @@ await app.connect();
 
 ## Fluent UI Web Components v3
 
+Fluent Web Components are available only in CDN mode.
+
 Load via: `<script src="https://unpkg.com/@fluentui/web-components@beta/dist/web-components.min.js"></script>`
 
 Available components (use these instead of plain HTML equivalents):
@@ -96,7 +137,9 @@ Available components (use these instead of plain HTML equivalents):
 
 ## Loading CDN libraries
 
-You can load external CDN libraries (for maps, charts, data visualization, etc.) via script tags when they add clear value.
+This section applies only when the user explicitly allows CDNs. You can load external
+libraries for maps, charts, data visualization, and similar needs when they add clear
+value.
 
 ### UMD global collision
 
@@ -136,6 +179,20 @@ function initWhenReady(data) {
 ```
 
 This pattern applies to any UMD library. If you load multiple libraries that use globals, save each reference immediately after loading.
+
+## Self-contained visualization
+
+Self-contained widgets must not load remote scripts, modules, styles, fonts, images,
+media, iframes, workers, or map tiles. Use:
+
+- inline SVG for charts, diagrams, timelines, and geographic schematics;
+- Canvas for dense plots where SVG would be unwieldy;
+- CSS grid/flexbox and semantic HTML for cards, tables, controls, and progress displays;
+- `data:` URLs only when a binary or raster asset is genuinely needed.
+
+Do not include a library merely because the CDN template would have used one. The
+embedded MCP runtime and theme tokens are the required platform code; widget-specific
+visualization code should stay small and purpose-built.
 
 ## Security
 

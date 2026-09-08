@@ -241,9 +241,11 @@ When the user asks for a widget:
    - Envelope return -> pass `content`, `structuredContent`, and `_meta` (renamed from the
      authored `meta` field).
 3. Invoke `generate-mcp-app-ui` with the visual requirements, tool name, input sample, and
-   representative full result.
-4. Keep the outputs separate: one `.tool.js`, one `.tool.json`, and one self-contained
-   `.html`.
+   representative full result. Forward an explicit CDN policy from the user's request.
+   If none was supplied, let the UI skill ask its required CDN-policy question; do not
+   assume public URLs are allowed.
+4. Keep the outputs separate: one `.tool.js`, one `.tool.json`, and one single-file
+   `.html` using the selected CDN policy.
 
 ## Refinement
 

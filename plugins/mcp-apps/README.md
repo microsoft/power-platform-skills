@@ -1,7 +1,8 @@
 # MCP Apps Tool and Widget Generator
 
 Generate JavaScript server runtimes and JSON Schema registration metadata for codeful MCP
-tools, plus self-contained HTML widgets that visualize their results.
+tools, plus single-file HTML widgets that visualize their results. Widgets can embed
+their runtime for restrictive hosts or use public CDNs when explicitly allowed.
 
 ## Installation
 
@@ -90,6 +91,12 @@ Here is the tool's test output:
 }
 ```
 
+The skill asks whether public CDN URLs are allowed. **No CDNs / self-contained** is the
+recommended default for MCP Inspector and other hosts with restrictive content security
+policies. In that mode, the generated HTML embeds the MCP Apps runtime and Fluent theme
+tokens, uses native HTML/CSS/SVG/Canvas for visuals, and has no runtime library downloads.
+If CDNs are allowed, the skill retains the smaller CDN-based output.
+
 The UI skill accepts:
 
 - a plain object representing `structuredContent`;
@@ -132,15 +139,18 @@ The envelope keys are reserved. If business data itself contains `content`,
 
 - A self-contained `.tool.js` for codeful server logic and a matching `.tool.json`
   registration sidecar.
-- Optionally, a single self-contained `.html` widget using
-  `@modelcontextprotocol/ext-apps` and Fluent UI Web Components.
+- Optionally, a single `.html` widget using `@modelcontextprotocol/ext-apps`, either
+  embedded with no CDN dependencies or loaded from public CDNs with Fluent UI Web
+  Components.
 
 See [`samples/account-summary.tool.js`](samples/account-summary.tool.js) and
 [`samples/account-summary.tool.json`](samples/account-summary.tool.json) for a complete
 paired tool example, [`samples/flight-status-widget.html`](samples/flight-status-widget.html)
 for a read-only widget, and
 [`samples/weather-refresh-widget.html`](samples/weather-refresh-widget.html) for an
-interactive widget.
+interactive CDN widget. The marker-based
+[`samples/self-contained-widget.template.html`](samples/self-contained-widget.template.html)
+shows the source shape used before the bundled runtime is inlined.
 
 ## Skill structure
 
@@ -150,10 +160,14 @@ skills/generate-mcp-app-ui/SKILL.md              - Widget generator
 references/codeful-tool-host-data-api.d.ts       - Injected server API contract
 references/mcp-apps-reference.md                 - MCP Apps result and lifecycle patterns
 references/design-guidelines.md                  - Visual design defaults
+assets/self-contained/mcp-app-runtime.min.js      - Vendored no-CDN browser runtime
+scripts/inline-self-contained-runtime.js          - Deterministic single-file composer
+scripts/_vendor-build/                            - Pinned runtime rebuild tooling
 samples/account-summary.tool.js                  - Codeful tool example
 samples/account-summary.tool.json                - Tool registration metadata example
 samples/flight-status-widget.html                - Read-only widget example
 samples/weather-refresh-widget.html              - Interactive widget example
+samples/self-contained-widget.template.html       - No-CDN source template
 ```
 
 ## Evals
@@ -164,6 +178,27 @@ samples/weather-refresh-widget.html              - Interactive widget example
   covers widget types, result envelopes, private metadata, and type-mismatch stress cases.
 
 Each suite includes `evals.json` and an `eval-runbook.md`.
+
+## Maintaining the self-contained runtime
+
+The no-CDN runtime is committed at
+`assets/self-contained/mcp-app-runtime.min.js`. It is generated code; do not edit it by
+hand. Its pinned build inputs live under `scripts/_vendor-build/`.
+
+After intentionally changing a dependency version:
+
+```bash
+cd plugins/mcp-apps/scripts/_vendor-build
+npm ci
+npm run build
+npm run check
+```
+
+Review `PROVENANCE.json` and `THIRD-PARTY-NOTICES.md` with every runtime update. Normal
+widget generation does not install packages: it uses the committed bundle through
+`scripts/inline-self-contained-runtime.js`. That script also supports `--prepare` to
+replace the embedded runtime region with the editable source marker before refining an
+existing widget.
 
 ## License
 

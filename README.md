@@ -75,11 +75,12 @@ generative pages for an app that already exists. Use either independently — ne
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
 
 Generate self-contained JavaScript server runtimes, JSON Schema registration metadata,
-and interactive MCP App widgets for codeful MCP tools.
+and interactive single-file MCP App widgets for codeful MCP tools.
 
 **Skills**: `/generate-codeful-mcp-tool` creates a named `runTool` server entry point plus
 its description, input schema, and structured output schema, with verified Dataverse
-access; `/generate-mcp-app-ui` creates a self-contained HTML widget and can consume
+access; `/generate-mcp-app-ui` creates an HTML widget that embeds its runtime by default
+for hosts that block public URLs, while retaining an opt-in CDN mode. It can consume
 model-visible content, structured output, and widget-private metadata.
 
 **Stack**: JavaScript codeful tools + HTML widgets using the MCP Apps protocol

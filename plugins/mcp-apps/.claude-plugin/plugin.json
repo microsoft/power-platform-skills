@@ -1,7 +1,7 @@
 {
   "name": "mcp-apps",
-  "version": "1.1.0",
-  "description": "Generate JavaScript server runtimes and interactive MCP App widgets for MCP tools.",
+  "version": "1.2.0",
+  "description": "Generate JavaScript server runtimes and CDN-free or CDN-enabled MCP App widgets.",
   "author": {
     "name": "Microsoft",
     "url": "https://www.microsoft.com"

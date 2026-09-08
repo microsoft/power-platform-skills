@@ -7,13 +7,16 @@ How to evaluate the `generate-mcp-app-ui` skill. Three layers, run in order.
 - **Skill definition:** `plugins/mcp-apps/skills/generate-mcp-app-ui/SKILL.md`
 - **Reference docs:** `plugins/mcp-apps/references/mcp-apps-reference.md`, `plugins/mcp-apps/references/design-guidelines.md`
 - **Sample widgets:** `plugins/mcp-apps/samples/flight-status-widget.html`, `plugins/mcp-apps/samples/weather-refresh-widget.html`
+- **Self-contained template:** `plugins/mcp-apps/samples/self-contained-widget.template.html`
+- **Runtime composer:** `plugins/mcp-apps/scripts/inline-self-contained-runtime.js`
 
 ## Eval data
 
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
 - `common_assertions`: 13 assertions every generated widget must pass
-- `evals`: 56 test cases, each with a `prompt`, inline `data`, per-widget `assertions`, and a `tier` field
+- `mode_assertions`: additional checks for `self-contained` and `cdn` output
+- `evals`: 58 test cases, each with a `prompt`, inline `data`, per-widget `assertions`, and a `tier` field
 
 The `data` field is the tool's test output. Most cases contain a plain object, which is
 treated as `result.structuredContent`. Result-channel cases contain a full authoring
@@ -21,13 +24,17 @@ envelope (`content`, `structuredContent`, `meta`) or runtime result (`content`,
 `structuredContent`, `_meta`). During rendering tests, authoring `meta` is renamed to
 runtime `_meta`.
 
+`delivery_mode` is explicit on cases that exercise mode selection. For cases without the
+field, answer the skill's question with **No CDNs / self-contained**, which is the
+default.
+
 ### Tiers
 
 Each eval has a `tier` to support selective running:
 
 | Tier     | Count | Purpose                                                                                                  |
 | -------- | ----- | -------------------------------------------------------------------------------------------------------- |
-| `smoke`  | 7     | Diverse representatives (map, chart, table, cards, complex layout, structured, stress). Run on every PR. |
+| `smoke`  | 9     | Diverse representatives plus explicit self-contained and CDN delivery cases. Run on every PR. |
 | `full`   | 47    | All remaining core widget types and result-channel cases. Run nightly or pre-release.                    |
 | `stress` | 2     | Type-mismatch edge cases (string booleans, empty-string coordinates). Run with full suite.               |
 
@@ -60,10 +67,11 @@ Here is a complete example using eval id 2 (weather widget).
    > }
    > ```
 
-3. Save the generated HTML file.
-4. **Layer 1 check:** Open the HTML in a text editor and verify: starts with `<!DOCTYPE html>`, has one `<script type="module">`, uses `result.structuredContent`, etc. Then check the per-widget assertions: "Shows current temperature prominently", "Shows 5-day forecast strip", "Uses weather icons/emoji for conditions."
-5. **Layer 2 check:** Open the HTML in a browser (it needs a JSON-RPC host to send it the tool data, see Step 3 below).
-6. **Layer 3 check:** Score the visual result against the rubric.
+3. When asked about public CDNs, choose **No CDNs / self-contained** for this example.
+4. Save the generated HTML file.
+5. **Layer 1 check:** Open the HTML in a text editor and verify: starts with `<!DOCTYPE html>`, has one `<script type="module">`, uses `globalThis.McpAppsRuntime`, contains no public runtime/resource URL, uses `result.structuredContent`, etc. Then check the per-widget assertions: "Shows current temperature prominently", "Shows 5-day forecast strip", "Uses weather icons/emoji for conditions."
+6. **Layer 2 check:** Open the HTML in a browser (it needs a JSON-RPC host to send it the tool data, see Step 3 below).
+7. **Layer 3 check:** Score the visual result against the rubric.
 
 ## How to run evals
 
@@ -75,6 +83,8 @@ For each eval in `evals.json`:
 
 - Use the `prompt` as the user message
 - Paste the `data` object as the tool's test output JSON
+- If `delivery_mode` is present, select that answer when the skill asks about public
+  CDNs. Otherwise select **No CDNs / self-contained**.
 
 Save each generated HTML file for testing.
 
@@ -82,13 +92,15 @@ To run only a subset, filter by `tier` (e.g., smoke-only for quick validation).
 
 ### Step 2: Layer 1 - Static assertions
 
-Check each generated HTML file against the `common_assertions` (13 checks) plus the eval's per-widget `assertions`.
+Check each generated HTML file against the `common_assertions` (13 checks), the selected
+entry in `mode_assertions`, and the eval's per-widget `assertions`.
 
 **Common assertions verify:**
 
 1. Complete HTML file starting with `<!DOCTYPE html>`
 2. Exactly one `<script type="module">` block
-3. Named import: `import { App } from ...`
+3. Correct runtime access for the mode: named `App` import for CDN mode or
+   `globalThis.McpAppsRuntime` for self-contained mode
 4. `app.ontoolresult` set before `app.connect()`
 5. `app.onhostcontextchanged` set before `app.connect()`
 6. `app.onteardown` set before `app.connect()`
@@ -97,12 +109,27 @@ Check each generated HTML file against the `common_assertions` (13 checks) plus 
 9. No `window.openai`
 10. No `max-width` on the main container (responsive `@media (max-width:...)` is fine)
 11. Uses `var(--color` Fluent design tokens
-12. Includes `<fluent-spinner>` loading state
+12. Includes an accessible loading state (`<fluent-spinner>` for CDN mode or a native
+    inline spinner for self-contained mode)
 13. Includes an error state
+
+**Self-contained mode assertions verify:**
+
+1. The runtime is embedded and the source marker is gone
+2. There are no remote script/module/style/font/image/media/iframe/worker/map-tile or
+   literal fetch dependencies
+3. Visualizations and controls use native HTML/CSS/SVG/Canvas, not `<fluent-*>` elements
+
+**CDN mode assertions verify:**
+
+1. `App` uses the named public-CDN import
+2. Fluent Web Components and Fluent tokens load from public CDNs
+3. Any additional external library adds clear visual value
 
 These can be checked with text search / regex against the HTML source. No browser needed.
 
-**Pass criteria:** Every widget passes all common assertions plus its own specific assertions.
+**Pass criteria:** Every widget passes all common assertions, its selected mode
+assertions, and its own specific assertions.
 
 ### Step 3: Layer 2 - Rendering tests
 
@@ -114,7 +141,11 @@ Load each widget in a browser to verify it actually runs.
 - Content renders (not stuck on "Loading..." or showing the error state)
 - Layout is not broken (no overlapping elements, no blank page)
 
-**Important:** Widgets import ES modules from CDN, so they must be served over HTTP (e.g., `npx serve .` or `python -m http.server`). Opening via `file://` will fail due to CORS restrictions on module imports.
+Serve the host and widget over HTTP (for example, `npx serve .` or
+`python -m http.server`) so iframe messaging behaves consistently. CDN mode also
+requires network access. Self-contained mode must render with public network access
+blocked; use browser request interception or an offline environment to prove it makes no
+runtime asset requests.
 
 This can be done manually or automated with Playwright / Puppeteer. The widget needs a host page that simulates the MCP Apps JSON-RPC protocol. For plain eval
 data, send it as `structuredContent`. For an envelope, send `content`,
@@ -149,7 +180,12 @@ The widget also expects an initial `hostContext` message for theming:
 
 See the [MCP Apps protocol spec](https://modelcontextprotocol.io/specification/2025-03-26/extensions/apps) for the full message format.
 
-**Pass criteria:** All widgets render with visible content, zero JS errors.
+For eval 57, trigger **Refresh** and verify `callServerTool` returns through the same
+`content`, `structuredContent`, and `_meta` normalization path. For eval 58, verify the
+CDN resources load and the chart renders.
+
+**Pass criteria:** All widgets render with visible content and zero JS errors.
+Self-contained widgets make zero public runtime/resource requests.
 
 ### Step 4: Layer 3 - UX scoring
 
