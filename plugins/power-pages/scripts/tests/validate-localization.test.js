@@ -264,7 +264,11 @@ test('enforces unavailable locales for same-direction locale sets', (t) => {
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 2);
-  assert.match(result.stderr, /requires one managed locale availability module/i);
+  assert.match(
+    result.stderr,
+    /Unavailable locales require one managed locale availability module/i
+  );
+  assert.doesNotMatch(result.stderr, /Pending bidirectional remediation requires one/i);
 });
 
 test('allows a mixed-direction locale to remain unavailable pending remediation', (t) => {

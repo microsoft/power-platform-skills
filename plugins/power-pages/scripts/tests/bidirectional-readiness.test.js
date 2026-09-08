@@ -2,8 +2,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('child_process');
+const path = require('path');
 const { auditBidirectionalReadiness } = require('../lib/bidirectional-readiness');
 const { createTempProject, writeProjectFile } = require('./test-utils');
+
+const AUDIT_PATH = path.join(__dirname, '..', 'audit-bidirectional-readiness.js');
 
 test('accepts logical directional CSS', (t) => {
   const projectRoot = createTempProject(t);
@@ -129,4 +133,35 @@ test('blocks invisible bidi controls in source', (t) => {
   const result = auditBidirectionalReadiness(projectRoot);
   assert.equal(result.summary.error, 1);
   assert.equal(result.findings[0].rule, 'unexpected-bidi-control');
+});
+
+test('ignores physical-property examples inside multiline comments', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', `
+    /*
+     * Avoid physical properties such as:
+     * margin-left: 1rem;
+     * text-align: right;
+     */
+    .card {
+      margin-inline-start: 1rem;
+    }
+  `);
+
+  const result = auditBidirectionalReadiness(projectRoot);
+  assert.equal(result.summary.error, 0, JSON.stringify(result.findings));
+});
+
+test('audit CLI exits nonzero when blocking findings exist', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/theme.css', '.card { margin-left: 1rem; }');
+
+  const result = spawnSync(
+    process.execPath,
+    [AUDIT_PATH, '--projectRoot', projectRoot],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 1);
+  assert.equal(JSON.parse(result.stdout).summary.error, 1);
 });
