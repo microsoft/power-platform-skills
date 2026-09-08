@@ -6,16 +6,16 @@ const {
   findProjectRoot,
 } = require('./lib/validation-helpers');
 const {
+  parseOptionalProjectRootArgs,
+} = require('./lib/cli-arguments');
+const {
   validateSiteIntegrity,
 } = require('./lib/site-integrity');
 
-function parseArgs(argv) {
-  const args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === '--projectRoot') args.projectRoot = argv[index + 1];
-  }
-  return args;
-}
+const USAGE =
+  'Usage: validate-site-integrity.js [--projectRoot <path>]';
+
+const parseArgs = (argv) => parseOptionalProjectRootArgs(argv, USAGE);
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -49,7 +49,12 @@ function main() {
 }
 
 if (require.main === module) {
-  process.exitCode = main();
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 2;
+  }
 }
 
 module.exports = {
