@@ -1128,11 +1128,11 @@ or row-action buttons.
 
 ```yaml
 - EventGallery:
-      Control: Gallery
-      Variant: Vertical
-      Properties:
-          Selectable: =false
-          DisplayMode: =DisplayMode.Edit
+    Control: Gallery
+    Variant: Vertical
+    Properties:
+      Selectable: =false
+      DisplayMode: =DisplayMode.Edit
 ```
 
 Set `DisplayMode` only on the individual action when it genuinely needs to be disabled.
@@ -1199,10 +1199,10 @@ An `AccessibleLabel` is not the visible value binding.
 
 ```yaml
 - StatusBadge:
-      Control: Badge
-      Properties:
-          Content: =ThisItem.Status
-          AccessibleLabel: ="Assignment status " & ThisItem.Status
+    Control: Badge
+    Properties:
+      Content: =ThisItem.Status
+      AccessibleLabel: ="Assignment status " & ThisItem.Status
 ```
 
 **Exception:** A purely decorative semantic control explicitly intended to have no
