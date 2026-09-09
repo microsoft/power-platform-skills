@@ -79,8 +79,18 @@ function azIdentity() {
  */
 function httpsOriginOrNull(envUrl) {
   try {
-    const u = new URL(String(envUrl));
-    return u.protocol === 'https:' ? u.origin : null;
+    const raw = String(envUrl == null ? '' : envUrl).trim();
+    if (!raw) return null;
+    const u = new URL(raw);
+    if (u.protocol !== 'https:') return null;
+    // An ORIGIN, strictly. A value carrying a path, query or fragment is REJECTED rather than
+    // silently trimmed to its origin: `dataverseRequest` appends `/api/data/...` to whatever it is
+    // given, so `https://org.crm.dynamics.com/some/path` would produce `.../some/path/api/data/...`
+    // and the preflight would report a misleading result about a URL nobody asked for. Rejecting is
+    // also the tighter credential boundary — this function's whole job is to decide where a bearer
+    // token may be sent, so "close enough" is the wrong disposition.
+    if ((u.pathname && u.pathname !== '/') || u.search || u.hash) return null;
+    return u.origin;
   } catch {
     return null;
   }
@@ -91,28 +101,37 @@ async function preflightAuth(envUrl, deps = {}) {
   const request = deps.request || dataverseRequest;
   const readIdentity = deps.azIdentity || azIdentity;
 
-  // Identity is read ONLY on a failure path — the happy path must not pay for an `az` subprocess.
+  // Memoized, because reading it costs an `az` subprocess and BOTH the success path (to report which
+  // identity was accepted) and the 401 path (to name the one that was rejected) want it. Without the
+  // cache the 401 path could read it twice.
+  let identityRead = false;
+  let cachedIdentity = null;
   const who = () => {
-    let id = null;
-    try { id = readIdentity(); } catch { id = null; }
-    return id;
+    if (!identityRead) {
+      identityRead = true;
+      try { cachedIdentity = readIdentity(); } catch { cachedIdentity = null; }
+    }
+    return cachedIdentity;
   };
 
-  if (!httpsOriginOrNull(envUrl)) {
+  // Normalize to the validated ORIGIN and use it from here on. Validating one string and then
+  // requesting with another is how a check becomes decorative.
+  const origin = httpsOriginOrNull(envUrl);
+  if (!origin) {
     return {
       ok: false,
-      error: `refusing to authenticate against '${envUrl}': the environment must be an absolute https:// URL. `
-        + 'A bearer token is attached to this request, so a non-HTTPS or malformed target is rejected before '
-        + 'any token is acquired.',
+      error: `refusing to authenticate against '${envUrl}': the environment must be an absolute https:// ORIGIN `
+        + '(scheme + host only, no path, query or fragment). A bearer token is attached to this request, so a '
+        + 'non-HTTPS, path-bearing or malformed target is rejected before any token is acquired.',
     };
   }
 
   let token = null;
-  try { token = getToken(envUrl); } catch { token = null; }
+  try { token = getToken(origin); } catch { token = null; }
   if (!token) {
     return {
       ok: false,
-      error: `no Azure CLI access token could be obtained for ${envUrl}. This is a sign-in problem, not a `
+      error: `no Azure CLI access token could be obtained for ${origin}. This is a sign-in problem, not a `
         + `permissions one — run \`az login\` (add \`--tenant <id>\` if this org lives in another tenant), then retry.`,
     };
   }
@@ -121,11 +140,11 @@ async function preflightAuth(envUrl, deps = {}) {
   try {
     // Headers are requested because a 401's `WWW-Authenticate` is the only thing that distinguishes a
     // Conditional Access / CAE claims challenge from a plain wrong-identity rejection.
-    res = await request(envUrl, 'GET', 'WhoAmI', null, { includeHeaders: true });
+    res = await request(origin, 'GET', 'WhoAmI', null, { includeHeaders: true });
   } catch (e) {
     // A transport failure says nothing about identity, so it must not be reported as one — and must
     // not BLOCK. See the `inconclusive` contract below.
-    return { ok: false, inconclusive: true, error: `the identity check could not reach ${envUrl}: ${(e && e.message) || e}` };
+    return { ok: false, inconclusive: true, error: `the identity check could not reach ${origin}: ${(e && e.message) || e}` };
   }
 
   const status = res && (res.status !== undefined ? res.status : res.statusCode);
@@ -143,7 +162,7 @@ async function preflightAuth(envUrl, deps = {}) {
     if (/insufficient_claims|claims=/i.test(authenticate)) {
       return {
         ok: false,
-        error: `Dataverse returned a CLAIMS CHALLENGE for ${envUrl} (401 with \`${authenticate.slice(0, 160)}\`). This is a `
+        error: `Dataverse returned a CLAIMS CHALLENGE for ${origin} (401 with \`${authenticate.slice(0, 160)}\`). This is a `
           + 'Conditional Access / CAE requirement, not a wrong-tenant problem — re-authenticate so the requested claims '
           + 'are satisfied (for example an interactive `az login`); switching tenant will not help.',
       };
@@ -154,10 +173,10 @@ async function preflightAuth(envUrl, deps = {}) {
       : 'The active Azure CLI identity could not be read, so the token source is unknown.';
     return {
       ok: false,
-      error: `Dataverse rejected the Azure CLI token for ${envUrl} (WhoAmI returned 401). ${whoText} `
+      error: `Dataverse rejected the Azure CLI token for ${origin} (WhoAmI returned 401). ${whoText} `
         + 'The most likely cause is that these scripts authenticate through the ACTIVE Azure CLI account rather than '
         + `the selected PAC profile, so \`pac org who\` can succeed while this fails — run \`az login --tenant <the `
-        + `tenant that owns ${envUrl}>\` and retry. A revoked token or a disabled account would also land here.`,
+        + `tenant that owns ${origin}>\` and retry. A revoked token or a disabled account would also land here.`,
     };
   }
 
@@ -319,7 +338,7 @@ function ensureOk(res, context, deps = {}) {
     throw new Error(
       `${context} failed: HTTP 401 — ${msg}. ${whoText} These scripts authenticate through the ACTIVE `
       + 'Azure CLI account, not the selected PAC profile, so this is an identity problem rather than a '
-      + 'Dataverse privilege one — run `az login --tenant <the tenant that owns this org>` and retry.'
+      + 'Dataverse privilege issue — run `az login --tenant <the tenant that owns this org>` and retry.'
     );
   }
   throw new Error(`${context} failed: HTTP ${res.status} — ${msg}`);

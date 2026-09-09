@@ -23,7 +23,7 @@
 //   addEntityPrivilegesToRole(...) -> role held prvReadnew_probeflow217190 afterwards (was false)
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { validateAppSpec, bpfUniqueName, BPF_ROLE_ACCESS } = require('../lib/app-spec.js');
+const { validateAppSpec, bpfUniqueName, BPF_ROLE_ACCESS, SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 const { planFor, runSdkBuild } = require('../lib/sdk-build.js');
 
 const PERSONA = { persona: 'Dispatcher', jobs: [{ name: 'Dispatch', privileges: [{ entity: 'contoso_ticket', access: ['read'] }] }] };
@@ -291,11 +291,15 @@ test('the COLUMN existence probe is a narrow read too — the reuse path was mis
   assert.deepStrictEqual(note.displayName, { 1033: 'Note', 3082: 'Nota' });
 });
 
-test('an unreadable column list falls back to findColumns rather than assuming the table is empty', async () => {
-  // Assuming "no columns" would make every existing column look missing and be re-created.
+test('an unreadable column list does NOT fall back to findColumns — that would re-poison the labels', async () => {
+  // The obvious fallback is exactly the bug. `findColumns` is the poisoning read this function
+  // exists to avoid, and this branch is the one where `createColumn` is guaranteed to run next, so
+  // falling back would silently restore the defect on the very path it targets. Instead: warn, treat
+  // every column as new, and let the create's already-exists handling de-duplicate.
   const { provisionDataModel } = require('../lib/entity-provision.js');
   let findColumnsCalled = 0;
   const createdColumns = [];
+  const warnings = [];
   const runner = {
     run: async (p, l, fn, o = {}) => { try { return await fn(); } catch (e) { if (o.skipIf && o.skipIf(e)) return undefined; throw e; } },
     skip: () => {},
@@ -321,10 +325,58 @@ test('an unreadable column list falls back to findColumns rather than assuming t
       queryRecords: async () => [],
     },
     runner,
+    warn: (m) => warnings.push(String(m)),
     preResolvedLanguageCode: 1033,
   });
-  assert.strictEqual(findColumnsCalled, 1, 'an unreadable attributes read must fall back');
-  assert.strictEqual(createdColumns.length, 0, 'and the fallback saw the column, so it was not re-created');
+  assert.strictEqual(findColumnsCalled, 0, 'the poisoning fallback must NOT run when a raw client is present');
+  assert.strictEqual(createdColumns.length, 1, 'every column looks new, and create de-duplicates the existing one');
+  assert.ok(
+    warnings.some((w) => /could not read existing columns for contoso_probe/.test(w) && /503/.test(w)),
+    `the degradation must be warned about, not silent — got ${JSON.stringify(warnings)}`,
+  );
+});
+
+test('a raw read that THROWS is handled too — the client throws only on a persistent transport error', async () => {
+  // `findExistingTable` and `findExistingColumns` must behave identically here. The az-backed client
+  // resolves `{status}` for 404s and even persistent 5xx, and throws only when the transport itself
+  // never produced a response; letting that propagate would abort a build over a blip that the
+  // documented fallbacks are designed to survive.
+  const { provisionDataModel } = require('../lib/entity-provision.js');
+  const createdColumns = [];
+  const warnings = [];
+  let findTablesCalled = 0;
+  const runner = {
+    run: async (p, l, fn, o = {}) => { try { return await fn(); } catch (e) { if (o.skipIf && o.skipIf(e)) return undefined; throw e; } },
+    skip: () => {},
+    mapLimit: async (items, _n, fn) => { const out = []; for (const it of items) out.push(await fn(it)); return out; },
+  };
+  await provisionDataModel({
+    spec: {
+      solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
+      languageCode: 1033,
+      entities: [{ schemaName: 'contoso_probe', displayName: 'Probe', primaryAttribute: { schemaName: 'contoso_name' }, columns: [{ schemaName: 'contoso_note', type: 'Text', displayName: 'Note' }] }],
+      relationships: [],
+    },
+    sdk: {
+      createTable: async () => ({ logicalName: 'contoso_probe', entitySetName: 'contoso_probes' }),
+      createColumn: async (e, o) => { createdColumns.push(o); return { logicalName: o.schemaName }; },
+      updateTable: async () => undefined,
+      updateColumn: async () => undefined,
+    },
+    provision: {
+      dataverse: { get: async () => { throw new Error('ECONNRESET'); } },
+      findTables: async () => { findTablesCalled += 1; return []; },
+      fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: 'contoso_probes', relationships: [] }),
+      queryRecords: async () => [],
+    },
+    runner,
+    warn: (m) => warnings.push(String(m)),
+    preResolvedLanguageCode: 1033,
+  });
+  // The table probe threw, so it fell back to findTables (which cannot poison a table that is about
+  // to be CREATED — the poisoning is read-then-create on the SAME object, and this table is absent).
+  assert.strictEqual(findTablesCalled, 1, 'a thrown table probe must fall back rather than abort the build');
+  assert.strictEqual(createdColumns.length, 1, 'and the build proceeded to create the column');
 });
 
 function securitySdk(over = {}) {
@@ -379,6 +431,72 @@ test('#513 apply grants the fixed access set on the BACKING TABLE at organizatio
   // The DERIVED backing table, not the flow name and not the flow's own entity.
   assert.deepStrictEqual(call.privileges, [{ entity: 'new_tickethandling', access: ['create', 'read', 'write', 'delete'], scope: 'organization' }]);
   assert.deepStrictEqual(r.created.bpfRoleGrants['Ticket Handling'], { backingTable: 'new_tickethandling', personas: ['Dispatcher'] });
+});
+
+test('#513 a persona is matched CASE-INSENSITIVELY — the author types the display name twice', async () => {
+  // A persona is a DISPLAY name repeated by hand in two unrelated sections of the spec
+  // (`personas[].persona` and `businessProcessFlows[].securityRoles.personas[]`). An exact-case
+  // Map lookup made "dispatcher" vs "Dispatcher" silently grant nothing while the build reported
+  // success — the worst failure mode for a security feature. The SPEC GATE also accepts the
+  // mismatch, so a case-sensitive apply would contradict its own validator.
+  const s = base({ securityRoles: { personas: ['dispatcher'] } }); // persona is declared as 'Dispatcher'
+  assert.deepStrictEqual(validateAppSpec(s, { profile: 'plan' }).errors || [], [], 'the gate must accept it too');
+  const sdk = securitySdk({
+    queryRecords: async (entity) => {
+      if (entity === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (entity === 'workflow') return [];
+      return [];
+    },
+    createArtifact: (type, def) => ({ id: '66666666-6666-6666-6666-666666666666', type, def }),
+    pushArtifact: async (type, id) => ({ ok: true, id }),
+    activateArtifact: async () => ({ ok: true }),
+    updateRecord: async () => ({}),
+  });
+  const r = await runSdkBuild(s, {
+    sdk, provisionSdk: sdk, apply: true,
+    phases: ['business-process-flows', 'security'], emit: () => undefined,
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r).slice(0, 400));
+  assert.strictEqual(sdk.calls.addEntityPrivilegesToRole.length, 1, 'the case-differing persona must still be granted');
+  assert.deepStrictEqual(
+    sdk.calls.addEntityPrivilegesToRole[0].privileges,
+    [{ entity: 'new_tickethandling', access: ['create', 'read', 'write', 'delete'], scope: 'organization' }],
+  );
+});
+
+test('#513 verify resolves the persona case-insensitively too, or it would report a false failure', async () => {
+  // build and verify must agree. If build grants a case-differing persona but verify queries
+  // `role` by the AS-WRITTEN casing, verify reports a missing grant that is actually present —
+  // which is worse than no check, because it trains the operator to ignore the check.
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const BACKING = 'new_tickethandling';
+  const privs = BPF_ROLE_ACCESS.map((a) => ({
+    Name: `prv${a[0].toUpperCase()}${a.slice(1)}${BACKING}`, PrivilegeId: `bpf-${a}`, PrivilegeType: a[0].toUpperCase() + a.slice(1),
+  }));
+  const queried = [];
+  const read = {
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, o) => {
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') {
+        queried.push((o && o.filter) || '');
+        // The DEPLOYED role carries the persona's own casing, and OData `eq` on a string is
+        // case-INsensitive in Dataverse — but the row is only returned for the canonical name here,
+        // so this asserts the resolver picked it rather than relying on server-side collation.
+        return /'Dispatcher'/.test((o && o.filter) || '') ? [{ roleid: 'role-1', name: 'Dispatcher', description: SDK_ROLE_MARKER }] : [];
+      }
+      if (set === 'workflow') return [{ workflowid: 'w1', statecode: 1 }];
+      return [];
+    },
+    entityPrivileges: async (t) => (t === BACKING ? privs : []),
+    rolePrivileges: async () => BPF_ROLE_ACCESS.map((a) => ({ privilegeId: `bpf-${a}`, depth: 'Global' })),
+  };
+  const s = base({ securityRoles: { personas: ['DISPATCHER'] } });
+  const r = await verifySpec(s, read);
+  const c = r.checks.find((x) => x.kind === 'bpf-roles');
+  assert.ok(c && c.present, `expected a passing bpf-roles check; filters=${JSON.stringify(queried)} check=${JSON.stringify(c)}`);
 });
 
 test('#513 a flow the phase did not build is SKIPPED with a reason, never granted blind', async () => {

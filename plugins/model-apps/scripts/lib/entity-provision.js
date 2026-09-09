@@ -371,17 +371,38 @@ function columnRequiredLevel(c) {
 // the first round of this fix missed it and why the end-to-end verification did not catch it.
 //
 // The projection deliberately matches `readAttributeRequiredLevels` below, so the rows still answer
-// `columnRequiredLevel`. Falls back to `findColumns` only when the raw client is unavailable
-// (unit-test doubles), preserving previous behaviour for them.
-async function findExistingColumns(provision, logical) {
+// `columnRequiredLevel`.
+//
+// ON THE FAILURE PATH, and this is the subtle part: when the raw client is PRESENT but the read
+// fails or returns a non-2xx, we return `[]` rather than falling back to `findColumns`. Falling back
+// would re-introduce the exact poisoning this function exists to remove, silently, on the very
+// branch it targets — `createColumn` is guaranteed to run here for every column that looks new. An
+// empty list instead makes every column look new, and `createColumn`'s `skipIf: isAlreadyExists`
+// de-duplicates the ones that already exist WITHOUT a poisoning pre-read. The cost is that the
+// required/capability reconcile degrades to best-effort for this table, which is the same
+// degradation a `readAttributeRequiredLevels` failure already produces — and it is warned about,
+// because a silent degradation is what this whole line of fixes is about.
+//
+// `findColumns` is therefore reserved for the one case where it cannot poison anything: no raw
+// client at all, which in practice means a unit-test double.
+async function findExistingColumns(provision, logical, warn) {
   const raw = provision && provision.dataverse;
   if (raw && typeof raw.get === 'function') {
+    let res = null;
+    let err = null;
     try {
-      const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes?$select=LogicalName,RequiredLevel`);
-      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
-        return res.body.value.map((a) => ({ logicalName: String(a.LogicalName || '').toLowerCase(), RequiredLevel: a.RequiredLevel }));
-      }
-    } catch { /* fall through to the SDK lister */ }
+      res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes?$select=LogicalName,RequiredLevel`);
+    } catch (e) { err = e; }
+    if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+      return res.body.value.map((a) => ({ logicalName: String(a.LogicalName || '').toLowerCase(), RequiredLevel: a.RequiredLevel }));
+    }
+    const why = err ? ((err && err.message) || String(err)) : `HTTP ${res && res.status}`;
+    if (typeof warn === 'function') {
+      warn(`could not read existing columns for ${logical} (${why}) — treating every declared column as new. `
+        + 'Existing ones are de-duplicated by the create\'s already-exists handling; required-level reconciliation '
+        + 'is skipped for this table this run.');
+    }
+    return [];
   }
   if (typeof (provision && provision.findColumns) !== 'function') return [];
   return (await provision.findColumns(logical)) || [];
@@ -668,7 +689,11 @@ async function findExistingTable(provision, schemaName) {
   const raw = provision && provision.dataverse;
   if (raw && typeof raw.get === 'function') {
     const escaped = logical.replace(/'/g, "''");
-    const res = await raw.get(`/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`);
+    // Wrapped like its `findExistingColumns` sibling. The client resolves `{status}` for a 404 and
+    // even a persistent 5xx, and throws only on a persistent TRANSPORT error; letting that propagate
+    // here would abort the build on a blip the `findTables` fallback might well survive.
+    let res = null;
+    try { res = await raw.get(`/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`); } catch { res = null; }
     if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
       return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
     }
@@ -724,7 +749,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-      existingColRows = await findExistingColumns(provision, logical);
+      existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {
@@ -734,7 +759,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         // plural fallback is only reachable for a STRING displayName; validateAppSpec requires an
         // explicit `pluralName` beside a localized one, because appending "s" is not a plural rule
         // outside English and would write "Línea base del proyectos" into Dataverse.
-        const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${labelText(e.displayName, resolvedLanguageCode)}s`,
+        const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${labelText(e.displayName, resolvedLanguageCode) || e.schemaName}s`,
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;

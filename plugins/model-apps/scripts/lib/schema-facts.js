@@ -25,8 +25,13 @@ function isBuildableColumn(c) {
 //
 // `choiceValueMap` indexes a LOCALIZED option under every language it declares (so sample data in
 // either language resolves), which means several keys can share one value. An eval fact must carry
-// ONE label per value, so collapse to the LOWEST-LCID alias — V8 enumerates integer-like keys
-// ascending, so that is the deterministic choice, not the author's write order.
+// ONE label per value, so collapse to the FIRST alias seen.
+//
+// That resolves to the lowest-LCID label — but NOT because of V8's integer-key ordering, which does
+// not apply here: this map is keyed by label STRINGS, so it enumerates in INSERTION order. The
+// ascending-LCID property comes from `labelAliases`, which emits a localized label's values in LCID
+// order (that is where the integer-key rule applies), combined with `choiceValueMap` being
+// first-wins. Change either of those and the winning label changes.
 function choiceFacts(entity, spec, columnLogical) {
   const map = choiceValueMap(entity, spec)[columnLogical];
   if (!map) return undefined;

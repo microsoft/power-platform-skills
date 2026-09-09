@@ -544,10 +544,14 @@ async function verifySpec(spec, read, opts = {}) {
       continue;
     }
     for (const personaName of f.securityRoles.personas) {
-      const roleName = String(personaName).trim();
+      // Resolve the reference to the persona's CANONICAL name, case-insensitively — the validator
+      // accepts a case-mismatched reference, and the deployed role carries the persona's own casing.
+      // Querying `name eq '<as written>'` would miss it and report a real grant as missing.
+      const declaredPersona = (spec.personas || []).find((p) => String(canonicalPersonaName(p) || '').toLowerCase() === String(personaName).trim().toLowerCase());
+      const roleName = String((declaredPersona && canonicalPersonaName(declaredPersona)) || personaName).trim();
       let row;
       try {
-        const bu = await resolveRoleBusinessUnit((e, o) => read.queryRecords(e, o), (spec.personas || []).find((p) => canonicalPersonaName(p) === roleName)?.businessUnitId, roleBuCache);
+        const bu = await resolveRoleBusinessUnit((e, o) => read.queryRecords(e, o), declaredPersona && declaredPersona.businessUnitId, roleBuCache);
         if (bu) {
           const rows = await read.queryRecords('role', { select: ['roleid', 'description', 'ismanaged'], filter: `name eq '${odataLit(roleName)}'${roleBuClause(bu)}`, top: 5 });
           row = (rows || []).find((r) => r.ismanaged !== true && (r.description || '') === SDK_ROLE_MARKER);

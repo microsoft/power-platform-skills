@@ -78,16 +78,61 @@ function provisionForRoles({ failSet } = {}) {
 }
 
 // Drive forms THEN security so the form id exists, exactly as a real build does.
-async function build(spec, { failSet } = {}) {
+async function build(spec, { failSet, warn } = {}) {
   const { sdk } = makeSimpleMockSdk();
   const { provision, calls } = provisionForRoles({ failSet });
   const events = [];
   const res = await runSdkBuild(spec, {
     sdk, provisionSdk: provision, apply: true,
-    phases: ['forms', 'security'], emit: (e) => events.push(e), warn: () => {},
+    phases: ['forms', 'security'], emit: (e) => events.push(e), warn: warn || (() => {}),
   });
   return { res, calls, events };
 }
+
+// --- the multi-Main-form warning ------------------------------------------------------------------
+//
+// `created.forms` keeps ONE id per entity, so a second Main form silently replaces the first there.
+// The warning exists so the reader is not left believing the id was lost — and it must be HONEST
+// about whether `created.formIds` can actually separate the two, because it sends the reader there.
+
+test('two DISTINCTLY NAMED Main forms are warned about, and pointed at created.formIds', async () => {
+  const spec = specWithFormRoles(null);
+  spec.forms = [
+    { entity: 'new_ticket', name: 'Standard', formType: 'Main' },
+    { entity: 'new_ticket', name: 'Expanded', formType: 'Main' },
+  ];
+  const warnings = [];
+  const { res } = await build(spec, { warn: (m) => warnings.push(String(m)) });
+  const w = warnings.find((m) => /more than one Main form/.test(m));
+  assert.ok(w, JSON.stringify(warnings));
+  assert.match(w, /The other ids are in created\.formIds/);
+  assert.notStrictEqual(res.created.formIds['new_ticket|Main|Standard'], undefined);
+  assert.notStrictEqual(res.created.formIds['new_ticket|Main|Expanded'], undefined);
+  assert.notStrictEqual(res.created.formIds['new_ticket|Main|Standard'], res.created.formIds['new_ticket|Main|Expanded'],
+    'distinct names really do separate them, which is what the warning promises');
+});
+
+test('two UNNAMED Main forms are told the truth: formIds cannot separate them either', async () => {
+  // The defect: `distinct` was computed by rebuilding an identity key from the earlier form's
+  // DISPLAY name ("new_ticket form"), while `formIdentityKey` uses the RAW name (""). Two unnamed
+  // forms therefore looked distinct and the warning sent the reader to `created.formIds` — where
+  // both collide on the SAME key and the first id is genuinely gone. The warning must instead say
+  // "give them distinct names".
+  const spec = specWithFormRoles(null);
+  spec.forms = [
+    { entity: 'new_ticket', formType: 'Main' },
+    { entity: 'new_ticket', formType: 'Main' },
+  ];
+  const warnings = [];
+  const { res } = await build(spec, { warn: (m) => warnings.push(String(m)) });
+  const w = warnings.find((m) => /more than one Main form/.test(m));
+  assert.ok(w, JSON.stringify(warnings));
+  assert.match(w, /created\.formIds cannot separate them either/);
+  assert.doesNotMatch(w, /The other ids are in created\.formIds/,
+    'promising a map that cannot answer the question is the bug');
+  assert.strictEqual(Object.keys(res.created.formIds).filter((k) => k.startsWith('new_ticket|Main|')).length, 1,
+    'and the collision is real: both unnamed forms land on one key');
+});
 
 test('a form offered to two personas resolves them to the roles this build created', async () => {
   const { res, calls } = await build(specWithFormRoles({ personas: ['Dispatcher', 'Technician'] }));

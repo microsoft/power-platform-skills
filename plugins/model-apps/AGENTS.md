@@ -118,9 +118,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   converges only Active/Draft **state**, never stage structure — and `bpfFilter` scopes every query in
   build/verify/teardown to the DEFINITION row, excluding both the platform's activated `type 2` copy and
   same-named TASK flows (also category 4). v1 is deliberately single-entity and linear: cross-entity
-  stages, branching, stage actions and `securityRoles` are **rejected at the spec gate** rather than
-  silently dropped, because the build cannot yet verify them (a BPF's role grants are privileges on the
-  backing table that ACTIVATION creates, so they belong to the `security` phase). The rejection is an
+  stages, branching and stage actions are **rejected at the spec gate** rather than silently dropped,
+  because the build cannot yet verify them. `securityRoles` was rejected alongside them and is now
+  **supported** (`{ "personas": [...] }`): a BPF's role grants are `create/read/write/delete` privileges
+  on the backing table that ACTIVATION creates, so they are applied in the **`security` phase**, after
+  both the flow and the personas' roles exist — persona lookup there is **case-insensitive**, since a
+  persona is a display name the author repeats by hand across two sections of the spec. There is no
+  `everyone`/`fallbackForm`/`order`: those are `forms[].securityRoles` concepts written into formxml,
+  and a privilege has no such equivalent. The rejection is an
   **allow-list at flow, stage AND step level**, because the SDK's normalizers copy a fixed key set and
   discard the rest — so a `branch` written on a stage (where the SDK actually models it), or the very
   plausible `fieldLogicalName` instead of `field` on a step, would otherwise validate clean and deploy

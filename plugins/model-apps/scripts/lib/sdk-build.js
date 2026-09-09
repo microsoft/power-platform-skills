@@ -1882,7 +1882,7 @@ async function runSdkBuild(spec, opts = {}) {
     // `formId`, which the App Spec supports precisely so two forms can share an entity, type and
     // name. Two such pinned forms collide in `formIds` as well, and claiming otherwise would send
     // the reader to a map that cannot answer them either.
-    const mainFormSeen = new Map(); // entity -> first Main form's display name, in spec order
+    const mainFormSeen = new Map(); // entity -> { shownName, identityKey } for the first Main form, in spec order
     defs.forEach((d, i) => {
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
@@ -1890,10 +1890,16 @@ async function runSdkBuild(spec, opts = {}) {
       // here would print "undefined" for exactly the forms the author did not name.
       const shownName = d.f.name || (d.def && d.def.name) || `${key} form`;
       if (!mainFormSeen.has(key)) {
-        mainFormSeen.set(key, shownName);
+        mainFormSeen.set(key, { shownName, identityKey: formIdentityKey(d.f) });
       } else if (typeof opts.warn === 'function') {
-        const distinct = formIdentityKey(d.f) !== formIdentityKey({ entity: d.f.entity, formType: 'Main', name: mainFormSeen.get(key) });
-        opts.warn(`entity ${key} has more than one Main form ("${mainFormSeen.get(key)}" and "${shownName}"); `
+        const first = mainFormSeen.get(key);
+        // Compared on the stored IDENTITY KEY of the earlier form, not on a key rebuilt from its
+        // DISPLAY name. Those differ for an UNNAMED form: `formIdentityKey` uses `f.name || ''`
+        // while `shownName` falls back to "<entity> form", so rebuilding from the display name made
+        // two unnamed Main forms look distinct when they actually collide in `created.formIds` —
+        // and the warning then pointed the reader at a map that could not separate them either.
+        const distinct = formIdentityKey(d.f) !== first.identityKey;
+        opts.warn(`entity ${key} has more than one Main form ("${first.shownName}" and "${shownName}"); `
           + `created.forms keeps ONE id per entity for the app shell, so it now reports "${shownName}". `
           + (distinct
             ? 'The other ids are in created.formIds, keyed "entity|formType|name" — read that map rather than re-querying systemform.'
@@ -3145,8 +3151,16 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('security', `flow roles for ${f.name}`, async () => {
         const personas = (f.securityRoles.personas || []);
+        // Case-INSENSITIVE, exactly like the form path immediately below — and for the same reason.
+        // `validateBpfSecurityRoles` resolves the persona reference against a LOWERCASED set, so a
+        // spec naming "dispatcher" for a persona declared as "Dispatcher" validates clean. A
+        // case-sensitive lookup here would then halt at the near-last phase, with a message claiming
+        // the persona "has no role in this build" — which is false; it was declared and its role was
+        // created. Late halt, wrong diagnosis, half-built app.
+        const roleByLower = new Map(Object.entries(result.created.roles || {})
+          .map(([name, rr]) => [String(name).trim().toLowerCase(), rr]));
         const roleIds = personas.map((p) => {
-          const rr = result.created.roles[String(p).trim()];
+          const rr = roleByLower.get(String(canonicalPersonaName({ persona: p }) || '').toLowerCase());
           if (!rr || !rr.roleId) throw new BuildHalt(`${label}: persona '${p}' has no role in this build`, { phase: 'security', code: 'bpf-role-unresolved', recoverable: false });
           return { persona: p, roleId: rr.roleId };
         });
