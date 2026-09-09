@@ -49,6 +49,8 @@ const EXPECTED_COVERAGE = [
   'malformed-platform-result',
   'partial-platform-dispatch',
   'firebase-worker-executable-contract',
+  'conditional-project-creation-questions',
+  'new-project-propagation-wait',
 ].sort();
 const EXPECTED = {
   projectId: 'field-ops-prod',
@@ -89,6 +91,52 @@ test('every planned setup-fcm scenario is traceable exactly once', () => {
       assert.ok(fs.statSync(fixturePath).isFile(), `${relativePath} must be a fixture file`);
     }
   }
+});
+
+test('Firebase project prompting branches before creation-only questions', () => {
+  const reference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/firebase-mcp-provisioning.md'),
+    'utf8',
+  );
+  const skill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-fcm/SKILL.md'),
+    'utf8',
+  );
+  const evaluation = JSON.parse(fs.readFileSync(EVAL_PATH, 'utf8')).evals
+    .find(({ coverage }) => coverage === 'conditional-project-creation-questions');
+
+  assert.match(reference, /first `AskUserQuestion` asks only\s+which path to take/);
+  assert.match(reference, /Do not include new-project ID or display-name fields in this first question/);
+  assert.match(reference, /Create a new Firebase project:\*\* now ask for a globally unique project ID\s+and optional display name together/);
+  assert.match(reference, /Existing Firebase project:\*\* select one exact `projectId`[\s\S]*Do not ask for a new project ID or display name/);
+  assert.match(skill, /Follow the reference's branch-first prompting exactly/);
+  assert.match(skill, /Ask those two\s+creation-only fields together only after/);
+  assert.ok(evaluation, 'conditional project-question eval exists');
+  assert.match(evaluation.expected_output, /first asks only which project path/);
+  assert.match(evaluation.expected_output, /Only after/);
+});
+
+test('new Firebase projects wait for bounded visibility propagation', () => {
+  const reference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/firebase-mcp-provisioning.md'),
+    'utf8',
+  );
+  const skill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-fcm/SKILL.md'),
+    'utf8',
+  );
+  const evaluation = JSON.parse(fs.readFileSync(EVAL_PATH, 'utf8')).evals
+    .find(({ coverage }) => coverage === 'new-project-propagation-wait');
+
+  assert.match(reference, /take up to one minute to appear in `firebase_list_projects`/);
+  assert.match(reference, /wait 5 seconds between attempts for up to 60\s+seconds total/);
+  assert.match(reference, /Do not retry `firebase_create_project` while waiting/);
+  assert.match(reference, /Do not call `firebase_update_environment`,\s+`firebase_get_project`, `firebase_list_apps`/);
+  assert.match(reference, /project-propagation-timeout/);
+  assert.match(skill, /poll the full paginated project list\s+immediately and then every 5 seconds for up to 60 seconds/);
+  assert.ok(evaluation, 'new-project propagation eval exists');
+  assert.match(evaluation.expected_output, /does not replay firebase_create_project/);
+  assert.match(evaluation.expected_output, /every 5 seconds for up to 60 seconds/);
 });
 
 test('setup-apns guidance scenarios remain contiguous and fixture-free', () => {

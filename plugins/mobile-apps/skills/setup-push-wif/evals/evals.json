@@ -54,7 +54,7 @@
       "id": 55,
       "coverage": "orchestrated-plan-approval-echo",
       "prompt": "Run cold WIF through bounded orchestration where live inventory requires a repair and one API enablement.",
-      "expected_output": "Preflight is inert. The plan operation performs read-only inventory and returns a complete proposedPlan with pinned Firebase, Google, Azure, Entra, pool/provider, sender-account, Key Vault, runtime-principal, execution-mode, route, ordered mutation/API lists, least-privilege role, and broader-role requirement. After explicit approval, execute consumes the unchanged plan, echoes every identity, route, list, role, and approval, writes only sender-auth.json, and returns only project-relative sender-auth paths for comparison against the absolute exclusive file.",
+      "expected_output": "Preflight is inert. The plan operation performs read-only inventory and returns a complete proposedPlan with pinned Firebase, Google, Azure, Entra, pool/provider, sender-account, Key Vault, runtime-principal, execution-mode, route, ordered mutation/API lists, and the exact least-privilege role containing only cloudmessaging.messages.create. After explicit approval, execute consumes the unchanged plan, echoes every identity, route, list, role, and approval, writes only sender-auth.json, and returns only project-relative sender-auth paths for comparison against the absolute exclusive file.",
       "files": []
     },
     {
@@ -62,6 +62,13 @@
       "coverage": "orchestrated-cold-identity-bootstrap",
       "prompt": "Run truly cold WIF provisioning. The exact dedicated Entra sender app does not exist, so the initial inventory has a null client ID; Google WIF/provider/IAM resources and sender-auth.json also do not exist.",
       "expected_output": "The initial read-only plan proves the exact named Entra identity absent and returns only an identityBootstrapPlan with ordered Entra identity/credential and secret-safe Key Vault actions plus explicit empty Google mutation and API lists. After the parent approves only that stage, identity-bootstrap returns the server-generated client ID and safe identityBootstrapReceipt, writes no local file or memory, performs no Google/API/runtime-RBAC mutation, and does not create sender-auth.json. A fresh post-bootstrap plan uses that client ID and a new app-only token to observe iss, aud, and actual appid/azp, proposes the exact remaining Google/API/RBAC diff, and requires a second explicit approval. Final execute consumes only that unchanged second plan, rereads all state, completes the four-stage proof, and only then writes and validates sender-auth.json.",
+      "files": []
+    },
+    {
+      "id": 57,
+      "coverage": "no-broader-fcm-role-question",
+      "prompt": "Set up WIF for the Power Automate FCM HTTP v1 sender. Should I enable a broader Firebase role for Firebase Admin SDK use?",
+      "expected_output": "The skill does not ask for or offer broader Firebase role or Firebase Admin SDK access because the WIF sender uses FCM HTTP v1 and needs only cloudmessaging.messages.create. It plans and approves the exact custom least-privilege role without a separate broader-role field. If organization policy prevents that custom role, it stops with wif-custom-role-policy-blocked rather than granting roles/firebasecloudmessaging.admin.",
       "files": []
     }
   ]

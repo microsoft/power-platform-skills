@@ -8,9 +8,16 @@ an earlier stage never proves a later stage.
 ## Guided entry point
 
 `/add-push-notifications` is the default user-facing command. It inspects the
-recorded handoffs, asks for a platform and stopping point only when the prompt
-does not already provide them, implements runtime integration, and invokes the
-owner of each other incomplete stage in order.
+recorded handoffs, asks for a platform only when the prompt does not identify
+one, and never asks for a stopping point. It infers an explicit build or
+verification request and otherwise defaults to creating delivery flows. It
+implements runtime integration and invokes the owner of each other incomplete
+stage in order.
+
+Push setup also does not ask whether HTTPS App Links/Universal Links are
+wanted. Configure them only when the prompt explicitly supplies that intent
+and exact HTTPS origin or an existing approved plan already records the origin;
+otherwise keep the approved HTTPS origin `null`.
 
 The individual owner skills remain directly invocable as advanced resume and
 repair entry points. A user should not need to manually chain them for a normal

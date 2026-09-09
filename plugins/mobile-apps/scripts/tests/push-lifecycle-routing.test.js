@@ -91,8 +91,10 @@ test('add-push owns runtime integration and orchestrates platform owners', () =>
   }
 
   assert.match(skill, /default user-facing push command/);
-  assert.match(skill, /Select one stopping point/);
+  assert.match(skill, /Resolve the stopping point/);
+  assert.match(skill, /Never ask the\s+user to choose a stopping point/);
   assert.match(skill, /Default to \*\*Create delivery flows\*\*/);
+  assert.match(skill, /do not ask about HTTPS App Links\/Universal Links/);
   assert.match(skill, /invoke `\/build-android`/);
   assert.match(skill, /invoke `\/verify-android-push`/);
   assert.match(skill, /never requires or fabricates\s+`sender-auth\.json`/);
@@ -137,7 +139,7 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
 
   assert.deepStrictEqual(
     addPush.evals.map(({ id }) => id),
-    Array.from({ length: 29 }, (_, index) => index + 1),
+    Array.from({ length: 31 }, (_, index) => index + 1),
   );
   assert.match(addPush.evals[14].expected_output, /invokes build-android/);
   assert.match(addPush.evals[14].expected_output, /invokes verify-android-push/);
@@ -168,6 +170,12 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.strictEqual(addPush.evals[28].coverage, 'cold-wif-identity-bootstrap-reapproval');
   assert.match(addPush.evals[28].expected_output, /null Entra client ID/);
   assert.match(addPush.evals[28].expected_output, /second explicit approval/);
+  assert.strictEqual(addPush.evals[29].coverage, 'apns-question-after-firebase');
+  assert.match(addPush.evals[29].expected_output, /does not ask whether an APNs credential is already uploaded/);
+  assert.match(addPush.evals[29].expected_output, /Only then/);
+  assert.strictEqual(addPush.evals[30].coverage, 'noninteractive-stopping-point-and-links');
+  assert.match(addPush.evals[30].expected_output, /does not ask for a stopping point/);
+  assert.match(addPush.evals[30].expected_output, /does not ask whether Universal Links or App Links are wanted/);
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),

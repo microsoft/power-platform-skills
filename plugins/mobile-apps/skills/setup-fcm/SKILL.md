@@ -68,12 +68,25 @@ automation as fallback.
    exact project root as `project_dir` and the selected ID as `active_project`.
    Immediately rerun `firebase_get_environment`; continue only when both values
    persisted, then require `firebase_get_project` to return the same project.
+   Follow the reference's branch-first prompting exactly: first ask only
+   whether to use an existing Firebase project, create a new Firebase project,
+   or add Firebase to an existing Google Cloud project. Do not ask for a new
+   project ID or display name in that path-selection question. Ask those two
+   creation-only fields together only after the user chooses **Create a new
+   Firebase project**. Existing Firebase selection asks only for one exact
+   listed project ID; existing Google Cloud selection asks only for its exact
+   project ID.
    The official
    Firebase MCP `firebase_create_project` tool in stable `firebase-tools`
    15.27.0 handles both new projects and adding Firebase to an existing Google
    Cloud project; there is no separate addFirebase core MCP tool. New
    organization/folder placement is unsupported: Do not fall back to CLI
-   parent flags.
+   parent flags. After any successful `firebase_create_project` call, follow
+   the reference's propagation gate: poll the full paginated project list
+   immediately and then every 5 seconds for up to 60 seconds. Do not activate
+   the project, register apps, retrieve configs, or replay the create mutation
+   until the exact project ID becomes visible. Stop with the resumable
+   propagation-timeout result if it remains absent at the deadline.
 6. In the parent, collect every selected platform's app decision before
    dispatching platform work. Use the exact app-list scratch files and resolver
    branches in the reference. `selection-required` needs an immutable

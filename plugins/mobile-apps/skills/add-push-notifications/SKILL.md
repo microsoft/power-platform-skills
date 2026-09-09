@@ -69,10 +69,11 @@ and shared navigation module -> 6. Add permission UX -> 7. Wire auth/topic
 lifecycle -> 8. Wire navigation sources -> 9. Validate -> 10. Continue
 sequential downstream owners -> 11. Update memory bank and report
 
-### 0. Select one stopping point and collect orchestration decisions
+### 0. Resolve the stopping point and collect orchestration decisions
 
 Infer the requested platforms and stopping point from the user's prompt and
-existing plan. Ask one grouped question only when either is unclear:
+existing plan. Ask for the platform only when it is unclear. Never ask the
+user to choose a stopping point:
 
 - **Configure app** — complete Firebase/platform prerequisites and app runtime
   integration, then stop.
@@ -86,8 +87,8 @@ notifications. Building and physical verification require explicit intent
 because they involve customer-managed signing, installation, and device
 actions.
 
-Record the selected platforms and stopping point for this run. Do not ask the
-user to choose or remember the individual owner commands.
+Record the inferred/defaulted stopping point for this run without prompting.
+Do not ask the user to choose or remember the individual owner commands.
 
 In the same main-context decision pass, resolve everything knowable before
 worker dispatch. Workers have no authority to ask, infer, or broaden these
@@ -105,28 +106,25 @@ choices:
   navigation-sender files that need conversion, and the Android channel ID.
   Ask one grouped navigation question only for genuine ambiguity; never let a
   worker discover and choose another screen or file;
-- ask whether HTTPS App Links/Universal Links are wanted. Record one approved
-  exact HTTPS origin or `null`. Never infer an origin from a website, tenant,
-  environment, custom scheme, or existing unapproved native setting;
-- when iOS is selected, record the registered-device mode
-  (`development`, `ad-hoc`, or both), approved Apple Team ID, and whether the
-  safe Apple/APNs handoffs are already complete. Do not request a credential,
-  credential path, account identity, device identifier, signing-asset
-  identifier, screenshot, or portal output.
-
-After Firebase identity is fixed in Step 3, complete any identity-dependent
-iOS and WIF questions in the main context. Present every user-performed Apple
-and Firebase Console instruction in the canonical `/setup-apple-ios` then
-`/setup-apns` order and collect each required Yes/No attestation before an iOS
-worker is eligible. This manual Apple Developer/Xcode guidance does not
-change credentials or portal state. It does not automate Apple setup or emit a proof artifact.
+- do not ask about HTTPS App Links/Universal Links as part of push setup. Use
+  an exact HTTPS origin only when the user's prompt explicitly requests these
+  links or the existing approved plan already records one; otherwise record
+  `null`. Never infer an origin from a website, tenant, environment, custom
+  scheme, or existing unapproved native setting;
+- when iOS is selected, note that platform-specific Apple/APNs decisions remain
+  pending unless they are already safely recorded. Do not ask whether an APNs
+  credential is uploaded, which credential route applies, or whether Firebase
+  Console accepted it during this pre-Firebase decision pass. Those questions
+  require the exact Firebase project and immutable iOS app identity established
+  in Step 3. Do not request a credential, credential path, account identity,
+  device identifier, signing-asset identifier, screenshot, or portal output.
 
 For cold WIF setup, collect and pin the exact Firebase/Google project, Google
 execution mode, Azure tenant/subscription/resource group, pool/provider,
 sender service account, exact Entra sender display name, Key Vault URI and
 secret name, and runtime connection principal. Pin the Entra sender client ID
 when it exists; otherwise pass `null` rather than inventing one. Do not guess
-the route, diff, mutation list, API enablement list, or broader-role need.
+the route, diff, mutation list, or API enablement list.
 Those are live facts produced by the read-only WIF planning phase in Step 4.
 If initial inventory proves the exact dedicated Entra identity is absent, the
 parent first displays and approves only the minimal
@@ -207,6 +205,20 @@ Android and iOS configs must name the same exact project.
 Only after this exact Firebase join, reread `memory-bank.md`. Do not freeze the
 pre-wave SHA-256 until the WIF read-only plan and all parent approvals are
 complete, immediately before execution dispatch in Step 4.3.
+
+At this point, after Firebase login when needed, exact project activation and
+read-back, and the immutable iOS Firebase app has been created or reused and
+validated, collect unresolved iOS decisions in the main context:
+registered-device mode (`development`, `ad-hoc`, or both), approved Apple Team
+ID, Apple setup completion, APNs `.p8` or `.p12` route, and the Firebase
+Console upload attestation. Reuse safely recorded answers rather than asking
+again, but never solicit or confirm them before the Firebase foundation
+exists. Complete any identity-dependent WIF questions at this same
+post-Firebase boundary. Present every user-performed Apple and Firebase Console
+instruction in the canonical `/setup-apple-ios` then `/setup-apns` order and
+collect each required Yes/No attestation before an iOS worker is eligible.
+This manual Apple Developer/Xcode guidance does not change credentials or
+portal state. It does not automate Apple setup or emit a proof artifact.
 
 ### 4. Run the bounded prerequisite/runtime/sender-auth wave
 
@@ -419,12 +431,13 @@ post-bootstrap `sender-auth-plan`, use a separate parent `AskUserQuestion`
 call to display the safe pinned identities, Google execution mode, route,
 resource group, Key Vault URI/secret name, runtime connection principal,
 ordered remaining mutation list, ordered API-enablement list,
-least-privilege role, and whether a broader FCM role is required. Obtain
-approval for that exact whole remaining plan and a separate explicit Yes/No
-decision for the broader role when required. The cold path must clearly label
-this as approval #2. Do not ask the worker, summarize away an operation, reuse
-bootstrap consent, or treat approval of `reuse`, one mutation, or one API as
-approval of another.
+and the exact least-privilege role. Obtain approval for that exact whole
+remaining plan. Do not ask about a broader Firebase role or Firebase Admin SDK
+access; the WIF sender requires only `cloudmessaging.messages.create`. A plan
+that cannot use that least-privilege custom role is blocked rather than
+broadened. The cold path must clearly label this as approval #2. Do not ask the
+worker, summarize away an operation, reuse bootstrap consent, or treat approval
+of `reuse`, one mutation, or one API as approval of another.
 
 If either plan returns `NEEDS_CONTEXT`, batch its stable requests into the
 parent question and retry only that planning stage, at most twice. A malformed
@@ -438,12 +451,9 @@ envelope is exactly:
 decision_envelope:
   approved: true
   approved_plan: <exact unchanged proposedPlan object>
-  broader_fcm_role_approved: true|false
 ```
 
-The broader-role decision must be `true` exactly when
-`broaderFcmRoleRequired` is true, and otherwise must be false. Any plan drift
-or newly required operation returns `NEEDS_CONTEXT:
+Any plan drift or newly required operation returns `NEEDS_CONTEXT:
 wif-route-approval-required`; never patch the approved object in place.
 
 Only after the final remaining-plan approval is complete, reread the raw bytes of
@@ -617,9 +627,9 @@ mutation stage; require a fresh read-only inventory to classify the observed
 partial or completed state. For final execution context, return to read-only
 `operation: plan`, validate a fresh exact proposal, display and approve it
 through the parent, and only then retry `operation: execute` with the unchanged
-replacement plan. If a required broader role is not approved, do not dispatch
-WIF execution; record sender authentication as incomplete while continuing
-independent eligible work.
+replacement plan. If the least-privilege custom role cannot be created or
+reused, do not dispatch WIF execution; record sender authentication as blocked
+while continuing independent eligible work. Never offer an admin-role fallback.
 
 #### 4.7 Independently revalidate and merge once
 
@@ -668,11 +678,13 @@ in-app, configured custom-scheme, approved HTTPS, and FCM-data parsers plus one
 dispatcher from `navigation-link-contract.md`. Never expose a raw route as an
 external destination.
 
-Ask for an HTTPS origin before adding App Link/Universal Link configuration;
-never guess one. When provided, add exact Android `intentFilters` and iOS
-`associatedDomains` settings, then guide the customer to host the platform
-association files. Record parser, native config, customer-confirmed association
-files, and physical installed-build verification separately.
+Add App Link/Universal Link configuration only when the user explicitly
+requested it with an exact HTTPS origin or the approved plan already contains
+one; never prompt for or guess an origin during push setup. When one is already
+approved, add exact Android `intentFilters` and iOS `associatedDomains`
+settings, then guide the customer to host the platform association files.
+Record parser, native config, customer-confirmed association files, and
+physical installed-build verification separately.
 
 Create `src/native/pushNotifications.ts` using the required surface and result
 types from the push contract. It must:

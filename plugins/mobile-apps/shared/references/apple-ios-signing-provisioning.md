@@ -53,7 +53,6 @@ decision_envelope:
   selected_modes: development|ad-hoc|development,ad-hoc
   apple_confirmations:
     identity: true
-    membership_access_agreements: true
     explicit_app_id: true
     push_capability: true
     intended_devices_registered: true
@@ -130,7 +129,7 @@ A successful `execute` uses this exact shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-ios-prerequisites-worker","runId":"<id>","operation":"execute","stage":"ios-prerequisites","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","firebaseIosAppId":"<id>","bundleIdentifier":"<id>","appleTeamId":"<id>"},"decisions":{"plistPath":"<project-relative plist path>","selectedModes":"development,ad-hoc","appleConfirmations":{"identity":true,"membershipAccessAgreements":true,"explicitAppId":true,"pushCapability":true,"intendedDevicesRegistered":true,"developmentCertificate":true,"developmentProfile":true,"distributionCertificate":true,"adHocProfile":true,"localXcodeSigning":true},"apnsMethod":"p8","apnsKeyId":"<safe id>","certificateEnvironments":null,"firebaseConsoleUploadConfirmed":true,"appleConfirmedAt":"<UTC timestamp>","apnsConfirmedAt":"<UTC timestamp>"},"changedFiles":[],"validatedFiles":["<project-relative plist path>"],"validations":[{"name":"ios-identity","ok":true},{"name":"apple-confirmation-envelope","ok":true},{"name":"apns-confirmation-envelope","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","appleState":{"status":"user-confirmed; not portal proof"},"apnsState":{"status":"configured, device verification pending"},"selectedModes":"development,ad-hoc","credentialType":"apns-auth-key"}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-ios-prerequisites-worker","runId":"<id>","operation":"execute","stage":"ios-prerequisites","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","firebaseIosAppId":"<id>","bundleIdentifier":"<id>","appleTeamId":"<id>"},"decisions":{"plistPath":"<project-relative plist path>","selectedModes":"development,ad-hoc","appleConfirmations":{"identity":true,"explicitAppId":true,"pushCapability":true,"intendedDevicesRegistered":true,"developmentCertificate":true,"developmentProfile":true,"distributionCertificate":true,"adHocProfile":true,"localXcodeSigning":true},"apnsMethod":"p8","apnsKeyId":"<safe id>","certificateEnvironments":null,"firebaseConsoleUploadConfirmed":true,"appleConfirmedAt":"<UTC timestamp>","apnsConfirmedAt":"<UTC timestamp>"},"changedFiles":[],"validatedFiles":["<project-relative plist path>"],"validations":[{"name":"ios-identity","ok":true},{"name":"apple-confirmation-envelope","ok":true},{"name":"apns-confirmation-envelope","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","appleState":{"status":"user-confirmed; not portal proof"},"apnsState":{"status":"configured, device verification pending"},"selectedModes":"development,ad-hoc","credentialType":"apns-auth-key"}
 ```
 
 The JSON status must agree with the first line. Require exact `contractVersion`,
@@ -270,27 +269,7 @@ These confirmations are attestations from the user, not portal read-back,
 machine validation, or proof. Never describe them as verified, validated, or
 proven by Apple.
 
-## 1. Membership, access, and agreements
-
-Guide the user to sign in at <https://developer.apple.com/account/> and select
-the exact approved Team. They confirm:
-
-- Apple Developer Program membership is active;
-- their role can manage Certificates, Identifiers & Profiles for the work;
-- no blocking agreements or account notices remain.
-
-Do not accept agreements, alter membership, invite users, change roles, or
-change legal/billing data. Those actions belong to the Account Holder or the
-organization's Apple administrator.
-
-After presenting the instructions, ask:
-
-```text
-Is membership, access, and agreement setup complete for Team <TEAM_ID>?
-Choices: Yes / No
-```
-
-## 2. Exact explicit App ID and Push Notifications
+## 1. Exact explicit App ID and Push Notifications
 
 In Certificates, Identifiers & Profiles, guide the user to Identifiers. They
 must reuse the exact explicit App ID for `<BUNDLE_ID>` or create it only if
@@ -315,7 +294,7 @@ Choices: Yes / No
 If an identifier exists on another team, only a wildcard match exists, or the
 exact identifier cannot be created, stop for an Apple administrator decision.
 
-## 3. Physical device registration
+## 2. Physical device registration
 
 For development and ad-hoc profiles, every target device must be registered on
 the approved Team. Guide the user to obtain each UDID locally through Finder,
@@ -333,7 +312,7 @@ Choices: Yes / No
 If the portal reports a device-limit or registration conflict, stop and direct
 the user to their Apple administrator.
 
-## 4. Mode-specific signing certificates
+## 3. Mode-specific signing certificates
 
 Explain which certificate type each selected mode requires:
 
@@ -371,7 +350,7 @@ for Team <TEAM_ID>?
 Choices: Yes / No
 ```
 
-## 5. Mode-specific provisioning profiles
+## 4. Mode-specific provisioning profiles
 
 Guide the user to create or regenerate each profile selected in the approved
 mode set:
@@ -401,7 +380,7 @@ intended registered devices?
 Choices: Yes / No
 ```
 
-## 6. Local Xcode installation
+## 5. Local Xcode installation
 
 Guide the user to install the current supported Xcode from the Mac App Store or
 Apple Developer downloads, launch it once, accept its license locally, and
@@ -441,7 +420,6 @@ non-secret block:
 - teamId: <TEAM_ID>
 - bundleIdentifier: <BUNDLE_ID>
 - scope: registered-device <SELECTED_MODES>
-- membershipAccessAgreements: user-confirmed
 - explicitAppId: user-confirmed
 - pushNotificationsCapability: user-confirmed
 - intendedDevicesRegistered: user-confirmed

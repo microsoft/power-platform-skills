@@ -53,8 +53,7 @@ Enter worker mode only for the exact common fields `contract_version: 1`,
   and performs no Google mutation or local write;
 - `operation: execute` receives the pre-wave memory hash, exclusive absolute
   `sender-auth.json` path, `approved: true`, the exact unchanged
-  post-bootstrap/reuse/repair `approved_plan`, and the explicit broader-role
-  decision.
+  post-bootstrap/reuse/repair `approved_plan`.
 
 In that mode:
 
@@ -62,11 +61,11 @@ In that mode:
   tenant/subscription/resource group, Google execution mode, pool/provider,
   sender service account, Entra sender app, Key Vault URI/secret name, runtime
   connection principal, route, ordered mutation/API-enablement approval lists,
-  least-privilege role, and broader-role decision, and stop on any mismatch;
+  and the exact least-privilege role, and stop on any mismatch;
 - never call `AskUserQuestion`; return
   `NEEDS_CONTEXT: <exact missing or newly required parent decision>` when an
   approval, route, mutation, API enablement, fallback, installation, rotation,
-  replacement, or broader role was not pre-approved;
+  or replacement was not pre-approved;
 - keep `preflight` entirely inert and `plan` read-only. Planning never grants
   mutation permission. If initial inventory proves the named dedicated Entra
   identity is absent, the parent must display and approve only the bootstrap
@@ -210,15 +209,18 @@ guarded official CLI fallback, plus `@azure/mcp@2.0.5`:
 4. Classify exactly one route: validate/reuse, approved repair, or approved new
    provisioning. Show the full state/diff, resource and RBAC mutations,
    security impact, and rollback. Obtain explicit confirmation before every
-   repair/provision route and before any API enablement or broader FCM fallback.
+   repair/provision route and before any API enablement. The WIF sender always
+   uses the least-privilege custom role containing only
+   `cloudmessaging.messages.create`; do not offer or ask about a broader Firebase
+   role or Firebase Admin SDK access.
    In orchestrated `operation: plan`, an absent identity returns only its
    narrow Entra/credential/Key Vault bootstrap plan. After separate parent
    approval, `identity-bootstrap` executes only that list, returns safe
    generated identity fields, and stops. A new post-bootstrap read-only plan
    must then use that client ID and a fresh token to return the exact remaining
    route, safe field-level diff, ordered Google/API/RBAC mutation lists, pinned
-   identities/decisions, least-privilege role, and broader-role need. The
-   parent obtains a second approval. In final `operation: execute`, compare the
+   identities/decisions, and least-privilege role. The parent obtains a second
+   approval. In final `operation: execute`, compare the
    fresh inventory with the unchanged second approved plan; any addition or
    change is `NEEDS_CONTEXT` rather than an interactive prompt.
 5. In direct mode, worker `identity-bootstrap`, or worker final `execute`,

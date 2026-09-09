@@ -254,6 +254,20 @@
       "prompt": "Preflight and then execute one Firebase platform worker while memory-bank.md exists and result paths are project-relative.",
       "expected_output": "The Task prompt carries operation: preflight and accepts only the exact mutation-free capability result. Execution receives the pre-wave SHA-256, may read only raw memory-bank.md bytes to compare that hash, never writes memory, and returns project-relative paths that the parent resolves against absolute exclusive files. Every return must explicitly report scratchCleanupComplete true and ownershipReleased true before fallback, retry, or parent file access.",
       "files": []
+    },
+    {
+      "id": 32,
+      "coverage": "conditional-project-creation-questions",
+      "prompt": "Set up Firebase, but I have not decided whether to use an existing Firebase project or create a new one.",
+      "expected_output": "The skill first asks only which project path to use. It does not ask for a new project ID or display name in the same question. If the user selects an existing Firebase project, it asks only for one exact project from the latest list. Only after the user selects Create a new Firebase project does it ask for the globally unique project ID and optional display name together.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "coverage": "new-project-propagation-wait",
+      "prompt": "Firebase project creation succeeded, but the new project is missing from the first firebase_list_projects response.",
+      "expected_output": "The skill treats the missing first read-back as expected propagation delay, not creation failure. It does not replay firebase_create_project or proceed to project activation, app registration, or SDK config retrieval. It polls the full paginated project list every 5 seconds for up to 60 seconds, continues immediately when the exact project ID appears, and otherwise stops with a resumable project-propagation-timeout result.",
+      "files": []
     }
   ]
 }

@@ -28,6 +28,10 @@ function frontmatterTools(relativePath) {
     .filter(Boolean);
 }
 
+function frontmatter(relativePath) {
+  return read(relativePath).match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+}
+
 function workerResults(relativePath) {
   return [...read(relativePath).matchAll(/^WORKER_RESULT: (\{.+\})$/gm)]
     .map((match) => JSON.parse(match[1]));
@@ -51,6 +55,29 @@ test('Firebase foundation is serial with a bounded two-platform wave', () => {
   assert.match(setupFcm, /If only one platform needs work, use one synchronous worker/);
   assert.match(setupFcm, /batch maximum is two|at most two|exactly two/i);
   assert.match(setupFcm, /After every dispatched platform has joined successfully/);
+});
+
+test('APNs upload questions wait for the exact Firebase iOS app', () => {
+  const addPush = read('skills/add-push-notifications/SKILL.md');
+  const stepThree = addPush.indexOf('### 3. Serially resume or establish and join Firebase client setup');
+  const postFirebaseQuestions = addPush.indexOf('At this point, after Firebase login when needed');
+  const stepFour = addPush.indexOf('### 4. Run the bounded prerequisite/runtime/sender-auth wave');
+
+  assert.ok(stepThree >= 0, 'Step 3 exists');
+  assert.ok(postFirebaseQuestions > stepThree, 'APNs questions follow Firebase setup');
+  assert.ok(stepFour > postFirebaseQuestions, 'APNs questions are collected before worker dispatch');
+  assert.match(
+    addPush.slice(0, stepThree),
+    /Do not ask whether an APNs\s+credential is uploaded/,
+  );
+  assert.match(
+    addPush.slice(postFirebaseQuestions, stepFour),
+    /immutable iOS Firebase app has been created or reused and\s+validated/,
+  );
+  assert.match(
+    addPush.slice(postFirebaseQuestions, stepFour),
+    /Firebase\s+Console upload attestation/,
+  );
 });
 
 test('Task capability checks carry prompt-level preflight operations', () => {
@@ -111,6 +138,39 @@ test('every bounded worker publishes a mutation-free preflight result', () => {
       `${workerFile} makes preflight inert`,
     );
   }
+});
+
+test('bounded workers inherit the host default available model', () => {
+  for (const workerFile of [
+    'agents/firebase-platform-worker.md',
+    'agents/push-runtime-worker.md',
+    'agents/push-wif-worker.md',
+    'agents/push-ios-prerequisites-worker.md',
+  ]) {
+    assert.doesNotMatch(
+      frontmatter(workerFile),
+      /^model:/m,
+      `${workerFile} must not pin a model unavailable to the host`,
+    );
+  }
+});
+
+test('iOS prerequisites omit the separate Apple membership attestation', () => {
+  const setupApple = read('skills/setup-apple-ios/SKILL.md');
+  const appleReference = read('shared/references/apple-ios-signing-provisioning.md');
+  const iosWorker = read('agents/push-ios-prerequisites-worker.md');
+  const setupAppleEvals = JSON.parse(read('skills/setup-apple-ios/evals/evals.json'));
+  const evaluation = setupAppleEvals.evals
+    .find(({ coverage }) => coverage === 'skip-membership-access-question');
+
+  for (const content of [appleReference, iosWorker]) {
+    assert.doesNotMatch(content, /membership_access_agreements/);
+    assert.doesNotMatch(content, /membershipAccessAgreements/);
+  }
+  assert.doesNotMatch(appleReference, /^## \d+\. Membership, access, and agreements$/m);
+  assert.match(setupApple, /Do not perform or ask for a separate Apple Developer Program membership/);
+  assert.ok(evaluation, 'membership-question regression eval exists');
+  assert.match(evaluation.expected_output, /does not ask this membership, role, access, or agreement question/);
 });
 
 test('cold WIF stages absent Entra identity before the remaining approval', () => {
@@ -298,13 +358,18 @@ test('parallel orchestration evals cover success and safe degradation', () => {
     [addPushPath, 'platform-specific-partial-blocker', /iOS as blocked/],
     [addPushPath, 'worker-contract-preflight-plan-paths-and-ios-fallback', /operation: preflight/],
     [addPushPath, 'cold-wif-identity-bootstrap-reapproval', /second explicit approval/],
+    [addPushPath, 'apns-question-after-firebase', /Only then/],
+    [addPushPath, 'noninteractive-stopping-point-and-links', /approved HTTPS origin of null/],
     [setupFcmPath, 'parallel-platform-success', /exactly two/],
     [setupFcmPath, 'single-platform-worker', /one synchronous/],
     [setupFcmPath, 'task-unavailable-inline-fallback', /Android-then-iOS/],
     [setupFcmPath, 'malformed-platform-result', /rejects Android as blocked/],
     [setupFcmPath, 'partial-platform-dispatch', /joins and validates Android first/],
     [setupFcmPath, 'firebase-worker-executable-contract', /scratchCleanupComplete true/],
+    [setupFcmPath, 'conditional-project-creation-questions', /Only after/],
+    [setupFcmPath, 'new-project-propagation-wait', /every 5 seconds for up to 60 seconds/],
     ['skills/setup-push-wif/evals/evals.json', 'orchestrated-cold-identity-bootstrap', /server-generated client ID/],
+    ['skills/setup-push-wif/evals/evals.json', 'no-broader-fcm-role-question', /wif-custom-role-policy-blocked/],
   ];
 
   for (const [relativePath, coverage, expectedPattern] of cases) {

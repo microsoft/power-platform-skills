@@ -22,7 +22,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   ));
   const ids = evals.map(({ id }) => id).sort((left, right) => left - right);
 
-  assert.deepStrictEqual(ids, Array.from({ length: 56 }, (_, index) => index + 1));
+  assert.deepStrictEqual(ids, Array.from({ length: 57 }, (_, index) => index + 1));
   for (const evaluation of evals) {
     assert.ok(evaluation.prompt.trim(), `scenario ${evaluation.id} needs a prompt`);
     assert.ok(evaluation.expected_output.trim(), `scenario ${evaluation.id} needs expected output`);
@@ -306,7 +306,8 @@ test('WIF worker plans read-only and executes only the unchanged approved diff',
   assert.match(parent, /WIF `operation: plan` is never\s+part of this execution batch/);
   assert.match(parent, /Pass the accepted `sender-auth-plan`'s `proposedPlan` object unchanged/);
   assert.match(parent, /approved: true/);
-  assert.match(parent, /broader_fcm_role_approved: true\|false/);
+  assert.doesNotMatch(parent, /broader_fcm_role_approved/);
+  assert.doesNotMatch(worker, /broaderFcmRoleRequired|broaderFcmRoleApproved/);
 
   const executeLine = [...worker.matchAll(/^WORKER_RESULT: (\{.+\})$/gm)]
     .map((match) => JSON.parse(match[1]))
@@ -331,9 +332,7 @@ test('WIF worker plans read-only and executes only the unchanged approved diff',
     'mutations',
     'apiEnablement',
     'googleExecutionMode',
-    'broaderFcmRoleApproved',
     'leastPrivilegeRole',
-    'broaderFcmRoleRequired',
     'resourceGroup',
     'keyVaultUri',
     'keyVaultSecretName',
@@ -343,11 +342,43 @@ test('WIF worker plans read-only and executes only the unchanged approved diff',
     assert.ok(Object.hasOwn(executeLine.decisions, key), `execute echoes decision ${key}`);
   }
   assert.strictEqual(executeLine.decisions.approved, true);
+  assert.ok(!Object.hasOwn(executeLine.decisions, 'broaderFcmRoleApproved'));
+  assert.ok(!Object.hasOwn(executeLine.decisions, 'broaderFcmRoleRequired'));
+  assert.match(evaluation.expected_output, /cloudmessaging\.messages\.create/);
   assert.deepStrictEqual(executeLine.changedFiles, ['sender-auth.json']);
   assert.deepStrictEqual(executeLine.validatedFiles, ['sender-auth.json']);
   assert.match(parent, /resolve each against `working_dir`\s+before comparing it with the absolute exclusive path/);
   assert.match(evaluation.expected_output, /execute consumes the unchanged plan/);
   assert.match(evaluation.expected_output, /echoes every identity, route, list, role, and approval/);
+});
+
+test('WIF does not offer a broader Firebase Admin role', () => {
+  const fs = require('node:fs');
+  const reference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-wif-provisioning.md'),
+    'utf8',
+  );
+  const owner = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
+    'utf8',
+  );
+  const parent = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
+    'utf8',
+  );
+  const evaluation = require(path.join(
+    PLUGIN_ROOT,
+    'skills/setup-push-wif/evals/evals.json',
+  )).evals.find(({ coverage }) => coverage === 'no-broader-fcm-role-question');
+
+  assert.match(reference, /only supported FCM project role/);
+  assert.match(reference, /`wif-custom-role-policy-blocked`/);
+  assert.match(reference, /must not be offered/);
+  assert.match(owner, /do not offer or ask about a broader Firebase/);
+  assert.match(parent, /Do not ask about a broader Firebase role or Firebase Admin SDK/);
+  assert.doesNotMatch(`${reference}\n${owner}\n${parent}`, /broader_fcm_role_approved/);
+  assert.ok(evaluation, 'WIF broader-role regression eval exists');
+  assert.match(evaluation.expected_output, /does not ask for or offer broader Firebase role/);
 });
 
 test('WIF worker separates truly cold identity bootstrap from final execution', () => {
@@ -401,7 +432,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
   assert.deepStrictEqual(
     orchestration.evals.map(({ id }) => id),
-    Array.from({ length: 29 }, (_, index) => index + 1),
+    Array.from({ length: 31 }, (_, index) => index + 1),
   );
 
   const skill = require('node:fs').readFileSync(

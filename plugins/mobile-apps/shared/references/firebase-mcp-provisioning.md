@@ -117,14 +117,26 @@ with the returned token until the selected project appears or the list is
 exhausted. Parse only non-secret project metadata such as `projectId` and
 `displayName`.
 
-Ask the user to choose one path:
+Use a branch-first question sequence. The first `AskUserQuestion` asks only
+which path to take:
+
+- **Use an existing Firebase project**
+- **Create a new Firebase project**
+- **Add Firebase to an existing Google Cloud project**
+
+Do not include new-project ID or display-name fields in this first question.
+They are irrelevant when the user selects an existing project and make the
+flow appear to require project creation.
+
+After the user selects the path, ask only the branch-specific follow-up:
 
 - **Existing Firebase project:** select one exact `projectId` from the latest
-  MCP result.
-- **New project without parent-placement requirements:** provide a globally
-  unique project ID and optional display name.
-- **Existing Google Cloud project:** provide its exact project ID and use the
-  official MCP create tool to add Firebase.
+  MCP result. Do not ask for a new project ID or display name.
+- **Create a new Firebase project:** now ask for a globally unique project ID
+  and optional display name together. These are creation-only fields.
+- **Existing Google Cloud project:** ask only for its exact project ID, then
+  use the official MCP create tool to add Firebase. Do not ask for a new-project
+  display name.
 
 If the user requires a **new** project under a specific **organization** or
 **folder**, STOP. The official Firebase MCP `firebase_create_project` tool in
@@ -179,12 +191,37 @@ emulate the path with CLI commands.
 On permission, billing, organization-policy, auth, or ownership failures,
 report the exact MCP error and STOP.
 
+### Wait for project propagation after creation
+
+After a successful `firebase_create_project` call, do not immediately activate
+the project or begin app registration. A newly created Firebase project can
+take up to one minute to appear in `firebase_list_projects`.
+
+Print one concise propagation notice, then poll the full paginated
+`mcp__firebase__firebase_list_projects` result for the exact `projectId`.
+Check immediately once, then wait 5 seconds between attempts for up to 60
+seconds total. Proceed as soon as the exact project appears. This bounded wait
+also applies when the same create tool has just added Firebase to an existing
+Google Cloud project.
+
+Do not retry `firebase_create_project` while waiting; a delayed list result
+does not mean creation failed, and replaying the persistent mutation can create
+confusing duplicate/error states. Permission, billing, organization-policy,
+authentication, or ownership errors are terminal and are not propagation
+delays. If the exact project is still absent after 60 seconds, STOP with a
+project-propagation-timeout message and preserve the selected project ID for a
+safe resume. Do not call `firebase_update_environment`,
+`firebase_get_project`, `firebase_list_apps`, or any app/config operation
+before visibility is confirmed.
+
 ## 4. Read back active-project readiness
 
 After selecting or creating/upgrading a project:
 
-1. Rerun `mcp__firebase__firebase_list_projects` and require the exact
-   `projectId` to appear in the latest paginated result set.
+1. Require the exact `projectId` in the latest paginated
+   `mcp__firebase__firebase_list_projects` result. For a project just created
+   or Firebase-enabled, use the bounded propagation poll above rather than
+   failing on the first missing result.
 2. Call `mcp__firebase__firebase_update_environment` with both
    `{ "project_dir": "<PROJECT_ROOT>", "active_project": "<PROJECT_ID>" }`.
 3. Rerun `mcp__firebase__firebase_get_environment` and require both the exact

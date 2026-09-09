@@ -100,13 +100,10 @@ exclusive_files:
 decision_envelope:
   approved: true
   approved_plan: <exact unchanged proposedPlan from operation: plan>
-  broader_fcm_role_approved: true|false
 ```
 
-The parent passes `proposedPlan` unchanged. The only fields beside it are
-`approved: true` and the explicit broader-role decision. Require
-`broader_fcm_role_approved: true` exactly when
-`approved_plan.broaderFcmRoleRequired` is true; otherwise require false.
+The parent passes `proposedPlan` unchanged. The only field beside it is
+`approved: true`.
 
 Treat the plan envelope or approved plan as immutable authority. Do not mutate,
 broaden, normalize, or fill it from discovered defaults. Resolve `working_dir`
@@ -127,7 +124,7 @@ Worker-mode rules:
    decision returns `NEEDS_CONTEXT: <exact missing parent decision>` as the
    literal first line. This includes a changed route/diff, an unapproved
    mutation, API enablement, CLI fallback, machine-level install, credential
-   rotation, replacement, or broader FCM role.
+   rotation, or replacement.
 2. Identity mismatch or live drift from the pinned project/environment stops
    before mutation and returns `BLOCKED: <safe identity mismatch>`. Do not
    switch context or manufacture a corrected envelope.
@@ -137,7 +134,7 @@ Worker-mode rules:
    Bootstrap approval does not authorize Google/provider/IAM, runtime RBAC,
    proof, or handoff work. Final `execute` authorizes only the exact second
    approved lists and does not authorize adjacent repairs, replacement,
-   rotation, API enablement, or broader privilege.
+   rotation, or API enablement.
 4. Do not write `memory-bank.md`. The only permitted worker-mode project write
    is the exact regular non-symlink `sender-auth.json` in `exclusive_files`,
    only during final `execute`, and only after the fresh four-stage proof
@@ -205,7 +202,7 @@ A successful post-bootstrap or reuse/repair plan uses this shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"sender-auth-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"fresh-entra-claims","ok":true},{"name":"safe-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Read-only WIF inventory and exact remaining proposal completed.","proposedPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"leastPrivilegeRole":"<exact role>","broaderFcmRoleRequired":false,"claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"}}}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"sender-auth-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"fresh-entra-claims","ok":true},{"name":"safe-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Read-only WIF inventory and exact remaining proposal completed.","proposedPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"}}}
 ```
 
 Use explicit empty `mutations: []` and `apiEnablement: []` lists when no
@@ -217,7 +214,7 @@ A successful `execute` uses this exact shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"execute","stage":"sender-auth","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"approved":true,"planPhase":"initial|post-identity-bootstrap","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"googleExecutionMode":"mcp","broaderFcmRoleApproved":false,"leastPrivilegeRole":"<exact role>","broaderFcmRoleRequired":false,"claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>","inventoryObservedAt":"<UTC timestamp>"},"changedFiles":["sender-auth.json"],"validatedFiles":["sender-auth.json"],"validations":[{"name":"live-inventory","ok":true},{"name":"approved-plan-equality","ok":true},{"name":"four-stage-proof","ok":true},{"name":"sender-auth-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","senderAuthPath":"sender-auth.json","senderAuthMode":"wif","verifiedAt":"<UTC timestamp>","validUntil":"<UTC timestamp>","proofComplete":true}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"execute","stage":"sender-auth","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"approved":true,"planPhase":"initial|post-identity-bootstrap","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"googleExecutionMode":"mcp","leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>","inventoryObservedAt":"<UTC timestamp>"},"changedFiles":["sender-auth.json"],"validatedFiles":["sender-auth.json"],"validations":[{"name":"live-inventory","ok":true},{"name":"approved-plan-equality","ok":true},{"name":"four-stage-proof","ok":true},{"name":"sender-auth-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","senderAuthPath":"sender-auth.json","senderAuthMode":"wif","verifiedAt":"<UTC timestamp>","validUntil":"<UTC timestamp>","proofComplete":true}
 ```
 
 All safe identities, route, execution mode, resource group, Key Vault
@@ -325,7 +322,7 @@ Require all of this compatible state:
 | Provider | Enabled; exact normalized issuer; singleton observed audience; exactly `google.subject=assertion.sub` plus the observed `appid` or `azp` mapping; app-ID equality condition with no tenant-only, wildcard, or alternate-app path. |
 | WIF binding | `roles/iam.workloadIdentityUser` on the sender service account for the exact app-restricted `principalSet://.../attribute.<claim>/<client-id>`, never the whole pool. |
 | Sender account | Exists, enabled, dedicated, no integration-created user-managed keys, and no Owner, Editor, or Service Account Token Creator. |
-| FCM | Only the sender account is bound to the approved custom role, whose enabled permission set is exactly `cloudmessaging.messages.create`, or to an explicitly approved admin fallback. |
+| FCM | Only the sender account is bound to the approved custom role, whose enabled permission set is exactly `cloudmessaging.messages.create`. Broader Firebase roles are incompatible with this WIF flow. |
 | Key Vault | Exact URI/name, enabled and unexpired metadata; runtime connection principal has `Key Vault Secrets User` at the secret or narrowest supported vault scope. Contributor is insufficient. |
 | Live claims | Fresh helper output has the expected tenant issuer, exact audience, and `appid`/`azp` equal to the dedicated client ID. |
 
@@ -355,8 +352,8 @@ complete safe plan. A genuinely absent dedicated Entra identity returns
 secret-safe Key Vault stage. Existing identity paths, and the mandatory fresh
 plan after bootstrap, return `proposedPlan` with the exact remaining
 reuse/repair/provision route, ordered mutation and API-enablement lists,
-least-privilege role, broader-role need, and inventory timestamp. Do not ask,
-approve, or mutate. The parent displays each whole plan and owns its distinct
+least-privilege role, and inventory timestamp. Do not ask, approve, or mutate.
+The parent displays each whole plan and owns its distinct
 `AskUserQuestion` approval.
 
 In worker `operation: identity-bootstrap`, the unchanged approved bootstrap
@@ -364,7 +361,7 @@ plan authorizes only its exact narrow mutations. In worker `operation:
 execute`, the unchanged `approved_plan` replaces the interactive prompt only
 for its exact remaining route and ordered lists. Any discovered addition,
 deletion, reorder, route change, execution-mode change, resource change, API
-enablement, replacement/rotation, or broader role is `NEEDS_CONTEXT:
+enablement, or replacement/rotation is `NEEDS_CONTEXT:
 wif-route-approval-required`; never call `AskUserQuestion` or treat parent
 orchestration or first-stage approval as blanket approval.
 
@@ -385,7 +382,7 @@ worker `operation: plan`, return `NEEDS_CONTEXT` with a stable safe route-choice
 code rather than returning alternatives or guessing. Inspection/reuse approval
 is not repair approval; repair approval is not replacement approval. Never
 broaden app restriction to tenant-only trust, use a whole-pool binding, or
-substitute a broader FCM role without its separate explicit approval.
+substitute a broader FCM role.
 
 ## 4. Entra identity and Key Vault
 
@@ -495,10 +492,13 @@ resource afterward.
 Create/reuse a dedicated sender service account. Bind
 `roles/iam.workloadIdentityUser` only to the exact app-restricted principal set.
 Prefer a project custom role containing only
-`cloudmessaging.messages.create`. If policy prohibits custom roles, explain the
-difference and obtain explicit approval before
-`roles/firebasecloudmessaging.admin`. Never grant Owner, Editor, Service
-Account Token Creator, or create a service-account key.
+`cloudmessaging.messages.create`. This is the only supported FCM project role
+for the WIF sender; Firebase Admin SDK access and
+`roles/firebasecloudmessaging.admin` are unnecessary and must not be offered.
+If organization policy prohibits the custom role, stop with
+`wif-custom-role-policy-blocked` rather than asking to broaden access. Never
+grant Owner, Editor, Service Account Token Creator, or create a service-account
+key.
 
 Do not proactively enable APIs. If inventory specifically reports STS, IAM
 Credentials, IAM, or FCM disabled, direct mode shows that API and obtains

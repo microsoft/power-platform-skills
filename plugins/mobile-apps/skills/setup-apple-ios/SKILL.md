@@ -1,6 +1,6 @@
 ---
 name: setup-apple-ios
-description: Use when manually preparing Apple Developer and local Xcode signing prerequisites for a Power Apps Expo iOS app. Membership/access and agreements, exact explicit App ID, Push Notifications, physical devices, Apple Development and Apple Distribution certificates, development/ad-hoc profiles, or Team/bundle drift. This is the required guided entry point before APNs or registered-device iOS builds; it never automates Apple or handles credentials.
+description: Use when manually preparing Apple Developer and local Xcode signing prerequisites for a Power Apps Expo iOS app. Covers the exact explicit App ID, Push Notifications, physical devices, Apple Development and Apple Distribution certificates, development/ad-hoc profiles, or Team/bundle drift. This is the required guided entry point before APNs or registered-device iOS builds; it never automates Apple or handles credentials.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
@@ -120,25 +120,29 @@ identity-continuity decision in the envelope or return `NEEDS_CONTEXT`.
 
 Follow `apple-ios-signing-provisioning.md` in order:
 
-1. active membership, Certificates/Identifiers/Profiles access, and agreements;
-2. exact explicit App ID and Push Notifications capability;
-3. intended physical-device registration without receiving UDIDs;
-4. Apple Development certificate and development profile when development is
+1. exact explicit App ID and Push Notifications capability;
+2. intended physical-device registration without receiving UDIDs;
+3. Apple Development certificate and development profile when development is
    selected;
-5. Apple Distribution certificate and ad-hoc profile when ad-hoc is selected;
-6. current Xcode installation and local signing availability.
+4. Apple Distribution certificate and ad-hoc profile when ad-hoc is selected;
+5. current Xcode installation and local signing availability.
+
+Do not perform or ask for a separate Apple Developer Program membership,
+account-role, portal-access, or blocking-agreement attestation. The user
+performs the required certificate and identifier actions manually; if Apple
+surfaces an access or agreement blocker during one of those actions, stop at
+that action and direct the user to their Account Holder or Apple administrator.
 
 Skip only certificate/profile sections for modes that are not in the approved
 scope; never require distribution assets for development-only setup or
 development assets for ad-hoc-only setup. For each applicable section, provide
 the official Apple URL, restate the exact Team and bundle identity, explain
 sensitive values the user must keep out of chat, and use `AskUserQuestion` to
-ask whether that section is complete with **Yes** and **No** choices. Advance
-only on **Yes**. On **No**, keep the workflow at that section, explain the safe
-remediation or owner, and do not claim later sections complete. A blocked
-agreement, missing role, quota, identifier conflict, device limit, absent
-private key, profile mismatch, or Xcode identity drift stops the workflow at
-that section.
+ask whether that section is complete with **Yes** and **No** choices. Advance only on **Yes**. On **No**, keep the workflow at that section, explain
+the safe remediation or owner, and do not claim later sections complete. An
+access/agreement error surfaced during a required action, quota, identifier
+conflict, device limit, absent private key, profile mismatch, or Xcode identity
+drift stops the workflow at that section.
 
 In combined orchestrated mode, require the corresponding parent-supplied user
 attestation for every applicable section. Do not prompt, perform, or simulate

@@ -5,7 +5,7 @@
       "id": 1,
       "coverage": "manual-end-to-end-setup",
       "prompt": "Guide me through Apple iOS setup for Team A1B2C3D4E5 and com.contoso.fieldapp. Expo and the selected Firebase iOS app already match. I need physical-device development and ad-hoc builds.",
-      "expected_output": "The skill presents each manual section separately and uses explicit Yes/No confirmation choices for membership/access/agreements, the explicit App ID and Push Notifications, registered devices, both certificate types, both profile types, and local Xcode signing. It performs no Apple portal automation and creates no apple-ios proof JSON files.",
+      "expected_output": "The skill skips a separate membership/access/agreement check. It presents each relevant manual section separately and uses explicit Yes/No confirmation choices for the explicit App ID and Push Notifications, registered devices, both certificate types, both profile types, and local Xcode signing. It performs no Apple portal automation and creates no apple-ios proof JSON files.",
       "files": []
     },
     {
@@ -104,6 +104,13 @@
       "coverage": "combined-ios-fallback-no-intermediate-result",
       "prompt": "Task dispatch is unavailable while the parent has a complete Apple and APNs confirmation envelope.",
       "expected_output": "The parent does not invoke setup-apple-ios as a separate fallback and does not accept an intermediate Apple WORKER_RESULT. It invokes setup-apns exactly once as the combined fallback owner, applies Apple identity/capability/signing semantics before APNs semantics, and accepts one final iOS WORKER_RESULT.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "coverage": "skip-membership-access-question",
+      "prompt": "Complete the membership/access check at https://developer.apple.com/account/ for Team U9Q7LAP789. Is membership active, your role sufficient, and every blocking agreement resolved?",
+      "expected_output": "The skill does not ask this membership, role, access, or agreement question and does not require a membershipAccessAgreements confirmation in the worker envelope or memory handoff. It proceeds with the relevant manual explicit App ID, Push Notifications, device, signing, profile, and Xcode sections. If Apple surfaces an access or agreement blocker during one of those required actions, it stops at that action and directs the user to the Account Holder or Apple administrator.",
       "files": []
     }
   ]

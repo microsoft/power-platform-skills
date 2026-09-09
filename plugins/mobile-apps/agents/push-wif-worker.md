@@ -3,7 +3,6 @@ name: push-wif-worker
 description: Use only when /add-push-notifications delegates WIF capability preflight, read-only live planning, the separately approved cold Entra identity bootstrap, or execution of an exact approved remaining plan. May write sender-auth.json only during final execute; never memory.
 user-invocable: false
 color: purple
-model: opus
 tools:
   - Read
   - Write
@@ -111,15 +110,12 @@ exclusive_files:
 decision_envelope:
   approved: true
   approved_plan: <the exact proposedPlan object returned by operation: plan>
-  broader_fcm_role_approved: true|false
 ```
 
 The parent must pass `proposedPlan` unchanged as `approved_plan`; the only
-approval fields added beside it are `approved: true` and the explicit
-`broader_fcm_role_approved` decision. Require that value to be `true` exactly
-when the plan reports `broaderFcmRoleRequired: true`, otherwise require
-`false`. All identities, route, decisions, mutations, and API enablement
-inside the plan are immutable. Missing inventory facts, approval, tooling-mode
+approval field added beside it is `approved: true`. All identities, route,
+decisions, mutations, and API enablement inside the plan are immutable.
+Missing inventory facts, approval, tooling-mode
 consent, a stale plan, or an unexpected route decision returns
 `NEEDS_CONTEXT`; never ask the user or broaden the plan.
 
@@ -205,9 +201,12 @@ This is read-only planning, not simulated execution.
    the safe pinned identities and decisions, `route:
    reuse|repair|provision`, the complete ordered remaining `mutations` list,
    complete ordered `apiEnablement` list, inventory timestamp,
-   least-privilege role decision, and whether a broader FCM role is required.
-   Empty lists are explicit. Do not repeat completed bootstrap mutations or
-   hide required actions behind prose or wildcard operations.
+   and the least-privilege role decision. The role must contain exactly
+   `cloudmessaging.messages.create`; if policy prevents that custom role,
+   return `BLOCKED: wif-custom-role-policy-blocked` rather than requesting a
+   broader Firebase role. Empty lists are explicit. Do not repeat completed
+   bootstrap mutations or hide required actions behind prose or wildcard
+   operations.
 6. If exact safe planning is impossible without a new identity/decision,
    return `NEEDS_CONTEXT`; if live identity/tooling prevents trustworthy
    inventory, return `BLOCKED`.
@@ -335,7 +334,7 @@ After bootstrap, a successful fresh read-only `plan` returns this shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"sender-auth-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>"},"decisions":{"planPhase":"post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<exact accepted safe receipt>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"fresh-entra-claims","ok":true},{"name":"safe-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Fresh read-only WIF inventory used the generated Entra identity and proposed the exact remaining work.","proposedPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"provision","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"leastPrivilegeRole":"<exact role>","broaderFcmRoleRequired":false,"claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same generated client ID>","googleProviderIssuer":"<observed normalized issuer>"},"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>"},"decisions":{"planPhase":"post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<exact accepted safe receipt>"}}}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"sender-auth-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>"},"decisions":{"planPhase":"post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<exact accepted safe receipt>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"fresh-entra-claims","ok":true},{"name":"safe-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Fresh read-only WIF inventory used the generated Entra identity and proposed the exact remaining work.","proposedPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"provision","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same generated client ID>","googleProviderIssuer":"<observed normalized issuer>"},"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>"},"decisions":{"planPhase":"post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<exact accepted safe receipt>"}}}
 ```
 
 Reuse and repair skip bootstrap and return the same `sender-auth-plan` shape
@@ -348,7 +347,7 @@ A successful `execute` returns this exact shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"execute","stage":"sender-auth","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"approved":true,"planPhase":"initial|post-identity-bootstrap","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"googleExecutionMode":"mcp","broaderFcmRoleApproved":false,"leastPrivilegeRole":"<exact role>","broaderFcmRoleRequired":false,"claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>","inventoryObservedAt":"<UTC timestamp>"},"changedFiles":["sender-auth.json"],"validatedFiles":["sender-auth.json"],"validations":[{"name":"live-inventory","ok":true},{"name":"approved-plan-equality","ok":true},{"name":"four-stage-proof","ok":true},{"name":"sender-auth-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","senderAuthPath":"sender-auth.json","senderAuthMode":"wif","verifiedAt":"<UTC timestamp>","validUntil":"<UTC timestamp>","proofComplete":true}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"execute","stage":"sender-auth","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"approved":true,"planPhase":"initial|post-identity-bootstrap","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"googleExecutionMode":"mcp","leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>","inventoryObservedAt":"<UTC timestamp>"},"changedFiles":["sender-auth.json"],"validatedFiles":["sender-auth.json"],"validations":[{"name":"live-inventory","ok":true},{"name":"approved-plan-equality","ok":true},{"name":"four-stage-proof","ok":true},{"name":"sender-auth-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","senderAuthPath":"sender-auth.json","senderAuthMode":"wif","verifiedAt":"<UTC timestamp>","validUntil":"<UTC timestamp>","proofComplete":true}
 ```
 
 The JSON `status` must agree with the first line. `runId`, worker identity, all

@@ -3,7 +3,6 @@ name: push-runtime-worker
 description: Use only when /add-push-notifications delegates pre-decided app runtime integration after exact Firebase identity is proven. Owns bounded runtime files and validation, never cloud or memory.
 user-invocable: false
 color: green
-model: sonnet
 tools:
   - Read
   - Write

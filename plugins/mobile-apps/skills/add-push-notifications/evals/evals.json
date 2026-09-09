@@ -182,6 +182,20 @@
       "prompt": "Configure push through delivery flows with WIF, but the exact dedicated Entra sender identity is genuinely absent and no client ID exists yet. Keep unrelated runtime and iOS work safe.",
       "expected_output": "The parent accepts a null Entra client ID only for initial read-only absence inventory. It asks first for only the exact Entra identity/credential and secret-safe Key Vault bootstrap, runs identity-bootstrap serially outside the execution wave, validates the safe server-generated client ID receipt, and does not accept sender-auth.json or Google mutations from that stage. It then requires a fresh claim-driven sender-auth plan using that client ID, presents the exact remaining Google/API/RBAC actions for a second explicit approval, and only then allows final WIF execute to join eligible independent runtime/iOS work. The parent accepts identity-bootstrap-plan, identity-bootstrap, sender-auth-plan, and sender-auth results only in order, preserves the same run ID, never silently falls back or replays an uncertain mutating bootstrap, and writes memory only once after final join and SHA validation.",
       "files": []
+    },
+    {
+      "id": 30,
+      "coverage": "apns-question-after-firebase",
+      "prompt": "Add iOS push to a new app. I have not logged in to Firebase or created the Firebase project and iOS app yet.",
+      "expected_output": "The parent does not ask whether an APNs credential is already uploaded during the initial orchestration questions. It first completes Firebase login when needed, selects or creates and activates the exact project, creates or reuses the exact iOS Firebase app, and validates its immutable app identity and client config. Only then does it collect unresolved Apple Team, build-mode, APNs credential-route, and Firebase Console upload attestations in setup-apple-ios then setup-apns order.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "coverage": "noninteractive-stopping-point-and-links",
+      "prompt": "Add push notifications for iOS.",
+      "expected_output": "The skill does not ask for a stopping point and defaults to Create delivery flows because no build or physical-verification intent is explicit. It does not ask whether Universal Links or App Links are wanted and passes an approved HTTPS origin of null unless the prompt or existing approved plan already contains an explicit exact origin.",
+      "files": []
     }
   ]
 }

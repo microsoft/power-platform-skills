@@ -3,7 +3,6 @@ name: push-ios-prerequisites-worker
 description: Use only when /add-push-notifications delegates validation of a complete pre-collected Apple/APNs confirmation envelope for one exact iOS identity. Read-only; never prompts, handles credentials, or writes memory.
 user-invocable: false
 color: pink
-model: sonnet
 tools:
   - Read
   - Bash
@@ -56,7 +55,6 @@ decision_envelope:
   selected_modes: development|ad-hoc|development,ad-hoc
   apple_confirmations:
     identity: true
-    membership_access_agreements: true
     explicit_app_id: true
     push_capability: true
     intended_devices_registered: true
@@ -196,7 +194,7 @@ A successful `execute` returns this exact shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-ios-prerequisites-worker","runId":"<id>","operation":"execute","stage":"ios-prerequisites","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","firebaseIosAppId":"<id>","bundleIdentifier":"<id>","appleTeamId":"<id>"},"decisions":{"plistPath":"<project-relative plist path>","selectedModes":"development,ad-hoc","appleConfirmations":{"identity":true,"membershipAccessAgreements":true,"explicitAppId":true,"pushCapability":true,"intendedDevicesRegistered":true,"developmentCertificate":true,"developmentProfile":true,"distributionCertificate":true,"adHocProfile":true,"localXcodeSigning":true},"apnsMethod":"p8","apnsKeyId":"<safe id>","certificateEnvironments":null,"firebaseConsoleUploadConfirmed":true,"appleConfirmedAt":"<UTC timestamp>","apnsConfirmedAt":"<UTC timestamp>"},"changedFiles":[],"validatedFiles":["<project-relative plist path>"],"validations":[{"name":"ios-identity","ok":true},{"name":"apple-confirmation-envelope","ok":true},{"name":"apns-confirmation-envelope","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","appleState":{"status":"user-confirmed; not portal proof"},"apnsState":{"status":"configured, device verification pending"},"selectedModes":"development,ad-hoc","credentialType":"apns-auth-key"}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-ios-prerequisites-worker","runId":"<id>","operation":"execute","stage":"ios-prerequisites","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","firebaseIosAppId":"<id>","bundleIdentifier":"<id>","appleTeamId":"<id>"},"decisions":{"plistPath":"<project-relative plist path>","selectedModes":"development,ad-hoc","appleConfirmations":{"identity":true,"explicitAppId":true,"pushCapability":true,"intendedDevicesRegistered":true,"developmentCertificate":true,"developmentProfile":true,"distributionCertificate":true,"adHocProfile":true,"localXcodeSigning":true},"apnsMethod":"p8","apnsKeyId":"<safe id>","certificateEnvironments":null,"firebaseConsoleUploadConfirmed":true,"appleConfirmedAt":"<UTC timestamp>","apnsConfirmedAt":"<UTC timestamp>"},"changedFiles":[],"validatedFiles":["<project-relative plist path>"],"validations":[{"name":"ios-identity","ok":true},{"name":"apple-confirmation-envelope","ok":true},{"name":"apns-confirmation-envelope","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","appleState":{"status":"user-confirmed; not portal proof"},"apnsState":{"status":"configured, device verification pending"},"selectedModes":"development,ad-hoc","credentialType":"apns-auth-key"}
 ```
 
 The JSON `status` must agree with the first line. `runId`, worker identity, and

@@ -3,7 +3,6 @@ name: firebase-platform-worker
 description: Use only when /setup-fcm delegates one pre-approved Android or iOS Firebase app/config track after the exact Firebase project is activated. Bounded worker; never changes project state or memory.
 user-invocable: false
 color: orange
-model: sonnet
 tools:
   - Read
   - Write
