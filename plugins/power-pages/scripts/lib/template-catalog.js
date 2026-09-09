@@ -74,7 +74,7 @@ function validateCatalogShape(catalog) {
   //       "requiredDataverseLanguages": [1033],
   //       "previewImages": ["spa/311-portal/previews/home.png"],
   //       "seedDataPath": "spa/311-portal/seed/data.json",
-  //       "templateVersion": "1.0.0.1", "author": "Microsoft" }
+  //       "author": "Microsoft" }
   //   ] }
   // `audience` here is the *template's* target persona list (admins/developers/
   // makers/partners) and is an array per the upstream schema at
@@ -93,7 +93,7 @@ function validateCatalogShape(catalog) {
       ? ['id', 'displayName', 'description', 'kind', 'author']
       : [
           'id', 'displayName', 'description', 'kind', 'framework',
-          'templateVersion', 'author',
+          'author',
         ];
     const missing = requiredStringFields.filter((field) => !isNonEmptyString(template[field]));
     if (missing.length > 0) return `template ${template.id || index} missing string field(s): ${missing.join(', ')}`;
@@ -126,9 +126,6 @@ function validateCatalogShape(catalog) {
         seenFrameworks.add(normalizedFramework);
         if (!FRAMEWORKS.has(normalizedFramework)) return `template ${template.id} variant ${framework} has unsupported framework`;
         if (!variant || typeof variant !== 'object' || Array.isArray(variant)) return `template ${template.id} variant ${framework} is not an object`;
-        const variantRequiredFields = ['templateVersion'];
-        const variantMissing = variantRequiredFields.filter((field) => !isNonEmptyString(variant[field]));
-        if (variantMissing.length > 0) return `template ${template.id} variant ${framework} missing string field(s): ${variantMissing.join(', ')}`;
         if (variant.solutionPath !== undefined || variant.websiteCodePath !== undefined) {
           return `template ${template.id} variant ${framework} must not define derivable solutionPath or websiteCodePath`;
         }
@@ -228,7 +225,6 @@ function normalizeCatalogFamilies(catalog = {}) {
           requiredDataverseLanguages: template.requiredDataverseLanguages || [],
           previewImages: template.previewImages || [],
           ...(template.seedDataPath ? { seedDataPath: template.seedDataPath } : {}),
-          templateVersion: template.templateVersion,
           author: template.author,
         }],
       };
@@ -259,7 +255,6 @@ function normalizeCatalogFamilies(catalog = {}) {
           requiredDataverseLanguages: variant.requiredDataverseLanguages || template.requiredDataverseLanguages || [],
           previewImages: Array.isArray(variant.previewImages) ? variant.previewImages : (template.previewImages || []),
           ...(variant.seedDataPath || template.seedDataPath ? { seedDataPath: variant.seedDataPath || template.seedDataPath } : {}),
-          templateVersion: variant.templateVersion,
           author: template.author,
         };
       }),

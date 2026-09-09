@@ -52,7 +52,6 @@ const VALID_TEMPLATE = {
   audience: ['makers', 'developers'],
   requiredDataverseLanguages: [1033],
   previewImages: ['templates/spa/company-portal/previews/home.png'],
-  templateVersion: '1.0.0',
   author: 'Microsoft',
 };
 
@@ -68,11 +67,8 @@ const VALID_TEMPLATE_FAMILY = {
   seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
   author: 'Microsoft',
   variants: {
-    react: {
-      templateVersion: '1.0.0',
-    },
+    react: {},
     vue: {
-      templateVersion: '1.0.1',
       previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
     },
   },
@@ -89,9 +85,7 @@ const VALID_TRADITIONAL_TEMPLATE_FAMILY = {
   previewImages: [],
   author: 'Microsoft',
   variants: {
-    none: {
-      templateVersion: '1.0.0',
-    },
+    none: {},
   },
 };
 
@@ -251,7 +245,6 @@ test('validateCatalogShape rejects manifest paths that are derived from template
         ...VALID_TEMPLATE_FAMILY,
         variants: {
           react: {
-            templateVersion: '1.0.0',
             solutionPath: 'templates/spa/supplier-portal/variants/react/solution',
           },
         },
@@ -266,7 +259,6 @@ test('validateCatalogShape rejects manifest paths that are derived from template
         ...VALID_TRADITIONAL_TEMPLATE_FAMILY,
         variants: {
           none: {
-            templateVersion: '1.0.0',
             websiteCodePath: 'templates/traditional/customer-self-service/variants/none/website-code',
           },
         },
@@ -324,11 +316,8 @@ test('fetchCatalog materializes nested preview and seed artifact paths', async (
       previewImages: ['spa/supplier-portal/previews/home.png'],
       seedDataPath: 'spa/supplier-portal/seed-data/data.json',
       variants: {
-        react: {
-          templateVersion: '1.0.0',
-        },
+        react: {},
         vue: {
-          templateVersion: '1.0.1',
           previewImages: ['spa/supplier-portal/variants/vue/previews/home.png'],
           seedDataPath: 'spa/supplier-portal/variants/vue/seed-data/data.json',
         },
@@ -376,7 +365,6 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         requiredDataverseLanguages: [1033],
         previewImages: ['templates/spa/supplier-portal/previews/home.png'],
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
-        templateVersion: '1.0.0',
         author: 'Microsoft',
       },
       {
@@ -392,7 +380,6 @@ test('normalizeCatalogFamilies exposes exact variant records with family metadat
         requiredDataverseLanguages: [1033],
         previewImages: ['templates/spa/supplier-portal/variants/vue/previews/home.png'],
         seedDataPath: 'templates/spa/supplier-portal/seed-data/data.json',
-        templateVersion: '1.0.1',
         author: 'Microsoft',
       },
     ],
@@ -536,7 +523,6 @@ test('validateCatalogShape accepts the 311 Portal audience array and rejects non
     keywords: ['311', 'citizen-services'],
     audience: ['makers', 'developers'],
     previewImages: ['spa/311-portal/previews/home.png'],
-    templateVersion: '1.0.0.1',
   };
 
   assert.equal(validateCatalogShape({ templates: [portal311] }), null);
