@@ -104,12 +104,13 @@ function skillStart(mode) {
     handle({ payload }) {
       const skillName = invocationFor(mode, payload);
       if (!skillName) return;
-      const context = telemetry.createTelemetryContext(payload);
+      const invocationCwd = resolveInvocationCwd(payload);
+      const context = telemetry.createTelemetryContext(payload, { cwd: invocationCwd });
       if (!context) return;
       telemetry.emitSkillStarted(
         context,
         { skillName, source: mode },
-        { cwd: resolveInvocationCwd(payload) },
+        { cwd: invocationCwd },
       );
     },
   };

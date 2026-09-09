@@ -5,7 +5,61 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.5.1
+## [Unreleased] — 2.6.0
+
+Business process flows, plus an SDK uptake that changes how business rules fail on an environment
+that cannot host them.
+
+### Added
+
+- **`businessProcessFlows[]` — guided, staged processes on a table.** Ordered stages with steps bound
+  to that table's columns, activated on create (an inactive flow is invisible, not merely inert).
+  Every step must bind a `field`; the platform refuses one without. v1 is single-entity and linear —
+  branching, stage actions and role grants ([#513]) are rejected rather than silently dropped.
+
+### Changed
+
+- **A business rule is validated before it is written.** A rule the SDK's compiler cannot understand
+  used to deploy as an empty rule that never fires. The build now runs the designer's own
+  completeness validator first and fails with its findings. No rule this spec surface can author is
+  affected — the whole operator/action/scope matrix was measured clean.
+
+### Fixed
+
+- **A build no longer halts on an environment that cannot host business rules.** The SDK now reports
+  the preview gate as a returned no-op instead of a thrown error; the build read that as a version
+  conflict and stopped. Such rules are skipped with a warning again, as documented — which matters
+  because those environments are the common case.
+- **A failed push reports the SDK's own reason.** Any push failure the build had no specific remedy
+  for was reported as *"the artifact changed in Maker"*, sending you to re-download an app nobody had
+  touched.
+- **Download round-trips `app.newLook` and `app.headerNavigationRefresh`** ([#514]). A downloaded spec
+  carried neither, so rebuilding it into another environment produced a classic-shell app and nothing
+  reported the loss.
+- **`views[].columns` rejects a non-string entry** ([#525]). An object was accepted by validation and
+  written into the view's fetchxml as `[object object]`; the build then failed at the platform and
+  left behind a view row that could not be read or deleted, so every later build failed the same way.
+- **A business process flow whose derived unique name is already taken is refused up front.** That
+  name is a *table* name — activation creates a backing table from it — and the derivation ignores
+  both the table and your publisher prefix, so a flow named after its own table collided silently and
+  failed late, mid-build. Now rejected at the plan gate against declared tables, and at build time
+  against any flow or table already in the environment.
+- **A reused business rule rejoins its solution on every build.** Solution membership was reconciled
+  only on the create path, so a rule that already existed — because an earlier component add failed,
+  or because it came from a different solution — stayed outside the solution permanently and never
+  travelled on export/import, with nothing saying so.
+- **A push that fails with the SDK's `VERSION_CONFLICT` still tells you to re-download.** Reporting
+  unrecognised SDK codes verbatim had dropped that remedy from a real 412.
+- **A table reference that is not a string is rejected instead of being coerced.** `charts[].entity`,
+  a subgrid's `childEntity`, a sitemap subarea's `entity` and a dashboard tile's `entity` were
+  stringified before the check, so a nested array passed validation and then crashed the build with a
+  raw `TypeError`.
+
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
+[#514]: https://github.com/microsoft/power-platform-skills/issues/514
+[#525]: https://github.com/microsoft/power-platform-skills/issues/525
+
+## [2.5.1]
 
 SDK uptake. Adds per-form security roles and three column capabilities; **business rules now require
 an environment that supports them**.
@@ -13,11 +67,9 @@ an environment that supports them**.
 ### Changed
 
 - **Business rules are environment-gated.** The SDK writes a rule only through the bound
-  `CreateProcessWithWfomJson` member; the workflow-XAML fallback was removed upstream because it
-  silently narrowed a rule into something you did not write. An environment that does not declare
-  that member **cannot host business rules at all** — the common case, not an edge case. Such rules
-  are **skipped** with a warning; everything else builds normally, and `--verify` reports them as
-  *not applicable on this environment* rather than failing the build.
+  `CreateProcessWithWfomJson` member, and an environment that does not declare it **cannot host
+  business rules at all** — the common case, not an edge case. Such rules are skipped with a warning;
+  everything else builds, and `--verify` reports them as *not applicable on this environment*.
 
 ### Added
 
@@ -40,51 +92,48 @@ an environment that supports them**.
   reaching PROD. Not to be confused with the plugin's own usage telemetry
   (`/model-apps:telemetry`), which is unrelated and unchanged.
 - **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
-  `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form;
-  undo with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)
+  `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form; undo
+  with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)
 - **Boolean `defaultValue`, whole-number `integerFormat`, and per-column `isValidForCreate` /
-  `isValidForUpdate` / `isValidForRead`** — the last of these is how you make a column read-only.
+  `isValidForUpdate` / `isValidForRead`** — the last is how you make a column read-only.
   ([#495], AB#6648523, AB#6648522, AB#6651276)
 - **Twelve more business-rule operators** and **multi-condition rules** (ANDed). Spelling matters:
-  `IsGreaterThan`, not `GreaterThan` — the SDK resolves an unknown operator to `Equals`, so the spec
-  rejects anything outside its table and suggests the right spelling.
-- **A `description` on every artifact that accepts one.** Written at create time and omitted when
+  `IsGreaterThan`, not `GreaterThan` — the SDK silently resolves an unknown operator to `Equals`, so
+  the spec rejects anything outside its table.
+- **A `description` on every artifact that accepts one**, written at create time and omitted when
   absent, so a rebuild never blanks text typed in the maker.
-- **Per-field form control** — `readOnly`, `hidden` and `after` (reposition), via a form-level
-  `fieldOptions` map or inline on an explicit layout. `prune: false` edits a subset of a form without
-  re-declaring every field, and only the enabled state is written, so a designer edit survives.
+- **Per-field form control** — `readOnly`, `hidden` and `after`, via a form-level `fieldOptions` map
+  or inline on an explicit layout. `prune: false` edits part of a form without re-declaring it.
 - **The AI form-fill family is controllable per capability** — assist toolbar, edit-form predictions,
   smart paste and file upload, instead of one flag that only governed the toolbar.
 
 ### Fixed
 
-- **Dashboards survive a download again** — the SDK could not deserialize a dashboard it had
-  serialized, so no tiles were recovered and the download failed without `--allow-lossy-download`.
-  ([#478])
+- **A `businessRules[]`-only edit is no longer treated as "nothing changed."** The diff driving
+  `--changed-only` had no entry for that phase, so the run did nothing at all. ([#478] fixed
+  alongside: the SDK could not deserialize a dashboard it had serialized, so downloads lost tiles.)
 - **Descriptions converge on existing views and charts** — previously written only at create, so the
-  platform's auto-created *"Active &lt;Plural&gt;"* view never got one. ([#496])
-- **Downloaded specs preserve deployed descriptions** where the artifact is reconstructed, and list
-  the rest in a read-only inventory. ([#494])
-- **Teardown removes the activated copy of a business rule**, which previously stranded an
-  undeletable row. ([#493])
-- **Existing columns honour an explicit `required` change on rebuild**; an omitted `required` still
-  leaves the live column alone.
-- **Big Integer columns are no longer placed on auto-generated forms** — Big Integer has no Unified
-  Interface control, so the field rendered *"Error loading control"* on every record.
+  auto-created *"Active &lt;Plural&gt;"* view never got one. ([#496])
+- **Downloaded specs preserve deployed descriptions**, listing the rest in a read-only inventory. ([#494])
+- **Teardown removes the activated copy of a business rule**, previously stranding an undeletable
+  row ([#493]), and clears column visualizations for a table the spec keeps (`existing: true`).
+- **Existing columns honour an explicit `required` change on rebuild**; an omitted one still leaves
+  the live column alone.
+- **Big Integer columns are no longer auto-placed on forms** — they have no Unified Interface control
+  and rendered *"Error loading control"* on every record.
 - **AI on/off is read with the platform's semantics** — `0` = platform default, `1` = disabled,
   `2` = enabled. Treating any non-zero value as "on" reported a disabled feature as enabled.
 - **Presence operators** (`ContainsData` / `DoesNotContainData`) deploy; the compiler bug behind the
-  `HTTP 500 — Error generating UiData` failures is gone with the compiler. ([#481])
+  `HTTP 500 — Error generating UiData` failures went with the compiler. ([#481])
 - **The async-surface guard is AST-based** — a regex could not decide the remaining cases. ([#475])
 - **`ai.summaries.default: "off"` no longer discards a per-table `enabled: true`**, and a
   differently-cased `tables[]` key keeps its `instruction` and `columns`.
-- **A row summary an environment cannot license is skipped, not fatal** — and the AI model row the
-  refused publish leaves behind is swept, so a rebuild does not then fail on a duplicate key.
+- **A row summary an environment cannot license is skipped, not fatal** — and the model row the
+  refused publish leaves behind is swept, so a rebuild does not fail on a duplicate key.
 - **A spec with no `appShell` reports what to add** instead of dying with
-  `Cannot read properties of undefined (reading 'areas')` after the app was already half-created.
+  `Cannot read properties of undefined (reading 'areas')` after the app was half-created.
 - **A malformed `businessRules` is a validation error**, not a raw `TypeError`; duplicate-cleanup
   warnings report the real failure instead of asserting a wedged platform row.
-- **Column visualizations are cleared on teardown for a table the spec keeps** (`existing: true`).
 
 [#475]: https://github.com/microsoft/power-platform-skills/issues/475
 [#478]: https://github.com/microsoft/power-platform-skills/issues/478
@@ -93,6 +142,7 @@ an environment that supports them**.
 [#494]: https://github.com/microsoft/power-platform-skills/issues/494
 [#495]: https://github.com/microsoft/power-platform-skills/issues/495
 [#496]: https://github.com/microsoft/power-platform-skills/issues/496
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
 
 ## [2.5.0]
 
@@ -106,7 +156,7 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   create. Every field is checked against the rule's own entity, because a rule naming a column that
   does not exist is accepted by the platform and then simply never fires. Operators `Equals` ·
   `DoesNotEqual`. Additive on rebuild, torn down with the app, and a new `business-rules` build
-  phase (15 now).
+  phase.
 - **Custom grid rendering (preview) — `entities[].columns[].visualization`.** Render a column as a
   radial dial, line chart, heat map or star rating in every grid and view that shows it. Per-column,
   so it is declared once rather than per view. Where the platform has not provisioned the preview the

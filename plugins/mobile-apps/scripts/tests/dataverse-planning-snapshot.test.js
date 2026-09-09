@@ -925,6 +925,47 @@ test('computed metadata is explicitly unavailable when SourceTypeMask cannot be 
   assert.match(computed.unavailableReason, /SourceTypeMask unavailable or malformed/);
 });
 
+test('image metadata preserves full-image settings and its complete update definition', async () => {
+  const imageDefinition = {
+    MetadataId: 'image-id',
+    LogicalName: 'new_photo',
+    SchemaName: 'new_Photo',
+    AttributeType: 'Virtual',
+    AttributeTypeName: { Value: 'ImageType' },
+    RequiredLevel: { Value: 'None' },
+    MaxHeight: 144,
+    MaxWidth: 144,
+    MaxSizeInKB: 10240,
+    CanStoreFullImage: false,
+    IsPrimaryImage: false,
+  };
+  const table = await loadDetailedEntity(async (_method, apiPath) => {
+    if (apiPath.includes('/Attributes?$select=')) {
+      return { status: 200, data: { value: [{
+        ...imageDefinition,
+        IsCustomAttribute: true,
+        IsManaged: false,
+        IsCustomizable: { Value: true },
+        IsValidForCreate: true,
+        IsValidForRead: true,
+        IsValidForUpdate: true,
+      }] } };
+    }
+    if (apiPath.includes('ImageAttributeMetadata')) {
+      return { status: 200, data: { value: [imageDefinition] } };
+    }
+    return { status: 200, data: { value: [] } };
+  }, entity('new_issue', 'Issue'));
+
+  const image = table.columns[0];
+  assert.equal(image.metadataId, 'image-id');
+  assert.equal(image.canStoreFullImage, false);
+  assert.equal(image.maxSizeInKB, 10240);
+  assert.equal(image.maxHeight, 144);
+  assert.equal(image.maxWidth, 144);
+  assert.deepEqual(image.imageUpdateDefinition, imageDefinition);
+});
+
 test('CLI request creation initializes one long-lived executor for the snapshot phase', async () => {
   let executorCreations = 0;
   let requests = 0;
