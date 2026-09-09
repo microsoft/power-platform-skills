@@ -116,6 +116,110 @@ test('hook dispatch runs outside the caller project and restores its cwd', () =>
   assert.equal(process.cwd(), originalCwd);
 });
 
+test('interactive Copilot invocation creates identity and logs before environment resolution', (t) => {
+  const context = fixture(t);
+  const appPath = path.join(context.projectRoot, 'app.json');
+  fs.writeFileSync(appPath, JSON.stringify({ expo: { extra: { telemetry: { appInstanceId: null, cluster: null } } } }));
+  const result = runHook('prompt', {
+    cwd: context.projectRoot,
+    session_id: 'session-1',
+    prompt: 'The user explicitly invoked the "/mobile-app:create-mobile-app" skill. Follow its instructions now.\n\n' +
+      '<skill-context name="create-mobile-app">\nredacted instructions',
+  }, context);
+  assert.equal(result.status, 0, result.stderr);
+  const telemetry = JSON.parse(fs.readFileSync(appPath, 'utf8')).expo.extra.telemetry;
+  assert.match(telemetry.appInstanceId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.equal(telemetry.cluster, null);
+  const events = waitForEvents(context, 1);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].data.skillName, 'create-mobile-app');
+  assert.equal(events[0].data.eventInfo.appInstanceId, telemetry.appInstanceId);
+});
+
+test('checkpoint CLI records and dispatches every lifecycle state without host-specific path variables', (t) => {
+  const context = fixture(t);
+  const appPath = path.join(context.projectRoot, 'app.json');
+  fs.writeFileSync(appPath, JSON.stringify({ expo: { extra: { telemetry: { appInstanceId: null, cluster: 'us' } } } }));
+  for (const state of ['started', 'completed', 'skipped', 'failed']) {
+    const probePath = path.join(context.root, `checkpoint-${state}.json`);
+    const additionalInfo = state === 'failed' ? '|app_not_initialized' : '';
+    const result = spawnSync(process.execPath, [
+      path.join(PLUGIN_ROOT, 'scripts', 'emit-telemetry-checkpoint.js'),
+      `add-connector|validate_connector_project|${state}${additionalInfo}`,
+    ], {
+      cwd: context.projectRoot, encoding: 'utf8', timeout: 10_000,
+      env: {
+        ...process.env,
+        PLUGIN_ROOT: '',
+        CLAUDE_SKILL_DIR: '',
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: context.configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: context.ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const probe = waitForJson(probePath);
+    assert.ok(probe, `checkpoint ${state} must reach the dispatcher`);
+    const envelope = JSON.parse(probe.body);
+    const dimensions = JSON.parse(envelope.data.customDimensions);
+    assert.equal(envelope.data.event_Name, `validate_connector_project_${state}`);
+    assert.equal(envelope.data.severity, state === 'failed' ? 'Error' : 'Info');
+    assert.equal(dimensions.skillName, 'add-connector');
+    assert.equal(dimensions.eventInfo.invocationSource, 'checkpoint');
+    assert.equal(dimensions.eventInfo.appInstanceId, JSON.parse(fs.readFileSync(appPath, 'utf8')).expo.extra.telemetry.appInstanceId);
+    assert.equal(dimensions.eventInfo.additionalInfo, state === 'failed' ? 'app_not_initialized' : undefined);
+    const records = waitForEvents(context, 1, dimensions.sessionId);
+    assert.equal(records.length, 1);
+    assert.deepEqual(Object.keys(records[0]).sort(), ['data', 'name', 'time']);
+    assert.equal(records[0].data.eventName, envelope.data.event_Name);
+    assert.equal(records[0].time, envelope.time);
+  }
+});
+
+test('checkpoint CLI keeps the invoking hook session across fresh processes', (t) => {
+  const context = fixture(t);
+  fs.writeFileSync(path.join(context.projectRoot, 'app.json'), JSON.stringify({
+    expo: { extra: { telemetry: { appInstanceId: null, cluster: 'us' } } },
+  }));
+  assert.equal(runHook('prompt', {
+    cwd: context.projectRoot,
+    session_id: 'session-1',
+    prompt: '/mobile-app:create-mobile-app',
+  }, context).status, 0);
+  assert.equal(waitForEvents(context, 1).length, 1);
+
+  for (const checkpoint of [
+    'validate_development_toolchain|completed',
+    'gather_app_requirements|started',
+  ]) {
+    const result = spawnSync(process.execPath, [
+      path.join(PLUGIN_ROOT, 'scripts', 'emit-telemetry-checkpoint.js'),
+      `create-mobile-app|${checkpoint}`,
+    ], {
+      cwd: context.projectRoot,
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: context.configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: context.ikeyPath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  const records = waitForEvents(context, 3);
+  assert.deepEqual(records.map((record) => record.data.eventName).sort(), [
+    'gather_app_requirements_started',
+    'skill_started',
+    'validate_development_toolchain_completed',
+  ]);
+  assert.ok(records.every((record) => record.data.sessionId === 'session-1'));
+  assert.equal(new Set(records.map((record) => record.data.correlationId)).size, 3);
+});
+
 test('prompt and pretool paths emit independent start signals', (t) => {
   const context = fixture(t);
   assert.equal(runHook('prompt', {

@@ -590,6 +590,43 @@ const BPF_STEP_KEYS = new Set(['name', 'field', 'required']);
 const BPF_MAX_STAGES = 30;
 const BPF_MAX_STEPS = 30;
 
+// The keys an `entities[]` table may carry. Everything else is REJECTED rather than dropped.
+//
+// Entities were the one authorable block with NO allow-list, and the gap was not theoretical: the
+// two most natural ways to ask for a second language — `entities[].languageCode` and
+// `entities[].localizedLabels` — both validated clean and were then silently ignored, so an author
+// asking for one table in Spanish got a SUCCESSFUL build with the request dropped and nothing
+// reporting the loss (#537). Neither key is read anywhere in scripts/ or scripts/lib/.
+//
+// They cannot be honoured today, which is precisely why they must fail loudly rather than validate
+// clean. The authoring language is BUILD-WIDE: provisionDataModel resolves ONE LCID and passes it to
+// every createTable / createColumn / createGlobalOptionSet / insertStatusValue / createRelationship /
+// createAlternateKey call, and the SDK takes it as a CONSTRUCTION-TIME option (the App/Form/Dashboard
+// adapters bake it in), so a per-table language would need a second SDK instance. Multi-language
+// labelling is blocked a layer lower still — the SDK's label serializer emits a ONE-element
+// LocalizedLabels array by design, and pushing an artifact read under a different LCID throws
+// ARTIFACT_LANGUAGE_MISMATCH.
+//
+// This list is the set the build actually READS. Adding a key here without a reader would re-open
+// the very silent-drop hole it exists to close.
+const ENTITY_KEYS = new Set([
+  'schemaName', 'displayName', 'pluralName', 'description', 'primaryAttribute', 'columns',
+  'hasNotes', 'quickCreate', 'existing', 'enrichDefaultViews',
+  'vectorIcon', 'iconDescription', 'icon',
+  'statusReasons', 'alternateKeys',
+]);
+
+// What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
+// names the mistake but not the fix, and for these two the fix is not guessable from the schema.
+//
+// Prototype-less on purpose: the lookup key comes from the SPEC, so a table carrying `constructor`
+// or `toString` would otherwise inherit a value from Object.prototype and splice
+// "function Object() { [native code] }" into the error message.
+const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
+  languageCode: ' — the authoring language is build-wide, not per-table: set the spec-level `languageCode`, which applies to every table',
+  localizedLabels: ' — write the LCID map on the label FIELD itself (e.g. "displayName": { "1033": "Baseline", "3082": "Línea base" }), not in a separate per-table block; see references/app-spec-schema.md → "Localized labels"',
+});
+
 // The column logical names an entity legitimately exposes to a rule / process step: its declared
 // columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
 // column on the referencing table, just declared elsewhere in the spec).
@@ -829,6 +866,30 @@ function validateLabel(value, label, errors, opts = {}) {
   if (warnings && base && keys.length && !keys.includes(String(base))) {
     warnings.push(`${label}: no label for the spec's languageCode ${base} — that is the label users without a matching UI language will see. Add "${base}" alongside ${keys.filter((k) => /^[1-9]\d*$/.test(k)).join(', ')}.`);
   }
+}
+// Describe a rejected value for an error message WITHOUT being able to throw doing it.
+// `JSON.stringify` throws on a BigInt and on a getter that throws, which would turn a structured
+// validation error into a raw crash — the exact outcome this validator exists to prevent.
+// The FALLBACK is guarded too: `Object.prototype.toString` itself throws on a revoked Proxy, so an
+// unguarded fallback would reintroduce the crash it exists to avoid.
+// Module-level so checks that run BEFORE validateAppSpec's local helpers are initialised can use it
+// too (a `const` arrow declared later in the function is in the temporal dead zone until then).
+function describeSpecValue(v) {
+  try { return JSON.stringify(v); } catch { /* fall through */ }
+  try { return Object.prototype.toString.call(v); } catch { return '<unprintable>'; }
+}
+
+// The single wording for a rejected LCID, shared by every entry point that accepts one.
+//
+// It is a function rather than a constant because the offending value is quoted back: the most
+// common wrong input is a BCP-47 language TAG ("es-ES", "de-DE") — the thing a person naturally
+// writes — and "must be a positive integer LCID" is true but leaves that author with nothing to act
+// on. Shared for the same reason `ENTITY_KEYS` is: two entry points that disagree about what a bad
+// LCID *is* teach the author two different rules for one field.
+// LCID reference: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
+function invalidLanguageCodeMessage(value) {
+  return `languageCode must be a positive integer LCID up to ${MAX_LCID} — e.g. 1033 (en-US) or 1031 (de-DE), `
+    + `not a language tag like "de-DE" (got ${describeSpecValue(value)})`;
 }
 
 // Normalize a page's implementation source into a discriminated shape:
@@ -1202,14 +1263,22 @@ function validateAppSpec(spec, opts = {}) {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
-    errors.push('languageCode must be a positive integer LCID');
+    // Keep the leading clause stable — the CLI flag and two test suites match on it. The appended
+    // guidance exists because the bare message named the mistake without naming the fix, and a
+    // language TAG is the most likely thing an author reaches for.
+    //
+    // A tag is NOT accepted as an alias, deliberately: the mapping is genuinely ambiguous where it
+    // matters (es-ES is 3082 with the international sort and 1034 with the traditional one), and a
+    // wrong guess would not fail — it would build every label in the wrong language, which is the
+    // same silent-corruption class this validator exists to prevent. Naming the LCID is safe;
+    // inferring one is not.
+    errors.push(invalidLanguageCodeMessage(spec.languageCode));
   }
   const entityNames = new Set();
   const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
   // Describe a rejected value for an error message WITHOUT being able to throw doing it.
-  // `JSON.stringify` throws on a BigInt and on a getter that throws, which would turn a structured
-  // validation error into a raw crash — the exact outcome this validator exists to prevent.
-  const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
+  // See describeSpecValue above for why a bare JSON.stringify is unsafe here.
+  const describeValue = describeSpecValue;
   // A table reference an author writes becomes a Dataverse METADATA NAME, so it has to be a string
   // BEFORE it is compared. `String([["new_ticket"]])` is `"new_ticket"`, so a nested array passes an
   // entity-membership check and then throws a raw TypeError deep in the build, where the engine
@@ -1222,11 +1291,66 @@ function validateAppSpec(spec, opts = {}) {
     return true;
   };
   for (const e of spec.entities || []) {
-    if (!e.schemaName) {
-      errors.push('entity.schemaName is required');
+    // Reject unknown keys (#537). A key with no reader is otherwise accepted and dropped, so an
+    // explicit authoring instruction disappears into a successful build.
+    //
+    // Guarded to plain objects: a malformed entity already fails the schemaName check below, and
+    // `Object.keys('x')` would turn one bad value into a bogus "unknown key '0'".
+    //
+    // The enumeration itself is guarded because the object comes from the CALLER: a programmatic
+    // caller can pass a Proxy whose `ownKeys` trap throws, and this validator's contract is to
+    // RETURN problems, not to throw them.
+    if (e && typeof e === 'object' && !Array.isArray(e)) {
+      // The label is resolved BEFORE `schemaName` is validated, and reading it can itself fail (a
+      // getter that throws). Without a fallback a malformed entity reported `entity undefined:
+      // unknown key ...` next to the real `entity.schemaName is required` — two errors for one
+      // problem, one of them naming a table that does not exist.
+      let label;
+      try {
+        label = typeof e.schemaName === 'string' && e.schemaName.trim() ? `entity ${e.schemaName}` : 'an entity with no schemaName';
+      } catch {
+        label = 'an entity whose schemaName could not be read';
+      }
+      let keys;
+      try {
+        keys = Object.keys(e);
+      } catch {
+        keys = null;
+        errors.push('an entity could not be inspected: enumerating its keys threw');
+      }
+      for (const k of keys || []) {
+        if (ENTITY_KEYS.has(k)) continue;
+        errors.push(`${label}: unknown key '${k}'${ENTITY_KEY_HINTS[k] || ''} (allowed: ${[...ENTITY_KEYS].join(', ')})`);
+      }
+    }
+    // `schemaName` must be a non-empty STRING, and the check says so rather than only testing
+    // truthiness. `!e.schemaName` let `42`, `{}` and `[]` through, and the very next line called
+    // `.toLowerCase()` on them — so a spec carrying `"schemaName": 42` CRASHED the validator with a
+    // raw TypeError instead of being told what was wrong. That is the one outcome this function must
+    // never produce: its whole contract is to turn bad input into structured errors, and a caller
+    // that gets a TypeError loses every finding collected so far, not just this one. Reachable from
+    // any hand- or model-authored JSON file, which is how every spec arrives.
+    //
+    // The read itself is wrapped only because it is cheap to do so. A getter or Proxy trap that
+    // throws is NOT comprehensively defended against in this validator — several later passes
+    // interpolate `e.schemaName` directly — and no attempt is made to pretend otherwise; that shape
+    // cannot come from `JSON.parse`, only from a programmatic caller.
+    let schemaNameValue;
+    let schemaNameReadable = true;
+    try { schemaNameValue = e.schemaName; } catch { schemaNameReadable = false; }
+    if (!schemaNameReadable) {
+      errors.push('entity.schemaName could not be read');
+    } else if (typeof schemaNameValue !== 'string' || !schemaNameValue.trim()) {
+      // `undefined`/`null`/`""` keep the original wording: it is the overwhelmingly common case and
+      // "is required" is the right thing to say about an absent value. A present-but-wrong value
+      // gets its own message, quoting what was found, because "required" would be actively
+      // misleading to someone who did supply one.
+      errors.push(schemaNameValue === undefined || schemaNameValue === null || schemaNameValue === ''
+        ? 'entity.schemaName is required'
+        : `entity.schemaName must be a non-empty string (got ${describeSpecValue(schemaNameValue)})`);
     } else {
-      entityNames.add(e.schemaName);
-      entityByLower.set(e.schemaName.toLowerCase(), e);
+      entityNames.add(schemaNameValue);
+      entityByLower.set(schemaNameValue.toLowerCase(), e);
     }
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
@@ -2673,6 +2797,9 @@ module.exports = {
   SDK_ROLE_MARKER,
   canonicalPersonaName,
   VALIDATION_PROFILES,
+  ENTITY_KEYS,
+  invalidLanguageCodeMessage,
+  ENTITY_KEY_HINTS,
   DIRECT_ENTRY_BEHAVIORS,
   COLUMN_VISUALIZATIONS,
   INTEGER_FORMATS,

@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, rejectLocalizedGlobalChoice } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, rejectLocalizedGlobalChoice, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -35,7 +35,10 @@ function validateProvisionInput(input) {
   // The other two entry points hard-error on the identical string; this gate keeps all three consistent
   // and runs before any SDK write.
   if (input.languageCode !== undefined && normalizeLanguageCode(input.languageCode) === null) {
-    errors.push('languageCode must be a positive integer LCID');
+    // Shares the App Spec validator's wording — the entity-key rule is already shared between these
+    // two entry points, and the same bad value must not produce a helpful error on one path and a
+    // terse one on the other.
+    errors.push(invalidLanguageCodeMessage(input.languageCode));
   }
 
   // Entities validation
@@ -73,6 +76,35 @@ function validateProvisionInput(input) {
 
     if (publisherPrefix && !e.schemaName.toLowerCase().startsWith(`${publisherPrefix}_`)) {
       errors.push(`entity '${e.schemaName}': schemaName must start with the solution publisher prefix '${publisherPrefix}_'`);
+    }
+
+    // Reject unknown table keys here too (#537). This is a SECOND entry point that accepts entities
+    // (the /genpage provisioning CLI), so validating only in validateAppSpec left the silent drop
+    // fully reproducible through a documented path: `languageCode`, `localizedLabels` and a
+    // misspelled `pluralname` all returned ok:true and were dropped before any SDK write.
+    //
+    // It shares ENTITY_KEYS with the App Spec deliberately, for the same reason normalizeLanguageCode
+    // is shared: two entry points that disagree about what a table key IS would be worse than either
+    // rule alone. This input is documented as "App Spec format", so entities copied out of an
+    // app-spec.json must keep validating.
+    //
+    // That means the 5 keys this narrower path does not consume — vectorIcon, iconDescription, icon,
+    // existing, enrichDefaultViews — are ACCEPTED and ignored here (it provisions the data model
+    // only; it writes no icons and enriches no views). That is a known subset boundary, not the
+    // unknown-key hole #537 is about, and rejecting them would break the copy-paste compatibility
+    // the format promises.
+    // Enumeration is guarded for the same reason as validateAppSpec's: the object comes from the
+    // caller, and a validator's contract is to RETURN problems rather than throw them.
+    let entityKeys;
+    try {
+      entityKeys = Object.keys(e);
+    } catch {
+      entityKeys = null;
+      errors.push(`entity '${e.schemaName}': could not be inspected — enumerating its keys threw`);
+    }
+    for (const k of entityKeys || []) {
+      if (ENTITY_KEYS.has(k)) continue;
+      errors.push(`entity '${e.schemaName}': unknown key '${k}'${ENTITY_KEY_HINTS[k] || ''} (allowed: ${[...ENTITY_KEYS].join(', ')})`);
     }
 
     entityByLower.set(e.schemaName.toLowerCase(), e);

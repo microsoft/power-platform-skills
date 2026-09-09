@@ -107,8 +107,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
   stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
   reason, relationship and alternate-key display names) **and** form, dashboard and sitemap labels.
-  The serializers used to hardcode 1033 with no caller override
-  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)); they now take the
+  The serializers used to hardcode 1033 with no caller override; they now take the
   authoring language, so a non-English build no longer produces translated columns next to English
   form labels.
   **Normally omit it**: the build reads the organization's base language
@@ -123,6 +122,13 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
   value is rejected by validation, and a caller that bypasses validation gets a warning naming the
   discarded value rather than a silent fall-through.
+  **It is build-wide.** One LCID is resolved and applied to every table, column, choice, status
+  value, relationship and alternate key in the spec. There is **no per-table language**: an
+  `entities[].languageCode` is rejected, because the build cannot honour it — the SDK takes the
+  language as a construction-time option. To label something in **several** languages, write the
+  field itself as an LCID map (see *Localized labels* below); an `entities[].localizedLabels` block
+  is rejected too, because the map belongs beside the name it labels rather than in a parallel
+  addressing scheme.
   **Emitted by `download-model-app.js` only if you pinned it yourself.** It is deliberately never
   read from Dataverse: an LCID copied out of the source org would be re-applied verbatim when the
   spec is rebuilt somewhere else, which is exactly how a spec starts failing in an org that lacks
@@ -134,7 +140,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 ## Localized labels — one name, several languages
 
 `languageCode` above sets the **one** language every plain label is written in. To label something in
-**several** languages, write the field as a map keyed by LCID instead of a string (AB#6686428):
+**several** languages, write the field as a map keyed by LCID instead of a string:
 
 ```jsonc
 "displayName": "Project Baseline"                                       // one language
@@ -316,6 +322,11 @@ it exists is accepted by validation, builds green, and does not change the deplo
   ]
 }
 ```
+- **Unknown table keys are REJECTED, not ignored.** A table accepts exactly the keys above
+  plus `statusReasons` / `alternateKeys`. Anything else — a misspelled `pluralname`, or a
+  `languageCode` / `localizedLabels` asking for a per-table language or a parallel label block —
+  fails validation naming the alternative, rather than validating clean and being dropped from the
+  build.
 - **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
@@ -501,8 +512,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   `filters[].attr`. Not `[{ "name": "..." }]` — that is the shape `forms[]` uses for its fields, and
   it used to be accepted here and stringified into the view's FetchXML as `[object object]`. The
   build then failed at the platform, mid-run, and left behind a view row that could not be read or
-  deleted, so every later build failed the same way
-  ([#525](https://github.com/microsoft/power-platform-skills/issues/525)). It is now rejected up
+  deleted, so every later build failed the same way. It is now rejected up
   front, naming the view and the offending entry.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
@@ -1244,7 +1254,7 @@ security. The security surface today is role-per-persona plus `roleGrants[]` (be
 Adds privileges for a table to a security role that **already exists** — typically the roles an
 existing solution ships. Use it when you add a table to an app whose access model somebody else owns:
 without it the table, its forms and its navigation deploy while every non-admin persona still cannot
-open the table, and nothing reports it (AB#6686429).
+open the table, and nothing reports it.
 
 ```jsonc
 "roleGrants": [
@@ -1313,7 +1323,7 @@ belong to somebody else and are never a finding.
 
 ## businessProcessFlows[].securityRoles — who may run a flow
 
-Same shape and same persona idiom as `forms[].securityRoles`, so there is one thing to learn ([#513]):
+Same shape and same persona idiom as `forms[].securityRoles`, so there is one thing to learn:
 
 ```jsonc
 { "name": "Ticket Handling", "entity": "contoso_ticket", "status": "Active",
@@ -1352,7 +1362,6 @@ fails closed when that table cannot be read — which also catches a flow that n
 Teardown plans nothing: measured, the flow (and with it the backing table and its privileges) is
 deleted before the roles, and the run completes with 0 failures.
 
-[#513]: https://github.com/microsoft/power-platform-skills/issues/513
 
 **Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
 security.

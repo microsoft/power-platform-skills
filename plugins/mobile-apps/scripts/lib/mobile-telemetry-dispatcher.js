@@ -8,7 +8,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { FIELD_TYPES, pick } = require('./telemetry/lib/events');
-const { appendLocal } = require('./telemetry/lib/local-log');
+const { appendLocal, pluginLogDir } = require('./telemetry/lib/local-log');
+const { findAppInstanceId, readTelemetryCluster } = require('./app-identity');
+const { resolveClusterEnvironment } = require('./telemetry/region/region-resolver');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const {
   isTransmissionOptedOut,
@@ -18,6 +20,59 @@ const {
 const PLACEHOLDER_IKEY = 'PLACEHOLDER_REPLACE_BEFORE_SHIPPING';
 const DEFAULT_LOCAL_DIR = path.join(os.homedir(), '.power-platform-skills');
 const RESERVED_META_FIELDS = new Set(['eventName', 'eventType', 'severity']);
+
+function readPriorEvents(projectRoot, env = process.env) {
+  const configDir = env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
+  const { cfg } = readIkeyConfig(env);
+  const appInstanceId = findAppInstanceId(projectRoot);
+  if (!appInstanceId || !cfg || cfg.disabled === true || isTransmissionOptedOut(configDir, 'mobile-app', env)) return [];
+  const records = [];
+  const sessionsRoot = pluginLogDir(configDir, 'mobile-app');
+  // Carry each parent directory explicitly so nested logs do not depend on
+  // Dirent.parentPath or the deprecated Dirent.path metadata.
+  const directories = [sessionsRoot];
+  while (directories.length) {
+    const directory = directories.pop();
+    try {
+      for (const file of fs.readdirSync(directory, { withFileTypes: true })) {
+        const filePath = path.join(directory, file.name);
+        if (file.isDirectory()) {
+          directories.push(filePath);
+          continue;
+        }
+        if (!file.isFile() || !/^events(?:\.jsonl|\.\d{14}\.old)$/.test(file.name)) continue;
+        let contents;
+        try { contents = fs.readFileSync(filePath, 'utf8'); } catch { continue; }
+        for (const line of contents.split('\n')) {
+          try {
+            const record = JSON.parse(line);
+            if (record.data?.pluginName === 'mobile-app' && record.data?.eventInfo?.appInstanceId === appInstanceId &&
+                Number.isFinite(Date.parse(record.time))) records.push(record);
+          } catch { /* Skip malformed or incomplete JSONL records. */ }
+        }
+      }
+    } catch { /* Missing or pruned logs must not block environment resolution. */ }
+  }
+  return records.sort((first, second) => Date.parse(first.time) - Date.parse(second.time));
+}
+
+async function prepareTelemetryBatch(projectRoot, env, environment = null) {
+  // Snapshot before resolution can publish a cluster, excluding events sent afterward.
+  const replay = readTelemetryCluster(projectRoot) ? [] : readPriorEvents(projectRoot, env);
+  const cluster = await resolveClusterEnvironment(projectRoot, environment);
+  return { cluster, replay: cluster ? replay : [] };
+}
+
+async function flushPriorEvents(projectRoot, environment, env = process.env) {
+  const { cluster, replay } = await prepareTelemetryBatch(projectRoot, env, environment);
+  if (!cluster || !replay.length) return;
+  fireAndForget({ data: { pluginName: 'mobile-app' }, replay }, {
+    projectRoot, env,
+    configDir: env.POWER_PLATFORM_SKILLS_CONFIG_DIR,
+    ikeyJsonPath: env.POWER_PLATFORM_SKILLS_IKEY_JSON,
+    fakeProbe: env.POWER_PLATFORM_SKILLS_FAKE_HTTPS,
+  });
+}
 
 function fireAndForget(event, opts = {}) {
   const env = opts.env || process.env;
@@ -44,6 +99,8 @@ function fireAndForget(event, opts = {}) {
         ...(optOutName && optOutValue ? { [optOutName]: optOutValue } : {}),
       },
     });
+    child.on('error', () => {});
+    child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify(event));
     child.unref();
   } catch {
@@ -142,37 +199,46 @@ async function dispatch(raw, env) {
   const data = sanitizeData(event.data);
   const time = new Date().toISOString();
   const configDir = env.POWER_PLATFORM_SKILLS_CONFIG_DIR || DEFAULT_LOCAL_DIR;
-  appendLocal({ time, name: event.name, data }, { configDir });
-
+  if (!Array.isArray(event.replay)) {
+    appendLocal({ time, name: event.name, data }, { configDir });
+  }
   if (isTransmissionOptedOut(configDir, data.pluginName, env)) return;
 
+  let records = Array.isArray(event.replay) ? event.replay : [{ data, time }];
   let iKey = '';
   let collectorUrl = '';
   const resolver = loadResolver(path.dirname(configPath));
   if (resolver && typeof resolver.resolve === 'function') {
     try {
-      // Resolved here, not in the hook: an unresolved cluster costs a `pac auth
-      // who` cold start, and this child is already detached from skill execution.
+      let cluster;
+      if (data.pluginName === 'mobile-app') {
+        const batch = await prepareTelemetryBatch(env.POWER_PLATFORM_SKILLS_PROJECT_ROOT || '', env);
+        cluster = batch.cluster;
+        if (!cluster) return;
+        if (!Array.isArray(event.replay) && batch.replay.length) records = batch.replay;
+      }
       const resolved = await resolver.resolve({
         event,
         cfg,
         configDir,
         projectRoot: env.POWER_PLATFORM_SKILLS_PROJECT_ROOT || '',
+        cluster,
       });
       iKey = resolved && resolved.iKey || '';
       collectorUrl = resolved && resolved.collectorUrl || '';
     } catch {
       // A resolver failure leaves the event in the local mirror.
     }
-    if (!iKey || !collectorUrl) return;
   } else {
     iKey = cfg.instrumentationKey || '';
     collectorUrl = cfg.collector_url || '';
   }
   if (!iKey || iKey === PLACEHOLDER_IKEY || !collectorUrl) return;
 
-  const envelope = buildEnvelope(data, time, iKey, cfg.event_stream_name);
-  const body = `${JSON.stringify(envelope)}\n`;
+  if (!records.length) return;
+  const body = records.map(record => JSON.stringify(
+    buildEnvelope(sanitizeData(record.data), record.time, iKey, cfg.event_stream_name),
+  )).join('\n') + '\n';
   const headers = {
     'Content-Type': 'application/x-json-stream; charset=utf-8',
     'x-apikey': iKey,
@@ -232,4 +298,6 @@ module.exports = {
   buildEnvelope,
   buildNormalEventData,
   fireAndForget,
+  readPriorEvents,
+  flushPriorEvents,
 };
