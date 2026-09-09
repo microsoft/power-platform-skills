@@ -12,6 +12,26 @@ rebuilding a real app into a second environment.
 
 ### Added
 
+- **`businessProcessFlows[].securityRoles` — who may run a flow** ([#513]). Same persona idiom as
+  `forms[].securityRoles`, so there is one thing to learn:
+
+  ```jsonc
+  { "name": "Ticket Handling", "entity": "contoso_ticket", "status": "Active",
+    "securityRoles": { "personas": ["Dispatcher"] }, "stages": [ /* … */ ] }
+  ```
+
+  The mechanic is different from a form's, and the issue asked for live measurement before the
+  surface was designed. It had two surprises, both of which shaped this:
+  - The backing table's logical name is **exactly** the name this repo already derives for its
+    collision check, so no id has to be read back and the grant can be planned before the flow exists.
+  - That table is **organization-owned** and every privilege it exposes is Global-only. So there is
+    **no `scope` to author** — offering one would be a knob the platform rejects. (It is also why the
+    SDK's own BPF role helper hardcodes Global: a platform constraint, not a shortcut.)
+
+  Rejected rather than ignored: `everyone` / `fallbackForm` / `order` (formxml concepts with no
+  equivalent here — the error says so), an empty `personas[]` (unlike a form, a flow grants access to
+  nobody by default, so an empty list leaves it unusable), and `securityRoles` on a **Draft** flow
+  (the backing table is created by activation, so there is nothing to grant on yet).
 - **Localized Dataverse metadata labels.** Any author-facing name — a table's `displayName` /
   `pluralName`, its primary column's, a column's, a lookup's, an alternate key's, a Choice option's
   — may now be written as a map keyed by LCID instead of a plain string
@@ -54,6 +74,21 @@ rebuilding a real app into a second environment.
 
 ### Fixed
 
+- **The table existence probe silently discarded every non-base-language label.** Found by running
+  the localized-label feature against an organization with two languages provisioned — it did not
+  work at all on the real build path, while every unit test passed. Order-controlled measurement,
+  eight tables in the sequence C,F,F,C,C,F,F,C so each arm appears early and late:
+
+  | | kept both languages |
+  |---|---|
+  | `createTable` alone | **4/4** |
+  | `findTables` then `createTable` | **0/4** |
+
+  The outgoing `EntityDefinitions` body is byte-identical either way, so the loss comes from the
+  unfiltered metadata read `findTables` issues first, not from the create payload. The probe is now a
+  narrow single-table read, which took the plugin path from 0/4 to 4/4 against the same org. A
+  non-404, non-2xx status still falls back to `findTables`, because assuming "absent" on a transient
+  failure would turn it into a duplicate-create attempt.
 - **Ten defects an adversarial peer review found in the three changes above.** Recorded because most
   of them were in code that already had tests, mutation tests and (for `roleGrants[]`) a passing live
   run — the class of bug that survives its own author's verification:
@@ -123,6 +158,7 @@ rebuilding a real app into a second environment.
 [AB#6686424]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686424
 [AB#6686428]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686428
 [#537]: https://github.com/microsoft/power-platform-skills/issues/537
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
 [AB#6686425]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686425
 [AB#6686426]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686426
 [AB#6686427]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686427

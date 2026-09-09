@@ -5,7 +5,7 @@
 // { ok, checks:[{kind,name,present,detail}], missing:[…] }.
 
 const { odataLit } = require('./odata.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
@@ -521,6 +521,49 @@ async function verifySpec(spec, read, opts = {}) {
     add('role-grant-privileges', label, cmp.ok, cmp.ok
       ? `${declared.length} granted privilege(s) held`
       : cmp.missing.map((m) => `${m.entity}.${m.access}: ${m.reason}`).join('; '));
+  }
+
+  // Business process flow role grants (`businessProcessFlows[].securityRoles`). #513.
+  //
+  // Verified on the flow's BACKING TABLE, not on the flow row: activation creates an org-owned table
+  // named `bpfUniqueName(flow.name)` (live-measured), and holding privileges on it is what lets a
+  // persona run the process. Subset semantics as everywhere else — a persona legitimately holds far
+  // more than this one grant.
+  for (const f of spec.businessProcessFlows || []) {
+    if (!f || !f.securityRoles || !Array.isArray(f.securityRoles.personas)) continue;
+    const backingTable = bpfUniqueName(f.name);
+    if (typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
+    let privs = null;
+    try {
+      privs = await read.entityPrivileges(backingTable);
+    } catch { privs = null; }
+    if (!Array.isArray(privs)) {
+      // Fail CLOSED: an unreadable backing table is not proof the grant landed. It also catches the
+      // realistic case that the flow never activated, so the table does not exist at all.
+      add('bpf-roles', f.name, false, `could not read privileges for the flow's backing table '${backingTable}' — it is created by ACTIVATION, so this also means the flow may not be active`);
+      continue;
+    }
+    for (const personaName of f.securityRoles.personas) {
+      const roleName = String(personaName).trim();
+      let row;
+      try {
+        const bu = await resolveRoleBusinessUnit((e, o) => read.queryRecords(e, o), (spec.personas || []).find((p) => canonicalPersonaName(p) === roleName)?.businessUnitId, roleBuCache);
+        if (bu) {
+          const rows = await read.queryRecords('role', { select: ['roleid', 'description', 'ismanaged'], filter: `name eq '${odataLit(roleName)}'${roleBuClause(bu)}`, top: 5 });
+          row = (rows || []).find((r) => r.ismanaged !== true && (r.description || '') === SDK_ROLE_MARKER);
+        }
+      } catch { row = undefined; }
+      if (!row) { add('bpf-roles', `${f.name} / ${roleName}`, false, 'persona role not found'); continue; }
+      let actual = null;
+      try { actual = await read.rolePrivileges(row.roleid); } catch { actual = null; }
+      if (!Array.isArray(actual)) { add('bpf-roles', `${f.name} / ${roleName}`, false, "could not read the role's privileges"); continue; }
+      const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
+      const declared = BPF_ROLE_ACCESS.map((access) => ({ entity: backingTable, access, scope: 'organization' }));
+      const cmp = compareRolePrivileges(declared, new Map([[backingTable, privs]]), actualByPrivilegeId);
+      add('bpf-roles', `${f.name} / ${roleName}`, cmp.ok, cmp.ok
+        ? `${declared.length} privilege(s) held on ${backingTable}`
+        : cmp.missing.map((m) => `${m.access}: ${m.reason}`).join('; '));
+    }
   }
 
   // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose

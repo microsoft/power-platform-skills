@@ -1301,5 +1301,45 @@ implies its content (it was converged), whereas a grant is additive onto a role 
 still exists whether or not the privileges landed. Subset semantics again — the role's other privileges
 belong to somebody else and are never a finding.
 
+## businessProcessFlows[].securityRoles — who may run a flow
+
+Same shape and same persona idiom as `forms[].securityRoles`, so there is one thing to learn ([#513]):
+
+```jsonc
+{ "name": "Ticket Handling", "entity": "contoso_ticket", "status": "Active",
+  "securityRoles": { "personas": ["Dispatcher"] },
+  "stages": [ /* … */ ] }
+```
+
+The **mechanic** is different, though, and it explains every rule below. A form's roles live inside
+its formxml. A flow's live on a **table**: activating a flow makes the platform create an
+organization-owned backing table, and holding privileges on that table is what lets a persona run the
+process. Three things measured live before this surface was designed:
+
+- the backing table's logical name is **exactly** the name derived from the flow name (the same
+  derivation as the flow-name collision rules above), so nothing has to be read back and the grant can
+  be planned before the flow exists;
+- the table is organization-owned and **every privilege is Global-only** — so there is **no `scope`**
+  to author, because the platform accepts no other depth;
+- the access granted is fixed at `create`, `read`, `write`, `delete` — a partial set produces a flow a
+  user can see but not advance.
+
+**Rejected rather than ignored**
+- `everyone`, `fallbackForm`, `order` — formxml concepts with no equivalent here. The error says so
+  rather than just listing allowed keys, because an author who wrote them learned them from `forms[]`.
+- an **empty** `personas[]` — unlike a form (offered to everyone until restricted), a flow's backing
+  table grants to nobody by default, so an empty list is a request that cannot be satisfied.
+- `securityRoles` on a **Draft** flow — the backing table is created by *activation*, so there is
+  nothing to grant on yet.
+
+Applied in the **security** phase, after `personas[]` roles exist. If the flow was not built in the
+same invocation the grant is **skipped with a stated reason**, never applied blind.
+`verify-model-app` proves each persona holds the privileges on the backing table (`bpf-roles`) and
+fails closed when that table cannot be read — which also catches a flow that never activated.
+Teardown plans nothing: measured, the flow (and with it the backing table and its privileges) is
+deleted before the roles, and the run completes with 0 failures.
+
+[#513]: https://github.com/microsoft/power-platform-skills/issues/513
+
 **Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
 security.

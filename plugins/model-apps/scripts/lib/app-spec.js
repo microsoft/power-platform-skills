@@ -486,6 +486,77 @@ const BUSINESS_RULE_SCOPES = ['Entity'];
 // Offering a knob the build cannot verify is how a spec deploys something the author did not mean.
 const BPF_STATUSES = ['Active', 'Draft'];
 
+// `businessProcessFlows[].securityRoles` — who may run a flow. #513.
+//
+// The mechanic is NOT the one `forms[].securityRoles` uses. A form's roles live inside its formxml;
+// a flow's live on a TABLE. Activating a flow makes the platform create an org-owned backing table,
+// and holding privileges on that table is what lets a persona run the process.
+//
+// Three things measured live against a real environment before this surface was designed, because
+// #513 asked for exactly that — and two of them contradict what the issue assumed:
+//
+//   1. The backing table's logical name is EXACTLY `bpfUniqueName(flow.name)`, the derivation this
+//      file already duplicates for its collision check. The issue expected it to need resolving from
+//      the deployed workflow's `uniquename`; measured, `uniquename` IS the derived value, so nothing
+//      has to be read back and the grant can be planned before the flow exists.
+//   2. The table is ORGANIZATION-OWNED and every privilege it exposes reports
+//      `CanBeGlobal: true, CanBeLocal: false, CanBeDeep: false, CanBeBasic: false`. So there is no
+//      `scope` to author — Global is the only depth the platform will accept, and requesting any
+//      other is rejected by the SDK. (This is also why the SDK's own internal BPF role helper
+//      hardcodes `Depth: "Global"`: a platform constraint, not a shortcut.)
+//   3. The exposed privileges are Create, Read, Write, Delete, Append and AppendTo — no Assign or
+//      Share, which org-owned tables do not have.
+//
+// So the surface is deliberately just `{ personas: [...] }`: the same key name and the same persona
+// idiom as forms, minus every knob that would be a lie here. `everyone`, `fallbackForm` and `order`
+// are formxml concepts and are rejected by name rather than ignored.
+const BPF_SECURITY_ROLE_KEYS = new Set(['personas']);
+// The access a persona needs on the backing table to run the flow. Fixed, not authorable: these are
+// the four the platform's own BPF role reconciliation grants, and a partial set produces a flow a
+// user can see but not advance — a worse outcome than not granting at all.
+const BPF_ROLE_ACCESS = ['create', 'read', 'write', 'delete'];
+
+function validateBpfSecurityRoles(flow, spec, label, errors) {
+  const sr = flow && flow.securityRoles;
+  if (sr === undefined) return;
+  if (!sr || typeof sr !== 'object' || Array.isArray(sr)) {
+    errors.push(`${label}: securityRoles must be an object like { "personas": ["Dispatcher"] }`);
+    return;
+  }
+  for (const k of Object.keys(sr)) {
+    if (BPF_SECURITY_ROLE_KEYS.has(k)) continue;
+    const formOnly = k === 'everyone' || k === 'fallbackForm' || k === 'order';
+    errors.push(`${label}: securityRoles has unknown key '${k}'`
+      + (formOnly
+        ? ` — that is a forms[].securityRoles concept written into formxml. A flow's access is a PRIVILEGE on its backing table, so there is no <Everyone /> equivalent and no ordering; list the personas that may run it.`
+        : ` (allowed: ${[...BPF_SECURITY_ROLE_KEYS].join(', ')})`));
+  }
+  if (!Array.isArray(sr.personas) || sr.personas.some((p) => typeof p !== 'string' || !p.trim())) {
+    errors.push(`${label}: securityRoles.personas must be an array of persona names`);
+    return;
+  }
+  if (!sr.personas.length) {
+    // Unlike a form — which is offered to everyone until it is restricted — a flow is reachable by
+    // NOBODY until a privilege is granted, so an empty list is not a no-op, it is a request that
+    // cannot be satisfied. Say so rather than silently granting nothing.
+    errors.push(`${label}: securityRoles.personas is empty — a flow's backing table grants access to nobody by default, so an empty list would leave the flow unusable. List at least one persona, or omit securityRoles and grant access in Maker.`);
+    return;
+  }
+  const declared = new Set((spec.personas || []).map((p) => String(canonicalPersonaName(p) || '').toLowerCase()));
+  for (const p of sr.personas) {
+    if (!declared.has(String(p).trim().toLowerCase())) {
+      errors.push(`${label}: securityRoles names persona '${p}', which is not declared in personas[]`);
+    }
+  }
+  const dupes = sr.personas.map((p) => String(p).trim().toLowerCase()).filter((p, i, a) => a.indexOf(p) !== i);
+  if (dupes.length) errors.push(`${label}: securityRoles lists persona '${dupes[0]}' more than once`);
+  // A DRAFT flow has no backing table: the table is created by ACTIVATION (measured). Granting on it
+  // would fail against a table that does not exist, so this is an authoring error, not a runtime one.
+  if (flow.status === 'Draft') {
+    errors.push(`${label}: securityRoles cannot be applied to a Draft flow — the backing table that carries the privileges is created by ACTIVATION, so there is nothing to grant on yet. Set status "Active", or drop securityRoles.`);
+  }
+}
+
 // Mirror of the vendored SDK's BPF `uniquename` derivation:
 //   uniqueName || `new_${name.toLowerCase().replace(/[^a-z0-9]/g, '') || 'businessprocessflow'}`
 // Two properties of it drive the collision check below, and both are easy to get wrong:
@@ -1601,12 +1672,13 @@ function validateAppSpec(spec, opts = {}) {
     // Allow-list the flow's own keys for the same reason as the stage/step ones below: naming only the
     // three knobs we knew about left others (the SDK also models `globalActions`) neither mapped nor
     // rejected — silently dropped, which is the failure this guard exists to prevent.
-    const BPF_FLOW_KEYS = new Set(['name', 'entity', 'description', 'status', 'order', 'stages']);
+    const BPF_FLOW_KEYS = new Set(['name', 'entity', 'description', 'status', 'order', 'stages', 'securityRoles']);
     for (const k of Object.keys(p)) {
       if (!BPF_FLOW_KEYS.has(k)) {
-        errors.push(`${label}: unsupported key '${k}' (allowed: ${[...BPF_FLOW_KEYS].join(', ')}). Security-role grants, branching and process actions are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker after the flow deploys.`);
+        errors.push(`${label}: unsupported key '${k}' (allowed: ${[...BPF_FLOW_KEYS].join(', ')}). Branching and process actions are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker after the flow deploys.`);
       }
     }
+    validateBpfSecurityRoles(p, spec, label, errors);
     const cols = declaredColumnLogicals(spec, p.entity);
     validateDescription(p.description, label, errors);
     if (!Array.isArray(p.stages) || !p.stages.length) {
@@ -2545,6 +2617,8 @@ module.exports = {
   BUSINESS_RULE_ACTION_TYPES,
   BUSINESS_RULE_DATA_TYPES,
   BPF_STATUSES,
+  BPF_ROLE_ACCESS,
+  BPF_SECURITY_ROLE_KEYS,
   bpfUniqueName,
   declaredColumnLogicals,
   BUSINESS_RULE_SCOPES,

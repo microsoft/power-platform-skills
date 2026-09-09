@@ -205,10 +205,16 @@ test('a cross-entity stage is rejected rather than silently retargeted', () => {
 test('a knob the build cannot verify is REJECTED, not ignored — at flow, stage AND step level', () => {
   // Silently dropping a key the author wrote is how a spec "deploys" something it does not: they
   // would see the stages appear and reasonably assume the rest applied.
-  for (const key of ['securityRoles', 'branch', 'actions', 'globalActions']) {
-    const errs = errorsFor([{ ...FLOW, [key]: key === 'securityRoles' ? ['Salesperson'] : [{}] }]);
+  //
+  // `securityRoles` is NO LONGER in this list: it is supported since #513 (see the dedicated tests
+  // below). It stays rejected as an ARRAY though — the shape here — because the supported form is
+  // an object, so the old spelling still fails rather than being read as something else.
+  for (const key of ['branch', 'actions', 'globalActions']) {
+    const errs = errorsFor([{ ...FLOW, [key]: [{}] }]);
     assert.ok(errs.some((e) => new RegExp(`unsupported key '${key}'`).test(e)), `${key}: ${JSON.stringify(errs)}`);
   }
+  const arrayRoles = errorsFor([{ ...FLOW, securityRoles: ['Salesperson'] }]);
+  assert.ok(arrayRoles.some((e) => /securityRoles must be an object like \{ "personas"/.test(e)), JSON.stringify(arrayRoles));
   // STAGE level is where an author would naturally write branching/actions — the SDK models them
   // there, and bpfDef maps only name/entity/steps, so an unguarded key vanishes without a word.
   for (const key of ['branch', 'actions', 'nextStageId', 'category', 'relationshipName']) {

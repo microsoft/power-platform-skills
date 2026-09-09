@@ -582,6 +582,41 @@ async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, read
 
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
+// Does this table already exist? Returns { logicalName, entitySetName } or null.
+//
+// Deliberately a NARROW `EntityDefinitions(LogicalName=…)` read rather than the SDK's `findTables`,
+// and this is a correctness requirement rather than an optimisation. LIVE-MEASURED, order-controlled
+// (8 tables, sequence C,F,F,C,C,F,F,C so each arm appears early and late): calling `findTables`
+// before `createTable` makes Dataverse store ONLY the base-language label of a multi-language name —
+// `create only` kept both languages 4/4, `findTables + create` kept both 0/4. The outgoing
+// EntityDefinitions body is byte-identical in both cases, so the loss is caused by the preceding
+// unfiltered metadata read, not by the create payload.
+//
+// Without this the localized-label feature silently degrades to English-only on the real build path
+// while every unit test (which never issues the preceding read) passes — the exact silent-drop class
+// of failure AB#6686428 exists to end.
+//
+// `dataverse.get` RESOLVES with `{ status }` on a 404 instead of throwing, so the status is checked
+// explicitly. Falls back to `findTables` only when the raw client is unavailable (older callers and
+// unit-test doubles), preserving previous behaviour for them.
+async function findExistingTable(provision, schemaName) {
+  const logical = String(schemaName).toLowerCase();
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    const escaped = logical.replace(/'/g, "''");
+    const res = await raw.get(`/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`);
+    if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
+      return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
+    }
+    if (res && res.status === 404) return null;
+    // Any other status is inconclusive — fall through to findTables rather than assume "absent",
+    // because assuming absent turns a transient read failure into a duplicate-create attempt.
+  }
+  if (typeof (provision && provision.findTables) !== 'function') return null;
+  const hits = await provision.findTables(schemaName, { top: 50 });
+  return (hits || []).find((t) => t.logicalName === logical) || null;
+}
+
 async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
@@ -618,8 +653,8 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
   for (const e of spec.entities) {
     const logical = e.schemaName.toLowerCase();
-    const hits = await provision.findTables(e.schemaName, { top: 50 });
-    const existingTable = (hits || []).find((t) => t.logicalName === logical);
+    const hits = await findExistingTable(provision, e.schemaName);
+    const existingTable = hits;
     let existingCols = new Set();
     let existingColRows = [];
     if (existingTable) {
@@ -649,8 +684,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
           if (!isAlreadyExists(err)) throw err;
           // First POST likely succeeded server-side; a transient-network retry hit "already exists".
           // Rediscover to capture entitySetName (required by later phases).
-          const rehits = await provision.findTables(e.schemaName, { top: 50 });
-          const found = (rehits || []).find((x) => x.logicalName === logical);
+          const found = await findExistingTable(provision, e.schemaName);
           if (!found) throw err;
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
         }

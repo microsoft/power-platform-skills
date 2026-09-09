@@ -37,6 +37,7 @@ const {
   bpfUniqueName,
   labelText,
   choiceValueMap,
+  BPF_ROLE_ACCESS,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -404,6 +405,11 @@ function planFor(spec, opts) {
   // roles exist — see the 7b block in the engine for why.
   if (has('security')) for (const f of spec.forms || []) {
     if (f && f.securityRoles) items.push({ phase: 'security', label: `form roles for ${f.name || f.formType || 'Main'} on ${f.entity}` });
+  }
+  // Flow role grants are planned under `security` for the same reason form ones are: they target the
+  // backing table ACTIVATION creates, and they need persona roles that do not exist until this phase.
+  if (has('security')) for (const f of spec.businessProcessFlows || []) {
+    if (f && f.securityRoles) items.push({ phase: 'security', label: `flow roles for ${f.name} (backing table ${bpfUniqueName(f.name)})` });
   }
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -1192,7 +1198,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -3108,6 +3114,53 @@ async function runSdkBuild(spec, opts = {}) {
         // solution would take an ownership decision the author did not ask for. If the role is already a
         // component of this solution, its updated privileges export with it either way.
         return `${n} privilege${n === 1 ? '' : 's'} granted on ${target.name || target.roleId}${target.managed ? ' (managed role)' : ''}`;
+      });
+    }
+
+    // 7b-bis. Business process flow role grants (`businessProcessFlows[].securityRoles`). #513.
+    //
+    // Runs in SECURITY, not in the flow phase, for the same reason `forms[].securityRoles` does: a
+    // persona's role does not exist until the loop above has run.
+    //
+    // The target is the flow's BACKING TABLE, not the flow row. Activating a flow makes the platform
+    // create an org-owned table, and holding privileges on THAT is what lets a persona run the
+    // process. Three things were measured live before this was written (see validateBpfSecurityRoles):
+    // the table's logical name is exactly `bpfUniqueName(flow.name)` so nothing has to be read back;
+    // the table is organization-owned and every privilege is Global-only, so there is no scope to
+    // author; and the public `addEntityPrivilegesToRole` grants on it (the SDK's internal BPF role
+    // helper is not on its public surface).
+    const flowsWithRoles = (spec.businessProcessFlows || []).filter((f) => f && f.securityRoles);
+    for (const f of flowsWithRoles) {
+      const backingTable = bpfUniqueName(f.name);
+      const label = `flow "${f.name}" (backing table ${backingTable})`;
+      // The flow must have been built in THIS invocation, or its backing table may not exist —
+      // ACTIVATION is what creates it. Checked BEFORE runner.run and reported through runner.skip,
+      // because a value returned from runner.run is not emitted: a silent skip would report a clean
+      // build in which nobody can run the process, which is the failure #513 exists to fix.
+      // The key mirrors the flow phase's own `${entityLogical}|${flow.name}`.
+      const built = result.created.businessProcessFlows[`${String(f.entity).toLowerCase()}|${f.name}`];
+      if (!built) {
+        runner.skip('security', `flow roles for ${f.name} (the business-process-flows phase did not run in this invocation, so the backing table may not exist yet)`);
+        continue;
+      }
+      await runner.run('security', `flow roles for ${f.name}`, async () => {
+        const personas = (f.securityRoles.personas || []);
+        const roleIds = personas.map((p) => {
+          const rr = result.created.roles[String(p).trim()];
+          if (!rr || !rr.roleId) throw new BuildHalt(`${label}: persona '${p}' has no role in this build`, { phase: 'security', code: 'bpf-role-unresolved', recoverable: false });
+          return { persona: p, roleId: rr.roleId };
+        });
+        for (const { persona, roleId } of roleIds) {
+          try {
+            // Organization scope is not a choice: the backing table is org-owned and its privileges
+            // report CanBeGlobal only, so any other depth is rejected by the platform.
+            await provision.addEntityPrivilegesToRole(roleId, [{ entity: backingTable, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
+          } catch (err) {
+            throw new BuildHalt(`${label}: could not grant to persona '${persona}': ${err && err.message ? err.message : err}`, { phase: 'security', code: 'bpf-role-grant-failed', recoverable: false });
+          }
+        }
+        result.created.bpfRoleGrants[f.name] = { backingTable, personas };
+        return `${roleIds.length} persona(s) granted ${BPF_ROLE_ACCESS.join('/')} on ${backingTable}`;
       });
     }
 
