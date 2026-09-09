@@ -658,6 +658,7 @@ test('downloadTemplateVariant derives the variant layout and discovers solutions
         fs.writeFileSync(path.join(localWebsiteCode, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
         fs.writeFileSync(path.join(localWebsiteCode, 'powerpages.config.json'), '{}');
         fs.writeFileSync(path.join(localWebsiteCode, 'package.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
         writeUnpackedSolution(path.join(localVariant, 'solutions', 'CompanyBase'), 'CompanyBase', { version: '1.0.0.0' });
         writeUnpackedSolution(path.join(localVariant, 'solutions', 'CompanyPortal'), 'CompanyPortal', { version: '2.0.0.0' });
       }
@@ -818,6 +819,8 @@ test('website code validation handles SPA and traditional source layouts', (t) =
   fs.writeFileSync(path.join(dir, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
   fs.writeFileSync(path.join(dir, 'powerpages.config.json'), '{}');
   fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+  assert.match(validateWebsiteCodeDirectory(dir, { kind: 'spa' }), /missing \.npmrc/);
+  fs.writeFileSync(path.join(dir, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
   fs.mkdirSync(path.join(dir, 'node_modules'));
   assert.match(validateWebsiteCodeDirectory(dir, { kind: 'spa' }), /generated or local-only/);
 

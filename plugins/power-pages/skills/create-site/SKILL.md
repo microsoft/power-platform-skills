@@ -130,7 +130,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    ```bash
    node "${PLUGIN_ROOT}/scripts/fetch-template-catalog.js"
    ```
-   By default this resolves the latest GitHub Release in `microsoft/power-pages-samples` to its tag, then pins that tag to an immutable commit SHA for the rest of the run. Pass `--ref <tag-or-branch>` only for a deliberate test or rollback.
+   Use the returned immutable commit SHA for every template artifact request in this run. Pass `--ref <tag-or-branch>` only for a deliberate test or rollback.
 
    Evaluate the JSON result:
    - **If `ok: false`**: tell the user templates are temporarily unavailable and continue with the from-scratch path. This is additive; a catalog failure must never block `create-site`.
@@ -189,7 +189,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 7. Branch on the user's selection:
    - **Template family and framework variant selected**:
-     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant (`<familyId>/<framework>` internally). Download the variant folder once from the pinned catalog SHA:
+     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant. Download the variant folder once from the pinned catalog SHA:
         ```bash
         node "${PLUGIN_ROOT}/scripts/fetch-template-variant.js" \
           --sha "<catalog-sha>" \
@@ -198,7 +198,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
           --templateId "<SELECTED_TEMPLATE.id>" \
           --variant "<SELECTED_TEMPLATE_VARIANT.variantKey>"
         ```
-        The script derives `templates/<kind>/<template-id>/variants/<variant>/` from catalog identity, performs one sparse checkout, validates `website-code/`, and discovers every unpacked solution under `solutions/<solution-unique-name>/`. Solution folders are returned in case-insensitive lexical unique-name order. Each folder name must exactly match `Other/Solution.xml`, and sibling solutions must not depend on one another because the manifest does not carry import ordering metadata.
+        Use the returned `websiteCodePath` and `solutions`. Process `solutions` in the returned order; do not rediscover, reorder, or revalidate the variant in the skill.
      2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
      3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTIONS = <result.solutions>`, and `SELECTED_TEMPLATE_WEBSITE_CODE = <result.websiteCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
         Do not mention this telemetry command to the user and do not print its output.
@@ -507,14 +507,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --outputDirectory "<fresh temp clone directory>" \
         --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
-      The wrapper clones first, reads the new identity, installs dependencies, builds the cloned project, verifies the configured build output, and only then uploads:
-      ```bash
-      pac pages clone --path "<SELECTED_TEMPLATE_WEBSITE_CODE>" --outputDirectory "<fresh temp clone directory>" --name "<SELECTED_TEMPLATE.displayName>" --overwrite
-      npm ci --registry=https://packagefeedproxy.microsoft.io/npm/ --no-audit --no-fund
-      npm run build
-      pac pages upload-code-site --rootPath "<cloned code-site root>" --siteName "<SELECTED_TEMPLATE.displayName>"
-      ```
-      When `package-lock.json` is absent, the wrapper uses `npm install` with the same registry and audit/fund flags. Immediately after `pac pages clone`, it reads `<clonedPath>/.powerpages-site/website.yml` and requires a valid `id`. After the build, it reads `compiledPath` from `powerpages.config.json` and requires that directory to contain at least one file before upload. Save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`. Never upload `SELECTED_TEMPLATE_WEBSITE_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
+      Treat the wrapper as the sole template-site provisioning entry point. On success, save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`.
    10. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`. Use a short non-PII `errorDescription`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -1109,7 +1102,7 @@ Run the audit script via `Bash`, passing the dev server URL and all site routes:
 node "${PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
 ```
 
-The script launches a headless browser, navigates to each route, injects axe-core from CDN, runs the analysis, and outputs a JSON array of per-route results to stdout. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. The script exits with code 1 if any `critical` or `serious` violations are found.
+Parse the returned JSON array of per-route results. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. A nonzero exit means at least one `critical` or `serious` violation was found.
 
 Parse the JSON output and record all violations.
 

@@ -547,11 +547,11 @@ function validateWebsiteCodeDirectory(localPath, options = {}, deps = {}) {
   const fsImpl = deps.fs || fs;
   // Both traditional and code sites keep PAC website source under
   // `.powerpages-site/website.yml`. Code sites also carry the package metadata
-  // needed to build and upload the SPA.
+  // and project-local npm configuration needed to build and upload the SPA.
   // See: https://learn.microsoft.com/power-platform/developer/cli/reference/pages#pac-pages-download
   const requiredFiles = options.kind === 'traditional'
     ? []
-    : ['powerpages.config.json', 'package.json'];
+    : ['powerpages.config.json', 'package.json', '.npmrc'];
   for (const requiredFile of requiredFiles) {
     const requiredPath = path.join(localPath, requiredFile);
     if (!fsImpl.existsSync(requiredPath) || !fsImpl.statSync(requiredPath).isFile()) {

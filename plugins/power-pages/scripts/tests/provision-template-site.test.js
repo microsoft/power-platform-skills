@@ -7,7 +7,6 @@ const os = require('os');
 const path = require('path');
 
 const {
-  NPM_REGISTRY,
   findCodeSiteRoot,
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
@@ -29,6 +28,7 @@ function createSource(root, { id = SOURCE_ID, name = 'Template Site' } = {}) {
   fs.writeFileSync(path.join(root, '.powerpages-site', 'website.yml'), `id: ${id}\nname: ${name}\n`);
   fs.writeFileSync(path.join(root, 'powerpages.config.json'), JSON.stringify({ compiledPath: 'dist' }));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { build: 'vite build' } }));
+  fs.writeFileSync(path.join(root, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
 }
 
 test('parseArgs accepts source, output, and site name', () => {
@@ -150,7 +150,6 @@ test('provisionTemplateSite clones, installs, builds, validates output, then upl
   assert.deepEqual(npmCalls, [
     [[
       'ci',
-      `--registry=${NPM_REGISTRY}`,
       '--no-audit',
       '--no-fund',
     ], clonedPath],
@@ -372,6 +371,59 @@ test('provisionTemplateSite rejects non-empty output directories', (t) => {
   });
 
   assert.deepEqual(result, { ok: false, step: 'validation', error: 'outputDirectory must be empty' });
+});
+
+test('provisionTemplateSite requires project-local npm configuration', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  createSource(source);
+  fs.rmSync(path.join(source, '.npmrc'));
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: path.join(dir, 'output'),
+    siteName: '311 Portal',
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    step: 'validation',
+    error: 'sourcePath is not a downloaded Power Pages code site',
+  });
+});
+
+test('provisionTemplateSite stops if cloning omits project-local npm configuration', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  createSource(source);
+  let npmCalled = false;
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: '311 Portal',
+  }, {
+    runPac(args) {
+      if (args[1] === 'clone') {
+        const clonedPath = path.join(output, '311-portal');
+        createSource(clonedPath, { id: CLONED_ID, name: '311 Portal' });
+        fs.rmSync(path.join(clonedPath, '.npmrc'));
+      }
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+    runNpm() {
+      npmCalled = true;
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.step, 'clone-output');
+  assert.match(result.error, /missing .*\.npmrc/);
+  assert.equal(npmCalled, false);
 });
 
 test('runPac invokes pac.exe directly on Windows without a command shell', () => {

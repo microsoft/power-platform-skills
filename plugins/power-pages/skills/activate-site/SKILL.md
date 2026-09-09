@@ -20,7 +20,7 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 ## Core Principles
 
 - **Cloud-aware URL resolution** — Never hardcode API base URLs or site URL domains. Always derive them from the Cloud value returned by `pac auth who`.
-- **Token handling** — Scripts acquire and refresh Azure CLI tokens internally. The agent only needs to verify the user is logged in to Azure CLI.
+- **Token handling** — The agent only needs to verify the user is logged in to Azure CLI.
 - **Confirm before mutating** — Always present the full activation parameters to the user and get explicit approval before POSTing to the websites API.
 
 **Initial request:** $ARGUMENTS
@@ -37,7 +37,7 @@ Provision a new Power Pages website in a Power Platform environment via the Powe
 
 ## Phase 1: Verify Prerequisites
 
-**Goal:** Ensure PAC CLI is installed and authenticated, and verify the user is logged in to Azure CLI (scripts handle token acquisition internally).
+**Goal:** Ensure PAC CLI is installed and authenticated, and verify the user is logged in to Azure CLI.
 
 ### Actions
 
@@ -78,7 +78,7 @@ pac auth who
 
 #### 1.3 Verify Azure CLI Login
 
-Verify the user is logged in to Azure CLI (the activation scripts acquire tokens internally):
+Verify the user is logged in to Azure CLI:
 
 ```bash
 az account show
@@ -243,9 +243,7 @@ node "${PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "
 
 Omit `--websiteRecordId` if it is null/empty.
 
-The script acquires an Azure CLI token, POSTs to the websites API, extracts the `Operation-Location` header, and polls every 10 seconds for up to 5 minutes (refreshing the token periodically). It outputs a JSON result to stdout. This provisioning-status loop is the authoritative activation poll.
-
-> **Note:** This script may run for up to 5 minutes while polling. Run it in the foreground and use a Bash timeout of at least 360 seconds (6 minutes). Do not launch it as a background command or continue to Phase 5 before its JSON result is available. A late background completion can resume the conversation after the user has already received the activation summary.
+Treat the script's JSON result as the authoritative activation result. Run it in the foreground with a Bash timeout of at least 360 seconds, and do not continue to Phase 5 until it exits. Do not launch a separate readiness poll.
 
 #### 4.2 Handle Results
 

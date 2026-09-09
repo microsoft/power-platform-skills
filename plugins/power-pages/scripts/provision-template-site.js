@@ -8,7 +8,6 @@ const { commandError, runPac } = require('./lib/pac-command');
 const { readWebsiteYml } = require('./lib/detect-project-context');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const NPM_REGISTRY = 'https://packagefeedproxy.microsoft.io/npm/';
 
 function parseArgs(argv) {
   const args = {};
@@ -128,6 +127,7 @@ function provisionTemplateSite(options, deps = {}) {
   }
   if (!fsImpl.existsSync(path.join(sourcePath, 'powerpages.config.json')) ||
       !fsImpl.existsSync(path.join(sourcePath, 'package.json')) ||
+      !fsImpl.existsSync(path.join(sourcePath, '.npmrc')) ||
       !fsImpl.existsSync(path.join(sourcePath, '.powerpages-site'))) {
     return { ok: false, step: 'validation', error: 'sourcePath is not a downloaded Power Pages code site' };
   }
@@ -168,11 +168,19 @@ function provisionTemplateSite(options, deps = {}) {
   } catch (err) {
     return { ok: false, step: 'clone-output', clonedPath, error: err.message };
   }
+  if (!fsImpl.existsSync(path.join(clonedPath, '.npmrc'))) {
+    return {
+      ok: false,
+      step: 'clone-output',
+      clonedPath,
+      ...clonedIdentity,
+      error: `Cloned site is missing ${path.join(clonedPath, '.npmrc')}`,
+    };
+  }
 
   const npm = deps.runNpm || ((args, cwd) => runNpm(args, cwd, deps));
   const installArgs = [
     fsImpl.existsSync(path.join(clonedPath, 'package-lock.json')) ? 'ci' : 'install',
-    `--registry=${NPM_REGISTRY}`,
     '--no-audit',
     '--no-fund',
   ];
@@ -243,7 +251,6 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
-  NPM_REGISTRY,
   commandError,
   findCodeSiteRoot,
   inspectCompiledOutput,
