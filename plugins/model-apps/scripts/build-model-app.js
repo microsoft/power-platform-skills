@@ -20,7 +20,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
@@ -522,6 +522,17 @@ async function main() {
   // (#456), before the SDK is constructed and before any label is written. That halt is the point:
   // Dataverse would otherwise accept some labels under the wrong language and reject others
   // mid-build, phases away from the flag that caused it.
+  // AB#6686427 — prove the ambient Azure CLI identity can reach this org BEFORE anything else on an
+  // apply. Everything below (the language read, the destructive-apply safety probe, every phase)
+  // authenticates through that identity, and when it is wrong they each fail in their own vocabulary
+  // — "could not determine the organization's base language", "preflight safety check could not run"
+  // — none of which names the actual cause. Dry runs skip it: they perform no writes and need no
+  // identity. An INCONCLUSIVE verdict never blocks; see preflightAuth.
+  if (opts.apply) {
+    const auth = await preflightAuth(env);
+    if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, errors: [auth.error] }); return; }
+    if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
+  }
   const authoringLanguageCode = opts.apply
     ? await resolveAuthoringLanguage({ envUrl: env, languageCode, spec, warn: (m) => process.stderr.write(`⚠ ${m}\n`) })
     : undefined;

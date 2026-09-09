@@ -1746,17 +1746,6 @@ async function runSdkBuild(spec, opts = {}) {
     }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def);
-      // Gap 2: make our main form the entity's default so the app opens it, not the blank stock form.
-      // Guarded to a table THIS build OWNS — a custom, publisher-prefixed table that isn't flagged
-      // `existing`. A system/reused table (account, systemuser, or anything without our prefix) must
-      // never have its default form re-pointed: that's a shared, environment-wide side effect.
-      if ((d.f.formType || 'Main') === 'Main') {
-        const entSpec = entityByLogical(spec, d.f.entity.toLowerCase());
-        const prefix = spec.solution && spec.solution.publisherPrefix;
-        const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
-          String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-        if (isOwnCustomTable) await promoteDefaultForm(id, d.f.entity.toLowerCase(), d.f.deactivateOtherMainForms === true);
-      }
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
         await runner.run('forms', `wire ${wantedEvents.length} event handler(s) on ${d.f.entity}`, async () => {
@@ -1774,7 +1763,42 @@ async function runSdkBuild(spec, opts = {}) {
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
     //
-    // AB#6686425: this map holds ONE id per entity, so a second Main form on the same table
+    // AB#6686426 — default-form promotion, ONCE per entity, AFTER every form exists.
+    //
+    // This used to run inside the concurrent per-form build above, so on a table with several Main
+    // forms every one of them promoted itself and the LAST to finish won. Which form a table opened
+    // with therefore depended on completion order — an alternate read-only or OnSave-blocked form
+    // could silently become the default, changing normal app behaviour.
+    //
+    // Selection is explicit first (`forms[].isDefault`), then a documented stable fallback: the FIRST
+    // Main form in spec order. Both are order-independent, which is the property that was missing.
+    // Still guarded to a table THIS build owns — re-pointing the default form of a system or reused
+    // table is an environment-wide side effect.
+    const promotedEntities = new Set();
+    const mainByEntity = new Map(); // entity -> { id, f } chosen for promotion
+    defs.forEach((d, i) => {
+      if ((d.f.formType || 'Main') !== 'Main') return;
+      const key = d.f.entity.toLowerCase();
+      const current = mainByEntity.get(key);
+      // An explicit isDefault always wins; otherwise the first Main form in spec order holds the slot.
+      if (!current || (d.f.isDefault === true && current.f.isDefault !== true)) {
+        mainByEntity.set(key, { id: ids[i], f: d.f });
+      }
+    });
+    for (const [entityLogical, chosen] of mainByEntity) {
+      const entSpec = entityByLogical(spec, entityLogical);
+      const prefix = spec.solution && spec.solution.publisherPrefix;
+      const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
+        String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
+      if (!isOwnCustomTable) continue;
+      // Serialized deliberately: two promotions racing is the bug being fixed.
+      await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      promotedEntities.add(entityLogical);
+    }
+    if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
+      [...mainByEntity].filter(([k]) => promotedEntities.has(k)).map(([k, v]) => [k, v.id])
+    );
+
     // overwrites the first. That is correct for what the map is for — the app shell wires one form
     // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably
     // concludes the other ids were lost. `created.formIds` below is keyed by the (entity, formType,

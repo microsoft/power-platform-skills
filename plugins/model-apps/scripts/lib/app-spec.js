@@ -1037,13 +1037,38 @@ function validateAppSpec(spec, opts = {}) {
       errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
     }
   }
+  // AB#6686426: `isDefault` picks which Main form a table opens with. Explicit beats the fallback
+  // (first Main form in spec order), and both are order-independent — which is the property the old
+  // behaviour lacked, when every Main form promoted itself from inside a concurrent loop and the last
+  // to finish won.
+  const defaultByEntity = {};
+  for (const f of spec.forms || []) {
+    if (!f) continue;
+    if (f.isDefault !== undefined && typeof f.isDefault !== 'boolean') {
+      errors.push(`form '${f.name || f.entity}': isDefault must be a boolean (got ${describeValue(f.isDefault)})`);
+      continue;
+    }
+    if (f.isDefault !== true) continue;
+    if (f.formType !== undefined && f.formType !== 'Main') {
+      errors.push(`form '${f.name || f.entity}': isDefault is only meaningful on a Main form (this one is '${f.formType}') — only Main forms are promoted`);
+      continue;
+    }
+    const key = String(f.entity || '').toLowerCase();
+    (defaultByEntity[key] = defaultByEntity[key] || []).push(f.name || '(unnamed)');
+  }
+  for (const [ent, names] of Object.entries(defaultByEntity)) {
+    if (names.length > 1) {
+      errors.push(`entity '${ent}': ${names.length} Main forms set isDefault (${names.join(', ')}) — exactly one form can be the table's default`);
+    }
+  }
+
   // #6: a Main form that sets deactivateOtherMainForms must be the ONLY Main form declared for its
-  // entity. Rationale: forms build concurrently and every Main form on an OWN custom table is promoted
-  // to isdefault. If a flagged form shares its entity with ANOTHER Main form (flagged or not), the
-  // sibling can win the isdefault race and then be deactivated by the flagged form's pass — leaving the
-  // entity's default form INACTIVE (a bricked form experience). Requiring the flagged form to stand
-  // alone removes the race entirely: the only other active main form is then the stock "Information"
-  // form (which the build never promotes), so deactivating it is safe.
+  // entity. NOTE the original rationale — "forms build concurrently and every Main form is promoted,
+  // so a sibling can win the isdefault race" — no longer holds: promotion is now a single serialized
+  // pass after all forms exist (AB#6686426). The rule is kept anyway on the surviving, independent
+  // ground: deactivating every other Main form is a DESTRUCTIVE, entity-wide act, and a spec that
+  // declares a sibling Main form alongside a flagged one is asking for that sibling to be built and
+  // then immediately deactivated — almost certainly not what the author meant.
   const mainFormsByEntity = {};
   const flaggedByEntity = {};
   for (const f of spec.forms || []) {
