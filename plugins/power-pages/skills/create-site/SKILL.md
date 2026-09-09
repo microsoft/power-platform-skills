@@ -564,7 +564,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```bash
        node "${PLUGIN_ROOT}/scripts/apply-seed-data.js" --seedDir "<localDir>" --envUrl "<environmentUrl>"
        ```
-       Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
+       Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). Seed records must use the exact table entity-set names, column logical names, and `<NavigationProperty>@odata.bind` lookup names from the template solution metadata. Never derive lookup navigation properties from a primary key, entity set, display name, or app-style alias such as `categoryId`; the seeder rejects ambiguous aliases before its first Dataverse write. For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
        Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`. If both are absent, skip this task.
    14. Mark **Apply template seed data** as `completed` or skipped.
    15. Mark **Activate template site** as `in_progress`. Before invoking `/activate-site`, update the status page:
@@ -579,7 +579,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - environmentUrl: <environmentUrl>
        - source: create-site template path
        ```
-       The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
+       The activate-site skill owns subdomain selection, final activation confirmation, provisioning-status polling, and recovery. Its foreground activation script is the only poll required by this flow.
        If activation fails, tell the user the cloned site exists but is not live and can be activated later by rerunning `/activate-site` with this identity. Do not treat activation failure as a failed supporting-solution import or site upload.
    16. When `/activate-site` returns a `siteUrl`, mark **Activate template site** as `completed` and **Show live template site** as `in_progress`.
    17. Redirect the already-open status page to the live site:
@@ -592,7 +592,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. If the user closed the status page, show the `siteUrl` for manual opening.
 
-       Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
+       Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds. Do not start a separate background command or Task to wait for the live URL to return HTTP 200. The status-page redirect and DNS note handle that delay without leaving work that can resume the conversation after the completion summary. If a reachability poll was started accidentally, stop it before marking **Show live template site** as `completed`.
    18. Mark **Show live template site** as `completed`, then present the template-path summary:
        - Template name and framework
        - Cloned site name and Website Record ID

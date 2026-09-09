@@ -67,11 +67,10 @@ function splitReservedFiles(record) {
 }
 
 function isCamelCaseLookupKey(key) {
-  // Some hand-authored template seed files use app-style lookup keys:
+  // App-style lookup aliases can appear in hand-authored seed files:
   //   { "categoryId": "<category-guid>", "serviceTypeId": "<type-guid>" }
-  // Dataverse rejects those raw properties. When the referenced GUID was seeded
-  // earlier in the same ordered seed run, convert the key to an @odata.bind
-  // using the target table's logical name derived from its primary key.
+  // Dataverse does not accept these aliases, and the exact navigation property
+  // cannot be derived from either the alias or the target table's primary key.
   const match = String(key || '').match(/^([a-z][A-Za-z0-9]*)Id$/);
   return Boolean(match);
 }
@@ -83,25 +82,54 @@ function indexSeedRecords(seed, idToTarget) {
     if (typeof id === 'string') {
       idToTarget.set(id.toLowerCase(), {
         entitySetName: seed.entitySetName,
-        navigationProperty: entityLogicalNameFromPrimaryKey(seed.primaryKey),
       });
     }
   }
 }
 
-function applyCamelCaseLookupBinds(recordBody, idToTarget) {
-  const out = {};
-  for (const [key, value] of Object.entries(recordBody || {})) {
-    if (isCamelCaseLookupKey(key) && typeof value === 'string') {
-      const target = idToTarget.get(value.toLowerCase());
-      if (target) {
-        out[`${target.navigationProperty}@odata.bind`] = `/${target.entitySetName}(${value})`;
-        continue;
+function validateSeedLookupContract(seedEntries) {
+  const idToTarget = new Map();
+  for (const { seed } of seedEntries) indexSeedRecords(seed, idToTarget);
+
+  const errors = [];
+  for (const { file, seed } of seedEntries) {
+    for (const record of seed.records) {
+      for (const [key, value] of Object.entries(record || {})) {
+        if (isCamelCaseLookupKey(key) && typeof value === 'string') {
+          errors.push({
+            file,
+            entitySetName: seed.entitySetName,
+            message: `Lookup ${key} is ambiguous; use the exact <NavigationProperty>@odata.bind name from the solution metadata`,
+          });
+          continue;
+        }
+        if (!key.endsWith('@odata.bind') || typeof value !== 'string') continue;
+        // Seed lookups use the OData bind shape:
+        //   "spa311_CategoryId@odata.bind":
+        //     "/spa311_categories(11111111-1111-1111-1111-111111111111)"
+        // Validate references to records in this seed set before any writes. The
+        // navigation-property key itself remains authoritative solution metadata.
+        const match = value.match(/^\/([^/()]+)\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/i);
+        if (!match) {
+          errors.push({
+            file,
+            entitySetName: seed.entitySetName,
+            message: `Lookup ${key} must use /<entitySetName>(<guid>)`,
+          });
+          continue;
+        }
+        const target = idToTarget.get(match[2].toLowerCase());
+        if (target && target.entitySetName !== match[1]) {
+          errors.push({
+            file,
+            entitySetName: seed.entitySetName,
+            message: `Lookup ${key} targets ${match[1]}, but the referenced seed record belongs to ${target.entitySetName}`,
+          });
+        }
       }
     }
-    out[key] = value;
   }
-  return out;
+  return errors;
 }
 
 function normalizeDataverseExportSeed(seed) {
@@ -376,58 +404,62 @@ function createTokenProvider({ envUrl, initialToken, resolveToken, refreshEvery 
 async function applySeedData({ seedDir, envUrl }, deps = {}) {
   const summary = emptySummary();
   try {
+    const seedEntries = [];
+    for (const filePath of listSeedFiles(seedDir, deps)) {
+      try {
+        const seed = readSeedFile(filePath, deps);
+        for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {
+          seedEntries.push({ file: path.basename(filePath), seed: seedEntry });
+        }
+      } catch (err) {
+        summary.errors.push({ file: path.basename(filePath), message: err.message });
+      }
+    }
+    summary.errors.push(...validateSeedLookupContract(seedEntries));
+    if (summary.errors.length > 0) {
+      summary.ok = false;
+      summary.failed = summary.errors.length;
+      return summary;
+    }
+
     const resolveToken = deps.getAuthToken || getAuthToken;
     const token = deps.token || resolveToken(envUrl);
     if (!token) {
       return { ...summary, ok: false, failed: 1, errors: [{ scope: 'auth', message: `Azure CLI token unavailable for ${envUrl}` }] };
     }
     const tokenProvider = deps.tokenProvider || createTokenProvider({ envUrl, initialToken: token, resolveToken, refreshEvery: deps.tokenRefreshEvery || TOKEN_REFRESH_EVERY_REQUESTS });
-    const idToEntitySet = new Map();
-
-    for (const filePath of listSeedFiles(seedDir, deps)) {
-      let seed;
-      try {
-        seed = readSeedFile(filePath, deps);
-      } catch (err) {
-        summary.failed += 1;
-        summary.errors.push({ file: path.basename(filePath), message: err.message });
-        continue;
-      }
-
-      for (const seedEntry of (Array.isArray(seed) ? seed : [seed])) {
-        indexSeedRecords(seedEntry, idToEntitySet);
-        for (const record of seedEntry.records) {
-          const context = { file: path.basename(filePath), entitySetName: seedEntry.entitySetName };
-          try {
-            const validationError = validateFilesContract({ seedDir, seed: seedEntry, record }, deps);
-            const { recordBody, files } = splitReservedFiles(record);
-            if (validationError) {
-              summary.failed += 1;
-              summary.errors.push({ ...context, message: validationError });
-              continue;
-            }
-            const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: applyCamelCaseLookupBinds(recordBody, idToEntitySet) }, deps);
-            let shouldUploadFiles = false;
-            if (res.error) {
-              summary.failed += 1;
-              summary.errors.push({ ...context, message: res.error });
-            } else if (isDuplicateConflict(res)) {
-              summary.skipped += 1;
-              shouldUploadFiles = true;
-            } else if (res.statusCode >= 200 && res.statusCode < 300) {
-              summary.inserted += 1;
-              shouldUploadFiles = true;
-            } else {
-              summary.failed += 1;
-              summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
-            }
-            if (shouldUploadFiles && files) {
-              await uploadRecordFiles({ seedDir, seed: seedEntry, record, files, envUrl, tokenProvider, summary, context }, deps);
-            }
-          } catch (err) {
+    for (const { file, seed: seedEntry } of seedEntries) {
+      for (const record of seedEntry.records) {
+        const context = { file, entitySetName: seedEntry.entitySetName };
+        try {
+          const validationError = validateFilesContract({ seedDir, seed: seedEntry, record }, deps);
+          const { recordBody, files } = splitReservedFiles(record);
+          if (validationError) {
             summary.failed += 1;
-            summary.errors.push({ ...context, message: err.message });
+            summary.errors.push({ ...context, message: validationError });
+            continue;
           }
+          const res = await postRecord({ envUrl, tokenProvider, entitySetName: seedEntry.entitySetName, record: recordBody }, deps);
+          let shouldUploadFiles = false;
+          if (res.error) {
+            summary.failed += 1;
+            summary.errors.push({ ...context, message: res.error });
+          } else if (isDuplicateConflict(res)) {
+            summary.skipped += 1;
+            shouldUploadFiles = true;
+          } else if (res.statusCode >= 200 && res.statusCode < 300) {
+            summary.inserted += 1;
+            shouldUploadFiles = true;
+          } else {
+            summary.failed += 1;
+            summary.errors.push({ ...context, statusCode: res.statusCode, message: res.body || `HTTP ${res.statusCode}` });
+          }
+          if (shouldUploadFiles && files) {
+            await uploadRecordFiles({ seedDir, seed: seedEntry, record, files, envUrl, tokenProvider, summary, context }, deps);
+          }
+        } catch (err) {
+          summary.failed += 1;
+          summary.errors.push({ ...context, message: err.message });
         }
       }
     }
@@ -476,6 +508,7 @@ module.exports = {
   uploadRecordFiles,
   postDataverseJson,
   createTokenProvider,
+  validateSeedLookupContract,
   entityLogicalNameFromPrimaryKey,
   contentTypeForFile,
   postDataverseAction,

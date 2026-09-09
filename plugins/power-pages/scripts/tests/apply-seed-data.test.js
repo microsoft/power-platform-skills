@@ -6,7 +6,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { applySeedData, listSeedFiles, readSeedFile, isDuplicateConflict, createTokenProvider } = require('../lib/apply-seed-data');
+const {
+  applySeedData,
+  listSeedFiles,
+  readSeedFile,
+  isDuplicateConflict,
+  createTokenProvider,
+  validateSeedLookupContract,
+} = require('../lib/apply-seed-data');
 const { parseArgs, run } = require('../apply-seed-data');
 
 function tempDir() {
@@ -142,7 +149,45 @@ test('applySeedData success path can run with injected fs and request function',
   assert.deepEqual(JSON.parse(requests[0].body), { cr123_name: 'Announcements' });
 });
 
-test('applySeedData maps camelCase lookup ids to odata binds from prior seed records', async () => {
+test('validateSeedLookupContract rejects inferred lookup aliases and mismatched entity sets', () => {
+  const entries = [
+    {
+      file: '010-categories.json',
+      seed: {
+        entitySetName: 'spa311_categories',
+        primaryKey: 'spa311_categoryid',
+        records: [{ spa311_categoryid: '11111111-1111-1111-1111-111111111111' }],
+      },
+    },
+    {
+      file: '020-service-types.json',
+      seed: {
+        entitySetName: 'spa311_servicetypes',
+        primaryKey: 'spa311_servicetypeid',
+        records: [{
+          spa311_servicetypeid: '22222222-2222-2222-2222-222222222222',
+          categoryId: '11111111-1111-1111-1111-111111111111',
+          'spa311_OtherCategory@odata.bind': '/wrong_categories(11111111-1111-1111-1111-111111111111)',
+        }],
+      },
+    },
+  ];
+
+  assert.deepEqual(validateSeedLookupContract(entries), [
+    {
+      file: '020-service-types.json',
+      entitySetName: 'spa311_servicetypes',
+      message: 'Lookup categoryId is ambiguous; use the exact <NavigationProperty>@odata.bind name from the solution metadata',
+    },
+    {
+      file: '020-service-types.json',
+      entitySetName: 'spa311_servicetypes',
+      message: 'Lookup spa311_OtherCategory@odata.bind targets wrong_categories, but the referenced seed record belongs to spa311_categories',
+    },
+  ]);
+});
+
+test('applySeedData preserves exact OData lookup navigation properties', async () => {
   const files = {
     '010-categories.json': {
       entitySetName: 'spa311_categories',
@@ -155,7 +200,7 @@ test('applySeedData maps camelCase lookup ids to odata binds from prior seed rec
       records: [{
         spa311_servicetypeid: '22222222-2222-2222-2222-222222222222',
         spa311_name: 'Pothole',
-        categoryId: '11111111-1111-1111-1111-111111111111',
+        'spa311_CategoryId@odata.bind': '/spa311_categories(11111111-1111-1111-1111-111111111111)',
       }],
     },
     '030-service-requests.json': {
@@ -164,7 +209,7 @@ test('applySeedData maps camelCase lookup ids to odata binds from prior seed rec
       records: [{
         spa311_servicerequestid: '33333333-3333-3333-3333-333333333333',
         spa311_name: 'SR-001',
-        serviceTypeId: '22222222-2222-2222-2222-222222222222',
+        'spa311_ServiceTypeId@odata.bind': '/spa311_servicetypes(22222222-2222-2222-2222-222222222222)',
       }],
     },
     '040-status-updates.json': {
@@ -173,7 +218,7 @@ test('applySeedData maps camelCase lookup ids to odata binds from prior seed rec
       records: [{
         spa311_statusupdateid: '44444444-4444-4444-4444-444444444444',
         spa311_name: 'Created',
-        serviceRequestId: '33333333-3333-3333-3333-333333333333',
+        'spa311_ServiceRequestId@odata.bind': '/spa311_servicerequests(33333333-3333-3333-3333-333333333333)',
       }],
     },
   };
@@ -198,18 +243,57 @@ test('applySeedData maps camelCase lookup ids to odata binds from prior seed rec
   assert.deepEqual(JSON.parse(requests[1].body), {
     spa311_servicetypeid: '22222222-2222-2222-2222-222222222222',
     spa311_name: 'Pothole',
-    'spa311_category@odata.bind': '/spa311_categories(11111111-1111-1111-1111-111111111111)',
+    'spa311_CategoryId@odata.bind': '/spa311_categories(11111111-1111-1111-1111-111111111111)',
   });
   assert.deepEqual(JSON.parse(requests[2].body), {
     spa311_servicerequestid: '33333333-3333-3333-3333-333333333333',
     spa311_name: 'SR-001',
-    'spa311_servicetype@odata.bind': '/spa311_servicetypes(22222222-2222-2222-2222-222222222222)',
+    'spa311_ServiceTypeId@odata.bind': '/spa311_servicetypes(22222222-2222-2222-2222-222222222222)',
   });
   assert.deepEqual(JSON.parse(requests[3].body), {
     spa311_statusupdateid: '44444444-4444-4444-4444-444444444444',
     spa311_name: 'Created',
-    'spa311_servicerequest@odata.bind': '/spa311_servicerequests(33333333-3333-3333-3333-333333333333)',
+    'spa311_ServiceRequestId@odata.bind': '/spa311_servicerequests(33333333-3333-3333-3333-333333333333)',
   });
+});
+
+test('applySeedData rejects ambiguous lookup aliases before the first Dataverse write', async () => {
+  const files = {
+    '010-categories.json': {
+      entitySetName: 'spa311_categories',
+      primaryKey: 'spa311_categoryid',
+      records: [{ spa311_categoryid: '11111111-1111-1111-1111-111111111111', spa311_name: 'Roads' }],
+    },
+    '020-service-types.json': {
+      entitySetName: 'spa311_servicetypes',
+      primaryKey: 'spa311_servicetypeid',
+      records: [{
+        spa311_servicetypeid: '22222222-2222-2222-2222-222222222222',
+        categoryId: '11111111-1111-1111-1111-111111111111',
+      }],
+    },
+  };
+  const fsImpl = {
+    existsSync: () => true,
+    readdirSync: () => Object.keys(files),
+    readFileSync: (filePath) => JSON.stringify(files[path.basename(filePath)]),
+  };
+  let requestCount = 0;
+
+  const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+    token: 'token',
+    fs: fsImpl,
+    makeRequest: async () => {
+      requestCount++;
+      return { statusCode: 204 };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.inserted, 0);
+  assert.equal(result.failed, 1);
+  assert.match(result.errors[0].message, /exact <NavigationProperty>@odata.bind/);
+  assert.equal(requestCount, 0);
 });
 
 test('applySeedData posts Dataverse export seed tables and uploads fileExports', async () => {

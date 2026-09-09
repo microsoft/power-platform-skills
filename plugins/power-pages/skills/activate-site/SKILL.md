@@ -243,9 +243,9 @@ node "${PLUGIN_ROOT}/skills/activate-site/scripts/activate-site.js" --siteName "
 
 Omit `--websiteRecordId` if it is null/empty.
 
-The script acquires an Azure CLI token, POSTs to the websites API, extracts the `Operation-Location` header, and polls every 10 seconds for up to 5 minutes (refreshing the token periodically). It outputs a JSON result to stdout.
+The script acquires an Azure CLI token, POSTs to the websites API, extracts the `Operation-Location` header, and polls every 10 seconds for up to 5 minutes (refreshing the token periodically). It outputs a JSON result to stdout. This provisioning-status loop is the authoritative activation poll.
 
-> **Note:** This script may run for up to 5 minutes while polling. Use a Bash timeout of at least 360 seconds (6 minutes).
+> **Note:** This script may run for up to 5 minutes while polling. Run it in the foreground and use a Bash timeout of at least 360 seconds (6 minutes). Do not launch it as a background command or continue to Phase 5 before its JSON result is available. A late background completion can resume the conversation after the user has already received the activation summary.
 
 #### 4.2 Handle Results
 
@@ -262,6 +262,8 @@ Evaluate the JSON output:
 | **`Failed`** | other | Present the error to the user and help troubleshoot. |
 | **`Running`** | — | Provisioning still in progress after 5 minutes. Inform the user it may take up to 15 minutes and suggest checking the Power Platform admin center. |
 | `error` field | — | Prerequisite failure (missing args, no token). Present the error and help troubleshoot. |
+
+Do not start a second background poll against `siteUrl` after the activation script returns `Succeeded`. HTTP and DNS propagation can lag behind provisioning; report that caveat in Phase 5 instead of leaving a command that can trigger another assistant turn. If an extra reachability poll was started accidentally, stop it before presenting the activation summary.
 
 ### Output
 
