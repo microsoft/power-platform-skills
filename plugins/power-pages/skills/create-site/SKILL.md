@@ -104,7 +104,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    - Site purpose/type
    - Target audience
 
-   Do **not** ask for framework or project location in Phase 1. Those questions only apply to the from-scratch branch and are asked after Phase 1.5 when that branch is selected.
+   Do **not** ask for framework or project location in Phase 1. Each creation path asks for its location after Phase 1.5 selects that path.
 
 **Audience influences site generation:**
 
@@ -200,7 +200,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         ```
         Use the returned `websiteCodePath` and `solutions`. Process `solutions` in the returned order; do not rediscover, reorder, or revalidate the variant in the skill.
      2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
-     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTIONS = <result.solutions>`, and `SELECTED_TEMPLATE_WEBSITE_CODE = <result.websiteCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Continue to the template sequence below. Do **not** ask project location and do **not** proceed to Phase 2.
+     3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTIONS = <result.solutions>`, and `SELECTED_TEMPLATE_WEBSITE_CODE = <result.websiteCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Do **not** proceed to Phase 2.
         Do not mention this telemetry command to the user and do not print its output.
         ```bash
         node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -211,6 +211,21 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
           --audience "<internal|external from Phase 1 discovery>"
         ```
         `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
+     4. Mark **Choose local template directory** as `in_progress`.
+
+<!-- not-a-gate: read-only location selection for the later template clone; no directory is created and no environment change has started -->
+
+        Ask where to create the local template project:
+
+        | Question | Header | Options |
+        |----------|--------|---------|
+        | Where should I create the template site's local files? | Project Location | New folder in current directory (Recommended), Any other directory |
+
+        Resolve the clone destination:
+        - **New folder in current directory**: use `<cwd>/<__SITE_SLUG__>/`.
+        - **Any other directory**: ask for a full path and resolve it to an absolute path.
+
+        The destination must not exist or must be empty. Check it without creating it. If it is non-empty, ask the user to choose another directory. Store the resolved path as `TEMPLATE_CLONE_OUTPUT_DIRECTORY`, confirm "The template project will be created under `<resolved path>`.", and mark **Choose local template directory** as `completed`.
    - **Start from scratch** or catalog unavailable: set `CREATION_PATH = "from-scratch"` and continue below.
 
 8. For the template path only:
@@ -500,14 +515,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       ```json
       { "state": "running", "phase": "site", "message": "Cloning, building, and uploading template site" }
       ```
-      Create a fresh temporary output directory, then clone the packaged SPA source and upload the clone:
+      Clone the packaged SPA source into the directory selected earlier, then upload the clone:
       ```bash
       node "${PLUGIN_ROOT}/scripts/provision-template-site.js" \
         --sourcePath "<SELECTED_TEMPLATE_WEBSITE_CODE>" \
-        --outputDirectory "<fresh temp clone directory>" \
+        --outputDirectory "<TEMPLATE_CLONE_OUTPUT_DIRECTORY>" \
         --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
-      Treat the wrapper as the sole template-site provisioning entry point. On success, save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`.
+      Treat the wrapper as the sole template-site provisioning entry point. On success, save the returned `clonedPath` as both `CLONED_TEMPLATE_SITE_PATH` and `PROJECT_ROOT`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`.
    10. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`. Use a short non-PII `errorDescription`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -527,14 +542,14 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       > 🚦 **Gate (progress · create-site:1.5.clone-failed):** Choose how to proceed after cloning, building, or uploading the packaged template site fails.
       >
       > **Trigger:** Phase 1.5 when cloning, cloned identity inspection, dependency installation, the project build, compiled-output validation, or `pac pages upload-code-site` fails.
-      > **Why we ask:** The temp directory can contain clone or build output, the environment can contain a partial code-site upload, and supporting solutions may already be installed.
-      > **Cancel leaves:** `partial-template-clone` — cached template artifacts and local clone files remain; supporting solutions or a partial site upload may also remain in Dataverse.
+      > **Why we ask:** The selected project directory can contain partial clone or build output, the environment can contain a partial code-site upload, and supporting solutions may already be installed.
+      > **Cancel leaves:** `partial-template-clone` — cached template artifacts and local files remain in the selected project directory; supporting solutions or a partial site upload may also remain in Dataverse.
 
       | Question | Header | Options |
       |----------|--------|---------|
       | The template site could not be cloned, built, or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
 
-      Do not retry automatically. A retry must use a new temporary output directory. If the user falls back to from-scratch, explain that supporting solutions or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
+      Do not retry automatically. For **Retry site creation**, ask for a new empty directory using the same **Project Location** prompt, update `TEMPLATE_CLONE_OUTPUT_DIRECTORY`, and rerun the wrapper. If the user falls back to from-scratch, explain that local files, supporting solutions, or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
    11. When clone, build, and upload succeed, mark **Clone, build, and upload template site** as `completed` and run `template_clone_success` telemetry silently:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
@@ -591,39 +606,23 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - Cloned site name and Website Record ID
        - Live site URL
        - DNS propagation note: the site may take a few minutes to load everywhere
-       - "Your site is live. Want to keep customizing it from here?"
+       - Local project path (`PROJECT_ROOT`)
+       - "Your site is live. Want to keep customizing the local project?"
 
-<!-- not-a-gate: optional post-live template customization branch; the template site is already imported and activated, so this prompt only chooses whether to download editable source files for further local changes -->
+<!-- not-a-gate: optional post-live template customization branch; the local clone already exists and the site is live -->
 
    19. Use `AskUserQuestion`:
 
        | Question | Header | Options |
        |----------|--------|---------|
-       | Your template site is live. Do you want to download the site source and customize it now? | Customize Template Site | Yes, download and customize (Recommended), No, finish here |
+       | Your template site is live. Do you want to customize the local project now? | Customize Template Site | Yes, customize now (Recommended), No, finish here |
 
        - **No, finish here**: mark **Select template or choose from-scratch** as `completed`, then stop.
-       - **Yes, download and customize**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
+       - **Yes, customize now**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
 
-   20. Mark **Download template site source** as `in_progress` and ask where to download the code site:
-
-       | Question | Header | Options |
-       |----------|--------|---------|
-       | Where should I download the template site's source files? | Download Location | New folder in current directory (Recommended), Current directory, Any other directory |
-
-       Resolve the path using the same location rules as from-scratch:
-       - **New folder in current directory**: create `<cwd>/<IMPORTED_SITE_NAME>/`.
-       - **Current directory**: use `<cwd>`.
-       - **Any other directory**: ask for a full path, then verify/create it.
-
-       Confirm the resolved path, then run:
-       ```bash
-       pac pages download-code-site -id "<IMPORTED_WEBSITE_RECORD_ID>" -p "<resolved path>"
-       ```
-
-       If download fails, surface the command output and ask whether to retry, choose another folder, or stop. If it succeeds, set `PROJECT_ROOT = "<resolved path>"`, mark **Download template site source** as `completed`, and continue into the planning/customization phases below.
-   21. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in the downloaded template site. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against `PROJECT_ROOT`; do **not** run Phase 2 scaffold/copy-template.
-   22. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes.
-   23. Run the existing validation/review flow. Do not automatically deploy unless the user explicitly asks to run `/deploy-site`.
+   20. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in `PROJECT_ROOT`. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against the cloned project; do **not** run Phase 2 scaffold/copy-template.
+   21. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes.
+   22. Run the existing validation/review flow. Do not automatically deploy unless the user explicitly asks to run `/deploy-site`.
 
 8. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
 
@@ -646,7 +645,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    Store this as `PROJECT_ROOT`.
 11. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
 
-**Output**: cloned template site identity (`IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`) and either a completed live template flow or a downloaded template code site ready for customization; or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
+**Output**: cloned template site identity (`IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`) and a local project path ready for optional customization; or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
 
 ---
 
@@ -1281,6 +1280,7 @@ After Phase 1.5 selects the template path, append the pre-install tasks immediat
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
+| Choose local template directory | Choosing project location | Ask where the local template project should be cloned and require a new or empty destination |
 | Resolve target environment | Resolving environment | Resolve the active PAC/Azure target environment and token before any environment preflight |
 | Confirm target environment | Confirming environment | Ask whether the resolved environment is the one the user wants for the template install |
 | Validate CLI tenant alignment | Checking CLI tenants | Verify PAC CLI and Azure CLI are authenticated to the same tenant before installation |
@@ -1293,7 +1293,7 @@ After the reinstall policy chooses a normal import, update, or import-anyway pat
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Import template supporting solutions | Importing supporting solutions | Import each required unmanaged supporting solution in deterministic order and poll every async job to completion |
-| Clone, build, and upload template site | Creating template site | Clone the packaged SPA source, install dependencies, build and verify the configured compiled output, then upload the resulting code site |
+| Clone, build, and upload template site | Creating template site | Clone the packaged SPA source into the selected local directory, install dependencies, build and verify the configured compiled output, then upload the resulting code site |
 | Show inactive template site | Showing template site | Use the Website Record ID written by `pac pages clone` to `.powerpages-site/website.yml` and tell the user the uploaded site is not activated yet |
 | Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
 | Activate template site | Activating template site | Invoke activate-site with the resolved site name and Website Record ID |
@@ -1303,8 +1303,7 @@ If the user chooses to customize the live template, append:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Download template site source | Downloading template source | Ask for a local folder and run `pac pages download-code-site -id <Website Record ID> -p <path>` |
-| Plan template customizations | Planning customizations | Ask what the user wants changed and plan edits against the downloaded code site |
+| Plan template customizations | Planning customizations | Ask what the user wants changed and plan edits against the existing cloned project |
 
 When every supporting solution is already installed at the same or newer version, append the same list without **Import template supporting solutions**. The packaged SPA clone/upload, site discovery, seed, activation, and live-preview tasks still run.
 

@@ -483,8 +483,8 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.update-installed` | gate | consent | 1.5 | One discovered solution is installed but the downloaded source is newer — confirm unmanaged update import; fires per matching solution iteration | template-cache |
 | `create-site:1.5.clone-existing` | gate | consent | 1.5 | Every supporting solution is same/newer — confirm skipping all imports and creating a new site from website code | template-cache |
 | `create-site:1.5.pack-failed` | gate | progress | 1.5 | Local validation or `pac solution pack` failed for one discovered solution before its Dataverse import attempt — retry, fall back, or stop; fires per failed solution iteration | template-cache |
-| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live route choice to download the cloned template source for local customization | — |
-| `create-site:1.5.template-download-location` | not-a-gate | — | 1.5 | Download folder selection before running `pac pages download-code-site`; no download runs until a path is selected | — |
+| `create-site:1.5.template-clone-location` | not-a-gate | — | 1.5 | Local destination selection before cloning the template; no directory or environment state changes until the later provisioning step | — |
+| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live choice to continue editing the local clone used to create the site | — |
 | `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone, identity inspection, dependency installation, build/output validation, or code-site upload failed - choose retry, from-scratch fallback, or stop | partial-template-clone |
 | `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
 | `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
