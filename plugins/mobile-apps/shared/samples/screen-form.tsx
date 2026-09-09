@@ -1,5 +1,5 @@
 import React from 'react'
-import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Controller, useForm } from 'react-hook-form'
 import { BackHandler, KeyboardAvoidingView, Platform, ScrollView } from 'react-native'
@@ -17,34 +17,49 @@ import {
   XStack,
   YStack,
 } from 'tamagui'
-import { z } from 'zod'
 
-const recipeSchema = z.object({
-  title: z.string().min(1, 'Title is required').max(100),
-  description: z.string().max(500).optional(),
-  servings: z.coerce.number().int().positive().max(100),
-  isPublic: z.boolean().default(false),
-})
+type RecipeForm = {
+  title: string
+  description: string
+  servings: number
+  isPublic: boolean
+}
 
-type RecipeForm = z.infer<typeof recipeSchema>
+type RecipeFormScreenProps = {
+  // Supply the approved generated-service adapter, not a timeout or local-state save.
+  saveRecipe?: (values: RecipeForm) => Promise<{ success: boolean; error?: { message?: string } }>
+}
 
-export default function RecipeFormScreen() {
+// Tamagui types the web event; native text events expose nativeEvent.text instead.
+function inputText(event: React.ChangeEvent<HTMLInputElement | HTMLDivElement>): string {
+  const target = event.target
+  if (target && typeof target === 'object' && 'value' in target && typeof target.value === 'string') {
+    return target.value
+  }
+  const native = event.nativeEvent
+  return native && 'text' in native && typeof native.text === 'string' ? native.text : ''
+}
+
+export default function RecipeFormScreen({ saveRecipe }: RecipeFormScreenProps = {}) {
   const router = useRouter()
+  const queryClient = useQueryClient()
+  const submitInFlight = React.useRef(false)
   const [showSuccess, setShowSuccess] = React.useState(false)
+  const [saveError, setSaveError] = React.useState<string | null>(null)
   const [discardOpen, setDiscardOpen] = React.useState(false)
 
-  const { control, handleSubmit, formState } = useForm<RecipeForm>({
-    resolver: zodResolver(recipeSchema),
+  const { control, handleSubmit, formState, reset } = useForm<RecipeForm>({
     mode: 'onBlur',
     defaultValues: { title: '', description: '', servings: 2, isPublic: false },
   })
 
-  // Android hardware back button — dirty-form guard (screen-builder rule 31).
-  // iOS swipe-back is handled by Stack navigator + AlertDialog on the Cancel button.
+  // The generated screen must also use its approved navigator-removal guard for
+  // header/gesture exits; a Cancel dialog does not protect iOS swipe-back.
   useFocusEffect(
     React.useCallback(() => {
       if (Platform.OS !== 'android') return
       const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (submitInFlight.current) return true
         if (formState.isDirty) {
           setDiscardOpen(true)
           return true   // consumed — do not pop
@@ -56,12 +71,36 @@ export default function RecipeFormScreen() {
   )
 
   const onSubmit = async (values: RecipeForm) => {
-    // call mutation...
+    if (submitInFlight.current) return
+    if (!saveRecipe) {
+      setSaveError('Saving is unavailable until this example is connected to a data source.')
+      return
+    }
+    submitInFlight.current = true
+    setSaveError(null)
+    try {
+      const result = await saveRecipe(values)
+      if (!result.success) throw new Error(result.error?.message ?? 'Save failed')
+    } catch (error) {
+      console.error('[RecipeForm] save failed', error)
+      setSaveError("Couldn't save the recipe. Your changes are still here. Try again.")
+      submitInFlight.current = false
+      return
+    }
+
+    // A committed save must not become a retryable create if refresh/navigation fails.
     setShowSuccess(true)
-    setTimeout(() => {
-      setShowSuccess(false)
-      router.back()
-    }, 1200)
+    reset(values)
+    void queryClient.invalidateQueries({ queryKey: ['recipes'] }).catch((error) => {
+      console.error('[RecipeForm] refresh after save failed', error)
+    })
+    try {
+      if (router.canGoBack()) router.back()
+      else router.navigate('/recipes')
+    } catch (error) {
+      console.error('[RecipeForm] exit after save failed', error)
+      setSaveError('Recipe saved. Use Cancel to return to the list.')
+    }
   }
 
   const onInvalid = () => {
@@ -82,16 +121,22 @@ export default function RecipeFormScreen() {
               <Controller
                 control={control}
                 name="title"
+                rules={{
+                  required: 'Title is required',
+                  maxLength: { value: 100, message: 'Use 100 characters or fewer' },
+                }}
                 render={({ field, fieldState }) => (
                   <YStack gap="$2">
                     <Label htmlFor="title">Title</Label>
                     <Input
                       id="title"
+                      aria-label="Title"
+                      aria-invalid={fieldState.invalid}
                       size="$4"
                       autoComplete="off"
                       enterKeyHint="next"
                       value={field.value}
-                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+                      onChange={(event) => field.onChange(inputText(event))}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
@@ -104,16 +149,19 @@ export default function RecipeFormScreen() {
               <Controller
                 control={control}
                 name="description"
+                rules={{ maxLength: { value: 500, message: 'Use 500 characters or fewer' } }}
                 render={({ field, fieldState }) => (
                   <YStack gap="$2">
                     <Label htmlFor="description">Description</Label>
                     <TextArea
                       id="description"
+                      aria-label="Description"
+                      aria-invalid={fieldState.invalid}
                       size="$4"
                       numberOfLines={4}
                       enterKeyHint="enter"
                       value={field.value ?? ''}
-                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+                      onChange={(event) => field.onChange(inputText(event))}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
@@ -126,17 +174,24 @@ export default function RecipeFormScreen() {
               <Controller
                 control={control}
                 name="servings"
+                rules={{
+                  min: { value: 1, message: 'Use at least 1 serving' },
+                  max: { value: 100, message: 'Use 100 servings or fewer' },
+                  validate: (value) => Number.isInteger(value) || 'Use a whole number',
+                }}
                 render={({ field, fieldState }) => (
                   <YStack gap="$2">
                     <Label htmlFor="servings">Servings</Label>
                     <Input
                       id="servings"
+                      aria-label="Servings"
+                      aria-invalid={fieldState.invalid}
                       size="$4"
                       inputMode="numeric"
                       enterKeyHint="done"
                       value={String(field.value ?? '')}
                       onChange={(event) => {
-                        const value = event.target?.value ?? event.nativeEvent?.text ?? ''
+                        const value = inputText(event)
                         field.onChange(Number(value) || 0)
                       }}
                       onBlur={field.onBlur}
@@ -159,6 +214,7 @@ export default function RecipeFormScreen() {
                     </YStack>
                     <Switch
                       id="isPublic"
+                      aria-label="Public recipe"
                       size="$3"
                       checked={field.value}
                       onCheckedChange={(next) => {
@@ -174,6 +230,7 @@ export default function RecipeFormScreen() {
               <XStack gap="$3" mt="$4">
                 <CancelButton
                   isDirty={formState.isDirty}
+                  disabled={formState.isSubmitting}
                   open={discardOpen}
                   onOpenChange={setDiscardOpen}
                 />
@@ -181,18 +238,26 @@ export default function RecipeFormScreen() {
                   <Button
                     flex={1}
                     bg="$blue10"
-                    disabled={!formState.isValid || formState.isSubmitting}
+                    disabled={!saveRecipe || !formState.isValid || formState.isSubmitting || showSuccess}
+                    aria-busy={formState.isSubmitting}
                   >
                     <Button.Text color="$color1">
-                      {formState.isSubmitting ? 'Saving…' : 'Save'}
+                      {formState.isSubmitting ? 'Saving…' : showSuccess ? 'Saved' : 'Save'}
                     </Button.Text>
                   </Button>
                 </Form.Trigger>
               </XStack>
 
+              {!saveRecipe && (
+                <Text color="$color10">
+                  Example only: connect an approved save handler to enable saving.
+                </Text>
+              )}
+              {saveError && <Text role="alert" color="$red10">{saveError}</Text>}
+
               {showSuccess && (
-                <YStack items="center" p="$3" bg="$green3" rounded="$3">
-                  <Text color="$green10" fontWeight="600">Recipe saved!</Text>
+                <YStack role="status" aria-live="polite" items="center" p="$3" bg="$green3" rounded="$3">
+                  <Text color="$green10" fontWeight="600">Recipe saved</Text>
                 </YStack>
               )}
             </YStack>
@@ -206,23 +271,28 @@ export default function RecipeFormScreen() {
 /** Cancel with dirty-form confirmation dialog (controlled — also opened by Android BackHandler). */
 function CancelButton({
   isDirty,
+  disabled,
   open,
   onOpenChange,
 }: {
   isDirty: boolean
+  disabled: boolean
   open: boolean
   onOpenChange: (next: boolean) => void
 }) {
   const router = useRouter()
 
   if (!isDirty) {
-    return <Button flex={1} onPress={() => router.back()}>Cancel</Button>
+    return <Button flex={1} disabled={disabled} onPress={() => {
+      if (router.canGoBack()) router.back()
+      else router.navigate('/recipes')
+    }}>Cancel</Button>
   }
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Trigger asChild>
-        <Button flex={1} onPress={() => onOpenChange(true)}>Cancel</Button>
+        <Button flex={1} disabled={disabled} onPress={() => onOpenChange(true)}>Cancel</Button>
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
         <AlertDialog.Overlay />
@@ -235,7 +305,10 @@ function CancelButton({
             <XStack gap="$3" justify="flex-end">
               <AlertDialog.Cancel asChild><Button>Keep editing</Button></AlertDialog.Cancel>
               <AlertDialog.Action asChild>
-                <Button theme="red" onPress={() => router.back()}>Discard</Button>
+                <Button theme="red" onPress={() => {
+                  if (router.canGoBack()) router.back()
+                  else router.navigate('/recipes')
+                }}>Discard</Button>
               </AlertDialog.Action>
             </XStack>
           </YStack>

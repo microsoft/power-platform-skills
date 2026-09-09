@@ -2,10 +2,12 @@
 
 Extracts palette, typography, spacing, radius, and component conventions from an existing web code app (sibling Power Apps code app or standalone web project).
 
+Read only for this input; follow [input safety](./input-modes.md). All parsing is static reading, never `require`/import/eval of the target. Return design data for both ordinary brand files and intent preview; no mandatory gallery.
+
 ## Pipeline
 
 ```
-1. Validate path (path-safety hook — not same as target native app, has package.json)
+1. Validate path explicitly (not same as target native app, has package.json)
 2. Detect UI framework via package.json dependencies
 3. Read framework-specific config files
 4. Build token map (palette + typography + spacing + radius + components)
@@ -52,7 +54,7 @@ theme.extend.borderRadius → radius policy
 }
 ```
 
-**Dynamic config fallback:** If `tailwind.config.ts` uses runtime functions → try `npx tailwindcss --print-config` (if Node available), else static parse with warning.
+**Dynamic config fallback:** If `tailwind.config.ts` uses runtime functions, read only statically available values and report unresolved ones. Never run npm/npx or the target's configuration.
 
 ### Fluent UI
 
@@ -124,7 +126,7 @@ Convert HSL values to hex.
 | Mix of Tailwind + Fluent + shadcn (no clear winner) | Ask user which is canonical |
 | No central theme — raw CSS scattered | Frequency-only extraction with warning |
 | CSS modules only (`*.module.css`) | Parse with lower-confidence flag |
-| `tailwind.config.ts` uses dynamic functions | Try `--print-config`, else static parse with warning |
+| `tailwind.config.ts` uses dynamic functions | Static parse with warning; request an exported token file if needed |
 | `@apply` used heavily without token exposure | Frequency map of class names |
 
 ## Cost

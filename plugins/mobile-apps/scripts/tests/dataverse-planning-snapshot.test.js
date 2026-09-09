@@ -23,6 +23,7 @@ const {
   validateSnapshot,
 } = require('../create-dataverse-snapshot');
 const { renderPlanningEvidence } = require('../render-dataverse-planning-evidence');
+const { readSkillWorkflow } = require('./helpers/workflow-documents');
 
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
@@ -1100,14 +1101,7 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
     path.join(pluginRoot, 'agents', 'data-model-architect.md'),
     'utf8',
   );
-  const planner = fs.readFileSync(
-    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
-    'utf8',
-  );
-  const createSkill = fs.readFileSync(
-    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
-    'utf8',
-  );
+  const createSkill = readSkillWorkflow('create-mobile-app');
   const snapshotScript = fs.readFileSync(
     path.join(pluginRoot, 'scripts', 'create-dataverse-snapshot.js'),
     'utf8',
@@ -1117,16 +1111,17 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(architect, /NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated-logical-names>/);
   assert.match(architect, /NEEDS_CONTEXT: proposed-dataverse-names:<comma-separated-logical-names>/);
   assert.match(architect, /\.tmp\/data-model-planning-status\.json/);
-  assert.match(planner, /Dataverse planning forwarding is verbatim/);
-  assert.match(planner, /Do not duplicate raw evidence/);
+  assert.match(createSkill, /(?:snapshot|evidence)[\s\S]*verbatim/i);
+  assert.match(createSkill, /Do not duplicate raw evidence[\s\S]*embed proposal decisions, not raw\s+rankings\/columns\/timings/);
   assert.match(createSkill, /render-dataverse-planning-evidence\.js/);
   assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
   assert.match(createSkill, /--proposed-tables "<exact comma-separated logical names>"/);
-  assert.match(createSkill, /connector-only.*skip every command/s);
-  assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
+  assert.match(createSkill, /Connector-only runs skip all commands/);
+  assert.match(createSkill, /For `connector-only`, set the detected prefix to empty and make no Dataverse prefix query/);
   assert.doesNotMatch(createSkill, /legacy-unverified/);
-  assert.match(createSkill, /does not accept an unresolved\s+`Unverified` plan/s);
+  assert.match(createSkill, /unverified[\s\S]*non-executable/);
+  assert.match(createSkill, /service mismatch[\s\S]*block Step 8/);
   assert.match(createSkill, /BLOCKED: Dataverse planning metadata unavailable for exact target decisions/);
-  assert.match(createSkill, /10–15 minute target/);
+  assert.doesNotMatch(createSkill, /10–15 minute target/);
   assert.doesNotMatch(snapshotScript, /execFileSync/);
 });

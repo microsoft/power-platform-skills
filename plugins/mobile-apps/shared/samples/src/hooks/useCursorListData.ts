@@ -19,6 +19,7 @@ export interface CursorPageFetchArgs {
 export type CursorPageResult<T> =
   | T[]
   | {
+      success?: boolean;
       items?: T[] | null;
       data?: T[] | null;
       value?: T[] | null;
@@ -38,6 +39,9 @@ export interface UseCursorListDataOptions<T> {
   initialSearch?: string;
   searchDebounceMs?: number;
   enabled?: boolean;
+  /** Preview/demo mode only; live responses never fall back to fixtures. */
+  source?: 'live' | 'fixture';
+  /** Used only with source: 'fixture'; label these records visibly. */
   mockData?: T[];
 }
 
@@ -68,22 +72,24 @@ export function useCursorListData<T>({
   initialSearch = '',
   searchDebounceMs = 300,
   enabled = true,
+  source = 'live',
   mockData,
 }: UseCursorListDataOptions<T>): UseCursorListDataReturn<T> {
   const [query, setQuery] = useState(initialSearch);
   const debouncedQuery = useDebouncedValue(query.trim(), searchDebounceMs);
 
   const cursorQuery = useInfiniteQuery({
-    queryKey: [...queryKey, { search: debouncedQuery, pageSize }],
+    queryKey: [...queryKey, { search: debouncedQuery, pageSize, source }],
     enabled,
     initialPageParam: undefined as string | undefined,
-    queryFn: async ({ pageParam }: { pageParam: string | undefined }) => normalizePage(
-      await fetchPage({
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
+      if (source === 'fixture') return { items: mockData ?? [], nextLink: null };
+      return normalizePage(await fetchPage({
         pageSize,
         search: debouncedQuery,
         skipToken: pageParam,
-      }),
-    ),
+      }));
+    },
     getNextPageParam: (lastPage: NormalizedCursorPage<T>) => (
       lastPage.nextSkipToken ?? extractSkipToken(lastPage.nextLink) ?? undefined
     ),
@@ -91,13 +97,11 @@ export function useCursorListData<T>({
 
   const items = useMemo(() => {
     const loadedItems = cursorQuery.data?.pages.flatMap((page: NormalizedCursorPage<T>) => page.items) ?? [];
-    return loadedItems.length > 0 ? loadedItems : (mockData ?? []);
-  }, [cursorQuery.data?.pages, mockData]);
+    return loadedItems;
+  }, [cursorQuery.data?.pages]);
 
   const error = cursorQuery.error
-    ? cursorQuery.error instanceof Error
-      ? cursorQuery.error.message
-      : 'Failed to load data'
+    ? "Couldn't load the list. Try again."
     : null;
 
   const loadMore = useCallback(() => {
@@ -134,7 +138,7 @@ function normalizePage<T>(result: CursorPageResult<T>): NormalizedCursorPage<T> 
     return { items: result, nextLink: null };
   }
 
-  if (result.error) {
+  if (result.success === false || result.error) {
     throw new Error(errorMessage(result.error));
   }
 

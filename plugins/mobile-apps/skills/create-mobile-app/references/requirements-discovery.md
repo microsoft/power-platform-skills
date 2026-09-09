@@ -1,64 +1,85 @@
 # Requirements Discovery Reference
 
-Use this only for Step 2b.1 of `/create-mobile-app` when prompt richness selects the `walk-through` path.
+Read only when the foreground `/create-mobile-app` flow needs to clarify an incomplete brief. Do not run a generic feature questionnaire for a brief that already identifies actors, tasks, outcomes, and integrations.
 
-## Infer Options From The Brief
+## Ground the brief
 
-Scan the user's description and wizard answers for these signals, then confirm inferred items with one `AskUserQuestion`.
+Capture who acts, what they are trying to do, how they enter/resume, what decision they make, the committed outcome, the next destination, and recovery after interruption. Separate confirmed facts, inferred context, and unknowns. Color, industry, or schema size does not establish a workflow or native capability.
 
-| Signal in description | Infer |
-|---|---|
-| "log", "record", "submit", "fill out" | Data entry / form screens |
-| "photo", "attach", "image", "camera" | Camera capability + image column |
-| "pick file", "upload PDF", "import document", "attach file" | Document-picker capability + optional Dataverse File column |
-| "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability + optional Dataverse File column when retained |
-| "view PDF", "open PDF", "preview PDF" | Native PDF viewer capability for HTTPS URLs or local `file://` URIs with viewer 0.2.9+ |
-| "signature", "sign", "sign off", "approval", "pen", "ink", "draw" | Pen-input capability + Dataverse Image/File storage target |
-| "track location", "background location", "GPS tracking", "follow route", "breadcrumb", "field worker location" | Geolocation capability (`@microsoft/power-apps-native-bglocation`) + Dataverse location table (default `msdyn_locationrecords`) |
-| "current location", "where am I", "tag with coordinates", "one-shot location" | One-shot location capability (`expo-location`) |
-| "share", "send to", "export" | Sharing capability |
-| "secure", "credentials", "token", "PIN" | Secure-store capability |
-| "assign", "technician", "manager" | Multiple user types |
-| "notify", "email", "alert" | Office 365 connector |
-| "SharePoint", "list", "document" | SharePoint connector |
-| "Teams", "chat", "message" | Teams connector |
-| "report", "dashboard", "history", "view all" | Read/list screens |
+Ask only about uncertainty that changes primary work, data ownership/persistence, authorization, an external integration, or native feasibility. The **foreground** owns questions and approval. A leaf agent returns `NEEDS_CONTEXT: <missing fact and consequence>`, never prompts the user or fabricates approval.
 
-Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; if a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical native allowlist.
+## Evidence-to-requirement mapping
 
-PDF/pen rules:
-- Do not infer `document-picker` from generic "PDF" alone; use the specific signal rows above.
-- Native PDF viewing supports HTTPS URLs and local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+.
-- Local generated PDFs require `expo-print`; preview requires native PDF viewer 0.2.9+, while sharing requires `expo-sharing`.
-- Retained generated PDFs require a Dataverse File column or child Evidence/Attachment table.
-- Signature/ink capture must record a Dataverse target in `native-app-plan.md`: Image column, File column, or child Evidence/Signature table.
-- Background/continuous location tracking uses the `geolocation` capability (`@microsoft/power-apps-native-bglocation`, MSAL-only) and requires an existing Dataverse target table (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). `/add-native geolocation` must verify that table; if it is missing, do not allow the control to be used. The missing control table is not created through `/add-dataverse`; use the geolocation-control table provisioning/setup mechanism, then re-run `/add-native geolocation`. Use one-shot `location` (`expo-location`) for a single foreground coordinate read; do not conflate the two.
+The following are interpretations to check against the actual brief, not automatic feature selections:
 
-## Ask Shape
+| Evidence in the brief | Requirement to record | Do not infer |
+|---|---|---|
+| Log, record, submit, fill out | A task with a capture/edit host and defined save outcome | A separate CRUD screen for every related table |
+| Take a photo, scan with camera | Camera/scanner use, permission/failure fallback, persistence if retained | Gallery selection, annotation, or background capture |
+| Choose an existing photo/image | Image picker and target if retained | Camera permission merely because an image is attached |
+| Attach, evidence | Determine the artifact/source only if it changes capture/storage | Camera or Dataverse Image from generic attachment alone |
+| Pick file, upload PDF, import document | Document picker; local/retained destination as required | PDF generation or viewing |
+| Generate/export a PDF report | PDF generation; on-device/share-only or retained destination | Document picker from the word PDF |
+| View/open/preview a PDF | Native PDF viewer with supported input | A picker or generation pipeline |
+| Draw a signature, ink, pen drawing | Pen-input capture, cancellation/failure path, explicit Image/File/child-table target | An approval workflow by itself |
+| Approve, reject, authorize, sign off | Decision/action, role rules, reason/audit if required, committed state change | Handwritten signature, biometrics, or PIN; clarify ambiguous "sign" only when consequential |
+| One current coordinate, tag with coordinates | One-shot location | Continuous/background tracking |
+| Continuous GPS/background route tracking | Geolocation with permission, start/stop/status, supported Dataverse target | Tracking from "field worker" or "site visit" alone |
+| Device share sheet, share a local file | Device sharing | Teams, email delivery, or server retention |
+| Notify, alert, send, share | Delivery channel/recipient only when specified; clarify if essential | Office 365 connector or push capability from a generic verb |
+| Store a token/credential securely on device | Secure-store if app-owned local secrets are actually needed | Custom auth/PIN screens from the adjective "secure" |
+| Assign work, manager/technician roles | Actor responsibilities and relevant permission boundaries | A separate admin app or team connector |
+| Explicit SharePoint site/list/library as data source | SharePoint connector and actual list/library contract | SharePoint from generic "list", "document", or "history" |
+| Explicit Microsoft Teams channel/chat integration | Teams connector and intended operation | Teams from generic "chat" or "message" |
+| Generic in-app chat/message feed | Conversation task, participants, actual data/delivery source | A named external provider without evidence |
+| Report, history, view all | Needed read/comparison outcome and data scope | Dashboard, KPI tiles, or an independent screen by keyword alone |
+| Audit, inspect, compliance check | Clarify whether users perform a checklist/evidence workflow, review historical changes, or both | A custom Audit Event table, change-log screen, or inspection workflow from the word alone |
 
-Ask exactly one structured question. Inferred items are `recommended: true`; plausible extras are unselected. Keep 2-6 options total and allow freeform input.
+A generic list/document can use Dataverse, another service, or local content. A generic chat can be app-owned. Do not present unrequested connectors as preselected "recommended" features.
 
-```json
-{
-  "questions": [
-    {
-      "header": "features",
-      "question": "Which of these should the app do? (multi-select -- add anything else as freeform text)",
-      "multiSelect": true,
-      "options": [
-        { "label": "Log inspection visits with date, notes, status", "recommended": true },
-        { "label": "Attach photos to each visit", "recommended": true },
-        { "label": "Assign visits to specific technicians" },
-        { "label": "Email manager on completion" }
-      ]
-    }
-  ]
-}
-```
+## Native and artifact feasibility
 
-Rules:
-- Use the `header` field as a stable answer key, such as `features`.
-- Never include `[x]` or `[ ]` checkbox markdown in the `question` field; it produces invalid tool parameters.
-- Ask no unrelated questions in this call.
+Resolve native requirements through [native capability proposals](../../../agents/native-app-planner.md#native-capability-proposals), which checks the live `template/package.json` and [add-native allowlist boundary](../../add-native/SKILL.md). An absent or runtime-banned module is a feasibility constraint, not a capability to promise. Pure JavaScript follows [dependency planning](../../../shared/references/javascript-dependency-planning.md), not the native allowlist.
 
-After the answer, summarize the confirmed requirements brief in 4-8 bullets covering what users can do, tracked data, and integrations. Confirm once with `Look right? (yes / adjust)`, then store the result as `<requirements_brief>`.
+- PDF viewing requires `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ for HTTPS or local `file://`; no `content://`, `blob:`, or `http://` viewer input.
+- Local PDF generation requires `expo-print`; sharing requires `expo-sharing` when shipped and requested. Retention requires a Dataverse File column or Attachment/Evidence table with a verified write path.
+- Signature/ink capture needs an explicit target in `native-app-plan.md`; a successful local capture is not proof of upload/retention.
+- Continuous/background tracking uses `geolocation` (`@microsoft/power-apps-native-bglocation`, MSAL-only) with an existing Dataverse table: default entity set `msdyn_locationrecords`, or verified custom `tableName`/`fieldMap`.
+- `/add-native geolocation` must verify that control table; a missing table is provisioned through the geolocation-control setup, not `/add-dataverse`. Do not use the control until verification succeeds.
+- One-shot foreground location uses `location` (`expo-location`), not the background control.
+- An offline profile does not provide a generated runtime queue. Record supported retry/draft behavior; seek foreground clarification only if required offline operation cannot be met.
+
+## Consequential questions through the foreground
+
+Use the smallest focused question that resolves the branching decision; do not reconfirm all inferred features. Examples:
+
+- When one action may create another record or change another state, ask the missing rule directly:
+  "Should <action> only record the result, trigger <related action>, or wait for review?"
+  Fill placeholders from the maker's vocabulary. Do not assume coupled transitions because records relate.
+- When several roles are implied but consequential authority is unclear, ask:
+  "Who can perform <specific transition>?" Record UI visibility, server-side authorization, and
+  any separate verification step; role names alone do not grant permission.
+- When completing work may imply a second business outcome, ask whether that outcome is automatic,
+  separately verified, or explicitly decided by another role. Ask only when the brief leaves a
+  consequential dependency unresolved; do not assume that all transitions must remain independent.
+- "When you say audit, do users perform a scheduled checklist/inspection, review a history of
+  changes, or both?" — only when the requested audit meaning changes the work or records.
+- "Does sign-off mean recording an approve/reject decision, or capturing a drawn signature?" — only if the brief leaves this important distinction unresolved.
+- "Should messages stay inside the app, or be sent to an existing Teams channel?" — only if external delivery is required but its destination is unclear.
+- "Are these documents already in a SharePoint library, or should the app retain newly uploaded files?" — only when the source/ownership affects integration work.
+
+Question priority:
+
+1. Primary job/outcome or actor authority that changes product behavior.
+2. Data/system ownership needed to make approved operations real.
+3. Native feasibility or disconnected/offline requirement that changes the workflow.
+4. Brand/content input only when supplied or explicitly requested; no-brand design can proceed.
+
+Do not ask "how many screens," generic fidelity, or a feature checklist when the request already
+asks for a complete mobile app. Derive the smallest coherent screen set and a clickable intent
+preview. Optional preview depth, style comparisons, galleries, existing-code import, and real
+content upload belong to their explicit standalone/edit/design paths—not the ordinary create wizard.
+
+Do not ask about decorative preferences here, force an option count, or present unrelated extras. If facts already answer the question, proceed without it.
+
+Summarize the confirmed brief compactly: actors/jobs, outcomes, supporting data, explicit integrations/native needs, and consequential constraints. Store as `<requirements_brief>` through the existing foreground plan/approval flow; do not add a duplicate "Look right?" gate after an already approved brief. Reversible assumptions are recorded, not turned into repeated questions.

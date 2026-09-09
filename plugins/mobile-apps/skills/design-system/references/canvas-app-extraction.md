@@ -2,12 +2,14 @@
 
 Extracts palette, typography, and component conventions from an existing Power Apps Canvas app (`.msapp` file).
 
+Read only for this input. Apply [input safety](./input-modes.md) explicitly; no hook performs it. Return extracted decisions to the ordinary spec/tokens + intent-preview workflow, not a mandatory gallery or duplicate bundle.
+
 ## Pipeline
 
 ```
-1. Validate .msapp path (path-safety hook — no .., no system dirs, no symlinks outside $HOME)
+1. Validate .msapp path under the input safety policies
 2. Validate file size (< 50 MB after unzip)
-3. Unzip .msapp to $TMPDIR/<random>/
+3. Stream-validate entries and extract only into a uniquely created project-local scratch directory
 4. Read CanvasManifest.json → get app metadata
 5. Parse Src/App.fx.yaml → extract theme variables from OnStart block:
    - Set(varTheme, {...})
@@ -20,7 +22,7 @@ Extracts palette, typography, and component conventions from an existing Power A
 8. Resolve ColorValue("named") constants via known-color-map
 9. Extract component conventions (button shape, card style, list patterns)
 10. Optional: MS Learn MCP enrichment for Canvas app theming guidance
-11. Cleanup: rm -rf $TMPDIR/<random>/
+11. Cleanup only this run's extraction directory on every exit
 ```
 
 ## Theme variable detection
@@ -48,7 +50,7 @@ RGBA(0, 120, 212, 1) → #0078D4
 RGBA(50, 49, 48, 1) → #323130
 ```
 
-Alpha < 1: compute effective color against white background, then emit hex.
+Alpha < 1: preserve alpha or composite against the actual identified source background, not assumed white. Flag unresolved backgrounds before contrast validation.
 
 ## Named color map (subset)
 
@@ -89,7 +91,7 @@ Purpose: Validate that extracted variables match the known Canvas theming schema
 |---|---|
 | `.msapp` encrypted / password-protected | STOP — ask to re-export without password |
 | No theme variable detected (all hardcoded) | Frequency-only extraction with warning |
-| `ColorValue("unknown")` constant | Fall back to default, log unknown |
+| `ColorValue("unknown")` constant | Report unresolved value; do not silently import an unrelated default |
 | 30+ colors (designer drift) | Cap at top 8, surface for user confirmation |
 | `.msapp` uses PCF / code components | Skip those screens with notice |
 | Tablet-only source | Extract anyway, flag "density may need mobile adjustment" |

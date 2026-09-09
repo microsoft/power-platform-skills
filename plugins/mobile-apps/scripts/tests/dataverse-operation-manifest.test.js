@@ -18,6 +18,7 @@ const {
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
+const { readSkillWorkflow } = require('./helpers/workflow-documents');
 
 const NOW = '2026-08-19T00:00:00.000Z';
 const SNAPSHOT_AT = '2026-08-18T23:55:00.000Z';
@@ -1607,10 +1608,7 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
     /structured schema[\s\S]*regenerate the complete aliases[\s\S]*service-required names/,
   );
   assert.match(skill, /--approval-receipt <working_dir>\/\.tmp\/mobile-plan-status\.json/);
-  const createSkill = fs.readFileSync(path.join(
-    __dirname,
-    '../../skills/create-mobile-app/SKILL.md',
-  ), 'utf8');
+  const createSkill = readSkillWorkflow('create-mobile-app');
   assert.match(
     createSkill,
     /foreground planning snapshot[\s\S]*never authorizes a write/,
@@ -1624,19 +1622,20 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
   assert.match(
     createSkill,
-    /receipt is missing, STOP as `BLOCKED`[\s\S]*must not synthesize it/,
+    /Missing receipt, partial records, changed contract\/plan, service mismatch or bad hashes block Step 8/,
   );
-  const planner = fs.readFileSync(path.join(
+  assert.match(createSkill, /Step 8 consumes\/verifies it and \*\*cannot create or refresh it\*\*/);
+  const approval = fs.readFileSync(path.join(
     __dirname,
-    '../../agents/native-app-planner.md',
+    '../../skills/create-mobile-app/references/approval-receipt.md',
   ), 'utf8');
   assert.match(
-    planner,
-    /Approved:[\s\S]*mobile-plan-status\.json[\s\S]*dataModel.*approval record/,
+    approval,
+    /only at explicit Gate 1 user acceptance[\s\S]*`dataModel` approval record contains the\s+acceptance time and approved contract hash/,
   );
   assert.match(
-    planner,
-    /Do not call the manifest builder to create or restamp this receipt/,
+    approval,
+    /Do not use the manifest builder to create or restamp this receipt/,
   );
 });
 

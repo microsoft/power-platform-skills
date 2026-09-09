@@ -19,6 +19,7 @@ const {
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 const { readProcessScope } = require('../lib/mobile-telemetry-session');
+const { readDocumentTree, readSkillWorkflow } = require('./helpers/workflow-documents');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -351,8 +352,9 @@ test('checkpoint event carries only static checkpoint enrichment', (t) => {
 });
 
 test('shared instructions own checkpoint execution and lifecycle rules', () => {
-  const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
-  const checkpointSection = shared.match(/## Workflow Checkpoints\r?\n([\s\S]*?)(?=\r?\n---)/)?.[1];
+  const shared = readDocumentTree(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'))
+    .map(document => document.content).join('\n');
+  const checkpointSection = shared.match(/## Workflow Checkpoints\r?\n([\s\S]*?)(?=\r?\n## |\r?\n---|$)/)?.[1];
   assert.ok(checkpointSection, 'shared instructions must define the checkpoint policy');
   assert.match(checkpointSection, /frontmatter `name`/);
   assert.match(checkpointSection, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js" "<skill-name>\|<checkpoint-name>\|<state>" \|\| true/);
@@ -367,11 +369,9 @@ test('shared instructions own checkpoint execution and lifecycle rules', () => {
 });
 
 test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
-  const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
-  const workflow = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app', 'SKILL.md'),
-    'utf8',
-  );
+  const shared = readDocumentTree(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'))
+    .map(document => document.content).join('\n');
+  const workflow = readSkillWorkflow('create-mobile-app');
 
   assert.match(shared, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js"/);
   assert.doesNotMatch(shared, /node "\$\{CLAUDE_SKILL_DIR\}/);
@@ -404,10 +404,7 @@ test('create-mobile-app uses precise checkpoint names at major workflow boundari
 
 test('every tracked operational skill has precise checkpoint markers', () => {
   for (const skillName of TRACKED_SKILL_NAMES) {
-    const workflow = fs.readFileSync(
-      path.join(PLUGIN_ROOT, 'skills', skillName, 'SKILL.md'),
-      'utf8',
-    );
+    const workflow = readSkillWorkflow(skillName);
     const matches = [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)];
 
     if (CHECKPOINT_EXEMPT_SKILLS.has(skillName)) {
@@ -417,7 +414,7 @@ test('every tracked operational skill has precise checkpoint markers', () => {
 
     assert.ok(matches.length > 0, `${skillName} must define at least one checkpoint`);
     assert.match(workflow.slice(0, matches[0].index),
-      /\[[^\]]+\]\((?:\.\.\/\.\.\/|\$\{PLUGIN_ROOT\}\/)shared\/shared-instructions\.md\)/,
+      /\[[^\]]+\]\((?:\.\.\/\.\.\/|\$\{PLUGIN_ROOT\}\/)shared\/shared-instructions(?:-core)?\.md\)/,
       `${skillName} must reference shared instructions before its first checkpoint`);
     assert.doesNotMatch(workflow, /\*\*Checkpoint execution:\*\*|emit-telemetry-checkpoint\.js/,
       `${skillName} must inherit checkpoint execution from shared instructions`);

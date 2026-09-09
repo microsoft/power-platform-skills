@@ -1,228 +1,110 @@
 ---
 name: preview-screens
-description: Use when the user wants to preview generated screens in a browser without starting Metro / a simulator — for example after /create-mobile-app finishes or after /edit-app regenerates a screen.
+description: Preview a planned primary journey or source-derived generated screens in a browser without Metro or a simulator. Supports intent before building and implementation approximation after building.
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Bash
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
-
 # Preview Screens
 
-Generates a self-contained HTML file that renders every screen in the app as a phone-frame mockup (375 × 812) with tab navigation and a dark/light toggle. The agent reads TSX files, understands the Tamagui component tree, and produces equivalent HTML/CSS — no programmatic TSX parsing.
+Follow applicable [shared instructions](../../shared/shared-instructions.md). Produce model-authored HTML/CSS with a small local interaction script—not a new renderer framework, not execution of React Native.
 
-## When to use
+## 1 — Locate and select mode
 
-- After generating screens, to see a quick visual preview without running Metro/Expo
-- To share a screenshot-ready mockup with stakeholders
-- To verify layout before deploying
+Use `--working-dir <path>` or cwd. Accept an app project (`package.json` or `power.config.json`), or an artifact-only design directory containing `brand/design-system.md`. Read the app name from the plan, memory-bank title, or package metadata.
 
-## When NOT to use
+| Mode | Input source | Output |
+|---|---|---|
+| `--mode intent` | Approved plan + brand design/tokens; before build | `_design_preview.html` |
+| `--mode implementation` | Current screen TSX + referenced local UI/config; after build | `preview.html` |
+| No mode | Implementation if visible app screen sources have been built; otherwise intent | As above |
 
-- To run the actual app → use `npx expo start`
-- To modify screens → use `/edit-app`; `screen-builder` is an internal agent invoked by orchestrator skills
+Auth-only/scaffold placeholders, layouts, OAuth callbacks, and redirects alone do not make an implementation. If the caller knows the lifecycle phase, use it: `/create-mobile-app` Step 6.75 explicitly requests intent; after screen building and `/edit-app` implementation changes explicitly request implementation. An explicit mode always wins.
 
-## Workflow
+Never copy `_design_preview.html` to `preview.html` or present stale intent as implementation. If explicit implementation has no built screens, report the missing input instead of silently falling back. Intent needs a plan journey, or the standalone design spec's small journey; if neither exists, report the missing context.
 
-1. Locate project → 2. Discover screens → 3. Read reference mapping → 4. Read & convert each screen → 5. Assemble preview.html → 6. Write file → 7. Open in browser
-
----
-
-### Step 1 — Locate project
-
-Determine the working directory:
-
-- If `$ARGUMENTS` contains `--working-dir <path>`, use that.
-- Otherwise use the current working directory.
-
-Validate the project:
-
-```text
-Glob pattern="power.config.json" path="<working_dir>"
-```
-
-If missing, check for `package.json`. If neither exists, report the error and stop.
-
-Read `memory-bank.md` if present to get the project name for the page title:
-
-```text
-Grep pattern="^# " path="<working_dir>/memory-bank.md"
-```
-
-Fallback: read `name` from `package.json`.
-
-### Step 2 — Discover screens
+## 2 — Scope by journey
 
 **Telemetry checkpoint: `discover_app_screens`**
 
-Find all TSX files under the app directory:
+**Intent:** follow [direct intent authoring](references/intent-authoring.md). Use compact relevant product context from the existing plan: domain/actors, journeys, data relationships and rules, connector operations, approved native capabilities, navigation, and design. Match heading capitalization case-insensitively and reuse `### Preview selection` (legacy `### Primary Preview`) for representative preview screen IDs and selection rationale. Select three main screens by default, fewer for a smaller product; no strict three-screen cap or List/Form/Detail default. If selection is missing, return IDs/rationale to the caller for the existing plan.
 
-```text
-Glob pattern="app/**/*.tsx" path="<working_dir>"
-```
+**Implementation:** discover visible `app/**/*.tsx`, excluding `_layout.tsx`, `+not-found.tsx`, dot directories, OAuth callbacks, and auth-only redirects. Read layouts separately for navigation/theme context. Match screen IDs/routes to the plan where present, but actual source determines what exists. Preserve all discovered screens by default; an explicit requested journey/screen subset may narrow scope. Order by primary journey entry and action sequence, not home-plus-two-details.
 
-**Exclude** these patterns — they are not screens:
-- `_layout.tsx` (navigation layouts)
-- `+not-found.tsx` (Expo Router error boundary)
-- Files in directories starting with `.`
-- `index.tsx` at the app root if it only contains an auth redirect (read it to check)
+Keep preview navigation controls distinct from app navigation. Use valid stable IDs, human-readable labels, and an entry screen that makes the task obvious. Include every intermediate destination necessary for the selected journey (or explicitly label out-of-scope destinations); never leave a required action as a dead button.
 
-**Derive screen names** from file paths:
-- `app/(app)/home.tsx` → "Home"
-- `app/(app)/recipes/index.tsx` → "Recipes"
-- `app/(app)/recipes/[id].tsx` → "Recipe Detail"
-- `app/login.tsx` → "Login"
-- `app/oauth-callback.tsx` → skip (not a visible screen)
+## 3 — Resolve actual design inputs
 
-If `native-app-plan.md` exists in the working directory, read its `## Screens` section for human-friendly labels.
+**Intent:** use approved design/token values directly in CSS. Do not load the Tamagui-to-HTML mapping or a prescribed phone shell.
 
-Build an ordered list: `[ { path, screenName, screenId } ]`.
+**Implementation only:** read [Tamagui-to-HTML mapping](../../shared/references/tamagui-html-mapping.md). Read `brand/design-system.md`, `brand/tokens.ts`, `tamagui.config.ts`, and only the local imports needed to resolve used tokens/fonts/themes. Inspect imported brand tokens, exported `appLightTheme` / `appDarkTheme`, provider theme props, and local font assets/loading—not just inline `tokens.color`.
 
-**Default tab ordering — Home first, then two details, then the rest.** Step 5 marks the first entry as `active`, so the order below directly controls which screen the user lands on when `preview.html` opens.
+- Intent before integration uses the approved brand inputs and the same host alias mapping planned for Step 9b. Label unresolved values/fallbacks rather than asserting exact host fidelity.
+- Implementation uses the current resolved source/config even if it differs from the design spec. Report that drift; do not restyle the source to hide it.
+- Resolve light and dark independently: surface/text/accent/status pairs, space, size, radius, font family/weight/size/line-height/tracking. Preserve Tamagui numeric keys and named brand keys separately.
+- Define every CSS variable used, including `--surface0` and `--surface1`, in both advertised themes. Never substitute a generic palette for imported brand values.
+- Use available local font assets with the correct weights when possible. If unavailable in browser, label the fallback; do not silently fetch Google Fonts or claim an uninstalled native font is rendered.
 
-Sort the list with this priority:
+Do not execute arbitrary imported config, application services, auth code, or network requests to obtain preview data. Use static reading and installed documented token definitions; unresolved dynamic values are an explicit approximation.
 
-1. **Home / dashboard first.** The first screen matching any of these paths (in this priority): `app/(app)/home.tsx`, `app/(app)/index.tsx`, `app/(app)/dashboard.tsx`, `app/index.tsx` (only if it's a real home screen — not the auth redirect you already filtered out in Step 2). If `native-app-plan.md` flags one screen as the home/landing screen, prefer that.
-2. **Then up to two detail screens.** A "detail" screen is any TSX whose route segment uses a dynamic param — file path contains `[` and `]` (e.g. `app/(app)/recipes/[id].tsx`, `app/(app)/orders/[orderId]/edit.tsx`). Take the first two in the order they were discovered (alphabetical by path is fine).
-3. **Then everything else** in discovery order.
-
-If there are fewer than two detail screens, just include whatever exists and continue with the rest — do not pad with non-detail screens to force a count of 3.
-
-Do not drop any screens — this rule only reorders. Every discovered screen still gets a tab.
-
-### Step 3 — Read reference mapping
-
-Load the Tamagui-to-HTML mapping reference:
-
-```text
-Read file_path="${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md"
-```
-
-Internalize:
-- Component → HTML element + CSS mappings (Section 1)
-- Token → pixel values for spacing, font-size, color (Section 2)
-- Conversion guidelines — placeholder rules, icon substitutions, what to skip (Section 3)
-- Phone frame HTML template (Section 4) — this is the outer shell
-
-Also check if the project has custom brand tokens:
-
-```text
-Glob pattern="tamagui.config.ts" path="<working_dir>"
-```
-
-If found, read it and extract any custom color tokens (look for `tokens: { color: { ... } }`). Add them as additional CSS custom properties in the generated HTML.
-
-### Step 4 — Read and convert each screen
+## 4 — Author screens and mock journey
 
 **Telemetry checkpoint: `render_screen_preview_frames`**
 
-**Print before starting:**
-> "→ Reading + converting <N> screens to HTML/CSS (one print per screen as I go)."
+**Intent:** choose composition from the approved purpose and per-screen decisions. Hierarchy, layout, media, and density may differ where the tasks differ. Token constraints do not mandate identical cards or a fixed template.
 
-For each screen in the ordered list from Step 2:
+**Implementation:** read the full selected screen TSX and its referenced local UI components/hooks as needed to understand rendered branches, navigation targets, action availability, and state feedback. Convert the actual JSX/Tamagui tree, dimensions, styles, and typography to HTML. Preserve source shortcomings and report them; the preview does not fix source.
 
-1. **Read the full TSX file.**
+For either mode:
 
-2. **Identify the component tree.** Walk the JSX return statement and note every Tamagui component, its props, and its children.
+1. Use one coherent, clearly labeled illustrative scenario: consistent record IDs, names, dates, units, statuses, and relationships across screens. Do not read real tenant records or secrets.
+2. Model key actions with small in-memory JS: selection, filter/search, navigation/back, form edit/validation, confirmation, and a visible completion state as appropriate. Include relevant loading/empty/error/retry states through an accessible scenario control where needed. Reset restores the initial scenario.
+3. Implementation mock actions must correspond to handlers/states present in source. If absent, show and report the missing implementation rather than inventing a working success flow.
+4. Show native-only placeholders for camera/scanner/location, PDF viewer/report, pen/signature capture, sharing/printing, file upload, auth, and offline/device APIs. Label `Native-only — not executed in browser`. Illustrative captured/ready states may be selected as mock scenarios, never falsely triggered as native success.
+5. Preserve meaningful media proportions and crop using approved local illustrative assets, or an honest labeled placeholder. Use consistent icon approximations with accessible names; never replace critical action labels with unexplained emoji.
+6. Use semantic buttons/links/inputs, associated labels, keyboard operation, visible focus, text plus color for status, and contrast-tested pairs. Allow scrolling/reflow, text zoom, and reduced motion. Avoid double safe-area padding.
 
-3. **Generate equivalent HTML/CSS** using the mapping from Step 3:
-   - `YStack` → `<div style="display:flex; flex-direction:column; ...">`
-   - Map every shorthand prop to its CSS equivalent (`flex={1}` → `flex:1`, `bg="$color2"` → `background:var(--color2)`, etc.)
-   - Map token values to pixels (`p="$4"` → `padding:16px`)
-   - Replace `<Ionicons name="..." />` icons with Unicode equivalents (see mapping reference Section 3, Guideline 4 — the icon substitution table uses Ionicons names)
+**Device geometry:** when given a device reference, match its width and height (measure the device,
+not the surrounding screenshot). If dimensions are unavailable, state the estimate. Otherwise use
+390 x 844 CSS px as the phone frame default, not a production layout constraint; honor explicit
+phone/tablet targets. Keep the same geometry across screens and revisions. Measure usable content
+separately from decorative bezels. Do not stretch frames with grid columns or shorten them using
+browser `vh` to fit above the fold. Scroll content inside the device; keep app chrome consistent.
+If the review canvas cannot fit the devices, wrap or use a switcher. Test narrow reflow separately
+at 320px without claiming it is the original device size. Report measured frame/content dimensions.
 
-4. **Handle dynamic content:**
-   - `.map()` over arrays → generate 3–4 representative placeholder items
-   - `useQuery` / `useMutation` → show the populated state only (skip loading/error branches)
-   - Form `defaultValues` → pre-fill inputs with those values
+No live service calls, storage writes outside the preview file, credentials, CDN scripts, analytics, remote font dependencies, or browser handlers pretending to save/upload to the tenant. Local simulation is not an app test.
 
-   Native PDF/pen controls need honest static approximations:
-   - PDF viewer actions → render a compact report/PDF block with a filename, generated timestamp, storage label (for example `Stored in Evidence PDF File` or `On-device share only`), and a disabled `View PDF` button. If the source URL is not visibly HTTPS, label it `Preview unavailable in browser` rather than showing a fake viewer.
-   - Generated PDF reports → render the generated/ready state and any persistence label from the plan or code, such as `Uploads to Evidence PDF File`. Do not embed a browser PDF iframe or imply the native viewer runs in preview.
-   - Pen/signature input → render a signature pad placeholder with an ink stroke sample and a captured-preview state. Include the persistence label when known, such as `Stored in Signature Image` or `Uploads to Signature File`.
-   - Do not wire browser click handlers that pretend to capture pen input, open native PDF viewer, share, print, or upload. This preview is visual only.
-
-5. **Produce a `<div class="screen" id="screen-{screenId}">` wrapping the converted HTML.**
-
-Use inline styles on elements. Keep each screen's HTML self-contained (no shared CSS classes between screens, except the theme variables).
-
-### Step 5 — Assemble preview.html
-
-Use the phone frame template from the mapping reference (Section 4) as the outer shell.
-
-Replace the placeholders:
-
-- **`{{APP_NAME}}`** — project name from Step 1
-- **`{{TABS}}`** — one `<button class="tab" ...>` per screen, first tab gets class `active`
-- **`{{SCREENS}}`** — all screen `<div>` blocks from Step 4, first screen gets class `active`
-
-If the project has custom brand tokens (from Step 3), add them to the `:root` CSS block.
-
-### Step 6 — Write the file
+## 5 — Assemble and check
 
 **Telemetry checkpoint: `write_screen_preview_document`**
 
-```text
-Write file_path="<working_dir>/preview.html"
-```
+**Intent:** author the complete HTML/CSS presentation directly; no prescribed shell or component conversion. **Implementation:** the mapping reference's adaptable phone shell is optional. Write only the selected mode's output. Label mode, scenario, source basis, and any unsupported/fallback behavior visibly. A light/dark switch is present only when both themes are resolved.
 
-Print confirmation:
+**Hard checks before handoff:**
 
-```
-✅ Preview generated: <working_dir>/preview.html
-   Screens: <N> (<comma-separated list of screen names>)
-   Toggle: dark/light mode button in top-right
-```
+- Safety: external content escaped for its output context; no executable imported content, secrets, unexpected network calls, or production mutations.
+- Links: unique screen/control IDs; every internal navigation target exists; external links are safe and intentional; no broken required journey destinations.
+- Required actions: primary journey can reach its completion and relevant recovery/reset; implementation gaps are visible, not fabricated.
+- Domain behavior: the illustrative transition follows the approved actor/preconditions and
+  updates only intended state/records. Preserve independent states and any explicitly approved coupling.
+- First use: top-level entries open the planned task surface or justified singleton;
+  check applicable scope/filter, filtered emptiness, and selected-item/deep-link entry with a
+  useful return path. Include scanning only when approved. Do not auto-switch explicit filters.
+- Accessibility: controls have names/labels, keyboard/focus behavior, usable targets, readable contrast, non-color status cues, and no clipped essential content.
+- Token coherence: all CSS variable references resolve in every offered theme; compare representative surface/text/accent and typography values against actual resolved inputs.
 
-### Step 7 — Open in browser
+Composition variety, resemblance to a named style, accent ratios, card counts, and screenshot similarity are **advisory**, not blocking tests. Check whether choices serve the task; do not enforce decorative sameness or diversity.
+
+## 6 — Open, exercise, report
 
 **Telemetry checkpoint: `open_screen_preview`**
 
-**Do NOT prompt.** The `visual_companion` flag in `<working_dir>/memory-bank.md` already encodes the answer; asking again is redundant. The flag is set by `/design-system` (Step 6.75) during project creation, or defaults to `yes` if `/design-system` was not run.
+Honor `visual_companion: no` and legacy `skip` even on standalone invocation: print the file link without auto-opening. Otherwise use available browser tools first: reuse an existing page, open the preview, inspect the accessibility snapshot, exercise every scope/filter binding, top-level entry/filter-empty recovery, exact-record lookup and primary actions/back/reset, toggle resolved themes, compare the wide three-screen canvas, and check 320px reflow. Screenshots supplement these checks; they do not replace interaction.
 
-Read the flag and act:
+If browser tools are unavailable, use the OS opener (`open`, `xdg-open`, or PowerShell `Start-Process`) with safely quoted paths, or print the link. Do not install a browser/testing framework merely for preview. State that browser interaction was not verified when only file/static checks were possible.
 
-```bash
-grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 2>/dev/null
-```
+Return output path, mode, selected screens/scenario, checks actually run, and known gaps. Say “source-derived implementation approximation” after build, never “native app verified.”
 
-| Flag | Action |
-|---|---|
-| `visual_companion: no` | Print the link and stop. Do not auto-open. |
-| `visual_companion: yes` (or missing memory-bank, or standalone invocation) | Print the link, then auto-open. |
-
-**`visual_companion: no`** — print:
-
-> "Preview is at: `file://<working_dir>/preview.html` (Visual Companion off — open manually.)"
-
-**Otherwise** — print the link AND auto-open in one breath, no prompt:
-
-> "Preview is at: `file://<working_dir>/preview.html` — opening now."
-
-Then try OS-appropriate openers in sequence and fall back to printing the link if none work:
-
-```bash
-open "<working_dir>/preview.html" 2>/dev/null \
-  || xdg-open "<working_dir>/preview.html" 2>/dev/null \
-  || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\preview.html'" 2>/dev/null \
-  || echo "Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html"
-```
-
-`open` is macOS-only; the chain covers Linux (`xdg-open`) and Windows / WSL (`powershell.exe Start-Process`). On headless / SSH sessions all three fail silently and the user just opens the link they were already given.
-
----
-
-## Notes
-
-- **Read-only with respect to source code.** This skill only creates/overwrites `preview.html` — it never modifies TSX files, layouts, configs, or the memory bank.
-- **Static approximation.** The preview does not execute React, handle state, or fetch data. Dynamic lists show placeholder items. Interactions (button taps, navigation) are not functional.
-- **Native capabilities are placeholders.** PDF viewer, PDF report, sharing, printing, and pen/signature capture are shown as static states only. Browser preview must not imply native capture/viewer APIs work there.
-- **Re-running** `/preview-screens` overwrites the previous `preview.html`.
-- **No memory-bank update** needed — previews are ephemeral artifacts.
-
-## References
-
-- [tamagui-html-mapping.md](../../shared/references/tamagui-html-mapping.md) — component + token mapping + phone frame template
-- [tamagui-component-recipes.md](../../shared/references/tamagui-component-recipes.md) — copy-paste Tamagui snippets (context for recognizing patterns)
-- [screen-templates.md](../../shared/references/screen-templates.md) — screen archetype layouts
+Source is read-only: do not modify TSX, services, configs, plan, or memory bank from this skill. The caller persists selection/approval. Re-running replaces only that mode's HTML; generating intent never overwrites implementation and vice versa.

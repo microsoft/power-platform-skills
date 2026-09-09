@@ -60,6 +60,13 @@ jobs:
               working-directory: plugins/mobile-apps/template
               run: npm install --no-audit --no-fund
 
+            - name: test-screen-samples-with-installed-types
+              shell: bash
+              working-directory: plugins/mobile-apps/template
+              env:
+                  MOBILE_SAMPLE_RUNTIME_REQUIRED: "1"
+              run: node --test ../scripts/tests/screen-sample-runtime.test.js
+
             - name: prepare-and-type-check-template
               shell: bash
               working-directory: plugins/mobile-apps/template

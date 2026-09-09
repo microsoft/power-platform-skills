@@ -2,7 +2,7 @@
 name: edit-app
 description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
 user-invocable: true
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill, EnterPlanMode, ExitPlanMode
 model: opus
 ---
 
@@ -11,6 +11,12 @@ model: opus
 # Edit App (`/edit-app`)
 
 Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
+
+This foreground skill owns every question and approval using the host's actually exposed question
+interface and plan-mode tools when available. Children only propose; they cannot approve or spawn
+nested agents. Follow the [create foreground/status contract](${PLUGIN_ROOT}/skills/create-mobile-app/SKILL.md#step-30--sub-agent-return-status-switch-canonical).
+No invented tool calls, no canceled/empty answer as approval, and no plain-text fallback when host
+policy requires a structured question. If approval cannot be captured, stop with the pending question.
 
 Use `--plan-only` only when the user explicitly asks to update planning docs without changing app code. Normal follow-up prompts in Copilot Chat Agent mode should apply the app change end to end.
 
@@ -302,22 +308,18 @@ Reuse the same planning primitives as `/create-mobile-app`, but only for the aff
 
 Read each affected section verbatim from `native-app-plan.md` and pass it as input to the relevant read-only agent. Use the plugin namespace for every `Task` invocation.
 
-Before the first `Task`, run a silent preflight for the leaf agent you need (`mobile-app:data-model-architect`, `mobile-app:screen-planner`, or `mobile-app:screen-builder` preflight later). If the host cannot spawn agents, print once:
-
-> "→ Planner agents unavailable in this host — running inline planning. (No action needed; this is automatic.)"
-
-Inline fallback rules:
-
-- Data Model: draft the section inline from the existing plan, `.datamodel-manifest.json`, generated models, and the user's edit brief; then gate it exactly like an agent result.
-- Screens: draft Screen Map / Navigation Contracts / per-screen spec changes inline using `agents/screen-planner.md`, `shared/references/screen-templates.md`, and the existing screen TSX; then gate it exactly like an agent result.
-- Native Capabilities and Connectors: already handled inline by this skill.
-- Never skip approval just because a leaf agent is unavailable.
+Dispatch real bounded work directly to the relevant leaf; no no-op `Task` preflight or run-wide
+degraded branch. If the host lacks agent dispatch or a real call reports unavailable/unknown agent,
+read that leaf's contract and execute the same bounded proposal in foreground with the same
+evidence, output and approval requirements. Do not switch execution location to bypass `BLOCKED`.
+Only load [create planning](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-02-planning.md)
+when planning needs its gate/dispatch rules; do not read all create phases.
 
 | Section | Agent (read-only) | Output file |
 |---|---|---|
 | Data Model | `mobile-app:data-model-architect` | `_dm_section.md` |
 | Native Capabilities | (handled inline — no separate agent) | `_native_section.md` |
-| Screens | `mobile-app:screen-planner` | `_screens_section.md` |
+| Screens | `mobile-app:screen-planner` | Graph: `_screens_section.md`; specs: staged `plan_path` |
 
 ```
 Spawn agent: mobile-app:<agent-name>
@@ -329,15 +331,26 @@ Prompt:
   Current section content: <verbatim>
   Working directory: <absolute path>
   Plugin root: ${PLUGIN_ROOT}
+  Confirmed actors, jobs, outcomes and domain evidence: <from the edit brief>
 
   Mode: edit (preserve existing decisions where the change doesn't affect them).
   Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
   Return the updated section as a markdown file.
+  No interactive tools, approval records, application source writes or nested agents.
 ```
 
-Parse the first line of every agent result using the return-status protocol in `AGENTS.md`. `DONE` continues, `DONE_WITH_CONCERNS:` must be surfaced and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before any file mutation, and unknown first lines are treated as `BLOCKED: malformed agent return`.
+Use the canonical create return-status handler. `DONE` is a proposal, not approval.
+For screen changes, give `plan_path: <working_dir>/.tmp/edit-native-app-plan.md` containing a
+staged copy of the current plan, never the live plan before Step 3 accepts the delta.
+When graph structure changes, dispatch `phase: graph`, review it in foreground, then embed its
+approved graph into that staged plan. Dispatch `phase: specs` against the locked staged graph;
+it updates only staged specs. For spec-only edits reuse the existing approved graph.
+Both phases receive `skip_preview: true`; brand/intent preview remains design/preview ownership.
+Preserve `### Primary journeys` and `### Preview selection` IDs within `## Screens`, and
+invalidate dependent approvals when changed. Do not create a separate UX JSON authority.
+Do not copy changes back to the live plan until Step 4.
 
-For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
+For Native Capabilities, read only [native capability proposals](${PLUGIN_ROOT}/agents/native-app-planner.md#native-capability-proposals), apply the approved intent to the current table, and stage the proposal. The native planner is a bounded proposal helper, not an approval owner. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
 - `native-pdf-viewer` 0.2.9+ opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
 - `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
@@ -366,6 +379,12 @@ Ask:
 > (c) Cancel — discard changes"
 
 If revise → loop back to Step 2 with the user's notes appended. If approve → continue. If cancel → STOP, leave the plan and app untouched.
+
+Only an explicit foreground acceptance records approval. If this edit invalidates a prior
+create-flow `.tmp/mobile-plan-status.json`, mark affected/dependent records pending; do not
+restamp it from an agent result or reuse it for mutations. The ordinary edit path keeps its
+own approved delta and `/add-dataverse` reconciliation; a later create resume must reapprove
+and validate its receipt before consuming it.
 
 If `$ARGUMENTS` includes `--plan-only`, change option (a) to "Approve and save plan only" and stop after Step 4 with a clear note that the app was intentionally not changed.
 
@@ -448,6 +467,10 @@ Use the plan diff plus the user's request to build the affected screen set:
 
 Before spawning builders:
 
+Read only [screen shell](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-08-screens.md)
+for the referenced Step 10b/10.7/10.8 rules below, and
+[build/quality](${PLUGIN_ROOT}/skills/create-mobile-app/references/phase-09-build.md) when starting waves.
+
 - Update route layout files using the `/create-mobile-app` Step 10b layout rules if navigation changed.
 - Create missing route folders for new screens.
 - Refresh the `## Generated Services` table using `/create-mobile-app` Step 10.7 rules if any data source/schema changed.
@@ -481,9 +504,11 @@ npx tsc --noEmit
 
 If it fails, batch-fix layouts, route names, skeleton imports, generated-service names, shared exports, or hook signatures, then rerun once. Do not launch screen-builders from a broken shell.
 
-#### Step 6.1 — Screen-builder preflight + waves
+#### Step 6.1 — Screen-builder dispatch + waves
 
-Before the first wave, run a silent `Task` preflight for `mobile-app:screen-builder` using a no-op screen name. If unavailable, print once and build inline using `agents/screen-builder.md`; inline mode must satisfy the same quality rules.
+Dispatch real screen work. Apply the same per-dispatch availability handling as Step 2; no
+probe screen or separate fallback plan. Foreground implementation uses the full screen-builder
+contract and all the same gates; children cannot delegate.
 
 Batch affected screens in waves of up to 5. For each wave:
 
@@ -491,7 +516,7 @@ Batch affected screens in waves of up to 5. For each wave:
 2. Spawn all builders in one message so they can run in parallel.
 3. Parse each first line per `AGENTS.md` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`). Unknown first lines are `BLOCKED`.
 4. Retry `NEEDS_CONTEXT` once with the missing context from plan/files/services.
-5. Stop on `BLOCKED` unless the user chooses to skip with an approved placeholder.
+5. Stop on `BLOCKED`; a reduced scope requires foreground plan/route reapproval, never a silently substituted placeholder.
 6. Run `npx tsc --noEmit` after the wave before launching the next wave.
 7. If the wave gate fails, group errors by root cause and respawn affected builders with consolidated TypeScript output. Cap at 2 retries per screen.
 
@@ -509,9 +534,16 @@ route: <route>
 target_file: <absolute path>
 plan_path: <absolute path>/native-app-plan.md
 current_file: <paste current file content if the file exists>
+screen_spec: <this screen's approved compact delta, when available inline>
+service_signatures: <actual generated methods/types used by this screen>
+token_context: <relevant brand/token roles and negatives>
+journey_context: <relevant Primary journeys action/outcome/recovery>
 
 Preserve unaffected behavior from the existing screen. Apply the approved plan diff. If this is an existing screen and no skeleton marker is present, update the screen from current_file instead of falling back to sample layout.
 ```
+
+Compact fields are optional prompt context, never new sidecars. Resolve signatures from the
+current generated sources and load only missing relevant context; do not duplicate the whole plan.
 
 ### Step 7 — Verify
 
@@ -565,7 +597,7 @@ If verification fails because the edit exposed stale generated services, rerun t
 
 Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
-If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
+If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens --mode implementation` after verification. This reads actual TSX/config/local components, regenerates `preview.html`, and opens it according to the project's `visual_companion` setting. Do not substitute a plan-derived intent preview for the edited implementation.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 
@@ -591,5 +623,5 @@ Final summary must say what changed in the app, what verification ran, where the
 
 - `native-app-plan.md` is still the durable source of truth. The change should be planned before it is applied, but planning is not the end state.
 - For complex multi-section edits, update and gate every required section first, then apply the mutation in dependency order. Do not leave a native capability entry that references missing Dataverse storage or a screen state that was never planned.
-- The architect agents are the same ones used by `native-app-planner` during initial creation, so planning improvements flow through here.
+- The foreground create/edit skills dispatch the same bounded architects directly; `native-app-planner` proposes native/integration context only.
 - This skill intentionally covers post-generation iteration. It is acceptable for `/edit-app` to touch Dataverse, `src/native/`, route layouts, screen TSX, brand tokens, `preview.html`, and `memory-bank.md` when the approved edit requires it.

@@ -1,5 +1,7 @@
 # Direction: Airline
 
+Optional explicit input only (`--direction airline`). Never auto-select from aviation keywords. Adapt the suggestions below to the actual job, supported tokens/fonts, and accessibility; they are not universal airline rules.
+
 Commercial-aviation brand language. Deep navy + crisp white surfaces + high-visibility status — the look of carrier mobile apps (Delta, United, Lufthansa, ANA) and ground-operations tools that read as both branded and operationally serious.
 
 ## Reference apps
@@ -100,7 +102,7 @@ tone: branded-operational
 - Sheet transitions: 200ms ease-out.
 - No spring physics on numeric counters or list reorders.
 
-## Negatives — HARD RULES (screen-builder enforces)
+## Optional style preferences
 
 - **NEVER** use safety-orange (`#FF6A00`) or any orange hue as primary or accent. Reserved for `statusModerate` only.
 - **NEVER** use cool-gray as page background — always pure white. Carriers brand with white-and-navy, not gray-and-indigo.
@@ -109,7 +111,9 @@ tone: branded-operational
 - **NEVER** use stack-only navigation when there are 3+ persistent contexts (Home / Schedule / Profile etc.) — use bottom tabs.
 - **NEVER** put a primary action above the fold or inside a card; primary action is bottom-pinned (mobile) or top-right (tablet).
 
-## Tamagui config snippet (canonical token bundle for `brand/tokens.ts`)
+## Illustrative palette fragment
+
+Normalize this fragment to the [brand artifact contract](../design-system-schema.md), including its `tokens` export, standard color roles, spacing, size, radius, and typography. Do not copy a partial palette as a complete runtime bundle.
 
 ```ts
 const brand = {
@@ -147,9 +151,8 @@ const tokens = {
 
 ## When to use this direction
 
-- App brief includes any of: `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`.
-- App audience is commercial-aviation operators, ground crew, pilots, cabin crew, or airline back-office staff.
-- App brand should read as carrier-affiliated rather than generic field-ops or generic SaaS.
+- The user explicitly requests this named direction or the navy/light treatment it describes.
+- The actual job and brand benefit from it; an audience or app name alone is not a selection rule.
 
 ## When NOT to use this direction
 
@@ -157,4 +160,4 @@ const tokens = {
 - General-aviation hobbyist apps (community-feel, less corporate).
 - Drone or UAV ops apps (different operational context — use `field-ops` or a custom direction).
 
-For those, use `signature` (slate + safety-orange) or a custom direction file.
+For other contexts, infer the appropriate design or use another explicitly requested direction from the [catalog](./design-directions.md).

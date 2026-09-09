@@ -4,6 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
+const { readSkillWorkflow } = require('./helpers/workflow-documents');
 const {
   hasNavigationTapGuard,
 } = require('../../hooks/validate-navigation-idempotency');
@@ -96,14 +97,14 @@ test('bundled dependencies match the current host-factory template boundary', ()
 });
 
 test('create flow keeps host theme foregrounds aligned with Tamagui brand accents', () => {
-  const skill = read('skills/create-mobile-app/SKILL.md');
+  const skill = readSkillWorkflow('create-mobile-app');
   const integration = read('skills/design-system/references/tamagui-integration.md');
-  assert.match(skill, /appLightTheme/);
-  assert.match(skill, /appDarkTheme/);
-  assert.match(skill, /accentOnAccent:\s*appLightTheme\.accentOnAccent/);
-  assert.match(skill, /accentOnAccent:\s*appDarkTheme\.accentOnAccent/);
-  assert.match(skill, /surface4:\s*appLightTheme\.color6/);
-  assert.match(skill, /surface4:\s*appDarkTheme\.color6/);
+  assert.match(skill, /skills\/design-system\/references\/tamagui-integration\.md/);
+  assert.match(skill, /useTheme\(\)[\s\S]*useThemeTokens\(\)[\s\S]*synchronized/);
+  assert.match(integration, /accentOnAccent:\s*appLightTheme\.accentOnAccent/);
+  assert.match(integration, /accentOnAccent:\s*appDarkTheme\.accentOnAccent/);
+  assert.match(integration, /surface4:\s*appLightTheme\.color6/);
+  assert.match(integration, /surface4:\s*appDarkTheme\.color6/);
   assert.doesNotMatch(skill, /function parseColorChannels/);
   assert.match(integration, /createPowerAppsTamaguiConfig/);
   assert.match(integration, /withPowerAppsSemanticAliases/);
