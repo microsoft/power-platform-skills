@@ -2,11 +2,13 @@
 
 Extracts palette, typography, spacing, and component tokens from a Figma file via the REST API.
 
+Read only for this input; follow [input safety](./input-modes.md). Return extracted data for the ordinary compact spec/tokens and intent preview, not an additional mandatory bundle.
+
 ## Prerequisites
 
 - `FIGMA_TOKEN` environment variable must be set (Personal Access Token or OAuth token)
 - File key from the Figma URL: `https://www.figma.com/file/<FILE_KEY>/...`
-- Path-safety hook scans for accidental commit of `FIGMA_TOKEN`
+- Explicitly check outputs for secrets; no path-safety hook performs that check
 
 ## Pipeline
 
@@ -74,9 +76,9 @@ Returns variable collections with modes and values.
 Figma variables support multiple modes (e.g., Light / Dark / High-contrast).
 
 - If single mode → use directly
-- If multiple modes → ask user: "Figma file has modes: Light, Dark, High-contrast. Which is your canonical (primary) mode?"
-- Default to `Mode 1` (first mode) if user doesn't answer
-- Store non-canonical modes as candidates for `--add-dark-mode` later
+- If multiple modes → use the approved light/dark/theme mapping and preserve distinct supplied modes.
+- An ambiguous canonical mode returns `NEEDS_CONTEXT` to foreground; never silently choose the first mode as approval.
+- Retain additional modes as explicit candidates for later theme work, without creating unused runtime sidecars.
 
 ## Color conversion
 
@@ -103,9 +105,11 @@ source: Figma file <key> (fetched <ISO date>)
 
 ## Typography
 | Role | Family | Size | Weight | Line | Tracking |
-| Heading | Inter | 24 | 600 | 32 | -0.5 |
+| Heading | Inter | 24 | 600 | 1.3333 | -0.020833 |
 ...
 ```
+
+Normalize source `lineHeightPx` and absolute `letterSpacing` by dividing by font size for the brand ratio/em schema. Verify the imported font has a supported local asset/fallback before claiming native availability.
 
 ## Rate limiting
 
@@ -124,7 +128,7 @@ source: Figma file <key> (fetched <ISO date>)
 | Rate limited (429) | Retry once after backoff, else STOP |
 | File > 50 MB equivalent (massive component library) | Fetch styles + variables only, skip components |
 | Non-sRGB color spaces (P3, Lab) | Convert to sRGB hex with notice |
-| Variable modes present | Ask user which is canonical, default Mode 1 |
+| Variable modes present | Reuse approved mapping; unresolved choices return `NEEDS_CONTEXT` to foreground |
 | Component sets present but design-spec preferred | Surface count, suggest `--design-spec` for richer extraction |
 
 ## Cost

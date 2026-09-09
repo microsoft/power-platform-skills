@@ -20,7 +20,8 @@ decision and timing claims.
 - No weaker reuse or extend decision; every selected existing table has detailed target evidence.
 - No missing cross-entity projection or risk notes.
 - First factual progress milestone appears within 30 seconds.
-- Gate 2/data-model readiness targets 10–15 minutes, quality first.
+- Data-model readiness follows completed evidence and approval checks, not a minimum
+  wall-clock budget. Report measured milestones without inventing progress.
 - Any inventory-only required candidate triggers one bounded exact-name snapshot expansion.
 - Every unresolved concept keeps at least its best detailed advisory candidate.
 - Exact-covered concepts do not receive unnecessary advisory alternatives.

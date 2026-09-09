@@ -1,6 +1,6 @@
 # Direction: SaaS
 
-The default productivity look. Familiar, professional, the look people inside an org expect from internal tools. Microsoft 365 / Asana / Salesforce family resemblance.
+An optional explicitly requested productivity look: familiar internal-tool treatment with Microsoft 365 / Asana / Salesforce family resemblance. Adapt suggestions to the actual task, native/font availability, and accessibility; do not select it automatically from industry keywords.
 
 ## Reference apps
 

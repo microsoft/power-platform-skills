@@ -1,7 +1,8 @@
 # Tamagui Integration
 
-Internal reference used by `/create-mobile-app` Step 9b after `/design-system`
-writes `brand/tokens.ts`. This is not a user-invocable skill.
+Internal reference used by `/create-mobile-app` Step 9b, `/edit-app`, and
+standalone design application after `/design-system` writes `brand/tokens.ts`.
+This is not a user-invocable skill. Read only when applying or checking integration.
 
 The native host owns the baseline Tamagui contract. Generated applications
 must extend that contract rather than copying its semantic aliases, color
@@ -112,15 +113,53 @@ declare module 'tamagui' {
 }
 ```
 
-The generated schema has one palette. Light mode receives its approved
+The ordinary generated schema has one palette. Light mode receives its approved
 surfaces, text, accents, and statuses. Dark mode keeps Config v5 dark surfaces
 and text while carrying the approved accent and status colors.
+
+For an explicitly designed dark palette, preserve the project's existing import
+shape (including `brand/tokens.dark.ts` if consumed) and pass its approved color
+roles through `withPowerAppsSemanticAliases(defaultConfig.themes.dark, ...)`.
+Do not spread the full light palette into dark. Additional existing token keys
+or named themes must not disappear on refresh; merge them into the existing
+customization rather than replacing the whole config with this example.
 
 Never copy `parseColorChannels`, `readableForeground`, or
 `withSemanticAliases` into the app. The host helper owns those rules.
 
 Never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`,
 `4xl`) onto Tamagui numeric keys. Preserve the default numeric scale.
+
+## Typography binding
+
+The palette example above does not by itself apply `brandTokens.typography`.
+Read the spec's role-to-font/size bindings and current local font loading. For
+each used role, bind the approved family, size, weight, line-height, and tracking
+to `createFont` or an existing screen text primitive. For example, **if** the spec
+binds body to `$body` size `$5`, extend rather than replace the other font keys:
+
+```ts
+import { createFont } from '@tamagui/core';
+
+const body = brandTokens.typography.body;
+const bodyFont = createFont({
+  ...defaultConfig.fonts.body,
+  family: body.family,
+  size: { ...defaultConfig.fonts.body.size, 5: body.size },
+  weight: { ...defaultConfig.fonts.body.weight, 5: body.weight },
+  lineHeight: { ...defaultConfig.fonts.body.lineHeight, 5: body.size * body.lineHeight },
+  letterSpacing: { ...defaultConfig.fonts.body.letterSpacing, 5: body.size * body.tracking },
+});
+```
+
+Merge `fonts: { ...existingCustomFonts, body: bodyFont }` into `customConfig`
+(omit `existingCustomFonts` when none exists). Apply the same process to the
+other **actual** bindings; do not force every heading onto one size. Preserve
+host `mono` and uncustomized fonts. Verify native loaded family/weight `face`
+entries when using separate font files; do not keep another family's face map
+on a changed family. If a family is unavailable, use the approved host fallback
+and record it rather than pretending to load it. See
+[typography guidance](../../../shared/references/typography-and-tone.md).
 
 ## Root Provider Wiring
 
@@ -203,3 +242,7 @@ npx tsc --noEmit
 Also verify that `tamagui.config.ts` contains no local color parser or semantic
 alias implementation and that both provider themes map every
 surface/text/accent value from `appLightTheme` / `appDarkTheme`.
+Verify used typography bindings and real font availability too. Refresh intent
+from approved inputs; refresh implementation from current source/config via
+[`/preview-screens`](../../preview-screens/SKILL.md). Browser review never verifies
+native rendering or connector behavior.

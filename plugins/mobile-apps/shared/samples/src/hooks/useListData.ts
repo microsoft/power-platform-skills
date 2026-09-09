@@ -4,8 +4,10 @@
  * Usage:
  *   const { items, loading, refreshing, error, onRefresh, refetch } = useListData(
  *     () => CategoryService.getAll({ orderBy: ['name asc'], top: 50 }),
- *     { mockData: MOCK_CATEGORIES }
+ *     { source: 'live' }
  *   );
+ *   // Preview only: { source: 'fixture', mockData: MOCK_CATEGORIES }.
+ *   // Label fixture data visibly; it is never a fallback for a live response.
  *
  * For unbounded Dataverse tables such as inspections, visits, work orders, or
  * tickets, use `useCursorListData` instead.
@@ -15,12 +17,16 @@ import { useState, useCallback, useRef } from 'react';
 import { useFocusEffect } from 'expo-router';
 
 interface ServiceResult<T> {
+  /** Generated services expose success; plain app-owned adapters may omit it. */
+  success?: boolean;
   data?: T[] | null;
   error?: { message?: string } | unknown;
 }
 
 interface UseListDataOptions<T> {
-  /** Fallback data when the service returns an error or empty result */
+  /** Explicit preview/demo mode; live is the default even when mockData is supplied. */
+  source?: 'live' | 'fixture';
+  /** Used only with source: 'fixture'; the live service is not called in that mode. */
   mockData?: T[];
   /** Skip auto-fetch on focus (useful for dependent queries) */
   manual?: boolean;
@@ -53,32 +59,42 @@ export function useListData<T>(
   mockDataRef.current = opts?.mockData;
   const manualRef = useRef(opts?.manual);
   manualRef.current = opts?.manual;
+  const sourceRef = useRef(opts?.source ?? 'live');
+  sourceRef.current = opts?.source ?? 'live';
+  const itemsSourceRef = useRef(sourceRef.current);
+  const loadVersionRef = useRef(0);
 
   const load = useCallback(async (isRefresh = false) => {
+    const version = ++loadVersionRef.current;
+    const source = sourceRef.current;
     try {
       if (!isRefresh) setLoading(true);
       setError(null);
+      if (itemsSourceRef.current !== source) setItems([]);
+      itemsSourceRef.current = source;
+
+      if (source === 'fixture') {
+        setItems(mockDataRef.current ?? []);
+        return;
+      }
 
       const result = await fetchRef.current();
-
-      if (result.error) {
-        const msg = typeof result.error === 'object' && result.error !== null && 'message' in result.error
-          ? String((result.error as { message: string }).message)
-          : 'Failed to load data';
-        setError(msg);
-        if (mockDataRef.current) setItems(mockDataRef.current);
-      } else {
-        const data = result.data ?? [];
-        setItems(data.length > 0 ? data : (mockDataRef.current ?? []));
+      if (version !== loadVersionRef.current || source !== sourceRef.current) return;
+      if (result.success === false || result.error) {
+        throw new Error('Failed to load data');
       }
+      setItems(result.data ?? []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unexpected error');
-      if (mockDataRef.current) setItems(mockDataRef.current);
+      if (version !== loadVersionRef.current || source !== sourceRef.current) return;
+      console.error('[useListData] load failed', e);
+      setError("Couldn't load the list. Try again.");
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (version === loadVersionRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, []);
+  }, [opts?.source]);
 
   useFocusEffect(
     useCallback(() => {
@@ -97,5 +113,8 @@ export function useListData<T>(
     void load(false);
   }, [load]);
 
-  return { items, loading, refreshing, error, onRefresh, refetch };
+  return {
+    items: itemsSourceRef.current === sourceRef.current ? items : [],
+    loading, refreshing, error, onRefresh, refetch,
+  };
 }

@@ -109,12 +109,12 @@ import { Pressable } from 'tamagui';
 - **Pinch-to-zoom for image preview** — needs `react-native-reanimated` + `PinchGestureHandler`. Recipe is medium-complexity (worklets + matrix transforms). Defer until image-heavy app types ship.
 - **Drag-to-reorder lists** — needs `react-native-draggable-flatlist` (NOT in template deps — would require upstream addition).
 - **Pan-to-dismiss sheets** — Tamagui `Sheet` handles this internally; nothing for builder to do.
-- **Edge-swipe back navigation customisation** — covered by screen-builder back-button rule (§31 / §32), not a gesture recipe.
+- **Edge-swipe back navigation customisation** — follow the assigned [navigation contract](../../agents/references/screen-builder/navigation.md), not an unrelated gesture recipe.
 
 ---
 
 ## Cross-references
 
-- Pull-to-refresh enforcement: `agents/screen-builder.md` rule 23
-- Hardware back button (Android) + swipe-back (iOS): `agents/screen-builder.md` rules 31 + 32
-- Animation vocabulary the planner uses: `agents/screen-planner.md` Step 4
+- Pull-to-refresh behavior: [list implementation](../../agents/references/screen-builder/list.md).
+- Hardware back, swipe-back, and draft recovery: [navigation](../../agents/references/screen-builder/navigation.md).
+- Task-appropriate motion and presentation: [design API](../../agents/references/screen-builder/design-api.md) and the approved [screen contract](screen-planning/spec-contract.md).

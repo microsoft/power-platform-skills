@@ -154,7 +154,39 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+The foreground skill confirms the missing requirements and owns the approval
+gates. Progress reports completed work and pending decisions, not a mandatory
+minimum planning time. If anything fails, `memory-bank.md` records the completed
+phase and pending work so the next invocation can verify and resume it.
+
+### Context and design boundaries
+
+- The create skill loads one phase reference at a time. Planning and screen
+  workers receive only the relevant approved context; they do not ask questions,
+  run approval tools, or spawn nested agents.
+  Phase files are numbered `phase-01-intake.md` through `phase-10-run.md` in
+  execution order; the [workflow index](skills/create-mobile-app/SKILL.md#load-only-the-active-phase)
+  and each file's Previous/Next links identify the correct place to maintain a step.
+- Primary user journeys drive Home, navigation, and screen selection. A
+  supporting table does not automatically create List/Detail/Form destinations.
+  Before graph approval, consolidate states, filters, parameterized details and
+  contextual actions; show the resulting route count and reasons for separate surfaces.
+  Three preview screens are not a fixed app-screen budget.
+- Without supplied branding, the model derives composition from the product's
+  tasks. Named industry presets, style comparisons, and component galleries are
+  optional rather than defaults.
+- The normal design outputs are compact design decisions, runtime tokens/themes,
+  and one directly AI-authored HTML intent preview, with three representative main
+  screens by default. Relevant domain, data, connector, native, and design decisions
+  inform its composition; it does not convert starter Tamagui components.
+  An intent preview illustrates the approved journey;
+  a post-build source preview approximates the implementation. Neither claims
+  native runtime verification.
+- Native package boundaries, generated-service ownership, accessibility,
+  explicit approvals, and phase validation remain required.
+- Minimum product UX includes confirmed domain transitions, useful first-entry
+  destinations, explicit initial filters, filter-empty recovery, and context-preserving
+  scan/deep links. Passing TypeScript alone is not evidence of a completed user task.
 
 ## Quick examples
 
@@ -167,15 +199,16 @@ The plugin is conversational — you describe what you want and the skill drives
 ```
 
 What happens:
-1. **Wizard** (~30s) — confirms device class / aesthetic
-2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
-3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
-4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
-5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
+1. **Requirements brief** — confirms the user, primary job, operating context, and missing outcome-changing decisions.
+2. **Journey and capability planning** — identifies evidence capture, review, submission, and recovery without treating every data entity as a screen.
+3. **Foreground approval gates** — reviews data/native/connector decisions and the screen graph/specifications; child proposals never approve themselves.
+4. **Design system** — uses supplied brand inputs when available, otherwise derives a task-appropriate composition. Style comparisons and component galleries are optional.
+5. **Intent preview** — demonstrates representative journey screens with coherent illustrative data and labeled interactions before screen implementation.
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
 7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
-End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
+End state: an app you can iterate on with hot reload, with the completed checks
+and any runtime verification still pending reported separately.
 
 ### 2. Add Dataverse tables to an existing app
 
@@ -269,11 +302,11 @@ Example edit flows:
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |
-| `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews. Auto-invoked at Step 6.75 of `/create-mobile-app`; also standalone. |
-| `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
+| `/design-system` | ✅ v0 | Task-led design with optional brand inputs and named presets. Writes compact design decisions and runtime tokens, then an intent preview. Extraction, style comparisons, galleries, and history load only when needed. Also runs standalone. |
+| `/preview-screens` | ✅ v0 | Browser-viewable intent storyboards before implementation or source-derived HTML approximations after generation/edits. Uses actual theme inputs and clearly distinguishes illustrative interactions from native runtime verification. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
-| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. The bundled offline package is consumed by the native host for local storage, queued synchronization, reconnect handling, and status UX, so the skill configures the host runtime instead of generating duplicate app-owned offline infrastructure. Offered explicitly by `/create-mobile-app` after Dataverse materialization; connectivity wording in the initial prompt does not auto-enable it. Also runs standalone on existing apps. |
+| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Auto-proposed by `/create-mobile-app` Step 6.85 for offline-relevant apps; also runs standalone on existing apps. |
 | `/enable-tables-offline` | 🟡 v0.1 | Pre-flight pass — flip `IsAvailableOffline` + `ChangeTrackingEnabled` on selected tables' EntityMetadata, then `PublishAllXml`. Idempotent. Mostly a no-op for fresh scaffolds since `/add-dataverse` Step 5b now sets these flags at create time; primary use case is fixing legacy / imported tables. |
 | `/assign-offline-profile` | 🟡 v0.1 | Bind users / teams to a Mobile Offline Profile via `usermobileofflineprofilemembership` / `teammobileofflineprofilemembership` rows. Without this, the profile exists but no one's app uses it. Accepts `--user <upn>`, `--team <name>`, `--me`, `--all-app-users`, `--unassign-*` flags. |
 | `/edit-offline-profile` | 🟡 v0.1 | Change ONE aspect of an existing profile (table scope, sync frequency, column list, name/description) without re-running the full wizard. Mirrors the `/edit-app` gated edit pattern. Accepts `--rename`, `--table X --scope`, `--table X --sync`, `--table X --columns add:/remove:/reset` flags. |
@@ -284,9 +317,9 @@ Example edit flows:
 
 | Agent | Role |
 | --- | --- |
-| `native-app-planner` | Orchestrator — approves data platform + native capabilities + connectors, conditionally coordinates the data-model architect, coordinates screen planning, and runs up to 4 approval gates |
+| `native-app-planner` | Bounded proposal worker for app-level decisions; foreground skills own dispatch, questions, and approvals |
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
-| `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
+| `screen-planner` | Bounded graph/spec proposal worker — maps primary journeys to appropriate navigation surfaces and per-screen outcomes |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
 

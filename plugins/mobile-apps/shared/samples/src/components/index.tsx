@@ -280,13 +280,15 @@ export function ActionRow({
 export function LoadingState({
   rows = 6,
   variant = 'list',
+  label = 'Loading content',
 }: {
   rows?: number;
   variant?: 'list' | 'detail' | 'form';
+  label?: string;
 }) {
   if (variant === 'detail') {
     return (
-      <YStack flex={1} gap="$3" p="$4">
+      <YStack flex={1} gap="$3" p="$4" role="status" aria-live="polite" aria-busy aria-label={label}>
         <YStack bg="$color4" height={22} width="55%" rounded="$2" />
         <YStack bg="$color4" height={14} width="35%" rounded="$2" />
         <YStack bg="$color4" height={1} width="100%" my="$2" />
@@ -301,7 +303,7 @@ export function LoadingState({
   }
 
   return (
-    <YStack gap="$3" p="$4">
+    <YStack gap="$3" p="$4" role="status" aria-live="polite" aria-busy aria-label={label}>
       {Array.from({ length: rows }).map((_, i) => (
         <XStack key={i} items="center" gap="$3" py="$3" borderBottomWidth={0.5} borderBottomColor="$borderColor">
           <YStack height={14} flex={1} bg="$color4" rounded="$2" />
@@ -329,7 +331,7 @@ export function ErrorState({
     <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
       <Ionicons name="alert-circle" size={48} color={theme.statusOverdue.val} />
       <Text fontSize="$6" fontWeight="700" color="$color12">{title}</Text>
-      <Text color="$color10" text="center">{message}</Text>
+      <Text role="alert" color="$color10" text="center">{message}</Text>
       <Button onPress={onRetry}>Try again</Button>
     </YStack>
   );
@@ -454,7 +456,7 @@ export function FilterChipRow({
             size="$3"
             rounded="$10"
             px="$3"
-            minH={36}
+            minH={44}
             bg={selected ? '$accentBase' : '$surface2'}
             borderWidth={selected ? 0 : 1}
             borderColor="$borderColor"
@@ -529,8 +531,8 @@ export function ModalHeader({
       <Button chromeless onPress={onCancel}>Cancel</Button>
       <Text fontSize={17} fontWeight="700">{title}</Text>
       {onSave ? (
-        <Button chromeless onPress={onSave} disabled={saving}>
-          <Text fontWeight="600">{saveLabel}</Text>
+        <Button chromeless onPress={onSave} disabled={saving} aria-busy={saving}>
+          <Button.Text fontWeight="600">{saving ? 'Saving…' : saveLabel}</Button.Text>
         </Button>
       ) : (
         <YStack width={56} />

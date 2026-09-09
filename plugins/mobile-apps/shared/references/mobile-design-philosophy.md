@@ -12,7 +12,7 @@ Every screen should feel designed, not generated. Benchmark: a well-made iOS app
 
 ## 1. Visual Hierarchy
 
-Every screen has exactly one primary action and one primary piece of information.
+Give each screen a clear task or reading focus. Make the next meaningful action prominent when one exists; passive content need not invent a primary CTA.
 
 | Role | Tamagui | Size |
 |---|---|---|
@@ -73,11 +73,11 @@ All text shares the same left margin. Never mix center-aligned and left-aligned 
 
 ### Home Screen Dashboard
 
-For most useful mobile apps, Home is a dashboard, not a welcome page and not a duplicate of the first list. It should answer three questions in one glance: what matters now, what changed recently, and what should I do next?
+Home is a route, not a universal dashboard shell. Choose its surface from the actor's entry and task: discovery for shopping, a lesson/resume workspace for learning, an actionable queue for expense review, or a checklist/capture flow for an inspection. These are examples, not domain defaults.
 
-Home should usually contain: a compact context header, one current/next item card, a progress/status/priority strip when relevant, 2–4 summary tiles, 3–5 recent/upcoming/recommended rows, and one bottom primary CTA. Keep the list/detail tabs for browsing everything; Home summarizes and routes.
+A dashboard is useful when comparing multiple signals helps choose the next action. Include only evidence needed for that decision; no mandatory summary tiles, recent-row quotas, progress rings, hero cards, or duplicate list tabs. A direct list/queue Home can be correct even when there is meaningful current state.
 
-The structure is generic, but the content must be domain-specific: inspection apps show assignment/progress/defects; learning apps show next lesson/streak/progress; finance apps show balance/due items/recent activity; healthcare apps show next appointment/tasks; CRM apps show pipeline/follow-ups. Do not copy a field-ops dashboard shape into domains where another current-state summary is more natural.
+Judge the experience through actor → task → entry → decision → committed outcome → next destination → recovery. Supporting tables can stay embedded; legitimate record-management tasks can use CRUD. Repeated structures are useful consistency when tasks repeat, not a reason to force decorative differences.
 
 ---
 
@@ -112,7 +112,7 @@ The structure is generic, but the content must be domain-specific: inspection ap
 
 **Surfaces: fill, not borders.** Cards separate from the background via fill difference (`bg="$color2"` on `$background`), not `borderWidth={1}` on everything. Reserve borders for: list item separators (`borderBottomWidth={0.5}`), input fields, and intentional dividers between concepts. If every surface has a border, the screen looks like a wireframe.
 
-**Status colors: desaturate for most apps.** Raw `$red10`/`$green10` on white pills scream. For non-field apps, use tinted backgrounds with text-weight color: `bg="$green3" color="$green10"`, `bg="$red3" color="$red10"`. Only field/ops apps keep fully saturated pills for outdoor visibility. See `color-palette-architecture.md` for desaturation values.
+**Status colors:** use readable semantic tokens, for example `bg="$green3" color="$green10"`. Saturation follows measured contrast, environment, and urgency — not an industry label. Outdoor visibility can justify stronger contrast without making every field-app screen a status dashboard.
 
 **Dark mode:** elevation via lighter surfaces (not shadow). Reduce text contrast one step. Accent colors brighter. Never pure `#000000` background or pure `#ffffff` text — use hue-tinted near-black and warm cream. See `color-palette-architecture.md` dark mode rules.
 
@@ -128,39 +128,42 @@ The structure is generic, but the content must be domain-specific: inspection ap
 
 **Loading:** Skeleton shapes matching real content layout — never centered spinner. Skeleton row = gray blocks matching row height.
 
-**Empty:** Icon + title ("No inspections yet") + subtitle (what to do) + CTA button. Centered in available space.
+**Empty:** Specific explanation and a useful next action when available ("No claims awaiting your review"; refresh or return). A relevant icon can help; an illustration or create CTA is not mandatory on a read-only surface.
 
 **Error:** Inline, not modal. `$red10` text + "Try again" button. Auth errors → redirect to login.
 
-**Offline/interruption:** Global connectivity banner for no connection. Form submit failures keep the user's input in place and offer retry. Long-running workflows should be resumable after app backgrounding or navigation away.
+**Offline/interruption:** Show known connection problems and preserve input with retry. Plan resumability for long-running work against supported local/persistent storage; do not imply an offline queue exists because an offline profile was configured. Failed required writes/uploads are not successful completion.
 
 ---
 
 ## 7. Industry-Adaptive Design
 
-| Industry | Density | Color | Typography | Touch | Key pattern |
-|---|---|---|---|---|---|
-| Enterprise/LOB | Medium-high | Minimal accent, blue CTA | Inter, no decorative | Standard 44pt | Dense rows, metadata-rich |
-| Consumer | Lower | Brand accent prominent | Custom font OK | Standard | Larger radius, imagery |
-| Field/Ops | High | High contrast, status colors | Larger body `$5`–`$6` | 52pt+ | Camera/scan forward, offline indicator |
-| Finance | Medium | Blue dominant, conservative | High-contrast, no decorative | Standard | Whitespace, trust signals |
-| Healthcare | Lower | Warm, approachable | Rounded sans-serif | Standard | Friendly illustrations, compassionate copy |
-| Education | Medium | Bright, playful | Slightly rounded | Standard | Gamification, streaks |
-| Productivity | High | Near-monochrome | System font, mono for data | Standard | Strong grid, batch ops |
+Separate **domain confidence** from **visual preference**. Record confirmed actor/task evidence, reasonable inferences, and consequential unknowns independently of palette, type, and tone. A blue brand does not prove finance; learning does not imply gamification; approval does not imply signature capture; no missing context defaults to field inspection or aviation.
+
+| Evidence about the work | Design implication to consider |
+|---|---|
+| Comparing many values to decide | Aligned, scannable rows; real units and meaningful ordering |
+| Reading or practicing a lesson | Readable prose/exercise area, retained place, unobtrusive controls |
+| Evaluating a purchase | Useful product imagery/attributes, quantity and price clarity, committed basket/order state |
+| Reviewing evidence before a decision | Evidence adjacent to policy/context; explicit approve/reject outcome and failure recovery |
+| Gloved/outdoor use explicitly confirmed | Larger targets and measured high contrast; not automatic camera, map, or offline features |
+| Sensitive information explicitly identified | Appropriate reveal/session policy backed by existing auth and authorization |
+
+These implications depend on the job, not the industry name. Brand choices remain explicit user/design decisions; use host defaults when unspecified instead of inventing domain certainty.
 
 ---
 
 ### Field/Ops Workflow Screens
 
-Inspection, dispatch, safety, maintenance, aviation, warehouse, and route apps need workflow-specific screens, not just CRUD screens with different labels.
+When field-work requirements include ordered steps, evidence, triage, or hand-off, use the appropriate workflow composition. A simple equipment-management task may legitimately use ordinary list/detail/form screens. The following are optional examples, not mandatory industry screens.
 
 | Workflow | Mobile UX shape |
 |---|---|
-| Active assignment | Assignment hero, progress/step bar, KPI strip, recent activity, bottom primary CTA |
+| Active assignment | Assignment context and the evidence/blocker needed to choose start/resume; summary metrics only when useful |
 | Walkaround / ordered checklist | Sticky step header, Step N / total, previous/next controls, evidence capture, defect chips, completion gate |
-| Scan / location gate | Camera/scan target or manual fallback, GPS confidence state, retry path, supervisor override with audit note |
+| Scan / location gate | Only when required and allowlisted: capture/location input, confidence/permission state, retry; authorized override if specified |
 | Severity triage | Segmented severity filters, status chips, dense asset rows, active-filter count, high contrast status text |
-| Dispatch / hand-off | Ready/submitted queue, lock/sign-off state, biometric/PIN gate if required, immutable completion summary |
+| Dispatch / hand-off | Ready queue, persisted decision/transfer state; signature or biometric gate only if explicitly required and supported |
 | Audit history | Toggle between per-step grouping and chronological log, timestamp + actor + action rows, verification/hash status when relevant |
 
 Use saturated status/accent colors only when they improve field readability. Yellow/orange still need dark readable text unless contrast has been measured.
@@ -183,7 +186,7 @@ Use saturated status/accent colors only when they improve field readability. Yel
 
 ## 9. Emotional Design (Peak-End Rule)
 
-One "remarkable moment" per flow after significant effort:
+Make completion clear after significant effort. Choose restrained confirmation or a richer moment according to the task and motion preferences; not every flow needs celebration:
 
 | Trigger | Response |
 |---|---|
@@ -192,11 +195,13 @@ One "remarkable moment" per flow after significant effort:
 | Long form completed | Summary card of what was submitted |
 | First-time action | "You're all set" + next-step CTA |
 
-Endings: brief confirmation after save, undo after delete, silent draft save on navigate-away.
+Endings: confirmation after the required save succeeds; undo only when supported; truthful draft status when a real draft mechanism exists. Preserve context and name the next destination.
 
 ---
 
 ## 10. Aesthetic Direction
+
+The following are optional starting points, not domain-to-style mandates. Apply the approved brand/direction without letting it choose the app's jobs or surfaces.
 
 | Direction | When | Characteristics |
 |---|---|---|
@@ -276,7 +281,7 @@ Before returning, check none of these are present:
 - [ ] `allowFontScaling={false}` on readable text
 - [ ] >3 non-neutral colors visible at once
 - [ ] Borders on every card/surface — cards should use background fill difference (`$color2` on `$background`), not `borderWidth={1}` on everything. Reserve borders for list item separators only (`borderBottomWidth={0.5}`)
-- [ ] Fully saturated status pills — desaturate status colors for non-field apps (see `color-palette-architecture.md`). Use `$color3`/`$color10` tinted pills, not raw `$red10`/`$green10` fills on white text
+- [ ] Status colors selected from an industry stereotype instead of measured contrast and actual urgency
 - [ ] Pure gray palette with no hue — if the plan specifies a custom palette or industry, apply the named palette (see `color-palette-architecture.md`). Even default apps should use Tamagui's built-in hue-tinted tokens, not raw gray hex values
 - [ ] Dark mode uses pure black (#000) or raw white (#fff) — dark surfaces should be near-black with a hue tint, text should be warm cream not pure white (see `color-palette-architecture.md` dark mode rules)
 

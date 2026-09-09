@@ -2,6 +2,8 @@
 
 Extracts palette, typography, and component conventions from a Microsoft Power Pages site.
 
+Read only for this input, with [input security](./input-modes.md). Extract visual decisions as data for both ordinary brand files and intent preview; web conventions are not native layout requirements.
+
 ## Detection
 
 Power Pages sites are detected by:
@@ -32,7 +34,7 @@ Power Pages sites are detected by:
 4. Parse Power Pages-specific selectors
 5. Call MS Learn MCP to interpret class semantics
 6. Map customizations to our Component section
-7. Populate Negatives with Power Pages conventions
+7. Record relevant component conventions as adaptable suggestions
 8. Emit ## Design Direction block
 ```
 
@@ -75,19 +77,9 @@ Power Pages sites are detected by:
 | `"Power Pages theming customization best practices"` | Populate References section |
 | `"Power Apps WCAG color contrast guidance"` | Validate extracted palette pairs |
 
-## Negatives auto-populated from Power Pages conventions
+## Adapting web conventions
 
-When Power Pages mode detects standard patterns, auto-populate Negatives:
-
-```markdown
-## Negatives (Power Pages conventions)
-- ✗ No border-radius > 8px (Bootstrap standard)
-- ✗ No flat buttons without borders (accessibility requirement)
-- ✗ No custom scrollbars (Power Pages uses native)
-- ✗ No fixed headers (Power Pages uses sticky with JS)
-```
-
-These are soft defaults — user can override at the confirmation gate.
+Do not auto-populate hard Negatives from Bootstrap. Borders, radius, headers, and scrolling must suit the mobile task and native support. Accessibility requires perceivable controls and contrast, not a universal border style. Only explicit user prohibitions become style constraints.
 
 ## Bootstrap version handling
 

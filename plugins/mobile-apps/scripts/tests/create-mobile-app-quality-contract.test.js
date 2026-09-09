@@ -5,16 +5,17 @@ const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
 
-const skillPath = path.resolve(
+const scaffoldPath = path.resolve(
   __dirname,
-  '../../skills/create-mobile-app/SKILL.md',
+  '../../skills/create-mobile-app/references/phase-03-scaffold.md',
 );
-const skill = fs.readFileSync(skillPath, 'utf8');
+const scaffold = fs.readFileSync(scaffoldPath, 'utf8');
 
 test('template preparation is delegated to the deterministic script', () => {
-  const start = skill.indexOf('### Step 5 — Prepare existing template');
-  const end = skill.indexOf('### Step 6 — Initialize');
-  const step = skill.slice(start, end);
+  const start = scaffold.indexOf('### Step 5 — Prepare existing template');
+  const end = scaffold.indexOf('### Step 6 — Initialize');
+  assert.ok(start >= 0 && end > start, 'the active scaffold phase must own preparation');
+  const step = scaffold.slice(start, end);
 
   assert.match(step, /scripts\/prepare-mobile-template\.js/);
   assert.match(step, /JSON_STRING_OF_WORKING_DIR/);
@@ -34,9 +35,10 @@ test('template preparation is delegated to the deterministic script', () => {
 });
 
 test('Power Apps initialization directly invokes the CLI with approved values', () => {
-  const initializeStart = skill.indexOf('### Step 6 — Initialize');
-  const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
-  const initialize = skill.slice(initializeStart, initializeEnd);
+  const initializeStart = scaffold.indexOf('### Step 6 — Initialize');
+  const initializeEnd = scaffold.indexOf('### Step 6.5 — Verify dependencies');
+  assert.ok(initializeStart >= 0 && initializeEnd > initializeStart);
+  const initialize = scaffold.slice(initializeStart, initializeEnd);
   assert.match(initialize, /npx power-apps init -t MobileApp/);
   assert.match(initialize, /--display-name "<displayName>"/);
   assert.match(initialize, /--environment-id "<environment-id>"/);

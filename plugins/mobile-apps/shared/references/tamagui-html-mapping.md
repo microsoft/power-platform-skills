@@ -1,284 +1,143 @@
-# Tamagui → HTML/CSS Mapping Reference
+# Tamagui → HTML Preview Mapping
 
-Reference for converting React Native / Tamagui screens to static HTML previews. Used by the `/preview-screens` skill.
+For source-derived **implementation previews only**. Intent previews use [direct HTML authoring](../../skills/preview-screens/references/intent-authoring.md), not this conversion table or shell. Mode and validation policy live in [preview-screens](../../skills/preview-screens/SKILL.md).
 
----
+## 1. Resolve inputs before mapping
 
-## 1. Component Mapping
+Read `tamagui.config.ts` and its relevant local imports, including `brand/tokens.ts`, exported `appLightTheme` / `appDarkTheme`, provider props, and font loading. Do not assume brand values are inline `tokens.color`. Do not execute application config/services to obtain them.
 
-| Tamagui Component | HTML Element | Key CSS |
-|---|---|---|
-| `YStack` | `<div>` | `display:flex; flex-direction:column;` |
-| `XStack` | `<div>` | `display:flex; flex-direction:row;` |
-| `Stack` | `<div>` | `display:flex;` |
-| `SafeAreaView` | `<div>` | `padding-top:44px; flex:1;` |
-| `ScrollView` | `<div>` | `overflow-y:auto; flex:1;` |
-| `KeyboardAvoidingView` | `<div>` | `flex:1;` (no keyboard behavior in HTML) |
-| `H2` | `<h2>` | `font-size:28px; font-weight:700; color:var(--color);` |
-| `H3` | `<h3>` | `font-size:23px; font-weight:700; color:var(--color);` |
-| `H4` | `<h4>` | `font-size:20px; font-weight:600; color:var(--color);` |
-| `H5` | `<h5>` | `font-size:17px; font-weight:600; color:var(--color);` |
-| `Text` | `<span>` | `color:var(--color);` |
-| `SizableText` | `<span>` | `color:var(--color);` + font-size from `size` prop |
-| `Paragraph` | `<p>` | `color:var(--color); line-height:1.5;` |
-| `Button` | `<button>` | `padding:10px 18px; border-radius:8px; border:1px solid var(--border-color); background:var(--color2); color:var(--color); cursor:pointer; font-weight:500; font-family:inherit;` |
-| `Button bg="$blue10"` + `Button.Text color="$color1"` | `<button>` | `background:var(--blue10); color:var(--color1); border:none;` |
-| `Button theme="red"` | `<button>` | `background:var(--red10); color:#fff; border:none;` |
-| `Button circular` | `<button>` | Add `border-radius:50%; width:40px; height:40px; padding:0; display:flex; align-items:center; justify-content:center;` |
-| `Button disabled` | `<button>` | Add `opacity:0.5; cursor:not-allowed;` |
-| `Input` | `<input>` | `padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; background:var(--background); color:var(--color); font-size:16px; width:100%; box-sizing:border-box; font-family:inherit;` |
-| `TextArea` | `<textarea>` | Same as Input + `min-height:100px; resize:vertical;` |
-| `Label` | `<label>` | `font-size:14px; font-weight:500; color:var(--color);` |
-| `Form` | `<form>` | Standard semantics |
-| `Form.Trigger` | — | Wrapping element; render the child `<button>` directly |
-| `Card` | `<div>` | `border:1px solid var(--border-color); border-radius:12px; padding:16px; background:var(--background);` |
-| `Card` with `borderWidth={1}` and `borderColor="$borderColor"` | `<div>` | Add `border:1px solid var(--border-color)` only when the approved design calls for a border |
-| `Separator` | `<hr>` | `border:none; border-top:1px solid var(--border-color); margin:8px 0;` |
-| `Avatar` | `<div>` | `width:40px; height:40px; border-radius:50%; overflow:hidden; background:var(--color4); display:flex; align-items:center; justify-content:center;` |
-| `Avatar.Image` | `<img>` | `width:100%; height:100%; object-fit:cover;` |
-| `Avatar.Fallback` | `<span>` | `font-size:14px; font-weight:600;` |
-| `FlatList` | `<div>` | `overflow-y:auto; flex:1;` — render 3–4 representative child items |
-| `ListItem` | `<div>` | `display:flex; align-items:center; padding:12px 16px; gap:12px; border-bottom:1px solid var(--border-color);` |
-| `AlertDialog` | `<div>` (overlay) | `position:absolute; inset:0; background:rgba(0,0,0,0.4); display:none; align-items:center; justify-content:center; z-index:50;` |
-| `AlertDialog.Content` | `<div>` | `background:var(--background); border-radius:12px; padding:20px; max-width:300px; width:85%;` |
-| `Sheet` | `<div>` (overlay) | Same overlay; content anchored to bottom with `border-radius:12px 12px 0 0;` |
-| `Sheet.Handle` | `<div>` | `width:36px; height:4px; border-radius:2px; background:var(--color4); margin:0 auto 12px;` |
-| `Switch` | `<div>` | Styled toggle: `width:44px; height:24px; border-radius:12px; background:var(--color4);` with inner thumb |
-| `Spinner` | `<div>` | `width:20px; height:20px; border:2px solid var(--color4); border-top-color:var(--blue10); border-radius:50%; animation:spin 0.8s linear infinite;` |
-| `Theme name="red"` | wrapper `<div>` | Set `--accent:var(--red10)` on this subtree |
+Implementation follows actual source even when the plan differs. Use the [native-host integration](../../skills/design-system/references/tamagui-integration.md) to understand its aliases; disclose unresolved values instead of inventing fidelity.
 
----
-
-## 2. Token Tables
-
-### Spacing tokens
-
-| Token | CSS |
+| Native input | HTML projection |
 |---|---|
-| `$1` | `4px` |
-| `$2` | `8px` |
-| `$3` | `12px` |
-| `$4` | `16px` |
-| `$5` | `20px` |
-| `$6` | `24px` |
-| `$8` | `32px` |
-| `$10` | `40px` |
-| `$true` | `16px` |
+| `$surface0` … `$surface3`, `$mediaSurface` | `--surface0` … `--surface3`, `--mediaSurface`, resolved separately in each theme |
+| `$text0` … `$text3`, `$color`, `$colorN` | Same-named CSS variables from the actual semantic/theme values |
+| `$accentDeep`, `$accentBase`, `$accentSoft`, `$accentOnAccent` | Same-named variables, including the contrast-tested on-accent foreground |
+| `$borderColor`, status foreground/background aliases | Preserve names and pairings; define every used alias |
+| `$background` | `--background` from resolved theme, not a guessed synonym for surface |
+| `$1`, `$4`, `$true` in space/size/radius | Resolve that category in installed defaultConfig + config; never use a universal pixel lookup |
+| Named brand `$sm`, `$lg`, etc. | Resolve the named key; never remap onto numbered defaults |
+| `$body`, `$heading`, `$mono` and font-size tokens | Actual configured family/face, size, weight, line-height, letter-spacing |
+| Brand typography ratio/em fields | CSS unitless line-height and em tracking; native config uses size × ratio/em |
 
-### Font-size tokens
+Raw `bg`/`surface`/`primary` brand fields may be transformed by `withPowerAppsSemanticAliases`; compare resolved aliases, not merely raw inputs. Light values must never leak into dark surfaces/text. Resolve any used nested theme explicitly.
 
-| Token | CSS |
+Every `var(--name)` must have a value in every advertised theme. In particular, the shell defines **both `--surface0` and `--surface1`** in light and dark. Add other used variables from actual inputs. Missing tokens or assets are reported, not silently filled with a generic preset.
+
+## 2. Component and behavior projection
+
+| Source | HTML/CSS approach |
 |---|---|
-| `$1` | `11px` |
-| `$2` | `12px` |
-| `$3` | `13px` |
-| `$4` | `14px` |
-| `$5` | `16px` |
-| `$6` | `18px` |
-| `$7` | `20px` |
-| `$8` | `23px` |
-| `$9` | `28px` |
-| `$10` | `34px` |
+| `YStack`, `XStack`, `Stack` | Flex container; preserve direction, alignment, gap, wrapping and dimensions |
+| `SafeAreaView` | Represent owned edges once; the phone shell is not an additional native inset |
+| `ScrollView`, `FlatList` | Scrollable content, `min-height:0`; enough coherent scenario rows to expose the task |
+| `H2`–`H5`, `Text`, `Paragraph` | Appropriate heading/text semantics using actual font props, not tag-default sizes |
+| `Button`, pressable row, link | Named keyboard-operable button/link; real mock destination/action or explicit limitation |
+| `Input`, `TextArea`, `Label`, `Form` | Associated label/control, appropriate type, simulated validation, no real submission |
+| `Card`, `ListItem`, `Separator` | Preserve intended grouping/border/radius; do not add a border/shadow by archetype |
+| `Switch`, checkbox | Native HTML control with visible label and usable target |
+| `AlertDialog`, `Sheet` | Accessible dialog semantics; focus entry/containment/return, Escape/cancel |
+| `Avatar`, image/media | Approved local illustrative asset and original crop/aspect, or labeled placeholder |
+| `Spinner`, skeleton | Scenario-selectable loading feedback; respect reduced motion |
+| `Theme`, press/focus/disabled style | Resolve subtree theme and actual interaction appearance |
+| Native camera/PDF/pen/share/upload etc. | Named native-only placeholder, never fake a native invocation |
 
-### Shorthand props
+Shorthands preserve meaning: `p`/`px`/`py` → padding, `bg` → background, `items` → align-items, `justify` → justify-content, `rounded` → border-radius. Resolve numeric/token props in their correct category.
 
-| Prop | CSS Property |
-|---|---|
-| `flex` | `flex` |
-| `bg` | `background` |
-| `p` | `padding` |
-| `px` | `padding-left` + `padding-right` |
-| `py` | `padding-top` + `padding-bottom` |
-| `m` | `margin` |
-| `mb` | `margin-bottom` |
-| `mt` | `margin-top` |
-| `rounded` | `border-radius` |
-| `items` | `align-items` |
-| `justify` | `justify-content` |
-| `color` | `color` |
-| `gap` | `gap` |
-| `height` | `height` |
-| `width` | `width` |
-| `text` | `text-align` |
+Use a coherent illustrative scenario, not independent random filler on every screen. Read source handlers/branches for implementation. Browser state is small and in-memory; never reimplement auth, connectors, device APIs, or production persistence. A relevant error/retry or validation branch is part of the journey, not something to omit automatically.
 
-### Theme colors
+Use consistent simple icon approximations and text labels; decorative icons are `aria-hidden`. Icons alone need an accessible name. Keep approved local media when it communicates the task. A missing image/font must have an honest fallback label, not an unrelated remote placeholder.
 
-| Token | Light | Dark | CSS Variable |
-|---|---|---|---|
-| `$background` | `#ffffff` | `#1a1a1a` | `var(--background)` |
-| `$surface0` | `#f5f5f5` | `#141414` | `var(--surface0)` |
-| `$surface1` | `#ffffff` | `#1a1a1a` | `var(--surface1)` |
-| `$color2` | `#f0f0f0` | `#2a2a2a` | `var(--color2)` |
-| `$color4` | `#e0e0e0` | `#3a3a3a` | `var(--color4)` |
-| `$color5` | `#d0d0d0` | `#4a4a4a` | `var(--color5)` |
-| `$color9` | `#888888` | `#8e8e93` | `var(--color9)` |
-| `$color10` | `#666666` | `#a0a0a0` | `var(--color10)` |
-| `$color12` | `#111111` | `#f5f5f7` | `var(--color12)` |
-| `$borderColor` | `#e0e0e0` | `#3a3a3a` | `var(--border-color)` |
-| `$red8` | `#e25050` | `#e25050` | `var(--red8)` |
-| `$red10` | `#d13438` | `#ff6369` | `var(--red10)` |
-| `$blue10` | `#0078d4` | `#7c96f3` | `var(--blue10)` |
+## 3. Safety and fidelity
 
----
+Escape untrusted values separately for text, attributes, CSS, and JS (including closing-script sequences); prefer `textContent` for dynamic labels. No imported executable HTML/JS, external scripts, remote font imports, live tenant data, or unexpected network calls. Never interpolate untrusted values into shell commands.
 
-## 3. Conversion Guidelines
+Hard checks: unique IDs, reachable required actions/destinations, names/labels, keyboard/focus, contrast, essential-content reflow, token closure in both themes, and clear mock/native boundaries. Style similarity and composition heuristics are advisory.
 
-1. **Static approximation only.** Do not replicate React state, hooks, or data fetching. Show the populated/happy-path state with placeholder data.
+## 4. Adaptable phone shell
 
-2. **Dynamic lists.** When you see `.map()` over an array or a `FlatList`, generate **3–4 items** with plausible placeholder text relevant to the domain (e.g., recipe names, employee names, inspection IDs).
-
-3. **Conditional renders.** Show only the primary data-present branch. Skip loading skeletons and error states.
-
-4. **Icons.** Replace Lucide icon components with Unicode or simple text:
-   - `Plus` → `+`
-   - `Edit3` → `✎`
-   - `Trash2` → `🗑`
-   - `ChevronLeft` → `‹`
-   - `ChevronRight` → `›`
-   - `Search` → `🔍`
-   - `X` → `✕`
-   - `Check` → `✓`
-   - `Settings` → `⚙`
-   - `User` → `👤`
-   - `LogOut` → `↪`
-   - Other → use the component name as text in a small gray circle
-
-5. **pressStyle / animation.** Ignore — static preview only. Add `:hover { opacity: 0.85; }` on buttons for minimal interactivity.
-
-6. **Theme cascading.** When `<Theme name="red">` wraps a subtree, apply `color:var(--red10)` to text and `background:var(--red10)` to buttons within that subtree's HTML.
-
-7. **Images.** Use a placeholder rectangle: `background:var(--color4); border-radius:8px;` with the same dimensions. Add a centered "📷" if the image is a user avatar or photo.
-
-8. **Custom brand tokens.** If `tamagui.config.ts` exists in the project and defines custom brand colors (look for `tokens: { color: { ... } }`), extract hex values and add them as additional CSS custom properties (e.g., `--brand-primary: #hex`).
-
-9. **Navigation.** Ignore `useRouter()`, `router.push()`, `router.back()` calls. Buttons that navigate render as normal buttons with no click behavior.
-
-10. **Form validation.** Show form fields in their default (empty or with `defaultValues`) state. Do not show error messages.
-
----
-
-## 4. Phone Frame HTML Template
-
-Use this as the outer shell for the generated `preview.html`. Replace `{{APP_NAME}}`, `{{TABS}}`, and `{{SCREENS}}` with generated content.
+Replace placeholders with escaped model-authored content and **resolved** values before writing. `{{LIGHT_EXTRA_VARIABLES}}` / `{{DARK_EXTRA_VARIABLES}}` include all additional used aliases and token categories. Font rules use approved local assets if available, not a network import. The shell establishes no screen layout.
 
 ```html
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{{APP_NAME}} — Screen Preview</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{APP_NAME}} — {{MODE}} preview</title>
 <style>
   :root {
-    --background: #ffffff; --bg-strong: #f5f5f5;
-    --color: #1a1a1a; --color2: #f0f0f0; --color4: #e0e0e0;
-    --color5: #d0d0d0; --color9: #888; --color10: #666; --color12: #111;
-    --border-color: #e0e0e0;
-    --red8: #e25050; --red10: #d13438; --blue10: #0078d4;
-    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --surface0: {{light.surface0}}; --surface1: {{light.surface1}};
+    --background: {{light.background}}; --text0: {{light.text0}};
+    --accentBase: {{light.accentBase}}; --accentOnAccent: {{light.accentOnAccent}};
+    --font-body: {{font.body}}; --font-heading: {{font.heading}};
+    {{LIGHT_EXTRA_VARIABLES}}
   }
   html.dark {
-    --background: #1a1a1a; --bg-strong: #000;
-    --color: #f5f5f5; --color2: #2a2a2a; --color4: #3a3a3a;
-    --color5: #4a4a4a; --color9: #8e8e93; --color10: #a0a0a0; --color12: #f5f5f7;
-    --border-color: #3a3a3a;
-    --red10: #ff6369; --blue10: #7c96f3;
+    --surface0: {{dark.surface0}}; --surface1: {{dark.surface1}};
+    --background: {{dark.background}}; --text0: {{dark.text0}};
+    --accentBase: {{dark.accentBase}}; --accentOnAccent: {{dark.accentOnAccent}};
+    {{DARK_EXTRA_VARIABLES}}
   }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: var(--font); background: #1a1a2e; min-height: 100vh; padding: 40px 20px; }
-
-  /* Page header */
-  .page-title { color: #fff; text-align: center; font-size: 24px; font-weight: 700; margin-bottom: 6px; }
-  .page-sub { color: #aaa; text-align: center; font-size: 13px; margin-bottom: 32px; }
-
-  /* Tabs */
-  .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 28px; flex-wrap: wrap; }
-  .tab {
-    padding: 7px 18px; border-radius: 20px; border: 1px solid #444;
-    background: transparent; color: #ccc; cursor: pointer; font-size: 13px;
-    font-family: var(--font); transition: all 0.2s;
-  }
-  .tab:hover { border-color: #888; color: #fff; }
-  .tab.active { background: var(--blue10); border-color: var(--blue10); color: #fff; }
-
-  /* Dark toggle */
-  .dark-toggle {
-    position: fixed; top: 16px; right: 20px; padding: 7px 14px;
-    border-radius: 8px; border: 1px solid #444; background: transparent;
-    color: #ccc; cursor: pointer; font-size: 12px; font-family: var(--font);
-  }
-  .dark-toggle:hover { border-color: #888; color: #fff; }
-
-  /* Phone frame */
-  .phone { width: 375px; height: 812px; margin: 0 auto; background: #000; border-radius: 44px; padding: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
-  .screen-wrap { width: 100%; height: 100%; background: var(--background); border-radius: 34px; overflow: hidden; display: flex; flex-direction: column; }
-  .notch { width: 120px; height: 28px; background: #000; border-radius: 0 0 16px 16px; margin: 0 auto; flex-shrink: 0; }
-  .screen-area { flex: 1; overflow-y: auto; }
-  .screen-area::-webkit-scrollbar { display: none; }
-
-  /* Screen visibility */
-  .screen { display: none; min-height: 100%; }
-  .screen.active { display: flex; flex-direction: column; }
-
-  /* Home indicator */
-  .home-ind { height: 28px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .home-ind div { width: 120px; height: 4px; background: var(--color4); border-radius: 2px; }
-
-  /* Shared component styles */
-  hr { border: none; border-top: 1px solid var(--border-color); margin: 8px 0; }
-  button { font-family: var(--font); }
-  input, textarea { font-family: var(--font); outline: none; }
-  input:focus, textarea:focus { border-color: var(--blue10); }
-
-  /* Spin animation for Spinner */
-  @keyframes spin { to { transform: rotate(360deg); } }
+  {{LOCAL_FONT_RULES}}
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 12px; background: var(--surface0); color: var(--text0); font-family: var(--font-body); }
+  .preview-header, .preview-nav { max-width: 760px; margin: 0 auto 16px; }
+  .preview-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+  button, input, textarea, select { font: inherit; }
+  button, .preview-nav a { min-height: 48px; min-width: 48px; }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible { outline: 3px solid var(--accentBase); outline-offset: 3px; }
+  .preview-nav [aria-current="page"] { background: var(--accentBase); color: var(--accentOnAccent); }
+  .phone { width: min(100%, 390px); height: 844px; margin: auto; background: var(--surface1); border: 1px solid currentColor; border-radius: 24px; overflow: hidden; }
+  .screen-area { height: 100%; overflow: auto; }
+  .screen { min-height: 100%; }
+  [hidden] { display: none !important; }
+  @media (max-width: 420px) { body { padding: 12px 8px; } .phone { border-radius: 12px; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+  {{SCREEN_STYLES}}
 </style>
 </head>
 <body>
-  <div class="page-title">{{APP_NAME}}</div>
-  <p class="page-sub">Power Platform · Expo + Tamagui · Screen Preview</p>
-  <button class="dark-toggle" onclick="document.documentElement.classList.toggle('dark'); this.textContent = document.documentElement.classList.contains('dark') ? 'Light' : 'Dark'">Dark</button>
-
-  <div class="tabs">
-    {{TABS}}
-  </div>
-
-  <div class="phone">
-    <div class="screen-wrap">
-      <div class="notch"></div>
-      <div class="screen-area">
-        {{SCREENS}}
-      </div>
-      <div class="home-ind"><div></div></div>
-    </div>
-  </div>
-
+  <header class="preview-header">
+    <h1>{{APP_NAME}}</h1>
+    <p>{{MODE}} · Illustrative scenario: {{SCENARIO}}</p>
+    <p>{{LIMITATIONS}}</p>
+    <button id="theme-toggle" type="button" aria-pressed="false">Dark theme</button>
+    {{SCENARIO_CONTROLS}}
+  </header>
+  <nav class="preview-nav" aria-label="Preview screens">{{TABS}}</nav>
+  <main class="phone"><div class="screen-area">{{SCREENS}}</div></main>
   <script>
-    function showScreen(id) {
-      document.querySelectorAll('.screen').forEach(function(s) { s.classList.remove('active'); });
-      document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
-      document.getElementById(id).classList.add('active');
-      document.querySelector('[data-screen="' + id + '"]').classList.add('active');
+    function showScreen(id, moveFocus = true) {
+      const target = document.getElementById(id);
+      if (!target || !target.classList.contains('screen')) return false;
+      document.querySelectorAll('.screen').forEach(screen => { screen.hidden = screen !== target; });
+      document.querySelectorAll('[data-screen]').forEach(button => {
+        if (button.dataset.screen === id) button.setAttribute('aria-current', 'page');
+        else button.removeAttribute('aria-current');
+      });
+      if (moveFocus) target.focus();
+      return true;
     }
-    // Show first screen
-    var first = document.querySelector('.screen');
-    if (first) first.classList.add('active');
-    var firstTab = document.querySelector('.tab');
-    if (firstTab) firstTab.classList.add('active');
+    document.querySelectorAll('[data-screen]').forEach(button => {
+      button.addEventListener('click', () => showScreen(button.dataset.screen));
+    });
+    const themeToggle = document.getElementById('theme-toggle');
+    if (themeToggle) themeToggle.addEventListener('click', () => {
+      const dark = document.documentElement.classList.toggle('dark');
+      themeToggle.setAttribute('aria-pressed', String(dark));
+      themeToggle.textContent = dark ? 'Light theme' : 'Dark theme';
+    });
+    const first = document.querySelector('.screen');
+    if (first) showScreen(first.id, false);
+    {{MOCK_JOURNEY_SCRIPT}}
   </script>
 </body>
 </html>
 ```
 
-**Tab markup** (one per screen):
-```html
-<button class="tab" data-screen="screen-{id}" onclick="showScreen('screen-{id}')">Screen Name</button>
-```
-
-**Screen markup** (one per screen):
-```html
-<div id="screen-{id}" class="screen">
-  <!-- Converted HTML here -->
-</div>
-```
+Navigation example: `<button type="button" data-screen="screen-review">Review</button>`.
+Screen example: `<section class="screen" id="screen-review" tabindex="-1" aria-label="Review" hidden>…</section>`.
+Choose order/IDs from the journey. Add key-action transitions and reset in `{{MOCK_JOURNEY_SCRIPT}}`; merely switching preview tabs is not a working primary journey. Omit the theme toggle and unresolved theme block if only one theme is available, and disclose that limit.

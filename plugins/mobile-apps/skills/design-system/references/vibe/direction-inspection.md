@@ -1,5 +1,7 @@
 # Direction: Inspection
 
+Optional explicit input only. Adapt the suggestions to the actual task, available native/font capabilities, and accessibility; this file is not an industry-keyword default.
+
 For field, ops, and outdoor apps. Built so a technician with gloves on, in sunlight, can find what they need at a glance and tap large targets without precision.
 
 ## Reference apps

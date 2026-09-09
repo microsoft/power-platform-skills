@@ -1,281 +1,80 @@
-# Design Planning Reference
+# Context-Led Design Planning
 
-Shared logic for inferring and planning the visual design system for a Power Apps mobile app. Used by `native-app-planner` (Step 3c) and `setup-datamodel`.
+Read when a planner or `/design-system` needs to resolve missing design decisions. Reuse approved context rather than loading every design reference.
 
-Mobile-first rules apply throughout — no CSS variables, no Google Fonts, no keyframes. Everything maps to Tamagui tokens, `expo-font`, and `react-native-reanimated`.
+## Start with the job
 
----
+Use the primary actor, task frequency, journey, content, decision risk, device posture, and environment. Industry is evidence about context, not an aesthetic router. Do not infer an inspection preset from “field,” a blue preset from “finance,” or an aviation preset from the app name. With sparse input, state modest assumptions and choose a useful hierarchy; do not ask the user to choose among three styles just to proceed.
 
-## Default Stack
+Respect supplied brand decisions. Without brand input, the model chooses the visual direction for the actual job. Existing named directions and reference brands remain optional explicit inputs. Tamagui's host baseline is an implementation resource, not the product's design brief.
 
-The bundled Expo template already ships a complete, production-ready design baseline. **If no design keywords are detected and the user did not specify an aesthetic, use the default and skip Step 3c's confirmation question entirely.**
+## Resolve consequential choices
 
-| Layer | Default | Where it lives |
-|---|---|---|
-| Aesthetic | Clean + Professional | — |
-| Font | Inter | `@tamagui/font-inter` (already in template) |
-| Theme | System light/dark auto-switch | `app/_layout.tsx` `useColorScheme()` |
-| Tokens | Tamagui `defaultConfig` | `tamagui.config.ts` (already in template) |
-| Brand color | None — uses Tamagui `$blue9` | — |
-| Animation | Platform-native transitions only | Expo Router default |
-| Border radius | Medium (`$4` Tamagui default) | — |
-
-Default = **`tamagui-design-system: add-aliases`** (the always-run minimum). Record `## Design` with the full inferred-from-industry block plus that line. There is no skip path — see the execution mapping below. Screen-builders depend on `$surface*` and `$accent*` aliases existing on every project, so this minimum invocation is non-negotiable.
-
----
-
-## Step 1 — Keyword Detection
-
-Scan requirements and wizard answers. Map matches to design decisions.
-
-| If requirements mention… | Design decision |
+| Decision | Reason from |
 |---|---|
-| brand colors, company colors, hex code, `#xxxxxx`, "matches our app" | Custom brand tokens → apply `skills/design-system/references/tamagui-integration.md` |
-| "dark mode first", "dark theme", "dark UI" | Default theme = dark |
-| "playful", "consumer", "fun", "kids", "game" | Bold tokens, spring animations |
-| "enterprise", "internal tool", "back office", "admin" | Reinforce default — no changes |
-| "minimal", "clean", "simple" | Reinforce default — no changes |
-| "professional", "corporate", "business" | Reinforce default — no changes |
-| custom font name (e.g. "use Outfit", "we use DM Sans") | Install that font via `expo-font` |
-| "no animations", "reduce motion" | Disable all animations, add `reduceMotion` config |
+| Hierarchy and entry point | What must the user notice, decide, and do next? |
+| Composition | What makes the task legible: sequence, comparison, overview, content, evidence, spatial relationship? |
+| Container hierarchy | Which content is one continuous collection/section, and which summary/decision truly needs a distinct surface? |
+| Density and disclosure | Frequency/expertise, information needed now, one-handed use, interruption and recovery |
+| Task substance | Which facts and relationships make the next decision/read/action possible? Is the illustrative state representative enough to judge this? |
+| Typography | Reading versus scanning, language/text scaling, numerical comparison, available native font assets |
+| Media | Recognition, evidence, orientation, or content value; omit when it adds no task value |
+| Surfaces and palette | Grouping, state meaning, supplied brand, contrast and lighting—not mandatory card/color quotas |
+| Tone and feedback | User's stakes, useful next action, saved versus queued versus failed state |
+| Motion | Orientation or feedback value, installed capabilities, reduced-motion behavior |
 
-### Industry detection
+Choose as needed; not every screen needs a hero, metric strip, progress ring, card grid, photo, or animation. Conversely do not ban these because a generic style guide favors sparse lists. Consistent tasks can share composition; different tasks may need different structures.
+Do not confuse visual simplicity with missing task context, or realism with a large fixture.
+Choose content before containers; neither removing cards nor adding records automatically improves UX.
+Existing approved requirements bound the design; missing essential semantics return to foreground,
+not invented schema fields or operations for visual richness.
 
-Also scan for industry signals and record the industry in `## Design`. This drives visual language, emotional design, and density decisions per [mobile-design-philosophy.md](mobile-design-philosophy.md) Sections 7 and 12.
+## Constraints and active references
 
-| If requirements mention… | Industry | Visual language |
-|---|---|---|
-| "inspection", "field", "safety", "audit", "checklist", "ops", "maintenance" | Field / Ops | High contrast, large targets, offline-ready, camera-forward |
-| "finance", "banking", "payments", "transactions", "accounts", "ledger" | Finance | Blue palette, conservative type, generous whitespace, trust signals |
-| "health", "wellness", "patient", "medical", "clinic", "care" | Healthcare | Warm approachable palette, friendly type, compassionate microcopy |
-| "learning", "education", "course", "student", "training", "quiz" | Education | Bright playful palette, gamification, streak/progress patterns |
-| "productivity", "tasks", "projects", "workflow", "CRM", "tickets" | Productivity | Minimal near-monochrome, dense layout, strong grid, quick-actions |
-| "sales", "catalog", "products", "orders", "inventory", "retail" | E-commerce | Brand-forward color, product imagery, frictionless CTAs |
-| "IoT", "sensors", "telemetry", "dashboard", "monitoring" | Tech / IoT | Dark option with accent gradients, data-dense cards, real-time indicators |
+- All app styling maps to supported Tamagui/native properties and tokens, not web-only CSS. HTML previews translate those decisions to CSS.
+- Use the existing native-host factory and semantic alias contract. No new outer providers, ad-hoc color parser, duplicated service layer, or native package expansion.
+- Maintain at least 44pt iOS / 48dp Android targets, visible focus/labels, text scaling, non-color state cues, and tested contrast. Increase targets for gloves, motion, or other actual context.
+- Palette work only: [color palette architecture](./color-palette-architecture.md). Typography/tone work only: [typography and tone](./typography-and-tone.md).
+- Font assets must exist or have an approved loading plan using supported capabilities. Do not assume optional packages are installed or propose an unapproved native dependency.
+- Broader experience guidance, only when needed: [mobile design philosophy](./mobile-design-philosophy.md).
 
-If no industry signal is detected, default to **Productivity** (the most common Power Platform use case).
+## Persist one compact design decision record
 
-### User stage detection
-
-| If requirements mention… | User stage baseline |
-|---|---|
-| "onboarding", "first-time", "new users", "getting started" | New user — larger targets, inline hints, progressive disclosure |
-| "daily use", "field workers", "operators", "staff" | Returning user (default) — standard density, efficiency-focused |
-| "power users", "admins", "bulk operations", "advanced" | Power user — dense layout, batch actions, less chrome |
-
-Default: **Returning user** (most Power Platform apps are for trained staff).
-
-If **no keywords match** → default to the **Productivity** industry, apply its aesthetic direction (Refined Minimal), and write a full `## Design` section with rationale. Never write just "default (Clean + Professional)" — always explain the industry inference and what it drives.
-
----
-
-## Step 1b — Aesthetic Direction
-
-After keyword/industry detection, determine the aesthetic direction. This shapes *every* visual choice. See [mobile-design-philosophy.md](mobile-design-philosophy.md) Section 13 for full details.
-
-| Industry | Default aesthetic direction |
-|---|---|
-| Field / Ops | Industrial / Utilitarian — high contrast, monospace data, edge-to-edge rows |
-| Finance | Refined Minimal — conservative, generous whitespace, trust signals |
-| Healthcare | Soft / Organic — warm surfaces, rounded type, friendly tone |
-| Education | Bold / Expressive — bright palette, playful type, gamified elements |
-| Productivity | Refined Minimal (default) — neutral, dense, monospace for data values |
-| E-commerce | Bold / Expressive — brand-forward color, prominent CTAs |
-| Tech / IoT | Industrial / Utilitarian — dark option, data-dense, monospace |
-
-Override if the user explicitly names a different direction ("I want something warm and friendly" for a field app → Soft / Organic instead of Industrial).
-
----
-
-## Step 1c — Palette Architecture
-
-Decide whether to build a custom color palette or use Tamagui defaults. Full palette building methodology → see [color-palette-architecture.md](color-palette-architecture.md).
-
-| Input | Palette action |
-|---|---|
-| User provides hex brand color | Build 3-variant accent scale (deep/base/soft) + tinted surface scale from brand hue |
-| User names an industry, no brand color | Use industry-default palette from `color-palette-architecture.md` |
-| User says "minimal" or "clean" | Near-monochrome: single accent at strict 10% usage, desaturated status colors |
-| User says "warm" or "organic" | Warm-tinted surfaces (cream/sand base), warm accent |
-| No input (default) | Standard Tamagui tokens, no custom palette needed |
-
-**Three-layer model:** If building a custom palette, define three semantic layers:
-1. **Surface scale** (surface0–4) — backgrounds from lightest to darkest
-2. **Text scale** (text0–3) — foreground from primary to faintest
-3. **Accent triad** — deep/base/soft variants of one brand hue
-
-**Status color desaturation:** For non-field apps, desaturate `$red10`/`$green10`/`$yellow10` by 15-25% so they sit politely in the palette. Field/ops apps keep full saturation for outdoor visibility.
-
-Record the palette decision in `## Design`.
-
----
-
-## Step 1d — Copy Tone Selection
-
-Select a copy tone profile based on industry + aesthetic direction. Full tone reference with example strings → see [typography-and-tone.md](typography-and-tone.md).
-
-| Tone | Voice | Button style | Empty state style | Error style |
-|---|---|---|---|---|
-| **Professional** | Direct, clear, no personality | Verb phrases ("Save report") | Statement + CTA ("No reports yet. Create one.") | Direct ("Could not load. Try again.") |
-| **Warm** | Encouraging, human, peer-like | Softer verbs ("Add your first...") | Question ("Ready to start?") | Gentle ("Something went wrong. Let's try again.") |
-| **Utilitarian** | Terse, no fluff, status-focused | Shortest verb ("Save", "Capture") | Minimal ("No items") | Status + retry ("Load failed. Retry.") |
-| **Editorial** | Calm, considered, no emoji ever | Verbs as statements ("Begin writing") | Invitational ("What will you write about?") | Understated ("We couldn't load this.") |
-
-**Industry defaults:** Enterprise/Productivity/Finance → Professional. Field/Ops → Utilitarian. Healthcare(patient)/Education/Consumer → Warm. Content/Creative → Editorial.
-
-**Universal microcopy rules (all tones):**
-- No exclamation marks in UI text
-- No emoji anywhere
-- Buttons are verbs, never "OK"/"Submit"/"Yes"/"No"
-- Errors state the problem + offer an action, never apologize
-
-Record the tone in `## Design`.
-
----
-
-## Step 2 — Aesthetic + Mood → Tamagui Decisions
-
-Only used when deviating from default. Map the user's aesthetic + mood to concrete Tamagui + Expo choices:
-
-| Aesthetic | Mood | Font | Font pairing | Brand token | Default theme | Animation | Tone |
-|---|---|---|---|---|---|---|---|
-| Clean + Professional | — | Inter (`@tamagui/font-inter`) | Single-family (weight only) | `$blue9` | System auto | None | Professional |
-| Bold + Vibrant | Professional | `@tamagui/font-inter` bold weights | Single-family (weight only) | Custom `$accentBase` (strong hue) | Light | Spring (`withSpring`) | Professional |
-| Bold + Vibrant | Playful/Consumer | Custom (`expo-font` + e.g. Nunito) | Single-family rounded | Custom `$accentBase` (saturated) | Light | Spring + bounce | Warm |
-| Dark + Moody | Technical | `@tamagui/font-mono` | Inter + JetBrains Mono | `$green9` or `$violet9` neon | Dark forced | Fade (`withTiming`) | Utilitarian |
-| Dark + Moody | Elegant | Custom serif (e.g. Playfair via `expo-font`) | Serif heading + Inter body | `$yellow9` gold/copper | Dark forced | Slow fade | Editorial |
-| Warm + Organic | Professional | Inter + warm palette | Single-family (weight only) | Custom `$accentBase` (terracotta) | System auto | Gentle ease | Warm |
-| Warm + Organic | Playful | Custom rounded (e.g. Nunito, Poppins) | Single-family rounded | Custom `$accentBase` (coral/sage) | System auto | Springy | Warm |
-
-**Font installation:**
-- `@tamagui/font-inter` / `@tamagui/font-mono` — already listed as optional deps in template, add to `tamagui.config.ts`
-- Custom fonts (Nunito, Playfair, etc.) — `npx expo install expo-font`, add to `app/_layout.tsx` `useFonts()`
-
----
-
-## Step 3 — Build the `## Design` Section
-
-### If default (no deviations):
+Write the existing plan's `## Design` section. Avoid a second design bundle or repeating every screen:
 
 ```markdown
 ## Design
-
-Default stack — no customization needed.
-- Industry rationale: <one sentence — e.g. "Detected as productivity/enterprise app; Refined Minimal is the standard for trained-staff internal tools">
-- Aesthetic: Clean + Professional
-- Aesthetic direction: Refined Minimal
-- Font: Inter (template default)
-- Typography: single-family, weight differentiation only
-- Headline tracking: default (no override)
-- Body line-height: 1.5x default
-- Theme: System light/dark auto
-- Tokens: Tamagui defaultConfig
-- Palette: default (no custom palette)
-- Animation: Platform-native transitions only
-- Industry: <detected or "productivity">
-- User stage: returning (default)
-- Copy tone: Professional
-- Emotional design: standard confirmations, no custom peak moments
-- Layout: cards for grouped content, edge-to-edge rows for dense lists
-- Hero visual principle: <one phrase — e.g. "oversized stat with edge-to-edge row beneath it" or "clean header, content leads">
-- Density target: comfortable
-- Surface treatment: flat (no elevation, no card borders)
-- Navigation mood: functional
-- Card strategy: edge-to-edge rows for lists, bordered cards for grouped summary content
-- Accent strategy: restrained — $blue9 at ≤10% of surface area
-- Motion policy: functional-only — skeleton→data transitions and press feedback, nothing decorative
-- One memorable thing: <one sentence — what a user will remember about this app visually. E.g. "monospace data values in every list row make it feel precise and trustworthy">
-- tamagui-design-system: add-aliases
+- Context and rationale: <actor, primary job, operating conditions; key assumptions>
+- Direction: <context-led description or explicitly requested named direction>
+- Hierarchy/layout: <entry focus, grouping, container strategy, disclosure, important composition decisions>
+- Typography: <roles, available families/weights, loading/fallback; scanning/reading rationale>
+- Palette/theme: <approved brand or inferred choices; light/dark policy>
+- Density/targets: <contextual spacing and usable target dimensions>
+- Media: <task purpose, source, crop/fallback; or none with reason>
+- Tone/feedback: <specific verbs; completion, pending and recovery treatment>
+- Native/accessibility constraints: <relevant limits>
+- Visual thesis: <one product-grounded idea and concrete hierarchy/type/surface/interaction consequences>
+- tamagui-design-system: <required — brand import | add-aliases — verify host baseline>
 ```
 
-> **`add-aliases` mode** — on the default path, Step 9b verifies that
-> `tamagui.config.ts` uses the native host's
-> `createPowerAppsTamaguiConfig`. The host factory already provides
-> `$surface0`–`$surface3`, `$accentBase`, `$accentSoft`, `$accentDeep`, and
-> `$accentOnAccent`, so the app does not copy a second alias implementation.
+Keep legacy `## Design Direction` if present as an input; reconcile it with the current record instead of creating another mandatory format. Explicit user requirements and safety/accessibility constraints outrank inferred style suggestions.
 
-### If deviating:
+## Journey preview handoff
 
-```markdown
-## Design
+The screen planner records `### Primary journeys` within `## Screens`: actor/job, entry, decision, ordered screen IDs, actions and approved operations, outcome/recovery, and illustrative scenario. Model-selected preview screen IDs and rationale live in `### Preview selection` (legacy `### Primary Preview`); reuse it, matching heading capitalization case-insensitively. Select three representative main screens by default so makers can compare the overall direction,
+fewer for a smaller product and more only when essential. This is a review-canvas default, not an
+application screen-count target or List/Form/Detail checklist. Per-screen specs own detail.
 
-- Aesthetic: <choice>
-- Aesthetic direction: <Industrial / Editorial / Refined Minimal / Soft Organic / Bold Expressive>
-- Mood: <choice>
-- Font: <font name> via <@tamagui/font-* or expo-font>
-- Typography: <single-family | paired: heading=X, body=Y>
-- Headline tracking: <letterSpacing overrides, e.g., "-0.5 at $7+">
-- Body line-height: <ratio, e.g., "1.6x for prose screens">
-- Brand color token: $brand → <hex or Tamagui token>
-- Palette: <default | custom: surface=warm cream, accent=ochre triad> (see color-palette-architecture.md)
-- Default theme: <system auto | light forced | dark forced>
-- Animation style: <none | spring | slow-fade | gentle-ease>
-- Industry: <detected industry>
-- Visual language: <from industry detection — e.g., "warm approachable palette, friendly microcopy">
-- User stage: <new | returning | power>
-- Copy tone: <Professional | Warm | Utilitarian | Editorial> (see typography-and-tone.md)
-- Emotional design: <peak moments to celebrate — e.g., "form completion summary, inspection streak counter">
-- Layout: <cards vs edge-to-edge rows, density level>
-- Hero visual principle: <one phrase describing the dominant visual treatment — e.g. "full-bleed hero image with gradient text overlay", "oversized numeric stat anchors every dashboard card", "whitespace is the hero — content floats">
-- Density target: <sparse | comfortable | dense> — sparse = lots of breathing room, consumer; dense = maximum info, field/finance
-- Surface treatment: <flat | subtle-depth | strong-cards | editorial> — flat = no shadows/borders; subtle-depth = 1px borders + mild elevation; strong-cards = clearly lifted cards; editorial = asymmetric layout with intentional blank space
-- Navigation mood: <functional | atmospheric | cinematic> — functional = tab bar + stack, invisible chrome; atmospheric = blurred tab bar, large titles; cinematic = full-bleed transitions, no visible navigation chrome
-- Card strategy: <edge-to-edge rows | bordered cards | floating cards | none> — choose one dominant pattern; mixing is a smell
-- Accent strategy: <restrained | expressive | monochrome> — restrained = accent touches only (CTAs, active states); expressive = accent on surfaces and fills; monochrome = no accent, type weight does the work
-- Motion policy: <none | functional-only | enriched | immersive> — functional-only = skeleton/data + press; enriched = + screen enter/exit + list stagger; immersive = + scroll parallax + celebration moments
-- One memorable thing: <one sentence. Not a feature list — a visual impression. E.g. "completion screens use a quiet summary card with strong mono data, making every save feel like a receipt". This field must be concrete and specific — reject vague answers like "clean and modern">
-- tamagui-design-system: required — brand tokens + theme variants
-```
+Foreground owns approval of new or changed plan semantics. Design does not redesign Dataverse schemas, introduce operations, or expand native/connector scope to enable a visual idea. Keep those requirements in the existing plan, not a new UX JSON authority.
 
----
+`/design-system` Step 6.75 materializes compact `brand/design-system.md` and `brand/tokens.ts`, then uses `/preview-screens --mode intent` for `_design_preview.html`. The intent preview tests design understanding before construction; post-build `/preview-screens --mode implementation` reads actual source for `preview.html`. Neither claims native execution.
 
-## Step 4 — Pass to Screen Planner
+## Implementation mapping
 
-Include the `## Design` section in the screen-planner prompt so per-screen specs reference the right tokens:
-
-```
-Approved design:
-- Aesthetic direction: Refined Minimal
-- Font: Inter (default)
-- Typography: single-family, weight differentiation
-- Headline tracking: -0.3 at $8+ only
-- Body line-height: 1.5x default
-- Brand color: $blue9
-- Palette: default
-- Theme: system light/dark
-- Animation: none
-- Industry: field/ops
-- Visual language: high contrast, large targets, camera-forward
-- User stage: returning
-- Copy tone: Utilitarian
-- Emotional design: celebrate inspection completion with summary card
-- Layout: edge-to-edge rows for inspection lists, cards for summary stats
-
-Per-screen specs MUST use Tamagui primitives (XStack, YStack, Text, Button) with
-token-based styling ($color, $background, $space.*) — never hardcoded hex or px values.
-Animation: only add if design section specifies a style.
-Color: follow the 60/30/10 rule (see mobile-design-philosophy.md Section 5).
-Industry patterns: apply visual language from mobile-design-philosophy.md Section 12.
-Aesthetic direction: apply from mobile-design-philosophy.md Section 13.
-Layout: question whether cards are needed — see Section 14 (edge-to-edge rows for dense lists).
-Data values: use fontFamily="$mono" for IDs, timestamps, currency, coordinates.
-Peak moments: note which screens have task-completion flows that deserve celebration.
-Anti-patterns: ensure no items from Section 16 checklist are present.
-Universal patterns: screen-builder will read universal-patterns.md for industry-specific
-patterns (sparklines for finance, offline sync for field, etc.). Include the industry in
-per-screen specs so the builder knows which sections to apply.
-```
-
----
-
-## Execution Mapping
-
-| `## Design` says | Step 9b action |
+| Existing plan/context | Step 9b or `/edit-app` action |
 |---|---|
-| `tamagui-design-system: add-aliases` | Verify that `tamagui.config.ts` calls `createPowerAppsTamaguiConfig`. The host already supplies the semantic aliases. |
-| `tamagui-design-system: required` | Apply `skills/design-system/references/tamagui-integration.md` with brand tokens + theme from the `## Design` section. |
-| Custom font only (no design-system line) | `npx expo install expo-font` + `useFonts()` in `app/_layout.tsx`, preserving the host Tamagui factory. |
+| `brand/tokens.ts` exists / `tamagui-design-system: required` | Apply [Tamagui integration](../../skills/design-system/references/tamagui-integration.md); create missing approved brand tokens first |
+| Legacy `tamagui-design-system: add-aliases`, no custom brand | Verify `createPowerAppsTamaguiConfig({})`; the host already supplies aliases |
+| Custom typography | Bind approved roles to Tamagui fonts and verify asset loading/fallback while preserving config/provider ownership |
 
-**There is no unchecked Step 9b path.** Every plan includes a
-`tamagui-design-system` line. `add-aliases` verifies host ownership; `required`
-applies generated brand tokens.
+No unchecked integration path: exported light/dark themes and `PowerAppsProvider` must agree. Do not install packages or modify the bundled main template as a design step.

@@ -1,6 +1,9 @@
 # MCP Design Queries
 
-Reusable MS Learn MCP query templates for design contexts. Used by `/design-system` Sub-step 1.6 (always-on enrichment) and by brand input modes that need schema validation.
+Optional Microsoft Learn query templates for a supplied Microsoft-platform brand
+source or an unresolved platform-schema question. Load only the matching section
+when that input mode needs it. No-brand design and ordinary Tamagui composition
+do not run enrichment queries.
 
 ---
 
@@ -43,21 +46,22 @@ Reusable MS Learn MCP query templates for design contexts. Used by `/design-syst
 ## Usage pattern
 
 ```
-1. Query MS Learn MCP with the relevant template
+1. Query Microsoft Learn with the one relevant template only when needed
 2. Parse response for token values, schema info, or validation rules
 3. Apply to the current extraction/generation step
-4. If MCP unavailable → skip silently, no degradation
-5. If MCP returns empty → use cached values with date notice
-6. If MCP returns conflicting articles → use most recently dated
+4. If MCP unavailable, use the applicable official documentation link or report the unresolved fact
+5. If results are empty, do not invent schema or substitute unrelated cached values
+6. If articles conflict, use the applicable product/version contract rather than publication date alone
 ```
 
 ## Caching policy
 
-- Results cached per-project in `shared/references/power-pages-defaults.md` (for Power Pages queries)
-- Cache validity: 30 days (after which re-query on next invocation)
-- Force refresh: `/design-system --refresh-cache`
-- Cache miss: query live, write result, continue
+- Reuse already-verified values and citations for the same source/product version.
+- If caching is useful, keep it project-local and record provenance; never rewrite
+  the installed plugin's reference files as a per-project cache.
+- Refresh only when the selected source or required platform contract changes.
 
 ## Cost
 
-~3-8k tokens per project (one-time; cached after first run per query set).
+No query cost on the ordinary no-import design path. Keep optional lookups bounded
+to the unresolved source fact instead of loading every query set.

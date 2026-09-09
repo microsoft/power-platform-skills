@@ -16,6 +16,9 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | iOS bundle id | |
 | Android bundle id | |
 | Working directory | |
+| Current phase | _completed phase and next phase reference; update after validation_ |
+| Pending decision | _exact unapproved question, or none; not an inferred approval_ |
+| Approved preview | _intent-preview path and the plan/design revision it represents; not runtime verification_ |
 | Plugin version that created the project | |
 | Created | _<ISO date>_ |
 | Metro logs | `.powernative/metro-logs/` — sanitized source used by `/debug-app`; do not copy ephemeral values from log filenames into this file |

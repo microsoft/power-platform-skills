@@ -188,7 +188,7 @@ Create `src/native/barcodeScanner.tsx`. If it already exists, do not overwrite.
 // Uses expo-camera CameraView. Never throws; permission state is rendered inline.
 
 import React from 'react';
-import { StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
+import { AppState, Button, Linking, Platform, StyleProp, StyleSheet, Text, View, ViewStyle } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import type { BarcodeScanningResult, BarcodeType } from 'expo-camera';
 
@@ -207,6 +207,8 @@ export type BarcodeScannerViewProps = {
   style?: StyleProp<ViewStyle>;
   overlay?: React.ReactNode;
   children?: React.ReactNode;
+  onDismiss?: () => void;
+  onManualEntry?: () => void;
 };
 
 const DEFAULT_BARCODE_TYPES = [
@@ -233,15 +235,39 @@ export function BarcodeScannerView({
   style,
   overlay,
   children,
+  onDismiss,
+  onManualEntry,
 }: BarcodeScannerViewProps) {
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
   const scanLockedRef = React.useRef(false);
+  const permissionInFlight = React.useRef(false);
+  const [permissionBusy, setPermissionBusy] = React.useState(false);
+  const [permissionError, setPermissionError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (permission && !permission.granted && permission.canAskAgain) {
-      requestPermission();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void getPermission().catch(() => setPermissionError('Could not check camera access. Try again.'));
+      }
+    });
+    return () => subscription.remove();
+  }, [getPermission]);
+
+  const recoverPermission = async () => {
+    if (permissionInFlight.current) return;
+    permissionInFlight.current = true;
+    setPermissionBusy(true);
+    setPermissionError(null);
+    try {
+      if (permission?.canAskAgain) await requestPermission();
+      else if (Platform.OS !== 'web') await Linking.openSettings();
+    } catch {
+      setPermissionError('Could not open camera access. Try again or use another available action.');
+    } finally {
+      permissionInFlight.current = false;
+      setPermissionBusy(false);
     }
-  }, [permission, requestPermission]);
+  };
 
   React.useEffect(() => {
     if (!paused) {
@@ -255,12 +281,37 @@ export function BarcodeScannerView({
     onScanned({ ok: true, data: event.data, type: event.type, raw: event });
   }, [onScanned, paused]);
 
-  if (!permission) {
-    return <View style={[styles.fallback, style]}><Text>Checking camera permission...</Text></View>;
-  }
+  const recoveryActions = (
+    <View style={styles.recovery}>
+      {onManualEntry && <Button title="Enter code manually" onPress={onManualEntry} />}
+      {onDismiss && <Button title="Close scanner" onPress={onDismiss} />}
+    </View>
+  );
+  const overlayLayer = overlay || children
+    ? <View pointerEvents="box-none" style={styles.overlay}>{overlay ?? children}</View>
+    : null;
 
-  if (!permission.granted) {
-    return <View style={[styles.fallback, style]}><Text>Camera permission is required to scan codes.</Text></View>;
+  if (!permission?.granted) {
+    return (
+      <View style={[styles.fallback, style]}>
+        <Text accessibilityLiveRegion="polite">
+          {permission ? 'Camera access is off. Enable it to scan codes.' : 'Checking camera permission...'}
+        </Text>
+        {permission && (permission.canAskAgain || Platform.OS !== 'web') && (
+          <Button
+            title={permissionBusy ? 'Opening camera access…' : permission.canAskAgain ? 'Enable camera' : 'Open settings'}
+            onPress={recoverPermission}
+            disabled={permissionBusy}
+          />
+        )}
+        {permission && !permission.canAskAgain && Platform.OS === 'web' && (
+          <Text>Allow camera access in your browser settings, then reload.</Text>
+        )}
+        {permissionError && <Text accessibilityRole="alert">{permissionError}</Text>}
+        {overlayLayer}
+        {recoveryActions}
+      </View>
+    );
   }
 
   return (
@@ -272,7 +323,8 @@ export function BarcodeScannerView({
         barcodeScannerSettings={{ barcodeTypes }}
         onBarcodeScanned={paused ? undefined : handleBarcodeScanned}
       />
-      {overlay || children ? <View pointerEvents="box-none" style={styles.overlay}>{overlay ?? children}</View> : null}
+      {overlayLayer}
+      {recoveryActions}
     </View>
   );
 }
@@ -281,10 +333,15 @@ const styles = StyleSheet.create({
   container: { flex: 1, overflow: 'hidden', position: 'relative' },
   overlay: { ...StyleSheet.absoluteFillObject },
   fallback: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
+  recovery: { gap: 8, padding: 16 },
 });
 ```
 
 Scanner rendering rule: do **not** put overlay UI as `CameraView` children. Expo Camera can render incorrectly when React children are nested inside the native camera preview. The generated control renders the camera as one layer and renders `overlay` / `children` as a sibling absolute layer above it.
+
+Permission recovery rule: provide `onDismiss` unless the surrounding screen already has a persistent safe-area back/close control, and `onManualEntry` when the approved workflow supports manual codes. These actions and existing overlays remain available while permission is loading or denied; do not trap them exclusively in the granted-camera branch. Offer an explicit permission request when it can be asked again, native settings after permanent denial, or browser instructions on web. Opening settings does not itself mean permission was granted; keep rendering the observed permission state.
+
+Truthful persistence rule: a scan result is not a saved record. Only report completion after the screen's approved generated-service writes and required uploads succeed. A connectivity banner or authored offline profile does not establish offline storage/sync; never promise “saved offline” without an implemented and verified durable queue.
 
 Scan mutation rule: the generated control has an internal one-shot scan lock so rapid `onBarcodeScanned` callbacks cannot double-submit. Screens should still set `paused=true` before navigating or mutating data, then reset `paused=false` and change `resetKey` when the screen regains focus. This makes returning to the scanner reliable after a successful scan.
 

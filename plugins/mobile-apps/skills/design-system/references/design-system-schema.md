@@ -1,289 +1,84 @@
-# `brand/design-system.md` — Schema
+# Compact Brand Artifact Contract
 
-This file documents the exact shape of `brand/design-system.md` that `/design-system` generates. Downstream agents/references (`screen-builder`, Tamagui integration, `/preview-screens`) read this file as the visual source of truth.
+Read only while writing or reconciling brand artifacts. The ordinary contract is `brand/design-system.md` + `brand/tokens.ts`; `_design_preview.html` visualizes the primary journey. Gallery and history are optional.
 
-## Location
+## `brand/design-system.md`
 
-```
-<project_root>/
-├── brand/
-│   ├── design-system.md     ← this schema
-│   ├── tokens.ts            ← importable Tamagui tokens
-│   ├── design-system.html   ← visual gallery (optional)
-│   └── .history/            ← version snapshots
-```
-
-## Full schema
+Use these headings for downstream compatibility; concise tables/bullets are enough. Do not pad sections, manufacture negatives, or copy every screen spec.
 
 ```markdown
-# {{App Name}} — Design System
-Generated: {{ISO 8601 timestamp}} | Direction: {{inspection | saas | product | hybrid(...)}}
+# <App> — Design System
 
 ## Brand
-- Identity: {{one-line description of app purpose and audience}}
-- Voice: {{tone: direct | professional | conversational}}
-- References: {{comma-separated reference apps, e.g. "ServiceTitan, Procore, Linear"}}
-- Brand notes: {{user's free-text notes, or "none"}}
+<Primary job/context, supplied brand versus inference, consequential design rationale>
 
 ## Palette
-| Token       | Hex       | Usage                   |
-|-------------|-----------|-------------------------|
-| bg          | {{hex}}   | screen background       |
-| surface     | {{hex}}   | cards, inputs, modals   |
-| primary     | {{hex}}   | primary CTAs, links     |
-| accent      | {{hex}}   | secondary accent        |
-| text        | {{hex}}   | body text               |
-| text-muted  | {{hex}}   | captions, meta          |
-| border      | {{hex}}   | dividers, input borders |
+| Token | Value | Role |
+|---|---|---|
+<bg, surface, primary, accent, text, textMuted, border; concrete resolved values>
 
 ## Status palette
-| Token          | Hex       |
-|----------------|-----------|
-| status-success | {{hex}}   |
-| status-warning | {{hex}}   |
-| status-danger  | {{hex}}   |
-| status-info    | {{hex}}   |
+<statusSuccess, statusWarning, statusDanger, statusInfo; foreground/background use>
 
 ## Typography
-| Role     | Family    | Size | Weight | Line | Tracking  |
-|----------|-----------|------|--------|------|-----------|
-| Display  | {{font}}  | {{}} | {{}}   | {{}} | {{}}      |
-| Heading  | {{font}}  | {{}} | {{}}   | {{}} | {{}}      |
-| Title    | {{font}}  | {{}} | {{}}   | {{}} | {{}}      |
-| Body     | {{font}}  | 16   | 400    | 1.5  | 0         |
-| Body-sm  | {{font}}  | 14   | 400    | 1.4  | 0         |
-| Caption  | {{font}}  | 12   | 500    | 1.3  | {{}}      |
-| Mono     | {{mono}}  | 14   | 400    | 1.4  | 0         |
+| Role | Family | Size | Weight | Line-height ratio | Tracking em | Tamagui binding |
+|---|---|---|---|---|---|---|
+<Only needed roles; body/heading plus caption/data/etc. where used>
+<Local asset/loading path or supported fallback; no invented font availability>
 
 ## Spacing
-{{scale: e.g. 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64}}
+<Named spacing, size and radius values; preserve host numeric token scale>
 
 ## Components
-
-### Button
-- Primary: bg {{primary}}, text white, radius {{md}}, height {{48|52}}px
-- Secondary: bg transparent, border 1px {{border}}, text {{primary}}, same radius
-- Tertiary: bg transparent, no border, text {{primary}}, underline on pressed
-- Destructive: bg {{status-danger}}, text white, same radius
-
-### Card
-- bg: {{surface}}
-- border: {{border policy — "1px border" or "shadow" or "none"}}
-- radius: {{md}}px
-- padding: {{lg}}px
-- shadow: {{shadow policy — "none" or "0 1px 3px rgba(0,0,0,0.1)" etc.}}
-
-### Input
-- height: {{48|52}}px
-- border: {{border style — "1px solid border" or "2px primary on focus"}}
-- radius: {{sm}}px
-- focus: {{focus treatment}}
-
-### List row
-- style: {{row-with-status-pill | card-with-meta | sentence}}
-- height: {{56|64|72}}px
-- status: {{4px left bar | pill badge | dot indicator}}
-- chevron: {{yes | no}}
-
-### Badge / Status pill
-- size: {{caption}} font
-- bg: {{status color at 15% opacity | solid}}
-- text: {{status color | white}}
-- radius: full (pill)
-
-### Iconography
-- Set: {{Ionicons | Lucide | SF Symbols}}
-- Style: {{outlined | filled}}
-- Size: 24px default
+<Only relevant decisions: hierarchy, composition, density, navigation, surfaces,
+media purpose/crop, input/action/state treatments. Per-screen differences are allowed.>
 
 ## Motion
-- Default: {{duration}}ms {{easing}}
-- List enter: {{stagger description or "none"}}
-- Screen transition: {{description or "default Expo Router"}}
-- Forbidden: {{list of forbidden motion patterns}}
+<Functional purpose or none; reduced-motion behavior>
 
-## Negatives (HARD RULES for screen-builder)
-{{list of forbidden patterns, each prefixed with ✗}}
-- ✗ {{forbidden pattern 1}}
-- ✗ {{forbidden pattern 2}}
-...
+## Negatives
+<Explicit user prohibitions and actual safety/accessibility constraints only;
+if none beyond shared constraints, say so. Style suggestions are not build gates.>
 
 ## Provenance
-- Direction: {{full direction description}}
-- Industry: {{industry}} ({{confidence}})
-- Brand notes: {{whether applied and to which sections}}
-- Generated by: /design-system v0.1
-- Source: {{input mode + file/URL if applicable}}
-- Confirmed: {{true|false|draft}}
-- Locked at: {{ISO timestamp}}
+<Input/source, inferred assumptions, confirmation state, date, integration gaps>
 ```
 
-## Direction-specific defaults
+Prefer existing camelCase color keys in both files; normalize legacy hyphenated labels when comparing drift. Legacy headings such as `## Negatives (HARD RULES)` remain readable. Explicit negatives are requirements; invented style prohibitions are not.
 
-### Inspection
+## `brand/tokens.ts`
 
-```markdown
-## Palette
-| Token       | Hex       | Usage                   |
-|-------------|-----------|-------------------------|
-| bg          | #f7f6f3   | screen background       |
-| surface     | #ffffff   | cards, inputs           |
-| primary     | #1e293b   | primary CTAs, headers   |
-| accent      | #FF6A00   | safety-orange accent    |
-| text        | #1a1a1a   | body text               |
-| text-muted  | #6b6b6b   | meta, captions          |
-| border      | #d8d6d0   | dividers                |
-
-## Status palette
-| Token          | Hex       |
-|----------------|-----------|
-| status-success | #2d7a3e   |
-| status-warning | #c8881e   |
-| status-danger  | #b8321a   |
-| status-info    | #1e293b   |
-
-## Typography
-| Role     | Family | Size | Weight | Line | Tracking |
-|----------|--------|------|--------|------|----------|
-| Display  | Inter  | 28   | 700    | 1.2  | -0.01em  |
-| Heading  | Inter  | 22   | 600    | 1.25 | -0.005em |
-| Title    | Inter  | 18   | 600    | 1.3  | 0        |
-| Body     | Inter  | 16   | 400    | 1.5  | 0        |
-| Body-sm  | Inter  | 14   | 400    | 1.4  | 0        |
-| Caption  | Inter  | 12   | 500    | 1.3  | 0.02em   |
-| Mono     | JetBrains Mono | 14 | 400 | 1.4 | 0     |
-
-## Negatives (HARD RULES)
-- ✗ No shadows — use border for separation
-- ✗ No serif fonts — Inter or JetBrains Mono only
-- ✗ No decorative motion — functional only (150ms ease-out)
-- ✗ No tap targets under 52px (gloved use)
-- ✗ No saturated red except status-danger
-- ✗ No chevrons on list rows — use status pills only
-- ✗ No display serif fonts
-```
-
-### SaaS
-
-```markdown
-## Palette
-| Token       | Hex       | Usage                   |
-|-------------|-----------|-------------------------|
-| bg          | #ffffff   | screen background       |
-| surface     | #f8f9fa   | cards, sections         |
-| primary     | #4f46e5   | primary CTAs, links     |
-| accent      | #4f46e5   | (= primary, indigo)     |
-| text        | #111827   | body text               |
-| text-muted  | #6b7280   | secondary text          |
-| border      | #e5e7eb   | dividers, input borders |
-
-## Status palette
-| Token          | Hex       |
-|----------------|-----------|
-| status-success | #dcfce7   |
-| status-warning | #fef3c7   |
-| status-danger  | #fecaca   |
-| status-info    | #dbeafe   |
-
-## Negatives (HARD RULES)
-- ✗ No pill buttons — use standard radius
-- ✗ No bold colors outside accent — keep neutral
-- ✗ No decorative illustration in UI chrome
-- ✗ No custom fonts — system-ui stack or Inter
-- ✗ No card shadows heavier than 0 1px 3px rgba(0,0,0,0.1)
-```
-
-### Product
-
-```markdown
-## Palette
-| Token       | Hex       | Usage                   |
-|-------------|-----------|-------------------------|
-| bg          | #faf8f5   | warm cream background   |
-| surface     | #ffffff   | cards, modals           |
-| primary     | #1a1614   | headings, primary text  |
-| accent      | #7d9b76   | sage accent             |
-| text        | #1a1614   | body text               |
-| text-muted  | #8a857e   | secondary text          |
-| border      | #e8e4de   | subtle dividers         |
-
-## Negatives (HARD RULES)
-- ✗ No chevrons on list rows — content-led, not action-led
-- ✗ No status pills — use subtle text indicators
-- ✗ No uppercase labels — sentence case only
-- ✗ No information density — sparse is the aesthetic
-- ✗ No system fonts — display heading must be visually distinct
-- ✗ No flat/utilitarian card styling — editorial warmth required
-```
-
-## Validation rules
-
-A valid `brand/design-system.md` MUST have:
-1. A header with app name and direction
-2. `## Palette` with at least 7 tokens (bg, surface, primary, accent, text, text-muted, border)
-3. `## Status palette` with 4 tokens
-4. `## Typography` with at least 5 roles
-5. `## Negatives` with at least 3 rules
-6. `## Provenance` with direction and timestamp
-
-Missing sections → skill surfaces error, asks user to re-run.
-
-## How screen-builder uses this file
-
-1. **Mandatory read** — builder MUST read `brand/design-system.md` if it exists in `<working_dir>/brand/`
-2. **Token references** — all color/spacing/radius values come from this spec, never hardcoded hex
-3. **Negatives are HARD RULES** — any pattern listed in `## Negatives` is forbidden. Violations are build failures.
-4. **Typography mapping** — `## Typography` role table maps to Tamagui font tokens ($heading, $body, $mono)
-5. **Component shapes** — `## Components` defines the exact shape for buttons, cards, inputs, list rows
-
-## How Tamagui Integration Uses tokens.ts
-
-`brand/tokens.ts` is a plain TypeScript export. `/create-mobile-app` Step 9b
-imports it into `tamagui.config.ts` using
-[`tamagui-integration.md`](./tamagui-integration.md) and the native host's
-`withPowerAppsSemanticAliases` helper:
+Keep the established plain export; no script execution, dependency, or JSON sidecar is needed. Example shape below is illustrative, not a default palette/style:
 
 ```ts
-import { createTokens } from '@tamagui/core';
-import { defaultConfig } from '@tamagui/config/v5';
-import {
-  createPowerAppsTamaguiConfig,
-  withPowerAppsSemanticAliases,
-} from '@microsoft/power-apps-native-host/config/tamaguiConfig';
-import { tokens as brandTokens } from './brand/tokens';
-
-const tokens = createTokens({
-  ...defaultConfig.tokens,
-  space: { ...defaultConfig.tokens.space, ...brandTokens.space },
-  size: { ...defaultConfig.tokens.size, ...brandTokens.size },
-  radius: { ...defaultConfig.tokens.radius, ...brandTokens.radius },
-});
-
-export const appLightTheme = withPowerAppsSemanticAliases(
-  defaultConfig.themes.light,
-  brandTokens.color,
-);
-
-export const appDarkTheme = withPowerAppsSemanticAliases(
-  defaultConfig.themes.dark,
-  {
-    primary: brandTokens.color.primary,
-    accent: brandTokens.color.accent,
-    statusSuccess: brandTokens.color.statusSuccess,
-    statusWarning: brandTokens.color.statusWarning,
-    statusDanger: brandTokens.color.statusDanger,
-    statusInfo: brandTokens.color.statusInfo,
+export const tokens = {
+  color: {
+    bg: '#ffffff', surface: '#f4f5f7',
+    primary: '#224e73', accent: '#224e73',
+    text: '#17222b', textMuted: '#4d5c67', border: '#74838f',
+    statusSuccess: '#22683b', statusWarning: '#805400',
+    statusDanger: '#a12424', statusInfo: '#224e73',
   },
-);
-
-const customConfig = {
-  tokens,
-  themes: {
-    ...defaultConfig.themes,
-    light: appLightTheme,
-    dark: appDarkTheme,
+  space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, '2xl': 32 },
+  size: { buttonHeight: 48, inputHeight: 48, iconSize: 24 },
+  radius: { sm: 4, md: 8, lg: 16, full: 9999 },
+  typography: {
+    heading: { family: 'System', size: 24, weight: '600', lineHeight: 1.25, tracking: 0 },
+    body: { family: 'System', size: 16, weight: '400', lineHeight: 1.5, tracking: 0 },
   },
-};
+} as const;
 
-export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig);
+export type BrandTokens = typeof tokens;
 ```
+
+`System` denotes the supported platform fallback, not a new downloadable font. Choose actual families from the project's resolved host/fonts. Preserve additional existing keys and role names consumed by code. Numbered space/size keys retain the defaultConfig scale; named brand keys are additive.
+
+For typography, `size` is native logical units, `lineHeight` is a ratio, and `tracking` is em. Bind roles explicitly in the spec; convert to native absolute lineHeight/letterSpacing when configuring `createFont`, and preserve equivalent units in HTML. A typography object not consumed by config/screens is not wired typography.
+
+## Runtime consumers and validation
+
+- Screen builders read the compact spec and actual tokens. Their task-specific composition remains model-authored.
+- [Tamagui integration](./tamagui-integration.md) imports `tokens`, extends default token scales, resolves semantic aliases, and maps both themes into the host provider.
+- `/preview-screens` reads imported brand tokens **and** actual config/font bindings. It does not assume raw brand keys equal resolved semantic aliases.
+- Light and dark must independently pass contrast checks. If an existing `brand/tokens.dark.ts` or named-theme import is used, preserve/reconcile it; new ordinary projects need no extra palette file.
+- Check spec/token values, used token references, font availability/bindings, and required artifact existence. No minimum decorative component count, mandatory reference brands, or fixed list of preset names.

@@ -1,5 +1,7 @@
 # Direction: Product
 
+Optional explicit input only. Adapt the suggestions to the actual task, available native/font capabilities, and accessibility; this file is not an industry-keyword default.
+
 For consumer-grade apps and premium employee experience. Type-led, warm or rich-dark, single muted accent, asymmetric layouts. Looks like an app you'd download by choice.
 
 ## Reference apps
