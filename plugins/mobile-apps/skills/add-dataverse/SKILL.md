@@ -34,6 +34,8 @@ Capture the **environment URL** (`https://orgXXX.crm.dynamics.com`), **environme
 
 ### Step 2 — Resolve plan
 
+**Telemetry checkpoint: `resolve_dataverse_schema_plan`**
+
 Look for `native-app-plan.md` in the project root:
 
 ```bash
@@ -258,6 +260,8 @@ agent-driven full reconciliation, not any safety check.
 
 ### Step 4 — Reconcile every planned table and column against the target
 
+**Telemetry checkpoint: `reconcile_dataverse_schema`**
+
 If `<operation_manifest_mode> = valid`, print:
 
 > `✓ Approved operation manifest validated — complete fresh reconciliation and derived metadata coverage are bound to this environment.`
@@ -382,6 +386,8 @@ Build and print a reconciliation matrix before Step 5:
 **Idempotency criterion (HARD):** re-running this skill against an already-applied plan MUST perform **zero** metadata writes. Every table, column, relationship, key, and calc column resolves to `reuse` or an "already exists, skipped" outcome from the Step 4 snapshot. If a re-run issues any POST, the reconciliation missed something — report it rather than writing. Use this as the acceptance check after any change to Steps 4, 5, or 5a–5d.
 
 ### Step 5 — Create / extend tables
+
+**Telemetry checkpoint: `apply_dataverse_schema_changes`**
 
 #### Valid operation-manifest execution branch
 
@@ -897,7 +903,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   | Boolean | `Microsoft.Dynamics.CRM.BooleanAttributeMetadata` | `DefaultValue`, `OptionSet` with `TrueOption`/`FalseOption` |
   | Choice (picklist) | `Microsoft.Dynamics.CRM.PicklistAttributeMetadata` | `OptionSet` with `IsGlobal: false`, `OptionSetType: "Picklist"`, `Options[]` — **option integer values start at `100000000` and increment by 1** |
   | Lookup | via `RelationshipDefinitions` — see 1:N skeleton above | — |
-  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxHeight`, `MaxWidth` |
+  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxSizeInKB` (default 10240), `CanStoreFullImage` |
   | File | `Microsoft.Dynamics.CRM.FileAttributeMetadata` | `MaxSizeInKB` |
 
   **Common mistake:** omitting `FormatName` on String columns and `DateTimeBehavior` on DateTime columns. Both are required — Dataverse rejects the POST without them.
@@ -921,7 +927,14 @@ Column shapes that have non-obvious gotchas (handle carefully):
     }
   }
   ```
-- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`, `MaxHeight`/`MaxWidth` required
+- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`,
+  `MaxSizeInKB` and `CanStoreFullImage`. Dataverse always reports
+  `MaxHeight: 144` and `MaxWidth: 144` for the generated thumbnail; those values
+  cannot be changed and must not be used as full-image dimensions. Set
+  `CanStoreFullImage: true` when users must inspect or download the retained
+  full-size image. Updating this setting requires retrieving the complete
+  current `ImageAttributeMetadata`, changing the writable property, sending a
+  full-definition `PUT`, and publishing customizations.
 - **File** — `@odata.type: Microsoft.Dynamics.CRM.FileAttributeMetadata`, `MaxSizeInKB` required
 
 If the column type is not a simple string/int/boolean, surface a one-line confirmation to the user before posting.
@@ -1003,6 +1016,8 @@ Add alternate keys to `.datamodel-manifest.json` for the table:
 
 ### Step 6 — Add data sources
 
+**Telemetry checkpoint: `generate_dataverse_data_sources`**
+
 **Print before starting:**
 > "→ Generating TypeScript services for <N> tables via `npx power-apps add-data-source` (sequential). Print '✓ <table>Service.ts' after each."
 
@@ -1019,13 +1034,32 @@ npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
 
-After generation, verify each required table appears in `power.config.json` `databaseReferences.default.cds.dataSources` and that a matching file exists in `src/generated/services/`. If any reused or custom table is missing, STOP before screen generation:
+After generation, verify the output created by
+`npx power-apps add-data-source` rather than guessing a JSON path or service
+filename. The command writes Dataverse configuration under the literal
+`databaseReferences["default.cds"].dataSources` key and derives service
+filenames from each entry's `entitySetName`, which may differ from the table
+logical name. The verifier also accepts the legacy nested
+`databaseReferences.default.cds` shape:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-services.js" \
+  --project-root "<working_dir>" \
+  --manifest "$OPERATION_MANIFEST"
+```
+
+For the standalone fallback path without a manifest, pass the resolved service
+list as `--tables "<comma-separated-logical-names>"`. If any reused or custom
+table is missing from config, lacks `entitySetName`, or has no matching generated
+service, STOP before screen generation:
 
 ```text
 BLOCKED: required Dataverse service missing for <logical-name>. Schema action=<reuse|extend|create>; app usage=<screens/hooks that require it>.
 ```
 
 ### Step 6b — Publish customizations
+
+**Telemetry checkpoint: `publish_dataverse_customizations`**
 
 When `<operation_manifest_mode> = valid`, skip this step: the validated
 manifest's final `publish` phase already ran and its pending checkpoint was
@@ -1049,6 +1083,8 @@ Build the entity list from all tables that were **created or extended** in Steps
 If the publish call returns a non-2xx status, report the error and stop — do not proceed. The user must resolve before the tables are usable.
 
 ### Step 6c — Verify tables exist
+
+**Telemetry checkpoint: `verify_dataverse_schema`**
 
 Confirm every created or extended table is queryable after publish with **one** filtered query, not one request per table:
 
@@ -1153,6 +1189,8 @@ if (!upload.success) {
 ```
 
 ### Step 8 — Type-check
+
+**Telemetry checkpoint: `validate_dataverse_integration`**
 
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify generated services compile (~15–30 seconds)."

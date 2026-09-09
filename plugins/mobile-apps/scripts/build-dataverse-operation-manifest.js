@@ -51,6 +51,8 @@ const DERIVED_COLUMN_TYPES = new Set([
   'computed',
 ]);
 const NULL_SOURCE_TYPE_IS_ORDINARY_TYPES = new Set([
+  'file',
+  'image',
   'lookup',
   'memo',
   'multiline',
@@ -1083,10 +1085,10 @@ function expectedColumnConstraints(column) {
     constraints.push(['defaultValue', Boolean(column.defaultValue), 'DefaultValue']);
   } else if (type === 'image') {
     constraints.push(
-      ['maxHeight', Number(column.maxHeight ?? 1440), 'MaxHeight',
+      ['maxSizeInKB', Number(column.maxSizeInKB ?? 10240), 'MaxSizeInKB',
         (actual, expected) => Number(actual) >= expected],
-      ['maxWidth', Number(column.maxWidth ?? 1440), 'MaxWidth',
-        (actual, expected) => Number(actual) >= expected],
+      ['canStoreFullImage', column.canStoreFullImage !== false, 'CanStoreFullImage',
+        (actual, expected) => Boolean(actual) === expected],
     );
   } else if (type === 'file') {
     constraints.push(
@@ -1215,6 +1217,33 @@ function columnCompatibility(tableName, column, liveColumn) {
   return compared;
 }
 
+function imageConfigurationUpdate(column, liveColumn, comparison) {
+  if (normalizeColumnType(column.type) !== 'image'
+    || !['create', 'adapt'].includes(column.plannedDecision)
+    || !liveColumn?.customizable
+    || !liveColumn.imageUpdateDefinition
+    || !comparison?.reasons?.length
+    || !comparison.reasons.every((reason) => (
+      reason.startsWith('CanStoreFullImage mismatch:')
+      || reason.startsWith('MaxSizeInKB mismatch:')
+    ))) {
+    return null;
+  }
+  const payload = stableClone(liveColumn.imageUpdateDefinition);
+  const metadataId = payload.MetadataId || liveColumn.metadataId;
+  if (!metadataId || !payload.LogicalName || !payload.SchemaName) return null;
+  delete payload['@odata.context'];
+  delete payload['@odata.etag'];
+  payload['@odata.type'] = 'Microsoft.Dynamics.CRM.ImageAttributeMetadata';
+  payload.MetadataId = metadataId;
+  payload.CanStoreFullImage = column.canStoreFullImage !== false;
+  payload.MaxSizeInKB = Math.max(
+    Number(payload.MaxSizeInKB || liveColumn.maxSizeInKB || 0),
+    Number(column.maxSizeInKB || 10240),
+  );
+  return payload;
+}
+
 function columnPayload(column, effectiveLogicalName = column.logicalName) {
   const type = normalizeColumnType(column.type);
   const schemaName = column.adaptedSchemaName
@@ -1327,8 +1356,11 @@ function columnPayload(column, effectiveLogicalName = column.logicalName) {
     return {
       '@odata.type': 'Microsoft.Dynamics.CRM.ImageAttributeMetadata',
       ...common,
-      MaxHeight: Number(column.maxHeight || 1440),
-      MaxWidth: Number(column.maxWidth || 1440),
+      MaxSizeInKB: Number(column.maxSizeInKB || 10240),
+      CanStoreFullImage: column.canStoreFullImage !== false,
+      ...(column.isPrimaryImage === undefined
+        ? {}
+        : { IsPrimaryImage: Boolean(column.isPrimaryImage) }),
     };
   }
   if (type === 'file') {
@@ -1629,16 +1661,31 @@ function keyExists(key, snapshotTable, aliases, effectiveTable) {
   };
 }
 
-function operation(index, id, phase, apiPath, body, solution) {
+function operation(index, id, phase, apiPath, body, solution, method = 'POST') {
   return {
     index,
     id,
     phase,
-    method: 'POST',
+    method,
     apiPath,
     body,
     solution,
   };
+}
+
+function isImageConfigurationPut(item) {
+  return item?.method === 'PUT'
+    && item?.phase === 'extensions'
+    && /^configure-image:[a-z0-9_]+:[a-z0-9_]+$/.test(String(item.id || ''))
+    && /^EntityDefinitions\(LogicalName='[a-z0-9_]+'\)\/Attributes\(LogicalName='[a-z0-9_]+'\)$/.test(
+      String(item.apiPath || ''),
+    )
+    && item.body?.['@odata.type'] === 'Microsoft.Dynamics.CRM.ImageAttributeMetadata'
+    && typeof item.body?.MetadataId === 'string'
+    && typeof item.body?.LogicalName === 'string'
+    && typeof item.body?.SchemaName === 'string'
+    && typeof item.body?.CanStoreFullImage === 'boolean'
+    && Number.isInteger(Number(item.body?.MaxSizeInKB));
 }
 
 function xmlEscape(value) {
@@ -1793,6 +1840,7 @@ function operationAffectedPublishTables(operation) {
     return [logicalNameFromSchemaName(operation.body?.SchemaName)];
   }
   if (String(operation?.id || '').startsWith('extend-column:')
+    || String(operation?.id || '').startsWith('configure-image:')
     || String(operation?.id || '').startsWith('create-key:')) {
     const match = String(operation.apiPath || '').match(
       /EntityDefinitions\(LogicalName='([^']+)'\)/,
@@ -2509,6 +2557,7 @@ function buildManifest({
     );
     const canExtend = Boolean(live.detail.customizable && live.detail.canCreateAttributes);
     const createColumns = [];
+    const imageConfigurationUpdates = [];
     let tableHasUnverified = false;
     let tableHasDeferred = false;
 
@@ -2587,6 +2636,27 @@ function buildManifest({
         if (column.plannedDecision === 'adapt') {
           aliases.columns.set(`${effectiveName}:${column.logicalName}`, columnTarget);
         }
+        continue;
+      }
+      const imageUpdatePayload = item.liveColumn
+        ? imageConfigurationUpdate(column, item.liveColumn, item.comparison)
+        : null;
+      if (imageUpdatePayload) {
+        imageConfigurationUpdates.push({
+          column,
+          effectiveLogicalName: columnTarget,
+          payload: imageUpdatePayload,
+        });
+        decisions.push(makeDecision({
+          itemId: columnId,
+          itemType: 'column',
+          table: requestedName,
+          requestedName: column.logicalName,
+          effectiveName: columnTarget,
+          decision: column.plannedDecision,
+          operation: `configure-image:${effectiveName}:${columnTarget}`,
+          reason: 'existing image column requires approved full-image configuration',
+        }));
         continue;
       }
       if (!item.liveColumn) {
@@ -2738,10 +2808,24 @@ function buildManifest({
       ));
       publishTables.add(effectiveName);
     }
+    for (const update of imageConfigurationUpdates.sort((left, right) => (
+      left.effectiveLogicalName.localeCompare(right.effectiveLogicalName)
+    ))) {
+      phaseOperations.extensions.push(operation(
+        nextIndex++,
+        `configure-image:${effectiveName}:${update.effectiveLogicalName}`,
+        'extensions',
+        `EntityDefinitions(LogicalName='${effectiveName}')/Attributes(LogicalName='${update.effectiveLogicalName}')`,
+        update.payload,
+        context.solutionUniqueName,
+        'PUT',
+      ));
+      publishTables.add(effectiveName);
+    }
 
     const tableDecision = tableHasUnverified
       ? 'unverified'
-      : createColumns.length > 0
+      : createColumns.length > 0 || imageConfigurationUpdates.length > 0
         ? 'extend'
         : table.plannedDecision === 'adapt'
           ? 'adapt'
@@ -2752,11 +2836,13 @@ function buildManifest({
       requestedName,
       effectiveName,
       decision: tableDecision,
-      operation: createColumns.length > 0 ? 'extensions-phase' : 'none',
+      operation: createColumns.length > 0 || imageConfigurationUpdates.length > 0
+        ? 'extensions-phase'
+        : 'none',
       reason: tableHasUnverified
         ? 'one or more columns remain unverified'
-        : createColumns.length > 0
-          ? `${createColumns.length} missing ordinary column(s) will be extended`
+        : createColumns.length > 0 || imageConfigurationUpdates.length > 0
+          ? `${createColumns.length} missing column(s) and ${imageConfigurationUpdates.length} image configuration update(s) will be applied`
           : tableHasDeferred
             ? 'compatible table reused; unsupported additions are explicitly deferred'
             : incompatible.length > 0
@@ -3305,7 +3391,9 @@ function buildManifest({
     summary: {
       decisionCount: decisions.length,
       metadataOperationCount: operations.length,
-      metadataWriteCount: operations.filter((item) => item.method === 'POST').length,
+      metadataWriteCount: operations.filter(
+        (item) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(item.method),
+      ).length,
       unresolvedCount: unverified.length,
       unverifiedCount: unverifiedFacts.length,
       conflictCount: conflicts.length,
@@ -3495,8 +3583,11 @@ function validateManifest(manifest, {
       if (item.phase !== item.enclosingPhase) {
         errors.push(`operation ${item.id} phase does not match its container`);
       }
-      if (item.method !== 'POST') errors.push(`operation ${item.id} is not a POST`);
-      if (['DELETE', 'PATCH', 'PUT'].includes(item.method)) {
+      if (item.method !== 'POST' && !isImageConfigurationPut(item)) {
+        errors.push(`operation ${item.id} uses an unsupported method`);
+      }
+      if (['DELETE', 'PATCH'].includes(item.method)
+        || (item.method === 'PUT' && !isImageConfigurationPut(item))) {
         errors.push(`operation ${item.id} is destructive or mutating in-place`);
       }
     }

@@ -186,6 +186,8 @@ test -f app.config.js && test -f power.config.json && test -f package.json
 
 ### Step 2 — Resolve capability
 
+**Telemetry checkpoint: `resolve_native_capability`**
+
 If `$ARGUMENTS` includes a capability name, package name, or control name, use it. Otherwise look for a `## Native Capabilities` section in `native-app-plan.md` and present the planned capabilities for confirmation. If neither exists, prompt the user with the supported-capabilities list above plus any relevant installed package from `package.json` that directly matches their request.
 
 Normalize the capability name to lowercase, hyphenated form (e.g., `Camera` → `camera`, `ImagePicker` → `image-picker`, `SecureStore` → `secure-store`). Also normalize aliases: `take-photo` / `photo` / `camera-control` / `expo-camera` → `camera`; `gallery` / `pick-image` / `expo-image-picker` → `image-picker`; `scanner` / `barcode` / `qr` → `barcode-scanner`; `open-pdf` / `view-pdf` / `pdf-control` / `pdf-viewer-control` / `@microsoft/power-apps-native-pdf-viewer` → `pdf-viewer`; `native-pdf-viewer` → `pdf-viewer`; `generate-pdf` / `pdf-export` → `pdf-report`; `signature` / `sign-off` / `ink` / `draw` / `pen-control` / `@microsoft/power-apps-native-pen-input` → `pen-input`; `location-tracking` / `background-location` / `gps-tracking` / `geo-tracking` / `track-location` / `power-apps-native-bglocation` / `@microsoft/power-apps-native-bglocation` → `geolocation`.
@@ -195,6 +197,8 @@ When the user asks for "location" or "GPS", disambiguate by intent: continuous/b
 If the user names something not in the supported table, apply the Native capability gate: resolve the relevant package from `package.json`, continue only when present and not runtime-banned, otherwise stop with a transparency note.
 
 ### Step 3 — Route to nested helpers or inline wrappers
+
+**Telemetry checkpoint: `dispatch_native_capability`**
 
 For normalized `camera`, `image-picker`, `barcode-scanner`, `qr-scanner`, `pdf-report`, `pdf-viewer`, `pen-input`, or `geolocation`, do not fall through to the generic wrapper flow and do not tell the user to run another slash command. Read the nested helper and follow its steps inside this `/add-native` invocation:
 
@@ -223,6 +227,8 @@ node -e "const p = require('./package.json'); const m = '<expo-module-name>'; if
 If the check fails, STOP. Do not run `npx expo install`. Print the error verbatim.
 
 ### Step 5 — Write wrapper
+
+**Telemetry checkpoint: `generate_native_wrapper`**
 
 **Print before starting:**
 > "→ Writing src/native/<wrapper>.ts (typed wrapper with discriminated-union result + iOS/Android platform guards)…"
@@ -280,6 +286,8 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 ```
 
 ### Step 6 — Type-check
+
+**Telemetry checkpoint: `validate_native_wrapper`**
 
 **Print before starting:**
 > "→ Running tsc to verify wrapper compiles (~10–20 seconds)."

@@ -6,7 +6,7 @@
 
 const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
@@ -246,6 +246,40 @@ async function verifySpec(spec, read, opts = {}) {
     const isActive = list[0].statecode === 1;
     add('business-rule', name, wantActive === isActive,
       wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the rule does not run' : 'deployed ACTIVE but the spec asks for Draft — the rule is running'));
+  }
+
+  // Business process flows. Reconciled on the same three axes as business rules, because a BPF fails
+  // the same three silent ways: it never built, it built twice (users are offered the same process
+  // more than once), or it is deployed Draft and therefore invisible on the form. Activation is
+  // best-effort in the build, so verify is what makes the outcome loud.
+  for (const flow of spec.businessProcessFlows || []) {
+    const entityLogical = String(flow.entity).toLowerCase();
+    const name = `${entityLogical}.${flow.name}`;
+    let rows;
+    try {
+      // DEFINITION rows only, BusinessFlow only (see bpfFilter) — counting the platform's activated
+      // `type 2` copy would report every healthy ACTIVE flow as a duplicate, and counting task flows
+      // would report an unrelated process as one.
+      rows = await read.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        filter: bpfFilter(flow.name, entityLogical),
+        top: 50,
+      });
+    } catch (e) {
+      // Fail CLOSED: a read that could not run must not read as "present and correct".
+      add('business-process-flow', name, false, `could not be read: ${e && e.message}`);
+      continue;
+    }
+    const list = rows || [];
+    if (!list.length) { add('business-process-flow', name, false, 'not deployed'); continue; }
+    if (list.length > 1) {
+      add('business-process-flow', name, false, `${list.length} process flows share this name on ${entityLogical} — users are offered the same process more than once`);
+      continue;
+    }
+    const wantActive = (flow.status || 'Active') === 'Active';
+    const isActive = list[0].statecode === 1;
+    add('business-process-flow', name, wantActive === isActive,
+      wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the process does not appear on the form' : 'deployed ACTIVE but the spec asks for Draft — the process is running'));
   }
 
   // Sitemap subareas (+ icons). Scope every check to the specific element type (and, for a subarea

@@ -14,6 +14,26 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ---
 
+## Workflow Checkpoints
+
+Only steps with this marker directly below the heading emit checkpoint telemetry:
+
+```markdown
+**Telemetry checkpoint: `<static_snake_case_name>`**
+```
+
+Run from the app directory using the invoked top-level skill's frontmatter `name` and the exact checkpoint marker. `${PLUGIN_ROOT}` is the installed plugin directory.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" "<skill-name>|<checkpoint-name>|<state>" || true
+```
+
+- Emit `started` immediately before the work, then `completed` after success or `failed` before stopping on failure. When a valid branch bypasses the work, emit only `skipped`, without `started`. Do not duplicate emissions already embedded in a command block.
+- Keep checkpoint names and optional info fixed, author-written `snake_case` values of at most 64 characters. Use precise verb-object names without lifecycle suffixes. Append `|<optional-info>` only when a static classification is needed; never include prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data.
+- Keep telemetry fail-open and secondary to the workflow. Ignore emitter output, never retry or inspect the emitter, and never change the work when emission fails. Do not emit checkpoints for unmarked steps.
+
+---
+
 ## Memory Bank
 
 **📋 [memory-bank.md](./memory-bank.md)**

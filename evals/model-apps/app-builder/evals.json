@@ -27,6 +27,11 @@
     "round-trip: authored directEntry survives unchanged",
     "teardown: every declared dashboard has a teardown step",
     "teardown: every declared command bar has a teardown step",
+    "teardown: every declared business rule and process flow has a teardown step",
+    "process: every business rule binds only columns the spec creates",
+    "process: every business rule compiles at least one condition and one action",
+    "process: every BPF step binds a field on the flow entity",
+    "process: every BPF stage is scoped to the flow entity (v1 is single-entity)",
     "ui: enriched default views keep parent lookups and drop createdon",
     "ui: each sub-grid is a full-width section titled by the child display name"
   ],
@@ -130,6 +135,31 @@
         "the customer form's ticket sub-grid is a 1-column full-width section titled 'Tickets' from the child pluralName (#5)",
         "validateAppSpec accepts the relational sample data: the $parent match resolves and the Choice labels are declared (#1/#4)",
         "quick create is enabled on the new_ticket table (#8)"
+      ]
+    },
+    {
+      "id": 5,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Process logic: a case table worked through a staged business process flow, with two business rules gating its fields — exercises businessProcessFlows[] and businessRules[].",
+      "expect": {
+        "tables": [
+          "new_customer",
+          "new_case"
+        ],
+        "relationships": [
+          "new_customer_new_case"
+        ],
+        "views": [
+          "Open Cases"
+        ],
+        "charts": []
+      },
+      "expectations": [
+        "the BPF stage order is Intake, Investigate, Resolve and every step binds a declared column",
+        "the BPF binds the relationship lookup new_accountref, not just the case table’s own columns",
+        "a rule with two conditions compiles both, ANDed, and neither is dropped",
+        "every business rule and the process flow each get exactly one teardown step"
       ]
     }
   ]

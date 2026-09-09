@@ -27,6 +27,8 @@ The native host runtime (`@microsoft/power-apps-native-host`) handles connector 
 
 ### Step 1 — Check Memory Bank
 
+**Telemetry checkpoint: `validate_connector_project`**
+
 Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 Also confirm we're inside a Power Apps mobile app:
@@ -38,6 +40,8 @@ test -f power.config.json && test -f app.config.js
 If either is missing, instruct the user to run `/create-mobile-app` first and stop.
 
 ### Step 2 — Identify Connector
+
+**Telemetry checkpoint: `resolve_connector_request`**
 
 **If `$ARGUMENTS` is provided or the caller already specified the connector**, use it directly and skip the question below.
 
@@ -75,6 +79,8 @@ npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
 After `add-flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
 
 ### Step 3 — Add Connector
+
+**Telemetry checkpoint: `generate_connector_data_source`**
 
 **First, get the connection ID or connection reference** (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
@@ -162,6 +168,8 @@ For each method the user needs:
 Help the user write code using the generated service methods.
 
 ### Step 5 — Build
+
+**Telemetry checkpoint: `validate_connector_integration`**
 
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify the new connector wires in cleanly (~10–20 seconds)."

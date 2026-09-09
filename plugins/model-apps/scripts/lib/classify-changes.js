@@ -36,6 +36,10 @@ const identityOf = {
   form: (f) => `${low(f.entity)}|${f.formType || 'Main'}|${f.name || ''}`,
   page: (p) => `${p.key || p.name}`,
   webResource: (w) => `${w.name}`,
+  // A rule and a flow are both identified by (entity, name) — the same pair the build's reuse query
+  // and the teardown resolver use, so the classifier cannot disagree with them about which is which.
+  businessRule: (r) => `${low(r.entity)}|${r.name}`,
+  businessProcessFlow: (p) => `${low(p.entity)}|${p.name}`,
 };
 
 function low(s) { return String(s == null ? '' : s).toLowerCase(); }
@@ -150,15 +154,24 @@ function classifyAppShell(cur, prior) {
 // Additive-skipped artifacts (charts/commands/dashboards) + web-resources: an ADDED one is created by a
 // full build (no debt); an EDITED existing one is SKIPPED by the additive engine (debt); a REMOVED one's
 // deletion is unproven (debt). Always full build (never a fast shape in v1).
-function classifyAdditive(cur, prior, phase, type, arrKey) {
+function classifyAdditive(cur, prior, phase, type, arrKey, opts = {}) {
+  // `convergedKeys` names the fields the ENGINE reconciles on an existing artifact. An edit confined
+  // to them still needs a full build, but it is applied — so recording it as permanent debt claims a
+  // divergence that will not exist after the rebuild. Business rules and business process flows both
+  // converge `status` (each reuse branch flips statecode in both directions), so a Draft->Active edit
+  // must not be filed as `-edit-not-convergent`.
+  const convergedKeys = opts.convergedKeys || [];
   const out = { fast: [], full: [], debt: [] };
   const { added, removed, common } = alignByIdentity(cur[arrKey], prior[arrKey], identityOf[type]);
   if (added.length) out.full.push(`${phase}: ${added.length} new ${type}(s) added — full build`);
   for (const r of removed) { out.full.push(`${phase}: ${type} '${r.id}' removed`); out.debt.push({ artifactType: type, identity: r.id, reason: `${type}-removed` }); }
   for (const c of common) {
     if (stableStringify(c.cur) !== stableStringify(c.prior)) {
-      out.full.push(`${phase}: ${type} '${c.id}' edited — the additive build engine skips edits to an existing ${type}`);
-      out.debt.push({ artifactType: type, identity: c.id, reason: `${type}-edit-not-convergent` });
+      const onlyConverged = convergedKeys.length && equalExcept(c.cur, c.prior, convergedKeys);
+      out.full.push(onlyConverged
+        ? `${phase}: ${type} '${c.id}' ${convergedKeys.join('/')} changed — reconciled by a full build`
+        : `${phase}: ${type} '${c.id}' edited — the additive build engine skips edits to an existing ${type}`);
+      if (!onlyConverged) out.debt.push({ artifactType: type, identity: c.id, reason: `${type}-edit-not-convergent` });
     }
   }
   return out;
@@ -213,6 +226,12 @@ function classifyChanges(current, prior) {
       case 'commands': merge(classifyAdditive(cur, prior, 'commands', 'command', 'commands')); break;
       case 'dashboards': merge(classifyAdditive(cur, prior, 'dashboards', 'dashboard', 'dashboards')); break;
       case 'web-resources': merge(classifyAdditive(cur, prior, 'web-resources', 'webResource', 'webResources')); break;
+      // Both are additive discover-reconcile: the engine creates what is missing and explicitly does
+      // NOT reapply stage/condition edits to an existing rule/flow ("recreate to change"), so an edit
+      // is real debt. The ONE exception is `status`: both reuse branches converge statecode in both
+      // directions, so a status-only change is applied by a rebuild and is not debt.
+      case 'business-rules': merge(classifyAdditive(cur, prior, 'business-rules', 'businessRule', 'businessRules', { convergedKeys: ['status'] })); break;
+      case 'business-process-flows': merge(classifyAdditive(cur, prior, 'business-process-flows', 'businessProcessFlow', 'businessProcessFlows', { convergedKeys: ['status'] })); break;
       default:
         // An unrecognized changed phase must never silently pass as fast (fail-closed).
         fullReasons.push(`${phase}: changed — no fast-path shape recognized`);
