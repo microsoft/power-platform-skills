@@ -29,6 +29,97 @@ function getAuthToken(envUrl) {
 }
 
 /**
+ * Reads the Azure CLI identity that will supply the Dataverse token. Best-effort and never throws —
+ * it exists to make a failure explicable, so it must not become a failure of its own.
+ * @returns {{user: string, tenantId: string}|null}
+ */
+function azIdentity() {
+  try {
+    const out = execFileSync(
+      'az',
+      ['account', 'show', '--query', '{user:user.name,tenantId:tenantId}', '-o', 'json'],
+      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' }
+    );
+    const parsed = JSON.parse(out);
+    return parsed && parsed.user ? { user: parsed.user, tenantId: parsed.tenantId || '(unknown)' } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * AB#6686427 — prove, before any real work, that the ambient Azure CLI context can actually talk to
+ * the requested org.
+ *
+ * The skill flow selects a PAC profile, but every script here authenticates through the
+ * INDEPENDENTLY active `az` account. In a normal multi-tenant workflow `pac auth` and `az login`
+ * legitimately point at different tenants: `pac org who` succeeds, `az` mints a token for the wrong
+ * tenant, and Dataverse answers 401. That reads as a permission problem, so the user goes looking at
+ * security roles and PAC profiles instead of at `az account show`.
+ *
+ * `WhoAmI` is the probe because it is the cheapest authenticated call and needs no privilege beyond
+ * being a valid user of the org — so a 401 here is about IDENTITY, not about what that identity may
+ * do. That distinction is the whole value: a 403 or a 5xx is deliberately NOT blamed on the tenant,
+ * because misattributing those would send the user down exactly the wrong path, which is the bug
+ * this fixes, mirrored.
+ *
+ * Dependencies are injected for tests. Returns `{ ok: true, identity }` or `{ ok: false, error }`
+ * and never throws — it is a diagnostic.
+ * WhoAmI: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/whoami
+ */
+async function preflightAuth(envUrl, deps = {}) {
+  const getToken = deps.getToken || getAuthToken;
+  const request = deps.request || dataverseRequest;
+  const readIdentity = deps.azIdentity || azIdentity;
+
+  const who = () => {
+    let id = null;
+    try { id = readIdentity(); } catch { id = null; }
+    return id;
+  };
+
+  let token = null;
+  try { token = getToken(envUrl); } catch { token = null; }
+  if (!token) {
+    return {
+      ok: false,
+      error: `no Azure CLI access token could be obtained for ${envUrl}. This is a sign-in problem, not a `
+        + `permissions one — run \`az login\` (add \`--tenant <id>\` if this org lives in another tenant), then retry.`,
+    };
+  }
+
+  let res;
+  try {
+    res = await request(envUrl, 'GET', 'WhoAmI');
+  } catch (e) {
+    // A transport failure says nothing about identity, so it must not be reported as one.
+    return { ok: false, error: `the identity check could not reach ${envUrl}: ${(e && e.message) || e}` };
+  }
+
+  const status = res && (res.status !== undefined ? res.status : res.statusCode);
+  if (status >= 200 && status < 300) {
+    const identity = who() || { user: '(unknown)', tenantId: '(unknown)' };
+    return { ok: true, identity, userId: res.data && (res.data.UserId || res.data.userId) };
+  }
+
+  if (status === 401) {
+    const id = who();
+    const whoText = id
+      ? `The token is being issued to '${id.user}' in tenant ${id.tenantId}.`
+      : 'The active Azure CLI identity could not be read, so the token source is unknown.';
+    return {
+      ok: false,
+      error: `Dataverse rejected the Azure CLI token for ${envUrl} (WhoAmI returned 401). ${whoText} `
+        + `A selected PAC profile does NOT control this — these scripts authenticate through the active `
+        + `Azure CLI account, so \`pac org who\` can succeed while this fails. Run \`az login --tenant <the `
+        + `tenant that owns ${envUrl}>\` and retry.`,
+    };
+  }
+
+  return { ok: false, error: `the identity check against ${envUrl} returned HTTP ${status}, which is not an authentication failure — investigate the response rather than the Azure CLI tenant.` };
+}
+
+/**
  * Makes a raw HTTPS request and resolves with `{ statusCode, body, headers? }` or `{ error }`.
  * @param {object} options
  * @param {string} options.url
@@ -380,6 +471,8 @@ function emitResult(ok, payload) {
 }
 
 module.exports = {
+  preflightAuth,
+  azIdentity,
   getAuthToken,
   makeRequest,
   dataverseRequest,

@@ -9,7 +9,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, emitResult, preflightAuth } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
@@ -1141,6 +1141,14 @@ async function main() {
   }
   const outDir = path.resolve(outArg || '.');
   fs.mkdirSync(outDir, { recursive: true });
+  // AB#6686427 — prove the ambient Azure CLI identity can actually reach this org BEFORE any read.
+  // Every read below is best-effort by design (a tenant without a setting definition, or a caller
+  // without access to one artifact class, must still produce a usable spec), so an auth failure does
+  // not surface as an error here — it degrades to an EMPTY spec: no forms, no views, no columns, and
+  // guessed primary attributes, reported as a success. That is AB#6686423's symptom, and this is the
+  // gate that stops it being mistaken for a round-trip gap.
+  const auth = await preflightAuth(env);
+  if (!auth.ok) { emitResult(false, { ok: false, error: auth.error }); return; }
   const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
   const resolved = await resolveAppId(sdk, appArg);
   if (resolved.error) { emitResult(false, { ok: false, error: resolved.error }); return; }
