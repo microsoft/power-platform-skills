@@ -604,12 +604,26 @@ function notRoundTrippedSummary(inventory) {
   // UNKNOWN class is worse than a known-omitted one, so it is surfaced even when nothing was read.
   const incomplete = (inventory && Array.isArray(inventory.incomplete) ? inventory.incomplete : [])
     .filter((i) => i && i.kind)
-    .map((i) => ({ kind: i.kind, reason: i.reason || 'read failed' }));
+    .map((i) => ({ kind: i.kind, reason: i.reason || 'read failed' }))
+    .sort((a, b) => a.kind.localeCompare(b.kind));
   if (!classes.length && !incomplete.length) return null;
+  // Sorted at EVERY level, not just the table one. The rows arrive from `queryRecords`, i.e. in
+  // whatever order Dataverse returned them, which carries no ordering guarantee — so two downloads
+  // of an unchanged app could emit the same artifacts in a different order. This block is written
+  // into the operator's output and compared between runs, so an unstable order reads as a change
+  // that did not happen, which is the opposite of the point: the report exists to make a real
+  // difference visible. `classes` is already deterministic (built from the fixed CLASSES list).
   return {
     classes,
     total: classes.reduce((n, c) => n + c.count, 0),
-    entities: [...byEntity.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([entity, v]) => ({ entity, ...v })),
+    entities: [...byEntity.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([entity, v]) => ({
+        entity,
+        forms: [...v.forms].sort((a, b) => String(a).localeCompare(String(b))),
+        views: [...v.views].sort((a, b) => String(a).localeCompare(String(b))),
+        charts: [...v.charts].sort((a, b) => String(a).localeCompare(String(b))),
+      })),
     ...(incomplete.length ? { incomplete } : {}),
   };
 }

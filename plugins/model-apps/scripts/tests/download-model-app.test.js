@@ -1344,7 +1344,10 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   assert.match(text, /NOTE: this download does not reconstruct forms\[\], views\[\] or charts\[\]/);
   assert.ok(res.notRoundTripped, 'the summary must ride on the runDownload result, not only on stderr');
   assert.strictEqual(res.notRoundTripped.total, 2, JSON.stringify(res.notRoundTripped));
-  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Everyone Form', 'Dispatcher Form'], views: [], charts: [] }]);
+  // SORTED, not in the order the mock returned them. `notRoundTripped` is compared between runs, so
+  // it sorts at every level; `descriptionInventory` below is the raw read and keeps Dataverse's
+  // order, which is why the two lists differ here.
+  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [] }]);
   // The spec on disk still carries them under descriptionInventory — the note's claim must be true.
   assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Everyone Form', 'Dispatcher Form']);
 });

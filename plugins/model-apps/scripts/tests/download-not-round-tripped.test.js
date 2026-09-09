@@ -116,3 +116,29 @@ test("the note's promise is TRUE: a downloaded spec plans no form/view/chart mut
   const risky = labels.filter((l) => /\b(form|view|chart)\b|delete|prune|deactivate|enrich/i.test(l));
   assert.deepStrictEqual(risky, [], `a downloaded spec planned work against a deployed artifact: ${risky.join(' | ')}`);
 });
+
+// --- determinism -----------------------------------------------------------------------------------
+
+test('the report is stable whatever order Dataverse returns rows in', () => {
+  // The rows come from `queryRecords`, which carries no ordering guarantee. This block is written
+  // into the operator's output and compared BETWEEN runs, so an unstable order reads as a change
+  // that did not happen -- the opposite of the point, which is to make a real difference visible.
+  // Tables were already sorted; the per-table artifact NAME lists were not, so it was half stable.
+  const build = (formNames, incompleteOrder) => notRoundTrippedSummary({
+    forms: formNames.map((n) => ({ entity: 'b_table', name: n })).concat([
+      { entity: 'a_table', name: 'Zulu' }, { entity: 'a_table', name: 'Alpha' },
+    ]),
+    views: [], charts: [],
+    incomplete: incompleteOrder.map((k) => ({ kind: k, reason: 'HTTP 403' })),
+  });
+
+  const one = build(['Zeta', 'Alpha', 'Mid'], ['views', 'charts']);
+  const two = build(['Mid', 'Zeta', 'Alpha'], ['charts', 'views']);
+  assert.deepStrictEqual(one, two, 'two orderings of the same data must produce an identical report');
+
+  // Assert the ordering itself, not just that the two agree -- both could be equally wrong.
+  assert.deepStrictEqual(one.entities.map((e) => e.entity), ['a_table', 'b_table']);
+  assert.deepStrictEqual(one.entities[0].forms, ['Alpha', 'Zulu']);
+  assert.deepStrictEqual(one.entities[1].forms, ['Alpha', 'Mid', 'Zeta']);
+  assert.deepStrictEqual(one.incomplete.map((i) => i.kind), ['charts', 'views']);
+});
