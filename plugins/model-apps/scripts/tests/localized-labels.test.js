@@ -651,6 +651,15 @@ test('an INCONCLUSIVE existence probe HALTS a localized table rather than fallin
     'a localized entity must halt on an unresolved probe');
   assert.strictEqual(findTablesCalled, 0, 'and it must NOT have issued the poisoning read to get there');
 
+  // The halt must name a REAL phase. `stages.js` is the single source of truth for the 16 phase
+  // names, and a halt tagged with one that is not in it makes the error report and the logs
+  // disagree with every other halt in the file — which both use `data-model`.
+  const { PHASES } = require('../lib/stages.js');
+  let halted;
+  await provisionDataModel(args({ 1033: 'Table', 3082: 'Tabla' })).catch((e) => { halted = e; });
+  assert.ok(PHASES.includes(halted.phase), `phase '${halted.phase}' is not one of ${JSON.stringify(PHASES)}`);
+  assert.strictEqual(halted.phase, 'data-model');
+
   // The counterfactual: a PLAIN label has nothing to lose, so the old fallback still applies and the
   // build proceeds. Tightening this path too would fail builds that are entirely correct.
   await provisionDataModel(args('Table'));

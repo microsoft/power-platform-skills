@@ -198,6 +198,25 @@ test('a path-bearing or query-bearing env is refused, not silently trimmed to it
 });
 
 // --- emitResult: a single explained failure must not be dressed as a partial one -----------------
+test('both CLIs report an auth-preflight failure with the SAME payload shape', () => {
+  // `emitResult` reserves `errors: [...]` for a genuine PARTIAL failure and summarises it as a COUNT.
+  // `build-model-app.js` wrapped its single preflight message in that array while
+  // `download-model-app.js` passed it as `error`, so the two sibling CLIs printed different things
+  // for the identical failure — and the one users hit on an apply printed the count, replacing a
+  // message written specifically to say which identity to sign in as.
+  //
+  // Asserted on the SOURCE because the alternative is spawning both CLIs against a live tenant.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  for (const cli of ['build-model-app.js', 'download-model-app.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', cli), 'utf8');
+    const line = src.split('\n').find((l) => /emitResult\(false,.*auth\.error/.test(l));
+    assert.ok(line, `${cli}: expected an emitResult call carrying auth.error`);
+    assert.match(line, /error:\s*auth\.error/, `${cli}: a single explained failure must use \`error\`: ${line.trim()}`);
+    assert.doesNotMatch(line, /errors:\s*\[/, `${cli}: \`errors: [...]\` is for PARTIAL failures and prints only a count: ${line.trim()}`);
+  }
+});
+
 test('emitResult prints a single error message instead of "unknown error(s)"', () => {
   // The auth preflight, the app-id resolver and friends all fail with { ok:false, error:"<what to
   // do>" } and no `errors` array. The old branch printed "Operation completed with unknown error(s)"

@@ -722,7 +722,7 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
         + 'Resolving this by the broad metadata read the build normally falls back to is what makes Dataverse store '
         + 'ONLY the base-language label (live-measured, 0/4 vs 4/4), so the build stops here instead of silently '
         + 'creating an English-only table. Re-run once the environment answers metadata reads.',
-        { phase: 'entities', code: 'table-probe-inconclusive', recoverable: true },
+        { phase: 'data-model', code: 'table-probe-inconclusive', recoverable: true },
       );
     }
     // Any other status is inconclusive — fall through to findTables rather than assume "absent",

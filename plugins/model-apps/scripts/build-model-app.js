@@ -530,7 +530,12 @@ async function main() {
   // identity. An INCONCLUSIVE verdict never blocks; see preflightAuth.
   if (opts.apply) {
     const auth = await preflightAuth(env);
-    if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, errors: [auth.error] }); return; }
+    // A single, already-explained failure uses `error`, not `errors: [...]`. `emitResult` reserves
+    // the array for a genuine PARTIAL failure and summarises it as a COUNT ("completed with 1
+    // error(s); see stdout JSON") — which would replace a message written specifically to tell the
+    // operator which identity to sign in as. `download-model-app.js` uses `error` for the identical
+    // failure, so the array here also made two sibling CLIs report the same problem differently.
+    if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, error: auth.error }); return; }
     if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
   }
   const authoringLanguageCode = opts.apply
