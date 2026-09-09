@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -242,4 +243,35 @@ test('both successful metadata publish paths invalidate planning inventory', () 
   assert.doesNotMatch(skill, /CLAUDE_SKILL_DIR.*dataverse-inventory-cache/);
   assert.match(skill, /After the `publish` phase succeeds[\s\S]*dataverse-inventory-cache\.js/);
   assert.match(skill, /After a 2xx publish[\s\S]*dataverse-inventory-cache\.js/);
+});
+
+test('publish checkpoint cleanup tolerates an absent path but surfaces deletion errors', (testContext) => {
+  const skill = fs.readFileSync(path.resolve(
+    __dirname, '..', '..', 'skills', 'add-dataverse', 'SKILL.md',
+  ), 'utf8');
+  const cleanup = skill.match(/node -e "([^"]+)" \\\r?\n\s+"\$\{PUBLISH_CHECKPOINT:-\}"/);
+  assert.ok(cleanup, 'checkpoint cleanup must default an unset shell variable to an empty path');
+
+  const file = path.join(path.dirname(tempFile(testContext)), 'publish checkpoint.json');
+  const runCleanup = args => spawnSync(process.execPath, ['-e', cleanup[1], ...args], {
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+  fs.writeFileSync(file, '{}');
+  for (const args of [[], ['']]) {
+    const result = runCleanup(args);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{}');
+  }
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = runCleanup([file]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(file), false);
+  }
+
+  const failed = runCleanup([path.dirname(file)]);
+  assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, /EISDIR|ERR_FS_EISDIR|EPERM/);
+  assert.equal(fs.existsSync(path.dirname(file)), true);
 });
