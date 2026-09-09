@@ -32,6 +32,12 @@ rebuilding a real app into a second environment.
   plural rule outside English. Anywhere the spec names an artifact by its label — `sampleData`
   picking a Choice option, `surfaces[]` naming a screen — **any** of its languages resolves.
   A single-language label stays a plain string everywhere, so no existing spec changes shape.
+
+  **The build halts if an LCID you name is not provisioned in the organization.** Live-measured: a
+  create carrying an unprovisioned LCID returns *success* and Dataverse keeps only the provisioned
+  label, reporting nothing. Without the halt this feature would have reproduced the very bug it
+  fixes. Best-effort like the existing `languageCode` check — an unreadable probe changes nothing,
+  and an all-plain-label spec never pays the round trip.
 - **`roleGrants[]` — extend a security role you did not author.** Adding a table to an existing app
   deployed the table, its forms and its navigation while every non-admin role still had no access to
   it, and nothing said so ([AB#6686429]). `roleGrants[]` adds privileges for a table to a role that

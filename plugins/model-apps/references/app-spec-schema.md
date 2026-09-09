@@ -171,6 +171,14 @@ An `entities[].localizedLabels` key is therefore **not** a supported shape.
   those users read a schema name — but a deliberately single-non-English label is legal.
 - Labels for all languages are written in **one** create call. That matters: a later single-language
   `PUT` can overwrite the base label even with merge semantics.
+- **Every LCID you name must be provisioned in the organization, and the build halts if one is not.**
+  This is the guard the feature depends on, not a nicety. Live-measured against a 1033-only org:
+  `createTable` carrying `{ "1033": …, "3082": … }` returns **success** and stores **only** the 1033
+  label — Dataverse does not warn, error, or report the drop anywhere. Without the halt you would get
+  a green build with the second language silently gone, which is the exact failure this feature
+  exists to end. The check is best-effort in the same way the existing `languageCode` check is: an
+  unreadable `RetrieveProvisionedLanguages` leaves the build unchanged, and a spec with only plain
+  string labels never pays the round trip.
 
 **Referencing a localized label.** Anywhere the spec names an artifact by its label — `sampleData`
 choosing a Choice option, or `personas[].jobs[].surfaces[]` naming a screen — **any** of its

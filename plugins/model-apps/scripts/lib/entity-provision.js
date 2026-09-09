@@ -14,6 +14,7 @@ const {
   quickCreateEnabledFor,
   normalizeLanguageCode,
   labelText,
+  localizedLabelLcids,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -77,6 +78,70 @@ async function checkProvisioned(lcid, source, provisionedLanguages) {
     + `through the columns. Provisioned languages: ${list.join(', ')}. Pick one of those, provision `
     + `${lcid} in the organization first, or omit the override to use the base language.`,
     { phase: 'data-model', code: 'language-not-provisioned', recoverable: false }
+  );
+}
+
+// Every LCID the spec's LOCALIZED labels ask for, deduped and sorted, with an example of where each
+// was declared so the halt below can name one. AB#6686428.
+function localizedLabelLcidsInSpec(spec) {
+  const byLcid = new Map(); // lcid -> a human-readable "where" for the first site that used it
+  const note = (value, where) => {
+    for (const lcid of localizedLabelLcids(value)) if (!byLcid.has(lcid)) byLcid.set(lcid, where);
+  };
+  for (const e of (spec && spec.entities) || []) {
+    const at = `entity ${e && e.schemaName}`;
+    note(e && e.displayName, `${at} displayName`);
+    note(e && e.pluralName, `${at} pluralName`);
+    note(e && e.primaryAttribute && e.primaryAttribute.displayName, `${at} primaryAttribute.displayName`);
+    for (const c of (e && e.columns) || []) {
+      note(c && c.displayName, `${at} column ${c && c.schemaName} displayName`);
+      for (const o of (c && c.options) || []) note(o, `${at} column ${c && c.schemaName} option`);
+    }
+    for (const k of (e && e.alternateKeys) || []) note(k && k.displayName, `${at} alternate key ${k && k.schemaName}`);
+  }
+  for (const r of (spec && spec.relationships) || []) note(r && r.lookup && r.lookup.displayName, `relationship lookup ${r && r.lookup && r.lookup.schemaName}`);
+  for (const g of (spec && spec.globalChoices) || []) {
+    note(g && g.displayName, `globalChoice ${g && g.name} displayName`);
+    for (const o of (g && g.options) || []) note(o, `globalChoice ${g && g.name} option`);
+  }
+  return [...byLcid.entries()].sort(([a], [b]) => a - b).map(([lcid, where]) => ({ lcid, where }));
+}
+
+// Halt when a LOCALIZED label names a language the organization has not provisioned. AB#6686428.
+//
+// This is NOT a validation nicety — it is the difference between the feature working and the feature
+// re-creating the exact bug it fixes. LIVE-MEASURED against a 1033-only organization: `createTable`
+// with `DisplayName: { 1033, 3082 }` returns SUCCESS and stores ONLY the 1033 label. Dataverse does
+// not warn, error, or report the drop anywhere. So without this check an author labels a table in
+// Spanish, gets a green build, and the Spanish is simply gone — "a successful build with the request
+// gone and nothing reporting the loss", which is the failure this whole feature exists to end.
+//
+// Distinct from `checkProvisioned` above, which guards the single build-wide authoring language: that
+// one can also fail LOUDLY later (a DateTime/Memo column is rejected outright), whereas a dropped
+// localized label has no downstream symptom at all.
+//
+// Best-effort in exactly the same way: an unreadable probe leaves the build unchanged, because a
+// diagnostic that cannot answer must not block work that would otherwise succeed.
+async function checkLocalizedLabelLanguages(spec, provisionedLanguages) {
+  const wanted = localizedLabelLcidsInSpec(spec);
+  if (!wanted.length || typeof provisionedLanguages !== 'function') return;
+  let list;
+  try {
+    list = await provisionedLanguages();
+  } catch {
+    return;
+  }
+  if (!Array.isArray(list) || !list.length) return;
+  const missing = wanted.filter((w) => !list.includes(w.lcid));
+  if (!missing.length) return;
+  throw new BuildHalt(
+    `${missing.length} localized label language(s) are not provisioned in this organization: `
+    + `${missing.map((m) => `${m.lcid} (first used by ${m.where})`).join('; ')}. `
+    + 'Dataverse would ACCEPT those labels and silently store only the provisioned one — live-measured: '
+    + 'a create carrying an unprovisioned LCID returns success and the label is simply absent afterwards, '
+    + 'with nothing reporting the loss. Provisioned languages: '
+    + `${list.join(', ')}. Provision the language in the organization first, or drop it from the labels.`,
+    { phase: 'data-model', code: 'localized-label-language-not-provisioned', recoverable: false }
   );
 }
 
@@ -528,6 +593,11 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   const resolvedLanguageCode = preResolvedLanguageCode
     || await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
 
+  // Before any write: refuse a localized label naming a language this org has not provisioned.
+  // Dataverse would accept it and silently keep only the provisioned label (live-measured), so this
+  // must run ahead of the first createTable rather than as a post-hoc verify.
+  await checkLocalizedLabelLanguages(spec, provisionedLanguages);
+
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
 
@@ -939,4 +1009,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages };

@@ -92,3 +92,27 @@ test('the warning says what to DO about it', () => {
 test('notRoundTrippedWarning is empty for an empty summary, so nothing is printed', () => {
   assert.strictEqual(notRoundTrippedWarning(null), '');
 });
+
+test("the note's promise is TRUE: a downloaded spec plans no form/view/chart mutation", () => {
+  // The note tells an operator "Rebuilding into THIS environment leaves them untouched." That is a
+  // promise about the BUILD, made by the DOWNLOAD, so nothing else would catch it going stale — and
+  // a wrong promise here is worse than the silence it replaced, because the operator would act on it.
+  //
+  // Two mechanisms could break it and both are checked: the forms phase prunes fields for a form
+  // whose spec declares an EXPLICIT layout (unreachable with `forms: []`), and the views phase
+  // enriches a table's stock Active/Inactive views (skipped because download flags every recovered
+  // table `existing: true`).
+  const { planFor, enrichesDefaultViews } = require('../lib/sdk-build.js');
+  const downloaded = {
+    solution: { uniqueName: 's', publisherPrefix: 'p' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'contoso_order', existing: true, displayName: 'Order', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    views: [], charts: [], forms: [], commands: [], dashboards: [], pages: [], webResources: [],
+    appShell: { areas: [] },
+  };
+  assert.strictEqual(enrichesDefaultViews(downloaded, downloaded.entities[0]), false,
+    'download flags recovered tables existing:true precisely so the stock views are left alone');
+  const labels = planFor(downloaded, {}).map((p) => p.label);
+  const risky = labels.filter((l) => /\b(form|view|chart)\b|delete|prune|deactivate|enrich/i.test(l));
+  assert.deepStrictEqual(risky, [], `a downloaded spec planned work against a deployed artifact: ${risky.join(' | ')}`);
+});

@@ -346,7 +346,99 @@ test('a metadata read that returned no labels falls back to the SDK display name
   assert.strictEqual(e.displayName, 'Order');
 });
 
-// --- the build payload ----------------------------------------------------------------------------
+// --- the unprovisioned-language guard -------------------------------------------------------------
+//
+// THE most important test in this file. LIVE-MEASURED against a 1033-only organization: `createTable`
+// carrying `DisplayName: { 1033, 3082 }` returns SUCCESS and stores ONLY the 1033 label. Dataverse
+// does not warn, error or report the drop anywhere. Without this guard the feature would recreate the
+// exact bug it was built to fix — a green build with the request silently gone.
+
+test('a localized label naming an UNPROVISIONED language HALTS before any write', async () => {
+  const { provisionDataModel, BuildHalt } = require('../lib/entity-provision.js');
+  const writes = [];
+  const s = base();
+  s.entities[0].displayName = ES;              // asks for 3082
+  s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base' };
+  const sdk = { createTable: async (o) => { writes.push(o); return { logicalName: 'x', entitySetName: 'xs' }; } };
+  const runner = { run: async (p, l, fn) => fn(), skip: () => {}, mapLimit: async (i, n, fn) => Promise.all(i.map(fn)) };
+  await assert.rejects(
+    () => provisionDataModel({
+      spec: s, sdk, provision: { findTables: async () => [], findColumns: async () => [], queryRecords: async () => [] },
+      runner, preResolvedLanguageCode: 1033, provisionedLanguages: async () => [1033],
+    }),
+    (err) => {
+      assert.ok(err instanceof BuildHalt, `expected a BuildHalt, got ${err && err.name}`);
+      assert.strictEqual(err.code, 'localized-label-language-not-provisioned');
+      assert.match(err.message, /3082 \(first used by entity contoso_projectbaseline displayName\)/, err.message);
+      // The message must state WHY silence is the danger, or the reader assumes a warning would suffice.
+      assert.match(err.message, /silently store only the provisioned one/);
+      assert.match(err.message, /Provisioned languages: 1033/);
+      return true;
+    },
+  );
+  // BEFORE any write, not as a post-hoc verify: a partial data model is the outcome being avoided.
+  assert.deepStrictEqual(writes, [], 'the build wrote a table before checking the label languages');
+});
+
+test('the guard names EVERY unprovisioned language, sorted, with where each came from', async () => {
+  const { localizedLabelLcidsInSpec, checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
+  const s = base();
+  s.entities[0].displayName = { 1033: 'Baseline', 3082: 'Línea base' };
+  s.entities[0].pluralName = { 1033: 'Baselines', 1031: 'Basislinien' };
+  s.entities[0].columns = [
+    // A column DISPLAY NAME and a Choice OPTION carry different unprovisioned LCIDs, so a guard that
+    // walks only one of the two is caught. (1040 = it-IT on the column, 1036 = fr-FR on the option.)
+    { schemaName: 'contoso_note', type: 'Text', displayName: { 1033: 'Note', 1040: 'Nota' } },
+    { schemaName: 'contoso_status', type: 'Choice', options: [{ 1033: 'Open', 1036: 'Ouvert' }] },
+  ];
+  s.entities[0].alternateKeys = [{ schemaName: 'contoso_key', columns: ['contoso_title'], displayName: { 1033: 'Key', 1043: 'Sleutel' } }];
+  s.entities.push({ schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] });
+  s.relationships = [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_projectbaseline', lookup: { schemaName: 'contoso_projectid', displayName: { 1033: 'Project', 1053: 'Projekt' } } }];
+  s.globalChoices = [{ name: 'contoso_p', displayName: { 1033: 'P', 3082: 'P' }, options: [{ 1033: 'High', 1045: 'Wysoki' }] }];
+  // Every authorable label site must be walked, or a spec passes the guard and still loses a language.
+  assert.deepStrictEqual(localizedLabelLcidsInSpec(s).map((w) => w.lcid), [1031, 1033, 1036, 1040, 1043, 1045, 1053, 3082]);
+  await assert.rejects(
+    () => checkLocalizedLabelLanguages(s, async () => [1033]),
+    (err) => {
+      for (const lcid of [1031, 1036, 1040, 1043, 1045, 1053, 3082]) assert.match(err.message, new RegExp(String(lcid)), `${lcid} missing from: ${err.message}`);
+      assert.match(err.message, /1031 \(first used by entity contoso_projectbaseline pluralName\)/);
+      assert.match(err.message, /1036 \(first used by entity contoso_projectbaseline column contoso_status option\)/);
+      assert.match(err.message, /1040 \(first used by entity contoso_projectbaseline column contoso_note displayName\)/);
+      assert.match(err.message, /1043 \(first used by entity contoso_projectbaseline alternate key contoso_key\)/);
+      assert.match(err.message, /1045 \(first used by globalChoice contoso_p option\)/);
+      assert.match(err.message, /1053 \(first used by relationship lookup contoso_projectid\)/);
+      return true;
+    },
+  );
+});
+
+test('the guard passes when every requested language IS provisioned', async () => {
+  const { checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
+  const s = base();
+  s.entities[0].displayName = ES;
+  s.entities[0].pluralName = { 1033: 'Baselines', 3082: 'Líneas base' };
+  await checkLocalizedLabelLanguages(s, async () => [1033, 3082]); // must not throw
+});
+
+test('the guard is best-effort: an unreadable probe leaves the build unchanged', async () => {
+  // Identical policy to the existing `checkProvisioned`: a diagnostic that cannot answer must never
+  // block work that would otherwise succeed.
+  const { checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
+  const s = base();
+  s.entities[0].displayName = ES;
+  s.entities[0].pluralName = { 1033: 'Baselines', 3082: 'Líneas base' };
+  for (const probe of [undefined, async () => { throw new Error('403'); }, async () => [], async () => null]) {
+    await checkLocalizedLabelLanguages(s, probe); // must not throw
+  }
+});
+
+test('the guard costs nothing for a spec with only plain labels', async () => {
+  // No localized labels -> the probe is never even called, so an all-string spec pays no round trip.
+  const { checkLocalizedLabelLanguages } = require('../lib/entity-provision.js');
+  let called = 0;
+  await checkLocalizedLabelLanguages(base(), async () => { called += 1; return [1033]; });
+  assert.strictEqual(called, 0);
+});
 
 test('the localized label reaches the SDK UNFLATTENED', async () => {
   // The plugin must not pre-flatten: the SDK's serializer is what turns a map into a multi-entry
