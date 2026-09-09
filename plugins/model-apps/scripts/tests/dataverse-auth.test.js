@@ -180,18 +180,70 @@ test('AB#6686427: the preflight is a diagnostic and never throws', async () => {
   }
 });
 
-test('AB#6686427: a non-401 failure is NOT reported as a tenant mismatch', async () => {
+test('AB#6686427: a non-401 failure is INCONCLUSIVE, not a block and not a tenant mismatch', async () => {
   // A 403 is a real privilege problem and a 500 is the service; blaming the az tenant for either
   // would send the user down exactly the wrong path — the mirror of the bug being fixed.
-  for (const status of [403, 500]) {
+  //
+  // They must also NOT BLOCK. This probe goes through `dataverseRequest`, which retries fewer
+  // statuses and fewer times than the `createAzHttpClient` the real download uses (that one also
+  // retries 504). A transient 5xx the download would have ridden out must not be turned into a hard
+  // failure by a diagnostic sitting in front of it. Found in review.
+  for (const status of [403, 429, 500, 504]) {
     const r = await preflightAuth('https://contoso.crm.dynamics.com', {
       getToken: () => 'token',
-      request: async () => ({ status, data: {} }),
+      request: async () => ({ status, data: { error: { message: 'upstream detail' } } }),
       azIdentity: () => ({ user: 'maker@contoso.com', tenantId: 'aaaa' }),
     });
     assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.inconclusive, true, `${status} must be inconclusive, never blocking`);
     assert.doesNotMatch(r.error, /az login --tenant/, `${status} must not be blamed on the az tenant`);
+    assert.match(r.error, /upstream detail/, 'the server message explains a 403 and must survive');
   }
+});
+
+test('AB#6686427: a non-HTTPS or malformed env is refused BEFORE any token is acquired', async () => {
+  // The preflight runs ahead of createAzHttpClient's credential boundary and goes through
+  // dataverseRequest, whose transport falls back to plain `http` for a non-HTTPS scheme. Without
+  // this gate a malformed --env could put a bearer token on the wire in clear text. Found in review.
+  for (const bad of ['http://contoso.crm.dynamics.com', 'not-a-url', 'ftp://x/y', '']) {
+    let tokenAsked = 0;
+    const r = await preflightAuth(bad, {
+      getToken: () => { tokenAsked++; return 'token'; },
+      request: async () => { throw new Error('must not reach the wire'); },
+      azIdentity: () => null,
+    });
+    assert.strictEqual(r.ok, false, `${bad} must be refused`);
+    assert.strictEqual(r.inconclusive, undefined, 'a bad target is definitive, not inconclusive');
+    assert.strictEqual(tokenAsked, 0, `no token may be acquired for ${bad}`);
+    assert.match(r.error, /https/i);
+  }
+});
+
+test('AB#6686427: a CLAIMS CHALLENGE 401 is not blamed on the tenant', async () => {
+  // Conditional Access / CAE answer 401 with `WWW-Authenticate: ... error="insufficient_claims"`,
+  // and `az login --tenant` does not fix it. Asserting tenant divergence as a certainty would be the
+  // same misattribution this bug is about, pointed somewhere new. Found in review.
+  const r = await preflightAuth('https://contoso.crm.dynamics.com', {
+    getToken: () => 'token',
+    request: async () => ({ status: 401, data: null, headers: { 'www-authenticate': 'Bearer error="insufficient_claims", claims="eyJ..."' } }),
+    azIdentity: () => ({ user: 'maker@contoso.com', tenantId: 'aaaa' }),
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.error, /claims/i);
+  assert.doesNotMatch(r.error, /az login --tenant/, 'a claims challenge is not a tenant problem');
+});
+
+test('AB#6686427: the happy path does not shell out to az for an identity nobody asked for', async () => {
+  // The caller only reads `auth.ok`; paying for an `az account show` subprocess on every successful
+  // run is pure cost. Found in review.
+  let idReads = 0;
+  const r = await preflightAuth('https://contoso.crm.dynamics.com', {
+    getToken: () => 'token',
+    request: async () => ({ status: 200, data: { UserId: 'u' } }),
+    azIdentity: () => { idReads++; return { user: 'maker@contoso.com', tenantId: 'aaaa' }; },
+  });
+  assert.strictEqual(r.ok, true);
+  assert.ok(idReads <= 1, `identity read at most once on success, got ${idReads}`);
 });
 
 // --- AB#6686424: a terminal 401 must explain itself ----------------------------------------------
@@ -253,4 +305,21 @@ test('AB#6686424: a 2xx is returned untouched (no identity read on the happy pat
   const res = { status: 200, data: { ok: 1 } };
   assert.strictEqual(ensureOk(res, 'ctx', { azIdentity: () => { called++; return null; } }), res);
   assert.strictEqual(called, 0, 'must not shell out to az on every successful call');
+});
+
+test('AB#6686424: a bodyless error does not print "null" as the server message', () => {
+  // Found by LIVE verification, not by the unit fixtures: a real Dataverse 401 often carries no body
+  // at all, so `data` is null and the message read "HTTP 401 — null". Every unit fixture supplied a
+  // message, so nothing caught it.
+  const { ensureOk } = require('../lib/dataverse-auth.js');
+  for (const [status, data] of [[401, null], [500, null], [404, undefined]]) {
+    assert.throws(
+      () => ensureOk({ status, data }, 'ctx', { azIdentity: () => null }),
+      (e) => {
+        assert.doesNotMatch(e.message, /— null|— undefined/, `${status} must not print a bare null: ${e.message}`);
+        assert.match(e.message, /no response body/);
+        return true;
+      }
+    );
+  }
 });

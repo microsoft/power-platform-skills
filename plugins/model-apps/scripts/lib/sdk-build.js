@@ -1777,21 +1777,29 @@ async function runSdkBuild(spec, opts = {}) {
     // AB#6686425: this map holds ONE id per entity, so a second Main form on the same table
     // overwrites the first. That is correct for what the map is for — the app shell wires one form
     // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably
-    // concludes the other ids were lost. They are not: `created.formIds` below holds every form.
-    // Say so at the moment the overwrite happens rather than leaving the reader to find the second
-    // map, because the failure mode is someone re-querying `systemform` to recover ids the build
-    // already returned.
-    const mainFormSeen = new Map(); // entity -> first form name that claimed the slot
+    // concludes the other ids were lost. `created.formIds` below is keyed by the (entity, formType,
+    // name) triple and normally holds them all.
+    //
+    // The warning deliberately does NOT promise that `formIds` is complete: `formIdentityKey` omits
+    // `formId`, which the App Spec supports precisely so two forms can share an entity, type and
+    // name. Two such pinned forms collide in `formIds` as well, and claiming otherwise would send
+    // the reader to a map that cannot answer them either.
+    const mainFormSeen = new Map(); // entity -> first Main form's display name, in spec order
     defs.forEach((d, i) => {
       if ((d.f.formType || 'Main') !== 'Main') return;
       const key = d.f.entity.toLowerCase();
-      if (mainFormSeen.has(key) && typeof opts.warn === 'function') {
-        opts.warn(`entity ${key} has more than one Main form ("${mainFormSeen.get(key)}" and "${d.f.name}"); `
-          + `created.forms keeps ONE id per entity for the app shell, so it now reports "${d.f.name}". `
-          + 'Every form id is in created.formIds, keyed "entity|formType|name" — read that map rather than '
-          + 're-querying systemform.');
-      } else if (!mainFormSeen.has(key)) {
-        mainFormSeen.set(key, d.f.name);
+      // `name` is optional on a form and is compiled to "<entity> form"; using the raw spec value
+      // here would print "undefined" for exactly the forms the author did not name.
+      const shownName = d.f.name || (d.def && d.def.name) || `${key} form`;
+      if (!mainFormSeen.has(key)) {
+        mainFormSeen.set(key, shownName);
+      } else if (typeof opts.warn === 'function') {
+        const distinct = formIdentityKey(d.f) !== formIdentityKey({ entity: d.f.entity, formType: 'Main', name: mainFormSeen.get(key) });
+        opts.warn(`entity ${key} has more than one Main form ("${mainFormSeen.get(key)}" and "${shownName}"); `
+          + `created.forms keeps ONE id per entity for the app shell, so it now reports "${shownName}". `
+          + (distinct
+            ? 'The other ids are in created.formIds, keyed "entity|formType|name" — read that map rather than re-querying systemform.'
+            : 'These two share an entity, type and name, so created.formIds cannot separate them either — give them distinct names.'));
       }
       result.created.forms[key] = ids[i];
     });

@@ -1148,7 +1148,11 @@ async function main() {
   // guessed primary attributes, reported as a success. That is AB#6686423's symptom, and this is the
   // gate that stops it being mistaken for a round-trip gap.
   const auth = await preflightAuth(env);
-  if (!auth.ok) { emitResult(false, { ok: false, error: auth.error }); return; }
+  if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, error: auth.error }); return; }
+  // An INCONCLUSIVE probe must not block: it goes through a client with a weaker retry policy than
+  // the one the download itself uses, so a transient 5xx here would otherwise fail a run that would
+  // have succeeded. Surface it and continue.
+  if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
   const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
   const resolved = await resolveAppId(sdk, appArg);
   if (resolved.error) { emitResult(false, { ok: false, error: resolved.error }); return; }
