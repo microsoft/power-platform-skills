@@ -375,12 +375,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       If the user confirms, set `SKIP_TEMPLATE_SOLUTION_IMPORT = true`. If the user declines, stop. Do not emit an import result event because no solution import was attempted.
 
-   6. Capture a site list snapshot before either solution import or site upload:
-      ```bash
-      node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-before-pages-list.txt>"
-      ```
-      If the result is `ok: false`, surface the error and stop before any environment mutation. This snapshot is later compared with the list after `upload-code-site`; supporting-solution import is not expected to create a site.
-   7. Render and open a read-only status page:
+   6. Render and open a read-only status page:
       ```bash
       # Create <temp-import-status-dir>/ and write this initial status JSON to <temp-import-status-dir>/status.json:
       # Import path:
@@ -396,7 +391,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/open-url.js" --url "<url from <temp-import-status-dir>/url.txt>"
       ```
       Reuse the already-downloaded local preview image URLs from the browser step; do not fetch preview images again for this page.
-   8. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solutions** as `in_progress`. Process `TEMPLATE_SOLUTIONS_TO_IMPORT` sequentially in its existing case-insensitive lexical unique-name order. For each entry, set `CURRENT_TEMPLATE_SOLUTION` and prepare its unmanaged solution for import:
+   7. Unless `SKIP_TEMPLATE_SOLUTION_IMPORT = true`, mark **Import template supporting solutions** as `in_progress`. Process `TEMPLATE_SOLUTIONS_TO_IMPORT` sequentially in its existing case-insensitive lexical unique-name order. For each entry, set `CURRENT_TEMPLATE_SOLUTION` and prepare its unmanaged solution for import:
       ```bash
       # Update the status JSON:
       # { "state": "running", "phase": "solution", "message": "Preparing solution <CURRENT_TEMPLATE_SOLUTION.uniqueName>" }
@@ -490,7 +485,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       If the error is `AttachmentBlocked`, point to `/import-solution` Phase 5b remediation.
       Only continue to the next step when the import poll result is `Succeeded`.
-   9. When every required solution import succeeds, mark **Import template supporting solutions** as `completed`, then run the `template_import_success` telemetry command once. If every solution import was skipped, mark the task as skipped and do not emit an import event:
+   8. When every required solution import succeeds, mark **Import template supporting solutions** as `completed`, then run the `template_import_success` telemetry command once. If every solution import was skipped, mark the task as skipped and do not emit an import event:
       ```bash
       node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
         --eventName template_import_success \
@@ -501,7 +496,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --seedApplied "false"
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
-   10. Mark **Clone and upload template site** as `in_progress`. Update the status page:
+   9. Mark **Clone and upload template site** as `in_progress`. Update the status page:
       ```json
       { "state": "running", "phase": "site", "message": "Cloning and uploading template site" }
       ```
@@ -517,8 +512,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       pac pages clone --path "<SELECTED_TEMPLATE_WEBSITE_CODE>" --outputDirectory "<fresh temp clone directory>" --name "<SELECTED_TEMPLATE.displayName>" --overwrite
       pac pages upload-code-site --rootPath "<cloned code-site root>" --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
-      Save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`. Never upload `SELECTED_TEMPLATE_WEBSITE_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
-   11. If clone or upload fails, run `template_clone_failure` telemetry silently with `errorClass` set to `PacPagesClone` or `PacPagesUploadCodeSite` from the returned `step`, and a short non-PII `errorDescription`:
+      Immediately after `pac pages clone`, the wrapper reads `<clonedPath>/.powerpages-site/website.yml`. It requires a valid `id` before upload, then returns that cloned identity after `upload-code-site` succeeds. Save `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`. Never upload `SELECTED_TEMPLATE_WEBSITE_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
+   10. If clone, cloned-identity inspection, or upload fails, run `template_clone_failure` telemetry silently with `errorClass` set to `PacPagesClone` for `clone`/`clone-output`, or `PacPagesUploadCodeSite` for `upload`, and a short non-PII `errorDescription`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --eventName template_clone_failure \
@@ -536,7 +531,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       > 🚦 **Gate (progress · create-site:1.5.clone-failed):** Choose how to proceed after cloning or uploading the packaged template site fails.
       >
-      > **Trigger:** Phase 1.5 when `pac pages clone` or `pac pages upload-code-site` fails.
+      > **Trigger:** Phase 1.5 when `pac pages clone`, cloned `.powerpages-site/website.yml` identity inspection, or `pac pages upload-code-site` fails.
       > **Why we ask:** The temp directory can contain clone output, the environment can contain a partial code-site upload, and supporting solutions may already be installed.
       > **Cancel leaves:** `partial-template-clone` — cached template artifacts and local clone files remain; supporting solutions or a partial site upload may also remain in Dataverse.
 
@@ -545,7 +540,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       | The template site could not be cloned or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
 
       Do not retry automatically. A retry must use a new temporary output directory. If the user falls back to from-scratch, explain that supporting solutions or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
-   12. When clone and upload succeed, mark **Clone and upload template site** as `completed` and run `template_clone_success` telemetry silently:
+   11. When clone and upload succeed, mark **Clone and upload template site** as `completed` and run `template_clone_success` telemetry silently:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --eventName template_clone_success \
@@ -555,15 +550,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
          --audience "<internal|external from Phase 1 discovery>"
        ```
        Do not include the site name, clone path, URL, or Website Record ID in telemetry.
-   13. Mark **Show inactive template site** as `in_progress`. Capture the post-upload site list and identify the new site:
-      ```bash
-      node "${PLUGIN_ROOT}/scripts/capture-pages-list.js" --output "<temp-after-pages-list.txt>"
-      node "${PLUGIN_ROOT}/scripts/diff-pages-list.js" --before "<temp-before-pages-list.txt>" --after "<temp-after-pages-list.txt>" --expectedSiteName "<SELECTED_TEMPLATE.displayName>"
-      ```
-      - **`status: "found"` and `inactive: true`**: set `IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`, and `IMPORTED_SITE_STATE`, then tell the user: "Template `<displayName>` was created as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). Current state: `<IMPORTED_SITE_STATE>`. Seed data and activation are next."
-      - **Any other result**: show the diff result and stop before seeding or activation. The upload may have completed, but the new inactive site was not identified safely. Tell the user to run `pac pages list -v` and then `/activate-site` with the correct Website Record ID.
-   14. Mark **Show inactive template site** as `completed`.
-   15. If `SELECTED_TEMPLATE_VARIANT.seedDataPath` or `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and update the status page:
+   12. Mark **Show inactive template site** as `in_progress`. Tell the user: "Template `<displayName>` was created as `<IMPORTED_SITE_NAME>` (`<IMPORTED_WEBSITE_RECORD_ID>`). It is not activated yet. Seed data and activation are next." Mark **Show inactive template site** as `completed`.
+   13. If `SELECTED_TEMPLATE_VARIANT.seedDataPath` or `SELECTED_TEMPLATE.seedDataPath` is present, mark **Apply template seed data** as `in_progress` and update the status page:
       ```json
       { "state": "running", "phase": "seed", "message": "Seeding template data" }
       ```
@@ -576,8 +564,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        Surface the JSON summary (`inserted`, `failed`, `skipped`, `errors`). For a lightweight read-only verification path, query each seeded `entitySetName` with `dataverse-request.js` using `GET "<entitySetName>?$top=1"` and report whether the seeded table is reachable. Seeding is best-effort: even if `failed > 0`, `ok: false`, or read-only verification cannot run, continue to activation.
        Prefer the selected variant's `seedDataPath` when present; otherwise use the family `seedDataPath`. If both are absent, skip this task.
-   16. Mark **Apply template seed data** as `completed` or skipped.
-   17. Mark **Activate template site** as `in_progress`. Before invoking `/activate-site`, update the status page:
+   14. Mark **Apply template seed data** as `completed` or skipped.
+   15. Mark **Activate template site** as `in_progress`. Before invoking `/activate-site`, update the status page:
        ```json
        { "state": "running", "phase": "activation", "message": "Activating template site" }
        ```
@@ -591,8 +579,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
        The activate-site skill owns subdomain selection, final activation confirmation, provisioning, polling, and recovery.
        If activation fails, tell the user the cloned site exists but is not live and can be activated later by rerunning `/activate-site` with this identity. Do not treat activation failure as a failed supporting-solution import or site upload.
-   18. When `/activate-site` returns a `siteUrl`, mark **Activate template site** as `completed` and **Show live template site** as `in_progress`.
-   19. Redirect the already-open status page to the live site:
+   16. When `/activate-site` returns a `siteUrl`, mark **Activate template site** as `completed` and **Show live template site** as `in_progress`.
+   17. Redirect the already-open status page to the live site:
        ```json
        {
          "state": "succeeded",
@@ -603,7 +591,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        Do not open a second browser page for the template path. The status page polls this file and redirects the same tab to `redirectUrl` when the URL is `http` or `https`. If the user closed the status page, show the `siteUrl` for manual opening.
 
        Always surface the activate-site DNS propagation caveat: the site may take a few minutes to load even after activation succeeds.
-   20. Mark **Show live template site** as `completed`, then present the template-path summary:
+   18. Mark **Show live template site** as `completed`, then present the template-path summary:
        - Template name and framework
        - Cloned site name and Website Record ID
        - Live site URL
@@ -612,7 +600,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 <!-- not-a-gate: optional post-live template customization branch; the template site is already imported and activated, so this prompt only chooses whether to download editable source files for further local changes -->
 
-   21. Use `AskUserQuestion`:
+   19. Use `AskUserQuestion`:
 
        | Question | Header | Options |
        |----------|--------|---------|
@@ -621,7 +609,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **No, finish here**: mark **Select template or choose from-scratch** as `completed`, then stop.
        - **Yes, download and customize**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
 
-   22. Mark **Download template site source** as `in_progress` and ask where to download the code site:
+   20. Mark **Download template site source** as `in_progress` and ask where to download the code site:
 
        | Question | Header | Options |
        |----------|--------|---------|
@@ -638,9 +626,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        ```
 
        If download fails, surface the command output and ask whether to retry, choose another folder, or stop. If it succeeds, set `PROJECT_ROOT = "<resolved path>"`, mark **Download template site source** as `completed`, and continue into the planning/customization phases below.
-   23. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in the downloaded template site. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against `PROJECT_ROOT`; do **not** run Phase 2 scaffold/copy-template.
-   24. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes.
-   25. Run the existing validation/review flow. Do not automatically deploy unless the user explicitly asks to run `/deploy-site`.
+   21. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in the downloaded template site. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against `PROJECT_ROOT`; do **not** run Phase 2 scaffold/copy-template.
+   22. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes.
+   23. Run the existing validation/review flow. Do not automatically deploy unless the user explicitly asks to run `/deploy-site`.
 
 8. For the from-scratch path only, tell the user: "I'll scaffold this site from scratch."
 
@@ -1311,7 +1299,7 @@ After the reinstall policy chooses a normal import, update, or import-anyway pat
 |-------------|------------|-------------|
 | Import template supporting solutions | Importing supporting solutions | Import each required unmanaged supporting solution in deterministic order and poll every async job to completion |
 | Clone and upload template site | Creating template site | Clone the packaged SPA source and upload the resulting code site |
-| Show inactive template site | Showing template site | Diff `pac pages list -v` output to identify the cloned site record and tell the user it is not live yet |
+| Show inactive template site | Showing template site | Use the Website Record ID written by `pac pages clone` to `.powerpages-site/website.yml` and tell the user the uploaded site is not activated yet |
 | Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
 | Activate template site | Activating template site | Invoke activate-site with the resolved site name and Website Record ID |
 | Show live template site | Showing live site | Open the activated site URL in the browser and invite the user to continue customizing |

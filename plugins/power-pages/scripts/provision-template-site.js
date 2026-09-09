@@ -4,6 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 const { commandError, runPac } = require('./lib/pac-command');
+const { readWebsiteYml } = require('./lib/detect-project-context');
+
+const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function parseArgs(argv) {
   const args = {};
@@ -32,6 +35,19 @@ function findCodeSiteRoot(outputDirectory, fsImpl = fs) {
     throw new Error(`Expected one cloned code-site root under ${outputDirectory}, found ${matches.length}`);
   }
   return matches[0];
+}
+
+function inspectClonedSiteIdentity(clonedPath, deps = {}) {
+  const readWebsite = deps.readWebsiteYml || readWebsiteYml;
+  const websiteMetadataPath = path.join(clonedPath, '.powerpages-site', 'website.yml');
+  const website = readWebsite(websiteMetadataPath);
+  if (!website || !GUID_PATTERN.test(website.id || '')) {
+    throw new Error(`Cloned site metadata is missing a valid id in ${websiteMetadataPath}`);
+  }
+  return {
+    siteName: website.name || null,
+    websiteRecordId: website.id,
+  };
 }
 
 function provisionTemplateSite(options, deps = {}) {
@@ -78,15 +94,33 @@ function provisionTemplateSite(options, deps = {}) {
     return { ok: false, step: 'clone-output', error: err.message };
   }
 
+  let clonedIdentity;
+  try {
+    clonedIdentity = inspectClonedSiteIdentity(clonedPath, deps);
+  } catch (err) {
+    return { ok: false, step: 'clone-output', clonedPath, error: err.message };
+  }
+
   const uploadResult = pac([
     'pages', 'upload-code-site',
     '--rootPath', clonedPath,
     '--siteName', siteName,
   ]);
   if (uploadResult.status !== 0) {
-    return { ok: false, step: 'upload', clonedPath, error: commandError('pac pages upload-code-site', uploadResult) };
+    return {
+      ok: false,
+      step: 'upload',
+      clonedPath,
+      ...clonedIdentity,
+      error: commandError('pac pages upload-code-site', uploadResult),
+    };
   }
-  return { ok: true, clonedPath };
+  return {
+    ok: true,
+    clonedPath,
+    siteName: clonedIdentity.siteName || siteName,
+    websiteRecordId: clonedIdentity.websiteRecordId,
+  };
 }
 
 function main() {
@@ -97,4 +131,11 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { commandError, findCodeSiteRoot, parseArgs, provisionTemplateSite, runPac };
+module.exports = {
+  commandError,
+  findCodeSiteRoot,
+  inspectClonedSiteIdentity,
+  parseArgs,
+  provisionTemplateSite,
+  runPac,
+};
