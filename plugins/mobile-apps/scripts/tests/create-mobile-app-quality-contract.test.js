@@ -17,9 +17,11 @@ test('template preparation is delegated to the deterministic script', () => {
   const step = skill.slice(start, end);
 
   assert.match(step, /scripts\/prepare-mobile-template\.js/);
-  assert.match(step, /JSON_STRING_OF_WORKING_DIR/);
-  assert.match(step, /JSON_STRING_OF_DISPLAY_NAME/);
-  assert.match(step, /JSON_STRING_OF_SLUG/);
+  assert.match(step, /"\$PREPARE_SCRIPT" "\$WORKING_DIR" "\$DISPLAY_NAME" "\$APP_SLUG"/);
+  assert.match(step, /workingDir: process\.argv\[3\]/);
+  assert.match(step, /displayName: process\.argv\[4\]/);
+  assert.match(step, /slug: process\.argv\[5\]/);
+  assert.doesNotMatch(step, /JSON_STRING_OF_/);
   assert.doesNotMatch(step, /--display-name "<displayName>"/);
   assert.match(step, /must not create, reset, delete, or\s+write anything under `src\/generated\/`/);
   assert.doesNotMatch(step, /rm\s+-rf[\s\S]*src\/generated/);

@@ -89,39 +89,64 @@ LAUNCH_DIR="$(pwd -P)"
 ```
 
 Set `REQUESTED_WORKING_DIR` to the raw `--working-dir` value when present,
-otherwise to an empty string. Resolve only a possible resume location here:
+otherwise to an empty string. Validate the possible resume location through the
+same resolver used by Step 2, before reading its memory bank or running commands
+inside it. Resume-only resolution needs no app slug and never creates files:
 
 ```bash
-RESUME_WORKING_DIR=""
 if [ -n "$REQUESTED_WORKING_DIR" ]; then
-  CANDIDATE=$(node -e "const path=require('node:path'); console.log(path.resolve(process.argv[1], process.argv[2]))" "$LAUNCH_DIR" "$REQUESTED_WORKING_DIR")
-  [ -f "$CANDIDATE/memory-bank.md" ] && RESUME_WORKING_DIR="$CANDIDATE"
-elif [ -f "$LAUNCH_DIR/memory-bank.md" ]; then
-  RESUME_WORKING_DIR="$LAUNCH_DIR"
+  RESUME_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-mobile-app-target.js" \
+    --launch-dir "$LAUNCH_DIR" --working-dir "$REQUESTED_WORKING_DIR" --resume-only) || exit $?
+else
+  RESUME_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-mobile-app-target.js" \
+    --launch-dir "$LAUNCH_DIR" --resume-only) || exit $?
 fi
+RESUME_WORKING_DIR=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.action === 'resume' ? j.workingDir : '')" "$RESUME_JSON")
 ```
 
-Do not create the candidate. When `$RESUME_WORKING_DIR` is non-empty, check
-its memory bank:
+`BLOCKED` is terminal: surface the exact resolver error. Never fall back to the
+raw requested path. `action: none` continues the fresh-project wizard without
+writes. When `$RESUME_WORKING_DIR` is non-empty, check its memory bank:
 
 - **Bank present** → read it. Identify the highest-numbered completed step. Inform the user:
   > "Found existing project '<name>' at `<dir>`. Steps 1–<N> already completed (last update <date>). Resume from Step <N+1>?"
-  Wait for confirmation. If the user says yes, set
-  `WORKING_DIR="$RESUME_WORKING_DIR"`, `SCAFFOLD_ACTION=resume`,
-  `NPM_INSTALL_TERMINAL_ID=""`, and load the display name, slug, environment,
-  and other approved values from the bank before jumping to that step. Skip
-  the wizard (Step 2). If `node_modules/expo` or
-  `node_modules/.package-lock.json` is missing, run one foreground
-  `cd "$WORKING_DIR" && npm install` before resuming; a memory-bank resume must
-  not continue with a partial dependency tree.
+  Wait for confirmation. Only if the user says yes, set `RESUME_APPROVED=yes`,
+  load the display name, slug, environment, and other approved values from the
+  bank, and execute the approved-resume block below before jumping to that step.
+  Skip the wizard (Step 2). A rejected resume performs no installation or writes;
+  ask for a different target or stop.
 - **Bank absent** → fresh project. Continue to Step 1; the final target is
   resolved after the app slug is known in Step 2.
 - **Bank present but corrupted** (missing required headings) → surface the parse error, ask the user whether to overwrite (lose history) or fix manually before proceeding.
 
 The bank is the only resume mechanism. Do not infer resume state from `package.json` or `node_modules/` — those can lie.
 
-Do not create directories, clone the template, or install packages in Step 0.
-Step 2c remains the last zero-side-effect abort gate.
+Do not create directories, clone the template, or install packages while probing
+for a resume. Step 2c remains the last project-mutation-free abort gate for fresh
+creation; an existing project's explicit resume approval authorizes only its
+resume path.
+
+#### Approved resume — validate and restore dependencies
+
+Revalidate the exact path after approval; it may have changed while awaiting the
+user. Do not trust a stored working-directory field from the memory bank.
+
+```bash
+test "$RESUME_APPROVED" = "yes" || { echo "BLOCKED: Resume approval is required." >&2; exit 2; }
+RESUME_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-mobile-app-target.js" \
+  --launch-dir "$LAUNCH_DIR" --working-dir "$RESUME_WORKING_DIR" --resume-only) || exit $?
+WORKING_DIR=$(node -e "const j=JSON.parse(process.argv[1]); if (j.action !== 'resume') throw new Error('Target is no longer resumable'); console.log(j.workingDir)" "$RESUME_JSON") || exit $?
+DEPENDENCIES_INSTALLED=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.dependenciesInstalled ? 'yes' : 'no')" "$RESUME_JSON")
+SCAFFOLD_ACTION=resume
+NPM_INSTALL_TERMINAL_ID=""
+if [ "$DEPENDENCIES_INSTALLED" != "yes" ]; then
+  (cd "$WORKING_DIR" && npm install) || exit $?
+fi
+```
+
+Run this block in the foreground. A failed install is terminal: surface its
+output and do not advance the checkpoint. Do not rerun fresh-template preparation
+on resume; continue from the validated memory bank's recorded next step.
 
 ### Step 1 — Prerequisites
 
@@ -350,7 +375,7 @@ Tier the result:
 
 | Score | Tier | What to do |
 |---|---|---|
-| **4 / 4** | `auto-plan` | **Skip both questions.** Extract the brief silently from `<description>`, write `native-app-plan.md` placeholder, fall through to Step 2c. The user's next interaction is the cost-estimate gate. |
+| **4 / 4** | `auto-plan` | **Skip both questions.** Extract the brief silently from `<description>` and keep it in memory, then fall through to Step 2c. Do not write a plan placeholder or create the target. The user's next interaction is the cost-estimate gate. |
 | **3 / 4** | `one-tap` | **Skip the multi-select.** Extract the brief, show it once, ask only "Look right? (yes / adjust)". On `yes` → Step 2c. On `adjust` → fall through to walk-through. |
 | **≤ 2 / 4** | `walk-through` | **Current behaviour.** Run the multi-select feature picker described in Step 2b.1, then the brief confirmation. |
 
@@ -494,9 +519,13 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 | User answer | Action |
 |---|---|
-| `proceed` (or empty / Enter) | Continue to Step 2d. Default. |
+| `proceed` (or empty / Enter) | Record `SCAFFOLD_APPROVAL=proceed` and continue to Step 2d. Default. |
 | `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. Recompute the slug/target when the app name or `--working-dir` changes, then return here for a fresh preview. **No working-dir mutations** occur before approval. |
 | `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
+
+Initialize `SCAFFOLD_APPROVAL` to empty for each fresh preview, including after
+`edit`. Only the user's `proceed` selection sets it. Keep the brief and preview
+in conversation memory until then; planning files are written only in Step 3.
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.
@@ -529,14 +558,22 @@ Use the exact `$WORKING_DIR` returned by
 `resolve-mobile-app-target.js`. Never recompute it from the current shell
 directory.
 
-If `$SCAFFOLD_ACTION = materialize`, create only its parent directory, then
-materialize the public template:
+Revalidate the approved destination before writing anything. If
+`$SCAFFOLD_ACTION = materialize`, create only its parent directory, then
+materialize the public template. Adoption does not download another copy:
 
 ```bash
-mkdir -p "$(dirname "$WORKING_DIR")"
-npx --yes degit@2.8.4 \
-  microsoft/power-platform-skills/plugins/mobile-apps/template#main \
-  "$WORKING_DIR"
+test "$SCAFFOLD_APPROVAL" = "proceed" || { echo "BLOCKED: Preview approval is required." >&2; exit 2; }
+TARGET_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-mobile-app-target.js" \
+  --launch-dir "$LAUNCH_DIR" --slug "$APP_SLUG" --working-dir "$WORKING_DIR") || exit $?
+node -e "const j=JSON.parse(process.argv[1]); if (j.workingDir !== process.argv[2] || j.action !== process.argv[3] || !['materialize','adopt'].includes(j.action)) throw new Error('Target changed since preview; resolve and approve again')" \
+  "$TARGET_JSON" "$WORKING_DIR" "$SCAFFOLD_ACTION" || exit $?
+if [ "$SCAFFOLD_ACTION" = "materialize" ]; then
+  mkdir -p "$(dirname "$WORKING_DIR")" || exit $?
+  npx --yes degit@2.8.4 \
+    microsoft/power-platform-skills/plugins/mobile-apps/template#main \
+    "$WORKING_DIR" || exit $?
+fi
 ```
 
 If the command fails, surface its exact output and STOP. Do not retry against a
@@ -547,35 +584,38 @@ For both modes, verify the resolved directory and template markers before any
 planner starts:
 
 ```bash
-cd "$WORKING_DIR"
-test "$(pwd -P)" = "$WORKING_DIR"
-test -f package.json
-test -f app.config.js
-test -f auth.config.json
+cd "$WORKING_DIR" &&
+node -e "const fs=require('node:fs'); if (fs.realpathSync('.') !== process.argv[1]) throw new Error('Working directory differs from the resolved target')" "$WORKING_DIR" &&
+test -f package.json &&
+test -f app.config.js &&
+test -f auth.config.json &&
 test -f tamagui.config.ts
 ```
 
 If any check fails, STOP. Never redirect work to the launch directory or
-another similarly named folder.
+another similarly named folder. Compare canonical paths in Node rather than
+comparing Bash `pwd` with a native Windows path.
 
-Before `npm install`, apply the approved app identity with targeted edits:
+Before `npm install`, apply the approved app identity using the existing
+preparation helper. Arguments are data, including quotes and dollar signs:
 
-| File | Find | Replace with |
-|---|---|---|
-| `app.config.js` | `const APP_NAME = process.env.APP_DISPLAY_NAME \|\| 'Power Apps Standalone App';` | `const APP_NAME = process.env.APP_DISPLAY_NAME \|\| '<displayName>';` |
-| `app.config.js` | `const APP_SLUG = process.env.APP_SLUG \|\| 'powerapps-standalone-app';` | `const APP_SLUG = process.env.APP_SLUG \|\| '<slug>';` |
-| `package.json` | `"name": "powerapps-standalone-app"` | `"name": "<slug>"` |
+```bash
+node - "$PLUGIN_ROOT/scripts/prepare-mobile-template.js" "$WORKING_DIR" "$DISPLAY_NAME" "$APP_SLUG" <<'NODE'
+const { updateIdentity } = require(process.argv[2]);
+updateIdentity(process.argv[3], process.argv[4], process.argv[5]);
+NODE
+```
 
-Replace only those values and preserve the rest of each file. Applying the
-package name before installation keeps the generated lockfile identity aligned
-with `package.json`.
+This updates only identity values and preserves the rest of each file. Applying
+the package name before installation keeps the generated lockfile identity aligned
+with `package.json`. Do not run full template preparation until Step 5 joins the install.
 
 Initialize the telemetry identity, environment cache, and planning directory
 now that the template exists:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "$WORKING_DIR"
-mkdir -p "$WORKING_DIR/.tmp"
+node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "$WORKING_DIR" &&
+mkdir -p "$WORKING_DIR/.tmp" &&
 printf '%s\n' "$ENV_JSON" > "$WORKING_DIR/.resolved-environment.json"
 ```
 
@@ -1077,14 +1117,16 @@ the presence of a partially populated `node_modules/`.
   not change registries, provision credentials, delete `node_modules/`, or
   silently retry.
 
-If no background install was needed, continue with the adopted installed
-template.
+For fresh `materialize`/`adopt` runs, a missing or lost terminal ID is not success:
+STOP and report that install completion cannot be verified. An interrupted run
+can explicitly restart from target resolution; Step 2d then runs a fresh install.
+Only an approved memory-bank resume uses the separate foreground restore path.
 
 Required checks:
 
 ```bash
-cd <working_dir>
-test -f package.json && test -f app.config.js && test -f auth.config.json && test -f tamagui.config.ts
+cd "$WORKING_DIR" &&
+test -f package.json && test -f app.config.js && test -f auth.config.json && test -f tamagui.config.ts &&
 test -d node_modules/expo
 ```
 
@@ -1120,15 +1162,13 @@ Run the deterministic preparation script once:
 
 ```bash
 PREPARE_SCRIPT="${PLUGIN_ROOT}/scripts/prepare-mobile-template.js"
-node - "$PREPARE_SCRIPT" <<'NODE'
+node - "$PREPARE_SCRIPT" "$WORKING_DIR" "$DISPLAY_NAME" "$APP_SLUG" <<'NODE'
 const { prepareMobileTemplate } = require(process.argv[2]);
 
-// Replace these placeholders with JSON.stringify(...) output so user-provided
-// quotes and dollar signs remain data rather than becoming shell syntax.
 const result = prepareMobileTemplate({
-  workingDir: <JSON_STRING_OF_WORKING_DIR>,
-  displayName: <JSON_STRING_OF_DISPLAY_NAME>,
-  slug: <JSON_STRING_OF_SLUG>,
+  workingDir: process.argv[3],
+  displayName: process.argv[4],
+  slug: process.argv[5],
 });
 process.stdout.write(`${JSON.stringify(result)}\n`);
 NODE

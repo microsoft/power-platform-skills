@@ -43,6 +43,23 @@ test('target resolution happens before preview without mutating the destination'
   );
   assert.doesNotMatch(preApproval, /^\s*(?:npx .*degit|npm install|mkdir -p)\b/m);
   assert.doesNotMatch(preApproval, />\s*["']?\$?WORKING_DIR\/\.resolved-environment\.json/);
+  assert.doesNotMatch(preApproval, /write `native-app-plan\.md` placeholder/);
+  assert.match(preApproval, /keep it in memory/);
+  assert.match(preview, /Only the user's `proceed` selection sets it/);
+});
+
+test('early resume validates through the same resolver before reading or restoring the project', () => {
+  const resume = section('### Step 0 — Capture launch directory', '### Step 1 — Prerequisites');
+  const probe = resume.slice(0, resume.indexOf('#### Approved resume'));
+  const restore = resume.slice(resume.indexOf('#### Approved resume'));
+  assert.match(probe, /resolve-mobile-app-target\.js/);
+  assert.match(probe, /--resume-only/);
+  assert.doesNotMatch(probe, /CANDIDATE=|RESUME_WORKING_DIR="\$LAUNCH_DIR"/);
+  assert.ok(probe.indexOf('--resume-only') < probe.indexOf('**Bank present**'));
+  assert.ok(restore.indexOf('RESUME_APPROVED') < restore.indexOf('--resume-only'));
+  assert.ok(restore.indexOf('--resume-only') < restore.indexOf('npm install'));
+  assert.match(restore, /j\.action !== 'resume'/);
+  assert.match(restore, /failed install is terminal/);
 });
 
 test('template materialization precedes a retained background install', () => {
@@ -52,13 +69,16 @@ test('template materialization precedes a retained background install', () => {
   );
 
   assert.match(scaffold, /degit@2\.8\.4/);
+  assert.ok(scaffold.indexOf('SCAFFOLD_APPROVAL') < scaffold.indexOf('mkdir -p'));
+  assert.match(scaffold, /Target changed since preview/);
   assert.match(scaffold, /plugins\/mobile-apps\/template#main/);
-  assert.match(scaffold, /test "\$\(pwd -P\)" = "\$WORKING_DIR"/);
+  assert.match(scaffold, /fs\.realpathSync\('\.'\) !== process\.argv\[1\]/);
   assert.match(scaffold, /background\/async mode/);
   assert.match(scaffold, /cd "\$WORKING_DIR" && npm install/);
   assert.match(scaffold, /NPM_INSTALL_TERMINAL_ID/);
   assert.match(scaffold, /continue immediately\s+to Step 3 without polling/);
   assert.match(scaffold, /every fresh `materialize` or `adopt` action/);
+  assert.match(scaffold, /const \{ updateIdentity \}/);
   assert.doesNotMatch(scaffold, /npm install\s*&/);
 });
 
@@ -77,6 +97,7 @@ test('template preparation joins the exact install before package mutation', () 
   assert.match(prepare, /test -d node_modules\/expo/);
   assert.match(prepare, /authoritative app-name collision check/);
   assert.match(prepare, /Step 5\.9 — Seed the recovery memory bank/);
+  assert.match(prepare, /missing or lost terminal ID is not success/);
 });
 
 test('planned JavaScript dependencies are reconciled in one exact install', () => {

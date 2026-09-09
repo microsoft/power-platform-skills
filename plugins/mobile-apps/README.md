@@ -62,6 +62,11 @@ materializes the template, installs dependencies, and generates the app.
     approved pure-JavaScript packages selected during planning are installed
     afterward only when their exact versions are not already present.
 
+    Aborting the fresh-project preview creates no project files. Existing apps
+    with a memory bank use the same directory validation before offering resume;
+    dependency restoration runs only after you approve that resume. A failed
+    install stops the workflow rather than advancing with partial dependencies.
+
     When prompted to sign in, use credentials for the tenant where the Dataverse
     environment belongs.
 

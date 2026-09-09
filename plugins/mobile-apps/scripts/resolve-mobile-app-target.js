@@ -14,9 +14,11 @@ const TEMPLATE_MARKERS = [
 function usage() {
   return [
     'Usage: node resolve-mobile-app-target.js --launch-dir <path> --slug <slug> [--working-dir <path>]',
+    '       node resolve-mobile-app-target.js --launch-dir <path> --resume-only [--working-dir <path>]',
     '',
     'Without --working-dir, an existing template/app in --launch-dir is adopted.',
     'Otherwise the target is resolved as <launch-dir>/<slug>.',
+    '--resume-only validates an existing resume target without a slug or writes; action none continues the wizard.',
   ].join('\n');
 }
 
@@ -25,10 +27,15 @@ function parseArgs(argv) {
     launchDir: null,
     slug: null,
     workingDir: null,
+    resumeOnly: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (['--launch-dir', '--slug', '--working-dir'].includes(arg)
+      && (!argv[index + 1] || argv[index + 1].startsWith('--'))) {
+      throw new Error(`Missing value for ${arg}`);
+    }
     if (arg === '--launch-dir') {
       parsed.launchDir = argv[index + 1];
       index += 1;
@@ -38,6 +45,8 @@ function parseArgs(argv) {
     } else if (arg === '--working-dir') {
       parsed.workingDir = argv[index + 1];
       index += 1;
+    } else if (arg === '--resume-only') {
+      parsed.resumeOnly = true;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
     } else {
@@ -65,7 +74,7 @@ function canonicalizeCandidate(candidatePath) {
 
 function hasTemplateMarkers(projectRoot) {
   return TEMPLATE_MARKERS.every((relativePath) => (
-    fs.existsSync(path.join(projectRoot, relativePath))
+    fs.lstatSync(path.join(projectRoot, relativePath), { throwIfNoEntry: false })?.isFile()
   ));
 }
 
@@ -96,11 +105,11 @@ function hasInitializedPowerConfig(projectRoot) {
 }
 
 function inspectTarget(targetPath) {
-  if (!fs.existsSync(targetPath)) {
+  const stat = fs.lstatSync(targetPath, { throwIfNoEntry: false });
+  if (!stat) {
     return { exists: false, empty: true };
   }
 
-  const stat = fs.lstatSync(targetPath);
   if (stat.isSymbolicLink()) {
     throw new Error(`Target must not be a symbolic link: ${targetPath}`);
   }
@@ -108,11 +117,16 @@ function inspectTarget(targetPath) {
     throw new Error(`Target must be a directory: ${targetPath}`);
   }
 
+  const memoryBank = fs.lstatSync(path.join(targetPath, 'memory-bank.md'), { throwIfNoEntry: false });
+  if (memoryBank && !memoryBank.isFile()) {
+    throw new Error(`Memory bank must be a regular file: ${targetPath}`);
+  }
+
   return {
     exists: true,
     empty: isDirectoryEmpty(targetPath),
     hasTemplate: hasTemplateMarkers(targetPath),
-    hasMemoryBank: fs.existsSync(path.join(targetPath, 'memory-bank.md')),
+    hasMemoryBank: Boolean(memoryBank),
     hasPlan: fs.existsSync(path.join(targetPath, 'native-app-plan.md')),
     hasDataModel: fs.existsSync(path.join(targetPath, '.datamodel-manifest.json')),
     hasGeneratedServices: hasGeneratedServices(targetPath),
@@ -124,9 +138,9 @@ function inspectTarget(targetPath) {
   };
 }
 
-function resolveMobileAppTarget({ launchDir, slug, workingDir }) {
+function resolveMobileAppTarget({ launchDir, slug, workingDir, resumeOnly = false }) {
   if (!launchDir) throw new Error('--launch-dir is required');
-  if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+  if (!resumeOnly && (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug))) {
     throw new Error('--slug must be a non-empty kebab-case app slug');
   }
 
@@ -135,28 +149,35 @@ function resolveMobileAppTarget({ launchDir, slug, workingDir }) {
     throw new Error(`Launch directory not found: ${requestedLaunchDir}`);
   }
   const canonicalLaunchDir = fs.realpathSync(requestedLaunchDir);
-  const launchInspection = inspectTarget(canonicalLaunchDir);
 
   // Running the skill from an already materialized template remains supported.
-  // Otherwise a no-flag invocation creates a sibling project directory from the
+  // Otherwise a no-flag invocation creates a child project directory from the
   // approved app slug, which works the same in CLI and VS Code agent sessions.
   const requestedTarget = workingDir
     ? path.resolve(canonicalLaunchDir, workingDir)
-    : launchInspection.hasTemplate
-      ? canonicalLaunchDir
+    : resumeOnly || hasTemplateMarkers(canonicalLaunchDir)
+      ? requestedLaunchDir
       : path.join(canonicalLaunchDir, slug);
-  if (fs.existsSync(requestedTarget) && fs.lstatSync(requestedTarget).isSymbolicLink()) {
+  if (fs.lstatSync(requestedTarget, { throwIfNoEntry: false })?.isSymbolicLink()) {
     throw new Error(`Target must not be a symbolic link: ${requestedTarget}`);
   }
   const targetPath = canonicalizeCandidate(requestedTarget);
 
+  const inspection = inspectTarget(targetPath);
+  // A normal launch from a parent/home directory is not a resume destination.
+  // Explicit destinations and anything claiming a memory bank still get all checks.
+  if (resumeOnly && !workingDir && !inspection.hasMemoryBank) {
+    return { action: 'none', launchDir: canonicalLaunchDir, workingDir: targetPath };
+  }
   const filesystemRoot = path.parse(targetPath).root;
   const homeDirectory = fs.realpathSync(os.homedir());
   if (targetPath === filesystemRoot || targetPath === homeDirectory) {
     throw new Error(`Unsafe mobile app target: ${targetPath}`);
   }
 
-  const inspection = inspectTarget(targetPath);
+  if (resumeOnly && (!inspection.exists || inspection.empty)) {
+    return { action: 'none', launchDir: canonicalLaunchDir, workingDir: targetPath };
+  }
   if (!inspection.exists || inspection.empty) {
     if (targetPath === canonicalLaunchDir && !workingDir) {
       throw new Error('Refusing to materialize the template over the launch directory; use a child path');
@@ -192,6 +213,10 @@ function resolveMobileAppTarget({ launchDir, slug, workingDir }) {
     throw new Error(
       `Target contains generated app data without memory-bank.md and cannot be safely resumed: ${targetPath}`,
     );
+  }
+
+  if (resumeOnly) {
+    return { action: 'none', launchDir: canonicalLaunchDir, workingDir: targetPath };
   }
 
   return {
