@@ -387,6 +387,41 @@ async function findExistingColumns(provision, logical) {
   return (await provision.findColumns(logical)) || [];
 }
 
+// Does a relationship with this schema name already exist on the entity?
+//
+// A NARROW relationship read, for the third time and the same measured reason: the plugin used to
+// answer this with `provision.fetchEntityMetadata(...)`, and any broad metadata read immediately
+// before a labelled create makes Dataverse store ONLY the base-language label. Order-controlled
+// (C,F,F,C): `createRelationship` alone kept a bilingual `lookupDisplayName` 2/2;
+// `fetchEntityMetadata` then `createRelationship` kept it 0/2.
+//
+// `$select=SchemaName` on the relationship collection is the smallest question that answers this.
+// Falls back to `fetchEntityMetadata` when the raw client is unavailable (unit-test doubles).
+//
+// Returns `true`/`false`, or `null` when it genuinely could not tell — the caller treats null the
+// way the old `catch {}` did (assume absent and let the create's own already-exists handling deal
+// with it), because a table created moments ago legitimately 404s here.
+async function relationshipExists(provision, entityLogical, schemaName, type) {
+  const collection = type === 'ManyToMany' ? 'ManyToManyRelationships' : 'OneToManyRelationships';
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    try {
+      const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(entityLogical)}')/${collection}?$select=SchemaName`);
+      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+        return res.body.value.some((r) => String(r.SchemaName || '').toLowerCase() === String(schemaName).toLowerCase());
+      }
+      if (res && res.status === 404) return false;
+    } catch { /* fall through */ }
+  }
+  if (typeof (provision && provision.fetchEntityMetadata) !== 'function') return null;
+  try {
+    const meta = await provision.fetchEntityMetadata(entityLogical);
+    return ((meta && meta.relationships) || []).some((r) => String(r.schemaName || '').toLowerCase() === String(schemaName).toLowerCase());
+  } catch {
+    return null;
+  }
+}
+
 async function readAttributeRequiredLevels({ sdk, provision, logical }) {
   const client = (provision && provision.dataverse) || (sdk && sdk.dataverse);
   if (!client || typeof client.get !== 'function') return new Map();
@@ -909,9 +944,11 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   for (const rel of spec.relationships || []) {
     if (rel.type === 'OneToMany') {
       const schema = relationshipSchemaName(rel, publisherPrefix);
-      let exists = false;
-      try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-      if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+      // `null` (could not tell) is treated as absent, exactly as the previous `catch {}` did: a table
+      // created moments earlier legitimately 404s here, and the create's own already-exists handling
+      // covers the race.
+      const exists = await relationshipExists(provision, rel.referenced.toLowerCase(), schema, 'OneToMany');
+      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
         const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode });
         result.relationships.push({
@@ -923,9 +960,8 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       }, { skipIf: isAlreadyExists });
     } else if (rel.type === 'ManyToMany') {
       const schema = manyToManySchemaName(rel, publisherPrefix);
-      let exists = false;
-      try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-      if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+      const exists = await relationshipExists(provision, rel.entity1.toLowerCase(), schema, 'ManyToMany');
+      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, async () => {
         const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode });
         result.relationships.push({

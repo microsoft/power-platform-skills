@@ -141,17 +141,26 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 "displayName": { "1033": "Project Baseline", "3082": "Línea base" }     // two
 ```
 
-This works on every author-facing name the SDK can localize — verified on the wire against the
-vendored bundle, which serializes a map into a multi-entry `LocalizedLabels` array:
+This works on every author-facing name the SDK can localize. **Measured**, per surface, against an
+organization with 1033 and 3082 provisioned — the table is the honest scope of the claim:
 
-| Where | Field |
-|---|---|
-| `entities[]` | `displayName`, `pluralName` |
-| `entities[].primaryAttribute` | `displayName` |
-| `entities[].columns[]` | `displayName`, and each entry of a local Choice's `options[]` |
-| `entities[].alternateKeys[]` | `displayName` |
-| `relationships[].lookup` | `displayName` |
-| `globalChoices[]` | `displayName`, and each entry of `options[]` |
+| Where | Field | Status |
+|---|---|---|
+| `entities[]` | `displayName`, `pluralName` | **verified** — stored in both languages |
+| `entities[].primaryAttribute` | `displayName` | **verified** |
+| `entities[].columns[]` | `displayName` | **verified** |
+| `entities[].columns[]` | inline Choice `options[]` | **verified** |
+| `relationships[].lookup` | `displayName` | **verified** |
+| `entities[].alternateKeys[]` | `displayName` | accepted; not consistently reproducible |
+| `globalChoices[]` | `displayName`, `options[]` | **NOT working** — see below |
+
+**Global choices are the exception, and it is not this plugin's doing.** Measured: a global option set
+created with a two-language label stores only the base language — **including through a raw
+`POST /GlobalOptionSetDefinitions` that bypasses the SDK entirely** (0/4). So a localized label on
+`globalChoices[]` validates and is sent, but Dataverse keeps one language. Use an **inline** Choice on
+the column when you need localized option labels, or set the global set's labels in Maker. This is
+recorded rather than hidden because the alternative — a spec that claims two languages and silently
+delivers one — is the exact failure this feature exists to end.
 
 **Why a map on the field, not a `localizedLabels` block.** The label belongs beside the name it
 labels. A table-level block cannot address a Choice **option** or a lookup's display name without

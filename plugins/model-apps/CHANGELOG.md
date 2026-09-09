@@ -53,6 +53,13 @@ rebuilding a real app into a second environment.
   picking a Choice option, `surfaces[]` naming a screen — **any** of its languages resolves.
   A single-language label stays a plain string everywhere, so no existing spec changes shape.
 
+  **Scope, stated honestly and per surface.** Verified against an org with two languages provisioned:
+  table `displayName`/`pluralName`, `primaryAttribute.displayName`, `columns[].displayName`, inline
+  Choice `options[]`, and `relationships[].lookup.displayName`. **`globalChoices[]` does NOT work** —
+  measured, Dataverse stores only the base language even through a raw `POST` that bypasses the SDK,
+  so use an inline Choice when you need localized option labels. `alternateKeys[].displayName` is
+  accepted but was not consistently reproducible. See `references/app-spec-schema.md`.
+
   **The build halts if an LCID you name is not provisioned in the organization.** Live-measured: a
   create carrying an unprovisioned LCID returns *success* and Dataverse keeps only the provisioned
   label, reporting nothing. Without the halt this feature would have reproduced the very bug it
@@ -89,6 +96,13 @@ rebuilding a real app into a second environment.
   narrow single-table read, which took the plugin path from 0/4 to 4/4 against the same org. A
   non-404, non-2xx status still falls back to `findTables`, because assuming "absent" on a transient
   failure would turn it into a duplicate-create attempt.
+
+  **The same hazard existed on two more paths, and both are fixed.** `findColumns` before
+  `createColumn` (0/4 → 4/4) — reached only on the table-REUSE branch, i.e. *adding a column to a
+  table that already exists*, which is the scenario the bug was reported against and which a
+  fresh-table end-to-end run never touches. And `fetchEntityMetadata` before `createRelationship`
+  (0/2 → 2/2), which cost a lookup's localized display name. Every remaining `findTables` /
+  `findColumns` / `fetchEntityMetadata` call on these paths is now fallback-only.
 - **Ten defects an adversarial peer review found in the three changes above.** Recorded because most
   of them were in code that already had tests, mutation tests and (for `roleGrants[]`) a passing live
   run — the class of bug that survives its own author's verification:
