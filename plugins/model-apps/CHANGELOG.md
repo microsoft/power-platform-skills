@@ -23,6 +23,12 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
   gives a concrete LCID (`1033`) and rejects a language tag explicitly. A tag is deliberately not
   accepted as an alias: `es-ES` is 3082 or 1034 depending on sort order, and guessing wrong would
   not fail — it would build every label in the wrong language.
+- **A non-string `entities[].schemaName` is an error, not a crash.** The check only tested
+  truthiness, so `"schemaName": 42` (or `{}`, `[]`, `true`) passed it and the next line called
+  `.toLowerCase()` on the value — `validateAppSpec` threw a raw `TypeError` and the caller lost
+  every problem found so far, not just that one. Found while reproducing the review comment on the
+  message above; pre-existing rather than introduced here, but on the same line and the same class
+  of "a validator must return problems, not throw them".
 
 [#537]: https://github.com/microsoft/power-platform-skills/issues/537
 

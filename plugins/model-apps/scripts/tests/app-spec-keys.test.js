@@ -340,10 +340,48 @@ test('#537 review: an unknown key on an entity with NO schemaName does not say "
   assert.doesNotMatch(msg, /entity undefined/, `no "entity undefined" label: ${msg}`);
 });
 
-// PRE-EXISTING, deliberately NOT fixed here: `validateAppSpec` still THROWS instead of returning
-// errors when an entity's `schemaName` is a non-string or a getter that throws. Verified against
-// `origin/main`, which fails identically — `e.schemaName.toLowerCase is not a function` and the
-// getter's own error — so it is not a regression from the allow-list change. The entity loop reads
-// `e.schemaName` at 19 further sites this PR does not touch; fixing it properly means resolving the
-// name ONCE into a local and threading it through, which is its own change with its own tests.
-// The label guard above covers the case the review actually raised: a MISSING schemaName.
+test('#537 review follow-up: a NON-STRING schemaName is an error, not a crash', () => {
+  // Found while reproducing the review comment above. `!e.schemaName` only tested truthiness, so
+  // `42`, `{}`, `[]` and `true` passed it and the very next line called `.toLowerCase()` on them —
+  // `validateAppSpec` THREW a raw TypeError instead of returning findings. That is the one outcome
+  // this function must never produce: the caller loses every problem collected so far, not just
+  // this one. Reachable from any hand- or model-authored JSON file, which is how specs arrive.
+  //
+  // Verified against `origin/main` before the fix: it threw for every non-string below.
+  const spec = (schemaName) => ({
+    solution: { uniqueName: 'S', displayName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A', description: '' },
+    entities: [{ ...(schemaName === undefined ? {} : { schemaName }), displayName: 'T', primaryAttribute: { schemaName: 'new_n', displayName: 'N' }, columns: [] }],
+    appShell: { areas: [] },
+  });
+
+  for (const bad of [42, {}, [], true, '   ']) {
+    let r;
+    assert.doesNotThrow(() => { r = validateAppSpec(spec(bad), { profile: 'plan' }); },
+      `a schemaName of ${JSON.stringify(bad)} must be REPORTED, not thrown`);
+    assert.strictEqual(r.ok, false);
+    assert.ok((r.errors || []).some((e) => /schemaName must be a non-empty string/.test(e)),
+      `${JSON.stringify(bad)} -> ${JSON.stringify(r.errors)}`);
+  }
+
+  // An ABSENT value keeps the original wording — it is the common case, and "is required" is the
+  // right thing to say about a value nobody supplied. Saying "must be a non-empty string" to
+  // someone who wrote nothing would be worse, not better.
+  for (const absent of [undefined, null, '']) {
+    const r = validateAppSpec(spec(absent), { profile: 'plan' });
+    assert.ok((r.errors || []).some((e) => /^entity\.schemaName is required$/.test(e)),
+      `${JSON.stringify(absent)} -> ${JSON.stringify(r.errors)}`);
+  }
+
+  // Counterfactual: a valid name still validates clean, so the tightening did not simply reject
+  // everything.
+  assert.strictEqual(validateAppSpec(spec('new_ticket'), { profile: 'plan' }).ok, true);
+});
+
+// STILL NOT FIXED, and deliberately so: `validateAppSpec` throws if reading `e.schemaName` ITSELF
+// throws — a getter or a Proxy trap. The read at the schemaName check is wrapped, but ~19 later
+// sites interpolate `e.schemaName` directly and any one of them re-triggers the trap, so a guard
+// only at the first site would buy nothing while implying the case was handled. Fixing it properly
+// means resolving the name ONCE into a local and threading it through every site, which is its own
+// change with its own tests. Unlike the non-string case above, this shape cannot come from
+// `JSON.parse` — only a programmatic caller can build it — so it is not on any real input path.

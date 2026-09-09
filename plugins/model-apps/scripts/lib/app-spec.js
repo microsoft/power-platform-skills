@@ -1026,11 +1026,34 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`${label}: unknown key '${k}'${ENTITY_KEY_HINTS[k] || ''} (allowed: ${[...ENTITY_KEYS].join(', ')})`);
       }
     }
-    if (!e.schemaName) {
-      errors.push('entity.schemaName is required');
+    // `schemaName` must be a non-empty STRING, and the check says so rather than only testing
+    // truthiness. `!e.schemaName` let `42`, `{}` and `[]` through, and the very next line called
+    // `.toLowerCase()` on them — so a spec carrying `"schemaName": 42` CRASHED the validator with a
+    // raw TypeError instead of being told what was wrong. That is the one outcome this function must
+    // never produce: its whole contract is to turn bad input into structured errors, and a caller
+    // that gets a TypeError loses every finding collected so far, not just this one. Reachable from
+    // any hand- or model-authored JSON file, which is how every spec arrives.
+    //
+    // The read itself is wrapped only because it is cheap to do so. A getter or Proxy trap that
+    // throws is NOT comprehensively defended against in this validator — several later passes
+    // interpolate `e.schemaName` directly — and no attempt is made to pretend otherwise; that shape
+    // cannot come from `JSON.parse`, only from a programmatic caller.
+    let schemaNameValue;
+    let schemaNameReadable = true;
+    try { schemaNameValue = e.schemaName; } catch { schemaNameReadable = false; }
+    if (!schemaNameReadable) {
+      errors.push('entity.schemaName could not be read');
+    } else if (typeof schemaNameValue !== 'string' || !schemaNameValue.trim()) {
+      // `undefined`/`null`/`""` keep the original wording: it is the overwhelmingly common case and
+      // "is required" is the right thing to say about an absent value. A present-but-wrong value
+      // gets its own message, quoting what was found, because "required" would be actively
+      // misleading to someone who did supply one.
+      errors.push(schemaNameValue === undefined || schemaNameValue === null || schemaNameValue === ''
+        ? 'entity.schemaName is required'
+        : `entity.schemaName must be a non-empty string (got ${describeSpecValue(schemaNameValue)})`);
     } else {
-      entityNames.add(e.schemaName);
-      entityByLower.set(e.schemaName.toLowerCase(), e);
+      entityNames.add(schemaNameValue);
+      entityByLower.set(schemaNameValue.toLowerCase(), e);
     }
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
