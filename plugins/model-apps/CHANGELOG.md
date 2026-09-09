@@ -7,199 +7,92 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [Unreleased] — 2.7.0
 
-Adding a table to an app somebody else's roles secure, and four app-builder defects found while
-rebuilding a real app into a second environment.
+Adding a table to an app somebody else's roles secure, multi-language Dataverse labels, and six
+app-builder defects found while rebuilding a real app into a second environment.
 
 ### Added
 
-- **`businessProcessFlows[].securityRoles` — who may run a flow** ([#513]). Same persona idiom as
-  `forms[].securityRoles`, so there is one thing to learn:
-
-  ```jsonc
-  { "name": "Ticket Handling", "entity": "contoso_ticket", "status": "Active",
-    "securityRoles": { "personas": ["Dispatcher"] }, "stages": [ /* … */ ] }
-  ```
-
-  The mechanic is different from a form's, and the issue asked for live measurement before the
-  surface was designed. It had two surprises, both of which shaped this:
-  - The backing table's logical name is the flow's `uniquename`, which for a flow this build creates
-    is exactly the name this repo already derives for its collision check — so the grant can be
-    *planned* before the flow exists. It is nonetheless **read back** at build time, because a flow
-    authored in Maker (or renamed later) keeps a unique name unrelated to its display name, and
-    granting on the derivation would target the wrong table or none at all.
-  - That table is **organization-owned** and every privilege it exposes is Global-only. So there is
-    **no `scope` to author** — offering one would be a knob the platform rejects. (It is also why the
-    SDK's own BPF role helper hardcodes Global: a platform constraint, not a shortcut.)
-
-  Rejected rather than ignored: `everyone` / `fallbackForm` / `order` (formxml concepts with no
-  equivalent here — the error says so), an empty `personas[]` (unlike a form, a flow grants access to
-  nobody by default, so an empty list leaves it unusable), and `securityRoles` on a **Draft** flow
-  (the backing table is created by activation, so there is nothing to grant on yet).
-- **Localized Dataverse metadata labels.** Any author-facing name — a table's `displayName` /
-  `pluralName`, its primary column's, a column's, a lookup's, an alternate key's, a Choice option's
-  — may now be written as a map keyed by LCID instead of a plain string
-  ([AB#6686428], [#537]):
+- **Localized Dataverse metadata labels** (AB#6686428, [#537]). Any author-facing name — a table's
+  `displayName`/`pluralName`, its primary column's, a column's, a lookup's, an alternate key's, an
+  inline Choice option's — may be a map keyed by LCID instead of a string:
 
   ```jsonc
   "displayName": { "1033": "Project Baseline", "3082": "Línea base del proyecto" }
   ```
 
-  Before this, a bilingual app needed a hand-written metadata patch after **every** create and edit,
-  and the Spanish UI silently fell back to English. On every **verified** surface below, all languages
-  are now written in the one create call, which is also the safe order: a later single-language `PUT`
-  can overwrite the base label even with merge semantics. `download-model-app` reconstructs them, so
-  the round trip closes for those surfaces.
+  Previously a bilingual app needed a hand-written metadata patch after every create and edit.
+  All languages are now written in the one create call, and `download-model-app` reconstructs them.
+  A single-language label stays a plain string, so no existing spec changes shape.
 
-  A language **tag** is rejected rather than guessed (`es-ES` is 3082 *or* 1034 depending on sort
-  order, and guessing wrong would not fail — it would label everything in the wrong language), and a
-  localized `displayName` now requires an explicit `pluralName`, because appending `"s"` is not a
-  plural rule outside English. Anywhere the spec names an artifact by its label — `sampleData`
-  picking a Choice option, `surfaces[]` naming a screen — **any** of its languages resolves.
-  A single-language label stays a plain string everywhere, so no existing spec changes shape.
+  Three things to know:
+  - **`globalChoices[]` is rejected**, not silently dropped. Dataverse stores only the base language
+    there — measured, even through a raw `POST` that bypasses the SDK — and reports nothing when it
+    does. Use an inline Choice on the column for localized option labels.
+  - A language **tag** (`"es-ES"`) is rejected rather than guessed: it maps to 3082 *or* 1034
+    depending on sort order, and guessing wrong would label everything in the wrong language.
+  - A localized `displayName` requires an explicit `pluralName` — appending `"s"` is not a plural
+    rule outside English. The build also **halts** if an LCID you name is not provisioned in the org,
+    because Dataverse accepts the create and keeps only the provisioned label.
 
-  **Scope, stated honestly and per surface.** Verified against an org with two languages provisioned:
-  table `displayName`/`pluralName`, `primaryAttribute.displayName`, `columns[].displayName`, inline
-  Choice `options[]`, and `relationships[].lookup.displayName`. **`globalChoices[]` does NOT work, and
-  a localized label there is REJECTED by validation** — measured, Dataverse stores only the base
-  language even through a raw `POST` that bypasses the SDK, and it reports nothing when it drops one,
-  so sending it anyway would mean a green build with the author's second language silently gone. Use
-  an inline Choice when you need localized option labels. `alternateKeys[].displayName` is accepted
-  but was not consistently reproducible. See `references/app-spec-schema.md`.
-
-  **The build halts if an LCID you name is not provisioned in the organization.** Live-measured: a
-  create carrying an unprovisioned LCID returns *success* and Dataverse keeps only the provisioned
-  label, reporting nothing. Without the halt this feature would have reproduced the very bug it
-  fixes. Best-effort like the existing `languageCode` check — an unreadable probe changes nothing,
-  and an all-plain-label spec never pays the round trip.
-
-  **An inconclusive existence probe also halts, for a localized table.** The narrow
-  `EntityDefinitions(LogicalName=…)` read replaces the SDK's `findTables` because that broad read,
-  issued immediately before a create, is what makes Dataverse keep only the base language (measured
-  0/4 vs 4/4). Falling back to `findTables` when the narrow read is inconclusive would put the
-  poisoning read back on the wire for exactly the create that follows a miss — so for an entity with
-  localized labels the read is retried and then the build stops. A plain-label entity is unaffected
-  and still falls back.
-- **Two label rules relaxed after they broke working specs.** A **blank plain-string** label is
-  accepted again: every create site falls back with `displayName || schemaName`, so `""` and an
-  omitted value are indistinguishable by the time they reach Dataverse, and rejecting one while
-  accepting the other failed specs that build correctly. A blank entry *inside* a localized map is
-  still rejected — a non-empty map is truthy, so nothing falls back and the blank label ships. And a
-  **duplicate plain option label** (`["Pending", "Pending"]`) is now a **warning**, not an error: it
-  is visible on the line, Dataverse allows it, and specs predating the rule provisioned fine. The
-  cross-language collision the rule was written for — where one option's Spanish label matches
-  another's English — is invisible to the author and still fails.
-- **`roleGrants[]` — extend a security role you did not author.** Adding a table to an existing app
-  deployed the table, its forms and its navigation while every non-admin role still had no access to
-  it, and nothing said so ([AB#6686429]). `roleGrants[]` adds privileges for a table to a role that
-  already exists — typically the roles an existing solution ships. It is **additive**
-  (`AddPrivilegesRole`), never converging, so it can safely target a role whose other privileges
-  belong to somebody else; `personas[]` remains the surface for roles the spec owns. The consequence
-  is that a grant is **one-way**: dropping the entry does not revoke, and teardown never removes one
-  (nothing records who added a privilege, so a revoke could strip access that predates the spec).
-  Resolution fails **closed** — an unknown role name, an ambiguous one, a stale pinned `roleId`, or an
-  unresolvable business unit all halt the build rather than skip, because granting on the wrong role
-  is a silent access defect no later phase would catch. `verify-model-app` proves the privileges are
-  actually held, which matters more here than for a persona: the role existed before the grant and
-  still exists whether or not it landed.
+  See `references/app-spec-schema.md` → *Localized labels* for the verified-per-surface table.
+- **`roleGrants[]` — extend a security role you did not author** (AB#6686429). Adding a table to an
+  existing app deployed the table, its forms and its navigation while every non-admin role still had
+  no access to it, and nothing said so. `roleGrants[]` adds privileges to a role that already exists,
+  typically the ones an existing solution ships. It is **additive** and therefore **one-way**:
+  dropping the entry does not revoke, and teardown never removes one. Resolution fails **closed** —
+  an unknown, ambiguous or stale role halts the build rather than skipping, because granting on the
+  wrong role is a silent access defect. `personas[]` remains the surface for roles the spec owns.
+- **`businessProcessFlows[].securityRoles` — who may run a flow** ([#513]). Same persona idiom as
+  `forms[].securityRoles`. The grant lands on the flow's activation-created backing table, so there
+  is no `scope` to author (the table is organization-owned and Global-only) and `securityRoles` on a
+  **Draft** flow is rejected — the table does not exist until activation.
 
 ### Fixed
 
-- **The table existence probe silently discarded every non-base-language label.** Found by running
-  the localized-label feature against an organization with two languages provisioned — it did not
-  work at all on the real build path, while every unit test passed. Order-controlled measurement,
-  eight tables in the sequence C,F,F,C,C,F,F,C so each arm appears early and late:
-
-  | | kept both languages |
-  |---|---|
-  | `createTable` alone | **4/4** |
-  | `findTables` then `createTable` | **0/4** |
-
-  The outgoing `EntityDefinitions` body is byte-identical either way, so the loss comes from the
-  unfiltered metadata read `findTables` issues first, not from the create payload. The probe is now a
-  narrow single-table read, which took the plugin path from 0/4 to 4/4 against the same org. A
-  non-404, non-2xx status still falls back to `findTables`, because assuming "absent" on a transient
-  failure would turn it into a duplicate-create attempt.
-
-  **The same hazard existed on two more paths, and both are fixed.** `findColumns` before
-  `createColumn` (0/4 → 4/4) — reached only on the table-REUSE branch, i.e. *adding a column to a
-  table that already exists*, which is the scenario the bug was reported against and which a
-  fresh-table end-to-end run never touches. And `fetchEntityMetadata` before `createRelationship`
-  (0/2 → 2/2), which cost a lookup's localized display name. Every remaining `findTables` /
-  `findColumns` / `fetchEntityMetadata` call on these paths is now fallback-only.
-- **Ten defects an adversarial peer review found in the three changes above.** Recorded because most
-  of them were in code that already had tests, mutation tests and (for `roleGrants[]`) a passing live
-  run — the class of bug that survives its own author's verification:
-  - **`roleGrants[]` were invisible to `--changed-only`.** The security slice was `personas` alone, so
-    a spec whose only change was adding a grant reported "already matches the spec" and never called
-    `AddPrivilegesRole` — the bug `roleGrants[]` fixes, reintroduced through the fast path.
-  - **The role-identity guard could be bypassed.** It compared names only, so a `roleId` pinned at a
-    role a persona also authors, or a name-and-id pair aliasing one role, both slipped past. The
-    apply path now re-checks on the **resolved** Dataverse role id. The same key was also *too*
-    strict: two same-named roles in different business units are different roles and are now allowed.
-  - **`provision-entities` bypassed localized-label validation.** It is a separate entry point and
-    provisions the solution *before* the data model, so a bad label failed after a write.
-  - **A localized Choice label did not resolve in a view filter**, sending the label string as the
-    value of a numeric picklist condition. Filters now resolve through the shared `choiceValueMap`,
-    which also fixes a column bound to a `globalChoice` never resolving at all.
-  - **An ambiguous cross-language option label is now rejected.** If one string names two options
-    (Spanish for one, English for another) any resolution rule is a coin flip, so the spec is what
-    must change.
-  - **A failed inventory read no longer reads as "the app has none".** One broad catch meant a 403 on
-    `systemform` produced an empty list and no note — AB#6686423 reappearing inside its own fix. Reads
-    are now caught per artifact class and reported as **unknown**.
-  - **The download kept hardcoding the primary column's label to `"Name"`**, losing the real label and
-    its translations on a fresh-environment rebuild.
-  - Plus a localized sub-grid title reaching form change detection as `[object Object]` (making two
-    different labels hash the same), and four derive sites resolving labels without the spec's
-    authoring language.
-- **A download could emit a raw Dataverse Label object as a column name.** Found by running a real
-  download: a synthetic lookup `*name` column carries `{"LocalizedLabels":[],"UserLocalizedLabel":null}`,
-  and the raw object reached the spec, which then failed its own validation. An unlabelled column is
-  now omitted, which is what Dataverse says about it.
-- **A download says what it did not bring back.** `download-model-app` does not reconstruct `forms[]`,
-  `views[]` or `charts[]` — a documented limitation — but nothing said so, so a spec with
-  `"forms": []` was indistinguishable from an app that genuinely has no forms ([AB#6686423]). Every
-  run now names the counts, the tables and the artifacts, and returns a `notRoundTripped` block on
-  the JSON result. It is a **note, not a gate**: the artifacts are still on the deployed app and are
-  still listed in the spec's `descriptionInventory`, and a rebuild into the *same* environment leaves
-  them untouched — the loss is real only when rebuilding into a different environment, and the
-  message says exactly that instead of a blanket "dropped".
-- **The Azure CLI identity is checked before any Dataverse read.** `download-model-app` and
-  `build-model-app --apply` now probe `WhoAmI` first and say *which* identity and tenant were used
-  when Dataverse rejects it ([AB#6686427]). Previously a token from the wrong tenant surfaced as an
-  empty download: the best-effort reads each swallowed their 401 and the run produced a spec with no
-  columns, no forms and guessed primary attributes — a silent, plausible-looking wrong answer rather
-  than a failure. The probe reports **inconclusive** (not "blocked") on a non-401, so a transient 5xx
-  cannot fail a run that would otherwise have worked, and a Conditional Access claims-challenge is
-  distinguished from a genuine tenant mismatch.
-- **A terminal 401 explains itself.** Dataverse 401s now carry the identity, tenant and environment
-  in the message ([AB#6686424]). The retry the report asked for would not have helped and already
-  existed: `az account get-access-token` is MSAL-cached, so two consecutive calls return a
-  byte-identical token — a wrong-tenant token cannot be fixed by asking again, only by re-`az login`.
-- **The complete form-id map is signposted.** A build whose entity has several Main forms now names
-  `created.formIds` (keyed `entity|type|name`) in its output ([AB#6686425]). The ids were never lost —
-  `created.forms` is a documented Main-form-only convenience map — but nothing pointed at the complete
-  one, so callers queried `systemforms` themselves to recover what the build already returned.
-- **Default-form promotion is deterministic.** Creating several Main forms for one table in parallel
-  could leave whichever finished last as the table's default ([AB#6686426]). Promotion now runs in one
-  serialized pass after the forms phase, honouring `forms[].isDefault` (validated: boolean, Main-only,
-  at most one per table) and otherwise the spec's declaration order.
+- **Localized labels were silently discarded on the real build path.** A broad metadata read issued
+  immediately before a create (`findTables` → `createTable`, `findColumns` → `createColumn`,
+  `fetchEntityMetadata` → `createRelationship`) makes Dataverse keep only the base-language label.
+  The request body is byte-identical either way, so nothing reported the loss. All three now use
+  narrow, single-artifact reads; the broad calls remain as fallbacks only. The column path is the one
+  reached when **adding a column to an existing table**, which is the reported scenario.
+- **A download says what it did not bring back** (AB#6686423). `download-model-app` does not
+  reconstruct `forms[]`, `views[]` or `charts[]`, but a spec with `"forms": []` was
+  indistinguishable from an app that genuinely has none. Runs now name the counts and artifacts and
+  return a `notRoundTripped` block. It is a note, not a gate: the loss is real only when rebuilding
+  into a *different* environment, and the message says so.
+- **The Azure CLI identity is checked before any Dataverse read** (AB#6686427). A token from the
+  wrong tenant used to surface as an *empty download* — the best-effort reads each swallowed their
+  401 and produced a spec with no columns and guessed primary attributes. The probe names the
+  identity and tenant, and reports **inconclusive** rather than blocked on a non-401 so a transient
+  5xx cannot fail a working run.
+- **A terminal 401 explains itself** (AB#6686424), naming the identity, tenant and environment. The
+  retry originally asked for would not have helped: `az account get-access-token` is MSAL-cached, so
+  a wrong-tenant token cannot be fixed by asking again, only by re-`az login`.
+- **Default-form promotion is deterministic** (AB#6686426). Creating several Main forms for one table
+  in parallel could leave whichever finished last as the default. Promotion now runs in one
+  serialized pass honouring `forms[].isDefault`.
+- **The complete form-id map is signposted** (AB#6686425). The ids were never lost —
+  `created.forms` is a documented Main-form-only convenience map — but nothing pointed at
+  `created.formIds` (keyed `entity|type|name`), so callers re-queried `systemforms`.
+- **A download could emit a raw Dataverse Label object as a column name.** A synthetic lookup `*name`
+  column carries an empty label object, which reached the spec and failed its own validation. An
+  unlabelled column is now omitted.
 
 ### Changed
 
-- **SDK uptake `cds-maker-sdk b9947026`.** Brings the platform halves of three of the bugs above:
+- **Two label rules relaxed** after they were measured to break specs that build correctly. A blank
+  plain-string label is accepted again — every create site falls back to the schema name, so `""` and
+  an omitted value are indistinguishable at the platform. A duplicate **plain** option label
+  (`["Pending", "Pending"]`) is now a warning: it is visible on the line and Dataverse allows it. A
+  blank entry *inside* a localized map, and a cross-language collision the author cannot see, both
+  still fail.
+- **SDK uptake `cds-maker-sdk b9947026`.** Brings the platform halves of three bugs above:
   multi-`LocalizedLabels` in the label serializer, `formTypes` on the form listing (it was hardcoded
-  to Main), and a public additive `addEntityPrivilegesToRole` — the call `roleGrants[]` compiles to.
+  to Main), and the public additive `addEntityPrivilegesToRole` that `roleGrants[]` compiles to.
 
-[AB#6686423]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686423
-[AB#6686424]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686424
-[AB#6686428]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686428
 [#537]: https://github.com/microsoft/power-platform-skills/issues/537
 [#513]: https://github.com/microsoft/power-platform-skills/issues/513
-[AB#6686425]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686425
-[AB#6686426]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686426
-[AB#6686427]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686427
-[AB#6686429]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686429
+
 ## [2.6.1]
 
 ### Fixed
