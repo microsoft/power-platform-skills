@@ -162,12 +162,12 @@ The app uses `@microsoft/applicationinsights-web` with the React Native manual-d
 ```ts
 import {
   getAppLogger,
-  getCustomerTelemetryLogger,
+  getCustomEventsLogger,
 } from '@microsoft/power-apps-native-host';
 ```
 
 - `getAppLogger()` is the host/runtime logger; its events continue to Microsoft OneDS and also fan out to the configured Application Insights resource.
-- `getCustomerTelemetryLogger()` is for the app's custom events; it goes only to the configured Application Insights resource and is a no-op when custom events are disabled.
+- `getCustomEventsLogger()` is for the app's custom events; it goes only to the configured Application Insights resource and is a no-op when custom events are disabled.
 - Generate custom event calls only when the user explicitly requested those events or an approved screen spec has a `Custom events` entry. Never use `getAppLogger()` for custom events.
 - Telemetry properties must be approved scalar values (result codes, durations, counts, screen identifiers, operation names). Never include form values, free text, record titles, names, emails, phone numbers, tokens, precise coordinates, nested objects, or complete URLs.
 
@@ -227,7 +227,7 @@ Parse `app.json` with Node after the mutation and assert:
 
 **Telemetry checkpoint: `offer_operation_instrumentation`**
 
-This skill only wires the telemetry pipeline; it never edits screens or generated services. Enabling Application Insights emits host-level signals (app load, unhandled errors, navigation) automatically, but **domain events like `todo_created` or `order_deleted` are custom events and require source changes**. Those changes belong to `/edit-app` → screen-planner → screen-builder, which emit named events through `getCustomerTelemetryLogger` under the existing scalar-only, no-PII allowlist. Offer that follow-up here; never instrument operations from this skill.
+This skill only wires the telemetry pipeline; it never edits screens or generated services. Enabling Application Insights emits host-level signals (app load, unhandled errors, navigation) automatically, but **domain events like `todo_created` or `order_deleted` are custom events and require source changes**. Those changes belong to `/edit-app` → screen-planner → screen-builder, which emit named events through `getCustomEventsLogger` under the existing scalar-only, no-PII allowlist. Offer that follow-up here; never instrument operations from this skill.
 
 Run this step only after a successful `enable` or `change-resource`. Skip it entirely for `disable`.
 
@@ -243,7 +243,7 @@ Run this step only after a successful `enable` or `change-resource`. Skip it ent
     Arguments:
       Add custom events at each successful create, update, and
       delete boundary for the app's main entities. Emit named events through
-      getCustomerTelemetryLogger with approved scalar properties only — no
+      getCustomEventsLogger with approved scalar properties only — no
       operation results, response payloads, form values, free text, record
       titles, personal identifiers, tokens, precise coordinates, nested
       objects, or complete URLs. Use trackScenario() for any duration.
