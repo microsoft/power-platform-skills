@@ -708,12 +708,20 @@ function downloadRepositoryDirectory(options = {}, validateDirectory, deps = {})
   return { localPath, cached: false };
 }
 
-function templateVariantRoot({ catalogPath = DEFAULT_CATALOG_PATH, kind, templateId, variant }) {
+function templateFamilyRoot({ catalogPath = DEFAULT_CATALOG_PATH, kind, templateId }) {
   if (!TEMPLATE_KINDS.has(kind)) throw new Error(`Unsupported template kind: ${kind}`);
   if (!ID_PATTERN.test(templateId || '')) throw new Error(`Invalid template id: ${templateId}`);
+  return path.posix.join(catalogBasePath(catalogPath), kind, templateId);
+}
+
+function templateVariantRoot({ catalogPath = DEFAULT_CATALOG_PATH, kind, templateId, variant }) {
   const normalizedVariant = String(variant || '').toLowerCase();
   if (!FRAMEWORKS.has(normalizedVariant)) throw new Error(`Unsupported template variant: ${variant}`);
-  return path.posix.join(catalogBasePath(catalogPath), kind, templateId, 'variants', normalizedVariant);
+  return path.posix.join(
+    templateFamilyRoot({ catalogPath, kind, templateId }),
+    'variants',
+    normalizedVariant
+  );
 }
 
 function compareCaseInsensitivePathNames(left, right) {
@@ -729,24 +737,24 @@ function compareCaseInsensitivePathNames(left, right) {
 function inspectTemplateSolutions(localSolutionsPath, kind, deps = {}) {
   const fsImpl = deps.fs || fs;
   if (!fsImpl.existsSync(localSolutionsPath)) {
-    return { ok: false, error: 'Template variant is missing solutions/' };
+    return { ok: false, error: 'Template is missing solutions/' };
   }
   const rootStat = fsImpl.lstatSync(localSolutionsPath);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    return { ok: false, error: 'Template variant solutions/ must be a directory and not a symbolic link' };
+    return { ok: false, error: 'Template solutions/ must be a directory and not a symbolic link' };
   }
 
   const entries = fsImpl.readdirSync(localSolutionsPath, { withFileTypes: true })
     .sort((left, right) => compareCaseInsensitivePathNames(left.name, right.name));
   if (entries.length === 0) {
-    return { ok: false, error: 'Template variant solutions/ must contain at least one solution' };
+    return { ok: false, error: 'Template solutions/ must contain at least one solution' };
   }
 
   const seenUniqueNames = new Set();
   const solutions = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
-      return { ok: false, error: `Template variant solutions/ contains a non-directory entry: ${entry.name}` };
+      return { ok: false, error: `Template solutions/ contains a non-directory entry: ${entry.name}` };
     }
     const solutionPath = path.join(localSolutionsPath, entry.name);
     const solutionError = validateUnpackedSolutionDirectory(solutionPath, {
@@ -766,7 +774,7 @@ function inspectTemplateSolutions(localSolutionsPath, kind, deps = {}) {
     }
     const normalizedUniqueName = inspected.uniqueName.toLowerCase();
     if (seenUniqueNames.has(normalizedUniqueName)) {
-      return { ok: false, error: `Template variant contains duplicate solution unique name: ${inspected.uniqueName}` };
+      return { ok: false, error: `Template contains duplicate solution unique name: ${inspected.uniqueName}` };
     }
     seenUniqueNames.add(normalizedUniqueName);
     solutions.push({
@@ -782,12 +790,9 @@ function inspectTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
   const websiteCodePath = path.join(localVariantPath, 'website-code');
   const websiteCodeError = validateWebsiteCodeDirectory(websiteCodePath, { kind }, deps);
   if (websiteCodeError) return { ok: false, error: websiteCodeError };
-  const solutionResult = inspectTemplateSolutions(path.join(localVariantPath, 'solutions'), kind, deps);
-  if (!solutionResult.ok) return solutionResult;
   return {
     ok: true,
     websiteCodePath,
-    solutions: solutionResult.solutions,
   };
 }
 
@@ -799,20 +804,32 @@ function validateTemplateVariantDirectory(localVariantPath, kind, deps = {}) {
 function downloadTemplateVariant(options = {}, deps = {}) {
   const { catalogPath = DEFAULT_CATALOG_PATH, kind, templateId, variant } = options;
   try {
+    const familyRoot = templateFamilyRoot({ catalogPath, kind, templateId });
     const variantRoot = templateVariantRoot({ catalogPath, kind, templateId, variant });
-    const result = downloadRepositoryDirectory(
+    const solutionsRoot = path.posix.join(familyRoot, 'solutions');
+    const variantResult = downloadRepositoryDirectory(
       { ...options, directoryPath: variantRoot },
       (localPath) => validateTemplateVariantDirectory(localPath, kind, deps),
       deps
     );
-    const inspected = inspectTemplateVariantDirectory(result.localPath, kind, deps);
-    if (!inspected.ok) throw new Error(inspected.error);
+    const solutionsResult = downloadRepositoryDirectory(
+      { ...options, directoryPath: solutionsRoot },
+      (localPath) => {
+        const inspected = inspectTemplateSolutions(localPath, kind, deps);
+        return inspected.ok ? null : inspected.error;
+      },
+      deps
+    );
+    const inspectedVariant = inspectTemplateVariantDirectory(variantResult.localPath, kind, deps);
+    if (!inspectedVariant.ok) throw new Error(inspectedVariant.error);
+    const inspectedSolutions = inspectTemplateSolutions(solutionsResult.localPath, kind, deps);
+    if (!inspectedSolutions.ok) throw new Error(inspectedSolutions.error);
     return {
       ok: true,
-      variantPath: result.localPath,
-      websiteCodePath: inspected.websiteCodePath,
-      solutions: inspected.solutions,
-      cached: result.cached,
+      variantPath: variantResult.localPath,
+      websiteCodePath: inspectedVariant.websiteCodePath,
+      solutions: inspectedSolutions.solutions,
+      cached: variantResult.cached && solutionsResult.cached,
     };
   } catch (err) {
     return { ok: false, kind, templateId, variant, error: err.message };
@@ -899,6 +916,7 @@ module.exports = {
   validateWebsiteCodeDirectory,
   validateUnpackedSolutionDirectory,
   repositoryDirectoryCheckoutRoot,
+  templateFamilyRoot,
   templateVariantRoot,
   inspectTemplateSolutions,
   inspectTemplateVariantDirectory,

@@ -24,6 +24,7 @@ const {
   validateUnpackedSolutionDirectory,
   repositoryDirectoryCheckoutRoot,
   inspectTemplateSolutions,
+  templateFamilyRoot,
   templateVariantRoot,
   zipFileNames,
   validateCatalogShape,
@@ -632,10 +633,11 @@ test('artifactCachePath rejects paths that escape the sha cache directory', () =
   );
 });
 
-test('downloadTemplateVariant derives the variant layout and discovers solutions in stable order', (t) => {
+test('downloadTemplateVariant combines variant website code with family solutions in stable order', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const variantPath = 'templates/spa/company/variants/react';
+  const solutionsPath = 'templates/spa/company/solutions';
   const calls = [];
   let partialRoot;
 
@@ -653,14 +655,15 @@ test('downloadTemplateVariant derives the variant layout and discovers solutions
       if (args[0] === 'init') partialRoot = args[2];
       if (args.includes('checkout')) {
         const localVariant = path.join(partialRoot, ...variantPath.split('/'));
+        const localSolutions = path.join(partialRoot, ...solutionsPath.split('/'));
         const localWebsiteCode = path.join(localVariant, 'website-code');
         fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
         fs.writeFileSync(path.join(localWebsiteCode, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
         fs.writeFileSync(path.join(localWebsiteCode, 'powerpages.config.json'), '{}');
         fs.writeFileSync(path.join(localWebsiteCode, 'package.json'), '{}');
         fs.writeFileSync(path.join(localWebsiteCode, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
-        writeUnpackedSolution(path.join(localVariant, 'solutions', 'CompanyBase'), 'CompanyBase', { version: '1.0.0.0' });
-        writeUnpackedSolution(path.join(localVariant, 'solutions', 'CompanyPortal'), 'CompanyPortal', { version: '2.0.0.0' });
+        writeUnpackedSolution(path.join(localSolutions, 'CompanyBase'), 'CompanyBase', { version: '1.0.0.0' });
+        writeUnpackedSolution(path.join(localSolutions, 'CompanyPortal'), 'CompanyPortal', { version: '2.0.0.0' });
       }
       return '';
     },
@@ -685,28 +688,35 @@ test('downloadTemplateVariant derives the variant layout and discovers solutions
     result.variantPath,
     repositoryDirectoryCheckoutRoot({ cacheRoot: dir, sha: SHA, directoryPath: variantPath })
   );
+  const localSolutionsPath = repositoryDirectoryCheckoutRoot({
+    cacheRoot: dir,
+    sha: SHA,
+    directoryPath: solutionsPath,
+  });
   assert.equal(result.websiteCodePath, path.join(result.variantPath, 'website-code'));
   assert.deepEqual(result.solutions, [
     {
       uniqueName: 'CompanyBase',
       version: '1.0.0.0',
-      solutionPath: path.join(result.variantPath, 'solutions', 'CompanyBase'),
+      solutionPath: path.join(localSolutionsPath, 'CompanyBase'),
     },
     {
       uniqueName: 'CompanyPortal',
       version: '2.0.0.0',
-      solutionPath: path.join(result.variantPath, 'solutions', 'CompanyPortal'),
+      solutionPath: path.join(localSolutionsPath, 'CompanyPortal'),
     },
   ]);
   assert.deepEqual(cached, { ...result, cached: true });
-  assert.equal(calls.filter(([, args]) => args.includes('sparse-checkout')).length, 1);
+  assert.equal(calls.filter(([, args]) => args.includes('sparse-checkout')).length, 2);
   assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${variantPath}`)), true);
+  assert.equal(calls.some(([, args]) => args.join(' ').includes(`sparse-checkout set --cone -- ${solutionsPath}`)), true);
 });
 
-test('downloadTemplateVariant accepts traditional website source and website solution components', (t) => {
+test('downloadTemplateVariant accepts traditional website source with family solution components', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const variantPath = 'templates/traditional/customer-self-service/variants/none';
+  const solutionsPath = 'templates/traditional/customer-self-service/solutions';
   let partialRoot;
 
   const result = downloadTemplateVariant({
@@ -722,6 +732,7 @@ test('downloadTemplateVariant accepts traditional website source and website sol
       if (args[0] === 'init') partialRoot = args[2];
       if (args.includes('checkout')) {
         const localVariant = path.join(partialRoot, ...variantPath.split('/'));
+        const localSolutions = path.join(partialRoot, ...solutionsPath.split('/'));
         const localWebsiteCode = path.join(localVariant, 'website-code');
         fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
         fs.writeFileSync(
@@ -729,7 +740,7 @@ test('downloadTemplateVariant accepts traditional website source and website sol
           'adx_name: Customer self-service\n'
         );
         writeUnpackedSolution(
-          path.join(localVariant, 'solutions', 'CustomerSelfService'),
+          path.join(localSolutions, 'CustomerSelfService'),
           'CustomerSelfService',
           { websiteComponents: true }
         );
@@ -743,7 +754,15 @@ test('downloadTemplateVariant accepts traditional website source and website sol
   assert.equal(result.solutions[0].uniqueName, 'CustomerSelfService');
 });
 
-test('templateVariantRoot derives fixed paths from catalog identity', () => {
+test('template family and variant roots derive fixed paths from catalog identity', () => {
+  assert.equal(
+    templateFamilyRoot({
+      catalogPath: 'templates/manifest.json',
+      kind: 'spa',
+      templateId: 'company',
+    }),
+    'templates/spa/company'
+  );
   assert.equal(
     templateVariantRoot({
       catalogPath: 'templates/manifest.json',
@@ -762,6 +781,41 @@ test('templateVariantRoot derives fixed paths from catalog identity', () => {
     }),
     /Invalid template id/
   );
+});
+
+test('downloadTemplateVariant rejects variant-local solutions when family solutions are missing', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const variantPath = 'templates/spa/company/variants/react';
+  let partialRoot;
+
+  const result = downloadTemplateVariant({
+    owner: 'o',
+    repo: 'r',
+    sha: SHA,
+    kind: 'spa',
+    templateId: 'company',
+    variant: 'react',
+    cacheRoot: dir,
+  }, {
+    execFileSync(command, args) {
+      if (args[0] === 'init') partialRoot = args[2];
+      if (args.includes('checkout')) {
+        const localVariant = path.join(partialRoot, ...variantPath.split('/'));
+        const localWebsiteCode = path.join(localVariant, 'website-code');
+        fs.mkdirSync(path.join(localWebsiteCode, '.powerpages-site'), { recursive: true });
+        fs.writeFileSync(path.join(localWebsiteCode, '.powerpages-site', 'website.yml'), 'adx_name: Company\n');
+        fs.writeFileSync(path.join(localWebsiteCode, 'powerpages.config.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, 'package.json'), '{}');
+        fs.writeFileSync(path.join(localWebsiteCode, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
+        writeUnpackedSolution(path.join(localVariant, 'solutions', 'CompanyPortal'), 'CompanyPortal');
+      }
+      return '';
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Template is missing solutions/);
 });
 
 test('inspectTemplateSolutions rejects folder and Solution.xml unique-name drift', (t) => {

@@ -189,7 +189,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 7. Branch on the user's selection:
    - **Template family and framework variant selected**:
-     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant. Download the variant folder once from the pinned catalog SHA:
+     1. Set `SELECTED_TEMPLATE` to the family entry and `SELECTED_TEMPLATE_VARIANT` to the exact framework variant. Resolve the selected template assets once from the pinned catalog SHA. The result combines the family's supporting solutions with the selected variant's website code:
         ```bash
         node "${PLUGIN_ROOT}/scripts/fetch-template-variant.js" \
           --sha "<catalog-sha>" \
@@ -198,7 +198,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
           --templateId "<SELECTED_TEMPLATE.id>" \
           --variant "<SELECTED_TEMPLATE_VARIANT.variantKey>"
         ```
-        Use the returned `websiteCodePath` and `solutions`. Process `solutions` in the returned order; do not rediscover, reorder, or revalidate the variant in the skill.
+        Use the returned `websiteCodePath` and `solutions`. Process `solutions` in the returned order; do not rediscover, reorder, or revalidate the template assets in the skill.
      2. If the result is `ok: false`, tell the user the selected framework variant is unavailable or invalid. If the same family has other available framework variants, offer those first; otherwise offer **Start from scratch** or **Stop**. Do not emit `template_used` for a variant whose package did not validate. If the user falls back to from-scratch, recommend the framework they had selected.
      3. If the result is `ok: true`, set `CREATION_PATH = "template"`, `SELECTED_TEMPLATE_SOLUTIONS = <result.solutions>`, and `SELECTED_TEMPLATE_WEBSITE_CODE = <result.websiteCodePath>`. Run the `template_used` telemetry command silently (fail-closed), then append the template pre-install tasks now (see [Progress Tracking](#progress-tracking)); append the execution tasks after the reinstall policy is known. Do **not** proceed to Phase 2.
         Do not mention this telemetry command to the user and do not print its output.
@@ -413,7 +413,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       node "${PLUGIN_ROOT}/scripts/pack-template-solution.js" \
         --solutionPath "<CURRENT_TEMPLATE_SOLUTION.solutionPath>"
       ```
-      Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>` and `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>` for the current solution. The packer creates the ZIP only in an owned OS temporary directory. Never write a packed ZIP into the downloaded variant or another repository path.
+      Set `PACKED_TEMPLATE_SOLUTION_ZIP = <result.zipPath>` and `PACKED_TEMPLATE_SOLUTION_WORK_DIRECTORY = <result.workDirectory>` for the current solution. The packer creates the ZIP only in an owned OS temporary directory. Never write a packed ZIP into the downloaded template cache or another repository path.
 
       If packing fails, do not call Dataverse and do not emit `template_import_failure` because no import was attempted. The packer removes partial output automatically.
 
