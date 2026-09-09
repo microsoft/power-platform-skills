@@ -198,6 +198,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   language disagrees with the SDK performing it (`ARTIFACT_LANGUAGE_MISMATCH`, for registrations
   marked `languageSensitive` — App, Form, Dashboard). Passing nothing preserves the SDK's own 1033
   default exactly, so the option is opt-in rather than a silent re-labelling.
+  **One language per BUILD, and there is no per-table override.** Because the LCID is resolved once
+  and is a construction-time SDK option, a second language would need a second SDK instance — and
+  multi-language labelling is blocked a layer lower anyway, since the SDK's label serializer emits a
+  one-element `LocalizedLabels` array by design. `entities[].languageCode` and
+  `entities[].localizedLabels` are therefore **rejected by validation**
+  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)) rather than accepted and
+  dropped: `entities[]` had no allow-list, so both validated clean and were silently ignored, and an
+  author asking for one table in a second language got a successful build with the request gone. Any
+  unknown table key now fails the same way (see `ENTITY_KEYS`, `scripts/lib/app-spec.js`). Note that
+  `references/localization.md` is about generated **page** code, not Dataverse labels.
   Note the SDK deliberately does **not** language-parameterize BusinessRule: its mapper's language
   parameter is the *environment base* language, a different concept.
   Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
