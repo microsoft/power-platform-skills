@@ -2132,6 +2132,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
+  validateRoleGrants(spec, errors);
   return { ok: errors.length === 0, errors, warnings };
 }
 
@@ -2149,6 +2150,111 @@ function slugify(name) {
 function canonicalPersonaName(persona) {
   const n = persona && persona.persona;
   return typeof n === 'string' ? n.trim() : n;
+}
+
+// `roleGrants[]` — ADD privileges for a table to a security role this spec did NOT author. AB#6686429.
+//
+// WHY a separate block rather than another persona. `personas[]` OWNS its role: the SDK writes it with
+// `ReplacePrivilegesRole`, which CONVERGES the role onto exactly the declared set — every privilege not
+// in the spec is REMOVED. That is the right semantics for a role the spec created, and the wrong one for
+// a role that already exists: pointing a persona at "Contoso PM — Project Manager" to add one table's
+// privileges would silently strip every OTHER privilege that role held. `roleGrants[]` therefore compiles
+// to `AddPrivilegesRole` (`sdk.addEntityPrivilegesToRole`), which is purely ADDITIVE — it never removes.
+//
+// The consequence the author must understand, and which the docs state: a roleGrant cannot REVOKE. To
+// take a privilege away, edit the role in Maker. Dropping the entry from the spec leaves the grant in
+// place; that is deliberate (a grant-only surface cannot know whether it put the privilege there) and it
+// is what makes teardown safe — see sdk-teardown.js, which deletes only SDK-marked persona roles.
+//
+// Depth is honoured, not fixed: the SDK maps scope → Depth with the SAME table this plugin uses
+// ({ user: Basic, businessUnit: Local, parentChild: Deep, organization: Global } — verified against the
+// vendored bundle), so a declared `scope` reaches Dataverse intact.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/addprivilegesrole
+const ROLE_GRANT_KEYS = new Set(['role', 'roleId', 'businessUnitId', 'privileges', 'description']);
+
+function validateRoleGrants(spec, errors) {
+  const grants = spec && spec.roleGrants;
+  if (grants === undefined) return;
+  if (!Array.isArray(grants)) {
+    errors.push('roleGrants must be an array of { role | roleId, privileges[] } entries');
+    return;
+  }
+  const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
+  // Persona names are compared TRIMMED + lowercased, the same identity the SDK keys a role by, so
+  // " Project Manager " and "project manager" are caught as the same role.
+  const personaNames = new Set(
+    (Array.isArray(spec.personas) ? spec.personas : [])
+      .map((p) => canonicalPersonaName(p))
+      .filter((n) => typeof n === 'string' && n.trim())
+      .map((n) => n.trim().toLowerCase()),
+  );
+  const seenTargets = new Set();
+  grants.forEach((g, i) => {
+    if (!g || typeof g !== 'object' || Array.isArray(g)) { errors.push(`roleGrants[${i}]: each entry must be an object`); return; }
+    for (const k of Object.keys(g)) {
+      if (!ROLE_GRANT_KEYS.has(k)) errors.push(`roleGrants[${i}]: unknown key '${k}' (allowed: ${[...ROLE_GRANT_KEYS].join(', ')})`);
+    }
+    const roleName = typeof g.role === 'string' ? g.role.trim() : g.role;
+    const label = `roleGrants[${i}]${roleName ? ` (role "${roleName}")` : g.roleId ? ` (roleId ${g.roleId})` : ''}`;
+    // Exactly one identity. Accepting both would let them disagree, and the apply path can only follow
+    // one — resolving the id and ignoring a mismatched name would grant on a role the author did not name.
+    const hasName = g.role !== undefined;
+    const hasId = g.roleId !== undefined;
+    if (hasName && hasId) {
+      errors.push(`${label}: set either 'role' (the existing role's display name) or 'roleId' (its GUID), not both — they can disagree and only one can be honoured`);
+    } else if (!hasName && !hasId) {
+      errors.push(`${label}: name the existing role to extend — set 'role' (display name) or 'roleId' (GUID)`);
+    }
+    if (hasName && (typeof roleName !== 'string' || !roleName)) {
+      errors.push(`${label}: role must be the non-empty display name of an EXISTING security role (got ${describeValue(g.role)})`);
+    }
+    if (hasId && (typeof g.roleId !== 'string' || !FORM_GUID_RE.test(g.roleId))) {
+      errors.push(`${label}: roleId must be a GUID (got ${describeValue(g.roleId)})`);
+    }
+    if (g.businessUnitId !== undefined && (typeof g.businessUnitId !== 'string' || !FORM_GUID_RE.test(g.businessUnitId))) {
+      errors.push(`${label}: businessUnitId must be a GUID`);
+    }
+    // A name lookup is scoped to a business unit; an id already IS the identity, so a BU alongside it is
+    // dead configuration that reads as if it constrains the lookup. Reject rather than ignore.
+    if (hasId && g.businessUnitId !== undefined) {
+      errors.push(`${label}: businessUnitId only scopes a lookup by 'role' name — remove it, or target the role by name instead of roleId`);
+    }
+    validateDescription(g.description, label, errors);
+    // Extending a role this SAME spec authors is self-defeating: the security phase runs personas first
+    // and `ReplacePrivilegesRole` converges that role onto the persona's declared set, so the grant would
+    // be added, then removed on the next build's persona pass, then re-added — churn that reads as an
+    // intermittent access bug. Declare the privileges on the persona's job instead, where they converge.
+    if (roleName && personaNames.has(String(roleName).toLowerCase())) {
+      errors.push(`${label}: '${roleName}' is a persona in this spec, whose role the build CONVERGES (privileges not declared on the persona are removed) — declare these privileges on that persona's job instead of as a roleGrant`);
+    }
+    if (roleName || g.roleId) {
+      // One grant per role. Two grants on the same role are not additive-safe to validate: the SDK
+      // detects the "entities sharing one Dataverse privilege must request one depth" conflict only
+      // WITHIN a single call, so splitting a role's privileges across entries would let a conflicting
+      // pair through to two separate writes, where the second silently wins.
+      const key = String(g.roleId || roleName).trim().toLowerCase();
+      if (seenTargets.has(key)) errors.push(`${label}: duplicate roleGrant for the same role — merge the privileges into one entry (two entries can request conflicting depths for one shared Dataverse privilege, and the later write would silently win)`);
+      seenTargets.add(key);
+    }
+    // Privilege shape: identical to a persona's, and validated the same way — enum-only here, because
+    // whether a table actually EXPOSES an access, and the shared-privilege depth rule, both need live
+    // metadata. Those surface as a BuildHalt from the security phase.
+    if (!Array.isArray(g.privileges) || !g.privileges.length) {
+      errors.push(`${label}: privileges must be a non-empty array — a roleGrant with nothing to grant is a no-op the SDK rejects`);
+      return;
+    }
+    for (const pr of g.privileges) {
+      if (!pr || typeof pr !== 'object' || Array.isArray(pr)) { errors.push(`${label}: each privilege must be an object`); continue; }
+      for (const k of Object.keys(pr)) if (k !== 'entity' && k !== 'access' && k !== 'scope') errors.push(`${label}: privilege unknown key '${k}' (allowed: entity, access, scope)`);
+      if (!pr.entity || typeof pr.entity !== 'string') errors.push(`${label}: privilege.entity (a table logical name) is required`);
+      if (!Array.isArray(pr.access) || !pr.access.length) {
+        errors.push(`${label}: privilege on '${pr.entity || '?'}' needs a non-empty access[]`);
+      } else {
+        for (const a of pr.access) if (!ACCESS_LEVELS.has(a)) errors.push(`${label}: unknown access '${a}' on '${pr.entity}' (valid: ${[...ACCESS_LEVELS].join(', ')})`);
+      }
+      if (pr.scope !== undefined && !PRIVILEGE_SCOPES.has(pr.scope)) errors.push(`${label}: unknown scope '${pr.scope}' on '${pr.entity}' (valid: ${[...PRIVILEGE_SCOPES].join(', ')})`);
+    }
+  });
 }
 
 // Upgrade a legacy App Spec to schemaVersion 2 in one pure pass (no I/O; returns a deep copy):
@@ -2215,6 +2321,7 @@ module.exports = {
   FORM_GUID_RE,
   ACCESS_LEVELS,
   PRIVILEGE_SCOPES,
+  ROLE_GRANT_KEYS,
   SDK_ROLE_MARKER,
   canonicalPersonaName,
   VALIDATION_PROFILES,

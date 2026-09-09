@@ -386,6 +386,12 @@ function planFor(spec, opts) {
     const n = (p.jobs || []).length;
     items.push({ phase: 'security', label: `security role "${p.persona}" (${n} job${n === 1 ? '' : 's'})` });
   }
+  // Role grants are planned after personas because they run after them (a grant on a role this spec
+  // also authors is rejected at validation, but the ORDER still matters for reading the plan).
+  if (has('security')) for (const g of spec.roleGrants || []) {
+    const n = (g.privileges || []).length;
+    items.push({ phase: 'security', label: `grant privileges on ${n} table${n === 1 ? '' : 's'} to existing role ${roleGrantLabel(g)}` });
+  }
   // Form role assignment is planned under `security` (not `forms`) because it can only run once the
   // roles exist — see the 7b block in the engine for why.
   if (has('security')) for (const f of spec.forms || []) {
@@ -1104,6 +1110,52 @@ function roleBuClause(bu) {
   return bu && FORM_GUID_RE.test(String(bu)) ? ` and _businessunitid_value eq ${bu}` : '';
 }
 
+// A stable, human-readable name for a `roleGrants[]` entry, used in plan lines, progress labels and
+// errors. Prefers the display name the author wrote; falls back to the pinned id.
+function roleGrantLabel(g) {
+  const name = g && typeof g.role === 'string' ? g.role.trim() : '';
+  return name ? `"${name}"` : `${(g && g.roleId) || '?'}`;
+}
+
+// Resolve the EXISTING role a `roleGrants[]` entry extends. AB#6686429.
+//
+// Fail-closed on every ambiguity, because the write is a privilege grant: granting on the wrong role is
+// a silent access-control defect that no later phase would catch.
+//   - `roleId` pinned → confirm the row EXISTS (an absent id is a stale pin, not a create trigger — this
+//     surface never creates a role) and report its name so the build log names what was actually changed.
+//   - `role` name → exact-match within the resolved business unit (explicit `businessUnitId`, else the org
+//     ROOT BU — the same identity `createPersonaRole`, teardown and verify use). 0 matches and >1 match
+//     are BOTH errors; ">1" happens when the same role name exists in several BUs and the author must
+//     disambiguate.
+//
+// Unlike the persona path this deliberately does NOT require the SDK ownership marker: the whole point is
+// to extend a role somebody else built. `ismanaged` is not a blocker either — Dataverse permits
+// AddPrivilegesRole on a managed role, and refusing would block the bug's actual scenario (a solution's
+// shipped roles). It IS surfaced in the returned detail so the log says what was touched.
+async function resolveRoleGrantTarget(provision, grant, buCache) {
+  if (grant.roleId) {
+    const rows = await provision.queryRecords('role', { select: ['roleid', 'name', 'ismanaged'], filter: `roleid eq ${grant.roleId}`, top: 1 });
+    const row = rows && rows[0];
+    if (!row) throw new Error(`roleGrant: pinned roleId ${grant.roleId} does not exist on this environment — correct the id, or target the role by name`);
+    return { roleId: String(row.roleid), name: row.name || '', managed: row.ismanaged === true };
+  }
+  const name = String(grant.role).trim();
+  const bu = await resolveRoleBusinessUnit((e, o) => provision.queryRecords(e, o), grant.businessUnitId, buCache);
+  // FAIL CLOSED when the BU cannot be resolved. Teardown/verify fall back to a name-only match because a
+  // false negative there is merely noisy; here a name-only match could grant privileges on a same-named
+  // role in a DIFFERENT business unit, which is a real privilege escalation.
+  if (!bu) throw new Error(`roleGrant "${name}": could not resolve the business unit to scope the role lookup — pin the role with 'roleId' instead`);
+  const rows = await provision.queryRecords('role', {
+    select: ['roleid', 'name', 'ismanaged'],
+    filter: `name eq '${String(name).replace(/'/g, "''")}'${roleBuClause(bu)}`,
+    top: 5,
+  });
+  const matches = (rows || []).filter((r) => r && r.roleid);
+  if (!matches.length) throw new Error(`roleGrant "${name}": no security role with that name exists in business unit ${bu} — check the spelling (the name must match EXACTLY), or pin the role with 'roleId'`);
+  if (matches.length > 1) throw new Error(`roleGrant "${name}": ${matches.length} roles share that name in business unit ${bu} — pin the one you mean with 'roleId'`);
+  return { roleId: String(matches[0].roleid), name: matches[0].name || name, managed: matches[0].ismanaged === true };
+}
+
 
 // --- orchestrator ----------------------------------------------------------------------
 async function runSdkBuild(spec, opts = {}) {
@@ -1124,7 +1176,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -2961,6 +3013,57 @@ async function runSdkBuild(spec, opts = {}) {
       });
     }
 
+    // 7a-bis. Role grants (`roleGrants[]`) — ADD privileges for a table to a PRE-EXISTING role. AB#6686429.
+    //
+    // The scenario this exists for: a table is added to an app whose solution already ships four data
+    // roles. Before this, the table, its forms and its nav deployed while every non-admin persona still
+    // had no access to it, and nothing said so.
+    //
+    // ADDITIVE, never converging. `addEntityPrivilegesToRole` compiles to `AddPrivilegesRole`, so a
+    // privilege the role already holds is re-asserted and every privilege the spec does NOT mention is
+    // left alone. That is what makes it safe to point at a role somebody else owns — and it is also why
+    // this surface cannot REVOKE (documented in references/app-spec-schema.md).
+    //
+    // Idempotency comes from Dataverse, not from a read-compare here: re-POSTing a grant the role already
+    // holds at the same depth succeeds and changes nothing. Re-POSTing at a HIGHER depth raises it. We do
+    // not pre-read the role's privileges, because a read-then-write would be racy and the write is
+    // already the converged operation.
+    //
+    // Runs AFTER the persona loop so that, if a future change ever allowed both to touch one role, the
+    // additive grant lands last rather than being converged away. Today validation rejects that overlap
+    // outright (see validateRoleGrants).
+    const roleGrantBuCache = {}; // memoize the root-BU lookup across grants in this build
+    for (const grant of spec.roleGrants || []) {
+      const label = roleGrantLabel(grant);
+      await runner.run('security', `grant privileges to existing role ${label}`, async () => {
+        let target;
+        try {
+          target = await resolveRoleGrantTarget(provision, grant, roleGrantBuCache);
+        } catch (err) {
+          // Fail-closed: an unresolvable or ambiguous role means we do not know what we would be granting
+          // on. Halting is better than skipping, because a skipped grant reads as a successful build whose
+          // users still cannot open the table — the exact failure this feature was filed for.
+          throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false });
+        }
+        let applied;
+        try {
+          applied = await provision.addEntityPrivilegesToRole(target.roleId, grant.privileges);
+        } catch (err) {
+          // Apply-time metadata guards live here: a table that exposes no such access, and the SDK's
+          // shared-privilege rule (two tables aliasing to one prv* must request one depth). Both are
+          // author errors that only live metadata can detect, so they surface with the SDK's own message.
+          throw new BuildHalt(`roleGrant ${label} could not be applied: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-failed', recoverable: false });
+        }
+        const n = Array.isArray(applied) ? applied.length : 0;
+        result.created.roleGrants[target.name || target.roleId] = { roleId: target.roleId, name: target.name, managed: target.managed, privileges: applied || [] };
+        // The role is NOT added to the app's solution. A persona role is ours to place; a pre-existing role
+        // already lives wherever its owner put it, and adding a foreign (possibly managed) role to this
+        // solution would take an ownership decision the author did not ask for. If the role is already a
+        // component of this solution, its updated privileges export with it either way.
+        return `${n} privilege${n === 1 ? '' : 's'} granted on ${target.name || target.roleId}${target.managed ? ' (managed role)' : ''}`;
+      });
+    }
+
     // 7b. Offer forms to specific security roles (`forms[].securityRoles`). AB#6648526.
     //
     // This runs in the SECURITY phase, not the forms phase, because a persona's role does not exist
@@ -3144,4 +3247,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

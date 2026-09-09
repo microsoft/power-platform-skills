@@ -59,6 +59,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "sampleData":    { /* optional, keyed by entity schemaName */ },
   "ai":            { /* optional — AI feature flags + row-summary config */ },
   "personas":      [ /* optional — one security role per persona (see below) */ ],
+  "roleGrants":    [ /* optional — ADD privileges to a role you did NOT author (see below) */ ],
   "languageCode":  1031 /* optional — LCID for Dataverse labels; defaults to the org's base language */
 }
 ```
@@ -1168,4 +1169,79 @@ requested access, and the rule that different entities sharing one Dataverse pri
 same scope.
 
 **Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
-security. The security surface today is role-per-persona only.
+security. The security surface today is role-per-persona plus `roleGrants[]` (below).
+
+## roleGrants[] (optional — extend a role you did NOT author)
+
+Adds privileges for a table to a security role that **already exists** — typically the roles an
+existing solution ships. Use it when you add a table to an app whose access model somebody else owns:
+without it the table, its forms and its navigation deploy while every non-admin persona still cannot
+open the table, and nothing reports it (AB#6686429).
+
+```jsonc
+"roleGrants": [
+  {
+    // Name the EXISTING role. Either `role` (display name) or `roleId` (GUID) — never both.
+    "role": "Contoso PM - Project Manager",
+    "businessUnitId": "…",                 // optional; scopes the NAME lookup (defaults to the org root BU)
+    "privileges": [
+      { "entity": "contoso_projectbaseline",
+        "access": ["create", "read", "write", "delete", "append", "appendTo", "assign", "share"],
+        "scope": "organization" }
+    ]
+  },
+  { "role": "Contoso PM - Viewer",
+    "privileges": [ { "entity": "contoso_projectbaseline", "access": ["read"], "scope": "organization" } ] }
+]
+```
+
+**How it differs from `personas[]` — and why both exist.** A persona role is **converged**: the build
+applies it with `ReplacePrivilegesRole`, so every privilege not in the spec is **removed**. That is
+right for a role the spec created and catastrophic for one it did not — pointing a persona at an
+existing role to add one table would silently strip everything else that role held. A `roleGrant`
+compiles to `AddPrivilegesRole` instead, which is purely **additive**: it re-asserts what you declare
+and leaves everything else alone.
+
+| | `personas[]` | `roleGrants[]` |
+|---|---|---|
+| Owns the role | yes (creates it, SDK-marked) | no — the role already exists |
+| Semantics | converges (replace) | adds only |
+| Can revoke | yes, by dropping the privilege | **no** — see below |
+| Managed role | refused (fail-closed conflict) | allowed |
+| Teardown | deletes the role | does nothing |
+
+**A grant is one-way.** Dropping an entry from `roleGrants[]` does **not** revoke the privilege, and
+`teardown` never removes one. `AddPrivilegesRole` does not record who added what, so a revoke could not
+tell a privilege this spec granted from one the role already held (or one a second spec granted) —
+stripping the latter is exactly the outcome this surface exists to avoid. **Revoke in Maker.**
+
+**Field reference**
+- `role` **or** `roleId` (**required**, exactly one) — the existing role's display name, or its GUID. Setting both is rejected: they can disagree and only one can be honoured.
+- `businessUnitId` (optional GUID) — scopes a lookup by `role` name. Rejected alongside `roleId`, where nothing would consult it.
+- `privileges[]` (**required**, ≥1) — identical shape to a persona's: `{ entity, access[], scope? }`. `scope` reaches Dataverse intact as the privilege `Depth`.
+- `description` (optional) — a note for readers of the spec; never written to Dataverse.
+
+**Resolution fails closed.** Granting on the wrong role is a silent access-control defect no later
+phase would catch, so every ambiguity is a **build halt**, never a skip: a name that matches no role,
+a name that matches more than one role in the business unit, a stale pinned `roleId`, or a business
+unit that cannot be resolved (a name-only fallback could grant on a same-named role in a *different*
+business unit). Unlike the persona path this does **not** require the SDK ownership marker, and a
+`ismanaged` role is allowed — extending a solution's shipped roles is the point.
+
+**Validation rules** (`validateAppSpec`): exactly one of `role` / `roleId`; GUID shapes; a non-empty
+`privileges[]` with valid `access` / `scope` tokens; **one entry per role** (two entries could request
+conflicting depths for a shared Dataverse privilege — the SDK only detects that *within* one call, so
+a split would let both writes through and the later would silently win); and a role that is **also a
+persona in this spec** is rejected, because the persona pass would converge the grant away on the next
+build. The apply-time metadata guards (a table that exposes no such access; two tables sharing one
+`prv*` at different depths) surface as a build halt with the SDK's own message.
+
+**Verification.** `verify-model-app` proves the role exists (`role-grant`) and — when the reader
+supplies privilege access — that it actually **holds** every granted privilege at at least the declared
+depth (`role-grant-privileges`). This matters more here than for a persona: a persona role's existence
+implies its content (it was converged), whereas a grant is additive onto a role that existed before and
+still exists whether or not the privileges landed. Subset semantics again — the role's other privileges
+belong to somebody else and are never a finding.
+
+**Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
+security.

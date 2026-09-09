@@ -466,6 +466,63 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
+  // Role grants (`roleGrants[]`) — privileges ADDED to a pre-existing role. AB#6686429.
+  //
+  // Verified with the SAME subset comparison as personas, and for a stronger reason: unlike a persona
+  // role (converged by ReplacePrivilegesRole, so existence implies content), a grant is ADDITIVE onto a
+  // role we do not own. Nothing else proves the grant landed — the role existed before and still exists
+  // whether or not the privileges were added. A subset check is exactly right here: every privilege the
+  // role holds beyond the declared set is somebody else's and must never be a finding.
+  //
+  // Deliberately NOT checked: the SDK ownership marker. The role belongs to someone else by definition.
+  for (const g of spec.roleGrants || []) {
+    const declaredName = typeof g.role === 'string' ? g.role.trim() : '';
+    const label = declaredName || String(g.roleId || '?');
+    let row;
+    try {
+      if (g.roleId) {
+        const rows = await read.queryRecords('role', { select: ['roleid', 'name'], filter: `roleid eq ${g.roleId}`, top: 1 });
+        row = (rows || [])[0];
+      } else {
+        // Same fail-closed BU scoping as the apply path: a name-only fallback could verify against a
+        // same-named role in another business unit and report a grant that never happened as held.
+        const bu = await resolveRoleBusinessUnit((e, o) => read.queryRecords(e, o), g.businessUnitId, roleBuCache);
+        if (bu) {
+          const rows = await read.queryRecords('role', { select: ['roleid', 'name'], filter: `name eq '${odataLit(declaredName)}'${roleBuClause(bu)}`, top: 5 });
+          row = (rows || []).length === 1 ? rows[0] : undefined; // ambiguity is not proof
+        }
+      }
+    } catch { row = undefined; }
+    add('role-grant', label, row, row ? '' : 'the role named by this roleGrant was not found (or its business unit could not be resolved, or the name is ambiguous)');
+    if (!row || typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
+    // `declaredPrivileges` folds in an `appmodule` read for a persona; a roleGrant grants exactly what it
+    // declares and must not imply app access, so the triples are flattened here instead of reusing it.
+    const declared = [];
+    for (const pr of g.privileges || []) {
+      for (const a of pr.access || []) declared.push({ entity: String(pr.entity || '').toLowerCase(), access: String(a), scope: pr.scope || 'user' });
+    }
+    let actual = null;
+    try {
+      actual = await read.rolePrivileges(row.roleid);
+    } catch { actual = null; }
+    if (!Array.isArray(actual)) {
+      add('role-grant-privileges', label, false, 'could not read the role\'s privileges');
+      continue;
+    }
+    const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
+    const entityPrivileges = new Map();
+    for (const entity of new Set(declared.map((d) => d.entity))) {
+      try {
+        const privs = await read.entityPrivileges(entity);
+        if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
+      } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
+    }
+    const cmp = compareRolePrivileges(declared, entityPrivileges, actualByPrivilegeId);
+    add('role-grant-privileges', label, cmp.ok, cmp.ok
+      ? `${declared.length} granted privilege(s) held`
+      : cmp.missing.map((m) => `${m.entity}.${m.access}: ${m.reason}`).join('; '));
+  }
+
   // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose
   // every requested AI feature was skipped (admin gate off) or silently not persisted still reported a
   // clean PASS — a false success signal for automation (ADO 6603383).

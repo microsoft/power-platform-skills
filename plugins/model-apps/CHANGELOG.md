@@ -5,7 +5,63 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.6.0
+## [Unreleased] — 2.7.0
+
+Adding a table to an app somebody else's roles secure, and four app-builder defects found while
+rebuilding a real app into a second environment.
+
+### Added
+
+- **`roleGrants[]` — extend a security role you did not author.** Adding a table to an existing app
+  deployed the table, its forms and its navigation while every non-admin role still had no access to
+  it, and nothing said so ([AB#6686429]). `roleGrants[]` adds privileges for a table to a role that
+  already exists — typically the roles an existing solution ships. It is **additive**
+  (`AddPrivilegesRole`), never converging, so it can safely target a role whose other privileges
+  belong to somebody else; `personas[]` remains the surface for roles the spec owns. The consequence
+  is that a grant is **one-way**: dropping the entry does not revoke, and teardown never removes one
+  (nothing records who added a privilege, so a revoke could strip access that predates the spec).
+  Resolution fails **closed** — an unknown role name, an ambiguous one, a stale pinned `roleId`, or an
+  unresolvable business unit all halt the build rather than skip, because granting on the wrong role
+  is a silent access defect no later phase would catch. `verify-model-app` proves the privileges are
+  actually held, which matters more here than for a persona: the role existed before the grant and
+  still exists whether or not it landed.
+
+### Fixed
+
+- **The Azure CLI identity is checked before any Dataverse read.** `download-model-app` and
+  `build-model-app --apply` now probe `WhoAmI` first and say *which* identity and tenant were used
+  when Dataverse rejects it ([AB#6686427]). Previously a token from the wrong tenant surfaced as an
+  empty download: the best-effort reads each swallowed their 401 and the run produced a spec with no
+  columns, no forms and guessed primary attributes — a silent, plausible-looking wrong answer rather
+  than a failure. The probe reports **inconclusive** (not "blocked") on a non-401, so a transient 5xx
+  cannot fail a run that would otherwise have worked, and a Conditional Access claims-challenge is
+  distinguished from a genuine tenant mismatch.
+- **A terminal 401 explains itself.** Dataverse 401s now carry the identity, tenant and environment
+  in the message ([AB#6686424]). The retry the report asked for would not have helped and already
+  existed: `az account get-access-token` is MSAL-cached, so two consecutive calls return a
+  byte-identical token — a wrong-tenant token cannot be fixed by asking again, only by re-`az login`.
+- **The complete form-id map is signposted.** A build whose entity has several Main forms now names
+  `created.formIds` (keyed `entity|type|name`) in its output ([AB#6686425]). The ids were never lost —
+  `created.forms` is a documented Main-form-only convenience map — but nothing pointed at the complete
+  one, so callers queried `systemforms` themselves to recover what the build already returned.
+- **Default-form promotion is deterministic.** Creating several Main forms for one table in parallel
+  could leave whichever finished last as the table's default ([AB#6686426]). Promotion now runs in one
+  serialized pass after the forms phase, honouring `forms[].isDefault` (validated: boolean, Main-only,
+  at most one per table) and otherwise the spec's declaration order.
+
+### Changed
+
+- **SDK uptake `cds-maker-sdk b9947026`.** Brings the platform halves of three of the bugs above:
+  multi-`LocalizedLabels` in the label serializer, `formTypes` on the form listing (it was hardcoded
+  to Main), and a public additive `addEntityPrivilegesToRole` — the call `roleGrants[]` compiles to.
+
+[AB#6686424]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686424
+[AB#6686425]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686425
+[AB#6686426]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686426
+[AB#6686427]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686427
+[AB#6686429]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686429
+
+## [2.6.0]
 
 Business process flows, plus an SDK uptake that changes how business rules fail on an environment
 that cannot host them.

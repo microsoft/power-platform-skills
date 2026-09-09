@@ -791,6 +791,18 @@ function planTeardown(spec) {
     if (!name) continue;
     steps.push({ kind: 'role', phase: 'security', label: `security role "${name}"`, target: { name, businessUnitId: p.businessUnitId } });
   }
+  // `roleGrants[]` are deliberately NOT torn down. AB#6686429 asks for "safe teardown semantics that
+  // do not remove pre-existing grants", and the safe semantics are to do nothing at all:
+  //
+  //   * the ROLE belongs to someone else — deleting it is out of the question, and the marker gate
+  //     above already refuses (a foreign role carries no SDK_ROLE_MARKER), so no step is needed for that;
+  //   * the PRIVILEGES cannot be revoked safely either. `AddPrivilegesRole` is additive and does not
+  //     record who added what, so a teardown could not tell a privilege this spec granted from one the
+  //     role already held — or one a second spec granted. Removing "what the spec declares" would strip
+  //     access that predates us, which is precisely the outcome the bug asks to avoid, and is worse
+  //     than leaving a stale grant (extra access on a role its owner still administers in Maker).
+  //
+  // Consequence, stated in references/app-spec-schema.md: a roleGrant is one-way. Revoke in Maker.
   for (const c of spec.charts || []) {
     steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });
   }

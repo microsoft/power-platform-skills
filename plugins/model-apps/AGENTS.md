@@ -529,6 +529,7 @@ scripts/
     spec-shape.js              ← shared structural normalization for both authoring gates
     surface-resolver.js        ← pure: resolve personas[].jobs[].surfaces[] to the spec artifacts that satisfy them
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
+                                  (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
     genpage-cli.js             ← pac model genpage upload/list/download wrapper
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)

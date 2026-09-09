@@ -33,6 +33,7 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 // this list is the living contract of what a re-vendored bundle MUST keep exposing.
 const SKILL_SDK_SURFACE = [
   'addElement',
+  'addEntityPrivilegesToRole',
   'addSolutionComponent',
   'associateRecords',
   'configureRowSummary',
