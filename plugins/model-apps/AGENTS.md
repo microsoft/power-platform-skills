@@ -52,13 +52,18 @@ able to tell what moved from the docs alone):
 Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
 tree and teardown order both did before).
 
-**Issue references belong in history and in code, never in agent-context reference material.**
-`references/*.md` and `skills/*/SKILL.md` are loaded verbatim into an agent's context to *author a
-spec*. A tracker link there costs tokens, cannot be dereferenced by the reader it is shown to, and
-goes stale while the doc lives on — so state the rule and the **why**, and stop. The test is simple:
-if deleting the link loses nothing operational, it was provenance, not explanation, and provenance
-belongs in `CHANGELOG.md` (which is version history and *should* cite `#nnn` / `AB#nnnnnnn`) or in a
-code comment next to the line it explains, where the repo root `AGENTS.md` actively asks for one.
+**Issue references belong in history and in code, never in use-the-plugin reference material.**
+`references/*.md` and `skills/*/SKILL.md` are loaded verbatim into an agent's context so it can
+*author a spec*. A tracker link there costs tokens, cannot be dereferenced by the reader it is shown
+to, and goes stale while the doc lives on — so state the rule and the **why**, and stop. The test is
+simple: if deleting the link loses nothing operational, it was provenance, not explanation.
+
+Provenance is welcome in the *other* class of doc — the material that explains **why the code is the
+way it is** rather than how to use it: this file, `CHANGELOG.md`, and code comments, where the
+repo-root `AGENTS.md` actively asks for one. Its reader is a contributor who can open the link and
+act on it. Prefer the bare id (`AB#6686428`, `#537`) over a full URL even there: it carries the same
+provenance, costs less, and cannot rot.
+
 A corollary for **error messages**: an error must stand alone. `operator 'X' is not usable — see
 <issue url>` sends an author to a tracker to find out what they did wrong; say what is wrong instead.
 
@@ -188,7 +193,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `--language-code` → App Spec `languageCode` → the org's base language → 1033. Without this, an org
   that has not provisioned 1033 fails the data-model phase with `The language code 1033 is not a valid
   language for this organization`
-  ([#447](https://github.com/microsoft/power-platform-skills/issues/447)) — and confusingly only on
+  (#447) — and confusingly only on
   *some* column types, because (observed 2026-08) Dataverse tolerates an unprovisioned LCID on
   `EntityMetadata` and `PicklistAttributeMetadata` but rejects it on `DateTime`/`Memo`. Every fallback
   to 1033 warns, as does an explicitly supplied LCID that had to be discarded.
@@ -206,7 +211,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **Scope — this now extends to the `forms`, `dashboards` and `app-shell` phases too.** Those go
   through the vendored SDK's artifact serializers, which used to hardcode `1033` into FormXML
   (`<label languagecode="1033">`), SiteMap XML (`<Title LCID="1033">`) and dashboard XML with **no
-  caller override** ([#455](https://github.com/microsoft/power-platform-skills/issues/455)). The SDK
+  caller override** (#455). The SDK
   now takes the authoring LCID as a **construction-time** option (`MakerSdkOptions.languageCode`),
   which is why `main()` resolves the language over the transport hatch (`resolveAuthoringLanguage`,
   `scripts/lib/entity-provision.js`) **before** calling `makeSdk`, and passes the identical value on
@@ -220,7 +225,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   multi-language labelling is blocked a layer lower anyway, since the SDK's label serializer emits a
   one-element `LocalizedLabels` array by design. `entities[].languageCode` and
   `entities[].localizedLabels` are therefore **rejected by validation**
-  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)) rather than accepted and
+  (#537) rather than accepted and
   dropped: `entities[]` had no allow-list, so both validated clean and were silently ignored, and an
   author asking for one table in a second language got a successful build with the request gone. Any
   unknown table key now fails the same way (see `ENTITY_KEYS`, `scripts/lib/app-spec.js`). Note that
@@ -232,7 +237,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `columns[].displayName`, `alternateKeys[].displayName`, `relationships[].lookup.displayName`,
   `globalChoices[].displayName` and any `options[]` entry) may instead be a **map keyed by LCID**,
   which the SDK's label serializer turns into a multi-entry `LocalizedLabels` array
-  (AB#6686428 / [#537](https://github.com/microsoft/power-platform-skills/issues/537)). The plugin
+  (AB#6686428 / #537). The plugin
   passes such a value through **unflattened** — flattening it here would silently restore the
   English-only behaviour while validation and the design doc still claimed two languages. Everything
   that RENDERS or DERIVES FROM a label must go through `labelText()` (never string-interpolate a
