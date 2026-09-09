@@ -138,6 +138,120 @@ test('AB#6686427: preflight passes and reports the identity when WhoAmI succeeds
   assert.match(r.identity.user, /maker@contoso\.com/);
 });
 
+test('dataverseRequest USES a preset token and skips the CLI entirely', async () => {
+  // The receiving half of the preflight optimisation. Passing the token is pointless if this side
+  // fetches its own anyway, and that is invisible from the caller.
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  let cliCalls = 0;
+  let sentAuth;
+  const res = await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'WhoAmI', null, {
+    token: 'tok-abc',
+    getToken: () => { cliCalls += 1; return 'tok-from-cli'; },
+    request: async ({ headers }) => { sentAuth = headers.Authorization; return { statusCode: 200, body: '{}' }; },
+  });
+  assert.strictEqual(cliCalls, 0, 'a preset token must skip `az account get-access-token` altogether');
+  assert.strictEqual(sentAuth, 'Bearer tok-abc');
+  assert.strictEqual(res.status, 200);
+
+  // Counterfactual: with no preset token it still acquires one, or the seam would have broken the
+  // normal path while looking green.
+  cliCalls = 0;
+  await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'WhoAmI', null, {
+    getToken: () => { cliCalls += 1; return 'tok-from-cli'; },
+    request: async ({ headers }) => { sentAuth = headers.Authorization; return { statusCode: 200, body: '{}' }; },
+  });
+  assert.strictEqual(cliCalls, 1);
+  assert.strictEqual(sentAuth, 'Bearer tok-from-cli');
+});
+
+test('a path-bearing or query-bearing env is refused, not silently trimmed to its origin', async () => {
+  // `dataverseRequest` appends `/api/data/...` to whatever it is given, so a trimmed
+  // `https://org.crm.dynamics.com/some/path` would probe `.../some/path/api/data/...` and report a
+  // result about a URL nobody asked for. This function decides where a bearer token may be sent, so
+  // "close enough" is the wrong disposition.
+  for (const bad of [
+    'https://contoso.crm.dynamics.com/some/path',
+    'https://contoso.crm.dynamics.com/?q=1',
+    'https://contoso.crm.dynamics.com/#frag',
+  ]) {
+    let tokenAsked = 0;
+    let requested = 0;
+    const r = await preflightAuth(bad, {
+      getToken: () => { tokenAsked += 1; return 'token'; },
+      request: async () => { requested += 1; return { status: 200, data: {} }; },
+      azIdentity: () => ({ user: 'maker@contoso.com', tenantId: 't' }),
+    });
+    assert.strictEqual(r.ok, false, `${bad} must be refused: ${JSON.stringify(r)}`);
+    assert.match(r.error, /ORIGIN/, r.error);
+    assert.strictEqual(tokenAsked, 0, `${bad}: no token may be acquired for a rejected target`);
+    assert.strictEqual(requested, 0, `${bad}: and nothing may be sent`);
+  }
+  // Counterfactual: a bare origin, and an origin with only a trailing slash, are both fine.
+  for (const good of ['https://contoso.crm.dynamics.com', 'https://contoso.crm.dynamics.com/']) {
+    const r = await preflightAuth(good, {
+      getToken: () => 'token',
+      request: async () => ({ status: 200, data: { UserId: 'u' } }),
+      azIdentity: () => ({ user: 'maker@contoso.com', tenantId: 't' }),
+    });
+    assert.strictEqual(r.ok, true, `${good} must be accepted: ${JSON.stringify(r)}`);
+  }
+});
+
+// --- emitResult: a single explained failure must not be dressed as a partial one -----------------
+test('emitResult prints a single error message instead of "unknown error(s)"', () => {
+  // The auth preflight, the app-id resolver and friends all fail with { ok:false, error:"<what to
+  // do>" } and no `errors` array. The old branch printed "Operation completed with unknown error(s)"
+  // for every one of them — burying a message written specifically to tell the operator what to do,
+  // under boilerplate that is also untrue: nothing completed, and it is not unknown.
+  const { emitResult } = require('../lib/dataverse-auth.js');
+  const run = (payload) => {
+    const out = [];
+    const err = [];
+    const so = process.stdout.write;
+    const se = process.stderr.write;
+    const ex = process.exit;
+    process.stdout.write = (s) => { out.push(String(s)); return true; };
+    process.stderr.write = (s) => { err.push(String(s)); return true; };
+    // `emitResult` ends the process by contract, so the exit is turned into a throw and swallowed.
+    process.exit = () => { throw new Error('__exit__'); };
+    try { emitResult(false, payload); } catch (e) { if (e.message !== '__exit__') throw e; } finally {
+      process.stdout.write = so; process.stderr.write = se; process.exit = ex;
+    }
+    return { out: out.join(''), err: err.join('') };
+  };
+
+  const single = run({ ok: false, error: 'no Azure CLI access token could be obtained; run az login' });
+  assert.match(single.err, /run az login/, 'the actionable message must reach stderr');
+  assert.doesNotMatch(single.err, /unknown error/, 'and must not be replaced by boilerplate');
+  assert.match(single.out, /"ok":false/, 'the structured payload still goes to stdout for callers');
+
+  // The genuine PARTIAL-failure contract is unchanged: a count, with the detail on stdout.
+  const partial = run({ ok: false, errors: [{ row: 1 }, { row: 2 }] });
+  assert.match(partial.err, /completed with 2 error\(s\)/, partial.err);
+
+  // Neither shape: say so honestly rather than claiming a count we do not have.
+  const opaque = run({ ok: false });
+  assert.match(opaque.err, /unstructured error/, opaque.err);
+  assert.doesNotMatch(opaque.err, /completed with/, 'nothing completed');
+});
+
+test('AB#6686427: the preflight HANDS its token to the request instead of fetching a second one', async () => {
+  // `preflightAuth` deliberately acquires a token itself so it can tell "not signed in" apart from
+  // "signed in but rejected" — two different diagnoses with two different fixes. Without passing it
+  // on, `dataverseRequest` shells out to `az account get-access-token` again for the same origin,
+  // and that call cold-starts the Azure CLI's Python runtime: seconds, on a path a user waits on.
+  let tokenCalls = 0;
+  let sawToken;
+  const r = await preflightAuth('https://contoso.crm.dynamics.com', {
+    getToken: () => { tokenCalls += 1; return 'tok-abc'; },
+    request: async (_url, _m, _p, _b, opts) => { sawToken = opts && opts.token; return { status: 200, data: { UserId: 'u' } }; },
+    azIdentity: () => ({ user: 'maker@contoso.com', tenantId: 'aaaaaaaa-0000-0000-0000-000000000000' }),
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(tokenCalls, 1, 'exactly one token acquisition');
+  assert.strictEqual(sawToken, 'tok-abc', 'and the SAME token must reach the request');
+});
+
 test('AB#6686427: a 401 names the ACTIVE az identity, the target org, and the remediation', async () => {
   const r = await preflightAuth('https://contoso.crm.dynamics.com', {
     getToken: () => 'token',

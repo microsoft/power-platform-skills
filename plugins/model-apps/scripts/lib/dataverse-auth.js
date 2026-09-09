@@ -70,11 +70,14 @@ function azIdentity() {
 /**
  * Reject anything that is not an absolute HTTPS origin BEFORE a token is acquired or sent.
  *
- * `createAzHttpClient` enforces this for the real work, but the preflight runs earlier and goes
- * through `dataverseRequest`, whose transport picks plain `http` for any non-HTTPS scheme
- * (`u.protocol === 'https:' ? https : http`). Without this gate a malformed `--env` could put a
- * bearer token on the wire in clear text before the existing fail-closed validation ever ran — the
- * preflight would have become a hole in the credential boundary it sits in front of.
+ * This is STRICTER than `createAzHttpClient`, deliberately, and the difference matters. That client
+ * requires an absolute `https:` org URL and refuses to send its token to a different ORIGIN — but it
+ * compares origins, so a path-bearing `--env` passes construction untouched. This gate additionally
+ * rejects a path, query or fragment, because the preflight runs earlier and goes through
+ * `dataverseRequest`, whose transport picks plain `http` for any non-HTTPS scheme
+ * (`u.protocol === 'https:' ? https : http`). Without it a malformed `--env` could put a bearer token
+ * on the wire in clear text before the client's fail-closed validation ever ran — the preflight would
+ * have become a hole in the credential boundary it sits in front of.
  * @returns {string|null} the normalized origin, or null when the value is unusable
  */
 function httpsOriginOrNull(envUrl) {
@@ -140,7 +143,10 @@ async function preflightAuth(envUrl, deps = {}) {
   try {
     // Headers are requested because a 401's `WWW-Authenticate` is the only thing that distinguishes a
     // Conditional Access / CAE claims challenge from a plain wrong-identity rejection.
-    res = await request(origin, 'GET', 'WhoAmI', null, { includeHeaders: true });
+    // The token acquired above is HANDED OVER rather than re-fetched: `dataverseRequest` would
+    // otherwise shell out to `az account get-access-token` a second time for the same origin, and
+    // that call cold-starts the Azure CLI runtime — seconds, on the path a user is waiting on.
+    res = await request(origin, 'GET', 'WhoAmI', null, { includeHeaders: true, token });
   } catch (e) {
     // A transport failure says nothing about identity, so it must not be reported as one — and must
     // not BLOCK. See the `inconclusive` contract below.
@@ -259,9 +265,20 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
   const cleanUrl = envUrl.replace(/\/+$/, '');
   const url = `${cleanUrl}/api/data/v9.2/${apiPath}`;
   const bodyStr = body == null ? null : typeof body === 'string' ? body : JSON.stringify(body);
-  const { includeHeaders = false, extraHeaders = {}, timeout = 60000 } = opts;
+  const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null } = opts;
+  // Test seams, matching `preflightAuth`'s injection style. Without them the token-reuse behaviour
+  // below could only be exercised against a live Azure CLI and a real org.
+  const acquireToken = opts.getToken || getAuthToken;
+  const send = opts.request || makeRequest;
 
-  let token = getAuthToken(cleanUrl);
+  // `token` lets a caller that has ALREADY acquired one hand it over instead of paying for a second
+  // `az account get-access-token`, which cold-starts the Azure CLI's Python runtime (seconds, not
+  // milliseconds, on Windows). `preflightAuth` is the case that matters: it deliberately fetches a
+  // token first so it can tell "not signed in" apart from "signed in but rejected" — two genuinely
+  // different diagnoses — and would otherwise fetch the very same token twice in a row.
+  // The 401 refresh path below still re-acquires from the CLI, because a preset token that has just
+  // been rejected is exactly the thing that must not be retried.
+  let token = presetToken || acquireToken(cleanUrl);
   if (!token) {
     throw new Error(`Failed to get Azure CLI token for ${cleanUrl}. Run 'az login' first.`);
   }
@@ -277,7 +294,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     };
     if (bodyStr) headers['Content-Type'] = 'application/json; charset=utf-8';
 
-    const res = await makeRequest({ url, method, headers, body: bodyStr, includeHeaders, timeout });
+    const res = await send({ url, method, headers, body: bodyStr, includeHeaders, timeout });
 
     if (res.error) {
       if (attempt < maxRetries) continue;
@@ -285,7 +302,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      token = getAuthToken(cleanUrl);
+      token = acquireToken(cleanUrl);
       if (!token) throw new Error("Token refresh failed. Run 'az login' again.");
       continue;
     }
@@ -563,12 +580,23 @@ function emitResult(ok, payload) {
   if (payload instanceof Error) {
     process.stderr.write(payload.message + '\n');
   } else if (payload !== null && typeof payload === 'object') {
-    // Partial failure (e.g., bulk insert with some errors). Emit the structured
-    // payload to stdout so callers can parse `errors`, and exit 1 so shells
+    // Structured failure. Emit the payload to stdout so callers can parse it, and exit 1 so shells
     // still treat it as a failure.
     process.stdout.write(JSON.stringify(payload) + '\n');
-    const n = Array.isArray(payload.errors) ? payload.errors.length : 'unknown';
-    process.stderr.write(`Operation completed with ${n} error(s); see stdout JSON\n`);
+    if (Array.isArray(payload.errors)) {
+      // A genuine PARTIAL failure (bulk insert with some rows rejected): the count is the useful
+      // summary and the detail is per-row on stdout.
+      process.stderr.write(`Operation completed with ${payload.errors.length} error(s); see stdout JSON\n`);
+    } else if (typeof payload.error === 'string' && payload.error.trim()) {
+      // A single, already-explained failure — an auth preflight rejection, an unresolvable app id.
+      // These carry a message written specifically to tell the operator what to DO, so print IT.
+      // The old branch printed "completed with unknown error(s)" for every one of them, burying the
+      // diagnostic under boilerplate that is both less informative and actively misleading: nothing
+      // "completed", and the error is not unknown.
+      process.stderr.write(payload.error.trim() + '\n');
+    } else {
+      process.stderr.write('Operation failed with an unstructured error; see stdout JSON\n');
+    }
   } else {
     process.stderr.write(String(payload) + '\n');
   }
