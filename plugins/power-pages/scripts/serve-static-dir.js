@@ -45,7 +45,9 @@ function safeResolve(root, urlPath) {
 
 function isServableFile(filePath) {
   try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    if (!fs.existsSync(filePath)) return false;
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink();
   } catch {
     return false;
   }

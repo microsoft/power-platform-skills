@@ -112,14 +112,43 @@ test('localizePreviewImages copies local preview images beside the served page',
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const sourcePath = path.join(dir, 'preview.png');
   const outputPath = path.join(dir, 'site', 'import.html');
-  fs.writeFileSync(sourcePath, 'fake image bytes');
+  const imageBytes = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from('fake png payload'),
+  ]);
+  fs.writeFileSync(sourcePath, imageBytes);
 
   const localized = localizePreviewImages([sourcePath], outputPath);
 
   assert.deepEqual(localized, ['preview-images/preview-01.png']);
-  assert.equal(
-    fs.readFileSync(path.join(dir, 'site', 'preview-images', 'preview-01.png'), 'utf8'),
-    'fake image bytes'
+  assert.deepEqual(
+    fs.readFileSync(path.join(dir, 'site', 'preview-images', 'preview-01.png')),
+    imageBytes
+  );
+});
+
+test('localizePreviewImages rejects non-images, directories, and symlinks', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const outputPath = path.join(dir, 'site', 'import.html');
+  const textPath = path.join(dir, 'secret.txt');
+  const fakePngPath = path.join(dir, 'fake.png');
+  const imagePath = path.join(dir, 'preview.png');
+  const imageLink = path.join(dir, 'preview-link.png');
+  fs.writeFileSync(textPath, 'secret');
+  fs.writeFileSync(fakePngPath, 'not a png');
+  fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const inputs = [textPath, fakePngPath, dir];
+  try {
+    fs.symlinkSync(imagePath, imageLink);
+    inputs.push(imageLink);
+  } catch (err) {
+    if (err.code !== 'EPERM') throw err;
+  }
+
+  assert.deepEqual(
+    localizePreviewImages(inputs, outputPath),
+    []
   );
 });
 

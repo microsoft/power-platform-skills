@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 
@@ -29,16 +31,36 @@ test('safeResolve rejects malformed percent-encoding without throwing', () => {
 });
 
 test('isServableFile treats stat failures as not found', () => {
-  const originalExistsSync = require('fs').existsSync;
-  const originalStatSync = require('fs').statSync;
+  const originalExistsSync = fs.existsSync;
+  const originalLstatSync = fs.lstatSync;
   try {
-    require('fs').existsSync = () => true;
-    require('fs').statSync = () => { throw new Error('permission denied'); };
+    fs.existsSync = () => true;
+    fs.lstatSync = () => { throw new Error('permission denied'); };
     assert.equal(isServableFile('/tmp/import/status.json'), false);
   } finally {
-    require('fs').existsSync = originalExistsSync;
-    require('fs').statSync = originalStatSync;
+    fs.existsSync = originalExistsSync;
+    fs.lstatSync = originalLstatSync;
   }
+});
+
+test('isServableFile rejects symbolic links', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'serve-static-dir-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'target.json');
+  const link = path.join(dir, 'status.json');
+  fs.writeFileSync(target, '{}');
+  try {
+    fs.symlinkSync(target, link);
+  } catch (err) {
+    if (err.code === 'EPERM') {
+      t.skip('File symlinks require additional privileges on this platform');
+      return;
+    }
+    throw err;
+  }
+
+  assert.equal(isServableFile(target), true);
+  assert.equal(isServableFile(link), false);
 });
 
 test('contentType returns useful types for import status assets', () => {

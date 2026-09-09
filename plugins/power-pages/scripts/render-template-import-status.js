@@ -7,6 +7,12 @@ const { fileURLToPath, pathToFileURL } = require('url');
 const { renderTemplate } = require('./lib/render-template');
 const { openInDefaultBrowser } = require('./lib/default-browser');
 
+const LOCAL_PREVIEW_SIGNATURES = {
+  '.png': Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  '.jpg': Buffer.from([0xff, 0xd8, 0xff]),
+  '.jpeg': Buffer.from([0xff, 0xd8, 0xff]),
+};
+
 function parseArgs(argv) {
   const args = { open: false, previewImages: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -32,7 +38,24 @@ function previewImageUrl(input, index, outputDir) {
     return input;
   }
   if (!fs.existsSync(sourcePath)) return input;
-  const ext = path.extname(sourcePath) || '.png';
+  const ext = path.extname(sourcePath).toLowerCase();
+  const signature = LOCAL_PREVIEW_SIGNATURES[ext];
+  let stat;
+  let prefix;
+  try {
+    stat = fs.lstatSync(sourcePath);
+    if (!signature || stat.isSymbolicLink() || !stat.isFile()) return null;
+    const handle = fs.openSync(sourcePath, 'r');
+    try {
+      prefix = Buffer.alloc(signature.length);
+      const bytesRead = fs.readSync(handle, prefix, 0, prefix.length, 0);
+      if (bytesRead !== signature.length || !prefix.equals(signature)) return null;
+    } finally {
+      fs.closeSync(handle);
+    }
+  } catch {
+    return null;
+  }
   const previewsDir = path.join(outputDir, 'preview-images');
   const destName = `preview-${String(index + 1).padStart(2, '0')}${ext}`;
   const destPath = path.join(previewsDir, destName);

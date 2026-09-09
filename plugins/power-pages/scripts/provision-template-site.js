@@ -138,8 +138,23 @@ function provisionTemplateSite(options, deps = {}) {
   ) {
     return { ok: false, step: 'validation', error: 'outputDirectory must be separate from sourcePath' };
   }
-  if (fsImpl.existsSync(outputDirectory) && fsImpl.readdirSync(outputDirectory).length > 0) {
-    return { ok: false, step: 'validation', error: 'outputDirectory must be empty' };
+  if (fsImpl.existsSync(outputDirectory)) {
+    let outputStat;
+    try {
+      outputStat = fsImpl.lstatSync(outputDirectory);
+    } catch (err) {
+      return { ok: false, step: 'validation', error: `Could not inspect outputDirectory: ${err.message}` };
+    }
+    if (outputStat.isSymbolicLink() || !outputStat.isDirectory()) {
+      return { ok: false, step: 'validation', error: 'outputDirectory must be a regular directory when it exists' };
+    }
+    try {
+      if (fsImpl.readdirSync(outputDirectory).length > 0) {
+        return { ok: false, step: 'validation', error: 'outputDirectory must be empty' };
+      }
+    } catch (err) {
+      return { ok: false, step: 'validation', error: `Could not read outputDirectory: ${err.message}` };
+    }
   }
   fsImpl.mkdirSync(outputDirectory, { recursive: true });
 

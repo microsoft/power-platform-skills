@@ -53,6 +53,18 @@ function normalizeAsyncJobId(value) {
   return match ? match[0].toLowerCase() : '';
 }
 
+function parsePositiveInteger(value, fallback, flagName) {
+  const raw = value === undefined || value === null || value === '' ? String(fallback) : String(value);
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    return { error: `Invalid ${flagName}: expected a positive integer` };
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    return { error: `Invalid ${flagName}: expected a positive integer` };
+  }
+  return { value: parsed };
+}
+
 // Dataverse asyncoperations statecode/statuscode reference:
 //   statecode 0: Open (0=Ready, 20=InProgress, 30=Pausing, 40=Canceling)
 //   statecode 1: Suspended (10=WaitingForResources)
@@ -81,8 +93,12 @@ async function pollAsyncOperation(rawArgs, deps = {}) {
   const envUrl = normalizeEnvUrl(rawArgs.envUrl);
   const asyncJobId = normalizeAsyncJobId(rawArgs.asyncJobId);
   if (!asyncJobId) return { error: `Invalid async operation id: ${rawArgs.asyncJobId}` };
-  const intervalMs = parseInt(rawArgs.intervalMs || '5000', 10);
-  const maxAttempts = parseInt(rawArgs.maxAttempts || '60', 10);
+  const intervalResult = parsePositiveInteger(rawArgs.intervalMs, 5000, '--intervalMs');
+  if (intervalResult.error) return intervalResult;
+  const attemptsResult = parsePositiveInteger(rawArgs.maxAttempts, 60, '--maxAttempts');
+  if (attemptsResult.error) return attemptsResult;
+  const intervalMs = intervalResult.value;
+  const maxAttempts = attemptsResult.value;
   const tokenResource = rawArgs.tokenResource || envUrl;
   const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
   const getToken = deps.getAuthToken || getAuthToken;
@@ -203,4 +219,4 @@ if (require.main === module) {
   pollAsyncOperation(args).then(output);
 }
 
-module.exports = { normalizeAsyncJobId, normalizeEnvUrl, parseArgs, pollAsyncOperation };
+module.exports = { normalizeAsyncJobId, normalizeEnvUrl, parseArgs, parsePositiveInteger, pollAsyncOperation };

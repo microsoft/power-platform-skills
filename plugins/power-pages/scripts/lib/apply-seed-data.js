@@ -57,7 +57,7 @@ function readSeedFile(filePath, deps = {}) {
     return parsed;
   }
   const normalizedExport = normalizeDataverseExportSeed(parsed);
-  if (normalizedExport) return normalizedExport;
+  if (Array.isArray(normalizedExport) && normalizedExport.length > 0) return normalizedExport;
   throw new Error('Expected flat { entitySetName: string, records: array } or export { tables: object } seed data');
 }
 

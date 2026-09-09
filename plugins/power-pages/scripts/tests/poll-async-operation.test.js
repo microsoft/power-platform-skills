@@ -6,7 +6,44 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { pollAsyncOperation } = require('../poll-async-operation');
+const { parsePositiveInteger, pollAsyncOperation } = require('../poll-async-operation');
+
+test('parsePositiveInteger accepts positive integers and rejects invalid poll settings', () => {
+  assert.deepEqual(parsePositiveInteger(undefined, 5000, '--intervalMs'), { value: 5000 });
+  assert.deepEqual(parsePositiveInteger('25', 5000, '--intervalMs'), { value: 25 });
+  for (const value of ['0', '-1', '1.5', '1ms', 'NaN']) {
+    assert.deepEqual(
+      parsePositiveInteger(value, 5000, '--intervalMs'),
+      { error: 'Invalid --intervalMs: expected a positive integer' }
+    );
+  }
+});
+
+test('poll-async-operation rejects invalid polling arguments before requests', async () => {
+  let requested = false;
+  const baseArgs = {
+    asyncJobId: '00000000-0000-0000-0000-000000000000',
+    envUrl: 'https://org.crm.dynamics.com',
+    token: 'token',
+  };
+  const deps = {
+    makeRequest: async () => {
+      requested = true;
+      return { statusCode: 200, body: '{}' };
+    },
+  };
+
+  assert.deepEqual(
+    await pollAsyncOperation({ ...baseArgs, intervalMs: 'bad' }, deps),
+    { error: 'Invalid --intervalMs: expected a positive integer' }
+  );
+  assert.deepEqual(
+    await pollAsyncOperation({ ...baseArgs, maxAttempts: '0' }, deps),
+    { error: 'Invalid --maxAttempts: expected a positive integer' }
+  );
+  assert.equal(requested, false);
+});
+
 
 test('poll-async-operation leaves progress indeterminate while import is running', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'poll-async-operation-test-'));

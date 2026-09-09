@@ -373,6 +373,28 @@ test('provisionTemplateSite rejects non-empty output directories', (t) => {
   assert.deepEqual(result, { ok: false, step: 'validation', error: 'outputDirectory must be empty' });
 });
 
+test('provisionTemplateSite rejects an output path that is a file', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const outputFile = path.join(dir, 'output');
+  createSource(source);
+  fs.writeFileSync(outputFile, 'not a directory');
+
+  assert.deepEqual(
+    provisionTemplateSite({
+      sourcePath: source,
+      outputDirectory: outputFile,
+      siteName: '311 Portal',
+    }),
+    {
+      ok: false,
+      step: 'validation',
+      error: 'outputDirectory must be a regular directory when it exists',
+    }
+  );
+});
+
 test('provisionTemplateSite requires project-local npm configuration', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

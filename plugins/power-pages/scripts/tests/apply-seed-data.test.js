@@ -92,6 +92,26 @@ test('readSeedFile normalizes Dataverse export seed shape', (t) => {
   assert.deepEqual(normalized[2].records[0].__files, { spnvc_file: 'files/invoice.pdf' });
 });
 
+test('readSeedFile rejects exports without a valid table entry', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'data.json');
+
+  fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, tables: {} }));
+  assert.throws(() => readSeedFile(file), /Expected/);
+
+  fs.writeFileSync(file, JSON.stringify({
+    schemaVersion: 1,
+    tables: {
+      broken: {
+        entitySet: 'cr123_broken',
+        records: [],
+      },
+    },
+  }));
+  assert.throws(() => readSeedFile(file), /Expected/);
+});
+
 test('applySeedData posts records, skips duplicates, and records failures without throwing', async (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
