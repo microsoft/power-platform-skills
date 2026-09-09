@@ -3,10 +3,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { commandError, runPac } = require('./lib/pac-command');
 const { readWebsiteYml } = require('./lib/detect-project-context');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NPM_REGISTRY = 'https://packagefeedproxy.microsoft.io/npm/';
 
 function parseArgs(argv) {
   const args = {};
@@ -48,6 +50,72 @@ function inspectClonedSiteIdentity(clonedPath, deps = {}) {
     siteName: website.name || null,
     websiteRecordId: website.id,
   };
+}
+
+function runNpm(args, cwd, deps = {}) {
+  const isWindows = (deps.platform || process.platform) === 'win32';
+  // npm is installed as npm.cmd on Windows, and Node cannot execute .cmd files
+  // directly with execFile. Route the fixed argument array through cmd.exe while
+  // keeping shell:false so no user-controlled command string is reparsed.
+  // See: https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
+  const command = isWindows ? 'cmd.exe' : 'npm';
+  const commandArgs = isWindows ? ['/d', '/s', '/c', 'npm.cmd', ...args] : args;
+  const options = {
+    cwd,
+    encoding: 'utf8',
+    timeout: deps.timeoutMs || 900000,
+    maxBuffer: 10 * 1024 * 1024,
+    shell: false,
+  };
+  try {
+    const stdout = (deps.runNpmCommand || execFileSync)(command, commandArgs, options);
+    return { status: 0, stdout: String(stdout || ''), stderr: '' };
+  } catch (err) {
+    return {
+      status: Number.isInteger(err.status) ? err.status : 1,
+      stdout: String(err.stdout || ''),
+      stderr: String(err.stderr || ''),
+      error: err,
+    };
+  }
+}
+
+function inspectCompiledOutput(clonedPath, fsImpl = fs) {
+  const configPath = path.join(clonedPath, 'powerpages.config.json');
+  let config;
+  try {
+    config = JSON.parse(fsImpl.readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`Could not read compiledPath from ${configPath}: ${err.message}`);
+  }
+  // Power Pages code sites declare build output as, for example, { "compiledPath": "dist" }.
+  // Keep inspection inside the cloned project so a malformed template cannot make this
+  // pre-upload check accept source files or follow an output directory outside the clone.
+  const compiledPath = String(config.compiledPath || '').trim();
+  if (!compiledPath || path.isAbsolute(compiledPath) || compiledPath.split(/[\\/]+/).includes('..')) {
+    throw new Error(`powerpages.config.json has an invalid compiledPath: ${compiledPath || '<empty>'}`);
+  }
+  const outputPath = path.resolve(clonedPath, compiledPath);
+  if (outputPath === path.resolve(clonedPath)) {
+    throw new Error(`powerpages.config.json has an invalid compiledPath: ${compiledPath}`);
+  }
+  if (
+    !fsImpl.existsSync(outputPath) ||
+    fsImpl.lstatSync(outputPath).isSymbolicLink() ||
+    !fsImpl.statSync(outputPath).isDirectory()
+  ) {
+    throw new Error(`Build output path is not a regular directory: ${outputPath}`);
+  }
+
+  const queue = [outputPath];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const entry of fsImpl.readdirSync(current, { withFileTypes: true })) {
+      if (entry.isFile()) return { compiledPath, outputPath };
+      if (entry.isDirectory()) queue.push(path.join(current, entry.name));
+    }
+  }
+  throw new Error(`Build output directory is empty: ${outputPath}`);
 }
 
 function provisionTemplateSite(options, deps = {}) {
@@ -101,6 +169,48 @@ function provisionTemplateSite(options, deps = {}) {
     return { ok: false, step: 'clone-output', clonedPath, error: err.message };
   }
 
+  const npm = deps.runNpm || ((args, cwd) => runNpm(args, cwd, deps));
+  const installArgs = [
+    fsImpl.existsSync(path.join(clonedPath, 'package-lock.json')) ? 'ci' : 'install',
+    `--registry=${NPM_REGISTRY}`,
+    '--no-audit',
+    '--no-fund',
+  ];
+  const installResult = npm(installArgs, clonedPath);
+  if (installResult.status !== 0) {
+    return {
+      ok: false,
+      step: 'install',
+      clonedPath,
+      ...clonedIdentity,
+      error: commandError(`npm ${installArgs[0]}`, installResult),
+    };
+  }
+
+  const buildResult = npm(['run', 'build'], clonedPath);
+  if (buildResult.status !== 0) {
+    return {
+      ok: false,
+      step: 'build',
+      clonedPath,
+      ...clonedIdentity,
+      error: commandError('npm run build', buildResult),
+    };
+  }
+
+  let compiledOutput;
+  try {
+    compiledOutput = inspectCompiledOutput(clonedPath, fsImpl);
+  } catch (err) {
+    return {
+      ok: false,
+      step: 'build-output',
+      clonedPath,
+      ...clonedIdentity,
+      error: err.message,
+    };
+  }
+
   const uploadResult = pac([
     'pages', 'upload-code-site',
     '--rootPath', clonedPath,
@@ -120,6 +230,7 @@ function provisionTemplateSite(options, deps = {}) {
     clonedPath,
     siteName: clonedIdentity.siteName || siteName,
     websiteRecordId: clonedIdentity.websiteRecordId,
+    compiledPath: compiledOutput.compiledPath,
   };
 }
 
@@ -132,10 +243,13 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+  NPM_REGISTRY,
   commandError,
   findCodeSiteRoot,
+  inspectCompiledOutput,
   inspectClonedSiteIdentity,
   parseArgs,
   provisionTemplateSite,
+  runNpm,
   runPac,
 };

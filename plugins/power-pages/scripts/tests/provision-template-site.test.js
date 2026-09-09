@@ -7,10 +7,13 @@ const os = require('os');
 const path = require('path');
 
 const {
+  NPM_REGISTRY,
   findCodeSiteRoot,
+  inspectCompiledOutput,
   inspectClonedSiteIdentity,
   parseArgs,
   provisionTemplateSite,
+  runNpm,
   runPac,
 } = require('../provision-template-site');
 
@@ -24,8 +27,8 @@ function tempDir() {
 function createSource(root, { id = SOURCE_ID, name = 'Template Site' } = {}) {
   fs.mkdirSync(path.join(root, '.powerpages-site'), { recursive: true });
   fs.writeFileSync(path.join(root, '.powerpages-site', 'website.yml'), `id: ${id}\nname: ${name}\n`);
-  fs.writeFileSync(path.join(root, 'powerpages.config.json'), '{}');
-  fs.writeFileSync(path.join(root, 'package.json'), '{}');
+  fs.writeFileSync(path.join(root, 'powerpages.config.json'), JSON.stringify({ compiledPath: 'dist' }));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { build: 'vite build' } }));
 }
 
 test('parseArgs accepts source, output, and site name', () => {
@@ -62,13 +65,39 @@ test('inspectClonedSiteIdentity reads the new website record id from cloned meta
   });
 });
 
-test('provisionTemplateSite clones packaged website code then uploads the cloned root', (t) => {
+test('inspectCompiledOutput requires the configured build directory to contain a file', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  createSource(dir);
+  fs.mkdirSync(path.join(dir, 'dist', 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'dist', 'assets', 'index.js'), 'built');
+
+  assert.deepEqual(inspectCompiledOutput(dir), {
+    compiledPath: 'dist',
+    outputPath: path.join(dir, 'dist'),
+  });
+});
+
+test('inspectCompiledOutput rejects a project root or parent path as compiled output', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  createSource(dir);
+
+  fs.writeFileSync(path.join(dir, 'powerpages.config.json'), JSON.stringify({ compiledPath: '.' }));
+  assert.throws(() => inspectCompiledOutput(dir), /invalid compiledPath/);
+
+  fs.writeFileSync(path.join(dir, 'powerpages.config.json'), JSON.stringify({ compiledPath: '../dist' }));
+  assert.throws(() => inspectCompiledOutput(dir), /invalid compiledPath/);
+});
+
+test('provisionTemplateSite clones, installs, builds, validates output, then uploads', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const source = path.join(dir, 'source');
   const output = path.join(dir, 'output');
   createSource(source);
-  const calls = [];
+  const pacCalls = [];
+  const npmCalls = [];
 
   const result = provisionTemplateSite({
     sourcePath: source,
@@ -76,12 +105,21 @@ test('provisionTemplateSite clones packaged website code then uploads the cloned
     siteName: 'Supplier Portal',
   }, {
     runPac(args) {
-      calls.push(args);
+      pacCalls.push(args);
       if (args[1] === 'clone') {
         createSource(path.join(output, 'supplier-portal'), {
           id: CLONED_ID,
           name: 'Supplier Portal',
         });
+        fs.writeFileSync(path.join(output, 'supplier-portal', 'package-lock.json'), '{}');
+      }
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+    runNpm(args, cwd) {
+      npmCalls.push([args, cwd]);
+      if (args[0] === 'run') {
+        fs.mkdirSync(path.join(cwd, 'dist'));
+        fs.writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html></html>');
       }
       return { status: 0, stdout: 'ok', stderr: '' };
     },
@@ -93,8 +131,9 @@ test('provisionTemplateSite clones packaged website code then uploads the cloned
     clonedPath,
     siteName: 'Supplier Portal',
     websiteRecordId: CLONED_ID,
+    compiledPath: 'dist',
   });
-  assert.deepEqual(calls, [
+  assert.deepEqual(pacCalls, [
     [
       'pages', 'clone',
       '--path', source,
@@ -107,6 +146,15 @@ test('provisionTemplateSite clones packaged website code then uploads the cloned
       '--rootPath', clonedPath,
       '--siteName', 'Supplier Portal',
     ],
+  ]);
+  assert.deepEqual(npmCalls, [
+    [[
+      'ci',
+      `--registry=${NPM_REGISTRY}`,
+      '--no-audit',
+      '--no-fund',
+    ], clonedPath],
+    [['run', 'build'], clonedPath],
   ]);
 });
 
@@ -158,6 +206,13 @@ test('provisionTemplateSite reports upload failure without retrying', (t) => {
       }
       return { status: 1, stdout: '', stderr: 'upload rejected' };
     },
+    runNpm(args, cwd) {
+      if (args[0] === 'run') {
+        fs.mkdirSync(path.join(cwd, 'dist'));
+        fs.writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html></html>');
+      }
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
   });
 
   assert.equal(result.ok, false);
@@ -166,6 +221,108 @@ test('provisionTemplateSite reports upload failure without retrying', (t) => {
   assert.equal(result.websiteRecordId, CLONED_ID);
   assert.match(result.error, /upload rejected/);
   assert.equal(calls, 2);
+});
+
+test('provisionTemplateSite stops before upload when dependency installation fails', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  createSource(source);
+  const pacCalls = [];
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: 'Supplier Portal',
+  }, {
+    runPac(args) {
+      pacCalls.push(args);
+      createSource(path.join(output, 'supplier-portal'), {
+        id: CLONED_ID,
+        name: 'Supplier Portal',
+      });
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+    runNpm(args) {
+      assert.equal(args[0], 'install');
+      return { status: 1, stdout: '', stderr: 'install rejected' };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.step, 'install');
+  assert.match(result.error, /install rejected/);
+  assert.equal(pacCalls.length, 1);
+});
+
+test('provisionTemplateSite stops before upload when the cloned project build fails', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  createSource(source);
+  const pacCalls = [];
+  let npmCalls = 0;
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: 'Supplier Portal',
+  }, {
+    runPac(args) {
+      pacCalls.push(args);
+      createSource(path.join(output, 'supplier-portal'), {
+        id: CLONED_ID,
+        name: 'Supplier Portal',
+      });
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+    runNpm(args) {
+      npmCalls++;
+      return args[0] === 'run'
+        ? { status: 1, stdout: '', stderr: 'build rejected' }
+        : { status: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.step, 'build');
+  assert.match(result.error, /build rejected/);
+  assert.equal(npmCalls, 2);
+  assert.equal(pacCalls.length, 1);
+});
+
+test('provisionTemplateSite stops before upload when build output is missing', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  createSource(source);
+  const pacCalls = [];
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: 'Supplier Portal',
+  }, {
+    runPac(args) {
+      pacCalls.push(args);
+      createSource(path.join(output, 'supplier-portal'), {
+        id: CLONED_ID,
+        name: 'Supplier Portal',
+      });
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+    runNpm() {
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.step, 'build-output');
+  assert.match(result.error, /not a regular directory/);
+  assert.equal(pacCalls.length, 1);
 });
 
 test('provisionTemplateSite stops before upload when clone metadata has no valid website id', (t) => {
@@ -228,5 +385,20 @@ test('runPac invokes pac.exe directly on Windows without a command shell', () =>
   });
   assert.equal(calls[0][0], 'pac.exe');
   assert.deepEqual(calls[0][1], ['pages', 'clone', '--path', 'source']);
+  assert.equal(calls[0][2].shell, false);
+});
+
+test('runNpm invokes the Windows npm.cmd shim through cmd.exe without a command shell', () => {
+  const calls = [];
+  runNpm(['run', 'build'], '/tmp/site', {
+    platform: 'win32',
+    runNpmCommand(command, args, options) {
+      calls.push([command, args, options]);
+      return 'ok';
+    },
+  });
+  assert.equal(calls[0][0], 'cmd.exe');
+  assert.deepEqual(calls[0][1], ['/d', '/s', '/c', 'npm.cmd', 'run', 'build']);
+  assert.equal(calls[0][2].cwd, '/tmp/site');
   assert.equal(calls[0][2].shell, false);
 });

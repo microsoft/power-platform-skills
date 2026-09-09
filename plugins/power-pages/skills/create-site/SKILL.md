@@ -305,7 +305,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports any required unmanaged supporting solutions, clones the website code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
+      | Install **`<SELECTED_TEMPLATE.displayName>`** into **`<environmentUrl>`**? This imports any required unmanaged supporting solutions, clones and builds the website code, and uploads the new code site. Seed data is applied before activation when available. | Install Template | Yes, install this template (Recommended), No, start from scratch, Cancel |
 
       - **No, start from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
       - **Cancel**: stop; no org mutation has happened. Do not emit `template_import_failure` because no import was attempted; `template_used` was already emitted when the template path was selected.
@@ -496,9 +496,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --seedApplied "false"
       ```
       `--audience` is the site audience captured in Phase 1 (`internal` or `external`), **not** the template's `audience` persona array from the catalog manifest. Do not include site name, URL, subdomain, free-text purpose, or any other user-identifying value.
-   9. Mark **Clone and upload template site** as `in_progress`. Update the status page:
+   9. Mark **Clone, build, and upload template site** as `in_progress`. Update the status page:
       ```json
-      { "state": "running", "phase": "site", "message": "Cloning and uploading template site" }
+      { "state": "running", "phase": "site", "message": "Cloning, building, and uploading template site" }
       ```
       Create a fresh temporary output directory, then clone the packaged SPA source and upload the clone:
       ```bash
@@ -507,13 +507,15 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
         --outputDirectory "<fresh temp clone directory>" \
         --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
-      This wrapper runs the two required PAC operations in order:
+      The wrapper clones first, reads the new identity, installs dependencies, builds the cloned project, verifies the configured build output, and only then uploads:
       ```bash
       pac pages clone --path "<SELECTED_TEMPLATE_WEBSITE_CODE>" --outputDirectory "<fresh temp clone directory>" --name "<SELECTED_TEMPLATE.displayName>" --overwrite
+      npm ci --registry=https://packagefeedproxy.microsoft.io/npm/ --no-audit --no-fund
+      npm run build
       pac pages upload-code-site --rootPath "<cloned code-site root>" --siteName "<SELECTED_TEMPLATE.displayName>"
       ```
-      Immediately after `pac pages clone`, the wrapper reads `<clonedPath>/.powerpages-site/website.yml`. It requires a valid `id` before upload, then returns that cloned identity after `upload-code-site` succeeds. Save `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`. Never upload `SELECTED_TEMPLATE_WEBSITE_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
-   10. If clone, cloned-identity inspection, or upload fails, run `template_clone_failure` telemetry silently with `errorClass` set to `PacPagesClone` for `clone`/`clone-output`, or `PacPagesUploadCodeSite` for `upload`, and a short non-PII `errorDescription`:
+      When `package-lock.json` is absent, the wrapper uses `npm install` with the same registry and audit/fund flags. Immediately after `pac pages clone`, it reads `<clonedPath>/.powerpages-site/website.yml` and requires a valid `id`. After the build, it reads `compiledPath` from `powerpages.config.json` and requires that directory to contain at least one file before upload. Save the returned `clonedPath` as `CLONED_TEMPLATE_SITE_PATH`, `siteName` as `IMPORTED_SITE_NAME`, and `websiteRecordId` as `IMPORTED_WEBSITE_RECORD_ID`. Never upload `SELECTED_TEMPLATE_WEBSITE_CODE` directly; `pac pages clone` must rewrite the downloaded site's identity first.
+   10. If clone, cloned-identity inspection, dependency installation, build, build-output validation, or upload fails, run `template_clone_failure` telemetry silently. Map the returned `step` to `errorClass`: `clone`/`clone-output` → `PacPagesClone`, `install` → `NpmInstall`, `build` → `NpmBuild`, `build-output` → `CompiledOutput`, and `upload` → `PacPagesUploadCodeSite`. Use a short non-PII `errorDescription`:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --eventName template_clone_failure \
@@ -522,25 +524,25 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
          --framework "<SELECTED_TEMPLATE_VARIANT.framework>" \
          --audience "<internal|external from Phase 1 discovery>" \
          --outcome failure \
-         --errorClass "<PacPagesClone|PacPagesUploadCodeSite>" \
+         --errorClass "<PacPagesClone|NpmInstall|NpmBuild|CompiledOutput|PacPagesUploadCodeSite>" \
          --errorDescription "<short non-PII failure category>"
        ```
        Then fire this gate:
 
       <!-- gate: create-site:1.5.clone-failed | category=progress | cancel-leaves=partial-template-clone -->
 
-      > 🚦 **Gate (progress · create-site:1.5.clone-failed):** Choose how to proceed after cloning or uploading the packaged template site fails.
+      > 🚦 **Gate (progress · create-site:1.5.clone-failed):** Choose how to proceed after cloning, building, or uploading the packaged template site fails.
       >
-      > **Trigger:** Phase 1.5 when `pac pages clone`, cloned `.powerpages-site/website.yml` identity inspection, or `pac pages upload-code-site` fails.
-      > **Why we ask:** The temp directory can contain clone output, the environment can contain a partial code-site upload, and supporting solutions may already be installed.
+      > **Trigger:** Phase 1.5 when cloning, cloned identity inspection, dependency installation, the project build, compiled-output validation, or `pac pages upload-code-site` fails.
+      > **Why we ask:** The temp directory can contain clone or build output, the environment can contain a partial code-site upload, and supporting solutions may already be installed.
       > **Cancel leaves:** `partial-template-clone` — cached template artifacts and local clone files remain; supporting solutions or a partial site upload may also remain in Dataverse.
 
       | Question | Header | Options |
       |----------|--------|---------|
-      | The template site could not be cloned or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
+      | The template site could not be cloned, built, or uploaded. How would you like to proceed? | Site Creation Failed | Retry site creation (Recommended), Fall back to from-scratch, Stop |
 
       Do not retry automatically. A retry must use a new temporary output directory. If the user falls back to from-scratch, explain that supporting solutions or a partial site upload may remain and recommend `<SELECTED_TEMPLATE_VARIANT.framework>`.
-   11. When clone and upload succeed, mark **Clone and upload template site** as `completed` and run `template_clone_success` telemetry silently:
+   11. When clone, build, and upload succeed, mark **Clone, build, and upload template site** as `completed` and run `template_clone_success` telemetry silently:
        ```bash
        node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
          --eventName template_clone_success \
@@ -1298,7 +1300,7 @@ After the reinstall policy chooses a normal import, update, or import-anyway pat
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
 | Import template supporting solutions | Importing supporting solutions | Import each required unmanaged supporting solution in deterministic order and poll every async job to completion |
-| Clone and upload template site | Creating template site | Clone the packaged SPA source and upload the resulting code site |
+| Clone, build, and upload template site | Creating template site | Clone the packaged SPA source, install dependencies, build and verify the configured compiled output, then upload the resulting code site |
 | Show inactive template site | Showing template site | Use the Website Record ID written by `pac pages clone` to `.powerpages-site/website.yml` and tell the user the uploaded site is not activated yet |
 | Apply template seed data | Applying seed data | Insert optional template seed records using the deterministic seed-data script; failures do not block activation |
 | Activate template site | Activating template site | Invoke activate-site with the resolved site name and Website Record ID |
