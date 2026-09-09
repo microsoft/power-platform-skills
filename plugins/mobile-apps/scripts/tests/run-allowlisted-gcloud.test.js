@@ -21,6 +21,19 @@ test('allows checked-in gcloud command families with explicit flags', () => {
     isAllowedGcloudArgs(
       [
         'iam',
+        'list-testable-permissions',
+        '//cloudresourcemanager.googleapis.com/projects/contoso-mobile',
+        '--filter=name:cloudmessaging.messages.create',
+        '--format=json(name,stage,customRolesSupportLevel)',
+      ],
+      allowlist,
+    ),
+    true,
+  );
+  assert.equal(
+    isAllowedGcloudArgs(
+      [
+        'iam',
         'workload-identity-pools',
         'describe',
         'power-automate-push',
@@ -37,6 +50,7 @@ test('allows checked-in gcloud command families with explicit flags', () => {
 test('rejects unlisted, shell-shaped, and malformed commands', () => {
   const allowlist = loadAllowlist();
   assert.equal(isAllowedGcloudArgs(['auth', 'print-access-token'], allowlist), false);
+  assert.equal(isAllowedGcloudArgs(['iam', 'permissions', 'query-testable'], allowlist), false);
   assert.equal(isAllowedGcloudArgs(['projects', 'delete', 'prod'], allowlist), false);
   assert.equal(isAllowedGcloudArgs(['iam', 'service-accounts', 'keys', 'create'], allowlist), false);
   assert.equal(isAllowedGcloudArgs(['projects', 'describe', 'prod\nwhoami'], allowlist), false);

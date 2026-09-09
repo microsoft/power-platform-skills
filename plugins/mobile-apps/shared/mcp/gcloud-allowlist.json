@@ -7,6 +7,7 @@
     "projects remove-iam-policy-binding",
     "services list",
     "services enable",
+    "iam list-testable-permissions",
     "iam workload-identity-pools list",
     "iam workload-identity-pools describe",
     "iam workload-identity-pools create",

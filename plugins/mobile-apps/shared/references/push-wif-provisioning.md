@@ -315,6 +315,13 @@ ID. Acquire a fresh Entra app-only token through the referenced secret and
 inspect it as in Section 5 only when an exact existing or just-bootstrapped
 client ID is available.
 
+When a custom FCM role is created successfully but FCM authorization still
+returns `PERMISSION_DENIED`, use the read-only
+`iam list-testable-permissions` command against the exact project resource to
+confirm whether `cloudmessaging.messages.create` currently supports custom
+roles before proposing the broader Firebase Cloud Messaging Admin fallback.
+This diagnostic does not authorize API enablement or IAM mutation.
+
 Require all of this compatible state:
 
 | Area | Required state |
