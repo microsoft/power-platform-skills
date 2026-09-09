@@ -358,6 +358,35 @@ function columnRequiredLevel(c) {
   return requiredLevelValue(c.RequiredLevel) || requiredLevelValue(c.requiredLevel);
 }
 
+// The columns a table already has, as `[{ logicalName, RequiredLevel }]`.
+//
+// Same reason as `findExistingTable` above, and the same measurement: calling the SDK's
+// `findColumns` immediately before `createColumn` makes Dataverse store ONLY the base-language
+// label of a multi-language column name. Order-controlled, 8 columns, sequence C,F,F,C,C,F,F,C:
+// `createColumn` alone kept both languages 4/4; `findColumns` then `createColumn` kept both 0/4.
+//
+// This path matters MORE than the table one, not less: it is the table-REUSE branch, i.e. adding a
+// column to a table that already exists — which is exactly the scenario AB#6686428 was reported
+// against ("adding a table to an existing app"). A fresh-table build never reaches it, which is why
+// the first round of this fix missed it and why the end-to-end verification did not catch it.
+//
+// The projection deliberately matches `readAttributeRequiredLevels` below, so the rows still answer
+// `columnRequiredLevel`. Falls back to `findColumns` only when the raw client is unavailable
+// (unit-test doubles), preserving previous behaviour for them.
+async function findExistingColumns(provision, logical) {
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    try {
+      const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes?$select=LogicalName,RequiredLevel`);
+      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+        return res.body.value.map((a) => ({ logicalName: String(a.LogicalName || '').toLowerCase(), RequiredLevel: a.RequiredLevel }));
+      }
+    } catch { /* fall through to the SDK lister */ }
+  }
+  if (typeof (provision && provision.findColumns) !== 'function') return [];
+  return (await provision.findColumns(logical)) || [];
+}
+
 async function readAttributeRequiredLevels({ sdk, provision, logical }) {
   const client = (provision && provision.dataverse) || (sdk && sdk.dataverse);
   if (!client || typeof client.get !== 'function') return new Map();
@@ -660,7 +689,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-      existingColRows = (await provision.findColumns(logical)) || [];
+      existingColRows = await findExistingColumns(provision, logical);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {

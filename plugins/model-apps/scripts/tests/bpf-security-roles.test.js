@@ -234,6 +234,99 @@ test('an INCONCLUSIVE probe falls back to findTables rather than assuming absent
   assert.strictEqual(created.length, 0, 'and the fallback found it, so no duplicate create');
 });
 
+test('the COLUMN existence probe is a narrow read too — the reuse path was missed first time', async () => {
+  // The table probe fix above was INCOMPLETE. `findColumns` poisons `createColumn` identically, and
+  // it is called on the table-REUSE branch — i.e. adding a column to a table that already exists,
+  // which is exactly the scenario AB#6686428 was reported against. A fresh-table build never reaches
+  // it, which is why both the first fix and the end-to-end verification missed it.
+  //
+  // Order-controlled, 8 columns, C,F,F,C,C,F,F,C:
+  //     createColumn only          kept both languages 4/4
+  //     findColumns + createColumn kept both languages 0/4
+  // After the fix, the plugin's reuse path measured 4/4 against the same org.
+  const { provisionDataModel } = require('../lib/entity-provision.js');
+  const gets = [];
+  const runner = {
+    run: async (p, l, fn, o = {}) => { try { return await fn(); } catch (e) { if (o.skipIf && o.skipIf(e)) return undefined; throw e; } },
+    skip: () => {},
+    mapLimit: async (items, _n, fn) => { const out = []; for (const it of items) out.push(await fn(it)); return out; },
+  };
+  const createdColumns = [];
+  const sdk = {
+    createTable: async () => { throw new Error('the table exists — the reuse branch must not create it'); },
+    createColumn: async (e, o) => { createdColumns.push(o); return { logicalName: o.schemaName.toLowerCase() }; },
+    updateTable: async () => undefined,
+    updateColumn: async () => undefined,
+  };
+  const provision = {
+    dataverse: {
+      get: async (url) => {
+        gets.push(url);
+        if (/^\/EntityDefinitions\(LogicalName='contoso_probe'\)\?/.test(url)) {
+          return { status: 200, headers: {}, body: { LogicalName: 'contoso_probe', EntitySetName: 'contoso_probes' } };
+        }
+        if (/\/Attributes\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [{ LogicalName: 'contoso_name', RequiredLevel: { Value: 'ApplicationRequired' } }] } };
+        }
+        return { status: 404, headers: {}, body: {} };
+      },
+    },
+    findColumns: async () => { throw new Error('findColumns must NOT be used before createColumn — it drops non-base-language labels'); },
+    findTables: async () => { throw new Error('findTables must NOT be used before a create'); },
+    fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: 'contoso_probes', relationships: [] }),
+    queryRecords: async () => [],
+  };
+  await provisionDataModel({
+    spec: {
+      solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
+      languageCode: 1033,
+      entities: [{ schemaName: 'contoso_probe', displayName: 'Probe', primaryAttribute: { schemaName: 'contoso_name' }, columns: [{ schemaName: 'contoso_note', type: 'Text', displayName: { 1033: 'Note', 3082: 'Nota' } }] }],
+      relationships: [],
+    },
+    sdk, provision, runner, preResolvedLanguageCode: 1033,
+  });
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='contoso_probe'\)\/Attributes\?\$select=LogicalName,RequiredLevel$/.test(u)), JSON.stringify(gets));
+  const note = createdColumns.find((c) => c.schemaName === 'contoso_note');
+  assert.ok(note, JSON.stringify(createdColumns));
+  assert.deepStrictEqual(note.displayName, { 1033: 'Note', 3082: 'Nota' });
+});
+
+test('an unreadable column list falls back to findColumns rather than assuming the table is empty', async () => {
+  // Assuming "no columns" would make every existing column look missing and be re-created.
+  const { provisionDataModel } = require('../lib/entity-provision.js');
+  let findColumnsCalled = 0;
+  const createdColumns = [];
+  const runner = {
+    run: async (p, l, fn, o = {}) => { try { return await fn(); } catch (e) { if (o.skipIf && o.skipIf(e)) return undefined; throw e; } },
+    skip: () => {},
+    mapLimit: async (items, _n, fn) => { const out = []; for (const it of items) out.push(await fn(it)); return out; },
+  };
+  await provisionDataModel({
+    spec: {
+      solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
+      languageCode: 1033,
+      entities: [{ schemaName: 'contoso_probe', displayName: 'Probe', primaryAttribute: { schemaName: 'contoso_name' }, columns: [{ schemaName: 'contoso_note', type: 'Text', displayName: 'Note' }] }],
+      relationships: [],
+    },
+    sdk: { createColumn: async (e, o) => { createdColumns.push(o); return { logicalName: o.schemaName }; }, updateTable: async () => undefined, updateColumn: async () => undefined },
+    provision: {
+      dataverse: {
+        get: async (url) => {
+          if (/^\/EntityDefinitions\(LogicalName='contoso_probe'\)\?/.test(url)) return { status: 200, headers: {}, body: { LogicalName: 'contoso_probe', EntitySetName: 'contoso_probes' } };
+          return { status: 503, headers: {}, body: {} };
+        },
+      },
+      findColumns: async () => { findColumnsCalled += 1; return [{ logicalName: 'contoso_note' }]; },
+      fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: 'contoso_probes', relationships: [] }),
+      queryRecords: async () => [],
+    },
+    runner,
+    preResolvedLanguageCode: 1033,
+  });
+  assert.strictEqual(findColumnsCalled, 1, 'an unreadable attributes read must fall back');
+  assert.strictEqual(createdColumns.length, 0, 'and the fallback saw the column, so it was not re-created');
+});
+
 function securitySdk(over = {}) {
   const calls = { addEntityPrivilegesToRole: [] };
   return {
