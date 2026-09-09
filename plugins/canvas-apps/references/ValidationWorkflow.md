@@ -50,8 +50,8 @@ If compilation fails, fix diagnostics in this order:
 
 1. `YamlInvalidSyntax` parse errors
 2. Control template version conflicts — `Control type '...@X' has a version that is newer
-than the current version of 'Y'` and `Another instance of control type '...' has
-already been referenced using a different version`
+   than the current version of 'Y'` and `Another instance of control type '...' has
+   already been referenced using a different version`
 3. `An entity with name '...' already exists` duplicate-name errors
 4. `Unknown property ...` errors
 5. `[Control 'App', Property '...']` errors
@@ -330,9 +330,8 @@ Immediately before the summary:
    agent, request another QA pass, or perform another inspection. If any of those are still
    needed, remain before the barrier and complete them first.
 4. Call `compile_canvas`, even when the clean-candidate compile succeeded.
-5. After it succeeds, make no further tool call. Return the summary immediately. In
-   particular, do not call `Task`, `read_agent`, `edit`, `create`, `apply_patch`,
-   `sync_canvas`, `view`, `glob`, `rg`, `Bash`, or another MCP tool.
+5. After `compile_canvas` succeeds, return the summary immediately without making another
+   tool call.
 6. If any later tool call, delegation, write, inspection, or repair occurs, the compile is
    no longer final. Finish that work, confirm every agent has returned, and repeat this
    entire gate. A compile predating later activity is not final proof.

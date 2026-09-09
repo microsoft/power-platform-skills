@@ -118,9 +118,9 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     For EDIT mode, compile after applying the before-builder app changes and resolve
     App-level diagnostics before dispatching.
 10. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
-and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
-assignment. Run these workers in waves of **at most three**. Fire each wave together,
-wait for it to return, then dispatch the next.
+   and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
+   assignment. Run these workers in waves of **at most three**. Fire each wave together,
+   wait for it to return, then dispatch the next.
 
 Never dispatch more than three builders at once. Larger fan-outs have hung without
 returning, and waves of three get you the first compile sooner, which is where systemic
@@ -240,8 +240,8 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - Reject `QACHK-CARD-PLACEHOLDER` `PASS` when a ModernCard displays Title, Subtitle and
   Description with `Height < 180`; send that screen back for self-QA.
 - If a builder returns `Status: Blocked`, re-invoke the planner to correct that screen
-brief, then rerun only the affected builder. Never ask a builder to guess missing
-definitions.
+  brief, then rerun only the affected builder. Never ask a builder to guess missing
+  definitions.
 - If a general-purpose screen worker cannot write its target, stop and report the exact
   tooling failure. Do not retry with a custom screen builder whose write restriction is
   already known.
@@ -261,11 +261,11 @@ discards prior fixes and does not converge.
 - Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
 - Complete every app, planning, and acceptance-artifact write before the final compile.
   The final successful `compile_canvas` must occur after the last `edit`, `create`, or
-  `apply_patch` and must be the final tool call before the summary. After it succeeds,
-  return the summary immediately without calling `Task`, `read_agent`, `view`, `glob`,
-  `rg`, `Bash`, another MCP tool, or any other tool. If any later tool call, delegation,
-  write, inspection, or repair occurs, the compile is no longer final: finish that work,
-  wait for every agent, and repeat the final generation-proof gate.
+  `apply_patch` and must be the final tool call before the summary. After
+  `compile_canvas` succeeds, return immediately without making another tool call. If any
+  later tool call, delegation, write, inspection, or repair occurs, the compile is no
+  longer final: finish that work, wait for every agent, and repeat the final
+  generation-proof gate.
 
 ## Shared Invariants
 

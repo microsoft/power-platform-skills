@@ -912,13 +912,13 @@ that the card's layout displays but the YAML leaves unset.
 
 ```yaml
 - KpiOpenCard:
-      Control: ModernCard
-      Properties:
-          Image: =Blank()
-          HeaderImage: =Blank()
-          Title: =CountRows(colOpenTasks) & ""
-          Subtitle: ="Open tasks"
-          Description: ="Across all projects"
+    Control: ModernCard
+    Properties:
+      Image: =Blank()
+      HeaderImage: =Blank()
+      Title: =CountRows(colOpenTasks) & ""
+      Subtitle: ="Open tasks"
+      Description: ="Across all projects"
 ```
 
 If the control definition includes `ImageAccessibleLabel` or
@@ -1036,22 +1036,22 @@ properties:
 
 ```yaml
 Screens:
-    Screen1:
-        Children:
-            - AppRoot:
-                  Control: GroupContainer
-                  Variant: AutoLayout
-                  Properties:
-                      Width: =Parent.Width
-                      Height: =Parent.Height
-                      LayoutMinWidth: =0
-                      LayoutMinHeight: =0
-                      LayoutDirection: =LayoutDirection.Vertical
-                  Children:
-                      - AppHeader:
-                        # ...
-                      - AppContent:
-                            # ...
+  Screen1:
+    Children:
+      - AppRoot:
+          Control: GroupContainer
+          Variant: AutoLayout
+          Properties:
+            Width: =Parent.Width
+            Height: =Parent.Height
+            LayoutMinWidth: =0
+            LayoutMinHeight: =0
+            LayoutDirection: =LayoutDirection.Vertical
+          Children:
+            - AppHeader:
+                # ...
+            - AppContent:
+                # ...
 ```
 
 After moving the controls, re-run `QACHK-FILLPORTIONS-DEFAULT`, `QACHK-SCROLL-TRAP`,
