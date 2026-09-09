@@ -682,22 +682,49 @@ async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, read
 // of failure AB#6686428 exists to end.
 //
 // `dataverse.get` RESOLVES with `{ status }` on a 404 instead of throwing, so the status is checked
-// explicitly. Falls back to `findTables` only when the raw client is unavailable (older callers and
-// unit-test doubles), preserving previous behaviour for them.
-async function findExistingTable(provision, schemaName) {
+// explicitly. Falls back to `findTables` when the raw client is unavailable (older callers and
+// unit-test doubles) or when the narrow read is INCONCLUSIVE — with one exception, below.
+//
+// `hasLocalizedLabels` closes the gap that fallback would otherwise leave open. `findTables` can
+// safely prove PRESENCE (a hit means we reuse the table and no create follows, so nothing is
+// poisoned), but a MISS is followed immediately by `createTable` — with the poisoning read already
+// on the wire. So for an entity whose labels ARE localized, an inconclusive probe is never resolved
+// by `findTables`: the narrow read is retried, and if it stays inconclusive the build HALTS rather
+// than silently shipping an English-only table. Same fail-closed rule as the unprovisioned-language
+// check above, and for the same reason: by the time a warning is read the table already exists, and
+// fixing a label after the fact is a manual job.
+async function findExistingTable(provision, schemaName, { hasLocalizedLabels = false, attempts = 3 } = {}) {
   const logical = String(schemaName).toLowerCase();
   const raw = provision && provision.dataverse;
   if (raw && typeof raw.get === 'function') {
     const escaped = logical.replace(/'/g, "''");
-    // Wrapped like its `findExistingColumns` sibling. The client resolves `{status}` for a 404 and
-    // even a persistent 5xx, and throws only on a persistent TRANSPORT error; letting that propagate
-    // here would abort the build on a blip the `findTables` fallback might well survive.
-    let res = null;
-    try { res = await raw.get(`/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`); } catch { res = null; }
-    if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
-      return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
+    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`;
+    // Retried only for a LOCALIZED entity, where the alternative to a conclusive answer is a halt.
+    // For everything else one attempt then `findTables` is both cheaper and exactly the old
+    // behaviour.
+    const tries = hasLocalizedLabels ? Math.max(1, attempts) : 1;
+    let lastWhy = 'unknown';
+    for (let i = 0; i < tries; i += 1) {
+      // Wrapped like its `findExistingColumns` sibling. The client resolves `{status}` for a 404 and
+      // even a persistent 5xx, and throws only on a persistent TRANSPORT error; letting that
+      // propagate here would abort the build on a blip the fallback might well survive.
+      let res = null;
+      try { res = await raw.get(url); } catch (err) { res = null; lastWhy = (err && err.message) || String(err); }
+      if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
+        return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
+      }
+      if (res && res.status === 404) return null;
+      if (res) lastWhy = `HTTP ${res.status}${res.body && res.body.LogicalName === undefined && res.status < 300 ? ' with no LogicalName in the body' : ''}`;
     }
-    if (res && res.status === 404) return null;
+    if (hasLocalizedLabels) {
+      throw new BuildHalt(
+        `could not determine whether table '${logical}' already exists (${lastWhy}), and its labels are localized. `
+        + 'Resolving this by the broad metadata read the build normally falls back to is what makes Dataverse store '
+        + 'ONLY the base-language label (live-measured, 0/4 vs 4/4), so the build stops here instead of silently '
+        + 'creating an English-only table. Re-run once the environment answers metadata reads.',
+        { phase: 'entities', code: 'table-probe-inconclusive', recoverable: true },
+      );
+    }
     // Any other status is inconclusive — fall through to findTables rather than assume "absent",
     // because assuming absent turns a transient read failure into a duplicate-create attempt.
   }
@@ -742,7 +769,11 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
   for (const e of spec.entities) {
     const logical = e.schemaName.toLowerCase();
-    const hits = await findExistingTable(provision, e.schemaName);
+    // Whether THIS entity carries any localized label. It decides whether an inconclusive existence
+    // probe may be resolved by the broad `findTables` read — safe for a plain-label entity, poisoning
+    // for a localized one. See findExistingTable.
+    const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
+    const hits = await findExistingTable(provision, e.schemaName, { hasLocalizedLabels: entityIsLocalized });
     const existingTable = hits;
     let existingCols = new Set();
     let existingColRows = [];
@@ -772,7 +803,8 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         } catch (err) {
           if (!isAlreadyExists(err)) throw err;
           // First POST likely succeeded server-side; a transient-network retry hit "already exists".
-          // Rediscover to capture entitySetName (required by later phases).
+          // Rediscover to capture entitySetName (required by later phases). No poisoning concern
+          // here whatever the labels are — the table now EXISTS, so no create follows this read.
           const found = await findExistingTable(provision, e.schemaName);
           if (!found) throw err;
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };

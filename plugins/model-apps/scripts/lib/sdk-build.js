@@ -1198,7 +1198,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -2214,7 +2214,14 @@ async function runSdkBuild(spec, opts = {}) {
       const entityLogical = String(flow.entity).toLowerCase();
       const key = `${entityLogical}|${flow.name}`;
       const existing = await provision.queryRecords('workflow', {
-        select: ['workflowid', 'statecode', 'createdon'],
+        // `uniquename` is selected, not derived. Activation creates the flow's backing TABLE with
+        // exactly this name, and the security phase grants privileges on that table. For a flow this
+        // build created, `bpfUniqueName(flow.name)` IS the deployed value — but a REUSED flow may
+        // have been authored in Maker or by another tool under any unique name at all, and a
+        // later display-name rename does not follow it. Deriving instead of reading would then grant
+        // on a table that either does not exist or, worse, belongs to something else entirely.
+        // See https://learn.microsoft.com/en-us/power-automate/developer/business-process-flows-code
+        select: ['workflowid', 'statecode', 'createdon', 'uniquename'],
         // Definition rows only, and BusinessFlow only — see bpfFilter.
         filter: bpfFilter(flow.name, entityLogical),
         // Ordered and > 1 for the same reason as business rules: `top: 1` unordered adopts an
@@ -2251,6 +2258,10 @@ async function runSdkBuild(spec, opts = {}) {
           runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists — reuse; stage edits aren't applied on rebuild, recreate to change)`);
         }
         result.created.businessProcessFlows[key] = existingId;
+        // The DEPLOYED backing-table name, read back rather than derived (see the select above). A
+        // row with no `uniquename` (an older projection, or a double that does not model the field)
+        // falls back to the derivation, which is still the right answer for anything this tool made.
+        result.created.bpfBackingTables[key] = String(existing[0].uniquename || bpfUniqueName(flow.name)).toLowerCase();
         // Reconcile solution membership on the REUSE path too. `addSolutionComponent` is otherwise
         // only reached by the create branch, so a run where the flow was created but the component
         // add failed (or a flow created by an earlier build of a different solution) would be reused
@@ -2321,6 +2332,11 @@ async function runSdkBuild(spec, opts = {}) {
         const art = provision.createArtifact('bpf', bpfDef(flow));
         const pushed = requireSuccessfulPush(await provision.pushArtifact('bpf', art.id), `business process flow ${flow.name}`, opts.warn);
         result.created.businessProcessFlows[key] = pushed.id;
+        // On the CREATE path the derivation is authoritative: the build supplied `flow.name`, the
+        // adapter derived `uniquename` from it, and `unique` above is that same derivation — already
+        // proven collision-free by the clash checks. Recorded explicitly so the security phase reads
+        // ONE map regardless of which branch produced the flow.
+        result.created.bpfBackingTables[key] = unique;
         // componentType 29 (workflow) — a BPF is a workflow row, so it ships in the solution the same
         // way a business rule does. Without this the process is left out of the solution and does not
         // travel on export/import.
@@ -3074,36 +3090,45 @@ async function runSdkBuild(spec, opts = {}) {
       if (rr && rr.roleId) personaRoleIds.set(String(rr.roleId).toLowerCase(), name);
     }
     const grantedRoleIds = new Map(); // lowercased roleId -> the label of the grant that claimed it
+    // TWO PASSES, deliberately. Resolving and guarding EVERY grant before applying ANY is what makes
+    // the identity guards below worth having: with resolve-guard-apply interleaved per grant, a spec
+    // whose second entry aliases the first applied grant #1 and only then halted, leaving one role
+    // changed and one not, with nothing in the output saying which. Every guard here rejects a spec
+    // that is wrong independently of the environment, so it costs nothing to learn that first.
+    const resolvedGrants = [];
     for (const grant of spec.roleGrants || []) {
       const label = roleGrantLabel(grant);
+      let target;
+      try {
+        target = await resolveRoleGrantTarget(provision, grant, roleGrantBuCache);
+      } catch (err) {
+        // Fail-closed: an unresolvable or ambiguous role means we do not know what we would be granting
+        // on. Halting is better than skipping, because a skipped grant reads as a successful build whose
+        // users still cannot open the table — the exact failure this feature was filed for.
+        throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false });
+      }
+      const idKey = String(target.roleId).toLowerCase();
+      if (personaRoleIds.has(idKey)) {
+        throw new BuildHalt(
+          `roleGrant ${label} resolves to role ${target.roleId}, which is also persona "${personaRoleIds.get(idKey)}" in this spec. `
+          + 'The build CONVERGES a persona\'s role (privileges not declared on the persona are removed), so this grant would be '
+          + 'undone on the next build — declare these privileges on that persona\'s job instead.',
+          { phase: 'security', code: 'role-grant-persona-overlap', recoverable: false },
+        );
+      }
+      if (grantedRoleIds.has(idKey)) {
+        throw new BuildHalt(
+          `roleGrant ${label} resolves to role ${target.roleId}, which roleGrant ${grantedRoleIds.get(idKey)} already targets. `
+          + 'Merge them into one entry: two entries can request conflicting depths for one shared Dataverse privilege, and the '
+          + 'SDK only detects that within a single call, so the later write would silently win.',
+          { phase: 'security', code: 'role-grant-duplicate-target', recoverable: false },
+        );
+      }
+      grantedRoleIds.set(idKey, label);
+      resolvedGrants.push({ grant, label, target });
+    }
+    for (const { grant, label, target } of resolvedGrants) {
       await runner.run('security', `grant privileges to existing role ${label}`, async () => {
-        let target;
-        try {
-          target = await resolveRoleGrantTarget(provision, grant, roleGrantBuCache);
-        } catch (err) {
-          // Fail-closed: an unresolvable or ambiguous role means we do not know what we would be granting
-          // on. Halting is better than skipping, because a skipped grant reads as a successful build whose
-          // users still cannot open the table — the exact failure this feature was filed for.
-          throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false });
-        }
-        const idKey = String(target.roleId).toLowerCase();
-        if (personaRoleIds.has(idKey)) {
-          throw new BuildHalt(
-            `roleGrant ${label} resolves to role ${target.roleId}, which is also persona "${personaRoleIds.get(idKey)}" in this spec. `
-            + 'The build CONVERGES a persona\'s role (privileges not declared on the persona are removed), so this grant would be '
-            + 'undone on the next build — declare these privileges on that persona\'s job instead.',
-            { phase: 'security', code: 'role-grant-persona-overlap', recoverable: false },
-          );
-        }
-        if (grantedRoleIds.has(idKey)) {
-          throw new BuildHalt(
-            `roleGrant ${label} resolves to role ${target.roleId}, which roleGrant ${grantedRoleIds.get(idKey)} already targets. `
-            + 'Merge them into one entry: two entries can request conflicting depths for one shared Dataverse privilege, and the '
-            + 'SDK only detects that within a single call, so the later write would silently win.',
-            { phase: 'security', code: 'role-grant-duplicate-target', recoverable: false },
-          );
-        }
-        grantedRoleIds.set(idKey, label);
         let applied;
         try {
           applied = await provision.addEntityPrivilegesToRole(target.roleId, grant.privileges);
@@ -3130,21 +3155,28 @@ async function runSdkBuild(spec, opts = {}) {
     //
     // The target is the flow's BACKING TABLE, not the flow row. Activating a flow makes the platform
     // create an org-owned table, and holding privileges on THAT is what lets a persona run the
-    // process. Three things were measured live before this was written (see validateBpfSecurityRoles):
-    // the table's logical name is exactly `bpfUniqueName(flow.name)` so nothing has to be read back;
+    // process. Two things were measured live before this was written (see validateBpfSecurityRoles):
     // the table is organization-owned and every privilege is Global-only, so there is no scope to
     // author; and the public `addEntityPrivilegesToRole` grants on it (the SDK's internal BPF role
     // helper is not on its public surface).
+    //
+    // The table NAME is taken from `created.bpfBackingTables`, which the flow phase read back from
+    // the deployed `workflow.uniquename`. It is only DERIVED from the display name as a last resort:
+    // a flow authored elsewhere, or renamed after creation, keeps its original unique name, and
+    // granting on the derivation would target a table that does not exist — or one that belongs to
+    // something else. The fallback still covers the doubles and older projections that do not carry
+    // the field, where the derivation is the correct answer anyway.
     const flowsWithRoles = (spec.businessProcessFlows || []).filter((f) => f && f.securityRoles);
     for (const f of flowsWithRoles) {
-      const backingTable = bpfUniqueName(f.name);
+      const flowKey = `${String(f.entity).toLowerCase()}|${f.name}`;
+      const backingTable = result.created.bpfBackingTables[flowKey] || bpfUniqueName(f.name);
       const label = `flow "${f.name}" (backing table ${backingTable})`;
       // The flow must have been built in THIS invocation, or its backing table may not exist —
       // ACTIVATION is what creates it. Checked BEFORE runner.run and reported through runner.skip,
       // because a value returned from runner.run is not emitted: a silent skip would report a clean
       // build in which nobody can run the process, which is the failure #513 exists to fix.
       // The key mirrors the flow phase's own `${entityLogical}|${flow.name}`.
-      const built = result.created.businessProcessFlows[`${String(f.entity).toLowerCase()}|${f.name}`];
+      const built = result.created.businessProcessFlows[flowKey];
       if (!built) {
         runner.skip('security', `flow roles for ${f.name} (the business-process-flows phase did not run in this invocation, so the backing table may not exist yet)`);
         continue;

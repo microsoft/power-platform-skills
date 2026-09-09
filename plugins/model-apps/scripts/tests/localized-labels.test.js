@@ -72,19 +72,60 @@ test('localizedLabelLcids reports only canonical LCID keys', () => {
 
 // --- validation: the shape ------------------------------------------------------------------------
 
-test('a localized label on every supported surface validates', () => {
-  // The exact list the bug asks for: table, plural, primary field, column, lookup, Choice options.
+test('a localized label on every VERIFIED surface validates', () => {
+  // The exact list the bug asks for, minus global choices: table, plural, primary field, column,
+  // lookup, alternate key, and INLINE Choice options. `globalChoices[]` is covered by its own test
+  // below — it is rejected, because Dataverse silently stores only the base language there.
   const s = base();
   s.entities[0].displayName = ES;
   s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base del proyecto' };
   s.entities[0].primaryAttribute.displayName = { 1033: 'Title', 3082: 'Título' };
-  s.entities[0].columns = [{ schemaName: 'contoso_note', type: 'Text', displayName: { 1033: 'Note', 3082: 'Nota' } }];
+  s.entities[0].columns = [
+    { schemaName: 'contoso_note', type: 'Text', displayName: { 1033: 'Note', 3082: 'Nota' } },
+    { schemaName: 'contoso_status', type: 'Choice', displayName: { 1033: 'Status', 3082: 'Estado' }, options: [{ 1033: 'Open', 3082: 'Abierto' }, { 1033: 'Closed', 3082: 'Cerrado' }] },
+  ];
   s.entities[0].alternateKeys = [{ schemaName: 'contoso_key', columns: ['contoso_title'], displayName: { 1033: 'Key', 3082: 'Clave' } }];
   s.entities.push({ schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] });
   s.relationships = [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_projectbaseline', lookup: { schemaName: 'contoso_projectid', displayName: { 1033: 'Project', 3082: 'Proyecto' } } }];
-  s.globalChoices = [{ name: 'contoso_status', displayName: { 1033: 'Status', 3082: 'Estado' }, options: [{ 1033: 'Open', 3082: 'Abierto' }, { 1033: 'Closed', 3082: 'Cerrado' }] }];
   const r = validateAppSpec(s, { profile: 'deploy' });
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('a LOCALIZED global choice is REJECTED — the platform silently drops it', () => {
+  // Measured 0/4 on an org with 1033 and 3082 provisioned, INCLUDING through a raw
+  // `POST /GlobalOptionSetDefinitions` that bypasses the SDK — so this is a platform limitation, not
+  // a serialization bug. Accepting it would reproduce the exact defect this feature exists to end:
+  // a green build with the author's second language silently gone. Rejecting is loud, lands BEFORE
+  // any write, and the message names the verified workaround.
+  const forDisplayName = errorsFor((s) => {
+    s.globalChoices = [{ name: 'contoso_status', displayName: { 1033: 'Status', 3082: 'Estado' }, options: ['Open'] }];
+  });
+  assert.ok(forDisplayName.some((e) => /displayName cannot be localized/.test(e)), JSON.stringify(forDisplayName));
+  assert.ok(forDisplayName.some((e) => /inline\s+Choice/i.test(e)), 'the error must name the workaround');
+
+  const forOption = errorsFor((s) => {
+    s.globalChoices = [{ name: 'contoso_status', displayName: 'Status', options: [{ 1033: 'Open', 3082: 'Abierto' }] }];
+  });
+  assert.ok(forOption.some((e) => /options\[0\] cannot be localized/.test(e)), JSON.stringify(forOption));
+
+  // Counterfactual: a PLAIN global choice is untouched, and so is an INLINE localized Choice —
+  // rejecting either would break the verified path and the workaround the message recommends.
+  assert.deepStrictEqual(errorsFor((s) => {
+    s.globalChoices = [{ name: 'contoso_status', displayName: 'Status', options: ['Open', 'Closed'] }];
+    s.entities[0].columns = [{ schemaName: 'contoso_p', type: 'Choice', displayName: { 1033: 'P', 3082: 'P' }, options: [{ 1033: 'High', 3082: 'Alta' }] }];
+  }), []);
+});
+
+test('the second entry point rejects a localized global choice identically', () => {
+  // `provision-entities.js` has its own gate. Two gates that disagree about what a label IS teach
+  // the author two different rules for one field.
+  const { validateProvisionInput } = require('../lib/provision-input.js');
+  const r = validateProvisionInput({
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, languageCode: 1033, entities: [], relationships: [],
+    globalChoices: [{ name: 'new_p', displayName: { 1033: 'P', 3082: 'Pr' }, options: ['High'] }],
+  });
+  assert.strictEqual(r.ok, false, JSON.stringify(r));
+  assert.ok(r.errors.some((e) => /cannot be localized/.test(e)), JSON.stringify(r.errors));
 });
 
 test('a plain-string label still validates — every existing spec is unaffected', () => {
@@ -566,4 +607,52 @@ test('a localized COLUMN, lookup, alternate key and Choice label all reach the S
   assert.deepStrictEqual(seen.key && seen.key.displayName, { 1033: 'Key', 3082: 'Clave' }, JSON.stringify(seen.key));
   assert.deepStrictEqual(seen.choice && seen.choice.displayName, { 1033: 'Priority', 3082: 'Prioridad' }, JSON.stringify(seen.choice));
   assert.deepStrictEqual(seen.choice && seen.choice.options, [{ value: 100000000, label: { 1033: 'High', 3082: 'Alta' } }], JSON.stringify(seen.choice));
+});
+// --- the poisoning-read hazard: the probe must never be resolved by a broad read ------------------
+//
+// The rest of this class of test lives in bpf-security-roles.test.js (the narrow-probe tests landed
+// there while that file was the active workspace). They belong together; see
+// "the table existence probe is a NARROW metadata read" there.
+
+test('an INCONCLUSIVE existence probe HALTS a localized table rather than falling back', async () => {
+  // `findTables` can safely prove PRESENCE, but a MISS is followed immediately by `createTable` --
+  // with the poisoning read already on the wire. So for a localized entity an unresolved probe must
+  // stop the build, not be answered by the very read that loses the label. Fail-closed for the same
+  // reason as the unprovisioned-language halt: once the table exists, a lost label is a manual fix.
+  const { provisionDataModel } = require('../lib/entity-provision.js');
+  let findTablesCalled = 0;
+  const args = (displayName) => ({
+    spec: {
+      solution: { uniqueName: 'c', publisherPrefix: 'c' },
+      languageCode: 1033,
+      entities: [{ schemaName: 'c_t', displayName, pluralName: displayName, primaryAttribute: { schemaName: 'c_n' }, columns: [] }],
+      relationships: [],
+    },
+    sdk: { createTable: async () => ({ logicalName: 'c_t', entitySetName: 'c_ts' }), updateTable: async () => undefined, updateColumn: async () => undefined },
+    provision: {
+      dataverse: { get: async () => ({ status: 503, headers: {}, body: {} }) },
+      findTables: async () => { findTablesCalled += 1; return []; },
+      findColumns: async () => [],
+      fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: 'c_ts', relationships: [] }),
+      queryRecords: async () => [],
+    },
+    runner: {
+      run: async (ph, l, fn, o = {}) => { try { return await fn(); } catch (e) { if (o.skipIf && o.skipIf(e)) return undefined; throw e; } },
+      skip: () => {},
+      mapLimit: async (items, _n, fn) => { const out = []; for (const it of items) out.push(await fn(it)); return out; },
+    },
+    warn: () => {},
+    preResolvedLanguageCode: 1033,
+  });
+
+  await assert.rejects(
+    () => provisionDataModel(args({ 1033: 'Table', 3082: 'Tabla' })),
+    (err) => err.code === 'table-probe-inconclusive' && /localized/.test(err.message),
+    'a localized entity must halt on an unresolved probe');
+  assert.strictEqual(findTablesCalled, 0, 'and it must NOT have issued the poisoning read to get there');
+
+  // The counterfactual: a PLAIN label has nothing to lose, so the old fallback still applies and the
+  // build proceeds. Tightening this path too would fail builds that are entirely correct.
+  await provisionDataModel(args('Table'));
+  assert.strictEqual(findTablesCalled, 1, 'a plain-label entity still falls back rather than halting');
 });

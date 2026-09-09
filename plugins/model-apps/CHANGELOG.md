@@ -22,8 +22,11 @@ rebuilding a real app into a second environment.
 
   The mechanic is different from a form's, and the issue asked for live measurement before the
   surface was designed. It had two surprises, both of which shaped this:
-  - The backing table's logical name is **exactly** the name this repo already derives for its
-    collision check, so no id has to be read back and the grant can be planned before the flow exists.
+  - The backing table's logical name is the flow's `uniquename`, which for a flow this build creates
+    is exactly the name this repo already derives for its collision check — so the grant can be
+    *planned* before the flow exists. It is nonetheless **read back** at build time, because a flow
+    authored in Maker (or renamed later) keeps a unique name unrelated to its display name, and
+    granting on the derivation would target the wrong table or none at all.
   - That table is **organization-owned** and every privilege it exposes is Global-only. So there is
     **no `scope` to author** — offering one would be a knob the platform rejects. (It is also why the
     SDK's own BPF role helper hardcodes Global: a platform constraint, not a shortcut.)
@@ -42,9 +45,10 @@ rebuilding a real app into a second environment.
   ```
 
   Before this, a bilingual app needed a hand-written metadata patch after **every** create and edit,
-  and the Spanish UI silently fell back to English. All languages are now written in the one create
-  call, which is also the safe order: a later single-language `PUT` can overwrite the base label even
-  with merge semantics. `download-model-app` reconstructs them, so the round trip closes.
+  and the Spanish UI silently fell back to English. On every **verified** surface below, all languages
+  are now written in the one create call, which is also the safe order: a later single-language `PUT`
+  can overwrite the base label even with merge semantics. `download-model-app` reconstructs them, so
+  the round trip closes for those surfaces.
 
   A language **tag** is rejected rather than guessed (`es-ES` is 3082 *or* 1034 depending on sort
   order, and guessing wrong would not fail — it would label everything in the wrong language), and a
@@ -55,16 +59,35 @@ rebuilding a real app into a second environment.
 
   **Scope, stated honestly and per surface.** Verified against an org with two languages provisioned:
   table `displayName`/`pluralName`, `primaryAttribute.displayName`, `columns[].displayName`, inline
-  Choice `options[]`, and `relationships[].lookup.displayName`. **`globalChoices[]` does NOT work** —
-  measured, Dataverse stores only the base language even through a raw `POST` that bypasses the SDK,
-  so use an inline Choice when you need localized option labels. `alternateKeys[].displayName` is
-  accepted but was not consistently reproducible. See `references/app-spec-schema.md`.
+  Choice `options[]`, and `relationships[].lookup.displayName`. **`globalChoices[]` does NOT work, and
+  a localized label there is REJECTED by validation** — measured, Dataverse stores only the base
+  language even through a raw `POST` that bypasses the SDK, and it reports nothing when it drops one,
+  so sending it anyway would mean a green build with the author's second language silently gone. Use
+  an inline Choice when you need localized option labels. `alternateKeys[].displayName` is accepted
+  but was not consistently reproducible. See `references/app-spec-schema.md`.
 
   **The build halts if an LCID you name is not provisioned in the organization.** Live-measured: a
   create carrying an unprovisioned LCID returns *success* and Dataverse keeps only the provisioned
   label, reporting nothing. Without the halt this feature would have reproduced the very bug it
   fixes. Best-effort like the existing `languageCode` check — an unreadable probe changes nothing,
   and an all-plain-label spec never pays the round trip.
+
+  **An inconclusive existence probe also halts, for a localized table.** The narrow
+  `EntityDefinitions(LogicalName=…)` read replaces the SDK's `findTables` because that broad read,
+  issued immediately before a create, is what makes Dataverse keep only the base language (measured
+  0/4 vs 4/4). Falling back to `findTables` when the narrow read is inconclusive would put the
+  poisoning read back on the wire for exactly the create that follows a miss — so for an entity with
+  localized labels the read is retried and then the build stops. A plain-label entity is unaffected
+  and still falls back.
+- **Two label rules relaxed after they broke working specs.** A **blank plain-string** label is
+  accepted again: every create site falls back with `displayName || schemaName`, so `""` and an
+  omitted value are indistinguishable by the time they reach Dataverse, and rejecting one while
+  accepting the other failed specs that build correctly. A blank entry *inside* a localized map is
+  still rejected — a non-empty map is truthy, so nothing falls back and the blank label ships. And a
+  **duplicate plain option label** (`["Pending", "Pending"]`) is now a **warning**, not an error: it
+  is visible on the line, Dataverse allows it, and specs predating the rule provisioned fine. The
+  cross-language collision the rule was written for — where one option's Spanish label matches
+  another's English — is invisible to the author and still fails.
 - **`roleGrants[]` — extend a security role you did not author.** Adding a table to an existing app
   deployed the table, its forms and its navigation while every non-admin role still had no access to
   it, and nothing said so ([AB#6686429]). `roleGrants[]` adds privileges for a table to a role that

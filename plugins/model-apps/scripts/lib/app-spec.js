@@ -147,8 +147,16 @@ function choiceValueMap(entity, spec) {
   // the alias "Abierto" belongs to BOTH options, and last-wins resolved a sample record's "Abierto"
   // to the SECOND option — the English label of a different choice quietly beating the Spanish label
   // of the one the author meant.
+  // Every dictionary here is keyed by an AUTHOR-CONTROLLED string — an option label, a global-choice
+  // name, a column schema name — so all three are `Object.create(null)`. On a plain `{}` the label
+  // "__proto__" is not merely unwritable (the write hits the prototype SETTER and is dropped): the
+  // READ `byLabel['__proto__']` returns `Object.prototype`, which is `!== undefined`. That made
+  // `invalidChoiceSampleTokens` accept "__proto__" as a known label and `resolveSampleRecords`
+  // resolve it to `Object.prototype`, which serializes into the Web API body as `{}` — a silently
+  // corrupted record that passed every gate. Measured: a Choice with options ["__proto__", "Open"]
+  // validated clean and produced `{"new_state": {}}`.
   const indexOptions = (options) => {
-    const byLabel = {};
+    const byLabel = Object.create(null);
     (options || []).forEach((label, i) => {
       for (const alias of labelAliases(label)) {
         if (!Object.prototype.hasOwnProperty.call(byLabel, alias)) byLabel[alias] = 100000000 + i;
@@ -156,11 +164,11 @@ function choiceValueMap(entity, spec) {
     });
     return byLabel;
   };
-  const globalByName = {};
+  const globalByName = Object.create(null);
   for (const g of (spec && spec.globalChoices) || []) {
     globalByName[String(g.name).toLowerCase()] = indexOptions(g.options);
   }
-  const map = {};
+  const map = Object.create(null);
   for (const c of entity.columns || []) {
     if (c.type !== 'Choice' && c.type !== 'MultiChoice') continue;
     let byLabel = null;
@@ -702,24 +710,63 @@ function labelAliases(value) {
 //   [ { "1033": "Open", "3082": "Abierto" }, { "1033": "Abierto", "3082": "Cerrado" } ]
 // the string "Abierto" names option 0 in Spanish and option 1 in English. Any resolution rule is
 // then a coin flip that silently picks one — so the SPEC is what must be fixed, not the tie-break.
-// Returns the offending aliases so the error can name them.
+// Returns the offending aliases so the error can name them, each flagged `hidden` when at least one
+// side is a LOCALIZED label — that is the case the author cannot see by reading the line, and the
+// only one severe enough to fail a spec that provisioned correctly before this rule existed.
 function ambiguousChoiceAliases(options) {
-  const seen = new Map(); // alias -> first option index
+  const seen = new Map(); // alias -> { index, localized }
   const clashes = [];
   (options || []).forEach((label, i) => {
+    const localized = isLocalizedLabelMap(label);
     for (const alias of labelAliases(label)) {
-      if (seen.has(alias) && seen.get(alias) !== i) clashes.push({ alias, first: seen.get(alias), second: i });
-      else if (!seen.has(alias)) seen.set(alias, i);
+      const prior = seen.get(alias);
+      if (prior && prior.index !== i) clashes.push({ alias, first: prior.index, second: i, hidden: localized || prior.localized });
+      else if (!prior) seen.set(alias, { index: i, localized });
     }
   });
   return clashes;
+}
+
+// Reject a LOCALIZED label on a global choice. AB#6686428.
+//
+// Not a validation nicety: Dataverse ACCEPTS the multi-language payload and stores only the base
+// language, reporting nothing. Measured 0/4 on an org with 1033 and 3082 provisioned — including
+// through a raw `POST /GlobalOptionSetDefinitions` that bypasses the SDK entirely, so this is a
+// platform limitation rather than a serialization bug we could fix. Every other localized surface
+// verified 4/4 on the same org in the same session.
+//
+// Accepting it would reproduce the exact defect this feature exists to end: a green build with the
+// author's request silently gone. Rejecting is loud, happens BEFORE any write, and has a working
+// workaround — an inline Choice on the column, which is verified. Plain-string labels are untouched;
+// only a map is rejected.
+function rejectLocalizedGlobalChoice(gc, label, errors) {
+  if (!gc || typeof gc !== 'object') return;
+  const WHY = 'Dataverse accepts the multi-language payload for a global option set and stores ONLY the base '
+    + 'language, reporting nothing (measured, including through a raw POST that bypasses the SDK). Use an inline '
+    + 'Choice on the column — `columns[].options[]` localizes correctly — or set this option set\'s labels in Maker.';
+  if (isLocalizedLabelMap(gc.displayName)) {
+    errors.push(`${label}: displayName cannot be localized. ${WHY}`);
+  }
+  (Array.isArray(gc.options) ? gc.options : []).forEach((o, i) => {
+    if (isLocalizedLabelMap(o)) errors.push(`${label}: options[${i}] cannot be localized. ${WHY}`);
+  });
 }
 
 function validateChoiceOptionLabels(options, label, errors, opts = {}) {
   if (!Array.isArray(options)) return;
   options.forEach((o, i) => validateLabel(o, `${label}: options[${i}]`, errors, opts));
   for (const c of ambiguousChoiceAliases(options)) {
-    errors.push(`${label}: the label '${c.alias}' names BOTH options[${c.first}] and options[${c.second}] — one string cannot select two values, so a sample record or view filter using it would silently resolve to whichever the engine picked. Rename one.`);
+    const msg = `${label}: the label '${c.alias}' names BOTH options[${c.first}] and options[${c.second}] — one string cannot select two values, so a sample record or view filter using it resolves to options[${c.first}].`;
+    if (c.hidden) {
+      // At least one side is localized, so the collision is INVISIBLE on the page: the author reads
+      // two different Spanish labels and cannot see that one matches the other option's English.
+      errors.push(`${msg} It is not visible on the line because at least one of them is a localized label. Rename one.`);
+    } else if (Array.isArray(opts.warnings)) {
+      // Both sides are plain strings, so the duplicate is visible on the line — and Dataverse allows
+      // it, so specs written before this rule existed provisioned fine. Failing them would break
+      // working input to restate something the author can already see; warn instead.
+      opts.warnings.push(`${msg} Rename one if they were meant to be different.`);
+    }
   }
 }
 
@@ -733,7 +780,15 @@ function validateLabel(value, label, errors, opts = {}) {
     return;
   }
   if (typeof value === 'string') {
-    if (!value.trim()) errors.push(`${label} must not be blank`);
+    // A blank PLAIN-STRING label is treated exactly as an absent one, because that is precisely what
+    // the runtime does with it: every create site falls back with `x.displayName || x.schemaName`
+    // (entity-provision.js:204, :737, :804, :960), so "" and undefined are indistinguishable by the
+    // time they reach Dataverse. Rejecting "" while accepting undefined would fail specs that build
+    // correctly today for no behavioural gain — the same reasoning already applied to
+    // `validateDescription`'s `allowEmpty`. A blank entry INSIDE a localized map is a different
+    // matter and is still rejected below: a non-empty map is truthy, so the `||` fallback never
+    // fires and the blank per-language label reaches the platform.
+    if (required && !value.trim()) errors.push(`${label} is required`);
     return;
   }
   if (!isLocalizedLabelMap(value)) {
@@ -1131,6 +1186,7 @@ function validateAppSpec(spec, opts = {}) {
     const gcLabel = `globalChoice '${(gc && gc.name) || '(unnamed)'}'`;
     validateLabel(gc && gc.displayName, `${gcLabel}: displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
     validateChoiceOptionLabels(gc && gc.options, gcLabel, errors, { warnings, baseLanguageCode: spec.languageCode });
+    rejectLocalizedGlobalChoice(gc, gcLabel, errors);
   }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
@@ -2450,6 +2506,14 @@ function validateRoleGrants(spec, errors) {
   // A role's identity is (trimmed+folded NAME, business unit) — the same key the SDK uses. Two roles
   // may legitimately share a name in different business units, so the BU must be part of the key or
   // that valid pair is rejected; an absent BU means "the org root", which is one specific BU.
+  //
+  // The BU half is a TEXTUAL comparison, and cannot be otherwise here: the root business unit's GUID
+  // is an environment fact, and nothing in this file may read the environment. So an implicit root
+  // (`businessUnitId` absent -> "root") and an EXPLICIT root (`businessUnitId` set to the root's
+  // GUID) key differently even though they name one business unit, and an overlap spanning that pair
+  // is invisible to this check. It is caught at apply time on the RESOLVED role id, which is the
+  // identity that actually matters — and since the apply path resolves and guards every grant before
+  // writing any of them, nothing is granted before it halts.
   const personaKey = (name, businessUnitId) => `${String(name || '').trim().toLowerCase()}@${String(businessUnitId || 'root').trim().toLowerCase()}`;
   const personaNames = new Set(
     (Array.isArray(spec.personas) ? spec.personas : [])
@@ -2588,6 +2652,7 @@ function migrateAppSpec(spec) {
 }
 
 module.exports = {
+  rejectLocalizedGlobalChoice,
   validateAppSpec,
   normalizePageSource,
   normalizeLanguageCode,

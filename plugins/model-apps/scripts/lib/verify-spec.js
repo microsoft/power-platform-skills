@@ -531,8 +531,25 @@ async function verifySpec(spec, read, opts = {}) {
   // more than this one grant.
   for (const f of spec.businessProcessFlows || []) {
     if (!f || !f.securityRoles || !Array.isArray(f.securityRoles.personas)) continue;
-    const backingTable = bpfUniqueName(f.name);
     if (typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
+    // READ the deployed unique name, do not derive it. A flow authored in Maker, or one renamed
+    // after creation, keeps a `uniquename` unrelated to its display name — and that name IS the
+    // backing table. Verifying against the derivation would report a real grant as missing, or (if
+    // an unrelated table happens to hold the derived name) PASS while the actual flow is ungranted,
+    // which is the worse of the two. Falls back to the derivation only when the row cannot be read,
+    // where it remains correct for anything this tool created.
+    // See https://learn.microsoft.com/en-us/power-automate/developer/business-process-flows-code
+    let backingTable = bpfUniqueName(f.name);
+    try {
+      const rows = await read.queryRecords('workflow', {
+        select: ['workflowid', 'uniquename'],
+        filter: bpfFilter(f.name, String(f.entity).toLowerCase()),
+        orderBy: 'createdon asc',
+        top: 5,
+      });
+      const deployed = rows && rows[0] && rows[0].uniquename;
+      if (deployed) backingTable = String(deployed).toLowerCase();
+    } catch { /* keep the derivation — the privilege read below fails closed anyway */ }
     let privs = null;
     try {
       privs = await read.entityPrivileges(backingTable);

@@ -5,7 +5,7 @@
 // by the shape of the fix.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { validateAppSpec, choiceValueMap, labelText } = require('../lib/app-spec.js');
+const { validateAppSpec, choiceValueMap, labelText, resolveSampleRecords } = require('../lib/app-spec.js');
 const { validateProvisionInput } = require('../lib/provision-input.js');
 const { phaseInputs } = (() => { const m = require('../lib/phase-diff.js'); return { phaseInputs: m.PHASE_INPUTS || m.phaseInputs }; })();
 const { runSdkBuild, subgridLabel, viewDef } = require('../lib/sdk-build.js');
@@ -94,11 +94,35 @@ test('#2b a NAME and a roleId aliasing ONE role halt on the resolved id', async 
     { roleId: '33333333-3333-3333-3333-333333333333', privileges: [{ entity: 'contoso_order', access: ['read'], scope: 'organization' }] },
   ];
   assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true);
-  await assert.rejects(() => applySecurity(s, securitySdk()), (err) => {
+  const aliasSdk = securitySdk();
+  await assert.rejects(() => applySecurity(s, aliasSdk), (err) => {
     assert.strictEqual(err.code, 'role-grant-duplicate-target');
     assert.match(err.message, /already targets/);
     return true;
   });
+  // And NOTHING was granted. The guards run in a resolve-and-check pass over EVERY grant before the
+  // first apply: interleaved, the first entry was written and only the second halted, leaving one
+  // role changed and one not with nothing in the output saying which.
+  assert.strictEqual(aliasSdk.calls.addEntityPrivilegesToRole.length, 0,
+    `no grant may be applied once any later one is known to be invalid; got ${JSON.stringify(aliasSdk.calls.addEntityPrivilegesToRole)}`);
+});
+
+test('#2b-bis a VALID grant preceding an invalid one is not applied either', async () => {
+  // The counterfactual that makes the assertion above mean something: here the first grant targets a
+  // completely different, legitimate role, so under the old interleaved order it was applied
+  // successfully before the second halted. Nothing about the first entry is wrong — it must still not
+  // land, because a build that halts must not leave a partial security state behind.
+  const s = base();
+  s.roleGrants = [
+    { role: 'Other', privileges: [{ entity: 'contoso_order', access: ['read'], scope: 'organization' }] },
+    { role: 'Shared', privileges: [{ entity: 'contoso_order', access: ['read'], scope: 'user' }] },
+    { roleId: '33333333-3333-3333-3333-333333333333', privileges: [{ entity: 'contoso_order', access: ['write'], scope: 'organization' }] },
+  ];
+  assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true);
+  const sdk = securitySdk();
+  await assert.rejects(() => applySecurity(s, sdk), (err) => err.code === 'role-grant-duplicate-target');
+  assert.strictEqual(sdk.calls.addEntityPrivilegesToRole.length, 0,
+    `the leading VALID grant must not have been applied; got ${JSON.stringify(sdk.calls.addEntityPrivilegesToRole)}`);
 });
 
 test('#2c two same-named roles in DIFFERENT business units are allowed', async () => {
@@ -207,10 +231,19 @@ test('#5 a label string naming TWO options is rejected, not tie-broken', () => {
   assert.match(hit, /Rename one/);
 });
 
-test('#5b a duplicate plain label is caught by the same rule', () => {
-  assert.ok(errorsFor((s) => {
-    s.globalChoices = [{ name: 'contoso_p', displayName: 'P', options: ['Open', 'Open'] }];
-  }).some((e) => /names BOTH options/.test(e)));
+test('#5b a duplicate PLAIN label warns rather than failing — it is visible, and Dataverse allows it', () => {
+  // Deliberately NOT an error. A plain duplicate sits on the same line, so the author can already
+  // see it, and specs written before this rule existed provisioned fine with one; failing them
+  // would break working input to restate something obvious. The invisible cross-language case
+  // above is the one that fails. Both are still DETECTED — only the severity differs.
+  const spec = base();
+  spec.globalChoices = [{ name: 'contoso_p', displayName: 'P', options: ['Open', 'Open'] }];
+  const r = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual((r.errors || []).some((e) => /names BOTH options/.test(e)), false,
+    `a visible duplicate must not fail the spec: ${JSON.stringify(r.errors)}`);
+  const w = (r.warnings || []).find((x) => /names BOTH options/.test(x));
+  assert.ok(w, `but it must still be reported: ${JSON.stringify(r.warnings)}`);
+  assert.match(w, /resolves to options\[0\]/, 'and the warning must state which one wins');
 });
 
 test('#5c the alias index is first-wins, so resolution is deterministic', () => {
@@ -391,4 +424,84 @@ test('#9d a form wireframe renders localized field labels in the spec language',
   assert.doesNotMatch(w, /\[object Object\]/);
   assert.match(w, /Nombre/);
   assert.match(w, /Nota/);
+});
+// --- Second review round: prototype keys, and the two label gates that still disagreed -----------
+
+test('an option label of "__proto__" resolves to its own value, not Object.prototype', () => {
+  // `choiceValueMap` is a dictionary keyed by an AUTHOR-CONTROLLED string. On a plain {} the READ
+  // `byLabel['__proto__']` returns Object.prototype, which is `!== undefined` -- so the validator
+  // accepted "__proto__" as a known label and `resolveSampleRecords` resolved it to Object.prototype,
+  // which serializes into the Web API body as {}. A silently corrupted record that passed every gate.
+  const entity = { schemaName: 'e', columns: [{ schemaName: 'c', type: 'Choice', options: ['__proto__', 'Open'] }] };
+  const map = choiceValueMap(entity, {});
+  assert.strictEqual(map.c.__proto__, 100000000, 'the label must own its slot');
+  const out = resolveSampleRecords(entity, [{ c: '__proto__' }, { c: 'Open' }], {});
+  assert.deepStrictEqual(out, [{ c: 100000000 }, { c: 100000001 }]);
+});
+
+test('an inherited Object.prototype key is not mistaken for a declared option', () => {
+  // The same defect with a nastier value: `byLabel['constructor']` returned the Object FUNCTION, so
+  // an undeclared "constructor" validated clean and resolved to a function.
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_status', type: 'Choice', displayName: 'S', options: ['Open', 'Closed'] }];
+  s.sampleData = { contoso_order: [{ contoso_name: 'n', contoso_status: 'constructor' }] };
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors || [];
+  assert.ok(errs.some((e) => /'constructor'.*is not a declared option label/.test(e)), JSON.stringify(errs));
+  const out = resolveSampleRecords(s.entities[0], [{ contoso_status: 'toString' }], s);
+  assert.strictEqual(typeof out[0].contoso_status, 'string', 'an inherited method must never become the value');
+});
+
+test('provision-input validates alternateKeys[].displayName, like the full validator', () => {
+  // `provision-entities.js` is a SEPARATE entry point whose only gate is this function. The label
+  // reaches `createAlternateKey` unchecked, where a language-tag key throws mid-provision -- AFTER
+  // the solution and tables are written. Two gates that disagree teach one field two rules.
+  const bad = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, languageCode: 1033, relationships: [],
+    entities: [{ schemaName: 'new_t', displayName: 'T', primaryAttribute: { schemaName: 'new_n' }, columns: [],
+      alternateKeys: [{ schemaName: 'new_key', displayName: { 'es-ES': 'Clave' }, columns: ['new_n'] }] }],
+  };
+  const r = validateProvisionInput(bad);
+  assert.strictEqual(r.ok, false, JSON.stringify(r));
+  assert.ok(r.errors.some((e) => /alternateKeys\[0\] displayName.*not an LCID/.test(e)), JSON.stringify(r.errors));
+  // Counterfactual: a CORRECT localized label must still pass, or the gate is just a blocker.
+  bad.entities[0].alternateKeys[0].displayName = { 3082: 'Clave', 1033: 'Key' };
+  assert.strictEqual(validateProvisionInput(bad).ok, true, JSON.stringify(validateProvisionInput(bad)));
+});
+
+test('a BLANK plain-string label is accepted — the runtime already treats it as absent', () => {
+  // Not a loosening for its own sake. Every create site falls back with `x.displayName ||
+  // x.schemaName`, so "" and undefined are indistinguishable by the time they reach Dataverse.
+  // Rejecting "" while accepting undefined failed specs that build correctly, which is a worse
+  // outcome than the typo it was catching. Both entry points must agree.
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_note', type: 'Text', displayName: '' }];
+  s.globalChoices = [{ name: 'contoso_p', displayName: '', options: ['Open'] }];
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors || [];
+  assert.strictEqual(errs.some((e) => /must not be blank/.test(e)), false, JSON.stringify(errs));
+
+  const pi = validateProvisionInput({
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, languageCode: 1033, relationships: [],
+    entities: [{ schemaName: 'new_t', displayName: 'T', primaryAttribute: { schemaName: 'new_n' }, columns: [{ schemaName: 'new_c', type: 'Text', displayName: '' }] }],
+  });
+  assert.strictEqual(pi.ok, true, JSON.stringify(pi.errors));
+
+  // A blank inside a LOCALIZED map is still rejected: a non-empty map is truthy, so the `||`
+  // fallback never fires and the blank per-language label reaches the platform.
+  const inMap = errorsFor((x) => {
+    x.entities[0].columns = [{ schemaName: 'contoso_note', type: 'Text', displayName: { 1033: '', 3082: 'Nota' } }];
+  });
+  assert.ok(inMap.some((e) => /label for LCID 1033 must be a non-empty string/.test(e)), JSON.stringify(inMap));
+});
+
+test('provision-input validates relationships[].lookup.displayName too', () => {
+  const bad = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' }, languageCode: 1033,
+    entities: [{ schemaName: 'new_t', displayName: 'T', primaryAttribute: { schemaName: 'new_n' }, columns: [] }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_t', referencing: 'new_t', lookup: { schemaName: 'new_p', displayName: { 'es-ES': 'Padre' } } }],
+  };
+  const r = validateProvisionInput(bad);
+  assert.strictEqual(r.ok, false, JSON.stringify(r));
+  assert.ok(r.errors.some((e) => /lookup\.displayName.*not an LCID/.test(e)), JSON.stringify(r.errors));
+  bad.relationships[0].lookup.displayName = { 3082: 'Padre', 1033: 'Parent' };
+  assert.strictEqual(validateProvisionInput(bad).ok, true, JSON.stringify(validateProvisionInput(bad)));
 });

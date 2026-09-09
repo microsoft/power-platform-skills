@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, rejectLocalizedGlobalChoice } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -125,6 +125,17 @@ function validateProvisionInput(input) {
         validateChoiceOptionLabels(c.options, `entity '${e.schemaName}': column '${c.schemaName || ''}'`, errors, { baseLanguageCode: input.languageCode });
       }
     }
+
+    // `alternateKeys[].displayName` is a label too, and it reaches `createAlternateKey` from THIS
+    // entry point. Omitting it here left `{"es-ES": "Clave"}` returning ok:true and throwing
+    // "localized label key 'es-ES' is not an LCID" mid-provision — after the solution and tables are
+    // already written. `validateAppSpec` has always covered it; the two gates must not disagree.
+    if (Array.isArray(e.alternateKeys)) {
+      e.alternateKeys.forEach((k, i) => {
+        if (!k || typeof k !== 'object') return;
+        validateLabel(k.displayName, `entity '${e.schemaName}': alternateKeys[${i}] displayName`, errors, { baseLanguageCode: input.languageCode });
+      });
+    }
   }
 
   // Relationships validation
@@ -162,6 +173,12 @@ function validateProvisionInput(input) {
           errors.push('OneToMany relationship: lookup object is required');
         } else if (!r.lookup.schemaName || typeof r.lookup.schemaName !== 'string') {
           errors.push('OneToMany relationship: lookup.schemaName is required');
+        }
+        // The lookup COLUMN's label, same reasoning as the alternate-key label above: it is passed
+        // straight to `createRelationship` from this entry point, and a language-tag key throws
+        // there rather than here.
+        if (r.lookup && typeof r.lookup === 'object') {
+          validateLabel(r.lookup.displayName, `OneToMany relationship (${r.lookup.schemaName || '?'}): lookup.displayName`, errors, { baseLanguageCode: input.languageCode });
         }
       }
 
@@ -202,6 +219,10 @@ function validateProvisionInput(input) {
         }
         validateLabel(g.displayName, `globalChoice '${g.name || ''}': displayName`, errors, { baseLanguageCode: input.languageCode });
         validateChoiceOptionLabels(g.options, `globalChoice '${g.name || ''}'`, errors, { baseLanguageCode: input.languageCode });
+        // Same rejection as validateAppSpec, from the same shared helper: Dataverse stores only the
+        // base language for a global option set and reports nothing. Two entry points that disagree
+        // about what a label IS is the whole reason these gates share their validators.
+        rejectLocalizedGlobalChoice(g, `globalChoice '${g.name || ''}'`, errors);
       }
     }
   }

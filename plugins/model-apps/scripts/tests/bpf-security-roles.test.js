@@ -513,3 +513,76 @@ test('#513 a flow the phase did not build is SKIPPED with a reason, never grante
   assert.ok(skipped, JSON.stringify(emitted.map((e) => `${e.status} ${e.label}`)));
   assert.match(skipped.label, /did not run in this invocation/);
 });
+// --- the backing table is READ BACK, not derived -------------------------------------------------
+
+test('#513 a REUSED flow grants on its DEPLOYED uniquename, not the derivation', async () => {
+  // A flow authored in Maker (or renamed after creation) keeps a `uniquename` unrelated to its
+  // display name -- and that name IS the backing table. Deriving would grant on a table that does
+  // not exist, or on an unrelated one that happens to hold the derived name.
+  const s = base({ securityRoles: { personas: ['Dispatcher'] } });
+  const sdk = securitySdk({
+    queryRecords: async (entity) => {
+      if (entity === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (entity === 'workflow') return [{ workflowid: 'w-existing', statecode: 1, createdon: '2020-01-01', uniquename: 'contoso_ticketprocess' }];
+      return [];
+    },
+    updateRecord: async () => ({}),
+  });
+  const r = await runSdkBuild(s, {
+    sdk, provisionSdk: sdk, apply: true,
+    phases: ['business-process-flows', 'security'], emit: () => undefined, warn: () => undefined,
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r).slice(0, 400));
+  assert.strictEqual(sdk.calls.addEntityPrivilegesToRole.length, 1, JSON.stringify(sdk.calls.addEntityPrivilegesToRole));
+  assert.strictEqual(sdk.calls.addEntityPrivilegesToRole[0].privileges[0].entity, 'contoso_ticketprocess',
+    'the DEPLOYED unique name, not bpfUniqueName("Ticket Handling")');
+  assert.notStrictEqual(sdk.calls.addEntityPrivilegesToRole[0].privileges[0].entity, bpfUniqueName('Ticket Handling'),
+    'and the derivation really is different here, so this asserts something');
+  assert.strictEqual(r.created.bpfRoleGrants['Ticket Handling'].backingTable, 'contoso_ticketprocess');
+});
+
+test('#513 a row with no uniquename falls back to the derivation rather than granting on undefined', async () => {
+  // Older projections and test doubles do not model the field. The derivation is the right answer
+  // for anything this tool created, so the fallback must stay -- but it must be a FALLBACK.
+  const s = base({ securityRoles: { personas: ['Dispatcher'] } });
+  const sdk = securitySdk({
+    queryRecords: async (entity) => {
+      if (entity === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (entity === 'workflow') return [{ workflowid: 'w-existing', statecode: 1, createdon: '2020-01-01' }];
+      return [];
+    },
+    updateRecord: async () => ({}),
+  });
+  const r = await runSdkBuild(s, {
+    sdk, provisionSdk: sdk, apply: true,
+    phases: ['business-process-flows', 'security'], emit: () => undefined, warn: () => undefined,
+  });
+  assert.strictEqual(sdk.calls.addEntityPrivilegesToRole[0].privileges[0].entity, bpfUniqueName('Ticket Handling'));
+});
+
+test('#513 verify reads the deployed uniquename too, or build and verify disagree', async () => {
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const DEPLOYED = 'contoso_ticketprocess';
+  const privs = BPF_ROLE_ACCESS.map((a) => ({
+    Name: `prv${a[0].toUpperCase()}${a.slice(1)}${DEPLOYED}`, PrivilegeId: `bpf-${a}`, PrivilegeType: a[0].toUpperCase() + a.slice(1),
+  }));
+  const asked = [];
+  const read = {
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set) => {
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') return [{ roleid: 'role-1', name: 'Dispatcher', description: SDK_ROLE_MARKER }];
+      if (set === 'workflow') return [{ workflowid: 'w1', statecode: 1, uniquename: DEPLOYED }];
+      return [];
+    },
+    entityPrivileges: async (t) => { asked.push(t); return t === DEPLOYED ? privs : []; },
+    rolePrivileges: async () => BPF_ROLE_ACCESS.map((a) => ({ privilegeId: `bpf-${a}`, depth: 'Global' })),
+  };
+  const r = await verifySpec(base({ securityRoles: { personas: ['Dispatcher'] } }), read);
+  const c = r.checks.find((x) => x.kind === 'bpf-roles');
+  assert.ok(c && c.present, `asked for: ${JSON.stringify(asked)}; check=${JSON.stringify(c)}`);
+  assert.ok(asked.includes(DEPLOYED), 'verify must ask about the DEPLOYED table');
+  assert.strictEqual(asked.includes(bpfUniqueName('Ticket Handling')), false, 'and never about the derivation');
+});

@@ -799,6 +799,30 @@ test('REGRESSION: a status-only edit is a full build but NOT permanent debt', ()
   assert.ok(stageEdit.debt.some((d) => /edit-not-convergent/.test(d.reason)), `a stage edit is real debt; got ${JSON.stringify(stageEdit.debt)}`);
 });
 
+test('REGRESSION: a securityRoles-only edit is a full build but NOT permanent debt either (#513)', () => {
+  // Stronger than the `status` case above. A BPF grant always targets a PERSONA role, and the
+  // security phase applies persona roles with `ReplacePrivilegesRole` — so a rebuild both ADDS a
+  // newly-declared persona and REMOVES one that was dropped. Filing permanent debt disabled every
+  // later fast apply over a divergence a full build erases. (`roleGrants[]` would NOT qualify: it is
+  // additive and cannot revoke.)
+  const { classifyChanges } = require('../lib/classify-changes.js');
+  const withPersonas = (personas) => {
+    const s = specWith([personas ? { ...FLOW, securityRoles: { personas } } : { ...FLOW }]);
+    s.personas = [{ persona: 'Dispatcher', jobs: [{ name: 'J', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] }];
+    return s;
+  };
+  const none = withPersonas(null);
+  const granted = withPersonas(['Dispatcher']);
+
+  for (const [label, cur, prior] of [['added', granted, none], ['removed', none, granted]]) {
+    const r = classifyChanges(cur, prior);
+    assert.deepStrictEqual(r.debt, [], `securityRoles ${label} is reconciled; got ${JSON.stringify(r.debt)}`);
+    assert.ok(r.changedPhases.includes('business-process-flows'), `${label}: it still needs a full build`);
+    assert.ok(r.fullReasons.some((x) => /securityRoles changed — reconciled/.test(x)),
+      `${label}: and the reason must name the field that changed, not the whole converged list: ${JSON.stringify(r.fullReasons)}`);
+  }
+});
+
 test('REGRESSION: the same status-only rule applies to business rules', () => {
   // Business rules converge status in their reuse branch too, so they shared the bug and the fix.
   const { classifyChanges } = require('../lib/classify-changes.js');

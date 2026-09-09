@@ -123,7 +123,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **supported** (`{ "personas": [...] }`): a BPF's role grants are `create/read/write/delete` privileges
   on the backing table that ACTIVATION creates, so they are applied in the **`security` phase**, after
   both the flow and the personas' roles exist — persona lookup there is **case-insensitive**, since a
-  persona is a display name the author repeats by hand across two sections of the spec. There is no
+  persona is a display name the author repeats by hand across two sections of the spec, and the target
+  table is the flow's **deployed `uniquename` read back** from the workflow row rather than derived
+  from its display name (a flow authored in Maker, or renamed later, keeps an unrelated unique name). There is no
   `everyone`/`fallbackForm`/`order`: those are `forms[].securityRoles` concepts written into formxml,
   and a privilege has no such equivalent. The rejection is an
   **allow-list at flow, stage AND step level**, because the SDK's normalizers copy a fixed key set and
