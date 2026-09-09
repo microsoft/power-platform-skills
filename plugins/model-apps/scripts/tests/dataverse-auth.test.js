@@ -193,3 +193,64 @@ test('AB#6686427: a non-401 failure is NOT reported as a tenant mismatch', async
     assert.doesNotMatch(r.error, /az login --tenant/, `${status} must not be blamed on the az tenant`);
   }
 });
+
+// --- AB#6686424: a terminal 401 must explain itself ----------------------------------------------
+//
+// Both auth paths already retry a 401 once (dataverse-auth's loop, and sdk-http-client.js:130). The
+// retry is not the gap: MEASURED, `az account get-access-token` serves from the MSAL cache, so an
+// immediate re-call returns a byte-identical token (same sha256). A retry therefore cannot fix a
+// token that is rejected for WHO it belongs to — only one that expired in a very narrow window.
+//
+// The reporter's own workaround was "refresh Azure CLI login and retry" — an `az login`, which is
+// AB#6686427's cause. So what a surviving 401 needs is not another attempt, it is to say whose
+// token was refused, so the reader stops looking at Dataverse roles.
+
+test('AB#6686424: a terminal 401 names the identity whose token was refused', () => {
+  const { ensureOk } = require('../lib/dataverse-auth.js');
+  assert.throws(
+    () => ensureOk({ status: 401, data: { error: { message: 'Unauthorized' } } }, 'read EntityDefinitions',
+      { azIdentity: () => ({ user: 'other@fabrikam.onmicrosoft.com', tenantId: 'bbbb-tenant' }) }),
+    (e) => {
+      assert.match(e.message, /other@fabrikam\.onmicrosoft\.com/, 'names the account');
+      assert.match(e.message, /bbbb-tenant/, 'names the tenant');
+      assert.match(e.message, /az login/, 'names the remediation');
+      return true;
+    }
+  );
+});
+
+test('AB#6686424: a NON-401 error is left exactly as it was', () => {
+  // A 403 is a real privilege problem and a 400 is a bad request; attaching identity advice to
+  // either would send the reader to `az login` for something az cannot fix.
+  const { ensureOk } = require('../lib/dataverse-auth.js');
+  for (const status of [400, 403, 404, 500]) {
+    assert.throws(
+      () => ensureOk({ status, data: { error: { message: 'boom' } } }, 'ctx', { azIdentity: () => ({ user: 'x', tenantId: 'y' }) }),
+      (e) => {
+        assert.doesNotMatch(e.message, /az login/, `${status} must not be blamed on the az identity`);
+        assert.match(e.message, /boom/);
+        return true;
+      }
+    );
+  }
+});
+
+test('AB#6686424: an unreadable identity still produces a useful 401, never a crash', () => {
+  const { ensureOk } = require('../lib/dataverse-auth.js');
+  assert.throws(
+    () => ensureOk({ status: 401, data: {} }, 'ctx', { azIdentity: () => { throw new Error('az gone'); } }),
+    (e) => {
+      assert.match(e.message, /401/);
+      assert.match(e.message, /az login/);
+      return true;
+    }
+  );
+});
+
+test('AB#6686424: a 2xx is returned untouched (no identity read on the happy path)', () => {
+  const { ensureOk } = require('../lib/dataverse-auth.js');
+  let called = 0;
+  const res = { status: 200, data: { ok: 1 } };
+  assert.strictEqual(ensureOk(res, 'ctx', { azIdentity: () => { called++; return null; } }), res);
+  assert.strictEqual(called, 0, 'must not shell out to az on every successful call');
+});

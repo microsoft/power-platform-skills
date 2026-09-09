@@ -1773,7 +1773,28 @@ async function runSdkBuild(spec, opts = {}) {
     });
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
-    defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
+    //
+    // AB#6686425: this map holds ONE id per entity, so a second Main form on the same table
+    // overwrites the first. That is correct for what the map is for — the app shell wires one form
+    // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably
+    // concludes the other ids were lost. They are not: `created.formIds` below holds every form.
+    // Say so at the moment the overwrite happens rather than leaving the reader to find the second
+    // map, because the failure mode is someone re-querying `systemform` to recover ids the build
+    // already returned.
+    const mainFormSeen = new Map(); // entity -> first form name that claimed the slot
+    defs.forEach((d, i) => {
+      if ((d.f.formType || 'Main') !== 'Main') return;
+      const key = d.f.entity.toLowerCase();
+      if (mainFormSeen.has(key) && typeof opts.warn === 'function') {
+        opts.warn(`entity ${key} has more than one Main form ("${mainFormSeen.get(key)}" and "${d.f.name}"); `
+          + `created.forms keeps ONE id per entity for the app shell, so it now reports "${d.f.name}". `
+          + 'Every form id is in created.formIds, keyed "entity|formType|name" — read that map rather than '
+          + 're-querying systemform.');
+      } else if (!mainFormSeen.has(key)) {
+        mainFormSeen.set(key, d.f.name);
+      }
+      result.created.forms[key] = ids[i];
+    });
     // Every form, addressable individually. `created.forms` is keyed by ENTITY and holds only the
     // Main form, which is all the app shell needs — but `forms[].securityRoles` is applied in the
     // SECURITY phase (roles do not exist until then), by which time the forms phase is long over and

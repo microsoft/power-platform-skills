@@ -232,10 +232,34 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
 /**
  * Throws if the response is not 2xx. Returns the response untouched on success.
  * Pulls Dataverse's structured error message out of `data.error.message` when present.
+ *
+ * AB#6686424 — a surviving 401 names the identity whose token was refused. Both auth paths already
+ * retry a 401 once, and that retry is NOT the gap: measured, `az account get-access-token` serves
+ * from the MSAL cache, so an immediate re-call returns a byte-identical token. A retry therefore
+ * cannot fix a token rejected for WHO it belongs to — only one that expired in a narrow window. The
+ * reporter's own workaround was `az login`, i.e. AB#6686427's cause. So what a terminal 401 needs is
+ * not another attempt but an explanation, or the reader goes looking at Dataverse security roles.
+ *
+ * Scoped to 401 only. A 403 is a genuine privilege problem and a 4xx/5xx is something else entirely;
+ * attaching identity advice to those would send the reader to `az login` for something it cannot fix.
+ * The identity is read lazily so a successful call never shells out to `az`.
  */
-function ensureOk(res, context) {
+function ensureOk(res, context, deps = {}) {
   if (res.status >= 200 && res.status < 300) return res;
   const msg = res?.data?.error?.message || (typeof res.data === 'string' ? res.data : JSON.stringify(res.data));
+  if (res.status === 401) {
+    const readIdentity = deps.azIdentity || azIdentity;
+    let id = null;
+    try { id = readIdentity(); } catch { id = null; }
+    const whoText = id
+      ? `The token was issued to '${id.user}' in tenant ${id.tenantId}.`
+      : 'The active Azure CLI identity could not be read.';
+    throw new Error(
+      `${context} failed: HTTP 401 — ${msg}. ${whoText} These scripts authenticate through the ACTIVE `
+      + 'Azure CLI account, not the selected PAC profile, so this is an identity problem rather than a '
+      + 'Dataverse privilege one — run `az login --tenant <the tenant that owns this org>` and retry.'
+    );
+  }
   throw new Error(`${context} failed: HTTP ${res.status} — ${msg}`);
 }
 
