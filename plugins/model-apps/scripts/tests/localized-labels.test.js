@@ -18,7 +18,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { validateAppSpec, labelText, labelAliases, isLocalizedLabelMap, localizedLabelLcids, validateLabel, choiceValueMap } = require('../lib/app-spec.js');
-const { labelFromDataverse, entityFromMetadata } = require('../download-model-app.js');
+const { labelFromDataverse, columnDisplayName, entityFromMetadata } = require('../download-model-app.js');
 
 const ES = { 1033: 'Project Baseline', 3082: 'Línea base del proyecto' };
 
@@ -344,6 +344,64 @@ test('a metadata read that returned no labels falls back to the SDK display name
   // previous behaviour, not to an empty label.
   const e = entityFromMetadata({ logicalName: 'new_order', schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name', attributes: [] }, 'new_order');
   assert.strictEqual(e.displayName, 'Order');
+});
+
+// --- the regression LIVE testing caught that the unit tests above did not --------------------------
+
+test('an EMPTY Dataverse Label never emits the raw object as a column displayName', () => {
+  // FOUND BY RUNNING A REAL DOWNLOAD, not by review. A synthetic lookup `*name` column carries
+  // EXACTLY this shape — measured on a live org for cfo_customeridname / cfo_billtoname:
+  //
+  //     {"LocalizedLabels":[],"UserLocalizedLabel":null}
+  //
+  // Merging the raw `DisplayName` into the attribute list (which this change does, to carry every
+  // language) made that object reachable by the pre-existing `|| a.DisplayName` fallback, so the
+  // download emitted it verbatim and the spec failed its OWN validation with
+  // "'LocalizedLabels' is not an LCID". A download that cannot write a valid spec is worse than one
+  // that loses a label, so this is the load-bearing case.
+  const EMPTY = { LocalizedLabels: [], UserLocalizedLabel: null };
+  assert.strictEqual(labelFromDataverse(EMPTY), undefined);
+  assert.strictEqual(columnDisplayName({ logicalName: 'cfo_customeridname', DisplayName: EMPTY }), undefined,
+    'an unlabelled column must be OMITTED, not labelled with the raw Label object');
+
+  const e = entityFromMetadata({
+    logicalName: 'cfo_workorder', schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_title',
+    attributes: [
+      { logicalName: 'cfo_customeridname', schemaName: 'cfo_customeridname', attributeType: 'String', isCustomAttribute: true, DisplayName: EMPTY },
+      { logicalName: 'cfo_title2', schemaName: 'cfo_title2', attributeType: 'String', isCustomAttribute: true, displayName: 'Title 2', DisplayName: EMPTY },
+    ],
+  }, 'cfo_workorder');
+  const unlabelled = e.columns.find((c) => c.schemaName === 'cfo_customeridname');
+  assert.strictEqual('displayName' in unlabelled, false, JSON.stringify(unlabelled));
+  // ...but the SDK's own flattened string is still used when it has one.
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'cfo_title2').displayName, 'Title 2');
+
+  // And the whole spec must validate — the property the live run actually broke.
+  const s = base();
+  s.entities = [e];
+  const r = validateAppSpec(s, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('columnDisplayName never returns a raw Label object for any shape', () => {
+  // Exhaustive over the shapes a live metadata read can produce, because ONE leak fails the download.
+  const shapes = [
+    { DisplayName: { LocalizedLabels: [], UserLocalizedLabel: null } },
+    { DisplayName: { LocalizedLabels: [{ Label: '   ', LanguageCode: 1033 }] } },
+    { DisplayName: { LocalizedLabels: [{ Label: 'x', LanguageCode: 'en-US' }] } },
+    { DisplayName: {} },
+    { DisplayName: null },
+    {},
+    { displayName: '', DisplayName: { LocalizedLabels: [] } },
+    { displayName: '   ', DisplayName: { LocalizedLabels: [] } },
+  ];
+  for (const a of shapes) {
+    const got = columnDisplayName(a);
+    assert.ok(got === undefined || typeof got === 'string' || isLocalizedLabelMap(got), `${JSON.stringify(a)} -> ${JSON.stringify(got)}`);
+    if (isLocalizedLabelMap(got)) assert.deepStrictEqual(localizedLabelLcids(got).length > 0, true);
+  }
+  // A UserLocalizedLabel with no LocalizedLabels is still a real label and must survive.
+  assert.strictEqual(columnDisplayName({ DisplayName: { LocalizedLabels: [], UserLocalizedLabel: { Label: 'Owner', LanguageCode: 1033 } } }), 'Owner');
 });
 
 // --- the unprovisioned-language guard -------------------------------------------------------------

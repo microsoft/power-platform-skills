@@ -655,12 +655,20 @@ function entityFromMetadata(meta, logical) {
     return withDescription({
       schemaName,
       // A column labelled in several languages round-trips as an LCID map; one language stays a
-      // plain string (AB#6686428). `labelFromDataverse` reads the RAW `DisplayName` Label merged in
-      // by readEntityWithDescriptions; the `descriptionFromDataverse` fallback below covers a caller
-      // that supplied only the SDK's already-flattened `displayName`.
-      ...(labelFromDataverse(a && a.DisplayName) !== undefined
-        ? { displayName: labelFromDataverse(a.DisplayName) }
-        : (a && (a.displayName || a.DisplayName) ? { displayName: descriptionFromDataverse(a.displayName || a.DisplayName) || a.displayName || a.DisplayName } : {})),
+      // plain string (AB#6686428). Resolution order, and every step must yield a STRING or a map —
+      // never a raw Dataverse Label object:
+      //   1. the RAW `DisplayName` Label merged in by readEntityWithDescriptions (the only source
+      //      that carries every language),
+      //   2. the SDK's own already-flattened `displayName` string,
+      //   3. a single-language Label unwrapped by descriptionFromDataverse.
+      //
+      // Step 2 is not optional tidiness. LIVE-MEASURED: a synthetic lookup `*name` column such as
+      // `cfo_customeridname` carries `{"LocalizedLabels":[],"UserLocalizedLabel":null}` — a wholly
+      // EMPTY Label. `labelFromDataverse` correctly returns undefined for it, and an `|| a.DisplayName`
+      // tail would then emit that raw object as the column's displayName, producing a spec that fails
+      // its own validation with "'LocalizedLabels' is not an LCID". Omitting the label entirely is the
+      // right answer: Dataverse has none either.
+      ...(columnDisplayName(a) !== undefined ? { displayName: columnDisplayName(a) } : {}),
       ...(specType ? { type: specType } : {}),
     }, a && (a.description !== undefined ? a.description : a.Description));
   }).filter((c) => c.schemaName);
@@ -766,6 +774,17 @@ function labelFromDataverse(value) {
   // could never be shown to matter — verified: inserting 3082 then 1033 yields keys ["1033","3082"].
   for (const l of usable) out[String(Number(l.LanguageCode))] = l.Label;
   return out;
+}
+
+// The App Spec `displayName` for one downloaded column, or undefined when Dataverse has no usable
+// label. GUARANTEES a string or an LCID map — never a raw Dataverse Label object, which would emit a
+// spec that fails its own validation. See the call site for the live-measured shape that motivated it.
+function columnDisplayName(a) {
+  const localized = labelFromDataverse(a && a.DisplayName);
+  if (localized !== undefined) return localized;
+  // The SDK's `fetchEntityMetadata` projection already flattens this one to a string.
+  if (typeof (a && a.displayName) === 'string' && a.displayName.trim()) return a.displayName;
+  return descriptionFromDataverse(a && a.DisplayName);
 }
 
 // Image webresourcetypes (png/jpg/gif/ico/svg) — an icon reference must resolve to one of these to be
@@ -1370,4 +1389,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, labelFromDataverse, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
