@@ -109,7 +109,7 @@ async function run(mode) {
 
   const invocationCwd = resolveInvocationCwd(payload);
   withStableDispatchCwd(() => {
-    const context = telemetry.createTelemetryContext(payload);
+    const context = telemetry.createTelemetryContext(payload, { cwd: invocationCwd });
     if (context) {
       telemetry.emitSkillStarted(
         context,

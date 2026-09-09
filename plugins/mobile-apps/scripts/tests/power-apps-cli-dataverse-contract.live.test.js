@@ -31,11 +31,11 @@ function runCli(cwd, args) {
   return result;
 }
 
-test('pinned PAC CLI emits a verifiable Dataverse service contract', {
+test('pinned Power Apps CLI emits a verifiable Dataverse service contract', {
   skip: skipReason,
   timeout: 210000,
 }, (testContext) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pac-dataverse-contract-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'power-apps-dataverse-contract-'));
   testContext.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const templatePackage = JSON.parse(fs.readFileSync(path.resolve(
     __dirname,
@@ -56,7 +56,7 @@ test('pinned PAC CLI emits a verifiable Dataverse service contract', {
     '--app-type',
     'MobileApp',
     '--display-name',
-    'PAC Dataverse Contract Probe',
+    'Power Apps Dataverse Contract Probe',
     '--build-path',
     './dist',
     '--file-entry-point',

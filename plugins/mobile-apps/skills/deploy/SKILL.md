@@ -38,6 +38,8 @@ If absent, continue — the project may have been created without the plugin. Re
 
 ### Step 2 — Build
 
+**Telemetry checkpoint: `build_power_apps_bundle`**
+
 **Print before starting:**
 > "→ Building production web bundle via `npm run build` (= `expo export --platform web`). ~30–90 seconds."
 
@@ -65,6 +67,8 @@ If the build fails:
 Verify `dist/` exists with `index.html` before continuing.
 
 ### Step 2.5 — Offline profile coverage gate
+
+**Telemetry checkpoint: `validate_offline_profile_coverage`**
 
 This is the final chance to catch schema that never made it into the Mobile Offline Profile before it ships — a table added to the data model but not the profile never syncs to devices, and a new column arrives blank offline. Validate that every schema change is covered **before** pushing.
 
@@ -102,6 +106,8 @@ Options:
 Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly overridden).
 
 ### Step 3 — Deploy
+
+**Telemetry checkpoint: `push_app_to_power_platform`**
 
 **Resolve and confirm the target environment FIRST.** `npx power-apps push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
 

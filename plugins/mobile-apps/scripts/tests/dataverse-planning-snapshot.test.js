@@ -1149,7 +1149,8 @@ test('image metadata preserves full-image settings and its complete update defin
     CanStoreFullImage: false,
     IsPrimaryImage: false,
   };
-  const table = await loadDetailedEntity(async (_method, apiPath) => {
+  const imageRequests = [];
+  const request = async (_method, apiPath) => {
     if (apiPath.includes('/Attributes?$select=')) {
       return { status: 200, data: { value: [{
         ...imageDefinition,
@@ -1162,10 +1163,12 @@ test('image metadata preserves full-image settings and its complete update defin
       }] } };
     }
     if (apiPath.includes('ImageAttributeMetadata')) {
+      imageRequests.push(apiPath);
       return { status: 200, data: { value: [imageDefinition] } };
     }
     return { status: 200, data: { value: [] } };
-  }, entity('new_issue', 'Issue'));
+  };
+  const table = await loadDetailedEntity(request, entity('new_issue', 'Issue'));
 
   const image = table.columns[0];
   assert.equal(image.metadataId, 'image-id');
@@ -1174,6 +1177,15 @@ test('image metadata preserves full-image settings and its complete update defin
   assert.equal(image.maxHeight, 144);
   assert.equal(image.maxWidth, 144);
   assert.deepEqual(image.imageUpdateDefinition, imageDefinition);
+  assert.deepEqual(imageRequests, [
+    "EntityDefinitions(LogicalName='new_issue')/Attributes/Microsoft.Dynamics.CRM.ImageAttributeMetadata",
+  ]);
+
+  const coreTable = await loadDetailedEntity(request, entity('new_issue', 'Issue'), { detailLevel: 'core' });
+  assert.equal(coreTable.detailLevel, 'core');
+  assert.ok(coreTable.missingDetailClasses.includes('typed-constraints'));
+  assert.equal(coreTable.columns[0].imageUpdateDefinition, undefined);
+  assert.equal(imageRequests.length, 1);
 });
 
 test('CLI request creation initializes one long-lived executor for the snapshot phase', async () => {

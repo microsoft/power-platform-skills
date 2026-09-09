@@ -34,6 +34,8 @@ Capture the **environment URL** (`https://orgXXX.crm.dynamics.com`), **environme
 
 ### Step 2 — Resolve plan
 
+**Telemetry checkpoint: `resolve_dataverse_schema_plan`**
+
 Look for `native-app-plan.md` in the project root:
 
 ```bash
@@ -258,6 +260,8 @@ agent-driven full reconciliation, not any safety check.
 
 ### Step 4 — Reconcile every planned table and column against the target
 
+**Telemetry checkpoint: `reconcile_dataverse_schema`**
+
 If `<operation_manifest_mode> = valid`, print:
 
 > `✓ Approved operation manifest validated — complete fresh reconciliation and derived metadata coverage are bound to this environment.`
@@ -382,6 +386,8 @@ Build and print a reconciliation matrix before Step 5:
 **Idempotency criterion (HARD):** re-running this skill against an already-applied plan MUST perform **zero** metadata writes. Every table, column, relationship, key, and calc column resolves to `reuse` or an "already exists, skipped" outcome from the Step 4 snapshot. If a re-run issues any POST, the reconciliation missed something — report it rather than writing. Use this as the acceptance check after any change to Steps 4, 5, or 5a–5d.
 
 ### Step 5 — Create / extend tables
+
+**Telemetry checkpoint: `apply_dataverse_schema_changes`**
 
 #### Valid operation-manifest execution branch
 
@@ -1018,6 +1024,8 @@ Add alternate keys to `.datamodel-manifest.json` for the table:
 
 ### Step 6 — Add data sources
 
+**Telemetry checkpoint: `generate_dataverse_data_sources`**
+
 **Print before starting:**
 > "→ Generating TypeScript services for <N> tables via `npx power-apps add-data-source` (sequential). Print '✓ <table>Service.ts' after each."
 
@@ -1034,15 +1042,16 @@ npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
 
-After generation, verify the actual PAC output rather than guessing a JSON path
-or service filename. PAC currently writes Dataverse under the literal
-`databaseReferences["default.cds"].dataSources` key and derives service filenames
-from each entry's `entitySetName`, which may differ from the table logical name.
-The verifier also accepts the legacy nested `databaseReferences.default.cds`
-shape:
+After generation, verify the output created by
+`npx power-apps add-data-source` rather than guessing a JSON path or service
+filename. The command writes Dataverse configuration under the literal
+`databaseReferences["default.cds"].dataSources` key and derives service
+filenames from each entry's `entitySetName`, which may differ from the table
+logical name. The verifier also accepts the legacy nested
+`databaseReferences.default.cds` shape:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/verify-dataverse-services.js" \
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-services.js" \
   --project-root "<working_dir>" \
   --manifest "$OPERATION_MANIFEST"
 ```
@@ -1057,6 +1066,8 @@ BLOCKED: required Dataverse service missing for <logical-name>. Schema action=<r
 ```
 
 ### Step 6b — Publish customizations
+
+**Telemetry checkpoint: `publish_dataverse_customizations`**
 
 When `<operation_manifest_mode> = valid`, skip this step: the validated
 manifest's final `publish` phase already ran and its pending checkpoint was
@@ -1088,6 +1099,8 @@ node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
 ```
 
 ### Step 6c — Verify tables exist
+
+**Telemetry checkpoint: `verify_dataverse_schema`**
 
 Confirm every created or extended table is queryable after publish with **one** filtered query, not one request per table:
 
@@ -1192,6 +1205,8 @@ if (!upload.success) {
 ```
 
 ### Step 8 — Type-check
+
+**Telemetry checkpoint: `validate_dataverse_integration`**
 
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify generated services compile (~15–30 seconds)."

@@ -2332,8 +2332,8 @@ test('security phase: a spec with no personas makes no security calls', async ()
 
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'business-rules', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security']);
-  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'business-rules', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'business-rules', 'business-process-flows', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'business-rules', 'business-process-flows', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });
 

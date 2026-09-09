@@ -111,6 +111,25 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   buttons** (`commands[]` — functional JS on-click + static hidden/disabled, incl. **flyout/split-button
   menus** via `type`+`children[]`), and **dashboards** (`dashboards[]` — chart/list/iframe/webresource
   tiles) with **sitemap placement** (a `dashboard` subarea auto-pins the dashboard as an app component).
+  It also builds **business process flows** (`businessProcessFlows[]` — the staged process bar on a
+  record): a `workflows` row of category 4 / type 1 / businessprocesstype 0 whose XAML the SDK compiles
+  from ordered `stages[]`/`steps[]`, activated in the same push. The phase is additive
+  discover-reconcile keyed on `(entity, name)` like `business-rules` — it creates what is missing and
+  converges only Active/Draft **state**, never stage structure — and `bpfFilter` scopes every query in
+  build/verify/teardown to the DEFINITION row, excluding both the platform's activated `type 2` copy and
+  same-named TASK flows (also category 4). v1 is deliberately single-entity and linear: cross-entity
+  stages, branching, stage actions and `securityRoles` are **rejected at the spec gate** rather than
+  silently dropped, because the build cannot yet verify them (a BPF's role grants are privileges on the
+  backing table that ACTIVATION creates, so they belong to the `security` phase). The rejection is an
+  **allow-list at flow, stage AND step level**, because the SDK's normalizers copy a fixed key set and
+  discard the rest — so a `branch` written on a stage (where the SDK actually models it), or the very
+  plausible `fieldLogicalName` instead of `field` on a step, would otherwise validate clean and deploy
+  as if it had never been written. Two further platform facts the validator encodes: a flow's **name
+  must be unique across the whole spec**, because the SDK derives `uniquename` as
+  `new_<name lowercased, non-alphanumerics stripped>` — **ignoring the table** — and activation creates
+  a backing table with that name; and a stage must carry **at least one step**, because the SDK
+  substitutes a placeholder step named "New Step" for an empty one (its own `stage-needs-step` rule
+  never fires, as the placeholder is injected before it looks).
   Following a **genpage-first policy**, overview/dashboard/analytics surfaces are authored as **generative
   pages** (`pages[]`) rather than classic dashboards — the build's `pages` phase uses a **three-authority
   model**: IDENTITY (durable `<app>_pagemanifest`, outranked by a downloaded spec's `pages[].pageId`),
@@ -132,8 +151,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   fails **closed** rather than scanning a partial list. Classic `dashboards[]` are opt-in.
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
-  `<app-folder>/.maker-workspace/` for reuse/edits. The 14 phases
-  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·security·publish`)
+  `<app-folder>/.maker-workspace/` for reuse/edits. The 16 phases
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·business-rules·business-process-flows·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
@@ -221,11 +240,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security
-  roles → dashboards → command bars → forms → charts → views → reset enriched default views to drop
+  roles → dashboards → command bars → business rules → business process flows → forms → charts → views
+  → reset enriched default views to drop
   parent lookups → relationships → AI row summaries → tables [reverse-topological, children-first] →
   web resources (generated app icon + page manifest + declared) → global choices → solution**). Forms/charts/views/relationships
   are deleted **explicitly before tables** (a table delete does not reliably cascade cross-references; it
-  does remove the table's own columns). **Web resources are deleted after tables**: a table's vector/raster
+  does remove the table's own columns). A business rule and a business process flow are `workflows` rows
+  bound to the entity, so they too are deleted before their table — and each is **deactivated first**,
+  because Dataverse refuses to delete an activated process. Deleting an activated BPF is also what
+  removes the org-owned **backing table** the platform creates on activation. **Web resources are deleted after tables**: a table's vector/raster
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
@@ -437,7 +460,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
-feature-flags.json             ← Default-OFF feature flags (currently connectors)
+feature-flags.json             ← Default-OFF feature flags (connectors, custom-api, custom-telemetry)
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
@@ -453,6 +476,7 @@ agents/                        ← Agent definitions (invoked by skills via Task
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
   custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when the plan has ## Custom API Bindings)
+  page-telemetry.md            ← props.appInsights page telemetry contract (custom-telemetry gated; loaded only when the maker asked to measure something)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
@@ -633,20 +657,28 @@ once here and only the per-feature specifics are tabled below:
 5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
-| | `connectors` | `custom-api` |
-|---|---|---|
-| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` |
-| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` |
-| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` |
-| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 |
-| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) |
-| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` |
+| | `connectors` | `custom-api` | `custom-telemetry` |
+|---|---|---|---|
+| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
+| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
+| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
+| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
+| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
+| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
 
 One connectors-only nuance: at Phase 4.5 the `/genpage` orchestrator re-probes and passes the
 verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch — **that dispatch
-value wins over the plan's `## Connector Bindings` section.**
+value wins over the plan's `## Connector Bindings` section.** Phase 4.7 does the same for
+`Telemetry: enabled|disabled`.
 
-Both flags currently ship **OFF**, each waiting on cross-repo dependencies:
+`custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
+section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
+checklist above are N/A, and its Phase 4.7 "deploy phase" is nothing but the re-probe that
+produces the dispatch line. It also carries a second gate the other flags do not have: even
+when `enabled`, `genpage-page-builder` instruments a page **only** when the maker explicitly
+asked to measure or track something. `enabled` is permission, not instruction.
+
+All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
 
 - **`connectors`** — the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
   authoring control (power-platform-ux), and the maker/admin ECS setting must all release first.
@@ -655,6 +687,9 @@ Both flags currently ship **OFF**, each waiting on cross-repo dependencies:
   persist `actionBindings` into `config.json`, and the `GenUxPluginActionAllowList` ECS setting.
   Note the maker-facing name is "Custom API" while the shipped wire contract stays
   `actionBindings` / `executeAction` (see `references/custom-api.md`).
+- **`custom-telemetry`** — the page telemetry facade in the UCI host runtime, the GenUX
+  authoring control (power-platform-ux), the AIBuilder CoderAgent telemetry prompt, and the
+  `GenUxEnableCustomTelemetry` ECS setting (see `references/page-telemetry.md`).
 
 ## TSX source lexer — known limits
 

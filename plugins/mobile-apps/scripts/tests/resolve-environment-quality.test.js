@@ -17,8 +17,9 @@ const {
 
 const resolverPath = path.resolve(__dirname, '../resolve-environment.js');
 
-test('no-cache mode permits reads but performs no filesystem writes', () => {
+test('no-cache mode permits reads but performs no filesystem writes', (t) => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-no-cache-'));
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
   const authPath = path.join(projectRoot, 'auth.config.json');
   fs.writeFileSync(authPath, `${JSON.stringify({ msal: { clientId: '', tenantId: '' } }, null, 2)}\n`);
   const before = fs.readFileSync(authPath);
@@ -45,30 +46,55 @@ test('resolver argument parsing accepts no-cache in either position', () => {
   assert.deepStrictEqual(parseArgs(['--no-cache', id]), { noCache: true, target: id });
 });
 
-test('resolver CLI leaves cached project files byte-identical in no-cache mode', () => {
+test('resolver CLI leaves cached project files byte-identical in no-cache mode', (t) => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-cli-no-cache-'));
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
   const environment = {
     environmentId: '11111111-1111-1111-1111-111111111111',
     environmentUrl: 'https://example.crm.dynamics.com',
     tenantId: '22222222-2222-2222-2222-222222222222',
   };
   const authPath = path.join(projectRoot, 'auth.config.json');
-  const authConfig = {
-    msal: { clientId: '', tenantId: '' },
-    environment,
-  };
-  fs.writeFileSync(authPath, `${JSON.stringify(authConfig, null, 2)}\n`);
-  const before = fs.readFileSync(authPath);
+  const appPath = path.join(projectRoot, 'app.json');
+  const cachePath = path.join(projectRoot, '.resolved-environment.json');
+  fs.writeFileSync(appPath, JSON.stringify({
+    expo: { extra: { telemetry: { appInstanceId: environment.environmentId, cluster: null } } },
+  }));
+  const appBefore = fs.readFileSync(appPath);
 
-  const result = spawnSync(
-    process.execPath,
-    [resolverPath, environment.environmentId, '--no-cache'],
-    { cwd: projectRoot, encoding: 'utf8' },
-  );
-  assert.strictEqual(result.status, 0, result.stderr);
-  assert.deepStrictEqual(fs.readFileSync(authPath), before);
-  assert.ok(!fs.existsSync(path.join(projectRoot, '.resolved-environment.json')));
-  assert.strictEqual(JSON.parse(result.stdout).source, 'cache');
+  for (const clusterMetadata of [{}, { clusterEnvironment: 'Prod', clusterGeoName: 'EU' }]) {
+    const cached = { ...environment, ...clusterMetadata };
+    const authConfig = {
+      msal: { clientId: '', tenantId: '' },
+      environment: cached,
+    };
+    fs.writeFileSync(authPath, `${JSON.stringify(authConfig, null, 2)}\n`);
+    const before = fs.readFileSync(authPath);
+    for (const existingSidecar of [false, true]) {
+      if (existingSidecar) fs.writeFileSync(cachePath, JSON.stringify(cached));
+      const filesBefore = fs.readdirSync(projectRoot).sort();
+      const result = spawnSync(
+        process.execPath,
+        [resolverPath, environment.environmentId, '--no-cache'],
+        {
+          cwd: projectRoot,
+          encoding: 'utf8',
+          timeout: 5000,
+          env: { ...process.env, PATH: '', POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+        },
+      );
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.deepStrictEqual(fs.readFileSync(authPath), before);
+      assert.deepStrictEqual(fs.readFileSync(appPath), appBefore);
+      assert.deepStrictEqual(fs.readdirSync(projectRoot).sort(), filesBefore);
+      assert.strictEqual(JSON.parse(result.stdout).source, 'cache');
+      assert.strictEqual(JSON.parse(result.stdout).clusterGeoName, clusterMetadata.clusterGeoName || null);
+      if (existingSidecar) {
+        assert.strictEqual(fs.readFileSync(cachePath, 'utf8'), JSON.stringify(cached));
+        fs.unlinkSync(cachePath);
+      }
+    }
+  }
 });
 
 test('HTTP diagnostics report status and safe response shape without body contents', () => {

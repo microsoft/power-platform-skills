@@ -269,11 +269,19 @@ function settingIsOn(value, feature) {
 }
 
 /**
- * Normalize a GUID for use as an UNQUOTED OData lookup comparand. Dataverse returns bare GUIDs, but
- * a caller-supplied id can arrive `{braced}` (the form `normalizeGuid` also accepts); interpolating
- * that raw produces `_x_value eq {0000…}`, a malformed filter that 400s and — because the proof
- * fails closed — reports every feature as unprovable. Stripping braces keeps a legitimate id
- * working; anything else is passed through so a genuinely bad id still fails loudly.
+ * Normalize a GUID before it is interpolated into a Dataverse request. Dataverse returns bare GUIDs,
+ * but a caller-supplied id can arrive `{braced}` (the form `normalizeGuid` also accepts).
+ *
+ * This previously documented itself as the thing that keeps the `$filter` valid — that a braced
+ * comparand "400s". MEASURED against a live environment, that is not what the server does: a braced
+ * GUID in a `$filter` comparand is ACCEPTED and returns the right row (200), quoted or unquoted, on
+ * both a primary-key column and a lookup `_value` column. The shape that genuinely rejects braces is
+ * the URL KEY SEGMENT — `workflows({0000…})` returns 400 where `workflows(0000…)` succeeds.
+ *
+ * So normalize for the two reasons that hold: an id is also used as a plain string KEY for
+ * comparison (a Map join, a Set membership test), where a formatting difference is a SILENT miss
+ * rather than an error; and an id normalized here stays safe if it is later moved into a key
+ * segment. Anything that is not a brace passes through, so a genuinely bad id still fails loudly.
  */
 function odataGuid(id) {
   return String(id === undefined || id === null ? '' : id).replace(/[{}]/g, '');
