@@ -246,8 +246,10 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
   const meta = await readEntityWithDescriptions(sdk, 'new_order');
   const e = entityFromMetadata(meta, 'new_order');
 
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
+  // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
   assert.strictEqual(status.description, 'State shown to dispatchers.');

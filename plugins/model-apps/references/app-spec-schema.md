@@ -131,6 +131,56 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   pin is not silently lost — losing it would leave newly created columns in the org default while
   the existing ones keep the pinned language, with no error anywhere.
 
+## Localized labels — one name, several languages
+
+`languageCode` above sets the **one** language every plain label is written in. To label something in
+**several** languages, write the field as a map keyed by LCID instead of a string (AB#6686428):
+
+```jsonc
+"displayName": "Project Baseline"                                       // one language
+"displayName": { "1033": "Project Baseline", "3082": "Línea base" }     // two
+```
+
+This works on every author-facing name the SDK can localize — verified on the wire against the
+vendored bundle, which serializes a map into a multi-entry `LocalizedLabels` array:
+
+| Where | Field |
+|---|---|
+| `entities[]` | `displayName`, `pluralName` |
+| `entities[].primaryAttribute` | `displayName` |
+| `entities[].columns[]` | `displayName`, and each entry of a local Choice's `options[]` |
+| `entities[].alternateKeys[]` | `displayName` |
+| `relationships[].lookup` | `displayName` |
+| `globalChoices[]` | `displayName`, and each entry of `options[]` |
+
+**Why a map on the field, not a `localizedLabels` block.** The label belongs beside the name it
+labels. A table-level block cannot address a Choice **option** or a lookup's display name without
+inventing a parallel addressing scheme, and it splits one value across two places that then drift.
+An `entities[].localizedLabels` key is therefore **not** a supported shape.
+
+**Rules**
+- Keys are **canonical positive integer LCIDs** up to 65535 — `3082`, not `"03082"` and not
+  `"es-ES"`. A language tag is rejected rather than guessed: `es-ES` is 3082 *or* 1034 depending on
+  sort order, and guessing wrong would not fail — it would label everything in the wrong language.
+- Every value must be a non-empty string; an empty map is rejected (the SDK rejects one too).
+- `pluralName` becomes **required** beside a localized `displayName`. The English fallback appends
+  `"s"`, which is not a plural rule in most languages — so the spec asks rather than inventing
+  *"Línea base del proyectos"*.
+- Omitting the spec's own `languageCode` from a map is a **warning**, not an error. Dataverse serves
+  the base-language label to every user whose UI language has none, so leaving it out usually means
+  those users read a schema name — but a deliberately single-non-English label is legal.
+- Labels for all languages are written in **one** create call. That matters: a later single-language
+  `PUT` can overwrite the base label even with merge semantics.
+
+**Referencing a localized label.** Anywhere the spec names an artifact by its label — `sampleData`
+choosing a Choice option, or `personas[].jobs[].surfaces[]` naming a screen — **any** of its
+languages resolves to the same artifact. One option, one value, several names.
+
+**Round-trip.** `download-model-app` reconstructs localized labels from Dataverse: a table, plural,
+column or option labelled in several languages comes back as a map, and one labelled in a single
+language comes back as a plain string (so no existing spec changes shape). The download emits
+`pluralName` alongside a localized `displayName`, so its own output re-validates.
+
 ## `description` — write one on everything that takes one
 
 `description` is optional on every artifact below and **recommended on all of them**. It is written

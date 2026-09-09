@@ -1,6 +1,7 @@
 'use strict';
 // Pure helper: build a PromptSpec for a single entity's AI summary.
 // No Dataverse / network access — operates entirely on the spec entity object.
+const { labelText } = require('./app-spec.js');
 
 // Column types preferred over Memo for summary columns.
 const PREFERRED_TYPES = new Set([
@@ -35,7 +36,7 @@ function buildPromptSpec(entity, opts) {
     columns = override.columns
       .map((s) => colMap.get(s.toLowerCase()))
       .filter(Boolean)
-      .map((c) => ({ logical: c.schemaName.toLowerCase(), display: c.displayName || c.schemaName }));
+      .map((c) => ({ logical: c.schemaName.toLowerCase(), display: labelText(c.displayName) || c.schemaName }));
   } else {
     // Auto-select: exclude PK, AutoNumber, File, Image, Lookup.
     const eligible = (entity.columns || []).filter((c) => {
@@ -53,7 +54,7 @@ function buildPromptSpec(entity, opts) {
     const selected = [...preferred, ...memos.slice(0, 1)].slice(0, 6);
     columns = selected.map((c) => ({
       logical: c.schemaName.toLowerCase(),
-      display: c.displayName || c.schemaName,
+      display: labelText(c.displayName) || c.schemaName,
     }));
   }
 
@@ -62,7 +63,7 @@ function buildPromptSpec(entity, opts) {
   if (override && override.instruction && override.instruction.trim().length > 0) {
     instruction = override.instruction;
   } else {
-    const recordType = entity.displayName || entity.schemaName;
+    const recordType = labelText(entity.displayName) || entity.schemaName;
     instruction = `Summarize this ${recordType} as a short paragraph highlighting the most important details and any recent activity.`;
   }
 

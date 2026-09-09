@@ -16,6 +16,7 @@
 // PURE: no I/O. The CLI wrapper (scripts/write-app-spec-doc.js) owns writing the file.
 
 const lc = (s) => String(s || '').toLowerCase();
+const { labelText } = require('./app-spec.js');
 
 // Every collection read below goes through these. The renderer runs against WORK-IN-PROGRESS specs
 // during authoring — a half-typed `jobs: "x"`, a null entry left by an edit, a `dataSources` written
@@ -106,7 +107,7 @@ function dataModel(spec) {
   if (!entities.length) { out.push('_No tables._', ''); return out; }
   for (const e of entities) {
     const reused = e.existing ? ' _(existing table — reused, not created)_' : '';
-    out.push(`### ${text(e.displayName, e.schemaName)} \`${lc(e.schemaName)}\`${reused}`, '');
+    out.push(`### ${text(labelText(e.displayName, spec && spec.languageCode), e.schemaName)} \`${lc(e.schemaName)}\`${reused}`, '');
     if (e.description) out.push(text(e.description), '');
     // The nav icon is something the user APPROVES, and at plan time the SVG may not exist yet — so
     // show what the glyph will DEPICT, not the web-resource name (which tells a reviewer nothing).
@@ -116,13 +117,13 @@ function dataModel(spec) {
     }
     out.push('| Column | Type | Notes |', '|---|---|---|');
     const pa = e.primaryAttribute && typeof e.primaryAttribute === 'object' ? e.primaryAttribute : null;
-    if (pa) out.push(`| ${cell(pa.displayName || pa.schemaName)} | ${cell(pa.type, 'Text')} | primary name${pa.autoNumberFormat ? `, auto-number \`${cell(pa.autoNumberFormat)}\`` : ''} |`);
+    if (pa) out.push(`| ${cell(labelText(pa.displayName, spec && spec.languageCode) || pa.schemaName)} | ${cell(pa.type, 'Text')} | primary name${pa.autoNumberFormat ? `, auto-number \`${cell(pa.autoNumberFormat)}\`` : ''} |`);
     for (const c of objs(e.columns)) {
       const notes = [];
       if (c.required) notes.push('required');
       if (c.options) notes.push(`choices: ${arr(c.options).map((o) => cell(o && typeof o === 'object' ? o.label : o)).join(', ')}`);
       if (c.globalChoice) notes.push(`global choice \`${cell(c.globalChoice)}\``);
-      out.push(`| ${cell(c.displayName || c.schemaName)} | ${cell(c.type, 'Text')} | ${notes.join('; ') || '—'} |`);
+      out.push(`| ${cell(labelText(c.displayName, spec && spec.languageCode) || c.schemaName)} | ${cell(c.type, 'Text')} | ${notes.join('; ') || '—'} |`);
     }
     out.push('');
     if (e.hasNotes) out.push('Notes/timeline enabled.', '');

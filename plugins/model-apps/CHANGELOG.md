@@ -12,6 +12,26 @@ rebuilding a real app into a second environment.
 
 ### Added
 
+- **Localized Dataverse metadata labels.** Any author-facing name — a table's `displayName` /
+  `pluralName`, its primary column's, a column's, a lookup's, an alternate key's, a Choice option's
+  — may now be written as a map keyed by LCID instead of a plain string
+  ([AB#6686428], [#537]):
+
+  ```jsonc
+  "displayName": { "1033": "Project Baseline", "3082": "Línea base del proyecto" }
+  ```
+
+  Before this, a bilingual app needed a hand-written metadata patch after **every** create and edit,
+  and the Spanish UI silently fell back to English. All languages are now written in the one create
+  call, which is also the safe order: a later single-language `PUT` can overwrite the base label even
+  with merge semantics. `download-model-app` reconstructs them, so the round trip closes.
+
+  A language **tag** is rejected rather than guessed (`es-ES` is 3082 *or* 1034 depending on sort
+  order, and guessing wrong would not fail — it would label everything in the wrong language), and a
+  localized `displayName` now requires an explicit `pluralName`, because appending `"s"` is not a
+  plural rule outside English. Anywhere the spec names an artifact by its label — `sampleData`
+  picking a Choice option, `surfaces[]` naming a screen — **any** of its languages resolves.
+  A single-language label stays a plain string everywhere, so no existing spec changes shape.
 - **`roleGrants[]` — extend a security role you did not author.** Adding a table to an existing app
   deployed the table, its forms and its navigation while every non-admin role still had no access to
   it, and nothing said so ([AB#6686429]). `roleGrants[]` adds privileges for a table to a role that
@@ -65,6 +85,8 @@ rebuilding a real app into a second environment.
 
 [AB#6686423]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686423
 [AB#6686424]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686424
+[AB#6686428]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686428
+[#537]: https://github.com/microsoft/power-platform-skills/issues/537
 [AB#6686425]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686425
 [AB#6686426]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686426
 [AB#6686427]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686427

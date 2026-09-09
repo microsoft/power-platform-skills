@@ -135,19 +135,27 @@ function columnTypeMap(t) {
 // `spec` to resolve global choices; without it, only inline-option columns resolve.
 // { columnLogicalName: { "Platinum": 100000000, ... } }.
 function choiceValueMap(entity, spec) {
+  // Index each option under EVERY string it can be named by — the label itself when plain, or each
+  // per-language string when localized (AB#6686428). A localized option has ONE value and N labels,
+  // so `sampleData` written in either language must resolve to the same value; keying on
+  // `String(label)` alone would turn a label map into the literal key "[object Object]".
+  const indexOptions = (options) => {
+    const byLabel = {};
+    (options || []).forEach((label, i) => {
+      for (const alias of labelAliases(label)) byLabel[alias] = 100000000 + i;
+    });
+    return byLabel;
+  };
   const globalByName = {};
   for (const g of (spec && spec.globalChoices) || []) {
-    const byLabel = {};
-    (g.options || []).forEach((label, i) => { byLabel[String(label)] = 100000000 + i; });
-    globalByName[String(g.name).toLowerCase()] = byLabel;
+    globalByName[String(g.name).toLowerCase()] = indexOptions(g.options);
   }
   const map = {};
   for (const c of entity.columns || []) {
     if (c.type !== 'Choice' && c.type !== 'MultiChoice') continue;
     let byLabel = null;
     if (Array.isArray(c.options) && c.options.length) {
-      byLabel = {};
-      c.options.forEach((label, i) => { byLabel[String(label)] = 100000000 + i; });
+      byLabel = indexOptions(c.options);
     } else if (c.globalChoice && globalByName[String(c.globalChoice).toLowerCase()]) {
       byLabel = globalByName[String(c.globalChoice).toLowerCase()];
     }
@@ -224,7 +232,7 @@ function lookupColumnsFor(spec, entityLogical) {
     const logical = String((r.lookup && r.lookup.schemaName) || '').toLowerCase();
     if (!logical || seen.has(logical)) continue;
     seen.add(logical);
-    out.push({ logical, displayName: (r.lookup && r.lookup.displayName) || (r.lookup && r.lookup.schemaName) || logical });
+    out.push({ logical, displayName: labelText((r.lookup && r.lookup.displayName), spec && spec.languageCode) || (r.lookup && r.lookup.schemaName) || logical });
   }
   return out;
 }
@@ -537,6 +545,125 @@ function normalizeLanguageCode(value) {
   if (typeof value === 'number') return Number.isInteger(value) ? ok(value) : null;
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) return ok(Number(value.trim()));
   return null;
+}
+
+// --- localized Dataverse metadata labels (AB#6686428) --------------------------------------------
+//
+// Every author-facing NAME in the spec — a table's `displayName`/`pluralName`, its primary column's,
+// a column's, a lookup's, a Choice option's, an alternate key's — may be EITHER a plain string or a
+// map keyed by LCID:
+//
+//   "displayName": "Project Baseline"
+//   "displayName": { "1033": "Project Baseline", "3082": "Línea base del proyecto" }
+//
+// The map form is the vendored SDK's own label shape (measured on the wire: each of createTable,
+// createColumn, createGlobalOptionSet, createRelationship and createAlternateKey serializes a map
+// into a multi-entry `LocalizedLabels` array), so the spec passes it straight through rather than
+// pre-flattening it. A string still emits exactly one label at the build's `languageCode`, so every
+// existing spec is byte-identical.
+//
+// WHY a map on the field rather than a sibling `localizedLabels` block: the label belongs next to
+// the name it labels. A table-level block cannot address a Choice OPTION or a lookup's display name
+// without inventing a parallel addressing scheme, and it separates the two halves of one value so
+// they drift.
+//
+// The reported workaround is instructive about the failure mode: labels must be written for ALL
+// languages in one request, "because a single-language PUT can overwrite 1033 even with merge
+// labels". That is why an author who supplies a map omitting the build's base language gets a
+// warning — the base label is what everyone without a matching UI language sees.
+// Label shape: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/label
+function isLocalizedLabelMap(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+// The LCIDs a localized label declares, in the order written. Returns [] for a string or a
+// non-canonical key, so callers never have to re-derive the rule.
+function localizedLabelLcids(value) {
+  if (!isLocalizedLabelMap(value)) return [];
+  return Object.keys(value).filter((k) => /^[1-9]\d*$/.test(k)).map(Number);
+}
+
+// Resolve a label to ONE display string, for everything that must render or derive from it (the
+// design doc, the app preview, eval facts, surface resolution, lint messages).
+//
+// Preference: the requested language (normally the spec's build-wide `languageCode`), then 1033,
+// then the LOWEST declared LCID. The 1033 step is load-bearing and not merely a tidy default: V8
+// orders integer-like object keys ASCENDING regardless of how they were written, so the last step
+// picks the numerically smallest LCID — for `{ 1031: "…", 1033: "…" }` that would be German. 1033 is
+// also the platform's own fallback for a user whose UI language has no label, so preferring it
+// keeps a document and Dataverse telling the same story.
+function labelText(value, languageCode) {
+  if (typeof value === 'string') return value;
+  if (!isLocalizedLabelMap(value)) return '';
+  const wanted = normalizeLanguageCode(languageCode);
+  const pick = (lcid) => (lcid != null && typeof value[String(lcid)] === 'string' ? value[String(lcid)] : undefined);
+  const first = localizedLabelLcids(value)[0];
+  const hit = pick(wanted) ?? pick(1033) ?? pick(first);
+  return typeof hit === 'string' ? hit : '';
+}
+
+// Every string a label can legitimately be NAMED by: a plain label is itself; a localized label is
+// each of its per-language strings. Used wherever an author may reference a label by text — Choice
+// option → value resolution for `sampleData`, and `personas[].jobs[].surfaces[]` — so a reference
+// written in ANY provisioned language resolves to the same artifact. Ordered by ascending LCID
+// (V8's own ordering for integer-like keys), which is stable but is NOT the author's write order.
+function labelAliases(value) {
+  if (typeof value === 'string') return value.trim() ? [value] : [];
+  if (!isLocalizedLabelMap(value)) return [];
+  return Object.values(value).filter((v) => typeof v === 'string' && v.trim());
+}
+
+// Validate a label that may be localized. `errors` gets a message per problem; `warnings` (optional)
+// gets the base-language advisory, which is guidance rather than a rule — a spec that deliberately
+// labels a table only in Spanish is legal, just probably not what the author meant.
+function validateLabel(value, label, errors, opts = {}) {
+  const { required = false, warnings = null, baseLanguageCode = null } = opts;
+  if (value === undefined || value === null) {
+    if (required) errors.push(`${label} is required`);
+    return;
+  }
+  if (typeof value === 'string') {
+    if (!value.trim()) errors.push(`${label} must not be blank`);
+    return;
+  }
+  if (!isLocalizedLabelMap(value)) {
+    errors.push(`${label} must be a string, or a localized label keyed by LCID like { "1033": "Baseline", "3082": "Línea base" } (got ${typeof value})`);
+    return;
+  }
+  let keys;
+  try {
+    keys = Object.keys(value);
+  } catch {
+    // A Proxy whose ownKeys trap throws would otherwise take down the whole validation pass.
+    errors.push(`${label} could not be read as a localized label`);
+    return;
+  }
+  if (!keys.length) {
+    errors.push(`${label} is an empty localized label — give it at least one LCID, e.g. { "1033": "Baseline" } (the SDK rejects an empty label)`);
+    return;
+  }
+  for (const k of keys) {
+    // Canonical positive integers only, mirroring the SDK's own key check. "01033" and "en-US" are
+    // rejected rather than coerced: a tag is ambiguous (es-ES is 3082 or 1034 depending on sort
+    // order) and guessing wrong would not fail — it would label everything in the wrong language.
+    if (!/^[1-9]\d*$/.test(k)) {
+      errors.push(`${label}: '${k}' is not an LCID — use a canonical positive integer like 1033 (en-US) or 3082 (es-ES), not a language tag`);
+      continue;
+    }
+    if (Number(k) > MAX_LCID) {
+      errors.push(`${label}: LCID ${k} is out of range (max ${MAX_LCID})`);
+      continue;
+    }
+    if (typeof value[k] !== 'string' || !value[k].trim()) {
+      errors.push(`${label}: the label for LCID ${k} must be a non-empty string`);
+    }
+  }
+  // Advisory, not an error. Dataverse serves the base-language label to every user whose UI language
+  // has none, so a localized label that omits it leaves those users reading a schema name.
+  const base = normalizeLanguageCode(baseLanguageCode);
+  if (warnings && base && keys.length && !keys.includes(String(base))) {
+    warnings.push(`${label}: no label for the spec's languageCode ${base} — that is the label users without a matching UI language will see. Add "${base}" alongside ${keys.filter((k) => /^[1-9]\d*$/.test(k)).join(', ')}.`);
+  }
 }
 
 // Normalize a page's implementation source into a discriminated shape:
@@ -889,6 +1016,13 @@ function validateAppSpec(spec, opts = {}) {
   validateDescription(spec.app && spec.app.description, 'app', errors, { allowEmpty: true });
   for (const gc of spec.globalChoices || []) {
     validateDescription(gc && gc.description, `globalChoice '${(gc && gc.name) || '(unnamed)'}'`, errors);
+    // Choice labels may be localized (AB#6686428). The SDK serializes an LCID map into a multi-entry
+    // LocalizedLabels array on BOTH the option-set display name and each option's label.
+    const gcLabel = `globalChoice '${(gc && gc.name) || '(unnamed)'}'`;
+    validateLabel(gc && gc.displayName, `${gcLabel}: displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
+    if (gc && Array.isArray(gc.options)) {
+      gc.options.forEach((o, i) => validateLabel(o, `${gcLabel}: options[${i}]`, errors, { warnings, baseLanguageCode: spec.languageCode }));
+    }
   }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
@@ -936,12 +1070,27 @@ function validateAppSpec(spec, opts = {}) {
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
     }
+    // Table + primary-column labels may be localized (AB#6686428).
+    validateLabel(e.displayName, `entity ${e.schemaName}: displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
+    validateLabel(e.pluralName, `entity ${e.schemaName}: pluralName`, errors, { warnings, baseLanguageCode: spec.languageCode });
+    if (e.primaryAttribute) validateLabel(e.primaryAttribute.displayName, `entity ${e.schemaName}: primaryAttribute.displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
+    // A LOCALIZED displayName cannot derive a plural. The English fallback appends "s"
+    // (`${displayName}s`), which is wrong in most languages and meaningless for a label map — so
+    // rather than write "Línea base del proyectos" into Dataverse, require the author to say it.
+    if (isLocalizedLabelMap(e.displayName) && e.pluralName === undefined) {
+      errors.push(`entity ${e.schemaName}: pluralName is required when displayName is a localized label — the plural cannot be derived by appending "s" in every language`);
+    }
     validateDescription(e.description, `entity ${e.schemaName}`, errors);
     for (const c of e.columns || []) {
       if (!c.schemaName) {
         errors.push(`entity ${e.schemaName}: a column is missing schemaName`);
       }
       validateDescription(c.description, `entity ${e.schemaName}: column ${c.schemaName}`, errors);
+      validateLabel(c.displayName, `entity ${e.schemaName}: column ${c.schemaName} displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
+      // Local (per-column) Choice options carry labels too, and take the same localized shape.
+      if (Array.isArray(c.options)) {
+        c.options.forEach((o, i) => validateLabel(o, `entity ${e.schemaName}: column ${c.schemaName} options[${i}]`, errors, { warnings, baseLanguageCode: spec.languageCode }));
+      }
       // A Customer column is created through `createCustomerColumn`, whose payload is only
       // { Lookup, OneToManyRelationships } — the SDK has nowhere to put a description, so one
       // authored here is silently discarded. Warn rather than error: the spec is still valid and
@@ -2132,6 +2281,17 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
+  // Lookup + alternate-key labels may be localized too (AB#6686428). Validated in one pass here
+  // rather than inside the entities loop, because relationships[] is a top-level block and an
+  // entity's alternateKeys[] have no other label check.
+  (spec.relationships || []).forEach((r, i) => {
+    if (r && r.lookup) validateLabel(r.lookup.displayName, `relationships[${i}] (${r.lookup.schemaName || '?'}): lookup.displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
+  });
+  for (const e of spec.entities || []) {
+    (e && Array.isArray(e.alternateKeys) ? e.alternateKeys : []).forEach((k, i) => {
+      if (k) validateLabel(k.displayName, `entity ${e.schemaName}: alternateKeys[${i}] displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
+    });
+  }
   validateRoleGrants(spec, errors);
   return { ok: errors.length === 0, errors, warnings };
 }
@@ -2314,6 +2474,11 @@ module.exports = {
   validateAppSpec,
   normalizePageSource,
   normalizeLanguageCode,
+  labelText,
+  labelAliases,
+  isLocalizedLabelMap,
+  localizedLabelLcids,
+  validateLabel,
   quickCreateEnabledFor,
   isPlatformIconRef,
   webResourceNameFromRef,

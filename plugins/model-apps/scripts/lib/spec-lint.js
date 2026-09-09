@@ -2,7 +2,7 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 
@@ -286,7 +286,7 @@ function lintAppSpec(spec) {
     // author picks a distinct name (or knowingly customizes the stock default).
     const ve = (spec.entities || []).find((x) => lc(x.schemaName) === lc(v.entity));
     if (ve && v.name) {
-      const plural = ve.pluralName || `${ve.displayName || ve.schemaName}s`;
+      const plural = labelText(ve.pluralName, spec && spec.languageCode) || `${labelText(ve.displayName, spec && spec.languageCode) || ve.schemaName}s`;
       if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
         W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }

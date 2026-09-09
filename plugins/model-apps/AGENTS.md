@@ -200,6 +200,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   default exactly, so the option is opt-in rather than a silent re-labelling.
   Note the SDK deliberately does **not** language-parameterize BusinessRule: its mapper's language
   parameter is the *environment base* language, a different concept.
+  **`languageCode` is the language for a PLAIN label, not the only language available.** An
+  author-facing name (`entities[].displayName`/`pluralName`, `primaryAttribute.displayName`,
+  `columns[].displayName`, `alternateKeys[].displayName`, `relationships[].lookup.displayName`,
+  `globalChoices[].displayName` and any `options[]` entry) may instead be a **map keyed by LCID**,
+  which the SDK's label serializer turns into a multi-entry `LocalizedLabels` array
+  (AB#6686428 / [#537](https://github.com/microsoft/power-platform-skills/issues/537)). The plugin
+  passes such a value through **unflattened** — flattening it here would silently restore the
+  English-only behaviour while validation and the design doc still claimed two languages. Everything
+  that RENDERS or DERIVES FROM a label must go through `labelText()` (never string-interpolate a
+  label), and anything that resolves an author's reference BY label text must go through
+  `labelAliases()` so a reference written in any provisioned language matches. Both live in
+  `app-spec.js`; `references/localization.md` is about generated **page** code, a separate concern.
   Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
   would keep passing against a bundle that ignored the option.
   `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same

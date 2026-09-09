@@ -13,6 +13,7 @@ const {
   manyToManySchemaName,
   quickCreateEnabledFor,
   normalizeLanguageCode,
+  labelText,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -558,7 +559,13 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {
-        const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
+        // `displayName` / `pluralName` / `primaryColumnDisplayName` are passed THROUGH unflattened: a
+        // plain string emits one label at `resolvedLanguageCode`, and an LCID map emits one per
+        // language (AB#6686428 — measured on the wire against the vendored bundle). The English
+        // plural fallback is only reachable for a STRING displayName; validateAppSpec requires an
+        // explicit `pluralName` beside a localized one, because appending "s" is not a plural rule
+        // outside English and would write "Línea base del proyectos" into Dataverse.
+        const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${labelText(e.displayName, resolvedLanguageCode)}s`,
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;

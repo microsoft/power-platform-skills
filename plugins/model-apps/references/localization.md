@@ -5,6 +5,12 @@ non-English language via `pac model list-languages`. English-only environments
 should skip this entire file — the page-builder will write the page without any
 localization scaffolding.
 
+> **Scope: generated PAGE code.** This file covers runtime translations, locale
+> formatting and RTL inside a generative page. Localizing **Dataverse metadata**
+> — table, column, lookup and Choice labels — is a separate mechanism: write the
+> label as an LCID map instead of a string. See `app-spec-schema.md` →
+> "Localized labels".
+
 The page-builder agent reads this conditionally based on the plan's `Environment`
 section, not unconditionally.
 

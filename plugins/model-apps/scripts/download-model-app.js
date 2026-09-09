@@ -654,13 +654,25 @@ function entityFromMetadata(meta, logical) {
     const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) ? undefined : mapped;
     return withDescription({
       schemaName,
-      ...(a && (a.displayName || a.DisplayName) ? { displayName: descriptionFromDataverse(a.displayName || a.DisplayName) || a.displayName || a.DisplayName } : {}),
+      // A column labelled in several languages round-trips as an LCID map; one language stays a
+      // plain string (AB#6686428). `labelFromDataverse` reads the RAW `DisplayName` Label merged in
+      // by readEntityWithDescriptions; the `descriptionFromDataverse` fallback below covers a caller
+      // that supplied only the SDK's already-flattened `displayName`.
+      ...(labelFromDataverse(a && a.DisplayName) !== undefined
+        ? { displayName: labelFromDataverse(a.DisplayName) }
+        : (a && (a.displayName || a.DisplayName) ? { displayName: descriptionFromDataverse(a.displayName || a.DisplayName) || a.displayName || a.DisplayName } : {})),
       ...(specType ? { type: specType } : {}),
     }, a && (a.description !== undefined ? a.description : a.Description));
   }).filter((c) => c.schemaName);
+  // Table label + plural. When the table carries more than one language, BOTH must round-trip and
+  // `pluralName` becomes required (validateAppSpec refuses to derive a plural from a label map), so
+  // the plural is emitted whenever the display name is localized.
+  const displayName = labelFromDataverse(meta && meta.DisplayName);
+  const pluralName = labelFromDataverse(meta && meta.DisplayCollectionName);
   return {
     schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
-    displayName: (meta && meta.displayName) || logical,
+    displayName: displayName !== undefined ? displayName : ((meta && meta.displayName) || logical),
+    ...(displayName && typeof displayName === 'object' && pluralName !== undefined ? { pluralName } : {}),
     ...(descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) ? { description: descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) } : {}),
     // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
     // does not have, which is exactly the bug this fixes.
@@ -700,24 +712,60 @@ async function readEntityWithDescriptions(sdk, logical) {
   // reintroduce exactly the silence this replaces.
   const entityPath = `/${metadataEntityPath(logical)}`;
   try {
-    const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description`);
-    if (res && res.status >= 200 && res.status < 300 && res.body) meta.Description = res.body.Description;
+    // DisplayName / DisplayCollectionName are read alongside Description so a table labelled in more
+    // than one language round-trips (AB#6686428). The SDK's own `fetchEntityMetadata` projection
+    // flattens `displayName` to ONE string, which is enough for identity but silently loses every
+    // other language — a rebuild from such a spec would recreate the table English-only.
+    const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description,DisplayName,DisplayCollectionName`);
+    if (res && res.status >= 200 && res.status < 300 && res.body) {
+      meta.Description = res.body.Description;
+      meta.DisplayName = res.body.DisplayName;
+      meta.DisplayCollectionName = res.body.DisplayCollectionName;
+    }
   } catch { /* description best-effort — never sink an otherwise usable download */ }
   try {
     // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
     // `targets` (lookup target tables) and `attributeType`, which this projection does not, and
     // entityFromMetadata/other callers rely on them.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description`);
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName`);
     const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || null;
     if (Array.isArray(rows)) {
-      const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r.Description]));
+      const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r]));
       meta.attributes = (meta.attributes || []).map((a) => {
         const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
-        return byLogical.has(key) ? { ...a, Description: byLogical.get(key) } : a;
+        const row = byLogical.get(key);
+        return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName } : a;
       });
     }
   } catch { /* column descriptions are best-effort */ }
   return meta;
+}
+
+// Reconstruct an App Spec label from a Dataverse Label, preserving EVERY language. AB#6686428.
+//
+// Shape (see the Label reference linked in hydrate-spec.js):
+//   { "LocalizedLabels": [{ "Label": "Baseline", "LanguageCode": 1033 },
+//                         { "Label": "Línea base", "LanguageCode": 3082 }],
+//     "UserLocalizedLabel": { "Label": "Baseline", "LanguageCode": 1033 } }
+//
+// Returns a plain STRING when the table is labelled in one language, and an LCID map only when there
+// are genuinely two or more. That asymmetry is deliberate: emitting `{ "1033": "Baseline" }` for
+// every single-language table would change the shape of every spec this tool has ever written, for
+// no gain, and would make every download diff noisy. Returns undefined when there is nothing usable,
+// so a caller can fall back to the SDK's flattened `displayName` rather than write an empty label.
+function labelFromDataverse(value) {
+  if (!value || typeof value !== 'object') return undefined;
+  const rows = Array.isArray(value.LocalizedLabels) ? value.LocalizedLabels : [];
+  const usable = rows.filter((l) => l && typeof l.Label === 'string' && l.Label.trim() && Number.isInteger(Number(l.LanguageCode)) && Number(l.LanguageCode) > 0);
+  if (!usable.length) return undefined;
+  if (usable.length === 1) return usable[0].Label;
+  const out = {};
+  // NOT sorted, deliberately: V8 orders integer-like object keys ASCENDING regardless of insertion
+  // order, so `JSON.stringify` of this map is already deterministic and two downloads of the same
+  // table produce byte-identical output. A sort here would look like it earned that guarantee and
+  // could never be shown to matter — verified: inserting 3082 then 1033 yields keys ["1033","3082"].
+  for (const l of usable) out[String(Number(l.LanguageCode))] = l.Label;
+  return out;
 }
 
 // Image webresourcetypes (png/jpg/gif/ico/svg) — an icon reference must resolve to one of these to be
@@ -1322,4 +1370,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, labelFromDataverse, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

@@ -1,0 +1,419 @@
+'use strict';
+// AB#6686428 / #537(b) — localized Dataverse metadata labels.
+//
+// The reported gap: "the whole-app App Spec cannot express multiple Dataverse metadata labels for
+// tables, plural names, primary fields, columns, lookups, or Choice options. Download also does not
+// round-trip existing localized labels." The build created English labels only; the Spanish UI
+// therefore fell back to English, and every create/edit needed a manual metadata patch afterwards.
+//
+// The shape is an LCID map ON THE FIELD, not a sibling `localizedLabels` block:
+//
+//     "displayName": { "1033": "Project Baseline", "3082": "Línea base del proyecto" }
+//
+// That is the vendored SDK's own label shape (measured on the wire: createTable, createColumn,
+// createGlobalOptionSet, createRelationship and createAlternateKey each serialize a map into a
+// multi-entry LocalizedLabels array), so the spec passes it through instead of pre-flattening. It
+// also keeps the label beside the name it labels, which a table-level block could not do for a
+// Choice OPTION or a lookup's display name without inventing a parallel addressing scheme.
+const { test } = require('node:test');
+const assert = require('node:assert');
+const { validateAppSpec, labelText, labelAliases, isLocalizedLabelMap, localizedLabelLcids, validateLabel, choiceValueMap } = require('../lib/app-spec.js');
+const { labelFromDataverse, entityFromMetadata } = require('../download-model-app.js');
+
+const ES = { 1033: 'Project Baseline', 3082: 'Línea base del proyecto' };
+
+function base() {
+  return {
+    schemaVersion: 2,
+    solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Contoso' },
+    languageCode: 1033,
+    entities: [{
+      schemaName: 'contoso_projectbaseline',
+      displayName: 'Project Baseline',
+      primaryAttribute: { schemaName: 'contoso_title', displayName: 'Title' },
+      columns: [],
+    }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Main', subAreas: [] }] }] },
+  };
+}
+
+const errorsFor = (mutate, profile = 'plan') => { const s = base(); mutate(s); return validateAppSpec(s, { profile }).errors || []; };
+const warningsFor = (mutate) => { const s = base(); mutate(s); return validateAppSpec(s, { profile: 'plan' }).warnings || []; };
+
+// --- labelText ------------------------------------------------------------------------------------
+
+test('labelText returns a plain string unchanged', () => {
+  assert.strictEqual(labelText('Baseline'), 'Baseline');
+});
+
+test('labelText prefers the requested language, then 1033, then the lowest declared LCID', () => {
+  assert.strictEqual(labelText(ES, 3082), 'Línea base del proyecto');
+  // No requested language -> 1033. This step is load-bearing, not decorative: V8 orders
+  // integer-like keys ASCENDING, so without it a { 1031, 1033 } label would resolve to GERMAN.
+  assert.strictEqual(labelText({ 1031: 'Projektbasislinie', 1033: 'Project Baseline' }), 'Project Baseline');
+  assert.strictEqual(labelText({ 3082: 'Línea base', 1033: 'Baseline' }), 'Baseline');
+  // Neither the requested language nor 1033 exists -> the lowest declared, rather than an empty cell.
+  assert.strictEqual(labelText({ 3082: 'Línea base' }, 1031), 'Línea base');
+  assert.strictEqual(labelText({ 3082: 'Línea base', 1031: 'Basislinie' }, 1049), 'Basislinie');
+});
+
+test('labelText returns "" for nothing usable, so callers can fall back to a schema name', () => {
+  for (const v of [undefined, null, {}, [], 42, { 'en-US': 'x' }]) assert.strictEqual(labelText(v), '', JSON.stringify(v));
+});
+
+test('localizedLabelLcids reports only canonical LCID keys', () => {
+  assert.deepStrictEqual(localizedLabelLcids(ES), [1033, 3082]);
+  assert.deepStrictEqual(localizedLabelLcids({ '01033': 'x', 'en-US': 'y' }), []);
+  assert.deepStrictEqual(localizedLabelLcids('Baseline'), []);
+  assert.strictEqual(isLocalizedLabelMap('Baseline'), false);
+  assert.strictEqual(isLocalizedLabelMap([]), false);
+});
+
+// --- validation: the shape ------------------------------------------------------------------------
+
+test('a localized label on every supported surface validates', () => {
+  // The exact list the bug asks for: table, plural, primary field, column, lookup, Choice options.
+  const s = base();
+  s.entities[0].displayName = ES;
+  s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base del proyecto' };
+  s.entities[0].primaryAttribute.displayName = { 1033: 'Title', 3082: 'Título' };
+  s.entities[0].columns = [{ schemaName: 'contoso_note', type: 'Text', displayName: { 1033: 'Note', 3082: 'Nota' } }];
+  s.entities[0].alternateKeys = [{ schemaName: 'contoso_key', columns: ['contoso_title'], displayName: { 1033: 'Key', 3082: 'Clave' } }];
+  s.entities.push({ schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] });
+  s.relationships = [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_projectbaseline', lookup: { schemaName: 'contoso_projectid', displayName: { 1033: 'Project', 3082: 'Proyecto' } } }];
+  s.globalChoices = [{ name: 'contoso_status', displayName: { 1033: 'Status', 3082: 'Estado' }, options: [{ 1033: 'Open', 3082: 'Abierto' }, { 1033: 'Closed', 3082: 'Cerrado' }] }];
+  const r = validateAppSpec(s, { profile: 'deploy' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('a plain-string label still validates — every existing spec is unaffected', () => {
+  assert.strictEqual(validateAppSpec(base(), { profile: 'deploy' }).ok, true);
+});
+
+test('a language TAG is rejected rather than guessed', () => {
+  // es-ES is 3082 or 1034 depending on sort order. Guessing wrong would not fail — it would label
+  // everything in the wrong language, which is far worse than a validation error.
+  const errs = errorsFor((s) => { s.entities[0].displayName = { 'es-ES': 'Línea base' }; });
+  const hit = errs.find((e) => /is not an LCID/.test(e));
+  assert.ok(hit, JSON.stringify(errs));
+  assert.match(hit, /not a language tag/);
+});
+
+test('a non-canonical integer key is rejected', () => {
+  // "01033" is not what Dataverse round-trips, and accepting it would produce two spec keys that
+  // mean one language.
+  assert.ok(errorsFor((s) => { s.entities[0].displayName = { '01033': 'x' }; }).some((e) => /is not an LCID/.test(e)));
+});
+
+test('an out-of-range LCID is rejected', () => {
+  assert.ok(errorsFor((s) => { s.entities[0].displayName = { 70000: 'x' }; }).some((e) => /out of range/.test(e)));
+});
+
+test('an EMPTY localized label is rejected — the SDK rejects it too', () => {
+  const errs = errorsFor((s) => { s.entities[0].displayName = {}; });
+  assert.ok(errs.some((e) => /empty localized label/.test(e)), JSON.stringify(errs));
+});
+
+test('a blank or non-string label value is rejected per LCID', () => {
+  for (const bad of ['', '   ', 42, null]) {
+    const errs = errorsFor((s) => { s.entities[0].displayName = { 1033: 'Baseline', 3082: bad }; });
+    assert.ok(errs.some((e) => /label for LCID 3082 must be a non-empty string/.test(e)), `${JSON.stringify(bad)}: ${JSON.stringify(errs)}`);
+  }
+});
+
+test('an array is rejected — it is not a label of either shape', () => {
+  assert.ok(errorsFor((s) => { s.entities[0].displayName = ['Baseline']; }).some((e) => /must be a string, or a localized label keyed by LCID/.test(e)));
+});
+
+test('validateLabel survives a value whose keys cannot be read', () => {
+  // A validator that CRASHES on a hostile spec is worse than one that rejects it: the author gets a
+  // stack trace instead of the list of everything else wrong with their spec.
+  const errors = [];
+  validateLabel(new Proxy({}, { ownKeys() { throw new Error('trap'); } }), 'entity x: displayName', errors);
+  assert.deepStrictEqual(errors, ['entity x: displayName could not be read as a localized label']);
+});
+
+// --- the plural rule ------------------------------------------------------------------------------
+
+test('a localized displayName REQUIRES an explicit pluralName', () => {
+  // The fallback appends "s" (`${displayName}s`). That is not a plural rule outside English, and on
+  // a label map it would produce "[object Object]s". Refusing is the only honest option.
+  const errs = errorsFor((s) => { s.entities[0].displayName = ES; });
+  const hit = errs.find((e) => /pluralName is required when displayName is a localized label/.test(e));
+  assert.ok(hit, JSON.stringify(errs));
+  assert.match(hit, /cannot be derived by appending "s"/);
+});
+
+test('a plain displayName still derives its plural, unchanged', () => {
+  assert.strictEqual(validateAppSpec(base(), { profile: 'deploy' }).ok, true);
+});
+
+// --- the base-language advisory -------------------------------------------------------------------
+
+test('a localized label omitting the base language WARNS but does not fail', () => {
+  // The reporter's own workaround note says both labels must be sent "because a single-language PUT
+  // can overwrite 1033". The base label is what every user without a matching UI language sees, so
+  // omitting it is nearly always a mistake — but a deliberately Spanish-only table is legal.
+  const s = base();
+  s.languageCode = 1033;
+  s.entities[0].displayName = { 3082: 'Línea base del proyecto' };
+  s.entities[0].pluralName = { 3082: 'Líneas base' };
+  const r = validateAppSpec(s, { profile: 'deploy' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const hit = (r.warnings || []).find((w) => /no label for the spec's languageCode 1033/.test(w));
+  assert.ok(hit, JSON.stringify(r.warnings));
+  assert.match(hit, /Add "1033" alongside 3082/, 'the warning must say what to add');
+});
+
+test('no base-language warning when the base language IS present', () => {
+  // A warning that fires on every correct spec is a warning nobody reads.
+  const ws = warningsFor((s) => { s.entities[0].displayName = ES; s.entities[0].pluralName = { 1033: 'Baselines', 3082: 'Líneas base' }; });
+  assert.deepStrictEqual(ws.filter((w) => /no label for the spec's languageCode/.test(w)), []);
+});
+
+// --- render + derive sites ------------------------------------------------------------------------
+
+test('a localized label never reaches a rendered document as [object Object]', () => {
+  const { renderAppSpecDoc } = require('../lib/app-spec-doc.js');
+  const { renderAppPreview } = require('../lib/app-preview.js');
+  const s = base();
+  s.languageCode = 3082;
+  s.entities[0].displayName = ES;
+  s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base del proyecto' };
+  s.entities[0].primaryAttribute.displayName = { 1033: 'Title', 3082: 'Título' };
+  s.entities[0].columns = [{ schemaName: 'contoso_note', type: 'Text', displayName: { 1033: 'Note', 3082: 'Nota' } }];
+  for (const [name, text, expect] of [
+    ['plan doc', renderAppSpecDoc(s), /Título/],
+    // The console preview renders table names but shows the primary column by SCHEMA name, so the
+    // table label is the assertion that fits it.
+    ['app preview', renderAppPreview(s), /Línea base del proyecto/],
+  ]) {
+    assert.doesNotMatch(text, /\[object Object\]/, `${name} rendered a raw label object`);
+    assert.match(text, expect, `${name} did not resolve the label to languageCode 3082`);
+  }
+});
+
+test('eval schema facts resolve a localized table label to a string', () => {
+  const { schemaFacts } = require('../lib/schema-facts.js');
+  const s = base();
+  s.entities[0].displayName = ES;
+  s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base' };
+  const facts = schemaFacts(s);
+  const e = (facts.tables || facts.entities || [])[0] || {};
+  assert.strictEqual(typeof e.displayName, 'string', JSON.stringify(facts).slice(0, 400));
+  assert.strictEqual(e.displayName, 'Project Baseline');
+  assert.strictEqual(JSON.stringify(facts).includes('[object Object]'), false);
+});
+
+test('eval choice facts carry ONE label per value, not one per language', () => {
+  // choiceValueMap indexes a localized option under every language so sample data resolves in
+  // either. An eval fact compares against Dataverse, where the option has ONE value — emitting a
+  // duplicate fact per language would make every bilingual choice look like twice as many options.
+  const { schemaFacts } = require('../lib/schema-facts.js');
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_status', type: 'Choice', options: [{ 1033: 'Open', 3082: 'Abierto' }, { 1033: 'Closed', 3082: 'Cerrado' }] }];
+  const facts = schemaFacts(s);
+  const table = (facts.tables || facts.entities || [])[0] || {};
+  const col = ((table.columns || []).find((c) => /contoso_status/i.test(c.logicalName || c.schemaName || ''))) || {};
+  const opts = col.choices || col.options || [];
+  assert.strictEqual(opts.length, 2, JSON.stringify(col));
+  assert.deepStrictEqual(opts.map((o) => o.value), [100000000, 100000001]);
+  assert.deepStrictEqual(opts.map((o) => o.label), ['Open', 'Closed'], 'the first-declared language must win');
+});
+
+test('a localized Choice option resolves from EITHER language for sampleData', () => {
+  // THE regression this guards: `choiceValueMap` used to key on `String(label)`, which turns a label
+  // map into the literal key "[object Object]" — so every sample record referencing a localized
+  // option would fail to resolve, silently, at build time.
+  const entity = { schemaName: 'contoso_projectbaseline', columns: [{ schemaName: 'contoso_status', type: 'Choice', options: [{ 1033: 'Open', 3082: 'Abierto' }, { 1033: 'Closed', 3082: 'Cerrado' }] }] };
+  const map = choiceValueMap(entity, {})['contoso_status'];
+  assert.strictEqual(map.Open, 100000000);
+  assert.strictEqual(map.Abierto, 100000000, 'the Spanish label must resolve to the SAME value');
+  assert.strictEqual(map.Closed, 100000001);
+  assert.strictEqual(map.Cerrado, 100000001);
+  assert.strictEqual('[object Object]' in map, false);
+});
+
+test('labelAliases is the one rule both sample data and surfaces use', () => {
+  // DRY: two different resolvers disagreeing about what a label can be CALLED would mean a spec that
+  // validates for sample data and not for surfaces, or vice versa.
+  assert.deepStrictEqual(labelAliases('Open'), ['Open']);
+  assert.deepStrictEqual(labelAliases({ 1033: 'Open', 3082: 'Abierto' }), ['Open', 'Abierto']);
+  assert.deepStrictEqual(labelAliases('   '), []);
+  assert.deepStrictEqual(labelAliases(undefined), []);
+});
+
+test('a surface named in EITHER language resolves', () => {
+  // `surfaces[]` is the machine-readable claim that a job is satisfied by these screens. On a
+  // bilingual spec, naming the Spanish label is as legitimate as naming the English one — matching
+  // only the resolved language would report a real surface as unresolved.
+  const { resolveSurfaces } = require('../lib/surface-resolver.js');
+  const mk = (surface) => {
+    const s = base();
+    s.entities[0].displayName = ES;
+    s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base' };
+    s.personas = [{ persona: 'Manager', jobs: [{ name: 'Manage', surfaces: [surface], privileges: [{ entity: 'contoso_projectbaseline', access: ['read'] }] }] }];
+    return resolveSurfaces(s);
+  };
+  for (const name of ['Project Baseline', 'Línea base del proyecto', 'contoso_projectbaseline']) {
+    const res = mk(name);
+    const unresolved = (res.unresolved || res.filter?.((r) => !r.resolved) || []).length;
+    assert.strictEqual(unresolved, 0, `'${name}' did not resolve: ${JSON.stringify(res).slice(0, 300)}`);
+  }
+});
+
+// --- download round-trip --------------------------------------------------------------------------
+
+const dvLabel = (pairs) => ({ LocalizedLabels: pairs.map(([LanguageCode, Label]) => ({ Label, LanguageCode })) });
+
+test('labelFromDataverse returns a STRING for one language and a MAP for several', () => {
+  // The asymmetry is deliberate: emitting { "1033": "Order" } for every single-language table would
+  // change the shape of every spec this tool has ever written, and make every download diff noisy.
+  assert.strictEqual(labelFromDataverse(dvLabel([[1033, 'Order']])), 'Order');
+  assert.deepStrictEqual(labelFromDataverse(dvLabel([[1033, 'Order'], [3082, 'Pedido']])), { 1033: 'Order', 3082: 'Pedido' });
+});
+
+test('labelFromDataverse emits deterministic key order without needing a sort', () => {
+  // V8 orders integer-like object keys ASCENDING regardless of insertion order, so two downloads of
+  // the same table serialize identically with no sort step. Pinned because the alternative — a sort
+  // that can never be shown to matter — reads as if it earned the guarantee.
+  assert.strictEqual(JSON.stringify(labelFromDataverse(dvLabel([[3082, 'Pedido'], [1033, 'Order']]))), '{"1033":"Order","3082":"Pedido"}');
+  assert.strictEqual(JSON.stringify(labelFromDataverse(dvLabel([[1033, 'Order'], [3082, 'Pedido']]))), '{"1033":"Order","3082":"Pedido"}');
+});
+
+test('labelAliases order follows ascending LCID, not the author write order', () => {
+  // Pinned because `choiceFacts` collapses a multi-alias option to its FIRST alias, so the eval fact
+  // it emits depends on this ordering being predictable.
+  assert.deepStrictEqual(labelAliases({ 3082: 'Abierto', 1033: 'Open' }), ['Open', 'Abierto']);
+});
+
+test('labelFromDataverse returns undefined for nothing usable, so a caller can fall back', () => {
+  for (const v of [undefined, null, 'Order', {}, dvLabel([]), { LocalizedLabels: [{ Label: '  ', LanguageCode: 1033 }] }]) {
+    assert.strictEqual(labelFromDataverse(v), undefined, JSON.stringify(v));
+  }
+  // A row with a junk LanguageCode is skipped rather than keyed under NaN.
+  assert.strictEqual(labelFromDataverse({ LocalizedLabels: [{ Label: 'x', LanguageCode: 'en-US' }] }), undefined);
+});
+
+test('entityFromMetadata round-trips a bilingual table, plural and column', () => {
+  const meta = {
+    logicalName: 'contoso_projectbaseline', schemaName: 'contoso_projectbaseline',
+    displayName: 'Project Baseline', primaryNameAttribute: 'contoso_title',
+    DisplayName: dvLabel([[1033, 'Project Baseline'], [3082, 'Línea base del proyecto']]),
+    DisplayCollectionName: dvLabel([[1033, 'Project Baselines'], [3082, 'Líneas base del proyecto']]),
+    attributes: [{ logicalName: 'contoso_note', schemaName: 'contoso_note', attributeType: 'String', isCustomAttribute: true, DisplayName: dvLabel([[1033, 'Note'], [3082, 'Nota']]) }],
+  };
+  const e = entityFromMetadata(meta, 'contoso_projectbaseline');
+  assert.deepStrictEqual(e.displayName, { 1033: 'Project Baseline', 3082: 'Línea base del proyecto' });
+  // The plural is emitted BECAUSE the display name is localized — validateAppSpec then requires it.
+  assert.deepStrictEqual(e.pluralName, { 1033: 'Project Baselines', 3082: 'Líneas base del proyecto' });
+  assert.deepStrictEqual(e.columns[0].displayName, { 1033: 'Note', 3082: 'Nota' });
+});
+
+test('a downloaded bilingual entity VALIDATES — the round trip closes', () => {
+  // The whole point: download -> rebuild must not fail on its own output. Without the pluralName
+  // emission above, this spec would be rejected by the localized-plural rule.
+  const meta = {
+    logicalName: 'contoso_projectbaseline', schemaName: 'contoso_projectbaseline',
+    displayName: 'Project Baseline', primaryNameAttribute: 'contoso_title',
+    DisplayName: dvLabel([[1033, 'Project Baseline'], [3082, 'Línea base del proyecto']]),
+    DisplayCollectionName: dvLabel([[1033, 'Project Baselines'], [3082, 'Líneas base del proyecto']]),
+    attributes: [],
+  };
+  const s = base();
+  s.entities = [entityFromMetadata(meta, 'contoso_projectbaseline')];
+  const r = validateAppSpec(s, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('a single-language table still downloads as a plain string', () => {
+  const meta = {
+    logicalName: 'new_order', schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name',
+    DisplayName: dvLabel([[1033, 'Order']]), DisplayCollectionName: dvLabel([[1033, 'Orders']]), attributes: [],
+  };
+  const e = entityFromMetadata(meta, 'new_order');
+  assert.strictEqual(e.displayName, 'Order');
+  // No plural is emitted for a plain label — it was never in the spec before and adding it would
+  // change every existing download.
+  assert.strictEqual('pluralName' in e, false, JSON.stringify(e));
+});
+
+test('a metadata read that returned no labels falls back to the SDK display name', () => {
+  // The raw metadata read is best-effort (it is wrapped in a catch). Losing it must degrade to the
+  // previous behaviour, not to an empty label.
+  const e = entityFromMetadata({ logicalName: 'new_order', schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name', attributes: [] }, 'new_order');
+  assert.strictEqual(e.displayName, 'Order');
+});
+
+// --- the build payload ----------------------------------------------------------------------------
+
+test('the localized label reaches the SDK UNFLATTENED', async () => {
+  // The plugin must not pre-flatten: the SDK's serializer is what turns a map into a multi-entry
+  // LocalizedLabels array. Flattening here would silently restore the English-only behaviour while
+  // every validation and document still claimed two languages.
+  const { provisionDataModel } = require('../lib/entity-provision.js');
+  const calls = [];
+  const s = base();
+  s.entities[0].displayName = ES;
+  s.entities[0].pluralName = { 1033: 'Project Baselines', 3082: 'Líneas base' };
+  s.entities[0].primaryAttribute.displayName = { 1033: 'Title', 3082: 'Título' };
+  const sdk = {
+    createTable: async (o) => { calls.push(o); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
+    createColumn: async (e, o) => ({ logicalName: o.schemaName.toLowerCase() }),
+    updateTable: async () => undefined,
+  };
+  const provision = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: `${l}s`, relationships: [] }),
+    queryRecords: async () => [],
+  };
+  const runner = {
+    run: async (phase, label, fn, o = {}) => { try { return await fn(); } catch (err) { if (o.skipIf && o.skipIf(err)) return undefined; throw err; } },
+    skip: () => {},
+    mapLimit: async (items, _n, fn) => { const out = []; for (const it of items) out.push(await fn(it)); return out; },
+  };
+  await provisionDataModel({ spec: s, sdk, provision, runner, preResolvedLanguageCode: 1033 });
+  const t = calls[0];
+  assert.ok(t, 'createTable was never called');
+  assert.deepStrictEqual(t.displayName, ES, 'displayName was flattened before reaching the SDK');
+  assert.deepStrictEqual(t.pluralName, { 1033: 'Project Baselines', 3082: 'Líneas base' });
+  assert.deepStrictEqual(t.primaryColumnDisplayName, { 1033: 'Title', 3082: 'Título' });
+});
+
+test('a localized COLUMN, lookup, alternate key and Choice label all reach the SDK unflattened', async () => {
+  const { provisionDataModel } = require('../lib/entity-provision.js');
+  const seen = { column: null, relationship: null, key: null, choice: null };
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_note', type: 'Text', displayName: { 1033: 'Note', 3082: 'Nota' } }];
+  s.entities[0].alternateKeys = [{ schemaName: 'contoso_key', columns: ['contoso_title'], displayName: { 1033: 'Key', 3082: 'Clave' } }];
+  s.entities.push({ schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] });
+  s.relationships = [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_projectbaseline', lookup: { schemaName: 'contoso_projectid', displayName: { 1033: 'Project', 3082: 'Proyecto' } } }];
+  s.globalChoices = [{ name: 'contoso_priority', displayName: { 1033: 'Priority', 3082: 'Prioridad' }, options: [{ 1033: 'High', 3082: 'Alta' }] }];
+  const sdk = {
+    createTable: async (o) => ({ logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }),
+    createColumn: async (e, o) => { if (o.schemaName === 'contoso_note') seen.column = o; return { logicalName: o.schemaName.toLowerCase() }; },
+    createRelationship: async (o) => { seen.relationship = o; return { schemaName: o.schemaName }; },
+    createAlternateKey: async (e, o) => { seen.key = o; return { logicalName: o.schemaName.toLowerCase() }; },
+    createGlobalOptionSet: async (o) => { seen.choice = o; return { name: o.name, metadataId: 'gc-1' }; },
+    updateTable: async () => undefined,
+  };
+  const provision = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: `${l}s`, relationships: [] }),
+    queryRecords: async () => [],
+  };
+  const runner = {
+    run: async (phase, label, fn, o = {}) => { try { return await fn(); } catch (err) { if (o.skipIf && o.skipIf(err)) return undefined; throw err; } },
+    skip: () => {},
+    mapLimit: async (items, _n, fn) => { const out = []; for (const it of items) out.push(await fn(it)); return out; },
+  };
+  await provisionDataModel({ spec: s, sdk, provision, runner, preResolvedLanguageCode: 1033 });
+  assert.deepStrictEqual(seen.column && seen.column.displayName, { 1033: 'Note', 3082: 'Nota' }, JSON.stringify(seen.column));
+  assert.deepStrictEqual(seen.relationship && seen.relationship.lookupDisplayName, { 1033: 'Project', 3082: 'Proyecto' }, JSON.stringify(seen.relationship));
+  assert.deepStrictEqual(seen.key && seen.key.displayName, { 1033: 'Key', 3082: 'Clave' }, JSON.stringify(seen.key));
+  assert.deepStrictEqual(seen.choice && seen.choice.displayName, { 1033: 'Priority', 3082: 'Prioridad' }, JSON.stringify(seen.choice));
+  assert.deepStrictEqual(seen.choice && seen.choice.options, [{ value: 100000000, label: { 1033: 'High', 3082: 'Alta' } }], JSON.stringify(seen.choice));
+});

@@ -5,6 +5,7 @@
 // interactive authoring turn before approving it. Pure (no I/O); the CLI is preview-form.js.
 const { compileFormIntent } = require('./artifact-intent.js');
 const { entityByLogical } = require('./_graph.js');
+const { labelText } = require('./app-spec.js');
 
 const INNER = 63; // content width inside the box borders
 
@@ -65,9 +66,9 @@ const BOTTOM = `└${'─'.repeat(INNER + 2)}┘`;
 // resolves the display name itself from the spec entity (falling back to the logical name).
 function labelFor(entity, fn) {
   if (!entity) return fn;
-  if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return entity.primaryAttribute.displayName || 'Name';
+  if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return labelText(entity.primaryAttribute.displayName) || 'Name';
   const c = (entity.columns || []).find((x) => x.schemaName.toLowerCase() === fn);
-  return (c && (c.displayName || c.schemaName)) || fn;
+  return (c && (labelText(c.displayName) || c.schemaName)) || fn;
 }
 
 // "Label * [widget]" for one field cell.
