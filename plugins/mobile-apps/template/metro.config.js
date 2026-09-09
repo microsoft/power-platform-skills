@@ -1,4 +1,3 @@
-const { withPowerNativeMetroLogging } = require('@microsoft/power-apps-native-host/config/metroLogger');
 const { createPowerAppsMetroConfig } = require('@microsoft/power-apps-native-host/config/metroConfig');
 
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT

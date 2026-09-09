@@ -49,7 +49,7 @@ node -e "const c=require('./power.config.json');console.log(c.appId||'MISSING')"
 
   > "⚠️ First deploy detected — `power.config.json` has no `appId` yet. The app ID is minted by the first push, but it is compiled **into** the native bundle at build time. So two full build+push cycles are required. I'll run both; the second is not optional."
 
-  Then run Steps 2 → 2.4 → 2.5 → 3 **twice**. In cycle 2, `npm run build` *and* `npm run package:android` / `package:ios` must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in. Step 2.5 (offline profile gate) may be skipped on cycle 2 **only if** no schema or profile file changed between the two cycles; if in doubt, re-run it — it is a local, no-network check.
+  Then run Steps 2 → 2.4 → 2.5 → 3 **twice**. In cycle 2, `npm run build` *and* the Step 2.4 native packaging commands must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in. Step 2.5 (offline profile gate) may be skipped on cycle 2 **only if** no schema or profile file changed between the two cycles; if in doubt, re-run it — it is a local, no-network check.
 
 **Why two cycles are unavoidable.** `power-apps push` mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build (`PushApp.js`: `throw new Error('Build path ${buildPath} does not exist')`). So the ID cannot be minted before the first build, and the first build cannot contain the ID.
 
@@ -102,7 +102,7 @@ kill "$EXPORT_PID" 2>/dev/null || true
 echo "✓ web export complete (process terminated manually — known hang)"
 ```
 
-Treat a completed `dist/` as success even though the process had to be killed. `npm run package:android` / `package:ios` are **not** affected — both exit 0 cleanly and stage into `dist/` via a temp dir, so they do not clear the web build.
+Treat a completed `dist/` as success even though the process had to be killed. The Step 2.4 native packaging commands are **not** affected — both exit 0 cleanly and stage into `dist/` via a temp dir, so they do not clear the web build.
 
 If the build fails:
 
@@ -115,37 +115,39 @@ Verify `dist/` exists with `index.html` before continuing.
 ### Step 2.4 — Native package (Hermes bundle + customer assets)
 
 **Print before starting:**
-> "→ Compiling the native Hermes bundle and hash-addressed asset package for iOS and Android via `npm run package:android` + `npm run package:ios`. No JavaScript is compiled inside the wrap pipeline — it only consumes these prebuilt files. ~1–3 minutes."
+> "→ Compiling the native Hermes bundle and hash-addressed asset package for iOS and Android. No JavaScript is compiled inside the wrap pipeline — it only consumes these prebuilt files. ~1–3 minutes."
 
 **Node version gate (required).** The native export crashes on **Node < 20.19.4** — it hits `util.styleText(['yellow','inverse','bold'], …)`, which older Node rejects, failing the Metro bundle with a cryptic `ERR_INVALID_ARG_VALUE`. Check first:
 
 ```bash
 node -v
 ```
-If it prints below **v20.19.4**, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the `package:*` commands on older Node.
+If it prints below **v20.19.4**, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the native packaging commands on older Node.
 
 The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript.
 
-**Script preflight (required).** `package:android` / `package:ios` were added to the template after the initial release, so apps scaffolded earlier will not have them and `npm run package:android` fails with a bare `Missing script: "package:android"`. Check before invoking:
+**Script preflight (required).** Both script names invoke the same `build-codegen-package` binary, but templates differ on naming: the current template ships `bundle:android` / `bundle:ios`, while some app folders carry `package:android` / `package:ios`. Detect whichever exists rather than assuming, or `npm run` fails with a bare `Missing script`:
 
 ```bash
 node -e '
 const s = require("./package.json").scripts || {};
-const missing = ["package:android","package:ios"].filter(k => !s[k]);
-if (missing.length) { console.log("MISSING:" + missing.join(",")); process.exit(1); }
-console.log("OK");
+const prefix = ["bundle", "package"].find(p => s[p + ":android"] && s[p + ":ios"]);
+if (!prefix) { console.log("MISSING"); process.exit(1); }
+console.log(prefix);
 '
 ```
 
-If it prints `MISSING:…`, STOP and tell the user exactly what to add — do not silently skip native packaging, and do not guess at the command:
+Capture the printed value as the script prefix (`bundle` or `package`) and use it for both commands below.
 
-> "⚠️ This app was scaffolded before native packaging was added to the template, so `package:android` / `package:ios` are missing from `package.json`. Add both scripts (copy them from the current plugin template at `plugins/mobile-apps/template/package.json`) and re-run. Without them the deploy produces a web-only build, and the wrapped native app will have no Hermes bundle to load."
+If it prints `MISSING`, STOP and tell the user exactly what to add — do not silently skip native packaging, and do not guess at the command:
 
-Once the preflight passes, produce both platforms:
+> "⚠️ This app has no native packaging scripts in `package.json`, so it predates CodeGen wrap support. Add `bundle:android` / `bundle:ios` (both `build-codegen-package <platform>`), copying them from the current plugin template at `plugins/mobile-apps/template/package.json`, and re-run. Without them the deploy produces a web-only build, and the wrapped native app will have no Hermes bundle to load."
+
+Once the preflight passes, produce both platforms using the detected prefix:
 
 ```bash
-npm run package:android
-npm run package:ios
+npm run "${PKG_PREFIX}:android"
+npm run "${PKG_PREFIX}:ios"
 ```
 
 Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
@@ -169,7 +171,7 @@ test -f dist/powerapps-customer-assets-ios/manifest.json     || { echo "MISSING 
 echo "✓ native package + asset manifests present"
 ```
 
-If a `package:*` step fails, surface the error and STOP. If the app renders bundled images/fonts, also confirm each `manifest.json` `assets` array is non-empty (an empty array means the app doesn't `require()` any static asset yet).
+If a native packaging step fails, surface the error and STOP. If the app renders bundled images/fonts, also confirm each `manifest.json` `assets` array is non-empty (an empty array means the app doesn't `require()` any static asset yet).
 
 ### Step 2.5 — Offline profile coverage gate
 
