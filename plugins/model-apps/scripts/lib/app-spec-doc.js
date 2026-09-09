@@ -121,7 +121,10 @@ function dataModel(spec) {
     for (const c of objs(e.columns)) {
       const notes = [];
       if (c.required) notes.push('required');
-      if (c.options) notes.push(`choices: ${arr(c.options).map((o) => cell(o && typeof o === 'object' ? o.label : o)).join(', ')}`);
+      // `o.label` is the legacy object-option shape. A LOCALIZED option is also an object but has no
+      // `label` key, so the legacy branch rendered every one as an empty cell — resolve through
+      // labelText first and only then fall back.
+      if (c.options) notes.push(`choices: ${arr(c.options).map((o) => cell(labelText(o, spec && spec.languageCode) || (o && typeof o === 'object' ? o.label : o))).join(', ')}`);
       if (c.globalChoice) notes.push(`global choice \`${cell(c.globalChoice)}\``);
       out.push(`| ${cell(labelText(c.displayName, spec && spec.languageCode) || c.schemaName)} | ${cell(c.type, 'Text')} | ${notes.join('; ') || '—'} |`);
     }

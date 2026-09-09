@@ -139,10 +139,20 @@ function choiceValueMap(entity, spec) {
   // per-language string when localized (AB#6686428). A localized option has ONE value and N labels,
   // so `sampleData` written in either language must resolve to the same value; keying on
   // `String(label)` alone would turn a label map into the literal key "[object Object]".
+  //
+  // FIRST alias wins on collision, and `invalidChoiceSampleTokens` rejects an ambiguous alias
+  // outright. Last-wins was the original and is silently wrong: given
+  //   [ { "1033": "Open",    "3082": "Abierto" },
+  //     { "1033": "Abierto", "3082": "Cerrado" } ]
+  // the alias "Abierto" belongs to BOTH options, and last-wins resolved a sample record's "Abierto"
+  // to the SECOND option — the English label of a different choice quietly beating the Spanish label
+  // of the one the author meant.
   const indexOptions = (options) => {
     const byLabel = {};
     (options || []).forEach((label, i) => {
-      for (const alias of labelAliases(label)) byLabel[alias] = 100000000 + i;
+      for (const alias of labelAliases(label)) {
+        if (!Object.prototype.hasOwnProperty.call(byLabel, alias)) byLabel[alias] = 100000000 + i;
+      }
     });
     return byLabel;
   };
@@ -576,8 +586,9 @@ function isLocalizedLabelMap(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-// The LCIDs a localized label declares, in the order written. Returns [] for a string or a
-// non-canonical key, so callers never have to re-derive the rule.
+// The LCIDs a localized label declares, in ASCENDING numeric order. That is not a choice: V8
+// enumerates integer-like object keys ascending regardless of how they were written, so this can
+// never reflect the author's write order. Returns [] for a string or a non-canonical key.
 function localizedLabelLcids(value) {
   if (!isLocalizedLabelMap(value)) return [];
   return Object.keys(value).filter((k) => /^[1-9]\d*$/.test(k)).map(Number);
@@ -611,6 +622,34 @@ function labelAliases(value) {
   if (typeof value === 'string') return value.trim() ? [value] : [];
   if (!isLocalizedLabelMap(value)) return [];
   return Object.values(value).filter((v) => typeof v === 'string' && v.trim());
+}
+
+// Reject a Choice option list in which one LABEL STRING names more than one option. AB#6686428.
+//
+// Only reachable once options may be localized: with plain string labels a duplicate is already
+// obviously wrong, but across languages it hides. Given
+//   [ { "1033": "Open", "3082": "Abierto" }, { "1033": "Abierto", "3082": "Cerrado" } ]
+// the string "Abierto" names option 0 in Spanish and option 1 in English. Any resolution rule is
+// then a coin flip that silently picks one — so the SPEC is what must be fixed, not the tie-break.
+// Returns the offending aliases so the error can name them.
+function ambiguousChoiceAliases(options) {
+  const seen = new Map(); // alias -> first option index
+  const clashes = [];
+  (options || []).forEach((label, i) => {
+    for (const alias of labelAliases(label)) {
+      if (seen.has(alias) && seen.get(alias) !== i) clashes.push({ alias, first: seen.get(alias), second: i });
+      else if (!seen.has(alias)) seen.set(alias, i);
+    }
+  });
+  return clashes;
+}
+
+function validateChoiceOptionLabels(options, label, errors, opts = {}) {
+  if (!Array.isArray(options)) return;
+  options.forEach((o, i) => validateLabel(o, `${label}: options[${i}]`, errors, opts));
+  for (const c of ambiguousChoiceAliases(options)) {
+    errors.push(`${label}: the label '${c.alias}' names BOTH options[${c.first}] and options[${c.second}] — one string cannot select two values, so a sample record or view filter using it would silently resolve to whichever the engine picked. Rename one.`);
+  }
 }
 
 // Validate a label that may be localized. `errors` gets a message per problem; `warnings` (optional)
@@ -1020,9 +1059,7 @@ function validateAppSpec(spec, opts = {}) {
     // LocalizedLabels array on BOTH the option-set display name and each option's label.
     const gcLabel = `globalChoice '${(gc && gc.name) || '(unnamed)'}'`;
     validateLabel(gc && gc.displayName, `${gcLabel}: displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
-    if (gc && Array.isArray(gc.options)) {
-      gc.options.forEach((o, i) => validateLabel(o, `${gcLabel}: options[${i}]`, errors, { warnings, baseLanguageCode: spec.languageCode }));
-    }
+    validateChoiceOptionLabels(gc && gc.options, gcLabel, errors, { warnings, baseLanguageCode: spec.languageCode });
   }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
@@ -1088,9 +1125,7 @@ function validateAppSpec(spec, opts = {}) {
       validateDescription(c.description, `entity ${e.schemaName}: column ${c.schemaName}`, errors);
       validateLabel(c.displayName, `entity ${e.schemaName}: column ${c.schemaName} displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
       // Local (per-column) Choice options carry labels too, and take the same localized shape.
-      if (Array.isArray(c.options)) {
-        c.options.forEach((o, i) => validateLabel(o, `entity ${e.schemaName}: column ${c.schemaName} options[${i}]`, errors, { warnings, baseLanguageCode: spec.languageCode }));
-      }
+      validateChoiceOptionLabels(c.options, `entity ${e.schemaName}: column ${c.schemaName}`, errors, { warnings, baseLanguageCode: spec.languageCode });
       // A Customer column is created through `createCustomerColumn`, whose payload is only
       // { Lookup, OneToManyRelationships } — the SDK has nowhere to put a description, so one
       // authored here is silently discarded. Warn rather than error: the spec is still valid and
@@ -2340,13 +2375,14 @@ function validateRoleGrants(spec, errors) {
     return;
   }
   const describeValue = (v) => { try { return JSON.stringify(v); } catch { return Object.prototype.toString.call(v); } };
-  // Persona names are compared TRIMMED + lowercased, the same identity the SDK keys a role by, so
-  // " Project Manager " and "project manager" are caught as the same role.
+  // A role's identity is (trimmed+folded NAME, business unit) — the same key the SDK uses. Two roles
+  // may legitimately share a name in different business units, so the BU must be part of the key or
+  // that valid pair is rejected; an absent BU means "the org root", which is one specific BU.
+  const personaKey = (name, businessUnitId) => `${String(name || '').trim().toLowerCase()}@${String(businessUnitId || 'root').trim().toLowerCase()}`;
   const personaNames = new Set(
     (Array.isArray(spec.personas) ? spec.personas : [])
-      .map((p) => canonicalPersonaName(p))
-      .filter((n) => typeof n === 'string' && n.trim())
-      .map((n) => n.trim().toLowerCase()),
+      .filter((p) => p && typeof canonicalPersonaName(p) === 'string' && canonicalPersonaName(p).trim())
+      .map((p) => personaKey(canonicalPersonaName(p), p.businessUnitId)),
   );
   const seenTargets = new Set();
   grants.forEach((g, i) => {
@@ -2384,7 +2420,11 @@ function validateRoleGrants(spec, errors) {
     // and `ReplacePrivilegesRole` converges that role onto the persona's declared set, so the grant would
     // be added, then removed on the next build's persona pass, then re-added — churn that reads as an
     // intermittent access bug. Declare the privileges on the persona's job instead, where they converge.
-    if (roleName && personaNames.has(String(roleName).toLowerCase())) {
+    //
+    // This is a NAME check only, and cannot be otherwise: a persona role is identified by (name, BU) and
+    // does not exist yet at lint time, so a `roleId` pinned at the same role is invisible here. The apply
+    // path therefore re-checks on the RESOLVED role id, which is the identity that actually matters.
+    if (roleName && personaNames.has(personaKey(roleName, g.businessUnitId))) {
       errors.push(`${label}: '${roleName}' is a persona in this spec, whose role the build CONVERGES (privileges not declared on the persona are removed) — declare these privileges on that persona's job instead of as a roleGrant`);
     }
     if (roleName || g.roleId) {
@@ -2392,7 +2432,12 @@ function validateRoleGrants(spec, errors) {
       // detects the "entities sharing one Dataverse privilege must request one depth" conflict only
       // WITHIN a single call, so splitting a role's privileges across entries would let a conflicting
       // pair through to two separate writes, where the second silently wins.
-      const key = String(g.roleId || roleName).trim().toLowerCase();
+      //
+      // Keyed on (name, BU) rather than name alone, because a role is identified by BOTH: two roles
+      // legitimately share a name in different business units, and rejecting that pair was wrong.
+      // A `roleId` keys on itself. A name and an id can still ALIAS the same role, which no static
+      // check can see — the apply path catches that on the resolved id.
+      const key = g.roleId ? `id:${String(g.roleId).trim().toLowerCase()}` : `name:${personaKey(roleName, g.businessUnitId)}`;
       if (seenTargets.has(key)) errors.push(`${label}: duplicate roleGrant for the same role — merge the privileges into one entry (two entries can request conflicting depths for one shared Dataverse privilege, and the later write would silently win)`);
       seenTargets.add(key);
     }
@@ -2474,6 +2519,7 @@ module.exports = {
   validateAppSpec,
   normalizePageSource,
   normalizeLanguageCode,
+  validateChoiceOptionLabels,
   labelText,
   labelAliases,
   isLocalizedLabelMap,

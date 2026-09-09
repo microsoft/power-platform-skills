@@ -38,10 +38,13 @@ const PHASE_SLICES = {
   'app-shell': (s) => ({ app: s.app, appShell: s.appShell }),
   pages: (s) => s.pages,
   'ai-features': (s) => s.ai,
-  // security consumes personas[]. It has no safe partial-apply path yet (a persona change must
-  // re-author roles + reconcile app associations), so a change here forces a FULL build via
+  // security consumes personas[] AND roleGrants[]. Both must be here: with only `personas`, a spec
+  // whose ONLY change was adding a roleGrant diffed as "nothing changed", so `--changed-only`
+  // reported "deployed app already matches the spec" and never called AddPrivilegesRole — the table
+  // deployed and the role still had no access to it, which is the exact bug roleGrants[] fixes.
+  // Neither has a safe partial-apply path yet, so a change here forces a FULL build via
   // FULL_BUILD_PHASES in classify-changes.js — never a silent changed-only no-op.
-  security: (s) => s.personas,
+  security: (s) => ({ personas: s.personas, roleGrants: s.roleGrants }),
 };
 
 // Deterministic, key-order-independent JSON so a reordered-but-equal slice compares equal. Arrays keep

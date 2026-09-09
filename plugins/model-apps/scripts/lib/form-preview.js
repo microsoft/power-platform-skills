@@ -64,19 +64,19 @@ const BOTTOM = `└${'─'.repeat(INNER + 2)}┘`;
 // Display label for a field logical name. compileFormIntent emits push-ready cells that OMIT the
 // label (the SDK adapter derives it from attribute metadata at push, per T4), so the preview
 // resolves the display name itself from the spec entity (falling back to the logical name).
-function labelFor(entity, fn) {
+function labelFor(entity, fn, lang) {
   if (!entity) return fn;
-  if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return labelText(entity.primaryAttribute.displayName) || 'Name';
+  if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return labelText(entity.primaryAttribute.displayName, lang) || 'Name';
   const c = (entity.columns || []).find((x) => x.schemaName.toLowerCase() === fn);
-  return (c && (labelText(c.displayName) || c.schemaName)) || fn;
+  return (c && (labelText(c.displayName, lang) || c.schemaName)) || fn;
 }
 
 // "Label * [widget]" for one field cell.
-function fieldLabel(entity, cell) {
+function fieldLabel(entity, cell, lang) {
   const fn = cell.control.fieldName;
   const req = cell.control.isRequired ? ' *' : '';
   const widget = WIDGET[fieldType(entity, fn)] || WIDGET.Text;
-  return `${cell.control.label || labelFor(entity, fn)}${req}  ${widget}`;
+  return `${cell.control.label || labelFor(entity, fn, lang)}${req}  ${widget}`;
 }
 
 // Render one form to an ASCII wireframe string.
@@ -112,7 +112,7 @@ function renderFormWireframe(spec, f) {
           const cells = (r.cells || []).filter((c) => c.control && c.control.fieldName);
           if (!cells.length) continue;
           const colW = Math.floor((INNER - 3) / Math.max(1, cells.length));
-          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c)}`, colW), colW));
+          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode)}`, colW), colW));
           lines.push(row(parts.join('')));
         }
       }

@@ -189,6 +189,9 @@ const APP_COMPONENT_ENTITY_SOURCES = [
   { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
   { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
 ];
+// Dataverse entity set -> the App Spec artifact class it inventories, so a failed read is reported
+// in the author's vocabulary ("forms could not be inventoried") rather than Dataverse's.
+const INVENTORY_KIND_BY_SET = { savedquery: 'views', savedqueryvisualization: 'charts', systemform: 'forms' };
 // Dataverse honors `$top` as a HARD cap and omits `@odata.nextLink`, so this is the point past which
 // components of one type stop being inspected. Generous for a real app (a 70-table app has ~1000
 // views), and exceeded only with a warning.
@@ -309,48 +312,65 @@ async function readAppShellSettings(sdk, appId) {
 }
 
 async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
-  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [] };
+  // `incomplete[]` records an artifact class whose read FAILED. Without it the whole app-component
+  // block shared one broad catch, so a 403 on `systemform` left `forms: []` — indistinguishable from
+  // an app with no forms, which is EXACTLY the reported bug (AB#6686423) reappearing inside the fix
+  // for it. It is a sibling key for the same reason `roleRestrictedForms` is: only the five
+  // whitelisted keys reach `app-spec.json`, so this informs the CLI without changing the spec shape.
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [], incomplete: [] };
+  const fail = (kind, err) => inventory.incomplete.push({ kind, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' });
   try {
     const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
     const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
     const parent = appUniqueId ? String(appUniqueId).replace(/[{}]/g, '') : null;
     if (parent) {
+      // Caught PER ARTIFACT CLASS, not once around the loop: one failed query must not hide the
+      // other two, and the caller has to be told WHICH class it cannot vouch for.
       for (const src of APP_COMPONENT_ENTITY_SOURCES) {
-        const rows = await sdk.queryRecords('appmodulecomponent', {
-          select: ['objectid', 'componenttype'],
-          filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-          top: COMPONENT_PAGE_CAP,
-        });
-        const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
-        if (src.set === 'savedquery') {
-          inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
-            withDescription({ id: r.savedqueryid, name: r.name, entity: r.returnedtypecode }, r.description)));
-        } else if (src.set === 'savedqueryvisualization') {
-          inventory.charts.push(...await rowsByIds(sdk, 'savedqueryvisualization', 'savedqueryvisualizationid', ids, ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'description'], (r) =>
-            withDescription({ id: r.savedqueryvisualizationid, name: r.name, entity: r.primaryentitytypecode }, r.description)));
-        } else if (src.set === 'systemform') {
-          // `formxml` is pulled ONLY to detect a role restriction — it is never stored. A form's
-          // security roles live inside formxml as `<DisplayConditions>` (there is no
-          // systemform↔role relationship), and `forms[]` is not reconstructed by this download at
-          // all, so a restricted form would come back as one every role can see. That is a silent
-          // WIDENING of access on a cross-environment rebuild, which is why it is worth one extra
-          // column on a query this download already makes.
-          //
-          // The flag is kept OFF the form entries and on a sibling key, because
-          // `sanitizeDescriptionInventory` whitelists exactly five keys — so this reaches the
-          // download CLI for its warning without leaking a new field into `app-spec.json`.
-          const rawForms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description', 'formxml'], (r) => r);
-          for (const r of rawForms) {
-            if (!r || !r.objecttypecode || r.objecttypecode === 'none') continue;
-            inventory.forms.push(withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
-            if (isRoleRestrictedFormXml(r.formxml)) {
-              inventory.roleRestrictedForms.push({ name: r.name, entity: r.objecttypecode });
+        try {
+          const rows = await sdk.queryRecords('appmodulecomponent', {
+            select: ['objectid', 'componenttype'],
+            filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
+            top: COMPONENT_PAGE_CAP,
+          });
+          const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
+          if (src.set === 'savedquery') {
+            inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
+              withDescription({ id: r.savedqueryid, name: r.name, entity: r.returnedtypecode }, r.description)));
+          } else if (src.set === 'savedqueryvisualization') {
+            inventory.charts.push(...await rowsByIds(sdk, 'savedqueryvisualization', 'savedqueryvisualizationid', ids, ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'description'], (r) =>
+              withDescription({ id: r.savedqueryvisualizationid, name: r.name, entity: r.primaryentitytypecode }, r.description)));
+          } else if (src.set === 'systemform') {
+            // `formxml` is pulled ONLY to detect a role restriction — it is never stored. A form's
+            // security roles live inside formxml as `<DisplayConditions>` (there is no
+            // systemform↔role relationship), and `forms[]` is not reconstructed by this download at
+            // all, so a restricted form would come back as one every role can see. That is a silent
+            // WIDENING of access on a cross-environment rebuild, which is why it is worth one extra
+            // column on a query this download already makes.
+            //
+            // The flag is kept OFF the form entries and on a sibling key, because
+            // `sanitizeDescriptionInventory` whitelists exactly five keys — so this reaches the
+            // download CLI for its warning without leaking a new field into `app-spec.json`.
+            const rawForms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description', 'formxml'], (r) => r);
+            for (const r of rawForms) {
+              if (!r || !r.objecttypecode || r.objecttypecode === 'none') continue;
+              inventory.forms.push(withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
+              if (isRoleRestrictedFormXml(r.formxml)) {
+                inventory.roleRestrictedForms.push({ name: r.name, entity: r.objecttypecode });
+              }
             }
           }
+        } catch (err) {
+          fail(INVENTORY_KIND_BY_SET[src.set] || src.set, err);
         }
       }
+    } else {
+      // No app-component parent means NONE of the three classes could be enumerated.
+      for (const src of APP_COMPONENT_ENTITY_SOURCES) fail(INVENTORY_KIND_BY_SET[src.set] || src.set, new Error('the app\'s component list could not be read'));
     }
-  } catch { /* inventory is best-effort; structural download still carries the rebuildable app spec */ }
+  } catch (err) {
+    for (const src of APP_COMPONENT_ENTITY_SOURCES) fail(INVENTORY_KIND_BY_SET[src.set] || src.set, err);
+  }
 
   try {
     if (solutionUniqueName && !isRestrictedSolution(solutionUniqueName)) {
@@ -578,11 +598,19 @@ function notRoundTrippedSummary(inventory) {
       byEntity.get(entity)[key].push(r.name);
     }
   }
-  if (!classes.length) return null;
+  // A class whose read FAILED is reported too, and is the reason this cannot simply return null on an
+  // empty inventory: "no forms were found" and "the forms query returned 403" look identical from
+  // here, and treating the second as the first is precisely the silent-loss bug being fixed. An
+  // UNKNOWN class is worse than a known-omitted one, so it is surfaced even when nothing was read.
+  const incomplete = (inventory && Array.isArray(inventory.incomplete) ? inventory.incomplete : [])
+    .filter((i) => i && i.kind)
+    .map((i) => ({ kind: i.kind, reason: i.reason || 'read failed' }));
+  if (!classes.length && !incomplete.length) return null;
   return {
     classes,
     total: classes.reduce((n, c) => n + c.count, 0),
     entities: [...byEntity.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([entity, v]) => ({ entity, ...v })),
+    ...(incomplete.length ? { incomplete } : {}),
   };
 }
 
@@ -590,19 +618,29 @@ function notRoundTrippedSummary(inventory) {
 // so the wording is testable without a download, and so the same summary can be emitted as JSON.
 function notRoundTrippedWarning(summary) {
   if (!summary) return '';
-  const counts = summary.classes.map((c) => `${c.count} ${c.label}${c.count === 1 ? '' : 's'}`).join(', ');
-  const lines = [
-    `NOTE: this download does not reconstruct forms[], views[] or charts[] — ${counts} on ${summary.entities.length} table(s) are absent from the rebuildable spec.`,
-    '  They are NOT lost: every one is listed under `descriptionInventory` in app-spec.json, and they remain on the deployed app.',
-    '  Rebuilding into THIS environment leaves them untouched. Rebuilding into a DIFFERENT environment will NOT recreate them —',
-    '  re-declare the ones you need in forms[] / views[] / charts[], or copy them with a solution export.',
-  ];
-  for (const e of summary.entities) {
-    const parts = [];
-    if (e.forms.length) parts.push(`forms: ${e.forms.join(', ')}`);
-    if (e.views.length) parts.push(`views: ${e.views.join(', ')}`);
-    if (e.charts.length) parts.push(`charts: ${e.charts.join(', ')}`);
-    lines.push(`    ${e.entity} — ${parts.join('; ')}`);
+  const lines = [];
+  if (summary.classes.length) {
+    const counts = summary.classes.map((c) => `${c.count} ${c.label}${c.count === 1 ? '' : 's'}`).join(', ');
+    lines.push(
+      `NOTE: this download does not reconstruct forms[], views[] or charts[] — ${counts} on ${summary.entities.length} table(s) are absent from the rebuildable spec.`,
+      '  They are NOT lost: every one is listed under `descriptionInventory` in app-spec.json, and they remain on the deployed app.',
+      '  Rebuilding into THIS environment leaves them untouched. Rebuilding into a DIFFERENT environment will NOT recreate them —',
+      '  re-declare the ones you need in forms[] / views[] / charts[], or copy them with a solution export.',
+    );
+    for (const e of summary.entities) {
+      const parts = [];
+      if (e.forms.length) parts.push(`forms: ${e.forms.join(', ')}`);
+      if (e.views.length) parts.push(`views: ${e.views.join(', ')}`);
+      if (e.charts.length) parts.push(`charts: ${e.charts.join(', ')}`);
+      lines.push(`    ${e.entity} — ${parts.join('; ')}`);
+    }
+  }
+  if (summary.incomplete && summary.incomplete.length) {
+    lines.push(
+      `WARNING: ${summary.incomplete.length} artifact class(es) could NOT be inventoried, so this download cannot say what it left behind:`,
+    );
+    for (const i of summary.incomplete) lines.push(`    ${i.kind} — ${i.reason}`);
+    lines.push('  Treat an empty list for those classes as UNKNOWN, not as "the app has none".');
   }
   return `${lines.join('\n')}\n`;
 }
@@ -677,6 +715,13 @@ function entityFromMetadata(meta, logical) {
   // the plural is emitted whenever the display name is localized.
   const displayName = labelFromDataverse(meta && meta.DisplayName);
   const pluralName = labelFromDataverse(meta && meta.DisplayCollectionName);
+  // The primary column's own label. It is EXCLUDED from `columns[]` (it is declared separately as
+  // `primaryAttribute`), so its label has to be read from the un-filtered attribute list here —
+  // otherwise a table whose primary column is called "Order Title" / "Título del pedido" downloads
+  // as the hardcoded "Name", and a fresh-environment rebuild loses both the real label and its
+  // translations. `'Name'` remains the fallback for a metadata read that carried no label at all.
+  const primaryAttr = primaryLower ? attrs.find((a) => String((a && (a.logicalName || a.LogicalName || a.schemaName || a.SchemaName)) || '').toLowerCase() === primaryLower) : null;
+  const primaryLabel = columnDisplayName(primaryAttr);
   return {
     schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
     displayName: displayName !== undefined ? displayName : ((meta && meta.displayName) || logical),
@@ -684,7 +729,7 @@ function entityFromMetadata(meta, logical) {
     ...(descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) ? { description: descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) } : {}),
     // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
     // does not have, which is exactly the bug this fixes.
-    primaryAttribute: primary ? { schemaName: primary, displayName: 'Name' } : null,
+    primaryAttribute: primary ? { schemaName: primary, displayName: primaryLabel !== undefined ? primaryLabel : 'Name' } : null,
     columns,
     // Flag every recovered table as pre-existing so a teardown of THIS downloaded spec never deletes the
     // table (+ its data). Download cannot prove which tables the app CREATED vs merely REFERENCED, and

@@ -20,6 +20,9 @@ const EXCLUDED_TYPES = new Set(['File', 'Image', 'Lookup', 'AutoNumber']);
  */
 function buildPromptSpec(entity, opts) {
   const override = (opts && opts.override) || null;
+  // Resolve localized labels in the SPEC's authoring language. Without it a Spanish-authoring spec
+  // generated an English prompt, because labelText falls back to 1033 when given no language.
+  const lang = opts && opts.spec && opts.spec.languageCode;
 
   const entityLogicalName = entity.schemaName.toLowerCase();
   // The record's primary KEY attribute (its id) — e.g. new_ohproject -> new_ohprojectid. The
@@ -36,7 +39,7 @@ function buildPromptSpec(entity, opts) {
     columns = override.columns
       .map((s) => colMap.get(s.toLowerCase()))
       .filter(Boolean)
-      .map((c) => ({ logical: c.schemaName.toLowerCase(), display: labelText(c.displayName) || c.schemaName }));
+      .map((c) => ({ logical: c.schemaName.toLowerCase(), display: labelText(c.displayName, lang) || c.schemaName }));
   } else {
     // Auto-select: exclude PK, AutoNumber, File, Image, Lookup.
     const eligible = (entity.columns || []).filter((c) => {
@@ -54,7 +57,7 @@ function buildPromptSpec(entity, opts) {
     const selected = [...preferred, ...memos.slice(0, 1)].slice(0, 6);
     columns = selected.map((c) => ({
       logical: c.schemaName.toLowerCase(),
-      display: labelText(c.displayName) || c.schemaName,
+      display: labelText(c.displayName, lang) || c.schemaName,
     }));
   }
 
@@ -63,7 +66,7 @@ function buildPromptSpec(entity, opts) {
   if (override && override.instruction && override.instruction.trim().length > 0) {
     instruction = override.instruction;
   } else {
-    const recordType = labelText(entity.displayName) || entity.schemaName;
+    const recordType = labelText(entity.displayName, lang) || entity.schemaName;
     instruction = `Summarize this ${recordType} as a short paragraph highlighting the most important details and any recent activity.`;
   }
 

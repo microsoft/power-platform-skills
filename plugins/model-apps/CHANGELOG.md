@@ -54,6 +54,36 @@ rebuilding a real app into a second environment.
 
 ### Fixed
 
+- **Ten defects an adversarial peer review found in the three changes above.** Recorded because most
+  of them were in code that already had tests, mutation tests and (for `roleGrants[]`) a passing live
+  run — the class of bug that survives its own author's verification:
+  - **`roleGrants[]` were invisible to `--changed-only`.** The security slice was `personas` alone, so
+    a spec whose only change was adding a grant reported "already matches the spec" and never called
+    `AddPrivilegesRole` — the bug `roleGrants[]` fixes, reintroduced through the fast path.
+  - **The role-identity guard could be bypassed.** It compared names only, so a `roleId` pinned at a
+    role a persona also authors, or a name-and-id pair aliasing one role, both slipped past. The
+    apply path now re-checks on the **resolved** Dataverse role id. The same key was also *too*
+    strict: two same-named roles in different business units are different roles and are now allowed.
+  - **`provision-entities` bypassed localized-label validation.** It is a separate entry point and
+    provisions the solution *before* the data model, so a bad label failed after a write.
+  - **A localized Choice label did not resolve in a view filter**, sending the label string as the
+    value of a numeric picklist condition. Filters now resolve through the shared `choiceValueMap`,
+    which also fixes a column bound to a `globalChoice` never resolving at all.
+  - **An ambiguous cross-language option label is now rejected.** If one string names two options
+    (Spanish for one, English for another) any resolution rule is a coin flip, so the spec is what
+    must change.
+  - **A failed inventory read no longer reads as "the app has none".** One broad catch meant a 403 on
+    `systemform` produced an empty list and no note — AB#6686423 reappearing inside its own fix. Reads
+    are now caught per artifact class and reported as **unknown**.
+  - **The download kept hardcoding the primary column's label to `"Name"`**, losing the real label and
+    its translations on a fresh-environment rebuild.
+  - Plus a localized sub-grid title reaching form change detection as `[object Object]` (making two
+    different labels hash the same), and four derive sites resolving labels without the spec's
+    authoring language.
+- **A download could emit a raw Dataverse Label object as a column name.** Found by running a real
+  download: a synthetic lookup `*name` column carries `{"LocalizedLabels":[],"UserLocalizedLabel":null}`,
+  and the raw object reached the spec, which then failed its own validation. An unlabelled column is
+  now omitted, which is what Dataverse says about it.
 - **A download says what it did not bring back.** `download-model-app` does not reconstruct `forms[]`,
   `views[]` or `charts[]` — a documented limitation — but nothing said so, so a spec with
   `"forms": []` was indistinguishable from an app that genuinely has no forms ([AB#6686423]). Every

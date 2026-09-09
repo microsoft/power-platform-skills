@@ -36,6 +36,7 @@ const {
   BUSINESS_RULE_VALUELESS_OPERATORS,
   bpfUniqueName,
   labelText,
+  choiceValueMap,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -295,15 +296,21 @@ function resolvePhases({ only, skip, from, to } = {}) {
 
 // Resolve a view-filter value: a Choice/MultiChoice label becomes its option int; everything
 // else (raw ints, strings, ISO dates) passes through. No-value operators omit the value entirely.
+//
+// Resolution goes through `choiceValueMap`, the SHARED rule, rather than `options.indexOf(val)`.
+// Two reasons, and the first is a real defect the naive version had: a LOCALIZED option is an
+// object (`{ "1033": "Open", "3082": "Abierto" }`), so `indexOf("Abierto")` returns -1 and the
+// LABEL was sent as the value of a numeric picklist condition — an invalid or silently ineffective
+// view filter. The second is that `choiceValueMap` also resolves a column bound to a `globalChoice`,
+// which the inline-only lookup never did.
 function resolveFilterValue(spec, entityLogical, attr, val) {
   if (typeof val !== 'string') return val;
   const e = entityByLogical(spec, entityLogical);
   const c = e && (e.columns || []).find((x) => x.schemaName.toLowerCase() === String(attr).toLowerCase());
-  if (c && (c.type === 'Choice' || c.type === 'MultiChoice') && Array.isArray(c.options)) {
-    const i = c.options.indexOf(val);
-    if (i >= 0) return 100000000 + i;
-  }
-  return val;
+  if (!c || (c.type !== 'Choice' && c.type !== 'MultiChoice')) return val;
+  const byLabel = choiceValueMap(e, spec)[String(c.schemaName).toLowerCase()];
+  const hit = byLabel && byLabel[val];
+  return typeof hit === 'number' ? hit : val;
 }
 
 function primaryNameOf(spec, logical) {
@@ -498,7 +505,11 @@ function defaultViewColumns(spec, entity, opts = {}) {
 function subgridLabel(spec, sg) {
   if (sg.label) return sg.label;
   const child = entityByLogical(spec, String(sg.childEntity || '').toLowerCase());
-  return (child && (child.pluralName || child.displayName)) || sg.childEntity;
+  // Resolved through labelText: a LOCALIZED plural/display name is an object, and returning it here
+  // put "[object Object]" into the form's section and control labels — and, because the form
+  // projection stringifies for change detection, made two DIFFERENT localized labels hash the same.
+  const lang = spec && spec.languageCode;
+  return labelText(child && child.pluralName, lang) || labelText(child && child.displayName, lang) || sg.childEntity;
 }
 // True when a table has enough declared columns to make enriching its default views worthwhile
 // (opt out per-entity with enrichDefaultViews:false).
@@ -1086,9 +1097,12 @@ async function ensureAppNotAvailableToRole(sdk, appId, roleId) {
 // Resolve the business unit a persona's role lives in, so role QUERIES (teardown, verify) scope to the
 // SAME (name, BU) identity the SDK uses on create (createPersonaRole keys a role by name WITHIN a BU).
 // Returns the explicit `businessUnitId`, else the org ROOT business unit (the SDK's own default — a BU
-// with no parent), else null when it can't be resolved (caller then falls back to a name-only match:
-// best-effort, so a transient BU-lookup failure never blocks teardown/verify). `q` is a queryRecords fn
-// (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU lookup for the run.
+// with no parent), else NULL when it cannot be resolved. Every current caller treats null as FAIL
+// CLOSED and reports the role as missing rather than matching on name alone (teardown
+// sdk-teardown.js, verify verify-spec.js, and the roleGrant apply path) — a name-only match could
+// touch a same-named role in a DIFFERENT business unit, which for a grant is privilege escalation.
+// `q` is a queryRecords fn (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU
+// lookup for the run.
 async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
   if (businessUnitId && FORM_GUID_RE.test(businessUnitId)) return businessUnitId;
   if (Object.prototype.hasOwnProperty.call(cache, 'rootBu')) return cache.rootBu;
@@ -1105,7 +1119,8 @@ async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
 }
 
 // The `_businessunitid_value eq <guid>` OData clause (Edm.Guid is UNQUOTED) that scopes a role query to a
-// business unit. Empty string when the BU is unknown (name-only fallback). `bu` is GUID-validated by
+// business unit. Empty string when the BU is unknown — but no caller reaches that today: every one
+// treats an unresolved BU as fail-closed before calling this. `bu` is GUID-validated by
 // resolveRoleBusinessUnit, so interpolation is injection-safe.
 function roleBuClause(bu) {
   return bu && FORM_GUID_RE.test(String(bu)) ? ` and _businessunitid_value eq ${bu}` : '';
@@ -3034,6 +3049,19 @@ async function runSdkBuild(spec, opts = {}) {
     // additive grant lands last rather than being converged away. Today validation rejects that overlap
     // outright (see validateRoleGrants).
     const roleGrantBuCache = {}; // memoize the root-BU lookup across grants in this build
+    // Resolved-id guards. The static validator can only compare NAMES, so a `roleId` pinned at a role
+    // a persona also authors, or a name-and-id pair aliasing one role, both slip past it. Both are
+    // caught here on the identity that actually matters — the resolved Dataverse role id:
+    //   * persona overlap would let ReplacePrivilegesRole converge the grant away on the next build,
+    //     and a failure BETWEEN the two passes leaves the access removed;
+    //   * two grants on one role split a depth conflict across two SDK calls, where the SDK's
+    //     "entities sharing one privilege must request one depth" check cannot see it and the later
+    //     write silently wins.
+    const personaRoleIds = new Map(); // lowercased roleId -> persona name, from the loop above
+    for (const [name, rr] of Object.entries(result.created.roles || {})) {
+      if (rr && rr.roleId) personaRoleIds.set(String(rr.roleId).toLowerCase(), name);
+    }
+    const grantedRoleIds = new Map(); // lowercased roleId -> the label of the grant that claimed it
     for (const grant of spec.roleGrants || []) {
       const label = roleGrantLabel(grant);
       await runner.run('security', `grant privileges to existing role ${label}`, async () => {
@@ -3046,6 +3074,24 @@ async function runSdkBuild(spec, opts = {}) {
           // users still cannot open the table — the exact failure this feature was filed for.
           throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false });
         }
+        const idKey = String(target.roleId).toLowerCase();
+        if (personaRoleIds.has(idKey)) {
+          throw new BuildHalt(
+            `roleGrant ${label} resolves to role ${target.roleId}, which is also persona "${personaRoleIds.get(idKey)}" in this spec. `
+            + 'The build CONVERGES a persona\'s role (privileges not declared on the persona are removed), so this grant would be '
+            + 'undone on the next build — declare these privileges on that persona\'s job instead.',
+            { phase: 'security', code: 'role-grant-persona-overlap', recoverable: false },
+          );
+        }
+        if (grantedRoleIds.has(idKey)) {
+          throw new BuildHalt(
+            `roleGrant ${label} resolves to role ${target.roleId}, which roleGrant ${grantedRoleIds.get(idKey)} already targets. `
+            + 'Merge them into one entry: two entries can request conflicting depths for one shared Dataverse privilege, and the '
+            + 'SDK only detects that within a single call, so the later write would silently win.',
+            { phase: 'security', code: 'role-grant-duplicate-target', recoverable: false },
+          );
+        }
+        grantedRoleIds.set(idKey, label);
         let applied;
         try {
           applied = await provision.addEntityPrivilegesToRole(target.roleId, grant.privileges);
