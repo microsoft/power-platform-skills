@@ -545,6 +545,68 @@ function isRoleRestrictedFormXml(formxml) {
   return /<Role\b/i.test(block[0]);
 }
 
+// Which of the app's DEPLOYED artifact classes this download does not reconstruct. AB#6686423.
+//
+// `forms[]`, `views[]` and `charts[]` are emitted EMPTY by hydrateSpec (see the note there for why
+// each is blocked). The artifacts themselves are already captured — `descriptionInventory` in the
+// written app-spec.json lists every one of them by id, name and table — but until this reporter
+// existed nothing SAID they were missing from the rebuildable part of the spec. The reported
+// symptom was exactly that: "it emitted empty forms and views ... with nothing reporting the loss".
+//
+// This is a REPORT, not a gate. Blocking would be wrong: every app has forms and views, so a
+// failure here would break every download, and the omission is not destructive in the environment
+// the app was downloaded from — a rebuild there does not delete artifacts the spec omits. The loss
+// is real only when rebuilding into a DIFFERENT environment, and the message says so rather than
+// stating a blanket "dropped".
+//
+// Returns null when there is nothing to report, so a caller can skip the warning entirely.
+function notRoundTrippedSummary(inventory) {
+  const CLASSES = [
+    { key: 'forms', label: 'form' },
+    { key: 'views', label: 'view' },
+    { key: 'charts', label: 'chart' },
+  ];
+  const classes = [];
+  const byEntity = new Map(); // table logical -> { forms:[], views:[], charts:[] }
+  for (const { key, label } of CLASSES) {
+    const rows = (inventory && Array.isArray(inventory[key]) ? inventory[key] : []).filter((r) => r && r.name);
+    if (!rows.length) continue;
+    classes.push({ kind: key, count: rows.length, label });
+    for (const r of rows) {
+      const entity = String(r.entity || 'unknown').toLowerCase();
+      if (!byEntity.has(entity)) byEntity.set(entity, { forms: [], views: [], charts: [] });
+      byEntity.get(entity)[key].push(r.name);
+    }
+  }
+  if (!classes.length) return null;
+  return {
+    classes,
+    total: classes.reduce((n, c) => n + c.count, 0),
+    entities: [...byEntity.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([entity, v]) => ({ entity, ...v })),
+  };
+}
+
+// Render `notRoundTrippedSummary` as the operator-facing warning. Kept separate from the computation
+// so the wording is testable without a download, and so the same summary can be emitted as JSON.
+function notRoundTrippedWarning(summary) {
+  if (!summary) return '';
+  const counts = summary.classes.map((c) => `${c.count} ${c.label}${c.count === 1 ? '' : 's'}`).join(', ');
+  const lines = [
+    `NOTE: this download does not reconstruct forms[], views[] or charts[] — ${counts} on ${summary.entities.length} table(s) are absent from the rebuildable spec.`,
+    '  They are NOT lost: every one is listed under `descriptionInventory` in app-spec.json, and they remain on the deployed app.',
+    '  Rebuilding into THIS environment leaves them untouched. Rebuilding into a DIFFERENT environment will NOT recreate them —',
+    '  re-declare the ones you need in forms[] / views[] / charts[], or copy them with a solution export.',
+  ];
+  for (const e of summary.entities) {
+    const parts = [];
+    if (e.forms.length) parts.push(`forms: ${e.forms.join(', ')}`);
+    if (e.views.length) parts.push(`views: ${e.views.join(', ')}`);
+    if (e.charts.length) parts.push(`charts: ${e.charts.join(', ')}`);
+    lines.push(`    ${e.entity} — ${parts.join('; ')}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 // Columns whose type could not be substantiated, so a `download -> rebuild into a fresh org` round
 // trip does not silently create them as Text. `type` is absent for a Choice/MultiChoice (above), or
 // for an attribute whose metadata carried no `attributeType` at all — an attribute with a type that
@@ -1121,9 +1183,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   if (restricted.length) {
     process.stderr.write(`WARNING: ${restricted.length} form(s) are restricted to specific security roles (${restricted.map((f) => `${f.entity}.${f.name}`).join(', ')}). This download does not reconstruct forms[], so that restriction is NOT carried into the spec — rebuilding into a fresh environment would recreate them visible to EVERY role. Re-declare it with forms[].securityRoles before a cross-environment rebuild.\n`);
   }
+  // AB#6686423: name the artifact classes this download leaves out of the rebuildable spec. The
+  // reported failure was not that they are omitted — that is a documented limitation — but that
+  // NOTHING said so, so a second session reading the spec could not tell "this app has no views"
+  // from "this download does not carry views".
+  const notRoundTripped = notRoundTrippedSummary(capturedInventory);
+  if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped };
 }
 
 async function main() {
@@ -1171,7 +1239,7 @@ async function main() {
   const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings } = result;
+  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped } = result;
   if (droppedSubareas > 0 || dashboardReconstructionError) {
     const droppedList = (droppedSubareaDetails || [])
       .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -1213,7 +1281,7 @@ async function main() {
   const specPath = path.join(outDir, 'app-spec.json');
   preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
+  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
 }
 
 // Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.
@@ -1254,4 +1322,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

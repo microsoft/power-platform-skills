@@ -28,6 +28,14 @@ rebuilding a real app into a second environment.
 
 ### Fixed
 
+- **A download says what it did not bring back.** `download-model-app` does not reconstruct `forms[]`,
+  `views[]` or `charts[]` — a documented limitation — but nothing said so, so a spec with
+  `"forms": []` was indistinguishable from an app that genuinely has no forms ([AB#6686423]). Every
+  run now names the counts, the tables and the artifacts, and returns a `notRoundTripped` block on
+  the JSON result. It is a **note, not a gate**: the artifacts are still on the deployed app and are
+  still listed in the spec's `descriptionInventory`, and a rebuild into the *same* environment leaves
+  them untouched — the loss is real only when rebuilding into a different environment, and the
+  message says exactly that instead of a blanket "dropped".
 - **The Azure CLI identity is checked before any Dataverse read.** `download-model-app` and
   `build-model-app --apply` now probe `WhoAmI` first and say *which* identity and tenant were used
   when Dataverse rejects it ([AB#6686427]). Previously a token from the wrong tenant surfaced as an
@@ -55,6 +63,7 @@ rebuilding a real app into a second environment.
   multi-`LocalizedLabels` in the label serializer, `formTypes` on the form listing (it was hardcoded
   to Main), and a public additive `addEntityPrivilegesToRole` — the call `roleGrants[]` compiles to.
 
+[AB#6686423]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686423
 [AB#6686424]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686424
 [AB#6686425]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686425
 [AB#6686426]: https://dev.azure.com/dynamicscrm/OneCRM/_workitems/edit/6686426

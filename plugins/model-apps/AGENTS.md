@@ -286,9 +286,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   round-trip.** (View hydration was tried and reverted — LIVE-verified that the deployed savedquery set
   can't reliably tell app-builder-authored views from Dataverse's auto-generated Active/Inactive/QuickFind
   system views: `isdefault` is TRUE on the authored primary view and FALSE on the system Inactive view, so
-  no filter isolates author views. Forms/charts/commands need structured reads the SDK doesn't expose.)
-  All four survive on the live app (a rebuild preserves them by discovery), but are absent from the
-  downloaded spec, so edit them in Maker or a fresh spec.
+  no filter isolates author views. Charts/commands need structured reads the SDK doesn't expose. FORMS are
+  a deliberate refusal rather than a missing capability: the SDK does expose `formTypes` on its form
+  listing, but the App Spec form shape cannot express everything a deployed `formxml` carries — header/
+  footer, business-process control, related-entity nav, control parameters, event libraries — and a LOSSY
+  form declared in the spec is *worse* than an absent one, because a rebuild into a fresh environment
+  recreates it having silently lost those controls while reporting success.)
+  All four survive on the live app (a rebuild into the SAME environment preserves them), but are absent
+  from the downloaded spec, so edit them in Maker or a fresh spec.
+  **The omission is reported, not silent** (AB#6686423): every deployed form/view/chart is listed in the
+  spec's `descriptionInventory`, and each run prints a note naming the counts, the tables and the
+  artifacts, plus a `notRoundTripped` block on the JSON result. It is a NOTE, never a gate — every app
+  has forms and views, so failing the download would break every download, and the omission is not
+  destructive in the environment the app came from. Do not "fix" this by reconstructing `forms[]`
+  without also solving the lossy-layout problem above.
   **Entities are the sitemap's tables UNIONED with the entities owned by the app's VIEW / CHART /
   FORM components** (`appComponentEntities`) — a maker-built app can include tables reachable only via
   a lookup/sub-grid/related view, with no sitemap entry of their own, and reconstructing from the
