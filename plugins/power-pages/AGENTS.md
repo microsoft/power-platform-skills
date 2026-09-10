@@ -17,7 +17,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **Dataverse-backed validation** must stay opt-in for local runs only. Do not require live Dataverse connectivity in CI workflows or default test runs; gate it behind explicit local flags such as `--validate-dataverse-relationships`.
 - **Azure CLI `--allow-no-subscriptions`** — this flag is only valid on `az login`. Other `az` subcommands (`az account get-access-token`, `az account show`, etc.) reject it as an unrecognized argument and exit 2, so do NOT add it to anything other than `az login`. When the user is not logged in to the Azure CLI, suggest plain `az login` first; only suggest `az login --allow-no-subscriptions` as a fallback if they don't have any associated Azure subscription, since that variant lets subscription-less accounts sign in and still mint AAD-scoped Dataverse/Power Platform tokens via subsequent `az account get-access-token` calls. Reuse the shared `getAuthToken` helper in `scripts/lib/validation-helpers.js` instead of shelling out to `az` directly.
 - **Reference docs** shared across skills live in `references/` — reference via `${PLUGIN_ROOT}/references/` paths, don't duplicate.
-- **Templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
+- **Local scaffold templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during from-scratch scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
 - **Hooks** are defined centrally in `hooks/hooks.json`, using `PostToolUse` with matcher `Skill` so validation runs when a tracked Power Pages skill completes.
 - **ALM split-decision thresholds** are intentionally tighter than the platform hard caps. `scripts/lib/alm-thresholds.js` recommends a split at 75 MB / 4000 components (vs platform caps of 95 MB / 6000), reserving ~20 MB / ~2000-component growth headroom in each split child. Override per-project via `.alm-config.json` if you have a justified reason to push closer to the caps.
 - **OAuth credential-style site settings** (ConsumerKey / ClientId / ClientSecret / etc.) are NOT excluded from solutions. `setup-solution` Phase 5 prompts per credential to choose between (a) Secret-typed env var (Key Vault per stage), (b) String-typed env var (plain text per stage), or (c) skip. The site-setting record is added to the solution and routed to an env var so secret values never ship in the solution zip. Plans generated before 2026-05-08 use the older `excluded` bucket — setup-solution's preloadedSettings handler treats those as `credentialNeedsDecision` for backward compatibility.
@@ -277,7 +277,10 @@ Playwright MCP server for browser automation and live site previews during devel
 
 ## Template System
 
-Framework templates use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`, `__PRIMARY_COLOR__`, `__BG_COLOR__`) that get replaced during site scaffolding. The `gitignore` file is stored without the dot prefix to avoid git interference in the plugin repo — it gets renamed to `.gitignore` during scaffolding.
+There are two template systems:
+
+- **Local scaffold templates** live under `skills/create-site/assets/{react,vue,angular,astro}/`. These use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`, `__PRIMARY_COLOR__`, `__BG_COLOR__`) that get replaced during from-scratch site scaffolding. The `gitignore` file is stored without the dot prefix to avoid git interference in the plugin repo — it gets renamed to `.gitignore` during scaffolding.
+- **Installable SPA templates** live outside this repo in `microsoft/power-pages-samples` under the `templates/` tree. `create-site` reads the central manifest, previews template cards, downloads artifacts from a pinned GitHub SHA, imports the selected template's **unmanaged** solution, applies optional seed data, activates the site, and opens the live URL. These are not `__PLACEHOLDER__` scaffolds; they are curated solution-backed starters.
 
 ## Validation Scripts
 
