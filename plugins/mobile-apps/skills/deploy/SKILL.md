@@ -144,7 +144,7 @@ If deploy fails, report the error and STOP — do not retry silently. Common fix
 | Error | Fix |
 |---|---|
 | `npx pa app push --non-interactive` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
-| Environment mismatch | Re-run `npx pa app init --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
+| Environment mismatch | Re-run `npx pa app init --app-type MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
 | `npx pa app push --non-interactive` not recognised | Run `npm install` in the project so `@microsoft/power-apps` provides the CLI, or install `@microsoft/power-apps-cli` only as a last-resort prerequisite after user confirmation. |
 
 ### Step 4 — Update memory bank

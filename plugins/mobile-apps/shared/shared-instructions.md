@@ -45,7 +45,7 @@ Per-project notebook persisted at `<working_dir>/memory-bank.md`. Every skill MU
 3. **Update at end** — append to the relevant section after a successful step. Use ISO dates. One-line entries. Never delete — mark `~~superseded~~`.
 4. **Resume on failure** — if a previous run died partway, the bank is the only record of where. Resume from the first incomplete step rather than re-running everything.
 
-If the bank doesn't exist yet, `/create-mobile-app` is responsible for copying the template (`${PLUGIN_ROOT}/shared/memory-bank.md`) into the working directory at Step 6 (right after `npx pa app init --non-interactive` succeeds).
+If the bank doesn't exist yet, `/create-mobile-app` is responsible for copying the template (`${PLUGIN_ROOT}/shared/memory-bank.md`) into the working directory at Step 6 (right after `npx pa app init --app-type MobileApp --non-interactive` succeeds).
 
 ---
 
@@ -107,7 +107,7 @@ All non-Dataverse connectors require a connection ID or connection reference bef
 
 Plugin-level hooks also run during unrelated plugin workflows, so every mutating mobile skill owns its validation:
 
-1. Track every file written by the skill or its subagents. Exclude untouched output from trusted generators such as `npx pa app init --non-interactive` and `npx pa app add data-source --non-interactive`.
+1. Track every file written by the skill or its subagents. Exclude untouched output from trusted generators such as `npx pa app init --app-type MobileApp --non-interactive` and `npx pa app add data-source --non-interactive`.
 2. Before returning success, pass each changed file explicitly:
 
    ```bash
@@ -172,7 +172,7 @@ Use direct `npx pa`, `node`, and `az` commands for the mobile-app plugin flow.
 Typical commands:
 
 ```bash
-npx pa app init --display-name '<name>' --environment-id <id> --non-interactive
+npx pa app init --app-type MobileApp --display-name '<name>' --environment-id <id> --non-interactive
 npx pa app add data-source --connector <api> --connection-id <connection-id> --non-interactive
 npx pa connection create --connector <api> --json --non-interactive
 npx pa connection list-references --solution-id <solution-id> --non-interactive
@@ -233,7 +233,7 @@ Apply these rules whenever an `az`, `npm`, `npx`, or `expo` command exits non-ze
 | Wrong Power Apps CLI user, `Multiple accounts found`, or standalone CLI auth loop | Run `npx pa auth status --json --non-interactive` to see cached accounts. If the right account is cached, run `npx pa auth switch --account <email> --non-interactive`. If not cached, run `npx pa auth login [--account <email>] --non-interactive`; unattended mode fails fast rather than waiting for browser authentication. Do not use `az account set` to switch this CLI. |
 | `connectionId not found` or empty `-c` | Create a connection with `npx pa connection create --connector <connector-id> --json --non-interactive`, use a caller-provided existing connection ID, or use `npx pa connection list-references --solution-id <solution-id> --non-interactive` and retry with `--connection-ref`. |
 | Missing `connector`, `table`, or `environmentId` | Re-run with the full long-form command for that connector shape; do not fall back to interactive prompts. |
-| `environment not set` | Confirm `power.config.json` has `environmentId`; if missing, rerun `npx pa app init --display-name '<name>' --environment-id <id> --non-interactive`. |
+| `environment not set` | Confirm `power.config.json` has `environmentId`; if missing, rerun `npx pa app init --app-type MobileApp --display-name '<name>' --environment-id <id> --non-interactive`. |
 | Non-zero exit for any other reason | Report exact stderr. STOP. |
 
 ### `npm install` / `npx expo install` failures
