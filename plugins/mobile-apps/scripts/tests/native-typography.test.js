@@ -17,6 +17,38 @@ const runtimeTest = (name, callback) => test(name, {
 const template = path.join(root, 'template');
 const dependency = (name) => require(require.resolve(name, { paths: [template] }));
 
+function typeErrors(sources) {
+  const ts = dependency('typescript');
+  const options = {
+    noEmit: true, strict: true, skipLibCheck: true,
+    jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler, target: ts.ScriptTarget.ES2020,
+    esModuleInterop: true, types: ['react'], typeRoots: [path.join(template, 'node_modules/@types')],
+  };
+  const host = ts.createCompilerHost(options);
+  const read = host.readFile;
+  const exists = host.fileExists;
+  const directoryExists = host.directoryExists;
+  const directories = new Set();
+  for (const file of sources.keys()) {
+    for (let dir = path.dirname(file); dir !== path.dirname(dir); dir = path.dirname(dir)) directories.add(dir);
+  }
+  host.readFile = file => sources.get(file) ?? read(file);
+  host.fileExists = file => sources.has(file) || exists(file);
+  host.directoryExists = dir => directories.has(dir) || directoryExists(dir);
+  host.resolveModuleNames = (names, containing) => names.map(name =>
+    ts.resolveModuleName(name, containing, options, host).resolvedModule
+      ?? ts.resolveModuleName(name, path.join(template, '__typography_probe.tsx'), options, host).resolvedModule);
+  const program = ts.createProgram([...sources.keys()], options, host);
+  return ts.getPreEmitDiagnostics(program).map(diagnostic => ({
+    code: diagnostic.code,
+    location: diagnostic.file
+      ? `${path.relative(root, diagnostic.file.fileName)}:${diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1}`
+      : 'config',
+    message: ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '),
+  }));
+}
+
 function environment() {
   const core = dependency('@tamagui/core');
   const { defaultConfig } = dependency('@tamagui/config/v5');
@@ -301,8 +333,80 @@ runtimeTest('documented binding and final-config assertion execute against the a
   env.assertNativeFontDefaults(result.tamaguiConfig);
 });
 
+function brandImportExample() {
+  const directory = path.join(root, 'shared/samples/__brand-import');
+  const configFile = path.join(directory, 'tamagui.config.ts');
+  const brandFile = path.join(directory, 'brand/tokens.ts');
+  const screenFile = path.join(directory, 'screen.tsx');
+  // Real apps also import Tamagui in screens; load that module before checking
+  // the documented config's augmentation without modifying the config example.
+  const screen = `import { Text } from 'tamagui';
+    import './tamagui.config';
+    export const heading = <Text px="$lg" color="$accentDeep">Review details</Text>;`;
+  const blocks = file => [...fs.readFileSync(path.join(root, file), 'utf8')
+    .matchAll(/```ts\n([\s\S]*?)```/g)].map(match => match[1]);
+  const config = blocks('skills/design-system/references/tamagui-integration.md')
+    .find(block => block.includes("from './brand/tokens'"));
+  const brand = blocks('skills/design-system/references/design-system-schema.md')
+    .find(block => block.includes('export const tokens ='));
+  assert.ok(config && brand, 'The full documented config and brand schema must remain available');
+  return { config, brand, configFile, brandFile, screen, screenFile };
+}
+
+runtimeTest('complete documented brand import type-checks and runs with the real native host', () => {
+  const { config, brand, configFile, brandFile, screen, screenFile } = brandImportExample();
+  assert.deepEqual(typeErrors(new Map([[configFile, config], [brandFile, brand], [screenFile, screen]])), []);
+  const env = environment();
+  const brandModule = loadSource(brand, brandFile, {});
+  const result = loadSource(config, configFile, {
+    '@tamagui/config/v5': { defaultConfig: env.defaultConfig },
+    '@microsoft/power-apps-native-host/config/tamaguiConfig':
+      dependency('@microsoft/power-apps-native-host/config/tamaguiConfig'),
+    './brand/tokens': brandModule,
+  });
+  const tokens = result.tamaguiConfig.tokensParsed;
+  for (const group of ['space', 'size', 'radius']) {
+    for (const [key, value] of Object.entries(brandModule.tokens[group])) {
+      assert.equal(tokens[group][`$${key}`].val, value);
+    }
+  }
+  assert.equal(tokens.space.$4.val, env.baseline.tokensParsed.space.$4.val);
+  assert.equal(tokens.size.$true.val, env.baseline.tokensParsed.size.$true.val);
+  assert.equal(result.appLightTheme.surface0, brandModule.tokens.color.bg);
+  assert.equal(result.appDarkTheme.surface0, env.defaultConfig.themes.dark.background);
+  assert.ok(result.tamaguiConfig.fonts.mono);
+  env.assertNativeFontDefaults(result.tamaguiConfig);
+});
+
+runtimeTest('real host type check rejects pre-normalizing the documented brand tokens', () => {
+  const { config, brand, configFile, brandFile, screen, screenFile } = brandImportExample();
+  const normalized = config.replace(/const tokens = (\{[\s\S]*?\n\});/, 'const tokens = createTokens($1);');
+  assert.notEqual(normalized, config, 'Regression probe must replace the raw token object');
+  const broken = `import { createTokens } from '@tamagui/core';\n${normalized}`;
+  const errors = typeErrors(new Map([[configFile, broken], [brandFile, brand], [screenFile, screen]]));
+  // The broken config also loses custom token types in its consumers. Check the
+  // direct factory mismatch rather than treating those downstream errors as its cause.
+  const configErrors = errors.filter(error => error.location.startsWith(`${path.relative(root, configFile)}:`));
+  assert.equal(configErrors.length, 1, JSON.stringify(errors));
+  assert.ok(configErrors.some(error => [2322, 2345].includes(error.code) && /NormalizeTokens/.test(error.message)),
+    `Expected the normalized-token type mismatch, received ${JSON.stringify(errors)}`);
+});
+
+runtimeTest('custom-space reference also preserves the host raw-token contract', () => {
+  const guide = fs.readFileSync(path.join(root, 'shared/references/tamagui-custom-tokens.md'), 'utf8');
+  const example = [...guide.matchAll(/```ts\n([\s\S]*?)```/g)].map(match => match[1])
+    .find(block => block.includes('const tokens ='));
+  assert.ok(example);
+  const source = `
+    import { defaultConfig } from '@tamagui/config/v5';
+    import { createPowerAppsTamaguiConfig } from '@microsoft/power-apps-native-host/config/tamaguiConfig';
+    ${example}
+    export const config = createPowerAppsTamaguiConfig({ tokens });
+  `;
+  assert.deepEqual(typeErrors(new Map([[path.join(template, '__custom_space_probe.ts'), source]])), []);
+});
+
 runtimeTest('typography helpers and documented host integration type-check against installed APIs', () => {
-  const ts = dependency('typescript');
   const samples = path.join(root, 'shared/samples');
   const probe = path.join(samples, '__native_typography_probe.tsx');
   const source = `
@@ -326,26 +430,5 @@ runtimeTest('typography helpers and documented host integration type-check again
     export const title = <TypographyText typography={nativeTypography.text.heading}>Review findings</TypographyText>;
     export const plain = <Text {...nativeTypography.text.heading}>Review findings</Text>;
   `;
-  const options = {
-    noEmit: true, strict: true, skipLibCheck: true,
-    jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler, target: ts.ScriptTarget.ES2020,
-    esModuleInterop: true, types: ['react'], typeRoots: [path.join(template, 'node_modules/@types')],
-  };
-  const host = ts.createCompilerHost(options);
-  const read = host.readFile;
-  const exists = host.fileExists;
-  host.readFile = (file) => file === probe ? source : read(file);
-  host.fileExists = (file) => file === probe || exists(file);
-  host.resolveModuleNames = (names, containing) => names.map((name) =>
-    ts.resolveModuleName(name, containing, options, host).resolvedModule
-      ?? ts.resolveModuleName(name, path.join(template, '__typography_probe.tsx'), options, host).resolvedModule);
-  const program = ts.createProgram([probe], options, host);
-  const errors = ts.getPreEmitDiagnostics(program).map((diagnostic) => {
-    const location = diagnostic.file
-      ? `${path.relative(root, diagnostic.file.fileName)}:${diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1}`
-      : 'config';
-    return `${location} TS${diagnostic.code}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}`;
-  });
-  assert.deepEqual(errors, []);
+  assert.deepEqual(typeErrors(new Map([[probe, source]])), []);
 });

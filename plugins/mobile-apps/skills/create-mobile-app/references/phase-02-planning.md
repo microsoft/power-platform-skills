@@ -17,7 +17,33 @@ agents or hold human gates. Apply the [root status handler](../SKILL.md#step-30-
 after each real dispatch; if agent tooling is unavailable, execute that same leaf contract here.
 No no-op probes, second fallback workflow, or skipped approvals.
 
-## 3.0 — Verified data evidence and proposal
+## 3.0 — Experience and information needs before data
+
+Before snapshot discovery, table proposals or fixed routes, foreground shapes the working
+experience from the confirmed brief. Preserve the user's requirements verbatim and separately
+record a compact `### Experience outline` and `### Information needs` under `## App Requirements`.
+These extend the existing plan; do not create a second product contract or invoke another planner.
+
+Trace the primary job through entry, repeated decisions/actions, necessary context, completion
+and interruption/recovery. Keep sequential work on the same object together when usable; use
+a separate surface only for a distinct decision, durable destination or focused capture.
+This is a provisional journey, not an approved route graph or a commitment to a screen count.
+Apply [experience synthesis](${PLUGIN_ROOT}/shared/references/design-planning.md#experience-synthesis):
+identify recognition, working rhythm, decision evidence, useful grouping/density and disclosure.
+Choose fields and relationships from these needs, not extra cards or every noun in the prompt.
+
+Classify each addition as explicit requirement, safe presentation, sample value or proposed scope.
+Safe presentation may group existing facts or clarify an action; new business operations, roles,
+integrations, offline persistence or evidence history are proposed scope, not implicit permission.
+Resolve consequential uncertainty through the existing owning gate before depending on it.
+No new questionnaire or approval gate; `--no-design` still requires useful journeys/data coverage.
+
+Information needs pair the user decision/fact/action with its semantic source: stored field,
+derived inputs/units, related read, write/transition, retained artifact or native/local capability.
+Record required versus explicitly deferred scope. Do not invent exact existing columns before
+evidence. Preserve useful needs while assessing feasibility; do not minimize the schema first.
+
+### Verified data evidence and proposal
 
 For `required`, read and execute [planning-snapshot.md](planning-snapshot.md). The foreground
 owns environment resolution, evidence, progress rendering and bounded exact-name expansions.
@@ -28,6 +54,7 @@ Dispatch `mobile-app:data-model-architect` directly in required mode:
 
 ```text
 Requirements brief: <confirmed brief verbatim, including workflow/domain context>
+Experience outline and Information needs: <foreground-derived journey, decisions, fact/action needs and classified assumptions>
 Original prompt and wizard facts: <verbatim facts>
 Working directory: <absolute working_dir>
 Plugin root: ${PLUGIN_ROOT}
@@ -40,6 +67,7 @@ Publisher prefix (detected from env): <literal prefix, or explicitly provisional
 Write _dm_section.md and normalize the structured schema contract per your agent contract.
 Snapshot-only: no live Dataverse discovery or environment resolution.
 Include all retained artifact storage, relationships, alternate keys and service requirements.
+Reconcile every required information/interaction need; overlap ranks candidates, never completeness.
 No user questions, approvals, receipt writes or nested agents; return the standard first-line status.
 ```
 
@@ -51,7 +79,7 @@ same snapshot/evidence paths. Bounded missing-metadata signals route to planning
 
 Dispatch `mobile-app:native-app-planner` for **only** native capabilities, connector needs and
 provisional design context with the confirmed brief, wizard facts, approved/drafted data needs,
-plugin root, working directory and output `.tmp/native-integration-proposal.md`.
+the Experience outline/Information needs, plugin root, working directory and output `.tmp/native-integration-proposal.md`.
 It cannot ask questions, run gates, assemble approval records or invoke architects.
 Resolve its `NEEDS_CONTEXT` in foreground. Surface excluded capabilities before approving scope.
 Send storage changes back to the data architect before Gate 1, not to a mutation worker.
@@ -94,6 +122,8 @@ If no permitted question interface exists, stop with the pending approval; do no
 4. **Gate 4b — Screen specs:** dispatch specs only against the approved graph, review compact
    per-screen behavior, independent domain states and authorized transitions, initial filters,
    data/permissions, JS dependencies and open questions.
+   Run the full information/interaction audit in Step 3.4 before acceptance in every data mode,
+   not only when related-field annotations exist. Resolve gaps and reapprove affected earlier gates.
    Gate 4b rejection reruns specs only. Structural changes return to Gate 4a.
 
 Brand selection is deferred to Step 6.75. Both screen phases use `skip_preview: true`; there is
@@ -110,6 +140,7 @@ For each phase dispatch `mobile-app:screen-planner` with:
 ```text
 phase: graph | specs
 Requirements brief: <confirmed brief verbatim>
+Experience outline and Information needs: <current proposed/approved journey, required facts/actions and classified assumptions>
 Workflow/domain context and explicit constraints: <from intake, not entity-count guesses>
 Wizard facts: <users, platforms, supplied design context>
 Approved data model / native capabilities / connectors: <relevant sections verbatim>
@@ -148,17 +179,27 @@ never approval records. If a screen requires new
 schema, native or connector scope, revise/reapprove that earlier gate and regenerate dependent
 graph/specs before returning to Gate 4b. Never silently revise locked input.
 
-## 3.4 — Cross-entity audit and final integrity
+## 3.4 — Information/interaction audit and final integrity
 
-After Gate 4b, only when specs contain `related_entity_fields`, dispatch the data architect with
-`mode: cross-entity-audit`, the locked `_dm_section.md`, screen plan, original prefix, working
-directory and plugin root. Run only its cross-entity algorithm: no schema mutation, computed
-metadata invention, or changes to the approved normalized contract.
-It proposes formatted lookup, bounded chained fetch or external server-owned projection read
-paths per [data-performance.md](${PLUGIN_ROOT}/shared/references/data-performance.md).
-Present any addendum as a Gate 1 addendum and reapprove affected dependent screen specs.
-`external-projection-required` remains blocked until supplied externally; approval alone cannot
-make an unavailable projection executable. With no related fields, record audit not applicable.
+After detailed specs are drafted and **before Gate 4b acceptance**, run
+[information and interaction coverage](${PLUGIN_ROOT}/shared/references/screen-data-coverage.md).
+Pass explicit `plan_path: <working_dir>/native-app-plan.md` to the read-only extraction helper
+and audit every intended spec against App Requirements/Information needs, not graph scratch.
+Connector-only, local and auth-only screens are included; no related annotations is not a skip.
+
+Foreground owns this audit for all data modes. For required Dataverse context it may dispatch
+`mobile-app:data-model-architect` with `mode: screen-data-audit`, the explicit plan_path, locked
+`_dm_section.md`, normalized contract, matching snapshot/evidence, original prefix and relevant
+native/connector scope. Supply the Experience outline/Information needs and extracted specs.
+The worker returns coverage findings and a related-read addendum where relevant; it cannot
+mutate the plan/schema, approve scope or create a receipt. If dispatch is unavailable,
+foreground executes the same audit.
+
+Foreground embeds `### Information and interaction coverage` inside `## Screens`. Resolve
+required gaps with the owning earlier gate and revise only affected specs before acceptance.
+Keep `### Cross-entity Reads` when relevant. `external-projection-required` remains unresolved
+until supplied externally or the affected scope is explicitly revised; approval alone is not
+an executable read path. No schema mutation or computed metadata invention occurs in this audit.
 
 Verify final plan, schema and the foreground receipt following approval-receipt.md. Validate
 every planning file written using `validate-mobile-files.js` with exact file paths.

@@ -3,6 +3,10 @@
 This is a lookup reference, not required reading for an already resolved skeleton.
 Read only when translating unresolved design fields or answering an API question.
 
+Use [component choice and creation](../../../shared/references/design-planning.md#component-choice-and-creation):
+reuse, adapt, compose, or generate UI for the task, not merely what a sample exposes.
+Keep new screen-local components in the assigned file; foreground owns reusable component files.
+
 ## Design precedence and translation
 
 Brand `## Negatives` forbids patterns absolutely. Approved brand components, palette,
@@ -35,6 +39,12 @@ not a superseded provisional planner suggestion: preserve first-viewport priorit
 media-subject scale and below-fold access, not just colors or outer container dimensions.
 A selected preview state is not
 automatically the app's default filter or record; honor the approved Data/Navigation entry.
+
+When reusing the shared `Hero`, keep its brand-aware solid surface and wrapping defaults
+unless the accepted design requests otherwise. Use the
+[Hero recipe](../../../shared/references/tamagui-component-recipes.md#hero) for paired colors,
+complete typography overrides, optional gradients and an adaptive action. A sample's old
+blue/white palette or one-line title is not a reason to weaken the approved presentation.
 
 ## Tamagui and host contract
 

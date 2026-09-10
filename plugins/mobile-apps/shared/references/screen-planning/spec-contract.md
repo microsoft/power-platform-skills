@@ -107,6 +107,14 @@ need no invented mutation, and useful repeated cards/forms remain valid.
 |---|---|---|
 ```
 
+Selection must demonstrate the primary working activity, not only valid IDs. In Rationale,
+name the journey step shown and why the surface makes its repeated read/compare/act loop
+visible. Include that working surface as a main frame or a clearly selected visible state;
+do not hide it only behind an unshown overlay while selecting entry/editor/confirmation
+by default. A reader, conversation or form may itself be the main activity.
+If the proposed selection omits it, revise Preview selection in foreground without inventing
+routes or changing approved operations. Add a necessary frame rather than forcing three.
+
 Reference existing Screen Map IDs; multiple states of the same ID are allowed. Select surfaces that demonstrate primary work and its result or consequential recovery. State names the specific populated, selected, blocked, success, error, or empty condition to illustrate. The rationale explains what a reviewer can judge there. This selection guides both early design validation and later previews, without pretending a static state verifies runtime behavior.
 Name the initial selection/filter and selected-record context in State when applicable. A preview
 may deliberately show a later or filtered state; label that variant instead of confusing it with
@@ -144,7 +152,7 @@ Write `### Per-Screen Specs` with `#### <Screen name> (<route>)` entries. Use fl
 | **Purpose**, **Route**, **File**, **Presentation** | Same as approved map; File resolves under working_dir |
 | **Layout delta** | Screen-specific structure and primary arrangement; include the entry composition below for main destinations and selected preview screens; no repeated shared chrome |
 | **UX contract** | Actor decision/read; action label/placement; confirmed domain rules, authorized transitions and prerequisites; commit operation + postcondition; visible result; next destination; failure/retry/cancel path. Keep independent states distinct |
-| **Data** | Approved semantic service/schema dependencies before generation; exact generated services/methods/properties once available. Name selected fields, initial scope/filter with rationale, ordering; local/static/auth-only data is explicit |
+| **Data** | Approved semantic service/schema dependencies before generation; exact generated services/methods/properties once available. Cover required facts, metrics, filters and derivations with inputs/units/read scope; name selected fields, initial scope/filter with rationale, ordering; local/static/auth-only data is explicit |
 | **Navigation** | Top-level entry behavior, scan/deep-link context, outgoing actions, preserved return scope and direct-entry fallback. Selection opens the relevant task/content, not merely a related record unless that serves the approved job |
 | **Navigation intent** | `navigate`, `push`, or `replace` per outgoing action, matching Navigation Contracts |
 | **State delta** | Domain empty/filter-empty, independently failing source, stale/conflict/permission/interruption states not covered by defaults; never present failed fetch as empty |
@@ -178,6 +186,17 @@ describe provisional visual intent, not a frozen composition. Apply the
 [behavior and presentation authority](../design-planning.md#entry-composition-and-reference-transfer):
 visual authors may improve arrangement within approved behavior and explicit brand constraints;
 foreground records the accepted composition at the existing design review.
+
+### Information and interaction reconciliation
+
+The early Experience outline and Information needs describe the job before schema decisions.
+Detailed Data, UX, Navigation and Artifact fields must account for every approved need.
+Foreground runs [information and interaction coverage](../screen-data-coverage.md) before spec
+approval and embeds its concise table in `## Screens`. It includes all intended screens, not
+only those with `related_entity_fields`; related annotations are one subset of the review.
+After design, recheck any changed information or action against that table; before building,
+resolve generation-pending exports against actual services. Missing required support returns
+to its owner rather than disappearing from a sparse screen or appearing as fabricated preview data.
 
 **Conditional fields** — omit when not relevant:
 

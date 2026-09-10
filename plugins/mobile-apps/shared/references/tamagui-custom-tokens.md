@@ -128,23 +128,18 @@ Wrap UI:
 ## Customizing space / size
 
 ```ts
-const tokens = createTokens({
+const tokens = {
   ...defaultConfig.tokens,
   space: {
     ...defaultConfig.tokens.space,
-    // e.g. tighten mobile defaults
-    px: 1,
-    0: 0,
-    1: 4,
-    2: 8,
-    3: 12,
-    4: 16,
-    // etc. — keep the $1–$10 scale intact
+    // Add task-specific names without changing built-in component spacing.
+    gutter: 16,
+    card: 12,
   },
-})
+};
 ```
 
-**HARD RULE — do not re-key brand spacing onto Tamagui's integer slots.** The integer keys (`1`, `2`, `3`, `4`, …, plus `0.25`, `0.5`, `0.75`, `1.5`) ARE the default Tamagui `$1`–`$10` scale (~4/8/12/16/20… px). Built-in `Button`, `Input`, `XStack` defaults reference `$4` internally, and every screen built by `screen-builder` uses `px="$4"`, `gap="$4"`, `mx="$4"`. Overwriting `$4` with a brand value like 64 px doesn't break the type-checker — it silently inflates padding everywhere, wraps banner text character-by-character, and squishes list rows.
+**HARD RULE — do not re-key brand spacing onto Tamagui's integer slots.** The numbered keys (`1`, `2`, `3`, `4`, …, plus `0.25`, `0.5`, `0.75`, `1.5`) belong to the installed `defaultConfig` scale. Built-in components and screen props such as `px="$4"` depend on that scale. Overwriting `$4` with a brand value like 64 px doesn't break the type-checker — it silently inflates padding everywhere, wraps banner text character-by-character, and squishes list rows.
 
 **Allowed:** spread `brandTokens.space` (which is keyed `xs/sm/md/lg/xl/2xl/...`) — those names don't collide with the integer scale, so the spread is a no-op for the defaults and only adds new tokens.
 
@@ -284,8 +279,9 @@ You probably need at most: 4–6 brand color tokens, named status tokens (above)
 ## Config version
 
 The standalone template uses Tamagui 2 with `@tamagui/config/v5`. Keep
-`createPowerAppsTamaguiConfig` imported from the native host, keep
-`createTokens` and `createFont` on `@tamagui/core`, preserve the template's
+`createPowerAppsTamaguiConfig` imported from the native host and `createFont`
+on `@tamagui/core` when needed; preserve the template's
 `declare module 'tamagui'` augmentation, and keep customization code between
-the marker lines. Use `createTokens` for non-color token groups; put color
-values in `light` and `dark` themes.
+the marker lines. Pass raw non-color token groups to the host factory, not
+pre-normalized `createTokens()` output; put color values in `light` and `dark`
+themes. Follow the [canonical native integration](../../skills/design-system/references/tamagui-integration.md#brand-import).

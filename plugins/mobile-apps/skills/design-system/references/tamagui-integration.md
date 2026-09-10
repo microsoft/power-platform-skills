@@ -60,7 +60,6 @@ imports.
 When `brand/tokens.ts` exists, update `tamagui.config.ts` to this shape:
 
 ```ts
-import { createTokens } from '@tamagui/core';
 import { defaultConfig } from '@tamagui/config/v5';
 import {
   createPowerAppsTamaguiConfig,
@@ -70,12 +69,12 @@ import {
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
 import { tokens as brandTokens } from './brand/tokens';
 
-const tokens = createTokens({
+const tokens = {
   ...defaultConfig.tokens,
   space: { ...defaultConfig.tokens.space, ...brandTokens.space },
   size: { ...defaultConfig.tokens.size, ...brandTokens.size },
   radius: { ...defaultConfig.tokens.radius, ...brandTokens.radius },
-});
+};
 
 export const appLightTheme = withPowerAppsSemanticAliases(
   defaultConfig.themes.light,
@@ -112,6 +111,11 @@ declare module 'tamagui' {
   interface TamaguiCustomConfig extends Conf {}
 }
 ```
+
+Pass raw token values to `createPowerAppsTamaguiConfig`; the host factory owns
+normalization. Do not wrap these groups in `createTokens()` first: its normalized
+variables do not satisfy the host's raw-token type contract. Preserve the installed
+numeric scale and add named brand tokens as shown, without casts or a second factory.
 
 The ordinary generated schema has one palette. Light mode receives its approved
 surfaces, text, accents, and statuses. Dark mode keeps Config v5 dark surfaces

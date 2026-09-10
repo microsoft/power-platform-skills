@@ -21,10 +21,10 @@ demonstrate APIs, not mandatory layouts or permission to ship an unwired action.
 
 ## Input and ownership
 
-Required invocation fields: `working_dir`, `screen_name`, `route`, `target_file`,
-`plan_path`. Optional `screen_spec`, `service_signatures`, `token_context`, and
-`journey_context` carry compact resolved excerpts. Also preserve relevant navigation
-contracts/shared conventions; the existing typed skeleton resolves imports and hooks.
+Required invocation fields: `working_dir`, `screen_name`, `route`, `target_file`, `plan_path`.
+Optional `screen_spec`, `service_signatures`, `token_context`, and `journey_context` carry compact resolved excerpts.
+`design_reference` supplies the accepted preview screen/state and observed review row, or explicit no-design/unverified status;
+`component_interfaces` names actual shared exports/props. Preserve navigation/shared conventions and typed skeleton imports/hooks.
 These are excerpts of existing artifacts, not a new work-order or sidecar format.
 
 - Write **only `target_file`**. Never edit `_layout.tsx`, providers, shared components,
@@ -38,8 +38,8 @@ These are excerpts of existing artifacts, not a new work-order or sidecar format
   the assigned `Data` field and Generated Services table.
 - Respect the exact nested path. Main landing is `app/(app)/home.tsx`, not
   `app/(app)/index.tsx`. A layout target or missing shared prerequisite is `BLOCKED`.
-- Import existing `@/components`, `@/hooks`, `@/utils`, `@/tokens`, app-specific
-  components, generated services, and native wrappers. Do not recreate shared helpers.
+- Reuse fitting components and existing hooks, utilities, tokens, services, and native wrappers; do not duplicate their behavior.
+- New task-specific UI is allowed within `target_file`; shared component additions/adaptations go to foreground.
 
 ## 1 — Resolve only relevant context
 
@@ -58,13 +58,13 @@ sections from `native-app-plan.md`, not the entire plan or other screens. Resolv
    inherited `## Design` / `## Design Direction`, and actual token/config declarations.
    Use the relevant accepted intent-preview screen as a visual reference, not production HTML/data;
    follow its reconciled spec and tokens. Resolve material drift in foreground, not a silent redesign.
+   Match actual shared components to the accepted recipes; missing exports return to foreground, not a generic substitute. A style acceptance does not verify an unobserved screen or native control.
    Preserve typography, navigation cues and alignment under [native presentation handoff](../shared/references/native-visual-review.md).
    Report missing full-screen rendered evidence; static checks are not visual approval.
 
-Compact specs intentionally omit inherited defaults. Do not demand repeated chrome,
-loading copy, or imports. Check these existing sources before `NEEDS_CONTEXT`.
-Missing app-specific service, route, role decision, binding, or destructive behavior is
-not permission to invent it. Do not reread Home or every generated service for idioms.
+Compact specs intentionally omit inherited chrome, loading copy and imports; check these sources before `NEEDS_CONTEXT`.
+Missing app-specific service, route, role decision, binding, or destructive behavior is not permission to invent it.
+Do not reread Home or every generated service for idioms.
 If field syntax is unclear, consult only relevant fields in the existing
 [screen planning contract](../shared/references/screen-planning/spec-contract.md).
 

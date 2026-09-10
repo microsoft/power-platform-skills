@@ -1,10 +1,13 @@
 import React from 'react';
 import { Button, Text } from 'tamagui';
-import { BottomActionBar, InfoRow, ScreenHeader } from '@/components';
+import { BottomActionBar, Hero, InfoRow, ScreenHeader } from '@/components';
 
 export function ExistingCallers({ onPress }: { onPress: () => void }) {
   return (
     <>
+      <Hero title="Inspection overview" />
+      <Hero title="Inspection overview" subtitle="Existing explicit gradient"
+        gradient="hero" action={{ label: 'Open', iconName: 'open-outline', onPress }} />
       <ScreenHeader
         title="Inspection log"
         subtitle="Recent activity"
@@ -23,6 +26,17 @@ export function ExistingCallers({ onPress }: { onPress: () => void }) {
 export function OptionalLayoutCallers({ onPress }: { onPress: () => void }) {
   return (
     <>
+      <Hero
+        title="Review the complete accessibility and inspection findings"
+        subtitle="Long content can wrap rather than being clamped to a banner."
+        backgroundColor="$surface1" foregroundColor="$text0"
+        titleTypography={{ fontFamily: '$heading', fontSize: 24, fontWeight: '600', lineHeight: 30, letterSpacing: 0 }}
+        subtitleTypography={{ fontFamily: '$body', fontSize: 16, fontWeight: '400', lineHeight: 24, letterSpacing: 0 }}
+        actionTypography={{ fontFamily: '$body', fontSize: 16, fontWeight: '600', lineHeight: 24, letterSpacing: 0 }}
+        actionPlacement="below"
+        action={{ label: 'Review findings', onPress, disabled: false }}
+      />
+      <Hero title="Intentionally compact label" titleNumberOfLines={1} subtitleNumberOfLines={2} />
       <ScreenHeader
         variant="compact"
         title="Reading review"
@@ -43,3 +57,6 @@ const invalidHeader = <ScreenHeader title="Reading" variant="hero-grid" />;
 const invalidInset = <BottomActionBar includeBottomInset="tabs"><Text>Review</Text></BottomActionBar>;
 void invalidHeader;
 void invalidInset;
+// @ts-expect-error A typography override must apply all role metrics, not size alone.
+const partialHeroTypography = <Hero title="Reading" titleTypography={{ fontSize: 24 }} />;
+void partialHeroTypography;

@@ -91,6 +91,9 @@ transitions. Clarify only unknowns that would change the outcome; do not infer b
 from status labels, colors, or an industry name.
 Forward the confirmed brief verbatim;
 do not expand it into a noun inventory masquerading as a screen plan.
+After proceed, Step 3 turns it into a separate Experience outline and Information needs before
+data proposals. Preserve supplied facts; classify inferred presentation, sample values and
+proposed business scope rather than treating a short prompt as permission for a thin app.
 On adjustment, revise with the user's answers; on start over, return to the description.
 Do not force a generic feature picker or reconfirm an already approved brief. Step 2c captures
 the final proceed/edit/abort decision, including the summarized brief.

@@ -7,6 +7,12 @@
 
 **Telemetry checkpoint: `apply_dataverse_data_model`**
 
+Before applying or skipping data work, verify the current plan has completed
+Information and interaction coverage for its approved detailed specs. On a legacy resume
+with missing coverage or unresolved required support, return to Step 3.4 for the authoritative
+plan audit and affected reapproval; a previously valid receipt alone does not establish UX
+completeness. Do not discover/mutate extra schema opportunistically during execution.
+
 For `connector-only`, verify the approved Data Model says zero Dataverse tables and no manifest
 exists. Skip Steps 8/8.5; Step 6.85 records no-Dataverse not-applicable before Step 9.
 Any nonempty Dataverse plan is a planning mismatch, not a skip.

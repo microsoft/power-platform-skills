@@ -255,6 +255,76 @@ test('task substance comes from product context without hardcoded visual or data
   assert.match(read('agents/references/screen-builder/design-api.md'), /do not invent production data to reproduce a richer mock/);
 });
 
+test('short briefs produce concrete experience decisions without requiring reference screenshots', () => {
+  const planning = read('shared/references/design-planning.md');
+  const planner = read('agents/screen-planner.md');
+  for (const text of [design, planner]) assert.match(text, /design-planning\.md#experience-synthesis/);
+  assert.match(design, /even without a screenshot/);
+  for (const decision of ['Recognition', 'Working rhythm', 'Density', 'Decision and feedback', 'Distinctive interaction']) {
+    assert.ok(planning.includes(`**${decision}:**`), `missing experience decision: ${decision}`);
+  }
+  assert.match(planning, /Dense means less redundant chrome, not smaller type or undersized touch targets/);
+  assert.match(planning, /receiving goods benefits from aligned expected\/received\/damaged/i);
+  assert.match(planning, /Reading a lesson benefits from readable prose/);
+  assert.match(planning, /neither implies a fixed\s+palette, card count, dashboard, sticky footer or new business feature/);
+  assert.match(planning, /not a new sidecar/);
+});
+
+test('reference adaptations reconcile actual content and operations before style acceptance', () => {
+  const planning = read('shared/references/design-planning.md');
+  const phase = read('skills/create-mobile-app/references/phase-04-design.md');
+  assert.match(planning, /one stored image is not a two-photo gallery/);
+  assert.match(planning, /editable versus read-only controls/);
+  assert.match(planning, /inline writes, a notification\/share action or new tabs is behavior/);
+  assert.match(phase, /Style acceptance is not\s+acceptance of undisclosed scope changes/);
+  assert.match(intent, /evidence count must respect storage cardinality/);
+  assert.match(intent, /A toast saying "opened" without navigation is not a working journey/);
+  assert.match(intent, /scenario controls, not fake capture handlers/);
+  assert.match(intent, /preserve invalid input and show the approved validation/);
+});
+
+test('task-specific presentation is realized once and passed through create and edit handoffs', () => {
+  const schema = read('skills/design-system/references/design-system-schema.md');
+  const shell = read('skills/create-mobile-app/references/phase-08-screens.md');
+  const build = read('skills/create-mobile-app/references/phase-09-build.md');
+  const edit = read('skills/edit-app/SKILL.md');
+  assert.match(schema, /purpose\/consumer\s+screen IDs, content and typography hierarchy/);
+  assert.match(schema, /names\/interfaces\s+alone are not implementations/);
+  assert.match(schema, /No component quota/);
+  assert.match(shell, /Materialize the accepted task-specific recipes/);
+  assert.match(shell, /actual component\s+path\/export, typed view data and callbacks/);
+  assert.match(shell, /populated, long-content and error states/);
+  for (const text of [build, edit]) {
+    assert.match(text, /design_reference/);
+    assert.match(text, /component_interfaces/);
+  }
+  assert.match(build, /do not\s+send only tokens and a generic archetype/);
+  assert.match(edit, /a prettier preview alone is not an implemented edit/);
+});
+
+test('rendered handoff checks effective density and truthfully separates style acceptance from verification', () => {
+  const review = read('shared/references/native-visual-review.md');
+  assert.match(intent, /Density and typography/);
+  assert.match(intent, /computed box and normal pointer\/keyboard reachability/);
+  assert.match(intent, /User\s+acceptance of appearance does not turn missing screenshots, failed checks or native simulations/);
+  assert.match(intent, /compact review chrome, not repeated pinned/);
+  assert.match(review, /Screen\/state \| accepted presentation \| actual source\/component \| observed result \| remaining gap/);
+  assert.match(review, /matching palette or component interface is not\s+evidence/);
+});
+
+test('provenance callers assert required inputs independently of the recorded source list', () => {
+  const phase = read('skills/create-mobile-app/references/phase-04-design.md');
+  const review = read('shared/references/native-visual-review.md');
+  for (const text of [preview, phase, review]) {
+    assert.match(text, /--require-source/);
+    assert.match(text, /--expect-mode/);
+    assert.match(text, /--expect-scope/);
+  }
+  assert.match(preview, /current task, not from the embedded source list/);
+  assert.match(preview, /check is read-only and never grants visual approval/);
+  assert.match(review, /Missing required inputs block the handoff/);
+});
+
 test('design references transfer composition without importing business behavior', () => {
   const planning = read('shared/references/design-planning.md');
   assert.match(design, /design-planning\.md#entry-composition-and-reference-transfer/);
@@ -478,12 +548,25 @@ test('import and refresh paths preserve ordinary artifacts and do not execute im
   assert.match(refresh, /after\*\* source\/config changes, reading current sources/);
 });
 
+test('edit and design refresh agree on coherent multi-dimension requests', () => {
+  const edit = read('skills/edit-app/SKILL.md');
+  const refresh = read('skills/design-system/references/refresh-flow.md');
+  assert.match(edit, /refresh-flow\.md#refresh--reskin/);
+  assert.match(edit, /one coherent\s+design edit/);
+  assert.match(edit, /complete requested delta/);
+  assert.match(edit, /do not refuse or split it solely because both palette and typography change/);
+  assert.match(edit, /Unrelated features[\s\S]*existing scope\/approval gates/);
+  assert.match(refresh, /Do not refuse a clear multi-dimension request merely because it changes more than one field/);
+  assert.doesNotMatch(edit, /One-major-change-per-prompt|palette AND typography\s*→\s*refuse/);
+});
+
 function runBrandExample() {
-  const example = fencedBlocks(integration, 'ts').find(block => block.includes('const tokens = createTokens'));
+  const example = fencedBlocks(integration, 'ts').find(block => block.includes("from './brand/tokens'"));
   assert.ok(example, 'brand-import example is missing');
+  assert.doesNotMatch(example, /\bcreateTokens\b/);
   // Execute the documented customization body with the host boundary stubbed.
   // This tests merge/forwarding contracts, not the external host's alias algorithm.
-  const body = example.slice(example.indexOf('const tokens = createTokens'), example.indexOf('// CUSTOMIZATION END'))
+  const body = example.slice(example.indexOf('const tokens = {'), example.indexOf('// CUSTOMIZATION END'))
     .replace(/\bexport /g, '');
   const brandTokens = {
     color: {
@@ -508,7 +591,7 @@ function runBrandExample() {
   };
   const calls = [];
   const context = vm.createContext({
-    defaultConfig, brandTokens, createTokens: value => value,
+    defaultConfig, brandTokens,
     withPowerAppsSemanticAliases: (base, colors) => {
       calls.push({ base, colors });
       return {

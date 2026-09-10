@@ -39,6 +39,11 @@ Capture the **environment URL**, **environment ID**, **tenant ID**, and **organi
 
 **Telemetry checkpoint: `design_dataverse_schema`**
 
+For an existing app, carry its relevant Experience outline, Information needs and detailed
+screen requirements into the proposal. Reconcile all approved fields/relationships and operations;
+overlap only selects a reuse candidate, never completeness. Keep schema-only requests bounded:
+do not invent a screen graph or extra fields merely to make a dense preview.
+
 Check `$ARGUMENTS` for diagram hints first (`*.png`, `*.jpg`, `erDiagram` keyword, `||--o{` cardinality syntax). If a hint is present → Path A. If `$ARGUMENTS` describes the app at all → silently take Path B (architect propose). Only if both are empty, ask:
 
 > "How would you like to define the data model?"
@@ -76,6 +81,7 @@ Task: mobile-app:data-model-architect
 Prompt:
   You are the data-model-architect agent for a Power Apps mobile app.
   Requirements: <$ARGUMENTS or ask the user what the app does>
+  Experience outline and Information needs: <relevant existing plan context, or explicit schema-only requirements>
   Working directory: <cwd>
   Plugin root: ${PLUGIN_ROOT}
 
@@ -110,6 +116,12 @@ If the user provided no requirements context, ask:
 ### Phase 4 — Combined Approval
 
 **Telemetry checkpoint: `approve_data_model_and_connectors`**
+
+If detailed app screens are affected, stage their updated specs and run
+[information and interaction coverage](${PLUGIN_ROOT}/shared/references/screen-data-coverage.md)
+using the explicit staged plan path before this approval. Resolve missing facts, filters,
+metrics, writes and evidence cardinality with the proposed model/connectors. If no screens
+exist and the request is schema-only, record that limit instead of claiming UX coverage.
 
 Present the full plan — data model + connectors — together in a single `EnterPlanMode` block:
 

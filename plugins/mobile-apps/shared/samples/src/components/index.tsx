@@ -1,6 +1,7 @@
 /**
  * Shared UI components — scaffolded at project creation.
- * Import from here. Never re-define inline in screen files.
+ * Reuse these components when they fit; they are not a closed catalog.
+ * Create task-specific UI when needed, reusing existing behavior helpers.
  *
  * Usage:
  *   import { LoadingState, ErrorState, EmptyState, ScreenHeader,
@@ -11,7 +12,7 @@
 
 import React from 'react';
 import { ScrollView, useWindowDimensions } from 'react-native';
-import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
+import { YStack, XStack, ZStack, Text, Button, useTheme, type TextProps, type YStackProps } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -113,45 +114,84 @@ export function StatTile({
 
 // ─── Hero ─────────────────────────────────────────────────────────────────────
 
+// Keep the baseline scaffold independent of the optional typography-binding helper.
+// Its NativeTypographyTextProps result is structurally compatible with this contract.
+type HeroTypography = Required<Pick<
+  TextProps, 'fontFamily' | 'fontSize' | 'fontWeight' | 'lineHeight' | 'letterSpacing'
+>>;
+
 export function Hero({
   title,
   subtitle,
-  gradient = 'hero',
+  gradient,
   action,
+  backgroundColor = '$accentBase',
+  foregroundColor,
+  titleTypography,
+  subtitleTypography,
+  actionTypography,
+  titleNumberOfLines,
+  subtitleNumberOfLines,
+  actionPlacement = 'auto',
 }: {
   title: string;
   subtitle?: string;
   gradient?: GradientName;
-  action?: { label: string; iconName?: IoniconName; onPress: () => void };
+  action?: { label: string; iconName?: IoniconName; onPress: () => void; disabled?: boolean };
+  backgroundColor?: YStackProps['bg'];
+  /** Custom surfaces/gradients need a verified readable foreground pair. */
+  foregroundColor?: TextProps['color'];
+  titleTypography?: HeroTypography;
+  subtitleTypography?: HeroTypography;
+  actionTypography?: HeroTypography;
+  titleNumberOfLines?: number;
+  subtitleNumberOfLines?: number;
+  actionPlacement?: 'auto' | 'below';
 }) {
-  return (
-    <Gradient name={gradient} style={{ borderRadius: 0 }}>
-      <YStack px="$5" pt="$6" pb="$5" gap="$1">
-        <XStack items="center" justify="space-between">
-          <YStack gap="$1" flex={1}>
-            <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
-              {title}
-            </Text>
-            {subtitle && (
-              <Text fontSize="$3" color="white" numberOfLines={2}>
-                {subtitle}
-              </Text>
-            )}
-          </YStack>
-          {action && (
-            <Button
-              size="$3" chromeless
-              borderColor="rgba(255,255,255,0.7)" borderWidth={1.5}
-              onPress={action.onPress}
-              icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="white" /> : undefined}
-            >
-              <Button.Text color="white">{action.label}</Button.Text>
-            </Button>
+  const { fontScale } = useWindowDimensions();
+  const [contentWidth, setContentWidth] = React.useState(0);
+  // Explicit legacy gradients keep their light foreground; the default solid
+  // surface follows the current theme's paired accent colors in both schemes.
+  const foreground = foregroundColor ?? (gradient ? 'white' : '$accentOnAccent');
+  const inlineAction = actionPlacement === 'auto' && contentWidth >= 480 * fontScale;
+  const content = (
+    <YStack bg={gradient ? undefined : backgroundColor} px="$5" pt="$6" pb="$5">
+      <XStack
+        flexDirection={inlineAction ? 'row' : 'column'}
+        items={inlineAction ? 'center' : 'stretch'} gap="$3"
+        onLayout={event => setContentWidth(event.nativeEvent.layout.width)}
+      >
+        <YStack gap="$2" flex={inlineAction ? 1 : undefined} minW={0}>
+          <Text
+            fontFamily="$heading" fontSize="$7" fontWeight="700" lineHeight="$7" letterSpacing={0}
+            {...titleTypography} color={foreground} role="heading" numberOfLines={titleNumberOfLines}
+          >{title}</Text>
+          {subtitle && (
+            <Text
+              fontFamily="$body" fontSize="$4" fontWeight="400" lineHeight="$4" letterSpacing={0}
+              {...subtitleTypography} color={foreground} numberOfLines={subtitleNumberOfLines}
+            >{subtitle}</Text>
           )}
-        </XStack>
-      </YStack>
-    </Gradient>
+        </YStack>
+        {action && (
+          <Button
+            minW={48} minH={48} height="auto" maxW="100%" px="$3" py="$2"
+            self="flex-start" shrink={1} chromeless
+            color={foreground} borderColor={foreground} borderWidth={1.5}
+            role="button" aria-label={action.label}
+            disabled={action.disabled} onPress={action.onPress}
+            icon={action.iconName ? <Ionicons name={action.iconName} size={24} accessible={false} /> : undefined}
+          >
+            <Button.Text
+              fontFamily="$body" fontSize="$4" fontWeight="600" lineHeight="$4" letterSpacing={0}
+              {...actionTypography} color={foreground} shrink={1} minW={0} ellipsis={false}
+            >{action.label}</Button.Text>
+          </Button>
+        )}
+      </XStack>
+    </YStack>
   );
+  return gradient ? <Gradient name={gradient} style={{ borderRadius: 0 }}>{content}</Gradient> : content;
 }
 
 // ─── SectionHeader ────────────────────────────────────────────────────────────
