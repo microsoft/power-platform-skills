@@ -54,7 +54,17 @@ function walk(dir) {
   // `evals/model-apps/**` and delete it when they finish, so a directory listed a moment ago can be
   // gone by the time it is descended into — which used to crash this whole file with ENOENT, but
   // only when the suite ran together, making it look like an unreproducible flake.
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  //
+  // Narrowed to the race it exists for. A blanket catch would let EACCES/EPERM/ENOTDIR silently
+  // shrink the corpus this guard scans, so the guard would PASS by looking at less — which is the
+  // exact failure mode it was written to prevent. Anything that is not "it vanished" is a real
+  // environment problem and must fail loudly.
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return out;
+    throw err;
+  }
   for (const entry of entries) {
     const p = path.join(dir, entry.name);
     // Scratch output from another test is never a citation source, so skip it outright rather than
@@ -72,8 +82,17 @@ const FILES = [...walk(TESTS_DIR), ...walk(EVALS_DIR)]
   // trivially self-satisfying — the exact failure mode it exists to prevent.
   .filter((f) => path.resolve(f) !== path.resolve(__filename))
   // Same race as `walk`, one level down: a file can vanish between the listing and the read. A file
-  // that no longer exists cannot be anyone's citation, so dropping it is correct as well as safe.
-  .map((f) => { try { return { file: path.basename(f), body: fs.readFileSync(f, 'utf8') }; } catch { return null; } })
+  // that no longer exists cannot be anyone's citation, so dropping it is correct as well as safe —
+  // but only for ENOENT. A permissions error means the corpus is incomplete for a reason nobody
+  // intended, and a guard that quietly scans fewer files is a guard that passes for the wrong reason.
+  .map((f) => {
+    try {
+      return { file: path.basename(f), body: fs.readFileSync(f, 'utf8') };
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return null;
+      throw err;
+    }
+  })
   .filter(Boolean);
 
 function citingFiles(id) {
