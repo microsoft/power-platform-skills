@@ -48,7 +48,8 @@ function assertNoExternalResources(html) {
   }
 
   const checks = [
-    [/\bimport\s*(?:\(|["'{*]|[A-Za-z_$])/, 'module import'],
+    [/\bimport\s*\(/, 'dynamic import'],
+    [/^\s*import\s+(?:["'{*]|[A-Za-z_$])/m, 'module import'],
     [/@import\b/i, 'CSS import'],
     [/\burl\(\s*(?!["']?(?:data:|#))/i, 'CSS resource'],
     [/\bfetch\s*\(/i, 'fetch'],
