@@ -75,6 +75,9 @@ CREATE and complex EDIT workflows return here after the planner finishes.
       are not collapsed into vague combined rows.
     - When review distinguishes approved and rejected outcomes, Approve and Reject/Decline
       have separate contracts owned by the same eligible record surface.
+    - Opposing transitions such as Receive/Issue, Increase/Decrease, Credit/Debit,
+      Allocate/Release, Check-in/Check-out, and Enable/Disable have separate contracts even
+      when one shared form implements both.
     - Every mutation names an observable bound result, not only a confirmation message.
     - Every mutation declares a write set and receipt proof set. For create/edit, reject the
       plan when any user-entered or user-selected write-set field is absent from the proof set.
@@ -89,6 +92,8 @@ CREATE and complex EDIT workflows return here after the planner finishes.
 5. Verify its `## Functional Test Matrix`:
     - Every Action Contract has at least one deterministic Given/When/Then success row.
     - Every required invalid, blocked, empty, clear/reset, or boundary path has a row.
+    - Every direction of an opposing pair has its own concrete scenario with explicit old
+      value/state, selected operation, amount when applicable, and expected new value/state.
     - Every `Then` names a source postcondition and an evidence surface that reads it.
     - Local/mock scenarios use concrete seeded IDs and values. Filter scenarios include at
       least two matching records and one non-matching record.
@@ -225,6 +230,13 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   every user-entered or user-selected field written by the handler needs a readable labeled
   receipt binding. Navigation, a notification, hidden state, or a row somewhere in a longer
   list cannot replace it. Compile success does not prove runtime usability.
+- For every opposing mutation pair, verify both contracts and both concrete scenarios.
+  The operation control is visible and pointer-selectable; submission is disabled while
+  operation or required amount/value is hidden, clipped, blank, invalid, unset, or
+  unreachable; and the handler reads the current explicit selection rather than stale or
+  default state. For arithmetic pairs, substitute the scenario values and verify increase
+  uses `old + amount`, decrease uses `old - amount`, and the receipt shows operation, old
+  value, amount, expected new value, and actual persisted new value.
 - Execute every `## Functional Test Matrix` row symbolically against the final formulas.
   Confirm the Given state makes the entry point eligible, the When event targets the
   declared source and stable ID, the Then values follow from the operation, and the

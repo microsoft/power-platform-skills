@@ -60,6 +60,26 @@ Every action must form one traceable loop:
 - Bind every downstream list, filter, metric, export, and decision surface to the same updated source or refresh the external source before observing it.
 - Define a deterministic Given/When/Then scenario for the success path and each required negative or boundary path. If the generated formulas cannot satisfy that scenario by inspection, the action is incomplete.
 
+## Directional mutation contracts
+
+Opposing transitions are independent behaviors, even when one form implements both.
+Receive/Issue, Increase/Decrease, Credit/Debit, Allocate/Release, Check-in/Check-out, and
+Enable/Disable each require separate Action Contract rows and separate concrete
+Given/When/Then scenarios.
+
+- A shared form is valid only when the operation selector and amount or value input are
+  visible, pointer-selectable, and included in the mutation formula and receipt.
+- Disable submission whenever the operation or required amount/value is hidden, clipped,
+  blank, invalid, unset, or unreachable. Never fall through to a default direction or use
+  stale operation state from an earlier interaction.
+- For arithmetic pairs, capture the old value before mutation and encode the direction
+  explicitly: increase is `newValue = oldValue + amount`; decrease is
+  `newValue = oldValue - amount`. State pairs must likewise assign explicit opposing
+  target states rather than toggle implicit state.
+- The receipt shows the chosen operation, old value/state, amount when applicable,
+  expected new value/state, and actual persisted new value/state. The destination observer
+  must agree with that receipt.
+
 ## Mutation receipt contract
 
 - Reserve a compact result card, banner, or detail region in the action screen's initial viewport. Hide it until a mutation succeeds.

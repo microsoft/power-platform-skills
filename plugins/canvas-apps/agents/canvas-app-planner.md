@@ -172,11 +172,18 @@ Before writing plans:
     behaviors into separate rows when requested or implied by that role-scoped lifecycle.
     When review has approved and rejected outcomes, require both Approve and Reject/Decline
     contracts on the same eligible record surface. A lone decision is an incomplete plan;
-    phone density may change their arrangement but may not remove either contract.
+    phone density may change their arrangement but may not remove either contract. Treat
+    Receive/Issue, Increase/Decrease, Credit/Debit, Allocate/Release, Check-in/Check-out,
+    Enable/Disable, and other opposing transitions as separate contracts even when they use
+    one shared form.
 13. For every Action Contract, name its eligible precondition, source of truth, immutable
     record identity, exact event, source transition, postcondition, observer formula, and
     visible evidence. Verify the observer reads the same source and field the event writes.
-    A control label and an `OnSelect` formula are not a complete contract.
+    A control label and an `OnSelect` formula are not a complete contract. For opposing
+    transitions, name the visible pointer-selectable operation control and require the
+    submit action to remain disabled while the operation or required amount/value is
+    hidden, clipped, blank, invalid, unset, or unreachable. Never permit an implicit,
+    default, or stale mutation direction.
 14. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
     stable ID, or deletion snapshot. Record the mutation's **write set** and **proof set** in
@@ -204,7 +211,10 @@ Before writing plans:
     negative path. Use concrete seeded IDs and values for local/mock data. Each `Then`
     names the source postcondition and the exact observer/evidence surface that proves it.
     In EDIT mode, add regression scenarios for existing behaviors whose source, fields,
-    controls, or observer formulas are touched.
+    controls, or observer formulas are touched. Give each direction of an opposing pair a
+    separate scenario using a concrete old value and amount. For arithmetic pairs, require
+    `increase = old + amount` and `decrease = old - amount`, and require the receipt to
+    show operation, old value, amount, expected new value, and actual persisted new value.
 18. For every selector or filter, couple the concrete option source, readable option
     formula, pointer-committed selected value, consumer predicate, active-selection
     indicator, and clear behavior. Apply the short-choice rule to filters as well as form

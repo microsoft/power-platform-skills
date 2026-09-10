@@ -1330,10 +1330,29 @@ prove that the requested outcome occurred.
 9. Mentally substitute the Functional Test Scenario's concrete Given values into the
    handler. Confirm its Then postcondition and every proof-set value follow from the
    formula without assuming runtime state not established by the app.
+10. For opposing transitions, confirm each direction has a separate Required Action and
+    concrete scenario. A shared form may share controls but not contracts or expected
+    outcomes.
+11. Confirm the operation selector and required amount/value input are visible,
+    pointer-selectable, inside parent bounds, and reachable in the scenario's Given state.
+    Confirm submit is disabled when either input is hidden, clipped, blank, invalid, unset,
+    or unreachable.
+12. Trace the current selected operation into the mutation formula. Reject a hard-coded
+    default direction, a stale variable from an earlier interaction, or a toggle that
+    infers the requested direction from prior state.
+13. For arithmetic pairs, substitute the same concrete old value and amount into both
+    scenarios. Increase must produce `old + amount`; decrease must produce
+    `old - amount`. Reject a reversed sign even when the formula compiles.
+14. Confirm the receipt binds the selected operation, old value, amount, expected new
+    value, and actual persisted new value, and that the destination observer shows the
+    same actual value.
 
 **Fix:** Preserve the affected record state, update or refresh the visible binding, and add
 the required in-viewport mutation receipt with write-set/proof-set parity and one labeled
-binding per proof-set field. `Notify()` alone is not an observable outcome.
+binding per proof-set field. For opposing transitions, split merged contracts and
+scenarios, expose a reachable operation selector, fail closed on invalid inputs, repair the
+arithmetic direction, and show complete before/after receipt evidence. `Notify()` alone is
+not an observable outcome.
 
 **Exception:** None for a mutation named in `## Required Actions`.
 

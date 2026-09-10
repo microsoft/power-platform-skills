@@ -62,7 +62,10 @@ choices, defaults, stable identity, prepopulation, cancel behavior, and a determ
 post-save mutation receipt bound to the changed ID. For every mutation, enumerate the write
 set and proof set. A create/edit proof set must contain every user-entered or user-selected
 field in the write set. Name the receipt control, visibility state, and labeled binding for
-each proof-set field. Do not use navigation, a notification, or a row somewhere in a longer
+each proof-set field. Opposing transitions have separate rows even when they share a form.
+For an arithmetic pair, each row names old value, amount, explicit `+` or `-` arithmetic,
+and a proof set containing operation, old value, amount, expected new value, and actual
+persisted new value. Do not use navigation, a notification, or a row somewhere in a longer
 list as the Observable result.]
 
 ## Functional Test Matrix
@@ -74,7 +77,9 @@ list as the Observable result.]
 [Include at least one success scenario for every Action Contract and one row for every
 required boundary or negative path. Use concrete seeded IDs and values when the app uses
 local/mock data. Every Then clause must be provable from the named source through the
-Evidence surface; do not use appearance, navigation, or notification as proof.]
+Evidence surface; do not use appearance, navigation, or notification as proof. Opposing
+transitions require separate scenarios with the same concrete old value and amount so
+their expected results prove both arithmetic directions.]
 
 ## Working Directory
 
@@ -137,7 +142,9 @@ list, card, row, or detail surface.]
 [Include only actions stated by the request or approved plan. Preserve unaffected existing
 actions, and do not expand the edit into universal CRUD. Preserve the semantic contracts
 for role-scoped primary-record management, paired review decisions, requested periods or
-cycles, and requested export/report output.]
+cycles, and requested export/report output. Preserve or add separate Action Contract rows
+for opposing transitions. A shared form does not merge Receive/Issue, Increase/Decrease,
+Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable/Disable into one contract.]
 
 ## Functional Test Matrix
 
@@ -146,7 +153,9 @@ cycles, and requested export/report output.]
 | [Changed or regression path] | [Current or seeded state] | [Exact visible interaction] | [Exact preserved or changed postcondition] | [Observer/control reading the source] | [Required failure/boundary behavior, or N/A] |
 
 [Cover every changed Action Contract and every existing action whose source, fields,
-controls, or observer are touched by this edit. This is the regression contract.]
+controls, or observer are touched by this edit. This is the regression contract. When an
+opposing pair is affected, include one concrete scenario per direction and verify explicit
+before/amount/after semantics.]
 
 ## Working Directory
 

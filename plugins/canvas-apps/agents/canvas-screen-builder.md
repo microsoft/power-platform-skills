@@ -134,6 +134,15 @@ Do not fix unrelated pre-existing issues.
 - Treat every Required Action as one closed transition loop: reachable eligible entry,
   event, operation against the named source and stable ID, declared postcondition, observer
   reading that same source, and visible evidence. Do not write one field and render another.
+- Implement opposing transitions as separate Required Actions and scenarios even when they
+  share a form. Keep the operation selector visible and pointer-selectable, branch the
+  mutation formula on the current explicit selection, and never reuse stale or implicit
+  direction state. Disable submission when the operation or required amount/value is
+  hidden, clipped, blank, invalid, unset, or unreachable.
+- For arithmetic pairs, capture the old value before mutation and implement the exact
+  direction: increase uses `oldValue + amount`; decrease uses `oldValue - amount`. The
+  receipt renders operation, old value, amount, expected new value, and actual persisted
+  new value, and the destination surface reads that same persisted value.
 - Implement every row in `Functional Test Scenarios`. Use its Given state to verify
   visibility and enablement, mentally execute the exact When interaction, then trace the
   resulting source values through the named observer and evidence. Implement boundary and
