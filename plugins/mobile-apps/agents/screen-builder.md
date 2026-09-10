@@ -58,6 +58,8 @@ sections from `native-app-plan.md`, not the entire plan or other screens. Resolv
    inherited `## Design` / `## Design Direction`, and actual token/config declarations.
    Use the relevant accepted intent-preview screen as a visual reference, not production HTML/data;
    follow its reconciled spec and tokens. Resolve material drift in foreground, not a silent redesign.
+   Preserve typography, navigation cues and alignment under [native presentation handoff](../shared/references/native-visual-review.md).
+   Report missing full-screen rendered evidence; static checks are not visual approval.
 
 Compact specs intentionally omit inherited defaults. Do not demand repeated chrome,
 loading copy, or imports. Check these existing sources before `NEEDS_CONTEXT`.

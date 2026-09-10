@@ -62,6 +62,19 @@ is not. If a fixed requirement needs revision, return the delta to foreground ra
 silently changing it. Missing layout detail alone is not missing product context: infer a
 presentation proposal from the approved job and disclose it for visual review.
 
+Do not overcorrect a crowded composition into a visually empty one. Preserve accepted
+identity, useful hierarchy and task context while reducing excess chrome, repeated copy or
+oversized media. A compact hero, illustration, contextual panel or plain list can each be
+appropriate; neither adding nor removing a hero is a universal quality rule.
+
+When a reference contains unimplemented context, distinguish **real integration** from
+**explicit demo presentation** instead of treating both as forbidden. Ask the foreground once
+which is intended if the choice changes behavior. Approved demo context may be coherent
+synthetic values and a clearly labeled local simulation; it must not impersonate a real
+booking, patient record, payment, approval, delivery or service promise. Keep it separate from
+live data and never use it to mask a failed request. Centralize shared demo values and preserve
+them across screens; the completion explicitly states what did **not** happen.
+
 For a supplied screenshot or HTML reference, record **Adopt / Adapt / Exclude** in the existing
 brand provenance: transferable hierarchy/media/density, native or accessibility adjustments,
 and unsupported data/actions. A visual reference does not authorize new business behavior.

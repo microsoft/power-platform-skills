@@ -86,16 +86,18 @@ The policy changes repair handling, never the requirement for a clean gate.
 
 **Telemetry checkpoint: `validate_screen_design_quality`**
 
-Scope: exact generated/changed screen files from Screen Map and this run, not generated services,
-brand, node_modules, sample files or unrelated routes. Include layouts only for a finding in
-generated screen chrome. Run available report-mode validators:
+Scope: exact generated/changed screen files and referenced changed local UI components, not
+generated services, node_modules, samples or unrelated routes. Review layout/provider inset
+ownership separately; these pattern scanners may exclude layouts and configuration. Run:
 
 ```bash
-node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <exact-screen-files>
-node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <exact-screen-files>
+node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report --strict <exact-screen-and-component-files>
+node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report --strict <exact-screen-and-component-files>
 ```
 
-Merge JSON issues by file/rule; use current content, not stale line numbers.
+Read coverage, errors, skipped reasons and JSON issues; a missing/empty scan is not a pass.
+Merge issues by file/rule; use current content, not stale line numbers.
+These source-pattern heuristics do not measure every rendered contrast pair or certify visual quality.
 Batch deterministic fixes per file (contrast/token pairs, labels/roles, targets, safe-area edges,
 font scaling); preserve the canonical Tamagui vs raw React Native accessibility props.
 For judgment calls (structure, brand intent, redundant status cues), review rather than churn.
@@ -105,6 +107,10 @@ These are explicit validators, never global plugin write hooks.
 Run `npx tsc --noEmit` after repairs. Record remaining nonblocking visual judgments as
 `DONE_WITH_CONCERNS`; never downgrade a required compile/route/mobile-validator failure.
 Run mandatory `validate-mobile-files.js` on every exact changed file before success.
+For changed typography, retain the canonical final-config `assertNativeFontDefaults` and
+complete role props from Step 9b. Its presence is not an executed test: distinguish helper
+regressions/type checks from observing this app's assertion at load. Unsupported/unobserved
+font configurations remain typography-unverified, and native font availability needs device evidence.
 
 ## Minimum product UX review
 
@@ -124,10 +130,18 @@ foreground's owning approval gate; cosmetic choices remain advisory. Record what
 and any unexecuted behavior honestly. Source review or an HTML simulation is not native/device
 verification, and must not be reported as one.
 
-## Optional static preview
+## Full-screen presentation handoff
 
-After clean gates, offer all screens / key journey screens / skip (default skip, not implied
-approval). Invoke `/preview-screens --mode implementation` for an explicit preview request
-and pass actual files. It reads built TSX/config/local components and writes `preview.html`;
-do not substitute the pre-build `_design_preview.html` or render the old plan as implemented UI.
-Honor `visual_companion`; static HTML is not runtime proof. Continue to the launch phase.
+After clean gates, follow [native presentation handoff](${PLUGIN_ROOT}/shared/references/native-visual-review.md).
+Use `/preview-screens --mode implementation` for complete affected screens and the primary
+journey, not only a component gallery. It reads built TSX/config/local components and writes
+`preview.html`; do not substitute `_design_preview.html` or improve the HTML to hide source drift.
+Record/check its source provenance and inspect typography, media resolution, repeated-item
+alignment, header/Back, tabs/footer and primary action placement at matching usable viewports.
+The accepted design is the minimum baseline, not a promise tied to a particular model.
+
+Honor explicit preview opt-out and `visual_companion` (which controls opening). Unavailable
+rendered evidence or component-only scope must remain `DONE_WITH_CONCERNS` / unverified, not a
+visual pass. Keep static, rendered-approximation and native-device results separate. Continue
+to launch only after structural gates pass and remaining concerns are surfaced; never imply
+native verification from HTML or idle Metro output.

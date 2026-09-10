@@ -1,33 +1,36 @@
 #!/usr/bin/env node
 
 /**
- * Explicit validator: catch contrast-failing color usage in TS/TSX files.
+ * Explicit source-pattern validator: flag potential contrast risks in TSX.
  *
- * Fires after Write / Edit / MultiEdit. Scans the resulting content for
- * patterns that historically fail WCAG AA in this plugin's generated apps:
+ * Workflow gate: node validate-color-contrast.js --report --strict <targets...>
+ * Scans text for recurring source patterns, not rendered foreground/background
+ * pairs. Alpha thresholds and token names cannot establish WCAG conformance:
  *
  *   1. Hardcoded hex on `color=` / `bg=` / `borderColor=` props (token bypass —
  *      doesn't adapt across light/dark and often fails contrast in one mode).
  *   2. Low-alpha rgba() on text or borders (e.g. `rgba(255,255,255,0.4)` border,
- *      `rgba(255,255,255,0.7)` text — both fail their respective WCAG ratios).
+ *      `rgba(255,255,255,0.7)` text — opacity alone cannot determine contrast).
  *   3. Low-contrast foreground tokens for readable text/icon states
  *      (`color="$color8"`, `$gray7`, etc.). These are too faint for inactive
  *      tabs, metadata, form helper text, and icon-only controls on mobile.
  *   4. White text on yellow/orange status fills, which often fails WCAG AA.
  *
- * Exits with code 2 + corrective message on stderr to block the call and
- * force the agent to fix it.
+ * Reports exact scanned/skipped paths, failures, findings and limitations.
+ * The legacy Write/Edit/MultiEdit stdin protocol remains for the explicit
+ * validate-mobile-files dispatcher; it is NOT registered in global hooks.
  *
- * Exit codes:
- *   0 = pass (no contrast issues, or not a TS/TSX file, or not a write tool)
- *   2 = block + show stderr to the model (Claude Code convention)
+ * Report exits: 0 = no findings (or informational --report findings),
+ *   1 = --strict findings, 2 = incomplete scan/invalid arguments.
+ * Legacy stdin exits: 0 = no findings/not watched/unparseable input,
+ *   2 = findings or unreadable source. See --help for the report contract.
  */
 
 const fs = require('fs');
-const path = require('path');
+const { runSourceReport, sourceFileExclusion } = require('../scripts/lib/source-pattern-report');
 
 const ALLOWED_HINT =
-  'Use Tamagui semantic tokens ($color10, $color12, $blue11, $statusOverdue, etc.) — they auto-adapt across light + dark mode and are pre-tested for AA contrast. Never hardcode hex on color/bg/borderColor props in TSX. See shared/references/accessibility-checklist.md for the contrast bar (4.5:1 body / 3:1 large text + non-text UI).';
+  'Prefer verified Tamagui semantic tokens ($color10, $color12, $blue11, $statusOverdue, etc.) over literal colors. Token names do not guarantee contrast: verify actual foreground/background pairs in light and dark mode. See shared/references/accessibility-checklist.md for contrast targets (4.5:1 body / 3:1 large text + non-text UI).';
 
 // ─── Pattern 1: hardcoded hex on color/bg/borderColor props ──────────────────
 // Matches:  color="#abc"  bg="#abcdef"  borderColor='#aabbcc'  color={someVar ? '#aaa' : '#bbb'}
@@ -37,8 +40,8 @@ const HEX_ON_COLOR_PROP = /\b(?:color|bg|background|borderColor)\s*=\s*['"]#[0-9
 const TERNARY_HEX_ON_COLOR_PROP = /\b(?:color|bg|background|borderColor)\s*=\s*\{[^}]*['"]#[0-9a-fA-F]{3,8}['"][^}]*\}/g;
 
 // ─── Pattern 2: low-alpha rgba on text / border ──────────────────────────────
-// Catches the failing-AA case: white-or-near-white text below ~0.85 alpha,
-// any-color borders below ~0.65 alpha (UI 3:1 threshold).
+// Heuristic thresholds for any RGB text/border values, not WCAG calculations.
+// Actual contrast depends on compositing, the background, and text size.
 //
 // Specifically flags:
 //   color="rgba(255,255,255,0.X)"     where X < 85
@@ -66,12 +69,7 @@ const WHITE_ON_YELLOW_ORANGE_REVERSED = new RegExp(
 );
 
 function isWatchedFile(filePath) {
-  if (typeof filePath !== 'string') return false;
-  // Only watch screen / component / sample TSX. Skip pure utility .ts files
-  // and skip the validator scripts themselves.
-  if (!/\.(tsx)$/i.test(filePath)) return false;
-  if (filePath.includes('/hooks/') && filePath.endsWith('.js')) return false;
-  return true;
+  return typeof filePath === 'string' && !sourceFileExclusion(filePath, 'tsx');
 }
 
 function isWriteTool(toolName) {
@@ -91,14 +89,7 @@ function extractContent(toolName, toolInput) {
       .join('\n');
   }
   const fp = toolInput.file_path || toolInput.filePath;
-  if (typeof fp === 'string' && fs.existsSync(fp)) {
-    try {
-      return fs.readFileSync(fp, 'utf8');
-    } catch {
-      return '';
-    }
-  }
-  return '';
+  return fs.readFileSync(fp, 'utf8');
 }
 
 // Strip out shadowColor lines (legitimate RN pattern — '#000' is the standard
@@ -127,7 +118,7 @@ function findIssues(content) {
   while ((mt = LOW_ALPHA_TEXT_RE.exec(cleaned))) {
     const alpha = parseInt(mt[1], 10) / (mt[1].length === 1 ? 10 : 100);
     issues.push({
-      type: `low-alpha text (alpha=${alpha.toFixed(2)} — needs ≥0.85 for AA at small sizes)`,
+      type: `low-alpha text (alpha=${alpha.toFixed(2)} — heuristic threshold <0.85)`,
       match: mt[0].trim(),
     });
   }
@@ -138,7 +129,7 @@ function findIssues(content) {
   while ((mb = LOW_ALPHA_BORDER_RE.exec(cleaned))) {
     const alpha = parseInt(mb[1], 10) / (mb[1].length === 1 ? 10 : 100);
     issues.push({
-      type: `low-alpha border (alpha=${alpha.toFixed(2)} — needs ≥0.65 for UI 3:1)`,
+      type: `low-alpha border (alpha=${alpha.toFixed(2)} — heuristic threshold <0.65)`,
       match: mb[0].trim(),
     });
   }
@@ -185,7 +176,7 @@ function findIssues(content) {
 
 function buildBlockMessage(filePath, issues) {
   const userMsg =
-    `\n[mobile-app] Found ${issues.length} contrast issue${issues.length === 1 ? '' : 's'} in ${filePath} that would fail WCAG AA. Claude will revise.\n`;
+    `\n[mobile-app] Found ${issues.length} contrast-risk source pattern${issues.length === 1 ? '' : 's'} in ${filePath}. These heuristics do not measure rendered WCAG contrast.\n`;
   const modelMsg =
     `\n--- For Claude ---\n` +
     `${issues.length} contrast issue${issues.length === 1 ? '' : 's'} blocking the write to ${filePath}:\n\n` +
@@ -206,27 +197,6 @@ function buildBlockMessage(filePath, issues) {
   return userMsg + modelMsg;
 }
 
-function collectTargetFiles(targets) {
-  const files = [];
-  const roots = targets.length > 0 ? targets : [process.cwd()];
-
-  function walk(target) {
-    if (!fs.existsSync(target)) return;
-    const stat = fs.statSync(target);
-    if (stat.isDirectory()) {
-      for (const entry of fs.readdirSync(target)) {
-        if (entry === 'node_modules' || entry === '.expo' || entry === 'dist' || entry === 'build') continue;
-        walk(path.join(target, entry));
-      }
-      return;
-    }
-    if (stat.isFile() && isWatchedFile(target)) files.push(target);
-  }
-
-  for (const target of roots) walk(path.resolve(target));
-  return files;
-}
-
 function lineForMatch(content, match) {
   const idx = content.indexOf(match);
   if (idx < 0) return 1;
@@ -241,7 +211,7 @@ function fixForIssue(issue) {
     return 'Use a stronger foreground token or full-opacity text; readable text must meet AA contrast.';
   }
   if (issue.type.includes('low-alpha border')) {
-    return 'Use a stronger border token or raise border opacity/width so non-text UI reaches 3:1 contrast.';
+    return 'Review the composited border/background pair; a stronger token or opacity may help. Verify 3:1 where required for non-text UI; border width does not establish a contrast ratio.';
   }
   if (issue.type.includes('low-contrast foreground token')) {
     return 'Use $color10 or stronger for metadata, inactive controls, helper text, and icon affordances.';
@@ -257,30 +227,17 @@ function isAutoFixable(issue) {
 }
 
 function runReportMode() {
-  const targets = process.argv.filter((arg) => arg !== '--report').slice(2);
-  const issues = [];
-  for (const filePath of collectTargetFiles(targets)) {
-    let content = '';
-    try {
-      content = fs.readFileSync(filePath, 'utf8');
-    } catch {
-      continue;
-    }
-    for (const issue of findIssues(content)) {
-      issues.push({
-        validator: 'validate-color-contrast',
-        file: path.relative(process.cwd(), filePath) || filePath,
-        line: lineForMatch(content, issue.match),
-        rule: issue.type,
-        match: issue.match,
-        fix: fixForIssue(issue),
-        autoFixable: isAutoFixable(issue),
-      });
-    }
-  }
-
-  process.stdout.write(JSON.stringify({ validator: 'validate-color-contrast', issues }, null, 2) + '\n');
-  process.exit(0);
+  return runSourceReport({
+    validator: 'validate-color-contrast',
+    scope: 'tsx',
+    analyze: (content) => findIssues(content).map((issue) => ({
+      line: lineForMatch(content, issue.match),
+      rule: issue.type,
+      match: issue.match,
+      fix: fixForIssue(issue),
+      autoFixable: isAutoFixable(issue),
+    })),
+  });
 }
 
 function main() {
@@ -293,6 +250,7 @@ function main() {
     } catch {
       process.exit(0);
     }
+    if (!input || typeof input !== 'object') process.exit(0);
 
     const toolName = input.tool_name;
     const toolInput = input.tool_input || {};
@@ -301,7 +259,14 @@ function main() {
     const filePath = toolInput.file_path || toolInput.filePath;
     if (!isWatchedFile(filePath)) process.exit(0);
 
-    const content = extractContent(toolName, toolInput);
+    let content;
+    try {
+      content = extractContent(toolName, toolInput);
+    } catch (error) {
+      if (typeof error.code !== 'string' || typeof error.syscall !== 'string') throw error;
+      process.stderr.write(`[mobile-app] Cannot read contrast source ${filePath}: ${error.code}. Validation is incomplete.\n`);
+      process.exit(2);
+    }
     if (!content) process.exit(0);
 
     const issues = findIssues(content);
@@ -312,8 +277,8 @@ function main() {
   });
 }
 
-if (process.argv.includes('--report')) {
-  runReportMode();
+if (process.argv.length > 2) {
+  process.exitCode = runReportMode();
 } else {
   main();
 }

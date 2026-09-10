@@ -231,6 +231,20 @@ If a single PDF/signature request requires multiple plan sections, say so and ru
 
 Before spawning architects or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors `/create-mobile-app` Step 2c at edit scale.
 
+For a bounded source-only repair whose exact delta is already known from inspection, combine
+this impact preview with Step 3's before/after, file scope and verification proposal in one
+foreground question. An explicit acceptance of that exact proposal satisfies both gates;
+record it once and continue with the approved delta, without another approval prompt or
+unnecessary planner dispatch. This shortcut never covers new data/schema, dependencies,
+native capabilities, route changes or a still-ambiguous redesign.
+In this bounded branch, the inline proposal replaces Step 2's read-only reproposal and Step 3's
+second question; proceed to Step 4 with the explicitly accepted delta and retain all later gates.
+
+If a question is interrupted, canceled or unavailable, state **paused; edits have not started**,
+record the pending decision in the existing memory bank, and stop. A status question or repeated
+screenshot is not consent and must not automatically reopen the same prompt. On resume, retain
+the inspected context and accepted scope; repeat health checks only if relevant files changed.
+
 Compute:
 
 - **Cost tier:** Cheap (single existing screen), Medium (new route/form/detail or one data source), Heavy (multi-screen/nav/design/data/native), Major (reskin or broad screen rebuild).
@@ -565,14 +579,23 @@ If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 node scripts/check-routes.js
 ```
 
-When screen files changed, run the mobile plugin's report-mode validators explicitly:
+When screens or shared UI changed, run the mobile plugin's strict report-mode validators on
+the exact changed screen/component files. Inspect layout/provider inset ownership separately:
 
 ```bash
-node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
-node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
+node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report --strict <exact-screen-and-component-files>
+node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report --strict <exact-screen-and-component-files>
 ```
 
 Treat validator findings like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator once. These scripts are invoked only inside the mobile workflow; do not register them as plugin-wide hooks.
+Inspect coverage, errors and skipped reasons as well as `issues`. An unreadable target or empty
+scan is not a pass. These are source-pattern heuristics, not measured rendered contrast or UX.
+For typography edits, use the canonical
+[native typography contract](${PLUGIN_ROOT}/skills/design-system/references/tamagui-integration.md#typography-binding):
+copy/merge its helpers, preserve fonts, apply complete role props, and assert the final host
+configuration with `assertNativeFontDefaults`. Type-check afterward. Record this app's assertion
+as typography-unverified until observed at load; a matching helper name in source or passing
+plugin fixture test is not execution evidence. Do not add a broad arbitrary-config evaluator.
 
 #### Step 7.1 — Targeted style-quality sweep
 
@@ -580,7 +603,7 @@ When screen files changed, run a focused version of `/create-mobile-app` Step 11
 
 Rules:
 
-1. Run `validate-screen-quality.js --report` and `validate-color-contrast.js --report` when available.
+1. Run `validate-screen-quality.js --report --strict` and `validate-color-contrast.js --report --strict` when available.
 2. Merge issues by file and rule.
 3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `aria-label`, missing `role`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
 4. Treat judgement calls as concerns, not infinite loops: complex safe-area restructuring, ambiguous brand color choices, large hierarchy redesigns, or empty-state rewrites that require large JSX movement.
@@ -598,6 +621,14 @@ If verification fails because the edit exposed stale generated services, rerun t
 Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
 If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens --mode implementation` after verification. This reads actual TSX/config/local components, regenerates `preview.html`, and opens it according to the project's `visual_companion` setting. Do not substitute a plan-derived intent preview for the edited implementation.
+Follow [native presentation handoff](${PLUGIN_ROOT}/shared/references/native-visual-review.md):
+review complete affected screens and required journey destinations, not merely isolated icons.
+Preserve the accepted preview's hierarchy/layout as the minimum baseline while respecting
+native text scaling and targets. Record/check the preview's source provenance, reload it from
+disk, and compare typography, media resolution, header/Back, repeated-item alignment, tabs/footer
+and primary action clearance. An explicit preview opt-out or component-only request remains
+unverified for full-screen quality. Keep source checks, rendered approximation and device
+evidence separate; no evidence means no visual/native success claim.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 
@@ -612,7 +643,7 @@ Append an edit entry to `memory-bank.md`:
 - Plan sections changed: <Data Model / Native Capabilities / Screens / Design / Connectors>
 - App changes: <screens/routes/native wrappers/data sources>
 - Verification: <commands/gates + pass/fail/skipped with reason>
-- Preview: <preview.html path or not generated>
+- Preview: <path, mode, full-screen/component scope, provenance check, rendered evidence or unverified reason>
 - Debug handoff: <not requested / /debug-app "<symptom>" invoked>
 - Blocks/concerns: <none or list>
 ```

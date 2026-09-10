@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Explicit validator: enforce screen-quality rules deterministically.
+ * Explicit source-pattern validator: flag potential screen-quality problems.
  *
  * Replaces these per-screen self-check rules from agents/screen-builder.md:
  *   - #20 Palette warmth (no raw grays in screens)
@@ -13,22 +13,26 @@
  *     bottom-anchored controls under the tab/home area, icon-only controls without
  *     labels, tappable custom stacks without roles, and too-small icon buttons.
  *
- * Fires after Write / Edit / MultiEdit on .tsx files inside `app/` or
- * `src/components/` of a generated project. Reads the tool_input from stdin,
- * scans content for forbidden patterns, exits 2 + corrective stderr to block.
+ * Workflow gate: node validate-screen-quality.js --report --strict <targets...>
+ * Reports scanned/skipped paths, failures, findings and heuristic limitations.
+ * This does not measure rendered visual quality or accessibility conformance.
+ * The legacy Write/Edit/MultiEdit stdin protocol remains for the explicit
+ * validate-mobile-files dispatcher; it is NOT registered in global hooks.
  *
  * Scope:
  *   - Watches: app/(any-path)/*.tsx, src/components/(any-path)/*.tsx
  *   - Skips:   route layouts, brand/tokens.ts, tamagui.config.ts, tests,
  *              node_modules, src/generated (auto-generated), shared/samples
  *
- * Exit codes:
- *   0 = pass (clean, not watched, or unparseable input)
- *   2 = block + show stderr to model
+ * Report exits: 0 = no findings (or informational --report findings),
+ *   1 = --strict findings, 2 = incomplete scan/invalid arguments.
+ * Legacy stdin exits: 0 = no findings/not watched/unparseable input,
+ *   2 = findings or unreadable source. See --help for the report contract.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { runSourceReport, sourceFileExclusion } = require('../scripts/lib/source-pattern-report');
 
 // ─── File-scope filtering ────────────────────────────────────────────────────
 
@@ -37,30 +41,7 @@ function isWriteTool(toolName) {
 }
 
 function isWatchedFile(filePath) {
-  if (typeof filePath !== 'string') return false;
-  if (!/\.tsx$/i.test(filePath)) return false;
-
-  const norm = filePath.replace(/\\/g, '/');
-
-  // Exclusions — these legitimately contain hex / inline shadows / etc.
-  const exclude = [
-    /\/_layout\.tsx$/,
-    /\/brand\//,
-    /\/tamagui\.config\.ts/,
-    /\/node_modules\//,
-    /\/tests?\//,
-    /\/src\/generated\//,
-    /\/shared\/samples\//, // plugin source, not a generated app screen
-    /\/\.expo\//,
-    /\/dist\//,
-    /\/build\//,
-  ];
-  for (const re of exclude) {
-    if (re.test(norm)) return false;
-  }
-
-  // Inclusions — must be inside an `app/` or `src/components/` of a project
-  return /\/app\//.test(norm) || /\/src\/components\//.test(norm);
+  return typeof filePath === 'string' && !sourceFileExclusion(filePath, 'screens');
 }
 
 // ─── Content extraction ──────────────────────────────────────────────────────
@@ -77,16 +58,9 @@ function extractContent(toolName, toolInput) {
       .map((e) => (e && typeof e.new_string === 'string' ? e.new_string : ''))
       .join('\n');
   }
-  // Fallback: PostToolUse may have already executed the write — read from disk
+  // Legacy callers without an inline write/edit payload must supply a readable file.
   const fp = toolInput.file_path || toolInput.filePath;
-  if (typeof fp === 'string' && fs.existsSync(fp)) {
-    try {
-      return fs.readFileSync(fp, 'utf8');
-    } catch {
-      return '';
-    }
-  }
-  return '';
+  return fs.readFileSync(fp, 'utf8');
 }
 
 // ─── Rule 1: Forbidden vague Tamagui token shorthands ────────────────────────
@@ -153,7 +127,7 @@ function findJsxOpeningTags(content, componentNames) {
       else if (char === '{') braceDepth += 1;
       else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
       else if (char === '>' && braceDepth === 0) {
-        tags.push({ name: startMatch[1], tag: content.slice(startMatch.index, index + 1) });
+        tags.push({ name: startMatch[1], tag: content.slice(startMatch.index, index + 1), start: startMatch.index, end: index + 1 });
         startRe.lastIndex = index + 1;
         break;
       }
@@ -306,16 +280,6 @@ function findSafeAreaProblems(content) {
     });
   }
 
-  const bottomActionBar = /<BottomActionBar\b/.test(content);
-  const safeAreaTopOnly = /<SafeAreaView\b[^>]*edges=\{\s*\[\s*['"]top['"]\s*\]\s*\}/.test(content);
-  if (bottomActionBar && safeAreaTopOnly) {
-    violations.push({
-      rule: 'bottom-ui-safe-area-top-only',
-      match: '<SafeAreaView edges={[\'top\']}> ... <BottomActionBar>',
-      fix: 'Use edges={[\'top\', \'bottom\']} whenever the screen has BottomActionBar, sticky form actions, or other bottom-anchored UI.',
-    });
-  }
-
   // Branch parity guard: if the populated branch has SafeAreaView but loading/error
   // branches early-return shared states above it, headers can clip under status/notch.
   const hasSafeAreaView = /<SafeAreaView\b/.test(content);
@@ -417,15 +381,24 @@ function findA11yControlProblems(content) {
     }
   }
 
-  const tappableContainerRe = /<(Button|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback|XStack|YStack|ZStack|Stack|View)\b(?=[^>]*\bonPress=)[^>]*>([\s\S]{0,1800}?)<\/\1>/g;
-  while ((m = tappableContainerRe.exec(content)) !== null) {
-    const block = m[0];
-    const body = m[2] || '';
-    const nestedInteractive = /<(Button|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback|Link)(?=\s|\/?>)|<(XStack|YStack|ZStack|Stack|View)(?=\s|\/?>)(?=[^>]*\bonPress=)/.test(body);
+  const controls = new Set(['Button', 'Pressable', 'TouchableOpacity', 'TouchableHighlight', 'TouchableWithoutFeedback', 'Link', 'XStack', 'YStack', 'ZStack', 'Stack', 'View']);
+  const plainControl = /^<(?:Button|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback|Link|XStack|YStack|ZStack|Stack|View)(?=\s|\/?>)/;
+  for (const opening of findJsxOpeningTags(content, controls)) {
+    if (!plainControl.test(opening.tag) || !/\bonPress\s*=/.test(opening.tag) || /\/>$/.test(opening.tag)) continue;
+    // A JSX icon prop can contain '/>'. Find the actual outer tag boundary before
+    // inspecting children, so a self-closing button cannot absorb a later sibling.
+    const close = content.indexOf(`</${opening.name}>`, opening.end);
+    if (close < 0 || close - opening.end > 1800) continue;
+    const body = content.slice(opening.end, close);
+    const nestedInteractive = findJsxOpeningTags(body, controls).some(child =>
+      plainControl.test(child.tag) && (
+        /^(?:Button|Pressable|TouchableOpacity|TouchableHighlight|TouchableWithoutFeedback|Link)$/.test(child.name) ||
+        /\bonPress\s*=/.test(child.tag)
+      ));
     if (nestedInteractive) {
       violations.push({
         rule: 'nested-touch-targets',
-        match: block.slice(0, 220),
+        match: content.slice(opening.start, close + opening.name.length + 3).slice(0, 220),
         fix: 'Do not nest tappable controls inside another onPress parent. Give the row/card a single press owner, move child actions to siblings, or make decorative child overlays pointerEvents="none" so they do not intercept the parent tap.',
       });
     }
@@ -488,7 +461,7 @@ function buildBlockMessage(filePath, violations) {
   const lines = [];
 
   lines.push(
-    `[mobile-app] A screen file was written with patterns known to cause silent UI bugs (invisible text, broken pull-to-refresh, dark-mode mismatch). The write was blocked; Claude will fix and retry — no action needed from you.`
+    '[mobile-app] Source-pattern heuristics found potential UI problems. Review the findings before workflow completion; this is not a rendered visual-quality or accessibility assessment.'
   );
   lines.push('');
   lines.push(`For Claude: BLOCKED: screen-quality violations in ${rel}`);
@@ -509,7 +482,6 @@ function buildBlockMessage(filePath, violations) {
     'empty-state-branched-above-flatlist': 'EmptyState branched above FlatList (breaks pull-to-refresh on empty list)',
     'missing-safe-area-chrome': 'Screen content can clip under the status/header area',
     'absolute-bottom-without-inset': 'Bottom-anchored controls can collide with tab bar/home indicator',
-    'bottom-ui-safe-area-top-only': 'Bottom UI requires bottom safe-area handling',
     'loading-branch-missing-safe-area': 'Loading branch can bypass safe-area wrapper',
     'error-branch-missing-safe-area': 'Error branch can bypass safe-area wrapper',
     'scanner-loader-outside-overlay': 'Scanner loader must be overlayed in camera preview',
@@ -541,27 +513,6 @@ function buildBlockMessage(filePath, violations) {
   return lines.join('\n');
 }
 
-function collectTargetFiles(targets) {
-  const files = [];
-  const roots = targets.length > 0 ? targets : [process.cwd()];
-
-  function walk(target) {
-    if (!fs.existsSync(target)) return;
-    const stat = fs.statSync(target);
-    if (stat.isDirectory()) {
-      for (const entry of fs.readdirSync(target)) {
-        if (entry === 'node_modules' || entry === '.expo' || entry === 'dist' || entry === 'build') continue;
-        walk(path.join(target, entry));
-      }
-      return;
-    }
-    if (stat.isFile() && isWatchedFile(target)) files.push(target);
-  }
-
-  for (const target of roots) walk(path.resolve(target));
-  return files;
-}
-
 function lineForMatch(content, match) {
   const idx = content.indexOf(match);
   if (idx < 0) return 1;
@@ -577,69 +528,70 @@ function isAutoFixable(violation) {
     'custom-pressable-missing-role',
     'nested-touch-targets',
     'dynamic-type-disabled',
-    'bottom-ui-safe-area-top-only',
   ].includes(violation.rule);
 }
 
 function runReportMode() {
-  const targets = process.argv.filter((arg) => arg !== '--report').slice(2);
-  const issues = [];
-  for (const filePath of collectTargetFiles(targets)) {
-    let content = '';
-    try {
-      content = fs.readFileSync(filePath, 'utf8');
-    } catch {
-      continue;
-    }
-    for (const violation of findAllViolations(content)) {
-      issues.push({
-        validator: 'validate-screen-quality',
-        file: path.relative(process.cwd(), filePath) || filePath,
-        line: lineForMatch(content, violation.match),
-        rule: violation.rule,
-        match: violation.match,
-        fix: violation.fix,
-        autoFixable: isAutoFixable(violation),
-      });
-    }
-  }
-
-  process.stdout.write(JSON.stringify({ validator: 'validate-screen-quality', issues }, null, 2) + '\n');
-  process.exit(0);
+  return runSourceReport({
+    validator: 'validate-screen-quality',
+    scope: 'screens',
+    limitations: [
+      'Bottom inset ownership is not resolved: BottomActionBar may own the inset or delegate it to a screen or parent tabs. Top-only SafeAreaView edges do not establish a defect. Verify a single inset owner in the rendered native layout; this report cannot establish missing or double insets.',
+    ],
+    analyze: (content) => findAllViolations(content).map((violation) => ({
+      line: lineForMatch(content, violation.match),
+      rule: violation.rule,
+      match: violation.match,
+      fix: violation.fix,
+      autoFixable: isAutoFixable(violation),
+    })),
+  });
 }
 
 // ─── stdin → exit ────────────────────────────────────────────────────────────
 
-if (process.argv.includes('--report')) {
-  runReportMode();
+function main() {
+  let inputData = '';
+  process.stdin.on('data', (chunk) => {
+    inputData += chunk;
+  });
+  process.stdin.on('end', () => {
+    let input;
+    try {
+      input = JSON.parse(inputData || '{}');
+    } catch {
+      process.exit(0);
+    }
+    if (!input || typeof input !== 'object') process.exit(0);
+
+    const toolName = input.tool_name || input.toolName;
+    const toolInput = input.tool_input || input.toolInput || {};
+
+    if (!isWriteTool(toolName)) process.exit(0);
+
+    const filePath = toolInput.file_path || toolInput.filePath;
+    if (!isWatchedFile(filePath)) process.exit(0);
+
+    let content;
+    try {
+      content = extractContent(toolName, toolInput);
+    } catch (error) {
+      if (typeof error.code !== 'string' || typeof error.syscall !== 'string') throw error;
+      process.stderr.write(`[mobile-app] Cannot read screen source ${filePath}: ${error.code}. Validation is incomplete.\n`);
+      process.exit(2);
+    }
+    if (!content) process.exit(0);
+
+    const violations = findAllViolations(content);
+    if (violations.length === 0) process.exit(0);
+
+    process.stderr.write(buildBlockMessage(filePath, violations) + '\n');
+    process.exit(2);
+  });
 }
 
-let inputData = '';
-process.stdin.on('data', (chunk) => {
-  inputData += chunk;
-});
-process.stdin.on('end', () => {
-  let input;
-  try {
-    input = JSON.parse(inputData || '{}');
-  } catch {
-    process.exit(0);
-  }
-
-  const toolName = input.tool_name || input.toolName;
-  const toolInput = input.tool_input || input.toolInput || {};
-
-  if (!isWriteTool(toolName)) process.exit(0);
-
-  const filePath = toolInput.file_path || toolInput.filePath;
-  if (!isWatchedFile(filePath)) process.exit(0);
-
-  const content = extractContent(toolName, toolInput);
-  if (!content) process.exit(0);
-
-  const violations = findAllViolations(content);
-  if (violations.length === 0) process.exit(0);
-
-  process.stderr.write(buildBlockMessage(filePath, violations) + '\n');
-  process.exit(2);
-});
+if (process.argv.length > 2) {
+  process.exitCode = runReportMode();
+} else {
+  main();
+}

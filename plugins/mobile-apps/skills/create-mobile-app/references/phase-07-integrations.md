@@ -44,6 +44,13 @@ The integration reference owns brand-token/provider wiring. Keep `useTheme()` an
 `useThemeTokens()` synchronized, preserve `SafeAreaProvider`, provider ordering, `offlineProfile`,
 `@ts-ignore` boundaries and color-scheme `defaultTheme`. No outer TamaguiProvider.
 Run `npx tsc --noEmit` after Tamagui/provider changes; block if unresolved.
+For typography customization, copy/merge the canonical `native-typography` and `TypographyText`
+helpers, bind approved roles with `createNativeTypography`, and apply its returned fonts.
+Place `assertNativeFontDefaults(tamaguiConfig)` after the final host factory call, not only
+against a baseline. Preserve complete role props for actual text consumers in Step 10.8.
+The helper's regression tests do not validate this app's unknown configuration: record an
+unobserved final assertion as typography-unverified until the native app loads. Do not run
+an arbitrary config evaluator or treat TypeScript/source-pattern success as runtime proof.
 
 ### Step 10 — Add connectors
 

@@ -1097,6 +1097,14 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 - **Every expected name present in `value[]`** → confirmed.
 - **Any expected name missing** → that table did not survive publish — report which ones and stop.
 
+For created/changed Image columns, table existence is insufficient. Re-read the published
+ImageAttributeMetadata and compare `CanStoreFullImage` and capacity with the approved contract
+using the [image read-back gate](../../shared/references/media-sources.md#authoring-read-back-gate).
+A successful metadata write does not prove the setting persisted. On mismatch, preserve
+actual observed values, report the discrepancy and reconcile through the existing approved
+metadata workflow; do not mark the requested values verified or silently change schema.
+This check runs after the deterministic manifest path too, before final handoff/seeding.
+
 ### Step 6d — Write `.datamodel-manifest.json`
 
 After all tables are verified, write the manifest to the project root using the `Write` tool:
@@ -1124,6 +1132,7 @@ After all tables are verified, write the manifest to the project root using the 
 `metadataId` and `solution` are required for `status: "new"` or `"extended"` entries — they're how Step 5a distinguishes "we own this on a re-run" from "name collision." Reused tables can omit both.
 
 Include only tables confirmed in Step 6c. Do NOT include tables reused with no schema changes.
+Image storage values come from the Step 6c read-back, not a copy of the proposed payload.
 
 ### Step 7 — Inspect generated files
 

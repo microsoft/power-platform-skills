@@ -32,6 +32,8 @@ Never copy `_design_preview.html` to `preview.html` or present stale intent as i
 
 **Implementation:** discover visible `app/**/*.tsx`, excluding `_layout.tsx`, `+not-found.tsx`, dot directories, OAuth callbacks, and auth-only redirects. Read layouts separately for navigation/theme context. Match screen IDs/routes to the plan where present, but actual source determines what exists. Preserve all discovered screens by default; an explicit requested journey/screen subset may narrow scope. Order by primary journey entry and action sequence, not home-plus-two-details.
 
+For post-build/edit quality review, use complete affected screens under [native presentation handoff](../../shared/references/native-visual-review.md). A component-only request is allowed but cannot satisfy the full-screen gate; report that scope as unverified.
+
 Keep preview navigation controls distinct from app navigation. Use valid stable IDs, human-readable labels, and an entry screen that makes the task obvious. Include every intermediate destination necessary for the selected journey (or explicitly label out-of-scope destinations); never leave a required action as a dead button.
 
 ## 3 — Resolve actual design inputs
@@ -45,6 +47,7 @@ Keep preview navigation controls distinct from app navigation. Use valid stable 
 - Resolve light and dark independently: surface/text/accent/status pairs, space, size, radius, font family/weight/size/line-height/tracking. Preserve Tamagui numeric keys and named brand keys separately.
 - Define every CSS variable used, including `--surface0` and `--surface1`, in both advertised themes. Never substitute a generic palette for imported brand values.
 - Use available local font assets with the correct weights when possible. If unavailable in browser, label the fallback; do not silently fetch Google Fonts or claim an uninstalled native font is rendered.
+- Resolve actual text props: plain `Text` with family/size does not imply the configured weight/line-height/tracking. Do not add bold typography to HTML when native source omits it.
 
 Do not execute arbitrary imported config, application services, auth code, or business-data network requests to obtain preview data. Verified image-media requests follow [media sources](../../shared/references/media-sources.md); they are not live data discovery. Use static reading and installed documented token definitions; unresolved dynamic values are an explicit approximation.
 
@@ -64,6 +67,7 @@ For either mode:
 4. Show native-only placeholders for camera/scanner/location, PDF viewer/report, pen/signature capture, sharing/printing, file upload, auth, and offline/device APIs. Label `Native-only — not executed in browser`. Illustrative captured/ready states may be selected as mock scenarios, never falsely triggered as native success.
 5. Preserve meaningful media proportions and crop using local illustrative assets or verified, appropriately licensed public HTTPS image URLs, including CDNs, under the media-source policy. Provide accessible alternatives and loading/error fallbacks; local downloads are not mandatory. Use consistent icon approximations with accessible names; never replace critical action labels with unexplained emoji.
 6. Use semantic buttons/links/inputs, associated labels, keyboard operation, visible focus, text plus color for status, and contrast-tested pairs. Allow scrolling/reflow, text zoom, and reduced motion. Avoid double safe-area padding.
+7. Keep unchanged screen/input/image nodes mounted. Selected-tab taps are no-ops; update only affected rows/counts/dialog state and preserve focus/scroll. Verify filter-empty recovery and return navigation without flicker or restarting every image request. Use the optional [stable local updates](../../shared/references/tamagui-html-mapping.md#stable-local-updates) pattern without adding a renderer framework.
 
 **Device geometry:** when given a device reference, match its width and height (measure the device,
 not the surrounding screenshot) and identify the usable app area inside it. If dimensions are
@@ -84,6 +88,15 @@ No live service calls, storage writes outside the preview file, credentials, CDN
 **Telemetry checkpoint: `write_screen_preview_document`**
 
 **Intent:** author the complete HTML/CSS presentation directly; no prescribed shell or component conversion. **Implementation:** the mapping reference's adaptable phone shell is optional. Write only the selected mode's output. Label mode, scenario, source basis, and any unsupported/fallback behavior visibly. A light/dark switch is present only when both themes are resolved.
+
+After authoring, record exact reviewed inputs in the HTML's inert provenance block:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/preview-provenance.js" --project-root "<working_dir>" --preview "<output.html>" --write --mode "<intent|implementation>" --scope "<full-screens|components>" --source "<reviewed-input>" --source "<another-reviewed-input>"
+node "${PLUGIN_ROOT}/scripts/preview-provenance.js" --project-root "<working_dir>" --preview "<output.html>" --check --expect-mode "<intent|implementation>" --expect-scope "<full-screens|components>"
+```
+
+Include the relevant plan/brand files for intent, or selected TSX plus local components/config/assets for implementation. Display generation time and source hashes from the embedded block in the existing preview information area using local script and `textContent`, not a second manually copied revision. A `current` result proves only freshness of that declared input set, not completeness, approval or visual/native success. Source/HTML changes invalidate it: re-read and regenerate/review before recording again; never merely restamp stale presentation.
 
 **Hard checks before handoff:**
 
@@ -113,6 +126,8 @@ Composition variety, resemblance to a named style, accent ratios, card counts, a
 **Telemetry checkpoint: `open_screen_preview`**
 
 Honor `visual_companion: no` and legacy `skip` even on standalone invocation: print the file link without auto-opening. Otherwise use available browser tools first: reuse an existing page, open the preview, inspect the accessibility snapshot, exercise every scope/filter binding, top-level entry/filter-empty recovery, exact-record lookup and primary actions/back/reset, toggle resolved themes, compare the wide three-screen canvas, and check 320px reflow. Screenshots supplement these checks; they do not replace interaction.
+Reload the page from disk after regeneration and check provenance before taking screenshots. For implementation, review the full selected screens against current source and accepted design using the native handoff reference; isolated icons are not evidence for their surrounding screens.
+Do not mistake your own scripted interactions for spontaneous app flicker. Announce tests that change a shared inspection tab, or use a separate clearly labeled verification tab; preserve the user's inspection state.
 For intent, inspect an actual screenshot of every selected screen's initial state, its internal
 scrolling and bottom actions, at the target device size, at 320px reflow, and in every offered
 theme. Normal click/keyboard actions must work: forced clicks or injected handler calls are not

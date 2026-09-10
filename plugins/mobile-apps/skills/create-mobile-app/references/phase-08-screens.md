@@ -85,6 +85,13 @@ Use current helpers as the API authority:
 [components](${PLUGIN_ROOT}/shared/samples/src/components/index.tsx),
 [utils](${PLUGIN_ROOT}/shared/samples/src/utils/index.ts).
 Load only the concrete helper/sample needed, not the entire sample tree.
+When approved typography roles are present, reuse the Step 9b `nativeTypography.text` tuples
+through `TypographyText` or complete `Text` prop spreads in shared and screen primitives.
+Prepare the actual helper/token exports before builders. Family/size-only calls do not
+preserve the approved weight, line height and tracking; follow the canonical integration.
+If a screen needs larger Dataverse images, prepare the focused
+[image reader and query contract](${PLUGIN_ROOT}/shared/references/media-sources.md#dataverse-image-resolution)
+with the actual generated download signature before builders; do not enlarge record thumbnails.
 
 ## 10.8b — Typed screen shell
 

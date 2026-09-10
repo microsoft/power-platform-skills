@@ -65,7 +65,11 @@ jobs:
               working-directory: plugins/mobile-apps/template
               env:
                   MOBILE_SAMPLE_RUNTIME_REQUIRED: "1"
-              run: node --test ../scripts/tests/screen-sample-runtime.test.js
+              run: >-
+                  node --test ../scripts/tests/screen-sample-runtime.test.js
+                  ../scripts/tests/native-typography*.test.js
+                  ../scripts/tests/native-layout*.test.js
+                  ../scripts/tests/native-media.test.js
 
             - name: prepare-and-type-check-template
               shell: bash
