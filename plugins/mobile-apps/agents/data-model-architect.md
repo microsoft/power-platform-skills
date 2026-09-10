@@ -29,7 +29,8 @@ You will be invoked by the foreground creation, data-model, or editing skill wit
 - **Dataverse planning mode** — `required` or `connector-only`.
   `connector-only` intentionally has no snapshot/evidence paths.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
-- **`mode` (optional)** — one of `default` (full Steps 1–7, the original flow) or `cross-entity-audit` (the addendum pass spawned AFTER `screen-planner` returns; runs ONLY Step 6a + writes a `### Cross-entity Reads` addendum to `_dm_section.md`, skipping discovery and re-scoring). When omitted, treat as `default`.
+- **Experience outline and Information needs** — foreground-derived jobs, decisions, required facts/actions and classified assumptions, separate from the verbatim brief. Use these to determine completeness, not a target table/column count.
+- **`mode` (optional)** — `default` proposes the full data model. `screen-data-audit` runs only Step 6a against the explicit authoritative `plan_path`; `cross-entity-audit` is a compatibility alias for the same complete audit. Audit modes return findings without changing the plan, `_dm_section.md`, schema or receipt.
 
 ## Hard Rules
 
@@ -73,10 +74,12 @@ You will be invoked by the foreground creation, data-model, or editing skill wit
 4. Infer required entities from requirements
 5. Reconcile target metadata and classify reuse / extend / create / adapt / defer / unverified
 6. Build dependency tiers
-6a. Cross-entity Read Audit (when `_screens_section.md` exists OR `mode: cross-entity-audit`)
+6a. Information and interaction audit (explicit audit mode only)
 7. Produce the `## Data Model` section
 
-**`mode: cross-entity-audit` short-circuit** — when invoked with `mode: cross-entity-audit`, skip Steps 1–6 entirely (the data model is already in `_dm_section.md` from the prior round) and run ONLY Step 6a + a slim Step 7-addendum that writes a `### Cross-entity Reads` block. The orchestrator presents this addendum to the user as an addendum to Gate 1 (or rolls it into the Gate 1 view if Gate 1 has not yet been presented).
+**Audit-mode short-circuit** — `screen-data-audit` and `cross-entity-audit` skip Steps 1–6 and 7.
+Run only Step 6a; return coverage findings and related-read guidance to foreground for the
+owning gate. Do not infer audit readiness from `_screens_section.md` existing.
 
 ---
 
@@ -209,6 +212,13 @@ From the user's requirements, list the entities the app needs. For each entity, 
 - **Fields needed** — name, type, required?
 - **Relationships** — to other entities in this list or to standard tables
 
+Reconcile the supplied Experience outline and Information needs as well as explicit nouns.
+Account for every required visible fact, metric, filter, action, transition and retained artifact:
+stored columns, derivations with inputs/units, supported related reads, writes and cardinality.
+A useful derived value does not automatically need a new column; repeated evidence/history may
+need a child relation. Classify sample-only/proposed scope honestly. The goal is the simplest
+complete model, not the smallest schema or a denser screen obtained through invented data.
+
 Standard table mappings to bias toward:
 
 | If the entity represents... | Prefer the standard table |
@@ -264,6 +274,12 @@ Classify every planned column before finalizing its table decision:
 
 `Extend` is a table decision, not a column operation. Do not classify any item as `Replace`; Dataverse cannot change column types in place, and replacement needs an explicit migration outside this workflow.
 
+Coverage is requirement-complete: every approved persisted field, relationship, key and
+service dependency must be supported, or explicitly unresolved/deferred by foreground.
+Field overlap ranks a reuse candidate; it never authorizes dropping a missing requirement.
+Extension-cost limits choose between compatible extension and a justified alternative;
+they are not a budget that permits discarding useful approved information.
+
 **Decision priority (HARD — apply in order, stop at first match):**
 
 1. **Standard table match** → always prefer a standard table (`contact`, `account`, `incident`, etc.) over creating a custom table for the same concept, but verify it by exact target GET. Reuse if it fits; Extend only when live managed properties permit the planned custom columns. If it is missing or incompatible, Defer — never create a custom imitation.
@@ -275,7 +291,7 @@ Classify every planned column before finalizing its table decision:
 
 > **⚠️ Plan-time collision check (HARD).** Before classifying any entity as `Create`, look up its **proposed logical name** (e.g. `cr8142a_inspection`) in the Step 3 IsCustomEntity result. If a row with that exact `LogicalName` already exists, the entity **CANNOT** be classified as `Create`. Apply the following decision tree in order:
 >
-> 1. **Downgrade to Reuse** — the existing table's columns from Step 3 already cover what the plan needs (≥70% column overlap or all required columns present). No schema changes.
+> 1. **Downgrade to Reuse** — all required persisted columns, relationships, keys and read/write semantics are verified compatible; derived needs have supported inputs and read paths. No schema changes. Partial overlap identifies a candidate, never completeness.
 > 2. **Downgrade to Extend** — the existing table is the right concept but missing some custom columns (any overlap, or same entity type), and live `IsCustomizable.Value` plus `CanCreateAttributes.Value` permit extension. Add only the missing columns; never remove or rename existing ones.
 > 3. **Adapt (rename and create)** — use ONLY when the existing custom table is a completely different entity concept (e.g., `cr8142a_inspection` exists but contains payroll or product catalog data — fundamentally incompatible). Bump the proposed name to `<prefix>_<entity>v2`, record the alias, and document the evidence in the Notes column.
 >
@@ -327,53 +343,38 @@ appear in the same brief.
 Update progress milestone `relationships-tiered` with direct relationship and
 dependency-tier counts.
 
-## Step 6a — Cross-entity Read Audit
+## Step 6a — Information and interaction audit
 
 **Print before starting:**
-> "→ Auditing planned screens for supported cross-entity read paths…"
+> "→ Auditing detailed screens for complete information and interaction support…"
 
-**Run condition:** execute this step when EITHER (a) `<working_dir>/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gate 4a/4b lands.
+Run only for explicit `screen-data-audit` or its compatibility alias `cross-entity-audit`.
+Require the caller's `plan_path`, current schema/evidence and relevant native/connector scope.
+Creation uses the authoritative plan; edits use the explicitly supplied staged plan. Never
+read `_screens_section.md` in preference to it or fall back to an older plan.
 
-When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
+Execute [information and interaction coverage](../shared/references/screen-data-coverage.md).
+Use its read-only extraction helper, then compare every intended spec and every requirement
+against supported primary/derived/related fields, filters, actions, writes and artifacts.
+Missing detailed specs or required target evidence is not an empty successful audit.
+No `related_entity_fields` blocks is not a skip: primary writes, counts, evidence multiplicity,
+local content and auth behavior still require support.
 
-This step exists because the generated SDK has no `$expand`. It classifies each
-cross-entity field into a supported formatted lookup or bounded chained fetch.
-Dataverse does not support defining calculated/formula expressions through
-code, so this audit never proposes generated formula metadata.
+For related fields, use only [supported read paths](../shared/references/data-performance.md#cross-entity-reads):
+formatted direct lookup, bounded chained fetch or externally supplied projection.
+Verify actual scope/units for aggregates and source cardinality for media. Do not synthesize
+computed metadata, change schema decisions or silently omit an unsupported required field.
 
-**Algorithm:**
+Return the coverage table defined by the shared reference and, when related fields exist,
+the existing `### Cross-entity Reads` table with Field / Resolution / Source / Driven by.
+Deduplicate identical paths while retaining every consuming screen ID. Foreground embeds
+the report in the plan and owns any data-model addendum/reapproval. Audit modes write no
+plan, `_dm_section.md`, normalized contract, receipt or application source.
 
-1. **Read the screen plan.** Look for `<working_dir>/_screens_section.md` first (graph-only mode after Gate 4a). If absent, parse `<working_dir>/native-app-plan.md` and extract the `## Screens` section. Walk every per-screen spec and collect every `related_entity_fields` block.
-
-2. **Per entry, branch on `recommends`:**
-
-   - **`recommends: formatted-lookup`** — verify the source is the primary
-     display name of a direct lookup. Create no column.
-   - **`recommends: chained-fetch`** — create no column. The screen-builder
-     performs one bounded related request outside row rendering.
-   - **`recommends: external-projection-required`** — record a blocker for a hot
-     list/dashboard field that cannot use the direct lookup annotation. Omit
-     the field until the user supplies a maker-created formula column or other
-     server-owned projection.
-
-3. **De-duplicate.** Collapse identical source/resolution pairs and track all
-   consuming screens.
-
-5. **Emit the addendum.** Write the `### Cross-entity Reads (auto-derived from screen plan)` subsection of `_dm_section.md`. Schema:
-
-   ```markdown
-   ### Cross-entity Reads (auto-derived from screen plan)
-
-   | Field | Resolution | Source | Driven by |
-   |---|---|---|---|
-   | Flight | formatted-lookup | cr3e9_flightid primary display | inspections list |
-   | Inspector email | chained-fetch | _ownerid_value → systemuser.internalemailaddress | inspection detail |
-   | Gate code | external-projection-required | cr3e9_flightid → cr3e9_gateid → cr3e9_code | home |
-   ```
-
-   In `mode: default` (Step 6a runs because `_screens_section.md` was found), append this subsection to the Step 7 output. In `mode: cross-entity-audit`, append it directly to the existing `_dm_section.md` (read it, append the subsection AFTER `### Notes` if present, otherwise at the end, then write back) and skip Step 7 entirely — return immediately.
-
-6. **No `related_entity_fields` blocks anywhere?** That is a valid outcome: every screen reads only its primary entity. Skip the addendum entirely; do not write an empty subsection.
+Return `NEEDS_CONTEXT` with the affected screen, fact/action and missing support when a required
+need is unresolved; unavailable required evidence is `BLOCKED`. Routine not-yet-generated
+exports are a named Step 10.7 handoff only when their schema/operation is already supported.
+`DONE` means the required needs were reconciled in the plan, not executed or approved.
 
 ## Step 7 — Produce the `## Data Model` Section
 
@@ -604,7 +605,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
 ```
 
 If normalization fails, fix the exact schema error and rerun it. Do not return
-`DONE` with a malformed or incomplete sidecar. In `cross-entity-audit` mode,
+`DONE` with a malformed or incomplete sidecar. In `screen-data-audit` or `cross-entity-audit` mode,
 preserve this contract unchanged because that pass adds read-path guidance, not
 metadata schema.
 

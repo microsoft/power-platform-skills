@@ -14,7 +14,8 @@ Copy-paste snippets for mobile-app screens.
 
 ## Primitives (import from `@/components`)
 
-These are defined once in the scaffold and imported by every screen. Never re-roll them inline.
+Reuse these scaffold components when they fit; they are not a closed catalog.
+Adapt shared components in foreground or create task-specific UI within the approved scope.
 
 ### `<Gradient>`
 
@@ -41,7 +42,9 @@ export function Gradient({
 }
 ```
 
-Usage: `<Gradient name="hero" style={{ height: 180 }}><Hero ... /></Gradient>`
+Use `<Gradient>` for a deliberately selected gradient surface with ordinary content.
+For a hero, pass `gradient="hero"` directly to `<Hero>` instead of nesting two gradients
+or constraining its text to a fixed-height outer wrapper.
 
 ---
 
@@ -145,65 +148,57 @@ Usage:
 
 ### `<Hero>`
 
-Gradient header for list and dashboard screens. Renders inside a `<Gradient>`.
+An optional emphasis region, not a mandatory header or a fixed brand style. The
+[canonical implementation](../samples/src/components/index.tsx) owns the code; do not
+copy an older recipe over it.
+
+- Default: solid `$accentBase` with the current theme's `$accentOnAccent` foreground.
+  `backgroundColor` and `foregroundColor` accept approved theme tokens or colors.
+  The action frame, icon and label share the same foreground through Tamagui.
+- `gradient` is opt-in and keeps existing named-gradient callers working. Those legacy
+  dark presets retain white as their compatibility foreground; pass `foregroundColor`
+  when changing gradient colors. Verify the pair across the whole gradient in each theme.
+  Merely changing the app palette does not change the separate gradient definitions.
+- Title/subtitle wrap without a line limit by default. `titleNumberOfLines` and
+  `subtitleNumberOfLines` are explicit truncation choices, not fixes for a cramped layout.
+- `titleTypography`, `subtitleTypography`, and `actionTypography` accept complete
+  `NativeTypographyTextProps` from the approved typography binding. Defaults use the
+  configured heading/body scales with explicit weight, line height and spacing.
+- The action is below the text until the measured content width is at least 480 logical
+  units times the font scale; it moves back below when the container narrows. This is a
+  conservative sample breakpoint, not an app-wide rule. `actionPlacement="below"` keeps
+  it below deliberately. Targets stay at least 48x48 with natural height and wrapping.
 
 ```tsx
-import { YStack, XStack, Text, Button } from 'tamagui'
-import { Ionicons } from '@expo/vector-icons'
-import type { GradientName } from '@/tokens'
+import React from 'react';
+import { Hero } from '@/components';
+import type { NativeTypographyTextProps } from '@/tokens/native-typography';
 
-type IoniconName = React.ComponentProps<typeof Ionicons>['name']
-
-export function Hero({
-  title,
-  subtitle,
-  gradient = 'hero',
-  action,
+export function ReviewIntro({
+  title, summary, headingTypography, onReview,
 }: {
-  title: string
-  subtitle?: string
-  gradient?: GradientName
-  action?: { label: string; iconName?: IoniconName; onPress: () => void }
+  title: string;
+  summary: string;
+  headingTypography: NativeTypographyTextProps;
+  onReview: () => void;
 }) {
   return (
-    <Gradient name={gradient} style={{ borderRadius: 0 }}>
-      <YStack px="$5" pt="$6" pb="$5" gap="$1">
-        <XStack items="center" justify="space-between">
-          <YStack gap="$1" flex={1}>
-            <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
-              {title}
-            </Text>
-            {subtitle && (
-              <Text fontSize="$3" color="rgba(255,255,255,0.8)" numberOfLines={2}>
-                {subtitle}
-              </Text>
-            )}
-          </YStack>
-          {action && (
-            <Button
-              size="$3" chromeless borderColor="rgba(255,255,255,0.4)"
-              borderWidth={1} onPress={action.onPress}
-              icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="white" /> : undefined}
-            >
-              <Button.Text color="white">{action.label}</Button.Text>
-            </Button>
-          )}
-        </XStack>
-      </YStack>
-    </Gradient>
-  )
+    <Hero
+      title={title}
+      subtitle={summary}
+      backgroundColor="$surface1"
+      foregroundColor="$text0"
+      titleTypography={headingTypography}
+      action={{ label: 'Review findings', iconName: 'document-text-outline', onPress: onReview }}
+    />
+  );
 }
 ```
 
-Usage:
-```tsx
-<Hero
-  title="Field Inspections"
-  subtitle="14 open · 3 overdue"
-  gradient="hero"
-  action={{ label: 'New', iconName: 'add', onPress: () => router.push('/inspections/new') }}
-/>
-```
+Reuse the action's real handler and verified state; the sample does not create an
+operation or navigate by itself. Check long/localized copy, narrow embedded containers,
+larger text and both themes in full-screen review. Do not force essential text to one
+line, disable scaling, or add an outer fixed height to preserve a banner silhouette.
 
 ---
 

@@ -22,7 +22,7 @@ Do not preload the agent files for phases that have not started.
 | Order | Phase / existing steps | Read when active | Exit condition |
 |---|---|---|---|
 | 1 | Intake (0–2d) | [phase-01-intake.md](references/phase-01-intake.md) | Fresh installed template or confirmed resume; brief + explicit proceed at plan preview |
-| 2 | Planning (3) | [phase-02-planning.md](references/phase-02-planning.md) | Foreground data, native/integration, graph and specs approvals; valid schema/receipt if required |
+| 2 | Planning (3) | [phase-02-planning.md](references/phase-02-planning.md) | Experience/information needs precede data; full coverage audit and foreground approvals; valid schema/receipt if required |
 | 3 | Scaffold (4–6.7) | [phase-03-scaffold.md](references/phase-03-scaffold.md) | Approved environment, deterministic preparation, init, clean scaffold TypeScript, memory bank |
 | 4 | Design (6.75) | [phase-04-design.md](references/phase-04-design.md) | Brand/default design and its preview handoff complete, or explicit `--no-design` |
 | 5 | Authentication (7) | [phase-05-auth.md](references/phase-05-auth.md) | Correct environment tenant, client ID wired or explicit auth deferral |
@@ -70,6 +70,10 @@ pre-mutation manifest is not evidence that an approved Dataverse app is connecto
   contract. Only foreground user acceptance creates/advances `.tmp/mobile-plan-status.json`.
   The operation-manifest builder verifies it; it never grants approval or restamps receipts.
   Revisions invalidate affected and dependent approvals; reapprove before mutation.
+- **Experience before schema:** shape the job and its information/interaction needs before
+  proposing tables or locking routes. All approved screen facts/actions need supported sources
+  and outcomes; field overlap is not completeness. Audit detailed specs in the explicit plan,
+  including staged edit plans, never graph-only scratch or only related-field annotations.
 - **No fake completion:** unsupported native/data capabilities are blockers, not mocks or TODOs.
   Use actual counts, completed milestones and measured elapsed times, not minimum spending targets,
   noun-count screen estimates, invented percentages or promised wall-clock readiness.

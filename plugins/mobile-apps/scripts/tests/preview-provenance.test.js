@@ -43,6 +43,50 @@ test('edits to a source or preview invalidate freshness without granting new app
   assert.deepEqual(checkProvenance(options).reasons, ['Preview document changed after recording']);
 });
 
+test('required handoff sources reject fresh but incomplete evidence without rewriting it', t => {
+  const options = fixture(t);
+  fs.mkdirSync(path.join(options.projectRoot, 'brand'));
+  fs.writeFileSync(path.join(options.projectRoot, 'brand/tokens.ts'), 'export const tokens = {};');
+  const requiredSources = [...options.sources, 'brand/tokens.ts'];
+  writeProvenance(options);
+  const file = path.join(options.projectRoot, options.preview);
+  const before = fs.readFileSync(file, 'utf8');
+
+  assert.equal(checkProvenance(options).status, 'current', 'legacy freshness checks stay compatible');
+  const result = checkProvenance({ ...options, requiredSources });
+  assert.equal(result.status, 'mismatch');
+  assert.deepEqual(result.reasons, ['Required source not recorded: brand/tokens.ts']);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'check must not add the missing source');
+  assert.match(result.limitations, /not dependency completeness, visual quality, approval or native execution/);
+
+  writeProvenance({ ...options, sources: requiredSources });
+  assert.equal(checkProvenance({ ...options, requiredSources }).status, 'current');
+  fs.appendFileSync(path.join(options.projectRoot, 'brand/tokens.ts'), '\n// changed');
+  assert.equal(checkProvenance({ ...options, requiredSources }).status, 'stale');
+});
+
+test('required source assertions normalize paths and allow extra reviewed inputs', t => {
+  const options = fixture(t);
+  fs.writeFileSync(path.join(options.projectRoot, 'tamagui.config.ts'), 'export default {};');
+  writeProvenance({ ...options, sources: [...options.sources, 'tamagui.config.ts'] });
+  const result = checkProvenance({
+    ...options,
+    requiredSources: ['./app/index.tsx', path.join(options.projectRoot, 'app/index.tsx')],
+  });
+  assert.equal(result.status, 'current');
+  assert.equal(result.sourceCount, 2);
+});
+
+test('required sources must be existing regular inputs inside the project', t => {
+  const options = fixture(t);
+  writeProvenance(options);
+  const other = fixture(t);
+  for (const requiredSources of [
+    ['missing.tsx'], ['app'], ['preview.html'],
+    [path.join(other.projectRoot, 'app/index.tsx')], [''], [null], 'app/index.tsx', null,
+  ]) assert.throws(() => checkProvenance({ ...options, requiredSources }));
+});
+
 test('missing provenance is unverified, not a visual pass', t => {
   assert.equal(checkProvenance(fixture(t)).status, 'unverified');
 });
@@ -89,6 +133,8 @@ test('source symlinks cannot escape the project', t => {
     throw error;
   }
   assert.throws(() => writeProvenance({ ...options, sources: ['outside.tsx'] }), /inside the project/);
+  writeProvenance(options);
+  assert.throws(() => checkProvenance({ ...options, requiredSources: ['outside.tsx'] }), /inside the project/);
 });
 
 test('malformed and duplicate embedded metadata do not pass', t => {
@@ -111,6 +157,14 @@ test('CLI returns nonzero for stale evidence and invalid inputs', t => {
   assert.equal(run(['--write', '--mode', 'implementation', '--scope', 'full-screens', '--source', options.sources[0]]).status, 0);
   assert.equal(run(['--check']).status, 0);
   assert.equal(run(['--check', '--expect-mode', 'implementation', '--expect-scope', 'full-screens']).status, 0);
+  assert.equal(run(['--check', '--require-source', options.sources[0]]).status, 0);
+  fs.writeFileSync(path.join(options.projectRoot, 'tamagui.config.ts'), 'export default {};');
+  const incomplete = run(['--check', '--require-source', options.sources[0], '--require-source', 'tamagui.config.ts']);
+  assert.equal(incomplete.status, 2);
+  assert.equal(JSON.parse(incomplete.stdout).status, 'mismatch');
+  assert.equal(run(['--check', '--require-source']).status, 2);
+  assert.equal(run(['--check', '--require-source', 'missing.ts']).status, 2);
+  assert.equal(run(['--write', '--mode', 'intent', '--scope', 'full-screens', '--source', options.sources[0], '--require-source', options.sources[0]]).status, 2);
   assert.equal(run(['--check', '--expect-mode', 'intent']).status, 2);
   assert.equal(run(['--check', '--write']).status, 2);
   assert.equal(run(['--check', '--source', options.sources[0]]).status, 2);

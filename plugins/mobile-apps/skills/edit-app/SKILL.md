@@ -289,7 +289,12 @@ Read and execute the `/design-system` skill instead of spawning a planner agent.
 | "change animations", "motion" | `/design-system --refresh motion` |
 | "full redesign", "reskin", "new theme" | `/design-system --reskin` |
 
-**One-major-change-per-prompt enforced.** If the user asks to change palette AND typography → refuse, ask which first. This matches `/design-system`'s own behavior.
+For related changes requested together, use the canonical
+[refresh flow](../design-system/references/refresh-flow.md#refresh--reskin) as one coherent
+design edit. Pass the complete requested delta to `/design-system`, including all affected
+dimensions; do not refuse or split it solely because both palette and typography change.
+Use `--reskin` only when a full redesign is intended. Unrelated features and changes to
+data, routes, native capabilities or dependencies retain their existing scope/approval gates.
 
 After `/design-system --refresh` returns, print:
 
@@ -301,11 +306,21 @@ Continuing with verification and preview. Rebuilding screens only if component s
 
 Do not stop after design refresh. Continue to Step 7 verification and Step 8 preview. If the refresh changed component shapes, density, negatives, or a full reskin requires TSX adjustments, include Screens in the affected sections and rebuild those screens.
 
+Before rebuilding, reconcile accepted presentation with approved data/operations, then materialize
+changed shared component recipes using create Step 10.8. Forward `design_reference` (accepted
+screen/state and observed review row) and actual `component_interfaces` with affected specs as
+in create Step 11. Preserve unverified checks; a prettier preview alone is not an implemented edit.
+
 ### Step 2 — Re-plan affected sections
 
 **Telemetry checkpoint: `revise_affected_app_plan`**
 
 Reuse the same planning primitives as `/create-mobile-app`, but only for the affected surfaces:
+
+Before data or route revisions, update the staged plan's Experience outline and Information
+needs from the requested change. Keep the original requirements and classify safe presentation,
+sample values and proposed business scope separately. Reconcile a useful journey with supporting
+data; do not let existing columns alone dictate the revised experience.
 
 | Surface | Reuse from create flow | Edit-app scope |
 |---|---|---|
@@ -346,6 +361,7 @@ Prompt:
   Working directory: <absolute path>
   Plugin root: ${PLUGIN_ROOT}
   Confirmed actors, jobs, outcomes and domain evidence: <from the edit brief>
+  Experience outline and Information needs: <affected decisions, facts/actions and classified assumptions>
 
   Mode: edit (preserve existing decisions where the change doesn't affect them).
   Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
@@ -363,6 +379,15 @@ Both phases receive `skip_preview: true`; brand/intent preview remains design/pr
 Preserve `### Primary journeys` and `### Preview selection` IDs within `## Screens`, and
 invalidate dependent approvals when changed. Do not create a separate UX JSON authority.
 Do not copy changes back to the live plan until Step 4.
+
+Before Step 3 approval, run [information and interaction coverage](${PLUGIN_ROOT}/shared/references/screen-data-coverage.md)
+against explicit `plan_path: <working_dir>/.tmp/edit-native-app-plan.md` for all affected specs.
+Include connector/local/auth-only screens and shared consumers, even with no related annotations.
+Never fall back to the live plan or `_screens_section.md` if staged specs are missing.
+Foreground embeds the report in the staged `## Screens`; required gaps return to their owners
+and invalidate only affected approvals. Reconcile design-added facts/actions before accepting
+the edit, then resolve any new service exports before builders. A data-only edit without affected
+screens still reconciles the explicit data requirements; do not manufacture screens to run an audit.
 
 For Native Capabilities, read only [native capability proposals](${PLUGIN_ROOT}/agents/native-app-planner.md#native-capability-proposals), apply the approved intent to the current table, and stage the proposal. The native planner is a bounded proposal helper, not an approval owner. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
@@ -621,6 +646,9 @@ If verification fails because the edit exposed stale generated services, rerun t
 Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
 If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens --mode implementation` after verification. This reads actual TSX/config/local components, regenerates `preview.html`, and opens it according to the project's `visual_companion` setting. Do not substitute a plan-derived intent preview for the edited implementation.
+Execute the shared [rendered preview review](${PLUGIN_ROOT}/shared/references/rendered-preview-review.md),
+including independent browser fallback and the preview-bound evidence gate. Return its
+`review_path` and `review_status`; missing screenshots/interactions remain unverified.
 Follow [native presentation handoff](${PLUGIN_ROOT}/shared/references/native-visual-review.md):
 review complete affected screens and required journey destinations, not merely isolated icons.
 Preserve the accepted preview's hierarchy/layout as the minimum baseline while respecting

@@ -260,5 +260,5 @@ field has a supported read path; it does not synthesize formula metadata.
 - `shared/references/mobile-ui-patterns.md` — pagination is a required rule for List screens that query unbounded tables
 - `screen-planner` — flags `pagination: cursor` in per-screen spec for List archetypes with unbounded data; emits `related_entity_fields` block per screen
 - `screen-builder` — applies pagination pattern when spec says `pagination: cursor`; applies the Cross-entity Field Resolution rule on every UI field
-- `data-model-architect` — Step 6a verifies every related field has a supported read path
+- `data-model-architect` — explicit Step 6a audits all information/interactions in the authoritative detailed plan; related fields use this document's supported read paths
 - `/setup-datamodel` and `/add-dataverse` — never synthesize formula definitions; they validate any user-supplied computed dependency before reuse

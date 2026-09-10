@@ -1228,6 +1228,34 @@ test('mechanical reconciliation never changes approved architecture decisions', 
   ));
 });
 
+test('seventy-percent field overlap cannot make an incomplete reused table executable', () => {
+  const names = ['cr1_name', ...Array.from({ length: 9 }, (_, index) => `cr1_field${index + 1}`)];
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'reuse', 0, names.map((name, index) => (
+      contractColumn(name, 'string', 'reuse', { primaryName: index === 0 })
+    )))],
+  };
+  const columns = names.map((name, index) => column(name, 'String', { primaryName: index === 0 }));
+  const incomplete = buildManifest(buildInputs(contract, snapshot({
+    tables: [table('cr1_item', columns.slice(0, 7))],
+  })));
+  assert.equal(incomplete.executable, false);
+  assert.equal(incomplete.summary.metadataOperationCount, 0, 'reuse does not silently authorize extension');
+  for (const name of names.slice(7)) {
+    const decision = incomplete.decisions.find(item => item.itemId === `column:cr1_item:${name}`);
+    assert.ok(decision, `missing required column must remain in reconciliation: ${name}`);
+    assert.equal(decision.decision, 'reuse', 'only foreground can revise the approved decision');
+    assert.equal(decision.operation, 'none');
+  }
+  const complete = buildManifest(buildInputs(contract, snapshot({
+    tables: [table('cr1_item', columns)],
+  })));
+  assert.equal(complete.executable, true);
+  assert.equal(complete.summary.metadataOperationCount, 0);
+});
+
 test('unverified table, column, relationship, and key decisions never queue writes', () => {
   const contract = {
     schemaVersion: 1,

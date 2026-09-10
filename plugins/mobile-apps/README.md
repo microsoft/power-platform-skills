@@ -163,6 +163,17 @@ phase and pending work so the next invocation can verify and resume it.
   Before graph approval, consolidate states, filters, parameterized details and
   contextual actions; show the resulting route count and reasons for separate surfaces.
   Three preview screens are not a fixed app-screen budget.
+  The storyboard must visibly demonstrate the primary working activity; an entry/editor/result
+  trio is not a default substitute for the actual workflow.
+- Before proposing the data model or fixing routes, foreground records an Experience
+  outline and Information needs: the working journey, decision evidence, repeated
+  interactions and classified assumptions. This enriches short briefs without silently
+  inventing business capabilities or requiring a reference screenshot.
+- [Information and interaction coverage](shared/references/screen-data-coverage.md)
+  reconciles every required fact, metric, filter, action and retained artifact against
+  supported data/capabilities before spec approval. Reuse requires complete support,
+  not a percentage of matching columns. The read-only audit helper uses the explicit
+  detailed plan, including staged edits, never graph-only scratch.
 - Before the first design, the maker can supply notes/Markdown, a logo, website,
   screenshot, guidelines, CSS/tokens or an accessible Figma reference, or choose
   **Let AI choose**. This choice is asked only when unanswered and is retained on resume.
@@ -175,11 +186,31 @@ phase and pending work so the next invocation can verify and resume it.
   An intent preview illustrates the approved journey;
   a post-build source preview approximates the implementation. Neither claims
   native runtime verification.
+  [First-preview usefulness](shared/references/design-planning.md#first-preview-usefulness)
+  requires orientation, relevant work/content and a clear next step, not a universal Home
+  layout or fuller sample list. Shared illustrative state keeps different selections,
+  edits, results and reset consistent across frames.
+- [Rendered review](shared/references/rendered-preview-review.md) exercises actual screenshots
+  and interactions, tries an independent advertised browser path after adapter failure, and
+  records preview-bound evidence before visual sign-off. Its validator checks declared coverage
+  and freshness, not aesthetic quality or native behavior. Scenario controls stay outside app
+  frames, and missing imagery is not represented as a completed media design.
+  Passing review cases bind their own preview hash and measured app-frame dimensions;
+  saved screenshots also bind inspected image-byte hashes. Older records missing those
+  declarations are incomplete, never automatically upgraded. Calibrate one readable capture
+  before collecting the matrix; coverage, usability findings and user approval are separate.
 - Native package boundaries, generated-service ownership, accessibility,
   explicit approvals, and phase validation remain required.
 - Minimum product UX includes confirmed domain transitions, useful first-entry
   destinations, explicit initial filters, filter-empty recovery, and context-preserving
   scan/deep links. Passing TypeScript alone is not evidence of a completed user task.
+- Accepted task-specific presentation is realized as actual shared components before
+  screen building. Builders receive the relevant accepted screen/state, resolved data
+  coverage and real component interfaces; tokens alone do not preserve the experience.
+
+Maintainers can use the [prompt-only UX evaluation protocol](shared/references/ux-generation-evaluation.md)
+to compare fresh generations across different tasks. Unit/contract tests are not a substitute
+for repeated rendered and native observations.
 
 ## Quick examples
 

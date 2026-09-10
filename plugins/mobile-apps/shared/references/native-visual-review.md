@@ -16,6 +16,11 @@ Keep three results separate in the existing memory-bank handoff:
 | Current source-derived full-screen preview | An approximation of the implemented composition and simulated journey | Native font metrics, device safe areas, authentication or connector execution |
 | Current user-supplied device screenshots / requested native debugging | The observed device state and exact reproduced behavior | Untested screens, themes, text sizes or workflows |
 
+For the rendered approximation, execute [rendered preview review](rendered-preview-review.md)
+including independent browser fallback and `validate-preview-review.js` evidence validation in
+implementation mode. A complete declared evidence record is not proof of native execution or
+good taste; compare the actual images/observations to the accepted design.
+
 Review complete affected screens and necessary journey destinations, including the surrounding
 header, content and footer. A shared-header change needs root and contextual examples; a gallery
 of header or tab fragments is supplemental, not a substitute. Honor an explicit component-only
@@ -28,6 +33,10 @@ the generated HTML. Its `current` status checks freshness of that declared set o
 discover omitted dependencies or grant approval. A later source or preview edit requires a new
 comparison before recording provenance again. Reload the browser from disk before reviewing;
 a newly captured screenshot of an old open tab is not evidence of the current file.
+On the provenance `--check`, assert `--expect-mode implementation`, `--expect-scope full-screens`
+and repeat `--require-source` for every selected screen plus its consumed local component,
+theme and typography files. Derive this set from the reviewed source, not the recorded list.
+Missing required inputs block the handoff without silently regenerating hashes.
 
 ## Compare at the same usable viewport
 
@@ -38,7 +47,7 @@ Keep touch targets accessible; do not shrink all text or controls just to fit a 
 
 | Surface | Inspect in current source and rendered approximation |
 |---|---|
-| Typography | Actual component weight, line height and tracking, not only configured font roles. Plain native Text does not apply every role property just because its family and size are set. |
+| Typography | Actual component weight, line height and tracking, not only configured font roles. Plain native Text does not apply every role property just because its family and size are set. For wrapping action labels, override inherited Button.Text ellipsis; auto-height alone does not remove single-line truncation. |
 | Header / Back | Clear Back ownership, intended row count, title/action alignment, visible labels or accessible icon names, no accidental duplicate header or safe-area padding. |
 | Tabs / footer | Approved icon-label-selected-state contract, consistent targets, one owner for bottom insets, and content/action clearance. Measure the remaining task viewport with short and long content; remove repeated pinned explanations before shrinking controls. Do not force every screen to have tabs or sticky actions. |
 | Repeated rows / cards | Deliberate alignment of comparable media, titles and actions; wrapping/long content and larger text remain usable. Do not impose equal heights on intentionally different content. |
@@ -52,8 +61,19 @@ styles, working handlers or image sources absent from the native source; report 
 Use [typography integration](../../skills/design-system/references/tamagui-integration.md) and
 [media sources](media-sources.md) for the corresponding repairs.
 
+For each affected screen, carry one compact comparison in the existing handoff:
+`Screen/state | accepted presentation | actual source/component | observed result | remaining gap`.
+Compare content/identity order, density at unchanged type/target sizes, icons/media, action
+placement and completion/recovery semantics. A matching palette or component interface is not
+evidence that the accepted experience was implemented. Repeated treatments must use the actual
+shared components, not separate approximations created by each builder.
+
 ## Outcome
 
+- A missing required fact/action, unsupported capability, unreadable label or clipped primary
+  control is not merely aesthetic. Repair verified failures or surface unresolved requirements
+  before declaring the affected UX complete. Preferences about palette or optional decoration
+  remain advisory. Missing rendered/native evidence remains explicitly unverified.
 - Record source findings, rendered comparisons, measured geometry, exercised actions, and
   unavailable checks separately. Fix deterministic implementation drift before claiming the
   presentation handoff is complete; cap visual repair/review at two passes.
@@ -62,5 +82,7 @@ Use [typography integration](../../skills/design-system/references/tamagui-integ
 - If browser/device evidence is unavailable or the user opts out, report `DONE_WITH_CONCERNS`
   with the unverified scope, not a visual pass. Structural compile/route/configuration failures
   remain blockers. An idle Metro terminal is not proof of runtime health.
+- One browser adapter failing does not establish unavailability of independent advertised
+  tools. Record actual attempts; an OS opener alone leaves visual review incomplete.
 - Runtime diagnosis remains user-requested, terminal-driven `/debug-app`; no React Native Web,
   Metro HTTP probes, forced clicks or automated native screen crawling.

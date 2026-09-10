@@ -23,8 +23,11 @@ const references = Object.fromEntries(['navigation', 'list', 'detail', 'platform
 const examples = new Map(Object.values(references).flatMap((source) =>
   [...source.matchAll(/```tsx\n\/\/ Native layout example: ([\w-]+)\n([\s\S]*?)\n```/g)]
     .map((match) => [match[1], match[2]])));
+const heroRecipe = read('shared/references/tamagui-component-recipes.md')
+  .split('### `<Hero>`')[1].split('\n---')[0];
+examples.set('hero-intro', heroRecipe.match(/```tsx\n([\s\S]*?)\n```/)[1]);
 
-function environment({ bottom = 34, width = 600, fontScale = 1 } = {}) {
+function environment({ bottom = 34, width = 600, fontScale = 1, themeValues = {} } = {}) {
   const h = hooks();
   const Tabs = component('Tabs');
   Tabs.Screen = component('Tabs.Screen');
@@ -41,8 +44,11 @@ function environment({ bottom = 34, width = 600, fontScale = 1 } = {}) {
     'expo-router': { Tabs },
     'expo-linear-gradient': components(['LinearGradient']),
     '@expo/vector-icons': components(['Ionicons']),
-    '@/tokens': { gradients: {}, shadows: { sm: {} } },
-    tamagui,
+    '@/tokens': loadSample('src/tokens/index.ts', {}),
+    tamagui: {
+      ...tamagui,
+      useTheme: () => new Proxy({}, { get: (_, name) => ({ val: themeValues[name] ?? '#000000' }) }),
+    },
   };
   const shared = loadSample('src/components/index.tsx', dependencies);
   dependencies['@/components'] = shared;
@@ -67,7 +73,7 @@ function environment({ bottom = 34, width = 600, fontScale = 1 } = {}) {
 
 test('layout guidance defines ownership without imposing one domain or composition', () => {
   assert.deepEqual([...examples.keys()].sort(), [
-    'inspection-header', 'inspection-pair', 'reading-review', 'reading-row', 'reading-tabs', 'selection-actions',
+    'hero-intro', 'inspection-header', 'inspection-pair', 'reading-review', 'reading-row', 'reading-tabs', 'selection-actions',
   ]);
   assert.match(references.navigation, /one\s+horizontal header row/);
   assert.match(references.navigation, /foreground-owned navigator wiring/);
@@ -86,6 +92,129 @@ test('layout guidance defines ownership without imposing one domain or compositi
   assert.match(references.list, /None|none is a mandatory default/);
   assert.match(references.detail, /normal-flow\s+sibling/);
   assert.match(references.detail, /not a fake approval/);
+});
+
+runtimeTest('Hero defaults to themed colors with complete wrapping text roles in both schemes', () => {
+  const template = path.join(root, 'template');
+  const { withPowerAppsSemanticAliases } = require(require.resolve('@microsoft/power-apps-native-host/config/tamaguiConfig', { paths: [template] }));
+  const { defaultConfig } = require(require.resolve('@tamagui/config/v5', { paths: [template] }));
+  for (const [scheme, primary, onPrimary] of [['light', '#123b4a', '#ffffff'], ['dark', '#73d6c7', '#0d1b22']]) {
+    const env = environment();
+    const theme = withPowerAppsSemanticAliases(defaultConfig.themes[scheme], { primary, onPrimary });
+    const title = 'Review the outstanding accessibility and inspection findings before continuing';
+    const subtitle = 'Read the full context and supporting evidence, including the recovery options.';
+    const tree = env.render('Hero', { title, subtitle });
+    assert.equal(tree.type, 'YStack');
+    assert.equal(tree.props.bg, '$accentBase');
+    assert.equal(theme[tree.props.bg.slice(1)], primary);
+    assert.equal(tree.props.height, undefined);
+    assert.equal(tree.props.maxH, undefined);
+    const texts = nodes(tree).filter(node => node.type === 'Text');
+    assert.equal(text(texts[0]), title);
+    assert.equal(text(texts[1]), subtitle);
+    assert.equal(texts[0].props.role, 'heading');
+    for (const node of texts) {
+      assert.equal(node.props.color, '$accentOnAccent');
+      assert.equal(theme[node.props.color.slice(1)], onPrimary);
+      assert.equal(node.props.numberOfLines, undefined);
+      assert.equal(node.props.allowFontScaling, undefined);
+      for (const key of ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing']) {
+        assert.notEqual(node.props[key], undefined, key);
+      }
+    }
+    assert.equal(nodes(tree).filter(node => node.type === 'Button').length, 0);
+  }
+});
+
+runtimeTest('Hero uses its measured container and text scale to keep actions below narrow content', () => {
+  for (const fontScale of [1, 1.5, 2]) {
+    const env = environment({ width: 1400, fontScale });
+    let calls = 0;
+    const props = {
+      title: 'Long inspection headline',
+      subtitle: 'Supporting context that must remain readable.',
+      action: { label: 'Review every outstanding finding', iconName: 'document-text-outline', onPress: () => calls++ },
+    };
+    let tree = env.render('Hero', props);
+    let row = find(tree, 'XStack');
+    assert.equal(row.props.flexDirection, 'column', 'Unmeasured layout starts safely below');
+    for (const width of [320, 390, 800, 300]) {
+      row.props.onLayout({ nativeEvent: { layout: { width } } });
+      tree = env.render('Hero', props);
+      row = find(tree, 'XStack');
+      assert.equal(row.props.flexDirection, width >= 480 * fontScale ? 'row' : 'column');
+      assert.equal(row.children[0].props.minW, 0);
+      const button = find(tree, 'Button');
+      assert.equal(button.props.minH, 48);
+      assert.equal(button.props.minW, 48);
+      assert.equal(button.props.height, 'auto');
+      assert.equal(button.props.maxW, '100%');
+      assert.equal(button.props.role, 'button');
+      assert.equal(button.props['aria-label'], props.action.label);
+      assert.equal(button.props.icon.props.size, 24);
+      assert.equal(button.props.icon.props.accessible, false);
+      assert.equal(find(button, 'Button.Text').props.shrink, 1);
+      assert.equal(find(button, 'Button.Text').props.ellipsis, false,
+        'auto-height alone does not disable Button.Text single-line truncation');
+    }
+    find(tree, 'Button').props.onPress();
+    assert.equal(calls, 1);
+    row.props.onLayout({ nativeEvent: { layout: { width: 1400 } } });
+    tree = env.render('Hero', { ...props, actionPlacement: 'below', action: { ...props.action, disabled: true } });
+    assert.equal(find(tree, 'XStack').props.flexDirection, 'column');
+    assert.equal(find(tree, 'Button').props.disabled, true);
+  }
+});
+
+runtimeTest('Hero honors approved colors, full typography tuples and deliberate line limits', () => {
+  const env = environment();
+  const titleTypography = { fontFamily: '$heading', fontSize: 27, fontWeight: '600', lineHeight: 35, letterSpacing: -0.1 };
+  const subtitleTypography = { fontFamily: '$body', fontSize: 17, fontWeight: '400', lineHeight: 26, letterSpacing: 0.2 };
+  const actionTypography = { fontFamily: '$body', fontSize: 16, fontWeight: '700', lineHeight: 24, letterSpacing: 0 };
+  const tree = env.render('Hero', {
+    title: 'Reading guide', subtitle: 'Supporting context',
+    backgroundColor: '$surface1', foregroundColor: '#17242b',
+    titleTypography, subtitleTypography, actionTypography,
+    titleNumberOfLines: 1, subtitleNumberOfLines: 2,
+    action: { label: 'Open guide', iconName: 'book-outline', onPress() {} },
+  });
+  assert.equal(tree.props.bg, '$surface1');
+  const [title, subtitle] = nodes(tree).filter(node => node.type === 'Text');
+  const button = find(tree, 'Button');
+  for (const [node, expected] of [[title, titleTypography], [subtitle, subtitleTypography], [find(button, 'Button.Text'), actionTypography]]) {
+    for (const [key, value] of Object.entries(expected)) assert.equal(node.props[key], value, key);
+    assert.equal(node.props.color, '#17242b');
+  }
+  assert.equal(title.props.numberOfLines, 1);
+  assert.equal(subtitle.props.numberOfLines, 2);
+  assert.equal(button.props.borderColor, '#17242b');
+  assert.equal(button.props.color, '#17242b');
+  assert.equal(button.props.icon.props.color, undefined, 'Tamagui supplies the resolved button foreground to the icon');
+});
+
+runtimeTest('explicit legacy Hero gradients remain opt-in and permit a custom foreground', () => {
+  const env = environment({ themeValues: { accentOnAccent: '#0d1b22' } });
+  for (const gradient of ['hero', 'danger', 'success', 'warm', 'neutral']) {
+    const tree = env.render('Hero', { title: 'Explicit gradient', gradient });
+    assert.equal(tree.type, env.shared.Gradient);
+    assert.equal(tree.props.name, gradient);
+    assert.equal(find(tree, 'Text').props.color, 'white');
+    assert.equal(find(tree, 'YStack').props.bg, undefined);
+  }
+  const custom = env.render('Hero', { title: 'Custom gradient', gradient: 'hero', foregroundColor: '#17242b' });
+  assert.equal(find(custom, 'Text').props.color, '#17242b');
+});
+
+test('Hero documentation routes to the canonical sample and explains configurable defaults', () => {
+  assert.match(heroRecipe, /canonical implementation/);
+  assert.match(heroRecipe, /Default: solid `\$accentBase`/);
+  assert.match(heroRecipe, /Title\/subtitle wrap without a line limit by default/);
+  assert.match(heroRecipe, /titleTypography/);
+  assert.match(heroRecipe, /verified|Verify the pair/);
+  assert.doesNotMatch(heroRecipe, /export function Hero\(/);
+  assert.doesNotMatch(read('shared/references/tamagui-component-recipes.md'), /height: 180.*<Hero/);
+  assert.doesNotMatch(read('shared/samples/src/components/index.tsx'), /from ['"]\.\.\/tokens\/native-typography['"]/,
+    'The base scaffold does not copy the optional typography binder');
 });
 
 runtimeTest('header additions retain callers and place accessible back/title/action in one row', () => {

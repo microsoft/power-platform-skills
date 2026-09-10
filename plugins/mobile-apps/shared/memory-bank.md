@@ -101,6 +101,7 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 | Brand input | _pending until answered; supplied references and their role, or explicit AI inference; not design approval_ |
 | Tamagui config | Tamagui 2 with default `@tamagui/config/v5` (no brand tokens) |
 | Brand tokens | _<none, or list>_ |
+| Rendered review | _mode-specific review path/result, actual browser attempts and unverified cases; not aesthetic approval or native proof_ |
 | Theme variants | light, dark |
 | `PortalProvider` | wired in template |
 | `PowerAppsProvider` | wired in template (handles all connector routing) |

@@ -33,6 +33,69 @@ Choose content before containers; neither removing cards nor adding records auto
 Existing approved requirements bound the design; missing essential semantics return to foreground,
 not invented schema fields or operations for visual richness.
 
+## Experience synthesis
+
+A short brief is not permission to deliver a thin screen. With permission to infer, turn the
+approved job into concrete presentation decisions before choosing containers or colors. Record
+them in the existing `## Design`, `Layout delta`, and brand `## Components`, not a new sidecar:
+
+- **Recognition:** choose the human-readable identity and supporting facts needed to select
+  the correct record; retain technical codes where the actual job needs them.
+- **Working rhythm:** identify what users repeatedly read, compare or change, what stays in
+  context, and what needs a focused detour. Changing an approved operation or route still
+  requires its owning gate; grouping the existing evidence does not.
+- **Density:** choose comparison-oriented, reading-oriented or mixed treatment with a reason.
+  Specify which facts sit together and what is disclosed later at the target usable viewport.
+  Dense means less redundant chrome, not smaller type or undersized touch targets.
+- **Decision and feedback:** place the next supported action beside the evidence needed to
+  take it; distinguish edited, saving, persisted, failed and completed states.
+- **Distinctive interaction:** name the task-specific grouping or control treatment that makes
+  this job easier, or say why the existing simple surface is sufficient.
+
+For example, receiving goods benefits from aligned expected/received/damaged values and
+evidence adjacent to discrepancies. Reading a lesson benefits from readable prose, retained
+position and a quiet continuation action. Both can be high quality; neither implies a fixed
+palette, card count, dashboard, sticky footer or new business feature.
+Use supported facts and modest disclosed assumptions, not invented suppliers, totals,
+notifications, media history or offline promises to make the screen appear complete.
+
+### First-preview usefulness
+
+Before materialization, use the existing Layout delta to answer three questions for the entry
+surface: **Where am I? Which content or work is relevant? What can I do or read next?** Carry
+the answers into the working surface and its result/recovery, not just a polished Home.
+Choose the leading identity from the user's selection decision: equipment name for maintenance,
+lesson/topic for learning, or claimant and expense context for review. Neither location-first
+rows nor an organization-first header is a universal default.
+
+Choose useful grouping from supported meaning (sequence, date, category, status, or relationship),
+not a mandatory row/card pattern. Search and context controls belong near selection when the job
+needs them and their sources support them; a focused reader or singleton needs neither by default.
+In the first viewport, distinguish primary content from metadata and actions without hiding the
+facts needed to decide. If the design feels empty, check missing task context, hierarchy and
+representative state before adding records, banners or metrics. If it feels crowded, remove
+redundant chrome and change grouping before shrinking typography or targets.
+
+The first preview should communicate a plausible finished experience within approved scope,
+not a sparse wireframe that relies on later native generation to supply visual judgment.
+A reference may demonstrate a useful quality level, but its palette, density, navigation and
+domain fields are not a recipe for other apps. User preference is not a percentage similarity gate.
+
+## Component choice and creation
+
+The AI may reuse, adapt, compose, or generate task-specific UI components when they better serve the approved user journey; the sample library is a starting point, not a closed catalog or a ceiling on design quality.
+Inspect existing components first and reuse their working behavior where it fits, but do not force a task into an unsuitable sample or duplicate data, authentication, navigation, or state-management helpers just to obtain a different appearance.
+For example, compose a new inspection evidence card when a generic information row cannot convey the required image, finding, and action together; keep its verified data access, accessibility, native support, and failure handling intact.
+Component creation within approved presentation and scope needs no separate component-choice approval; changes to business behavior, data, routes, dependencies, or explicit design requirements still use their owning foreground gate.
+
+For each task-specific treatment reused across screens, record a compact recipe in the existing
+brand `## Components`: purpose and consuming screen IDs, content/typography hierarchy, grouping
+and density, icon/media treatment, states, and action semantics. This is more than a component
+name or prop interface. After services are resolved, foreground maps the recipe to a real
+component/export before builder fan-out; use typed view data and callbacks without duplicating
+service or persistence logic. A one-screen treatment may stay screen-local. Do not create a
+mandatory component catalog, gallery or signature-component sidecar.
+
 ## Entry composition and reference transfer
 
 Resolve the [entry composition](screen-planning/spec-contract.md#entry-composition-within-existing-specs)
@@ -80,6 +143,13 @@ brand provenance: transferable hierarchy/media/density, native or accessibility 
 and unsupported data/actions. A visual reference does not authorize new business behavior.
 Inspect it without executing imported scripts. If it cannot be viewed, disclose that limitation.
 Without a supplied reference, infer presentation from the approved job; do not require one.
+
+Reconcile visible content as well as styling before accepting a reference adaptation. Check
+field/read availability, media cardinality (one stored image is not a two-photo gallery),
+editable versus read-only controls, action destinations and persistence prerequisites.
+Adding inline writes, a notification/share action or new tabs is behavior, not spacing.
+Return a necessary scope delta to its owner; otherwise omit the unsupported affordance rather
+than inventing a working-looking placeholder. Keep approved demo-only context explicitly separate.
 
 ## Constraints and active references
 

@@ -5,6 +5,9 @@ Graph, `fetch`, or axios. Use the supplied signatures/Generated Services snapsho
 inspect only needed methods and model declarations. If the snapshot is absent,
 glob generated services as an older-plan fallback. Missing service/method is a
 foreground prerequisite, not a guessed import, substitute service, or fake data.
+Use supplied `data_coverage` or the plan's Information and interaction coverage to reconcile
+every required fact, metric, filter and operation with actual interfaces. Do not drop missing
+facts to make a screen compile or treat generation-pending business support as a mock.
 Displaying public HTTPS image URLs through the installed image component is permitted by
 [media sources](../../../shared/references/media-sources.md), not a connector-first violation.
 Fetch records/URL fields through generated services; do not add an HTTP client to render imagery.

@@ -61,10 +61,10 @@ Do not execute arbitrary imported config, application services, auth code, or bu
 
 For either mode:
 
-1. Use one coherent, clearly labeled illustrative scenario: consistent record IDs, names, dates, units, statuses, and relationships across screens. Do not read real tenant records or secrets.
+1. Use one coherent, clearly labeled illustrative scenario: consistent record IDs, names, dates, units, statuses, and relationships across screens. Keep shared state in one local source; selection, save and reset must update the correct record and dependent frames. Do not read real tenant records or secrets.
 2. Model key actions with small in-memory JS: selection, filter/search, navigation/back, form edit/validation, confirmation, and a visible completion state as appropriate. Include relevant loading/empty/error/retry states through an accessible scenario control where needed. Reset restores the initial scenario.
 3. Implementation mock actions must correspond to handlers/states present in source. If absent, show and report the missing implementation rather than inventing a working success flow.
-4. Show native-only placeholders for camera/scanner/location, PDF viewer/report, pen/signature capture, sharing/printing, file upload, auth, and offline/device APIs. Label `Native-only — not executed in browser`. Illustrative captured/ready states may be selected as mock scenarios, never falsely triggered as native success.
+4. Native-only controls retain the intended product affordance and a truthful `Native-only — not executed in browser` indication. Put simulation controls such as "Use illustrative GPS state", upload toggles and test explanations in separate preview chrome, outside `data-preview-screen-id` frames. Scenario controls select realistic captured/ready/error states; normal app controls must not pretend to execute native success.
 5. Preserve meaningful media proportions and crop using local illustrative assets or verified, appropriately licensed public HTTPS image URLs, including CDNs, under the media-source policy. Provide accessible alternatives and loading/error fallbacks; local downloads are not mandatory. Use consistent icon approximations with accessible names; never replace critical action labels with unexplained emoji.
 6. Use semantic buttons/links/inputs, associated labels, keyboard operation, visible focus, text plus color for status, and contrast-tested pairs. Allow scrolling/reflow, text zoom, and reduced motion. Avoid double safe-area padding.
 7. Keep unchanged screen/input/image nodes mounted. Selected-tab taps are no-ops; update only affected rows/counts/dialog state and preserve focus/scroll. Verify filter-empty recovery and return navigation without flicker or restarting every image request. Use the optional [stable local updates](../../shared/references/tamagui-html-mapping.md#stable-local-updates) pattern without adding a renderer framework.
@@ -81,7 +81,7 @@ browser `vh` to fit above the fold. Scroll content inside the device; keep app c
 If the review canvas cannot fit the devices, wrap or use a switcher. Test narrow reflow separately
 at 320px without claiming it is the original device size. Report measured frame/content dimensions.
 
-No live service calls, storage writes outside the preview file, credentials, CDN scripts, analytics, remote font dependencies, or browser handlers pretending to save/upload to the tenant. Declared verified HTTPS image requests are allowed; disclose their network dependency. Local simulation is not an app test.
+No live service calls, browser-script storage writes, credentials, CDN scripts, analytics, remote font dependencies, or handlers pretending to save/upload to the tenant. Review tools may write only the selected HTML and project-local screenshot/review evidence. Declared verified HTTPS image requests are allowed; disclose their network dependency. Local simulation is not an app test.
 
 ## 5 — Assemble and check
 
@@ -93,10 +93,15 @@ After authoring, record exact reviewed inputs in the HTML's inert provenance blo
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/preview-provenance.js" --project-root "<working_dir>" --preview "<output.html>" --write --mode "<intent|implementation>" --scope "<full-screens|components>" --source "<reviewed-input>" --source "<another-reviewed-input>"
-node "${PLUGIN_ROOT}/scripts/preview-provenance.js" --project-root "<working_dir>" --preview "<output.html>" --check --expect-mode "<intent|implementation>" --expect-scope "<full-screens|components>"
+node "${PLUGIN_ROOT}/scripts/preview-provenance.js" --project-root "<working_dir>" --preview "<output.html>" --check --expect-mode "<intent|implementation>" --expect-scope "<full-screens|components>" --require-source "<reviewed-input>" --require-source "<another-reviewed-input>"
 ```
 
 Include the relevant plan/brand files for intent, or selected TSX plus local components/config/assets for implementation. Display generation time and source hashes from the embedded block in the existing preview information area using local script and `textContent`, not a second manually copied revision. A `current` result proves only freshness of that declared input set, not completeness, approval or visual/native success. Source/HTML changes invalidate it: re-read and regenerate/review before recording again; never merely restamp stale presentation.
+Select required inputs from the current task, not from the embedded source list: intent requires
+the plan (or standalone design brief), brand spec and tokens; implementation requires every
+selected screen and its consumed local UI/theme/font inputs. Repeat `--require-source` for those
+exact files. A missing required source returns `mismatch` even when recorded hashes are fresh;
+the check is read-only and never grants visual approval or proves dependency completeness.
 
 **Hard checks before handoff:**
 
@@ -112,6 +117,8 @@ Include the relevant plan/brand files for intent, or selected TSX plus local com
   useful return path. Include scanning only when approved. Do not auto-switch explicit filters.
 - Accessibility: controls have names/labels, keyboard/focus behavior, usable targets, readable contrast, non-color status cues, and no clipped essential content.
 - Token coherence: all CSS variable references resolve in every offered theme; compare representative surface/text/accent and typography values against actual resolved inputs.
+  Check computed colors on the element that owns the theme, not just variable declarations;
+  inherited text/background can retain the old theme when overrides live on a descendant.
 - Experience evidence (intent): compare rendered context, hierarchy, decision/read evidence,
   media proportions, action placement, usable first viewport and initial-state consistency
   against approved task requirements and the current visual-intent proposal, not a frozen
@@ -126,6 +133,9 @@ Composition variety, resemblance to a named style, accent ratios, card counts, a
 **Telemetry checkpoint: `open_screen_preview`**
 
 Honor `visual_companion: no` and legacy `skip` even on standalone invocation: print the file link without auto-opening. Otherwise use available browser tools first: reuse an existing page, open the preview, inspect the accessibility snapshot, exercise every scope/filter binding, top-level entry/filter-empty recovery, exact-record lookup and primary actions/back/reset, toggle resolved themes, compare the wide three-screen canvas, and check 320px reflow. Screenshots supplement these checks; they do not replace interaction.
+Follow [rendered preview review](../../shared/references/rendered-preview-review.md) for browser
+adapter fallback and the preview-bound evidence gate. A locked profile or one unavailable
+adapter is not proof that all browser tools are unavailable. Record actual independent attempts.
 Reload the page from disk after regeneration and check provenance before taking screenshots. For implementation, review the full selected screens against current source and accepted design using the native handoff reference; isolated icons are not evidence for their surrounding screens.
 Do not mistake your own scripted interactions for spontaneous app flicker. Announce tests that change a shared inspection tab, or use a separate clearly labeled verification tab; preserve the user's inspection state.
 For intent, inspect an actual screenshot of every selected screen's initial state, its internal
@@ -133,8 +143,16 @@ scrolling and bottom actions, at the target device size, at 320px reflow, and in
 theme. Normal click/keyboard actions must work: forced clicks or injected handler calls are not
 evidence of reachability. Respect opt-out; unavailable screenshots are unverified, not passed.
 
-If browser tools are unavailable, use the OS opener (`open`, `xdg-open`, or PowerShell `Start-Process`) with safely quoted paths, or print the link. Do not install a browser/testing framework merely for preview. State that browser interaction was not verified when only file/static checks were possible.
+If all independent available browser paths fail or opening is declined, use the OS opener
+(`open`, `xdg-open`, or PowerShell `Start-Process`) with safely quoted paths, or print the link.
+Do not install a browser/testing framework, kill browsers or delete profile locks. File opening
+is not rendered verification: report the precise missing cases as visual review incomplete.
+State that browser interaction was not verified when only file/static checks were possible.
 
 Return output path, mode, selected screens/scenario, checks actually run, and known gaps. For intent include the compact per-screen review evidence and any repairs; missing visual evidence returns `DONE_WITH_CONCERNS`, not a claimed visual pass. For implementation report source shortcomings rather than improving the preview to hide them. Say “source-derived implementation approximation” after build, never “native app verified.”
+Full-screen visual handoffs also return `review_path`, `review_status` and the result of
+`validate-preview-review.js`; only `complete` establishes declared review coverage. Report
+that separately from observed usability findings and user acceptance; do not translate a
+coverage count into "all UX checks passed."
 
 Source is read-only: do not modify TSX, services, configs, plan, or memory bank from this skill. The caller persists selection/approval. Re-running replaces only that mode's HTML; generating intent never overwrites implementation and vice versa.

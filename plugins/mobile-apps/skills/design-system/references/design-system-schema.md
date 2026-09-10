@@ -34,6 +34,13 @@ Use these headings for downstream compatibility; concise tables/bullets are enou
 media purpose/crop/visible-subject emphasis, input/action/state treatments. Distinguish fixed
 user requirements from provisional visual proposals until approval; per-screen differences are allowed.>
 <For remote images, include loading/error fallback and network/offline dependency per the media-source policy.>
+<For task-specific treatments reused across screens, include a compact recipe: purpose/consumer
+screen IDs, content and typography hierarchy, grouping/density, icon/media treatment, states,
+and action semantics. Foreground realizes these as components before builders; names/interfaces
+alone are not implementations. One-screen treatments may remain local. No component quota.>
+<Choose a visible treatment, not only a component name: leading/supporting identity, coherent
+groups, row/action emphasis, appropriate separation, recognizable icons and meaningful media.
+Rendered review tests that realization; native components are not a later beautification step.>
 
 ## Motion
 <Functional purpose or none; reduced-motion behavior>

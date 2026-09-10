@@ -32,6 +32,9 @@ screen_spec: <this screen's approved compact spec, when available inline>
 service_signatures: <only actual generated methods/types this screen consumes>
 token_context: <relevant brand/token roles and negatives>
 journey_context: <relevant Primary journeys row and action/outcome/recovery>
+design_reference: <accepted preview path + relevant screen/state + observed review row, or explicit no-design/unverified status>
+component_interfaces: <actual shared paths/exports + typed props/state contracts consumed by this screen>
+data_coverage: <resolved supporting fields/derivations/operations for this screen's required facts and actions>
 Scope: assigned screen only; shared/layout changes return NEEDS_CONTEXT to foreground.
 Read your compact screen spec, shared conventions, actual Generated Services snapshot, relevant
 brand direction/negatives and existing target. Samples are API/import references, not layouts.
@@ -44,6 +47,10 @@ NEEDS_CONTEXT: / BLOCKED: first line, then result and changed-file paths.
 These optional compact fields are prompt context, not new sidecars or competing plan authority.
 When supplied, the builder reads only unresolved relevant plan/reference sections rather than
 reloading the full plan or service tree; signatures still come from actual Step 10.7 output.
+When a preview was accepted, `design_reference` is required for its consuming screens; do not
+send only tokens and a generic archetype. For other routes use the approved spec and shared
+recipes without pretending that an unrendered route has visual evidence. Supply actual
+`component_interfaces` whenever the screen consumes a shared task-specific treatment.
 
 Reject missing File columns/path escapes before dispatch; do not flatten folder structure.
 Apply the root status handler to every result and verify artifacts, not just the status string.
@@ -124,6 +131,9 @@ Use the actual source/handler/route evidence, not only an approved sketch:
   scan/deep-link entry and preserved return context. Never route a tab to a fixed sample ID.
 - Check the primary operation is wired with visible pending/error/retry behavior and honest
   persistence. Compilation and the presence of handlers alone do not establish task completion.
+- Compare the implemented facts, metrics, filters, actions and artifact cardinality against
+  `### Information and interaction coverage`; every generation-pending entry must now be
+  resolved. Test coherent populated/empty/error states, not only fixture names or mock success.
 
 Repair implementation mismatches before launch. Missing outcome-changing rules return to the
 foreground's owning approval gate; cosmetic choices remain advisory. Record what was inspected
@@ -139,6 +149,9 @@ journey, not only a component gallery. It reads built TSX/config/local component
 Record/check its source provenance and inspect typography, media resolution, repeated-item
 alignment, header/Back, tabs/footer and primary action placement at matching usable viewports.
 The accepted design is the minimum baseline, not a promise tied to a particular model.
+Require the implementation-mode rendered-review record and `validate-preview-review.js` result
+for the complete affected screens. Keep preview-only scenario controls out of native UI and
+preserve actual icon/media/grouping treatments, not only component names and token colors.
 
 Honor explicit preview opt-out and `visual_companion` (which controls opening). Unavailable
 rendered evidence or component-only scope must remain `DONE_WITH_CONCERNS` / unverified, not a

@@ -66,11 +66,19 @@ function writeProvenance({ projectRoot, preview, mode, scope, sources }) {
   return { status: 'recorded', ...provenance };
 }
 
-function checkProvenance({ projectRoot, preview, expectedMode, expectedScope }) {
+function checkProvenance({ projectRoot, preview, expectedMode, expectedScope, requiredSources = [] }) {
   if (expectedMode && !['intent', 'implementation'].includes(expectedMode)) throw new Error('Invalid expected mode');
   if (expectedScope && !['full-screens', 'components'].includes(expectedScope)) throw new Error('Invalid expected scope');
+  if (!Array.isArray(requiredSources) || requiredSources.some(source => typeof source !== 'string' || !source.trim())) {
+    throw new Error('Required sources must be an array of non-empty file paths');
+  }
   const root = fs.realpathSync(projectRoot);
   const previewPath = resolvePreview(root, preview);
+  const requiredFiles = new Set(requiredSources.map(source => {
+    const file = resolveFile(root, source);
+    if (file === previewPath) throw new Error('A preview cannot be its own source');
+    return file;
+  }));
   const document = normalizeDocument(fs.readFileSync(previewPath, 'utf8'));
   if (!document.block) return { status: 'unverified', reasons: ['No source provenance recorded'] };
   if (!/\stype\s*=\s*["']application\/json["']/i.test(document.block)) {
@@ -88,6 +96,7 @@ function checkProvenance({ projectRoot, preview, expectedMode, expectedScope }) 
   const reasons = [];
   if (hash(document.html) !== provenance.documentSha256) reasons.push('Preview document changed after recording');
   const seen = new Set();
+  const recordedFiles = new Set();
   for (const source of provenance.sources) {
     if (!source || typeof source.file !== 'string' || path.isAbsolute(source.file) ||
         !/^[a-f0-9]{64}$/.test(source.sha256) || seen.has(source.file)) {
@@ -96,10 +105,16 @@ function checkProvenance({ projectRoot, preview, expectedMode, expectedScope }) 
     seen.add(source.file);
     const file = resolveFile(root, source.file);
     if (file === previewPath) throw new Error('A preview cannot be its own source');
+    recordedFiles.add(file);
     if (hash(fs.readFileSync(file)) !== source.sha256) reasons.push(`Source changed: ${source.file}`);
   }
+  // A fresh hash set can still omit the plan, theme or shared component a caller is
+  // handing off. Assert those inputs without replacing or restamping recorded evidence.
+  const missingRequiredSources = [...requiredFiles].filter(file => !recordedFiles.has(file))
+    .map(file => path.relative(root, file).split(path.sep).join('/')).sort();
+  for (const file of missingRequiredSources) reasons.push(`Required source not recorded: ${file}`);
   const mismatch = (expectedMode && expectedMode !== provenance.mode) ||
-    (expectedScope && expectedScope !== provenance.scope);
+    (expectedScope && expectedScope !== provenance.scope) || missingRequiredSources.length > 0;
   if (expectedMode && expectedMode !== provenance.mode) reasons.push(`Expected ${expectedMode} mode, recorded ${provenance.mode}`);
   if (expectedScope && expectedScope !== provenance.scope) reasons.push(`Expected ${expectedScope} scope, recorded ${provenance.scope}`);
   return {
@@ -111,7 +126,7 @@ function checkProvenance({ projectRoot, preview, expectedMode, expectedScope }) 
 }
 
 function parseArgs(args) {
-  const options = { projectRoot: process.cwd(), sources: [] };
+  const options = { projectRoot: process.cwd(), sources: [], requiredSources: [] };
   let action;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -120,12 +135,13 @@ function parseArgs(args) {
       action = arg;
       continue;
     }
-    if (!['--project-root', '--preview', '--mode', '--scope', '--source', '--expect-mode', '--expect-scope'].includes(arg)) {
+    if (!['--project-root', '--preview', '--mode', '--scope', '--source', '--expect-mode', '--expect-scope', '--require-source'].includes(arg)) {
       throw new Error(`Unknown argument: ${arg}`);
     }
     const value = args[++index];
     if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}`);
     if (arg === '--source') options.sources.push(value);
+    else if (arg === '--require-source') options.requiredSources.push(value);
     else options[{
       '--project-root': 'projectRoot', '--preview': 'preview', '--mode': 'mode', '--scope': 'scope',
       '--expect-mode': 'expectedMode', '--expect-scope': 'expectedScope',
@@ -135,8 +151,8 @@ function parseArgs(args) {
   if (action === '--check' && (options.mode || options.scope || options.sources.length)) {
     throw new Error('--check uses the recorded mode, scope and sources; do not supply replacements');
   }
-  if (action === '--write' && (options.expectedMode || options.expectedScope)) {
-    throw new Error('Expected mode/scope are assertions for --check only');
+  if (action === '--write' && (options.expectedMode || options.expectedScope || options.requiredSources.length)) {
+    throw new Error('Expected mode/scope and required sources are assertions for --check only');
   }
   return { action, options };
 }

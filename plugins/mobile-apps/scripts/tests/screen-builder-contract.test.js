@@ -36,3 +36,31 @@ test('builder keeps child ownership and truthful outcomes separate from presenta
     assert.ok(entry.includes(status));
   }
 });
+
+test('AI may create task-specific components without being constrained to samples', () => {
+  const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
+  const planning = read('shared/references/design-planning.md');
+  const shell = read('skills/create-mobile-app/references/phase-08-screens.md');
+  const api = read('agents/references/screen-builder/design-api.md');
+  const samples = read('shared/samples/src/components/index.tsx');
+  assert.match(planning, /AI may reuse, adapt, compose, or generate task-specific UI/);
+  assert.match(planning, /starting point, not a closed catalog or a ceiling/);
+  assert.match(planning, /Inspect existing components first/);
+  assert.match(planning, /do not force a task into an unsuitable sample/);
+  assert.match(planning, /no separate component-choice approval/);
+  assert.match(planning, /owning foreground gate/);
+  assert.match(entry, /New task-specific UI is allowed within `target_file`/);
+  assert.match(entry, /shared component additions\/adaptations go to foreground/);
+  for (const text of [shell, api]) assert.match(text, /#component-choice-and-creation/);
+  assert.match(samples, /Create task-specific UI when needed/);
+  assert.doesNotMatch(samples, /Never re-define inline/);
+});
+
+test('builders consume concrete accepted presentation and realized shared interfaces', () => {
+  assert.match(entry, /`design_reference` supplies the accepted\s+preview screen\/state and observed review row/);
+  assert.match(entry, /explicit no-design\/unverified status/);
+  assert.match(entry, /`component_interfaces` names actual shared exports\/props/);
+  assert.match(entry, /Match actual shared components to the accepted recipes/);
+  assert.match(entry, /missing exports return to foreground/);
+  assert.match(entry, /style acceptance does not verify an unobserved screen or native control/);
+});

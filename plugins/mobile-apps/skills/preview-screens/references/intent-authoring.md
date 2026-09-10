@@ -21,6 +21,11 @@ Include all relevant decisions, not every source file, metadata response, or too
 | Navigation | Main destinations, task-appropriate entry, applicable scope/filters, contextual actions, selected-item/deep-link returns |
 | Design | Approved tokens, typography, hierarchy, density, imagery, accessibility and explicit negatives |
 
+Use the foreground's Experience outline, Information needs and coverage when present. Supported
+facts can have realistic synthetic values; additional concepts, artifact counts or operations
+are not authorized by their presence in a screenshot. Derive quantities/counts from one coherent
+scenario, keeping units and selected-record relationships consistent across all frames.
+
 Foreground may supply these facts inline. Retrieve only missing relevant plan sections.
 Capability and connector decisions need to be planned before preview, not provisioned.
 Unknown business policy remains an assumption or foreground question, never an invented rule.
@@ -36,6 +41,13 @@ the eventual app. Use fewer when the product has fewer meaningful surfaces; expa
 when an essential journey cannot be explained otherwise or the user requests it.
 Contextual details, dialogs, sheets, and recovery states can extend those main screens
 without becoming filler navigation tabs.
+
+Before rendering, check the selection against the primary journey's working rhythm. Where do
+users repeatedly read, compare, capture or decide? That surface must be visible in the main
+storyboard, not merely reachable through a hidden modal. If the selected frames only show
+entry, a field editor and confirmation, return a targeted selection change to foreground.
+Keep valid form/reader/conversation-centered journeys; this is not a ban on forms or a
+requirement to add a dashboard, scanner or route.
 
 Choose composition from the job and information hierarchy. Use readable mobile typography,
 meaningful whitespace, task-relevant imagery/icons, clear action priority, and coherent
@@ -64,6 +76,10 @@ or use the documented phone default. Tablet-first work uses the approved tablet 
 adaptive layout; phone frames are not a universal device model.
 Do not widen the phone, shorten its height, or shrink text/targets to make the review canvas fit.
 If three full-size devices do not fit, switch the review layout; do not distort the app viewport.
+Apply [first-preview usefulness](../../../shared/references/design-planning.md#first-preview-usefulness)
+before choosing the shell. Review chrome is not app content: keep scenario explanations collapsed
+or outside the primary canvas, and use the same responsive switcher/layout during review that
+the maker will open. Do not repair an obstructed screenshot by temporarily hiding that chrome.
 
 - Give containers a semantic purpose; avoid redundant nesting or decoration that competes
   with the content. One continuous surface may suit a related collection; cards, grids or
@@ -84,6 +100,36 @@ If three full-size devices do not fit, switch the review layout; do not distort 
 - Density follows frequency and task: an operational queue can be compact; a consequential
   review needs more evidence and breathing room. Do not manufacture empty space or decorative
   variation when a repeated row is the clearest pattern.
+- Fix fit at the container level first: reserve only needed action width, allow flex/grid content
+  to shrink and wrap, and keep scrolling content within its real available height. Clipping or
+  `overflow-x: hidden` is not a fix for off-screen controls. Truncation is acceptable for secondary
+  text only when the decision-bearing identity/facts remain readable or have a reachable disclosure;
+  it must not hide the date, amount, unit or distinguishing name the user needs to choose.
+
+### Realize the visual treatment
+
+Translate each accepted recipe into a concrete rendered arrangement, not only a named box.
+Specify which identity leads, which facts share a group, where visual weight belongs, and how
+the next action relates to its prerequisites. Compare those choices in the screenshot.
+
+- Lead with recognizable task/record context; retain technical references where useful without
+  letting a long code accidentally dominate the title and controls.
+- Give controls, selection and focus clear boundaries. Decorative cards and separators need
+  not all use the same strong control outline; use surfaces/spacing to express grouping too.
+- A repeated full-width button in every row is not a default. Use a suitable whole-row action
+  or quieter affordance when the operation is selection; keep independent actions separate.
+- Use recognizable local SVG/icon artwork or a supported icon representation with accessible
+  names. Letter blocks such as "PH", "TR" or "GPS" are not a finished icon treatment.
+- For a populated photo/evidence state, use approved representative illustrative imagery,
+  with visible subject/crop and source provenance. A colored box saying "photo" cannot validate
+  media prominence. If imagery is unavailable, show an honest empty state or mark the selected
+  populated media treatment unverified; do not silently forbid imagery to avoid realizing it.
+- Choose a realistic workload and meaningful variation, not the smallest fixture that makes
+  handlers pass. Do not fabricate fields, padding records or unsupported metrics to fill space.
+
+No fixed colors, card count, density or screenshot imitation is required. Native controls
+and helpers can preserve typography and behavior later; they do not automatically improve
+weak grouping, action hierarchy or visual identity.
 
 ### Task substance before polish
 
@@ -108,6 +154,20 @@ scope from Data/Navigation. Do not switch to All or add records to make the imag
 Exercise every offered filter and search with an expected match and no-match result; check
 record identities and count labels, not only that a handler ran. A loaded-page count must not
 be presented as a whole-dataset count.
+
+Keep one local scenario state in the HTML and render dependent views from it. A selection
+must carry the selected record ID and parent context, not always open the first example.
+Test two distinct records when a collection has them, including a read-only/completed variant
+where applicable; an explicit out-of-scope destination is better than showing the wrong record.
+Save/confirm must change the intended local record and its dependent views, not only show a
+"saved" message. Reset restores fields, selected choices, filters, errors, parent/child state
+and enabled actions to the declared initial scenario. These are preview-only state operations,
+not permission to create a production data store or execute a native/API call.
+
+For each filter or visible related fact, recheck its source in every scope that offers it.
+A location filter on one collection does not make location available on a different collection
+whose records only expose a related display name. Return that gap through the existing coverage
+audit instead of adding plausible sample properties that have no supported production read path.
 
 Before handoff, inspect each screen and ask: can the actor understand the situation and take
 the next supported step? Does selection open the relevant task/content, or only a related record?
@@ -136,12 +196,25 @@ new renderers, or real-service setup.
 
 Exercise bindings before handoff:
 
+- Reconcile the illustrative content with approved data/native/route scope before styling it:
+  fields and totals need supported reads; evidence count must respect storage cardinality;
+  read-only decisions must not acquire editing controls. No supplier, extra photo, tab, share,
+  notification or offline state is added just because it appeared in a reference. Keep explicitly
+  approved demo context separate from production; return necessary scope changes to foreground.
 - Exercise each applicable scope/filter/search against its declared data source and affected
   surfaces. Keep displayed records, derived counts, and labels consistent. No out-of-scope record
   remains; an empty filtered result preserves and explains its scope. Independent views need
   not share a filter. Do not add search, filters, counters or mutations just to satisfy this check.
 - A selected/scanned/deep-linked ID opens the exact record and correct parent context. Back
   restores the originating scope/filter/selection, or uses the approved direct-entry fallback.
+- An enabled action must perform its declared local transition or expose an explicitly labeled
+  out-of-scope destination. A toast saying "opened" without navigation is not a working journey.
+  Native-only controls explain the boundary; scenario controls, not fake capture handlers,
+  select illustrative captured/uploaded/location states. Do not silently clamp one entered
+  business value when another changes; preserve invalid input and show the approved validation.
+- Exercise compound filters, a different selected record, invalid input, and reset after edits,
+  not just the happy path of the first example. Record actual before/after identity and state.
+  "Control visible" or "still available" is not evidence that its action worked.
 - Mock mutations, when part of the approved job, update only the declared records/states and
   dependent views. Reset restores the exact initial scenario; shared context stays synchronized.
 - For phone previews at desktop and 320px widths, essential content/actions remain visible without horizontal
@@ -174,6 +247,8 @@ reflow and every offered theme without resizing the target device to hide weakne
 | Usable first viewport | Meaningful content begins; continuation and navigation are discoverable | Chrome, introduction or empty padding displaces the task, or essential content is clipped |
 | Action placement | Required controls are legible and reachable with normal click/keyboard actions, including after scrolling | Overlays, clipping or decoration obscure an action or separate it from prerequisite evidence |
 | State fidelity | Initial controls, records, counts and reset match the declared preview state | The illustration silently narrows scope, changes records or contradicts its labels |
+| Density and typography | Actual text roles and effective hit areas remain usable in populated/long-content states | Tiny labels or controls make a dense screenshot fit, or excess chrome forces task facts out |
+| Affordance fidelity | Icons, media and controls convey the accepted task and supported action | Letter abbreviations stand in for icons, decorative blocks masquerade as evidence, or an enabled control only shows a success-shaped toast |
 
 Measure the **visible subject**, media container, usable app width/height and scrolling viewport
 separately. An image element or SVG viewBox includes transparent/internal whitespace; its CSS
@@ -201,6 +276,17 @@ context, focal content and next step | pass/fail/unverified + reason | repair/re
 Name visible regions/labels and measured geometry, not "looks polished". Reuse the existing
 handoff; include subject/container proportions when media matters and viewport/chrome allocation
 when it affects the task. Do not create a score file, duplicate design document, or approval receipt.
+Record only checks actually executed. A global 48px CSS rule does not prove a locally overridden
+stepper's hit area; inspect its computed box and normal pointer/keyboard reachability. User
+acceptance of appearance does not turn missing screenshots, failed checks or native simulations
+into verified results. Put preview limitations in compact review chrome, not repeated pinned
+explanations that crowd the product UI.
+
+Execute [rendered preview review](../../../shared/references/rendered-preview-review.md):
+try an independent available browser path after an adapter failure, capture actual screens,
+critique the realized treatment and validate the preview-bound observation record. This small
+evidence record is not a score file or product authority. No observation can be inferred from
+the HTML existing, a component recipe name, or a successful source validator.
 
 If any applicable check fails, make **one focused repair pass**, then rerun the affected
 visual and interaction checks. Do not restyle unrelated screens. Provisional visual changes
@@ -216,6 +302,9 @@ a clean review. This procedure cannot guarantee aesthetic preference or native r
 ## Approval and implementation handoff
 
 Return the preview path, selected screen IDs, scenario, checks, assumptions, and limitations.
+Include `review_path`, `review_status` and actual browser attempts from rendered review.
+Include any fact/action that lacks coverage in the existing plan. A visually successful
+illustration is not ready for implementation until those needs are resolved by foreground.
 The foreground collects changes and acceptance, updates affected existing screen specs/shared
 conventions/design values, and records the accepted preview revision. No approval is inferred
 from a rendered page.

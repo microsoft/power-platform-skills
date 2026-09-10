@@ -24,6 +24,9 @@ not a question to the user. You cannot mark a gate approved or write an approval
 
 Require confirmed requirements brief, platform/wizard facts, working directory, plugin root,
 requested sections, and one caller-assigned output path under `<working_dir>/.tmp/`.
+Preserve the supplied Experience outline and Information needs when checking capability and
+artifact feasibility. Return unsupported required needs to foreground; do not redesign the
+journey around an absent wrapper or expand scope merely to imitate a reference.
 For edits also require the current relevant section; preserve unaffected decisions.
 Write only that proposal file. Do not edit `native-app-plan.md`, `_dm_section.md`,
 `_screens_section.md`, `memory-bank.md` or `.tmp/mobile-plan-status.json`.
