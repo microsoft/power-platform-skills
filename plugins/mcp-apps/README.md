@@ -37,7 +37,7 @@ and generates a temporary `RuntimeTypes.ts` for verified columns, lookup shapes,
 values. The type file is removed after generation. The final output is a matched pair:
 
 - `<tool-name>.tool.js` contains the self-contained runtime.
-- `<tool-name>.tool.json` contains the tool registration metadata.
+- `<tool-name>.tool.json` contains the tool registration metadata and MCP tool annotations.
 
 The JavaScript file exports:
 
@@ -56,6 +56,12 @@ The JSON sidecar keeps registration concerns out of executable code:
 {
   "name": "account-summary",
   "description": "Search accounts by name and return revenue and status summaries.",
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
   "inputSchema": {
     "type": "object",
     "properties": {}
@@ -70,6 +76,8 @@ The JSON sidecar keeps registration concerns out of executable code:
 `inputSchema` describes the complete `toolInput` object and its validation constraints.
 `outputSchema` describes only the model-visible `structuredContent` business payload. It
 does not include conversational `content`, authored `meta`, or runtime `_meta`.
+`annotations` always includes `readOnlyHint`, `destructiveHint`, `idempotentHint`, and an
+`openWorldHint` fixed to `false` for the constrained codeful runtime.
 
 ### Generate an MCP App widget
 

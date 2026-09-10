@@ -4,9 +4,11 @@
     "Creates exactly one final JavaScript file with a .tool.js suffix and one matching JSON file with a .tool.json suffix",
     "Exports an async function named runTool",
     "Uses the runTool parameter shape { toolInput, dataApi }",
-    "The .tool.json parses as JSON and contains exactly name, description, inputSchema, and outputSchema",
+    "The .tool.json parses as JSON and contains exactly name, description, annotations, inputSchema, and outputSchema",
     "The sidecar name matches the kebab-case basename shared by the .tool.js and .tool.json files",
     "The sidecar description concisely explains what the tool does and when a model should call it",
+    "annotations contains boolean readOnlyHint, destructiveHint, idempotentHint, and openWorldHint fields that match the generated behavior",
+    "annotations.openWorldHint is always false",
     "inputSchema has an object root and represents every accepted input field, required field, default, and runtime constraint",
     "inputSchema sets additionalProperties to false unless the prompt explicitly requires extensible input",
     "outputSchema has an object root and describes only the model-visible structuredContent business payload",
@@ -38,6 +40,7 @@
         "Does not invoke PAC CLI because Dataverse is not used",
         "Rejects missing, empty, negative, or non-numeric item values",
         "Returns a plain object so the host promotes it to structuredContent",
+        "Marks the deterministic calculation as read-only, non-destructive, idempotent, and not open-world",
         "inputSchema requires items and constrains each quantity and unitPrice consistently with runtime validation",
         "outputSchema requires subtotal, tax, and total as numbers"
       ]
@@ -60,6 +63,7 @@
         "Escapes nameContains before interpolating it into an OData filter",
         "Reads rows from queryTable result.rows",
         "Reads the status label from statecode@OData.Community.Display.V1.FormattedValue",
+        "Marks the query as read-only, non-destructive, idempotent, and not open-world",
         "inputSchema represents nameContains as an optional string and limit as a bounded integer",
         "outputSchema describes the returned account summaries and count fields"
       ]
@@ -81,6 +85,7 @@
         "Validates the GUID and permits only verified numeric choice values",
         "Calls updateRow with the singular account logical name",
         "Does not return success when updateRow throws",
+        "Marks the set-value update as writable, destructive, idempotent, and not open-world",
         "inputSchema requires accountId with UUID format and constrains categoryValue to verified choices",
         "outputSchema describes the updated id and category value"
       ]
@@ -101,6 +106,7 @@
         "Calls loadMoreRows only when hasMoreRows is true and loadMoreRows exists",
         "Stops at the validated limit",
         "Does not include loadMoreRows or another function in the returned object",
+        "Marks the paged query as read-only, non-destructive, idempotent, and not open-world",
         "inputSchema constrains limit to an integer from 1 through 100",
         "outputSchema includes the returned contacts and hasMoreRows flag"
       ]
@@ -130,6 +136,7 @@
       "assertions": [
         "Returns an intentional content, structuredContent, and meta envelope",
         "Explains that authored meta is delivered to the widget as runtime _meta",
+        "Marks the account query as read-only, non-destructive, idempotent, and not open-world",
         "outputSchema describes only the accounts and totalCount inside structuredContent and excludes content, meta, and _meta",
         "Invokes generate-mcp-app-ui after validating the server file",
         "Passes content, structuredContent, and normalized _meta to the UI skill",
@@ -154,6 +161,7 @@
         "Recognizes content and meta as reserved result-envelope keys",
         "Wraps the complete business payload inside structuredContent",
         "Does not accidentally move the business meta field into widget-private _meta",
+        "Marks the document inspection as read-only, non-destructive, idempotent, and not open-world",
         "outputSchema directly describes the business content, meta, and owner fields without adding a structuredContent wrapper"
       ]
     },
@@ -172,6 +180,7 @@
         "Rejects malformed accountId before calling dataApi",
         "Adds useful context to a retrieveRow failure and rethrows it",
         "Does not return an empty account or ok false object as a fallback",
+        "Marks the retrieval as read-only, non-destructive, idempotent, and not open-world",
         "inputSchema requires accountId with UUID format"
       ]
     },
@@ -192,6 +201,7 @@
         "Writes the lookup through _regardingobjectid_value using /account(guid)",
         "Does not emit @odata.bind or a plural entity-set path",
         "Returns the id resolved by createRow",
+        "Marks the create as writable, non-destructive, non-idempotent, and not open-world",
         "inputSchema requires subject and regardingAccountId and constrains regardingAccountId with UUID format",
         "outputSchema describes the newly created task id"
       ]

@@ -78,10 +78,11 @@ Generate self-contained JavaScript server runtimes, JSON Schema registration met
 and interactive single-file MCP App widgets for codeful MCP tools.
 
 **Skills**: `/generate-codeful-mcp-tool` creates a named `runTool` server entry point plus
-its description, input schema, and structured output schema, with verified Dataverse
-access; `/generate-mcp-app-ui` creates an HTML widget that embeds its runtime by default
-for hosts that block public URLs, while retaining an opt-in CDN mode. It can consume
-model-visible content, structured output, and widget-private metadata.
+its description, MCP behavior annotations, input schema, and structured output schema,
+with verified Dataverse access; `/generate-mcp-app-ui` creates an HTML widget that embeds
+its runtime by default for hosts that block public URLs, while retaining an opt-in CDN
+mode. It can consume model-visible content, structured output, and widget-private
+metadata.
 
 **Stack**: JavaScript codeful tools + HTML widgets using the MCP Apps protocol
 

@@ -32,7 +32,7 @@ You generate a matched pair of files for one MCP tool:
 
 - `<tool-name>.tool.js`: the complete JavaScript server implementation.
 - `<tool-name>.tool.json`: declarative registration metadata containing the tool name,
-  description, input schema, and output schema.
+  description, input schema, output schema, and MCP tool annotations.
 
 The host imports the JavaScript module and calls:
 
@@ -49,7 +49,8 @@ Before generating, establish:
 2. Its input fields, types, required fields, and constraints. Accept a JSON Schema, a
    representative input object, or an exact field description. Never guess the input shape.
 3. The expected result, preferably as a representative output object.
-4. Whether it reads or writes Dataverse, and the requested tables in business terms.
+4. Whether it reads or writes Dataverse, the requested tables in business terms, and
+   whether any write creates, appends, updates, overwrites, or deletes state.
 5. Whether the user also wants an MCP App widget.
 
 Ask only for information that is missing. A sample input/output is preferred but not
@@ -143,6 +144,12 @@ The JSON sidecar MUST be valid JSON with exactly these top-level fields:
 {
   "name": "account-summary",
   "description": "Search accounts and return revenue and status summaries.",
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
   "inputSchema": {
     "type": "object",
     "properties": {}
@@ -157,6 +164,22 @@ The JSON sidecar MUST be valid JSON with exactly these top-level fields:
 - `name`: exactly the confirmed tool name and the shared file basename.
 - `description`: concise, model-actionable guidance explaining what the tool does and when
   to call it. Do not copy the user's prompt verbatim or include implementation details.
+- `annotations`: MCP
+  [`ToolAnnotations`](https://modelcontextprotocol.io/specification/2025-06-18/schema#toolannotations)
+  describing the tool's behavior. Always emit all four boolean hints:
+  - `readOnlyHint`: `true` only when the tool cannot modify Dataverse or any other state.
+  - `destructiveHint`: `true` when the tool may delete, overwrite, or otherwise cause a
+    destructive update. Set it to `false` for read-only tools and non-destructive creates
+    or additive writes.
+  - `idempotentHint`: `true` when repeated calls with the same valid input have no
+    additional effect. Reads, deterministic calculations, and updates that set the same
+    values are idempotent; creates and append-style operations are not.
+  - `openWorldHint`: always `false` because the codeful runtime cannot access arbitrary
+    external systems.
+  Infer these values from the generated implementation and requested behavior. If the
+  write semantics are genuinely ambiguous, ask before generating rather than guessing.
+  Treat annotations as advisory metadata, not as a substitute for runtime validation or
+  authorization.
 - `inputSchema`: the complete JSON Schema for `toolInput`. Use an object root, list every
   accepted field under `properties`, identify required fields with `required`, encode
   runtime constraints such as bounds, formats, enums, and array item shapes, and set
@@ -219,9 +242,10 @@ Before reporting completion:
 2. Import the file as an ESM data URL with Node.js and assert that `runTool` is a function.
    Importing MUST NOT execute data access or other top-level side effects.
 3. Parse the sidecar with `JSON.parse`. Confirm it has exactly `name`, `description`,
-   `inputSchema`, and `outputSchema`; the name matches both filenames; both schemas have
-   object roots; and every input constraint enforced by the runtime is represented in
-   `inputSchema`.
+   `annotations`, `inputSchema`, and `outputSchema`; the name matches both filenames;
+   all four annotation hints are booleans, `openWorldHint` is `false`, the other hints
+   match the implementation's actual behavior, both schemas have object roots, and every
+   input constraint enforced by the runtime is represented in `inputSchema`.
 4. Grep the output for imports, `require`, placeholders, guessed columns, and unsupported
    host access.
 5. When representative input/output was supplied, invoke `runTool` with an in-memory mock
@@ -256,6 +280,6 @@ already verified for the file.
 
 ## Completion response
 
-State both generated tool file paths and summarize the description, input contract, and
-structured result contract. If a widget was requested, also state the HTML path and which
-result channels it consumes.
+State both generated tool file paths and summarize the description, tool annotations,
+input contract, and structured result contract. If a widget was requested, also state the
+HTML path and which result channels it consumes.

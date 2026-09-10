@@ -29,10 +29,12 @@ Inspect the generated output and verify:
 
 1. Exactly one final `.tool.js` and one matching `.tool.json` exist.
 2. The module exports an async `runTool({ toolInput, dataApi })`.
-3. The sidecar parses as JSON, contains exactly `name`, `description`, `inputSchema`, and
-   `outputSchema`, and its name matches both file basenames.
-4. The description is concise and model-actionable. Both schemas have object roots;
-   `inputSchema` captures all accepted fields and constraints; and `outputSchema`
+3. The sidecar parses as JSON, contains exactly `name`, `description`, `annotations`,
+   `inputSchema`, and `outputSchema`, and its name matches both file basenames.
+4. The description is concise and model-actionable. `annotations` contains boolean
+   `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` values that
+   match the implementation, with `openWorldHint` always `false`. Both schemas have object
+   roots; `inputSchema` captures all accepted fields and constraints; and `outputSchema`
    describes only the `structuredContent` business payload.
 5. There are no imports, `require` calls, package references, host transports, direct HTTP,
    filesystem calls, environment reads, or top-level side effects.
@@ -88,6 +90,7 @@ Score each output from 1-5 on:
 | Schema safety | Are all Dataverse names and values verified instead of inferred? |
 | Runtime compatibility | Is the file self-contained ESM with the exact host entry point? |
 | Metadata contract | Does the sidecar accurately describe the tool and match runtime validation and structured output? |
+| Tool annotations | Do the read-only, destructive, and idempotent hints match behavior, with open-world access disabled? |
 | Result visibility | Is data placed intentionally in model-visible or widget-private channels? |
 | Error behavior | Do failures throw without leaking internals or pretending success? |
 | UI handoff | When requested, does the widget receive the normalized complete result? |

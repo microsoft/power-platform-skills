@@ -1,6 +1,12 @@
 {
   "name": "account-summary",
   "description": "Search accounts by name and return revenue and status summaries.",
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  },
   "inputSchema": {
     "type": "object",
     "properties": {
