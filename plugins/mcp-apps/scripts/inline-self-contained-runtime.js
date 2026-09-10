@@ -36,7 +36,7 @@ function countOccurrences(value, needle) {
 }
 
 function assertNoExternalResources(html) {
-  const resourceAttribute = /<(script|link|img|iframe|audio|video|source|object)\b[^>]*\b(src|srcset|href|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  const resourceAttribute = /<(script|link|img|iframe|audio|video|source|object|image|use)\b[^>]*\b(src|srcset|href|xlink:href|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
   for (const match of html.matchAll(resourceAttribute)) {
     const value = (match[3] ?? match[4] ?? match[5] ?? '').trim();
     if (match[2].toLowerCase() === 'srcset') {
