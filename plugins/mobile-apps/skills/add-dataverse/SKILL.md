@@ -499,11 +499,13 @@ This retains prior checkpoint bindings/tables as integrity-protected history,
 keeps earlier successful tables publication-pending, and maps only the
 journal-proven failed collision table to its revised in-contract alias. It
 fails closed if a completed write would disappear from the revised contract or
-change definition: completed tables/inline columns, extension columns,
-relationships (including cascade behavior), and alternate keys must each map
-to an equivalent revised structured component. It also rejects any unrelated
-out-of-contract publish target. Only after this succeeds may Step 8 overwrite
-the operation manifest.
+change definition: completed tables/inline columns, extension columns, image
+configuration PUTs, relationships (including cascade behavior), and alternate keys must each map
+to an equivalent revised structured component. Completed image PUTs retain their
+full hash-bound definitions only when the revised image requirements remain
+compatible; they stay publication-pending without replaying the update. It also
+rejects any unrelated out-of-contract publish target. Only after this succeeds
+may Step 8 overwrite the operation manifest.
 
 The manifest builder never emits calculated/rollup/formula creation. Reused
 computed dependencies have already crossed the exact derived-metadata barrier;
