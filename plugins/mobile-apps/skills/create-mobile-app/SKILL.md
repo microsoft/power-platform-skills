@@ -379,7 +379,7 @@ Scope (proxy estimates — actual numbers come from architects):
 
 Time (rough — agent time only, excludes your approval latency at gates):
   Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
-  Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
+  Scaffolding   ~1-2 min          ← validates prepared template + runs `npx pa app init --app-type MobileApp --non-interactive`
   Screen build  ~<low>-<high> min ← parallel, capped at 5 concurrent
 
 Token tier: Opus everywhere in v0 (model routing not yet shipped).
