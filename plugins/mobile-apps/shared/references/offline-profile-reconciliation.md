@@ -107,7 +107,7 @@ only mention `/setup-offline-profile` if the user has expressed interest in offl
 ## Gate a `delta` (`/deploy`, the final publish step)
 
 `/deploy` is the last chance to catch schema that never made it into the offline profile
-before it ships. Run the delta check **before** `npx power-apps push`:
+before it ships. Run the delta check **before** `npx pa app push --non-interactive`:
 
 - `no-manifest` / `no-profile` / `in-sync` → no gate; continue (for `no-profile`, print a
   one-line note that no offline profile exists).

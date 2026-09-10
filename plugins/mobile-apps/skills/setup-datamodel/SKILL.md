@@ -146,7 +146,7 @@ Arguments:
   --skip-planning
 ```
 
-`/add-dataverse` creates tables in tier order, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, publishes customizations, writes `.datamodel-manifest.json`, and type-checks. Wait for it to return before Phase 6.
+`/add-dataverse` creates tables in tier order, runs `npx pa app add data-source --connector dataverse --table <name> --non-interactive` per table from the app root, publishes customizations, writes `.datamodel-manifest.json`, and type-checks. Wait for it to return before Phase 6.
 
 **Cross-entity reads from the screen plan** — the approved
 `### Cross-entity Reads` subsection contains formatted lookups, bounded chained

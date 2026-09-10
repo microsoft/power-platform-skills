@@ -194,7 +194,7 @@ test('scaffold validation uses preparation writes, not later generator output', 
   fs.writeFileSync(configPath, '{"environmentId":"manual-edit"}\n');
   const manualEdit = validate(['power.config.json']);
   assert.strictEqual(manualEdit.status, 2, manualEdit.stderr);
-  assert.match(manualEdit.stderr, /owned by `npx power-apps init`/);
+  assert.match(manualEdit.stderr, /owned by `npx pa app init/);
 });
 
 test('preparation round-trips JavaScript line terminators in app display names', () => {

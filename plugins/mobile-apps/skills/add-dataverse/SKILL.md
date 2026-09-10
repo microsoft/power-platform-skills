@@ -12,7 +12,7 @@ model: opus
 
 Two paths:
 
-- **Existing tables only** — skip to Step 5 (just runs `npx power-apps add-data-source` per table)
+- **Existing tables only** — skip to Step 5 (just runs `npx pa app add data-source --non-interactive` per table)
 - **New / extended tables** — full workflow with Web API mutations in dependency order
 
 ## Workflow
@@ -141,11 +141,11 @@ If they need new tables and refuse both paths, recommend they run `/setup-datamo
 
 ### Step 3 — Setup Dataverse Web API auth
 
-Required only if creating or extending tables. Skip to Step 5 for read-only `add-data-source`.
+Required only if creating or extending tables. Skip to Step 5 for read-only `app add data-source`.
 
 #### Step 3a — Environment consistency check
 
-`npx power-apps` and `az` authenticate independently — they can point to different accounts. Verify `power.config.json` resolves and `az` can token for the target tenant before making any Dataverse API calls:
+`npx pa` and `az` authenticate independently — they can point to different accounts. Verify `power.config.json` resolves and `az` can token for the target tenant before making any Dataverse API calls:
 
 ```bash
 ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")")
@@ -1019,7 +1019,7 @@ Add alternate keys to `.datamodel-manifest.json` for the table:
 **Telemetry checkpoint: `generate_dataverse_data_sources`**
 
 **Print before starting:**
-> "→ Generating TypeScript services for <N> tables via `npx power-apps add-data-source` (sequential). Print '✓ <table>Service.ts' after each."
+> "→ Generating TypeScript services for <N> tables via `npx pa app add data-source --non-interactive` (sequential). Print '✓ <table>Service.ts' after each."
 
 When `<operation_manifest_mode> = valid`, set `SERVICE_REQUIRED_TABLES` from
 `service.requiredTables[].logicalName`. Keep the manifest's resolved adapted
@@ -1029,13 +1029,13 @@ sequential outside BATCH-METADATA.
 For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
-npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name>
+npx pa app add data-source --connector dataverse --table <table-logical-name> --non-interactive
 ```
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
 
 After generation, verify the output created by
-`npx power-apps add-data-source` rather than guessing a JSON path or service
+`npx pa app add data-source --non-interactive` rather than guessing a JSON path or service
 filename. The command writes Dataverse configuration under the literal
 `databaseReferences["default.cds"].dataSources` key and derives service
 filenames from each entry's `entitySetName`, which may differ from the table
@@ -1069,7 +1069,7 @@ publish retry.
 **Print before starting:**
 > "→ Publishing customizations (PublishXml) so new tables/columns become queryable. ~5–20 seconds."
 
-Only after **every** Step 5 metadata POST and **every** Step 6 `npx power-apps add-data-source` has returned successfully, publish so the new tables and columns are available to the runtime. `PublishXml` takes the same exclusive metadata lock as the create/extend calls — do not run it concurrently with anything from Steps 5 or 6.
+Only after **every** Step 5 metadata POST and **every** Step 6 `npx pa app add data-source --non-interactive` has returned successfully, publish so the new tables and columns are available to the runtime. `PublishXml` takes the same exclusive metadata lock as the create/extend calls — do not run it concurrently with anything from Steps 5 or 6.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
@@ -1195,7 +1195,7 @@ if (!upload.success) {
 **Print before starting:**
 > "→ Regenerating connector schemas + running tsc to verify generated services compile (~15–30 seconds)."
 
-`npx power-apps add-data-source` (Step 5) wrote new files into `.power/schemas/<connector>/`. The `connectorSchemas.ts` consumed by `app/_layout.tsx` is now stale — regenerate it before type-checking, otherwise the new tables won't be wired into the runtime schema map and `tsc` will pass against an out-of-date snapshot:
+`npx pa app add data-source --non-interactive` (Step 5) wrote new files into `.power/schemas/<connector>/`. The `connectorSchemas.ts` consumed by `app/_layout.tsx` is now stale — regenerate it before type-checking, otherwise the new tables won't be wired into the runtime schema map and `tsc` will pass against an out-of-date snapshot:
 
 ```bash
 npm run generate-schemas
@@ -1278,7 +1278,7 @@ After printing the summary, **offer one-click sample-data seeding** — but only
 
 - **Always** use generated services (e.g., `Cr123_jobsiteService.getAll()`) — never `fetch` / `axios` directly.
 - Result data lives at `result.data`, not `result` itself.
-- Don't edit files under `src/generated/` — they are regenerated on every `npx power-apps add-data-source`.
+- Don't edit files under `src/generated/` — they are regenerated on every `npx pa app add data-source --non-interactive`.
 - Picklist (Choice) fields, virtual fields, lookups, and file/image columns each have non-obvious gotchas. Keep `references/dataverse-reference.md` aligned with this skill.
 - A valid operation manifest removes repeated agent reconciliation; it does not
   change Dataverse's serialized metadata-lock latency. Real matched A/B runs

@@ -95,6 +95,14 @@ test('bundled dependencies match the current host-factory template boundary', ()
   assert.strictEqual(packageJson.scripts['bundle:ios'], 'build-codegen-package ios');
 });
 
+test('generated environment and local signing config stay out of source control', () => {
+  const gitignore = read('template/.gitignore');
+  assert.match(gitignore, /^wrap\.config\.json$/m);
+  assert.doesNotMatch(gitignore, /^wrap\.config\.json\.example$/m);
+  assert.match(gitignore, /^power\.config\.json$/m);
+  assert.match(gitignore, /^\.powernative\/$/m);
+});
+
 test('create flow keeps host theme foregrounds aligned with Tamagui brand accents', () => {
   const skill = read('skills/create-mobile-app/SKILL.md');
   const integration = read('skills/design-system/references/tamagui-integration.md');
