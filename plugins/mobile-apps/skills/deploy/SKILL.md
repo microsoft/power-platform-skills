@@ -135,8 +135,10 @@ npm run bundle:ios
 
 Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
 
-- `dist/index.android.bundle.hbc` / `dist/main.jsbundle.hbc` — the Hermes bytecode bundle.
-- `dist/powerapps-customer-assets-android/` and `dist/powerapps-customer-assets-ios/` — `manifest.json` plus `assets/<fileHash>.<type>` for every image/font.
+- **Android:** `dist/index.android.bundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-android/` (`manifest.json` + `assets/<fileHash>.<type>`)
+- **iOS:** `dist/main.jsbundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-ios/` (`manifest.json` + `assets/<fileHash>.<type>`)
+
+Both platforms are required — the verification below fails if either bundle or either manifest is missing.
 
 These sit alongside `index.html` under the same container SAS, so the wrap pipeline fetches them as siblings — no RP or connector change is required.
 
