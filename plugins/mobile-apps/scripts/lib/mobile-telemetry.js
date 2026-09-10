@@ -13,7 +13,8 @@ const events = require('./telemetry/lib/events');
 const { fireAndForget } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
-const { findAppInstanceId } = require('./app-identity');
+const { ensureAppInstanceId } = require('./app-identity');
+const { resolveProcessSessionId } = require('./mobile-telemetry-session');
 
 function readPluginVersion() {
   const manifestPath = path.resolve(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
@@ -200,7 +201,12 @@ function resolveCopilotRootSessionId(hostSessionId, opts) {
 
 function resolveSessionId(payload, opts = {}) {
   const hostSessionId = session.resolveHostSessionId(payload);
-  return session.getSessionId(resolveCopilotRootSessionId(hostSessionId, opts));
+  const rootSessionId = resolveCopilotRootSessionId(hostSessionId, opts);
+  return session.getSessionId(resolveProcessSessionId(rootSessionId, {
+    ...opts,
+    cwd: opts.cwd || (payload && payload.cwd),
+    configDir: configDir(opts.env),
+  }));
 }
 
 function createTelemetryContext(payload, opts = {}) {
@@ -249,7 +255,12 @@ function commonFields(context, invocation, opts = {}) {
   const eventInfo = {};
   if (invocation.source) eventInfo.invocationSource = invocation.source;
   if (invocation.additionalInfo) eventInfo.additionalInfo = invocation.additionalInfo;
-  const appInstanceId = findAppInstanceId(opts.cwd) || null;
+  let appInstanceId = null;
+  try {
+    if (opts.cwd) appInstanceId = ensureAppInstanceId(opts.cwd);
+  } catch {
+    // Identity persistence must never block a skill invocation.
+  }
   eventInfo.appInstanceId = appInstanceId;
   if (Object.keys(eventInfo).length) fields.eventInfo = eventInfo;
 

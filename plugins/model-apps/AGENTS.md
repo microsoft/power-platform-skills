@@ -111,6 +111,25 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   buttons** (`commands[]` — functional JS on-click + static hidden/disabled, incl. **flyout/split-button
   menus** via `type`+`children[]`), and **dashboards** (`dashboards[]` — chart/list/iframe/webresource
   tiles) with **sitemap placement** (a `dashboard` subarea auto-pins the dashboard as an app component).
+  It also builds **business process flows** (`businessProcessFlows[]` — the staged process bar on a
+  record): a `workflows` row of category 4 / type 1 / businessprocesstype 0 whose XAML the SDK compiles
+  from ordered `stages[]`/`steps[]`, activated in the same push. The phase is additive
+  discover-reconcile keyed on `(entity, name)` like `business-rules` — it creates what is missing and
+  converges only Active/Draft **state**, never stage structure — and `bpfFilter` scopes every query in
+  build/verify/teardown to the DEFINITION row, excluding both the platform's activated `type 2` copy and
+  same-named TASK flows (also category 4). v1 is deliberately single-entity and linear: cross-entity
+  stages, branching, stage actions and `securityRoles` are **rejected at the spec gate** rather than
+  silently dropped, because the build cannot yet verify them (a BPF's role grants are privileges on the
+  backing table that ACTIVATION creates, so they belong to the `security` phase). The rejection is an
+  **allow-list at flow, stage AND step level**, because the SDK's normalizers copy a fixed key set and
+  discard the rest — so a `branch` written on a stage (where the SDK actually models it), or the very
+  plausible `fieldLogicalName` instead of `field` on a step, would otherwise validate clean and deploy
+  as if it had never been written. Two further platform facts the validator encodes: a flow's **name
+  must be unique across the whole spec**, because the SDK derives `uniquename` as
+  `new_<name lowercased, non-alphanumerics stripped>` — **ignoring the table** — and activation creates
+  a backing table with that name; and a stage must carry **at least one step**, because the SDK
+  substitutes a placeholder step named "New Step" for an empty one (its own `stage-needs-step` rule
+  never fires, as the placeholder is injected before it looks).
   Following a **genpage-first policy**, overview/dashboard/analytics surfaces are authored as **generative
   pages** (`pages[]`) rather than classic dashboards — the build's `pages` phase uses a **three-authority
   model**: IDENTITY (durable `<app>_pagemanifest`, outranked by a downloaded spec's `pages[].pageId`),
@@ -132,8 +151,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   fails **closed** rather than scanning a partial list. Classic `dashboards[]` are opt-in.
   **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
   sanctioned exceptions elsewhere), so metadata is persisted under
-  `<app-folder>/.maker-workspace/` for reuse/edits. The 14 phases
-  (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·security·publish`)
+  `<app-folder>/.maker-workspace/` for reuse/edits. The 16 phases
+  (`solution·data-model·sample-data·web-resources·views·charts·forms·business-rules·business-process-flows·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
@@ -179,6 +198,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   language disagrees with the SDK performing it (`ARTIFACT_LANGUAGE_MISMATCH`, for registrations
   marked `languageSensitive` — App, Form, Dashboard). Passing nothing preserves the SDK's own 1033
   default exactly, so the option is opt-in rather than a silent re-labelling.
+  **One language per BUILD, and there is no per-table override.** Because the LCID is resolved once
+  and is a construction-time SDK option, a second language would need a second SDK instance — and
+  multi-language labelling is blocked a layer lower anyway, since the SDK's label serializer emits a
+  one-element `LocalizedLabels` array by design. `entities[].languageCode` and
+  `entities[].localizedLabels` are therefore **rejected by validation**
+  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)) rather than accepted and
+  dropped: `entities[]` had no allow-list, so both validated clean and were silently ignored, and an
+  author asking for one table in a second language got a successful build with the request gone. Any
+  unknown table key now fails the same way (see `ENTITY_KEYS`, `scripts/lib/app-spec.js`). Note that
+  `references/localization.md` is about generated **page** code, not Dataverse labels.
   Note the SDK deliberately does **not** language-parameterize BusinessRule: its mapper's language
   parameter is the *environment base* language, a different concept.
   Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
@@ -221,11 +250,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security
-  roles → dashboards → command bars → forms → charts → views → reset enriched default views to drop
+  roles → dashboards → command bars → business rules → business process flows → forms → charts → views
+  → reset enriched default views to drop
   parent lookups → relationships → AI row summaries → tables [reverse-topological, children-first] →
   web resources (generated app icon + page manifest + declared) → global choices → solution**). Forms/charts/views/relationships
   are deleted **explicitly before tables** (a table delete does not reliably cascade cross-references; it
-  does remove the table's own columns). **Web resources are deleted after tables**: a table's vector/raster
+  does remove the table's own columns). A business rule and a business process flow are `workflows` rows
+  bound to the entity, so they too are deleted before their table — and each is **deactivated first**,
+  because Dataverse refuses to delete an activated process. Deleting an activated BPF is also what
+  removes the org-owned **backing table** the platform creates on activation. **Web resources are deleted after tables**: a table's vector/raster
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no

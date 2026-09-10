@@ -53,7 +53,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -407,6 +407,69 @@ const KIND_HANDLERS = {
     },
     tolerateNotFound: true,
   },
+  businessProcessFlows: {
+    // Same shape as a business rule — a `workflows` row the SDK does not model as a deletable
+    // artifact kind — so resolve and delete it over queryRecords/deleteRecord.
+    //
+    // Scoped by (category 4, businessprocesstype 0, name, primaryentity): a same-named process on
+    // another table, and a same-named TASK FLOW on this one, are both left alone.
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        // DEFINITION rows only (see bpfFilter in sdk-build.js). Activating a process makes the
+        // platform create a `type 2` activated copy parented to the definition; it refuses to delete
+        // that copy directly (405) and removes it with its parent, so an unfiltered query would
+        // produce a guaranteed per-flow teardown failure — the exact bug fixed for business rules.
+        filter: bpfFilter(target.name, target.entity),
+        top: 50,
+      });
+      return (rows || []).map((r) => ({ id: r.workflowid, name: target.name, statecode: r.statecode }));
+    },
+    async del(sdk, item) {
+      // Deactivate before delete: Dataverse refuses to delete an activated process. An activated BPF
+      // additionally owns a backing TABLE (logical name = the workflow's uniquename) that the
+      // platform creates on activation and removes with the process — so this delete is what cleans
+      // that up too, and skipping it would strand a table this app created.
+      if (item.statecode === 1) {
+        try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
+      }
+      try {
+        return await sdk.deleteRecord('workflow', item.id);
+      } catch (e) {
+        // Because the delete cascades a TABLE drop, it is slow — MEASURED live at longer than the
+        // client's 60s HTTP timeout on two of three runs. The server keeps working after the client
+        // gives up, so a timeout here says nothing about whether the flow was removed; reporting it
+        // as a failure made teardown exit non-zero and tell the operator to go clean up something
+        // that was, in fact, already gone.
+        //
+        // So on a TRANSPORT failure only (never on a real HTTP error, which carries a status and a
+        // meaning), POLL for the row to disappear and let the environment decide the verdict.
+        // Polling rather than a single re-read is the whole point: measured, the row is still present
+        // at the moment the client times out and only disappears ~1-2 minutes later, so a single peek
+        // reproduces exactly the false failure this exists to remove.
+        const transport = /timed out|timeout|socket hang up|ECONNRESET|ETIMEDOUT|Transport failure/i.test(String((e && e.message) || ''));
+        if (!transport) throw e;
+        // Bounded by ATTEMPTS, not by wall-clock. A time-based deadline cannot be shortened by a test
+        // that stubs the sleep, so the "row never disappears" case would genuinely block a unit test
+        // for the full budget — which it did, taking the suite from 28s to 242s.
+        const POLL_ATTEMPTS = 16;
+        const POLL_INTERVAL_MS = 15000;   // ~4 minutes total; measured worst case is well inside that
+        for (let attempt = 1; ; attempt++) {
+          let rows;
+          try {
+            rows = await sdk.queryRecords('workflow', { select: ['workflowid'], filter: `workflowid eq ${item.id}`, top: 1 });
+          } catch {
+            // A failed probe is not evidence either way; keep waiting until the budget runs out.
+            rows = [{ unknown: true }];
+          }
+          if (!(rows || []).length) return undefined;
+          if (attempt >= POLL_ATTEMPTS) throw e;
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        }
+      }
+    },
+    tolerateNotFound: true,
+  },
   commands: {
     // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
     // resolveArtifact('command', { entity }) returns that single per-entity artifact and
@@ -488,7 +551,7 @@ const KIND_HANDLERS = {
   form: {
     async resolve(sdk, target) {
       // Resolve by (entity, name, TYPE) or a pinned formId — NOT name alone — so tearing down a Main form
-      // never ALSO deletes the table's same-named Quick View / Card siblings (Sol review: the old name-only
+      // never ALSO deletes the table's same-named Quick View / Card siblings (the old name-only
       // resolveArtifact returned every match and del() deleted each). resolveExistingFormId returns the ONE
       // intended form (null if absent → nothing to delete; throws on a residual (entity,type,name) collision
       // → teardown halts fail-closed rather than delete an arbitrary form).
@@ -688,6 +751,13 @@ function planTeardown(spec) {
     const entity = String(r.entity).toLowerCase();
     steps.push({ kind: 'businessRules', phase: 'business-rules', label: `business rule "${r.name}" (${entity})`, target: { entity, name: r.name } });
   }
+  // Business process flows, for the same reasons and in the same position: an activated BPF is a
+  // workflow row bound to the entity (plus a platform-owned backing table), so it has to go before
+  // the table it references and is not something a table delete cascades away.
+  for (const p of spec.businessProcessFlows || []) {
+    const entity = String(p.entity).toLowerCase();
+    steps.push({ kind: 'businessProcessFlows', phase: 'business-process-flows', label: `business process flow "${p.name}" (${entity})`, target: { entity, name: p.name } });
+  }
   // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
   // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV
   // form first makes Dataverse 400 ("cannot be deleted because it is referenced by 1 other
@@ -799,7 +869,7 @@ function planTeardown(spec) {
   // app.icon is set — that image is a declared webResources[] entry handled by the loop above.
   // ALSO skipped when the derived name collides with a DECLARED webResources[] entry: if that entry is
   // `external:true` the loop deliberately protected it (a shared nav icon named `<appUnique>_icon`), so
-  // this derived delete must not clobber the skip and delete a shared resource (Sol review, High); if it
+  // this derived delete must not clobber the skip and delete a shared resource; if it
   // is a normal declared entry the loop already scheduled it, so skipping here just avoids a duplicate.
   if (spec.app && spec.solution && !spec.app.icon) {
     const generatedIcon = `${appUniqueName(spec)}_icon`;

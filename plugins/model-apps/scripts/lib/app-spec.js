@@ -451,6 +451,105 @@ const BUSINESS_RULE_DATA_TYPES = ['String', 'Memo', 'Picklist', 'State', 'Status
 // which cannot be resolved before the forms phase has run.
 const BUSINESS_RULE_SCOPES = ['Entity'];
 
+// --- Business process flows (BPF) ---------------------------------------------------------------
+//
+// A BPF is a `workflows` row (category 4 / type 1 / businessprocesstype 0) whose XAML the platform
+// reads to materialize the read-only `processstage` rows. The vendored SDK owns that serialization;
+// the plugin owns the judgment below.
+//
+// v1 is deliberately a SINGLE-ENTITY, linear flow: ordered stages, each with ordered steps bound to
+// columns of that same entity. The SDK's artifact additionally models `category`, `nextStageId`,
+// `relationshipName`, `branch`, stage `actions` and `securityRoles`, and those are NOT exposed here:
+//   * cross-entity stages / branching change what the flow MEANS and need live verification per
+//     shape before being offered;
+//   * `securityRoles` needs role IDs (the SDK grants CRUD privileges on the backing table that
+//     ACTIVATION creates, via `reconcileBpfSecurityRoles({ roleId, access })`) — that is the
+//     `security` phase's job, not this one, and is tracked as a follow-up.
+// Offering a knob the build cannot verify is how a spec deploys something the author did not mean.
+const BPF_STATUSES = ['Active', 'Draft'];
+
+// Mirror of the vendored SDK's BPF `uniquename` derivation:
+//   uniqueName || `new_${name.toLowerCase().replace(/[^a-z0-9]/g, '') || 'businessprocessflow'}`
+// Two properties of it drive the collision check below, and both are easy to get wrong:
+//   * it IGNORES the entity, so two flows on DIFFERENT tables can derive one unique name; and
+//   * it strips case and punctuation, so "Ticket Handling" and "ticket-handling" derive the same one.
+// The plugin does not supply an explicit `uniqueName` (bpfDef leaves it to the SDK), so an author has
+// no way to disambiguate. This is not merely a name clash: ACTIVATION creates an org-owned backing
+// TABLE named after the derived value, so the second flow cannot deploy at all.
+function bpfUniqueName(name) {
+  const normalized = String(name === undefined || name === null ? '' : name).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return `new_${normalized || 'businessprocessflow'}`;
+}
+
+// The keys a stage / step may carry. Everything else is REJECTED rather than dropped: the SDK's own
+// normalizers copy a fixed key set (stage: id/name/entityLogicalName/steps + category/nextStageId/
+// relationshipName/actions/branch; step: id/name/fieldName/required) and discard the rest, so an
+// unmapped key an author wrote — a stage `branch`, or the very plausible `fieldLogicalName` instead of
+// `field` — would otherwise validate clean and deploy as if it had never been written.
+const BPF_STAGE_KEYS = new Set(['name', 'entity', 'steps']);
+const BPF_STEP_KEYS = new Set(['name', 'field', 'required']);
+// Hard ceilings the vendored SDK enforces on a BPF. Pinned here so an over-large flow is a spec
+// error, not a throw from inside the bundle in a late build phase.
+const BPF_MAX_STAGES = 30;
+const BPF_MAX_STEPS = 30;
+
+// The keys an `entities[]` table may carry. Everything else is REJECTED rather than dropped.
+//
+// Entities were the one authorable block with NO allow-list, and the gap was not theoretical: the
+// two most natural ways to ask for a second language — `entities[].languageCode` and
+// `entities[].localizedLabels` — both validated clean and were then silently ignored, so an author
+// asking for one table in Spanish got a SUCCESSFUL build with the request dropped and nothing
+// reporting the loss (#537). Neither key is read anywhere in scripts/ or scripts/lib/.
+//
+// They cannot be honoured today, which is precisely why they must fail loudly rather than validate
+// clean. The authoring language is BUILD-WIDE: provisionDataModel resolves ONE LCID and passes it to
+// every createTable / createColumn / createGlobalOptionSet / insertStatusValue / createRelationship /
+// createAlternateKey call, and the SDK takes it as a CONSTRUCTION-TIME option (the App/Form/Dashboard
+// adapters bake it in), so a per-table language would need a second SDK instance. Multi-language
+// labelling is blocked a layer lower still — the SDK's label serializer emits a ONE-element
+// LocalizedLabels array by design, and pushing an artifact read under a different LCID throws
+// ARTIFACT_LANGUAGE_MISMATCH.
+//
+// This list is the set the build actually READS. Adding a key here without a reader would re-open
+// the very silent-drop hole it exists to close.
+const ENTITY_KEYS = new Set([
+  'schemaName', 'displayName', 'pluralName', 'description', 'primaryAttribute', 'columns',
+  'hasNotes', 'quickCreate', 'existing', 'enrichDefaultViews',
+  'vectorIcon', 'iconDescription', 'icon',
+  'statusReasons', 'alternateKeys',
+]);
+
+// What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
+// names the mistake but not the fix, and for these two the fix is not guessable from the schema.
+//
+// Prototype-less on purpose: the lookup key comes from the SPEC, so a table carrying `constructor`
+// or `toString` would otherwise inherit a value from Object.prototype and splice
+// "function Object() { [native code] }" into the error message.
+const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
+  languageCode: ' — the authoring language is build-wide, not per-table: set the spec-level `languageCode`, which applies to every table',
+  localizedLabels: ' — multi-language labels are not supported: the build writes ONE label per name, in the spec-level `languageCode` language',
+});
+
+// The column logical names an entity legitimately exposes to a rule / process step: its declared
+// columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
+// column on the referencing table, just declared elsewhere in the spec).
+//
+// Shared by the business-rule and BPF validators — they ask the identical question, and an answer
+// that drifts between them would let one accept a field the other rejects.
+function declaredColumnLogicals(spec, entitySchemaName) {
+  const ent = (spec.entities || []).find((e) => e && e.schemaName === entitySchemaName);
+  const cols = new Set();
+  if (!ent) return cols;
+  if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(String(ent.primaryAttribute.schemaName).toLowerCase());
+  for (const c of ent.columns || []) if (c && c.schemaName) cols.add(String(c.schemaName).toLowerCase());
+  for (const rel of spec.relationships || []) {
+    if (rel && rel.referencing === entitySchemaName && rel.lookup && rel.lookup.schemaName) {
+      cols.add(String(rel.lookup.schemaName).toLowerCase());
+    }
+  }
+  return cols;
+}
+
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
 //
 // This is the SINGLE definition used by all three entry points an LCID can arrive from, so they can
@@ -475,6 +574,31 @@ function normalizeLanguageCode(value) {
   if (typeof value === 'number') return Number.isInteger(value) ? ok(value) : null;
   if (typeof value === 'string' && /^\d+$/.test(value.trim())) return ok(Number(value.trim()));
   return null;
+}
+
+// Describe a rejected value for an error message WITHOUT being able to throw doing it.
+// `JSON.stringify` throws on a BigInt and on a getter that throws, which would turn a structured
+// validation error into a raw crash — the exact outcome this validator exists to prevent.
+// The FALLBACK is guarded too: `Object.prototype.toString` itself throws on a revoked Proxy, so an
+// unguarded fallback would reintroduce the crash it exists to avoid.
+// Module-level so checks that run BEFORE validateAppSpec's local helpers are initialised can use it
+// too (a `const` arrow declared later in the function is in the temporal dead zone until then).
+function describeSpecValue(v) {
+  try { return JSON.stringify(v); } catch { /* fall through */ }
+  try { return Object.prototype.toString.call(v); } catch { return '<unprintable>'; }
+}
+
+// The single wording for a rejected LCID, shared by every entry point that accepts one.
+//
+// It is a function rather than a constant because the offending value is quoted back: the most
+// common wrong input is a BCP-47 language TAG ("es-ES", "de-DE") — the thing a person naturally
+// writes — and "must be a positive integer LCID" is true but leaves that author with nothing to act
+// on. Shared for the same reason `ENTITY_KEYS` is: two entry points that disagree about what a bad
+// LCID *is* teach the author two different rules for one field.
+// LCID reference: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
+function invalidLanguageCodeMessage(value) {
+  return `languageCode must be a positive integer LCID up to ${MAX_LCID} — e.g. 1033 (en-US) or 1031 (de-DE), `
+    + `not a language tag like "de-DE" (got ${describeSpecValue(value)})`;
 }
 
 // Normalize a page's implementation source into a discriminated shape:
@@ -842,16 +966,94 @@ function validateAppSpec(spec, opts = {}) {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
-    errors.push('languageCode must be a positive integer LCID');
+    // Keep the leading clause stable — the CLI flag and two test suites match on it. The appended
+    // guidance exists because the bare message named the mistake without naming the fix, and a
+    // language TAG is the most likely thing an author reaches for.
+    //
+    // A tag is NOT accepted as an alias, deliberately: the mapping is genuinely ambiguous where it
+    // matters (es-ES is 3082 with the international sort and 1034 with the traditional one), and a
+    // wrong guess would not fail — it would build every label in the wrong language, which is the
+    // same silent-corruption class this validator exists to prevent. Naming the LCID is safe;
+    // inferring one is not.
+    errors.push(invalidLanguageCodeMessage(spec.languageCode));
   }
   const entityNames = new Set();
   const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
+  // Describe a rejected value for an error message WITHOUT being able to throw doing it.
+  // See describeSpecValue above for why a bare JSON.stringify is unsafe here.
+  const describeValue = describeSpecValue;
+  // A table reference an author writes becomes a Dataverse METADATA NAME, so it has to be a string
+  // BEFORE it is compared. `String([["new_ticket"]])` is `"new_ticket"`, so a nested array passes an
+  // entity-membership check and then throws a raw TypeError deep in the build, where the engine
+  // calls `.toLowerCase()` on the array itself. It is the same trap as `views[].columns` (#525):
+  // coercing during validation makes the validator agree with a value the builder cannot use.
+  // Returns true when it reported a problem, so callers can `continue`.
+  const badEntityRef = (value, where) => {
+    if (typeof value === 'string' && value.trim()) return false;
+    errors.push(`${where}: entity must be a table name (a string), got ${describeValue(value)}`);
+    return true;
+  };
   for (const e of spec.entities || []) {
-    if (!e.schemaName) {
-      errors.push('entity.schemaName is required');
+    // Reject unknown keys (#537). A key with no reader is otherwise accepted and dropped, so an
+    // explicit authoring instruction disappears into a successful build.
+    //
+    // Guarded to plain objects: a malformed entity already fails the schemaName check below, and
+    // `Object.keys('x')` would turn one bad value into a bogus "unknown key '0'".
+    //
+    // The enumeration itself is guarded because the object comes from the CALLER: a programmatic
+    // caller can pass a Proxy whose `ownKeys` trap throws, and this validator's contract is to
+    // RETURN problems, not to throw them.
+    if (e && typeof e === 'object' && !Array.isArray(e)) {
+      // The label is resolved BEFORE `schemaName` is validated, and reading it can itself fail (a
+      // getter that throws). Without a fallback a malformed entity reported `entity undefined:
+      // unknown key ...` next to the real `entity.schemaName is required` — two errors for one
+      // problem, one of them naming a table that does not exist.
+      let label;
+      try {
+        label = typeof e.schemaName === 'string' && e.schemaName.trim() ? `entity ${e.schemaName}` : 'an entity with no schemaName';
+      } catch {
+        label = 'an entity whose schemaName could not be read';
+      }
+      let keys;
+      try {
+        keys = Object.keys(e);
+      } catch {
+        keys = null;
+        errors.push('an entity could not be inspected: enumerating its keys threw');
+      }
+      for (const k of keys || []) {
+        if (ENTITY_KEYS.has(k)) continue;
+        errors.push(`${label}: unknown key '${k}'${ENTITY_KEY_HINTS[k] || ''} (allowed: ${[...ENTITY_KEYS].join(', ')})`);
+      }
+    }
+    // `schemaName` must be a non-empty STRING, and the check says so rather than only testing
+    // truthiness. `!e.schemaName` let `42`, `{}` and `[]` through, and the very next line called
+    // `.toLowerCase()` on them — so a spec carrying `"schemaName": 42` CRASHED the validator with a
+    // raw TypeError instead of being told what was wrong. That is the one outcome this function must
+    // never produce: its whole contract is to turn bad input into structured errors, and a caller
+    // that gets a TypeError loses every finding collected so far, not just this one. Reachable from
+    // any hand- or model-authored JSON file, which is how every spec arrives.
+    //
+    // The read itself is wrapped only because it is cheap to do so. A getter or Proxy trap that
+    // throws is NOT comprehensively defended against in this validator — several later passes
+    // interpolate `e.schemaName` directly — and no attempt is made to pretend otherwise; that shape
+    // cannot come from `JSON.parse`, only from a programmatic caller.
+    let schemaNameValue;
+    let schemaNameReadable = true;
+    try { schemaNameValue = e.schemaName; } catch { schemaNameReadable = false; }
+    if (!schemaNameReadable) {
+      errors.push('entity.schemaName could not be read');
+    } else if (typeof schemaNameValue !== 'string' || !schemaNameValue.trim()) {
+      // `undefined`/`null`/`""` keep the original wording: it is the overwhelmingly common case and
+      // "is required" is the right thing to say about an absent value. A present-but-wrong value
+      // gets its own message, quoting what was found, because "required" would be actively
+      // misleading to someone who did supply one.
+      errors.push(schemaNameValue === undefined || schemaNameValue === null || schemaNameValue === ''
+        ? 'entity.schemaName is required'
+        : `entity.schemaName must be a non-empty string (got ${describeSpecValue(schemaNameValue)})`);
     } else {
-      entityNames.add(e.schemaName);
-      entityByLower.set(e.schemaName.toLowerCase(), e);
+      entityNames.add(schemaNameValue);
+      entityByLower.set(schemaNameValue.toLowerCase(), e);
     }
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
@@ -1031,7 +1233,7 @@ function validateAppSpec(spec, opts = {}) {
       if (!qv.targetEntity || !entityByLower.has(String(qv.targetEntity).toLowerCase())) errors.push(`form ${f.entity}: quickView references unknown targetEntity '${qv.targetEntity}'`);
       if (!qv.form) { errors.push(`form ${f.entity}: quickView is missing form (the name of a QuickView form in forms[])`); continue; }
       // Resolve by (name, targetEntity) AND prefer the QuickView — a same-named Main on the target entity
-      // must not shadow the intended QuickView (order-dependent otherwise; Sol review). The build keys the
+      // must not shadow the intended QuickView (order-dependent otherwise). The build keys the
       // quick-view lookup by (entity, QuickView, name) too.
       const qvCandidates = (spec.forms || []).filter((x) => x.name === qv.form && String(x.entity).toLowerCase() === String(qv.targetEntity || '').toLowerCase());
       const qf = qvCandidates.find((x) => (x.formType || 'Main') === 'QuickView') || qvCandidates[0];
@@ -1047,6 +1249,7 @@ function validateAppSpec(spec, opts = {}) {
             errors.push(`form ${f.entity}: a subgrid is missing childEntity`);
             continue;
           }
+          if (badEntityRef(sg.childEntity, `form ${f.entity}: subgrid childEntity`)) continue;
           if (!entityByLower.has(String(sg.childEntity).toLowerCase())) {
             errors.push(`form ${f.entity}: subgrid references unknown childEntity '${sg.childEntity}'`);
             continue;
@@ -1072,7 +1275,7 @@ function validateAppSpec(spec, opts = {}) {
   }
   // Two QuickView forms sharing (entity, name) make a quick-view reference — which resolves a QuickView by
   // (targetEntity, name) — ambiguous (the build map keeps only one, order-dependently). Reject the
-  // ambiguity at author time (Sol review). Main/Card share the "Information" name harmlessly (they're not
+  // ambiguity at author time. Main/Card share the "Information" name harmlessly (they're not
   // quick-view targets), so this is scoped to QuickView.
   const qvIdentity = new Set();
   for (const f of spec.forms || []) {
@@ -1083,7 +1286,8 @@ function validateAppSpec(spec, opts = {}) {
   }
   for (const ch of spec.charts || []) {
     validateDescription(ch && ch.description, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`, errors);
-    if (!ch || !ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
+    if (!ch || badEntityRef(ch.entity, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`)) continue;
+    if (!ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
       errors.push(`chart references unknown entity '${ch && ch.entity}'`);
       continue;
     }
@@ -1104,9 +1308,41 @@ function validateAppSpec(spec, opts = {}) {
     }
   }
   for (const v of spec.views || []) {
-    validateDescription(v && v.description, `view '${(v && (v.name || v.entity)) || '(unnamed)'}'`, errors);
+    const vlabel = `view '${(v && (v.name || v.entity)) || '(unnamed)'}'`;
+    validateDescription(v && v.description, vlabel, errors);
     if (!entityNames.has(v.entity)) {
       errors.push(`view references unknown entity '${v.entity}'`);
+    }
+    // A column/attribute reference is STRINGIFIED downstream, never type-checked: `viewDef` maps
+    // every one of them with `String(x).toLowerCase()`. So a non-string is not rejected — it is
+    // silently turned into text, and an object becomes the literal `[object object]`, which lands
+    // in the view's fetchxml. Dataverse refuses it with an opaque metadata error ("entity doesn't
+    // contain attribute with Name = '[object object]'") mid-build, after the solution, tables and
+    // columns already exist.
+    //
+    // The damage outlives that run. The savedquery row is created holding the bad fetchxml, so
+    // every later READ of it also 400s and the next build dies at the same step; Dataverse reports
+    // the row as system-defined and refuses to delete it, so recovery means tearing the table down.
+    // https://github.com/microsoft/power-platform-skills/issues/525
+    //
+    // `{ "name": "..." }` is not an exotic mistake: it is exactly the shape `forms[]` uses for its
+    // fields, so an author moving between the two surfaces writes it naturally.
+    const attrRef = (value, where) => {
+      if (typeof value !== 'string' || !value.trim()) {
+        errors.push(`${vlabel}: ${where} must be a non-empty column name (a string), got ${describeValue(value)}`);
+      }
+    };
+    if (v && v.columns !== undefined) {
+      if (!Array.isArray(v.columns)) errors.push(`${vlabel}: columns must be an array of column names`);
+      else v.columns.forEach((c, i) => attrRef(c, `columns[${i}]`));
+    }
+    if (v && v.sort !== undefined) {
+      if (!Array.isArray(v.sort)) errors.push(`${vlabel}: sort must be an array`);
+      else v.sort.forEach((s, i) => attrRef(s && s.attr, `sort[${i}].attr`));
+    }
+    if (v && v.filters !== undefined) {
+      if (!Array.isArray(v.filters)) errors.push(`${vlabel}: filters must be an array`);
+      else v.filters.forEach((f, i) => attrRef(f && f.attr, `filters[${i}].attr`));
     }
   }
   // Commands (modern command-bar buttons). A functional button needs a JS library + function;
@@ -1160,16 +1396,7 @@ function validateAppSpec(spec, opts = {}) {
     }
 
     // Columns the rule may reference: the entity's own declared columns plus its primary name.
-    const ent = (spec.entities || []).find((e) => e && e.schemaName === r.entity);
-    const cols = new Set();
-    if (ent) {
-      if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(String(ent.primaryAttribute.schemaName).toLowerCase());
-      for (const c of ent.columns || []) if (c && c.schemaName) cols.add(String(c.schemaName).toLowerCase());
-      // A lookup created by a relationship is a real column on the referencing table.
-      for (const rel of spec.relationships || []) {
-        if (rel && rel.referencing === r.entity && rel.lookup && rel.lookup.schemaName) cols.add(String(rel.lookup.schemaName).toLowerCase());
-      }
-    }
+    const cols = declaredColumnLogicals(spec, r.entity);
     const checkField = (field, what) => {
       if (!field) { errors.push(`${label}: ${what} needs a field`); return; }
       if (cols.size && !cols.has(String(field).toLowerCase())) {
@@ -1237,6 +1464,154 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
   }
+  // Business process flows. Same discipline as business rules and for the same reason: the platform
+  // accepts a BPF whose step names a column that does not exist, materializes its stages, and then
+  // simply renders a step bound to nothing — no error at deploy time, and nothing downstream to
+  // catch it. So every field is checked against the flow's own entity here.
+  const bpfUniques = new Map();
+  for (const p of spec.businessProcessFlows || []) {
+    const label = `business process flow '${(p && p.name) || '(unnamed)'}'`;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) { errors.push('businessProcessFlows[] entries must be objects'); continue; }
+    if (!p.name) errors.push(`${label}: name is required`);
+    else if (typeof p.name !== 'string' || !p.name.trim()) {
+      // The SDK derives the server unique name by lower-casing this value, so a non-string reaches
+      // `.toLowerCase()` and dies with a TypeError inside the bundle rather than a spec error here.
+      errors.push(`${label}: name must be a non-empty string`);
+    } else {
+      // Keyed on the DERIVED unique name, not on (entity, name). The build identifies a flow by
+      // (entity, name) for reuse, but the SERVER identity the SDK derives ignores the entity and
+      // strips case/punctuation — so an (entity, name) key would let two flows through that cannot
+      // both exist. See bpfUniqueName.
+      const unique = bpfUniqueName(p.name);
+      const clash = bpfUniques.get(unique);
+      if (clash !== undefined) {
+        errors.push(`${label}: collides with '${clash}' — both derive the Dataverse unique name '${unique}' (the derivation lower-cases the name, strips punctuation, and ignores the table). Activation creates a backing table with that name, so the second flow cannot deploy. Rename one, e.g. "${p.name} (Cases)".`);
+      } else {
+        bpfUniques.set(unique, p.name);
+      }
+      // The derived name is a TABLE name, so it collides with tables too — not only with other
+      // flows. Activation creates an org-owned backing table called `unique`, and a table with that
+      // logical name cannot be created twice.
+      //
+      // This axis is easy to hit precisely because the derivation ignores the solution's publisher
+      // prefix and always emits `new_`: on a spec using the default `new` prefix, a flow named after
+      // its own table ("Ticket" on `new_ticket`) derives exactly that table's logical name. Without
+      // this check it validates clean and then fails in the business-process-flows phase — after the
+      // solution, tables, columns, views, forms and the app already exist — with a platform error
+      // naming a table the author never meant to create.
+      //
+      // `existing: true` tables are included deliberately: the build does not create them, but they
+      // are still in the org, so the backing table clashes just the same.
+      const tableClash = entityByLower.get(unique);
+      if (tableClash) {
+        errors.push(`${label}: derives the Dataverse unique name '${unique}', which is already the logical name of the table '${tableClash.schemaName}' in this spec. Activating a flow creates a backing table with that name (the derivation lower-cases the name, strips punctuation, and always uses the 'new_' prefix regardless of your publisher prefix), so the flow cannot deploy. Rename the flow, e.g. "${p.name} Process".`);
+      }
+    }
+    if (!p.entity || !entityNames.has(p.entity)) { errors.push(`${label}: references unknown entity '${p.entity}'`); continue; }
+    if (p.status !== undefined && !BPF_STATUSES.includes(p.status)) {
+      errors.push(`${label}: status must be ${BPF_STATUSES.join('|')}`);
+    }
+    if (p.order !== undefined && (!Number.isInteger(p.order) || p.order < 1)) {
+      errors.push(`${label}: order must be a positive integer (it becomes the workflow's processorder)`);
+    }
+    // Allow-list the flow's own keys for the same reason as the stage/step ones below: naming only the
+    // three knobs we knew about left others (the SDK also models `globalActions`) neither mapped nor
+    // rejected — silently dropped, which is the failure this guard exists to prevent.
+    const BPF_FLOW_KEYS = new Set(['name', 'entity', 'description', 'status', 'order', 'stages']);
+    for (const k of Object.keys(p)) {
+      if (!BPF_FLOW_KEYS.has(k)) {
+        errors.push(`${label}: unsupported key '${k}' (allowed: ${[...BPF_FLOW_KEYS].join(', ')}). Security-role grants, branching and process actions are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker after the flow deploys.`);
+      }
+    }
+    const cols = declaredColumnLogicals(spec, p.entity);
+    validateDescription(p.description, label, errors);
+    if (!Array.isArray(p.stages) || !p.stages.length) {
+      errors.push(`${label}: stages[] is required (a flow with no stage is not a process)`);
+      continue;
+    }
+    // The SDK enforces a hard ceiling of 30 stages per flow and 30 steps per stage. Without these
+    // the spec validates, the build runs, and the SDK throws in a late phase with the earlier
+    // artifacts already created — the same half-built-app failure the step-field rule above exists
+    // to prevent.
+    if (p.stages.length > BPF_MAX_STAGES) {
+      errors.push(`${label}: ${p.stages.length} stages — the platform allows at most ${BPF_MAX_STAGES}`);
+    }
+    const stageNames = new Set();
+    for (const st of p.stages) {
+      if (!st || typeof st !== 'object' || Array.isArray(st)) { errors.push(`${label}: each stage must be an object`); continue; }
+      if (!st.name) { errors.push(`${label}: every stage needs a name`); continue; }
+      if (stageNames.has(st.name)) errors.push(`${label}: duplicate stage name '${st.name}'`);
+      stageNames.add(st.name);
+      // Reject an unmapped stage key rather than dropping it. `branch`, `actions`, `nextStageId`,
+      // `category` and `relationshipName` are STAGE-level in the SDK's model — which is exactly where
+      // an author would write them — and bpfDef maps only name/entity/steps, so without this they
+      // would vanish silently.
+      for (const k of Object.keys(st)) {
+        if (!BPF_STAGE_KEYS.has(k)) {
+          errors.push(`${label}: stage '${st.name}' has unsupported key '${k}' (allowed: ${[...BPF_STAGE_KEYS].join(', ')}). Branching, stage actions and cross-entity flow are modelled by the SDK but cannot be verified by this build, so they are rejected rather than silently dropped — configure them in Maker.`);
+        }
+      }
+      // v1 is single-entity: a stage on another table is a cross-entity flow, which changes what the
+      // process means (it spans records) and is rejected rather than silently retargeted.
+      if (st.entity !== undefined && st.entity !== p.entity) {
+        errors.push(`${label}: stage '${st.name}' targets '${st.entity}' — cross-entity flows are not supported; every stage must be on ${p.entity}`);
+      }
+      if (st.steps !== undefined && !Array.isArray(st.steps)) {
+        errors.push(`${label}: stage '${st.name}': steps must be an array`);
+        continue;
+      }
+      // A stage MUST carry at least one step. The SDK's createDefault substitutes a placeholder step
+      // literally named "New Step" when a stage has none, so an empty stage deploys a step the author
+      // never wrote (and the SDK's own `stage-needs-step` rule never fires, because the placeholder is
+      // injected before it looks).
+      if (!(st.steps || []).length) {
+        errors.push(`${label}: stage '${st.name}' has no steps — a stage with none deploys a placeholder step named "New Step" that you did not author`);
+      }
+      if ((st.steps || []).length > BPF_MAX_STEPS) {
+        errors.push(`${label}: stage '${st.name}' has ${st.steps.length} steps — the platform allows at most ${BPF_MAX_STEPS} per stage`);
+      }
+      const stepNames = new Set();
+      for (const step of st.steps || []) {
+        if (!step || typeof step !== 'object' || Array.isArray(step)) { errors.push(`${label}: stage '${st.name}': each step must be an object`); continue; }
+        if (!step.name) { errors.push(`${label}: stage '${st.name}': every step needs a name`); continue; }
+        if (stepNames.has(step.name)) errors.push(`${label}: stage '${st.name}': duplicate step name '${step.name}'`);
+        stepNames.add(step.name);
+        // Same reason as the stage allow-list, and the likeliest instance of it: a step written with
+        // `fieldLogicalName` (the name used elsewhere in the SDK's own artifact shapes) is dropped by
+        // the step normalizer and deploys bound to nothing.
+        for (const k of Object.keys(step)) {
+          if (!BPF_STEP_KEYS.has(k)) {
+            errors.push(`${label}: stage '${st.name}' step '${step.name}' has unsupported key '${k}' (allowed: ${[...BPF_STEP_KEYS].join(', ')}${k === 'fieldLogicalName' ? " — the column key is 'field'" : ''})`);
+          }
+        }
+        // `field` is REQUIRED on every step. This was originally modelled as optional — a step with
+        // no field was documented as a "checklist item" — but the platform rejects it outright:
+        //
+        //   HTTP 400 from .../api/data/v9.0/workflows(<id>)
+        //   Attribute - datafieldname of ControlStep cannot be null or empty
+        //
+        // MEASURED live, and isolated by A/B: the identical flow with every step bound to a column
+        // deploys and activates cleanly. Because the push happens in a late phase, accepting the
+        // shape here meant the build HALTED after the solution, table, columns, views and forms were
+        // already created — the author got a half-built app and a platform error naming an internal
+        // XAML element they never wrote. So it is rejected up front, where it is actionable.
+        //
+        // `null` and a blank/whitespace string are the SAME defect as `undefined` and must give the
+        // same message. Treating only `undefined` as missing let them fall through to the column
+        // check, which reported `references ''` — or, worse, `references 'null'` from stringifying
+        // the value — instead of saying what was actually wrong.
+        const fieldGiven = step.field !== undefined && step.field !== null && String(step.field).trim() !== '';
+        if (!fieldGiven) {
+          errors.push(`${label}: stage '${st.name}' step '${step.name}' binds no field — every step must set 'field' (the platform rejects a step with no column: "datafieldname of ControlStep cannot be null or empty"). For a manual check-off, bind a Boolean column such as a "Confirmed" flag.`);
+        } else if (cols.size && !cols.has(String(step.field).toLowerCase())) {
+          errors.push(`${label}: stage '${st.name}' step '${step.name}' references '${step.field}', which is not a column on ${p.entity}`);
+        }
+        if (step.required !== undefined && typeof step.required !== 'boolean') {
+          errors.push(`${label}: stage '${st.name}' step '${step.name}': required must be a boolean`);
+        }
+      }
+    }
+  }
   // Dashboards: chart/list tiles reference a declared chart/view; iframe needs a url; webresource a
   // declared web resource.
   const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
@@ -1255,6 +1630,7 @@ function validateAppSpec(spec, opts = {}) {
         if (byId) {
           if (!t.viewId) errors.push(`dashboard '${d.name}': chart tile with visualizationId also needs viewId`);
           if (!t.entity) errors.push(`dashboard '${d.name}': id-based chart tile needs entity`);
+          else badEntityRef(t.entity, `dashboard '${d.name}': chart tile`);
         } else {
           if (!t.chart || !chartNamesSet.has(t.chart)) errors.push(`dashboard '${d.name}': chart tile references unknown chart '${t.chart}'`);
           if (!t.view || !viewNamesSet.has(t.view)) errors.push(`dashboard '${d.name}': chart tile needs a declared view for its data — '${t.view}' not found`);
@@ -1262,6 +1638,7 @@ function validateAppSpec(spec, opts = {}) {
       } else if (t.type === 'list') {
         if (byId) {
           if (!t.entity) errors.push(`dashboard '${d.name}': id-based list tile needs entity`);
+          else badEntityRef(t.entity, `dashboard '${d.name}': list tile`);
         } else if (!t.view || !viewNamesSet.has(t.view)) {
           errors.push(`dashboard '${d.name}': list tile references unknown view '${t.view}'`);
         }
@@ -1508,7 +1885,7 @@ function validateAppSpec(spec, opts = {}) {
         // (`Account`), and a sitemap subarea's `entity` comes from the deployed sitemap XML as a
         // LOGICAL name. A downloaded spec therefore legitimately pairs `schemaName: "Account"` with
         // `entity: "account"`. Matches the chart check above, which already uses `entityByLower`.
-        if (sa.entity && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
+        if (sa.entity && !badEntityRef(sa.entity, 'sitemap subArea') && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
         // A sitemap URL subarea is EITHER a real link OR a web-resource reference —
         // `$webresource:<name>` (what the Site Map Designer writes for a "custom page backed by an
@@ -1941,6 +2318,9 @@ module.exports = {
   SDK_ROLE_MARKER,
   canonicalPersonaName,
   VALIDATION_PROFILES,
+  ENTITY_KEYS,
+  invalidLanguageCodeMessage,
+  ENTITY_KEY_HINTS,
   DIRECT_ENTRY_BEHAVIORS,
   COLUMN_VISUALIZATIONS,
   INTEGER_FORMATS,
@@ -1949,6 +2329,9 @@ module.exports = {
   BUSINESS_RULE_ACTIONS,
   BUSINESS_RULE_ACTION_TYPES,
   BUSINESS_RULE_DATA_TYPES,
+  BPF_STATUSES,
+  bpfUniqueName,
+  declaredColumnLogicals,
   BUSINESS_RULE_SCOPES,
   migrateAppSpec,
   columnTypeMap,

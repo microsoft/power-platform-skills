@@ -1072,3 +1072,107 @@ test('validateAppSpec detects whitespace-distinct persona names as duplicates (S
   ]));
   assert.ok(!r.ok && r.errors.some((e) => /duplicate persona name/.test(e)), JSON.stringify(r.errors));
 });
+
+// --- views[]: a column reference must be a STRING (#525) ---------------------------------------
+//
+// `viewDef` maps every entry with `String(name).toLowerCase()`, so a non-string is not rejected —
+// it is STRINGIFIED. An object becomes the literal `[object object]`, which reaches the view's
+// fetchxml and is refused by the platform with an opaque metadata error, mid-build, after the
+// solution and tables already exist.
+//
+// The damage outlives the run: the savedquery row is created carrying that fetchxml, and every
+// later read of it also fails, so the next build dies at the same step. Dataverse reports the row
+// as system-defined and refuses to delete it, so recovering means tearing the table down.
+//
+// `{ "name": "..." }` is not a wild guess either — it is exactly the shape `forms[]` uses for its
+// fields, so an author moving between the two surfaces writes it naturally.
+const viewSpec = (view) => {
+  const s = cloneDesk();
+  s.views = [Object.assign({ entity: 'new_customer', name: 'Active Customers' }, view)];
+  return s;
+};
+const viewErrors = (view) => (validateAppSpec(viewSpec(view)).errors || []);
+
+test('validateAppSpec rejects a non-string entry in views[].columns (#525)', () => {
+  for (const bad of [{ name: 'new_name' }, 42, null, ['new_name'], true]) {
+    const errs = viewErrors({ columns: ['new_name', bad] });
+    assert.ok(
+      errs.some((e) => /columns/.test(e) && /string/.test(e)),
+      `${JSON.stringify(bad)} must be rejected as a column; got ${JSON.stringify(errs)}`
+    );
+    // The message has to name the view, or an author with a dozen views cannot act on it.
+    assert.ok(errs.some((e) => /Active Customers/.test(e)), `the error must name the view; got ${JSON.stringify(errs)}`);
+  }
+});
+
+test('validateAppSpec rejects a blank column name, which fetchxml cannot express either', () => {
+  for (const bad of ['', '   ']) {
+    const errs = viewErrors({ columns: [bad] });
+    assert.ok(errs.some((e) => /columns/.test(e)), `${JSON.stringify(bad)} must be rejected; got ${JSON.stringify(errs)}`);
+  }
+});
+
+test('validateAppSpec rejects a non-string sort/filter attribute for the same reason', () => {
+  // `viewDef` stringifies these two the same way (`String(s.attr)` / `String(f.attr)`), so they
+  // carry the identical failure and were fixed together rather than one at a time.
+  const sortErrs = viewErrors({ columns: ['new_name'], sort: [{ attr: { name: 'new_name' }, dir: 'asc' }] });
+  assert.ok(sortErrs.some((e) => /sort/.test(e) && /string/.test(e)), `got ${JSON.stringify(sortErrs)}`);
+  const filterErrs = viewErrors({ columns: ['new_name'], filters: [{ attr: { name: 'new_name' }, op: 'eq', value: 'x' }] });
+  assert.ok(filterErrs.some((e) => /filter/.test(e) && /string/.test(e)), `got ${JSON.stringify(filterErrs)}`);
+});
+
+test('validateAppSpec still accepts a well-formed view (the guard adds no false positive)', () => {
+  const r = validateAppSpec(viewSpec({ columns: ['new_name', 'new_segment'], sort: [{ attr: 'new_name', dir: 'asc' }], filters: [{ attr: 'new_segment', op: 'eq', value: 'SMB' }] }));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  // Omitted collections must stay optional — the primary name column is substituted downstream.
+  assert.strictEqual(validateAppSpec(viewSpec({})).ok, true);
+});
+
+test('the whole shipped sample set still validates (no regression from the views guard)', () => {
+  for (const s of [sample, desk]) {
+    const r = validateAppSpec(s);
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  }
+});
+
+// --- an entity reference is a METADATA NAME, so it must be a string too (#525's sibling) ---------
+//
+// `String([["new_ticket"]])` is `"new_ticket"`, so a one-element nested array passed every
+// entity-membership check and then threw a RAW TypeError deep in the build, where the engine calls
+// `.toLowerCase()` on the array itself. These are valid JSON, so they reach the CLI from a spec file
+// — unlike a Symbol or a throwing getter, which cannot survive JSON.
+test('a nested-array entity reference is a structured error, not a late TypeError', () => {
+  const NESTED = [['new_ticket']];
+  const cases = [
+    ['chart', (s) => { s.charts = [{ name: 'C', entity: NESTED, chartType: 'Column', groupBy: 'new_priority' }]; }],
+    ['form subgrid childEntity', (s) => { s.forms = [{ entity: 'new_customer', name: 'F', subgrids: [{ childEntity: NESTED }] }]; }],
+    ['sitemap subArea', (s) => { s.appShell.areas[0].groups[0].subAreas.push({ entity: NESTED, title: 'X' }); }],
+    ['dashboard chart tile', (s) => { s.dashboards = [{ name: 'D', tiles: [{ type: 'chart', viewId: '11111111-1111-1111-1111-111111111111', visualizationId: '22222222-2222-2222-2222-222222222222', entity: NESTED }] }]; }],
+    ['dashboard list tile', (s) => { s.dashboards = [{ name: 'D2', tiles: [{ type: 'list', viewId: '11111111-1111-1111-1111-111111111111', entity: NESTED }] }]; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const spec = cloneDesk();
+    mutate(spec);
+    let res;
+    assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'plan' }); },
+      `${label}: validation must not throw on a JSON-representable wrong type`);
+    assert.strictEqual(res.ok, false, `${label}: must be rejected`);
+    assert.ok((res.errors || []).some((e) => /must be a table name \(a string\)/.test(e)),
+      `${label}: expected a table-name type error; got ${JSON.stringify(res.errors)}`);
+  }
+});
+
+test('the value describer cannot itself throw (BigInt / a throwing getter)', () => {
+  // A validator that crashes while formatting its own error message is worse than one that misses
+  // the case: the caller gets a stack trace instead of a finding.
+  for (const [label, bad] of [
+    ['BigInt', 10n],
+    ['throwing getter', Object.defineProperty({}, 'toJSON', { get() { throw new Error('nope'); } })],
+  ]) {
+    const spec = cloneDesk();
+    spec.views = [{ entity: 'new_customer', name: 'V', columns: [bad] }];
+    let res;
+    assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'plan' }); }, `${label} must not crash the validator`);
+    assert.strictEqual(res.ok, false, `${label} must still be rejected`);
+  }
+});

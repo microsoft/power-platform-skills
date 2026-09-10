@@ -238,3 +238,42 @@ test('REAL BUNDLE: a malformed appModuleId is rejected up front', async () => {
   const { sdk } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
   await assert.rejects(() => sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: 'not-a-guid' }));
 });
+
+// The boolean spelling is NOT a flat 1/0, and the schema doc said it was. That inaccuracy caused a
+// real incident: `appFeatures: { nlSearch: false, nlChart: false }` was written believing it meant
+// "leave alone", and it DISABLED two features a live app was inheriting as on. For the form-fill
+// family the tri-state is 0 = platform default, 1 = DISABLED, 2 = enabled, so `false` there is an
+// explicit off rather than an unset.
+//
+// Pinned against the real bundle in BOTH directions, so a re-vendor that changes the encoding fails
+// here instead of silently making the documentation wrong again.
+test('REAL BUNDLE: the boolean-to-numeric mapping is per-family, not a flat 1/0', async () => {
+  const EXPECTED = {
+    formFill: { setting: 'FormFillBarUXEnabled', onValue: '2', offValue: '1' },
+    nlSearch: { setting: 'NLGridSearchSetting', onValue: '1', offValue: '0' },
+    nlChart: { setting: 'NLChartDataVisualizationSetting', onValue: '1', offValue: '0' },
+    m365: { setting: 'm365copilotmodelappenabled', onValue: '1', offValue: '0' },
+  };
+
+  for (const [feature, want] of Object.entries(EXPECTED)) {
+    for (const [flag, expected] of [[true, want.onValue], [false, want.offValue]]) {
+      // Gate reported ON so the SDK writes in both directions (enabling is gated; disabling is not).
+      const { sdk, calls } = freshSdk({ gate: '2', effective: '2', overrideRows: [{ appsettingid: 'a1', value: expected }] });
+      await sdk.setAppAiFeatures(APP, { [feature]: flag }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
+      const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
+      assert.ok(save, `${feature}=${flag}: a SaveSettingValue must be issued`);
+      assert.strictEqual(save.body.SettingName, want.setting, `${feature}: setting name`);
+      assert.strictEqual(String(save.body.Value), expected,
+        `${feature}=${flag} must write ${expected} — the docs previously claimed a flat 1/0, which is wrong for the form-fill family`);
+    }
+  }
+});
+
+test('REAL BUNDLE: disabling is NOT gated — a false is written even when the org gate is off', async () => {
+  // This asymmetry is why an incorrect `false` is the more damaging mistake: it always lands.
+  const { sdk, calls } = freshSdk({ gate: '0', effective: '0', overrideRows: [{ appsettingid: 'a1', value: '1' }] });
+  await sdk.setAppAiFeatures(APP, { formFill: false }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
+  const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
+  assert.ok(save, 'a disable must be written even with the gate off');
+  assert.strictEqual(String(save.body.Value), '1', 'and 1 means DISABLED, not platform default');
+});

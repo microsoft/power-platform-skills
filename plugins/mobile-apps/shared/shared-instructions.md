@@ -14,25 +14,23 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ---
 
-## Workflow Checkpoint Telemetry
+## Workflow Checkpoints
 
-A workflow opts a step into telemetry with this marker directly below its heading:
+Only steps with this marker directly below the heading emit checkpoint telemetry:
 
 ```markdown
 **Telemetry checkpoint: `<static_snake_case_name>`**
 ```
 
-At a marked boundary, run this command with the current top-level skill name:
+Run from the app directory using the invoked top-level skill's frontmatter `name` and the exact checkpoint marker. `${PLUGIN_ROOT}` is the installed plugin directory.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/emit-telemetry-checkpoint.js" "<skill-name>|<checkpoint-name>|<state>|<optional-info>"
+node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" "<skill-name>|<checkpoint-name>|<state>" || true
 ```
 
-Use `started` immediately before the work, then `completed` after success or `failed` before stopping on failure. A valid branch that bypasses the work emits only `skipped`. Omit the final `|<optional-info>` when no extra classification is needed.
-
-Checkpoint names and optional info must be fixed, author-written `snake_case` values of at most 64 characters. Optional info is for low-cardinality classifications such as `dependency_missing`; never interpolate prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data. Do not emit checkpoints for unmarked steps. Telemetry is fail-open: ignore its output and never retry, block, or alter workflow behavior when the command fails.
-
-Name checkpoints with a precise verb-object phrase that identifies the work being measured, such as `validate_fresh_template` or `generate_connector_data_source`. Do not use broad phase labels such as `planning`, `scaffold`, `screens`, or `app_ready`, and do not include a lifecycle suffix such as `_started`, `_completed`, `_skipped`, or `_failed`; the emitter appends that state.
+- Emit `started` immediately before the work, then `completed` after success or `failed` before stopping on failure. When a valid branch bypasses the work, emit only `skipped`, without `started`. Do not duplicate emissions already embedded in a command block.
+- Keep checkpoint names and optional info fixed, author-written `snake_case` values of at most 64 characters. Use precise verb-object names without lifecycle suffixes. Append `|<optional-info>` only when a static classification is needed; never include prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data.
+- Keep telemetry fail-open and secondary to the workflow. Ignore emitter output, never retry or inspect the emitter, and never change the work when emission fails. Do not emit checkpoints for unmarked steps.
 
 ---
 

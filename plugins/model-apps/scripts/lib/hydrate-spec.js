@@ -192,8 +192,19 @@ async function hydrateSpec(read) {
     solution,
     // Round-trip the app's REAL, immutable uniquename so a rebuild resolves the EXISTING app by identity
     // (appUniqueName prefers this over the display-name derivation) — survives a display-name rename and
-    // never creates a duplicate app (Sol review). Omitted for a legacy read that didn't surface it.
-    app: { name: app.name, description: app.description || '', ...(app.uniquename ? { uniqueName: app.uniquename } : {}) },
+    // never creates a duplicate app. Omitted for a legacy read that didn't surface it.
+    //
+    // `newLook` / `headerNavigationRefresh` are emitted ONLY when the app carries an explicit app-scope
+    // override (#514). Absent means the app inherits the environment, and the build treats an omitted
+    // field the same way, so omitting is faithful — emitting a value for an inherited setting would
+    // invent an override the app never had.
+    app: {
+      name: app.name,
+      description: app.description || '',
+      ...(app.uniquename ? { uniqueName: app.uniquename } : {}),
+      ...(typeof app.newLook === 'boolean' ? { newLook: app.newLook } : {}),
+      ...(typeof app.headerNavigationRefresh === 'boolean' ? { headerNavigationRefresh: app.headerNavigationRefresh } : {}),
+    },
     entities,
     webResources,
     views: [],

@@ -98,6 +98,10 @@ const SKILL_SDK_SURFACE = [
   'updateRecord',
   'updateTable',
   'updateWebResource',
+  // The business-rule designer's OWN completeness validator. Nothing on the push path runs it, and a
+  // rule the compiler could not understand deploys as an EMPTY rule with HTTP 204 — so losing this
+  // method silently re-opens a trap that has no other detector.
+  'validateBusinessRule',
 ];
 
 function realSdk() {

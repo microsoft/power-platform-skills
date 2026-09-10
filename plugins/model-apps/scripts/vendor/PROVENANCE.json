@@ -1,14 +1,14 @@
 {
-  "commit": "5dcb83986fb7b396b2c033089ab89a199665a830",
-  "subject": "loc(copilot-studio): add catalogues for 12 new locales (additions-only)",
+  "commit": "e7e8e601a5587ebed523bf9de0043130eafa7888",
+  "subject": "Fix PPAPI licensing recommendation pagination",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-08-31T21:41:17.872Z",
-  "newestSrcAt": "2026-08-31T21:40:14.316Z",
+  "libBuiltAt": "2026-09-04T21:32:20.419Z",
+  "newestSrcAt": "2026-09-04T21:24:55.321Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v22.13.1",
-  "builtAt": "2026-08-31T21:41:40.924Z",
-  "bundleSha256": "2d459dec4bad316c468a05ce9d21f13eef48984a483b0aaa29d3f627213db0f5",
-  "bundleBytes": 682531
+  "builtAt": "2026-09-04T21:43:31.252Z",
+  "bundleSha256": "dabef5c4e76ce646d613834d1114f32e89c013a6a16b91e1fb83c7f4ee4494ed",
+  "bundleBytes": 692039
 }

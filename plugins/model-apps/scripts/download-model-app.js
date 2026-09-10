@@ -18,6 +18,7 @@ const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode } = require('./lib/app-spec.js');
+const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -242,6 +243,67 @@ async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
     const filter = clean.slice(i, i + 20).map((id) => `${idField} eq ${id}`).join(' or ');
     const rows = await sdk.queryRecords(set, { select, filter, top: 1000 });
     for (const r of rows || []) out.push(mapRow(r));
+  }
+  return out;
+}
+
+// Read the two app-shell settings the BUILD writes but the download previously dropped, so a
+// downloaded spec round-trips them instead of silently reverting an app to the classic shell when it
+// is rebuilt into a fresh environment (#514).
+//
+// Only an EXPLICIT app-scope override is emitted. An absent row means "inherits the environment", and
+// the build treats an omitted field the same way — so omitting is the faithful representation, and
+// emitting a value for an inherited setting would invent an override the app never had.
+//
+// Encoding, and the trap it hides:
+//   NewLookAlwaysOn            stored as the string 'true' / 'false'
+//   HeaderAndNavigationRefresh stored as a Number TRI-STATE where 2 = on, 1 = OFF, 0 = platform
+//                              default. A truthy read reports 1 — which means disabled — as enabled,
+//                              which is the same mistake that made `ai.appFeatures: false` disable a
+//                              live app's features.
+const SHELL_SETTINGS = {
+  NewLookAlwaysOn: { field: 'newLook', decode: (v) => (String(v).toLowerCase() === 'true' ? true : (String(v).toLowerCase() === 'false' ? false : undefined)) },
+  HeaderAndNavigationRefresh: { field: 'headerNavigationRefresh', decode: (v) => (String(v) === '2' ? true : (String(v) === '1' ? false : undefined)) },
+};
+
+async function readAppShellSettings(sdk, appId) {
+  const out = {};
+  try {
+    const defs = await sdk.queryRecords('settingdefinition', {
+      select: ['settingdefinitionid', 'uniquename'],
+      filter: Object.keys(SHELL_SETTINGS).map((n) => `uniquename eq '${n}'`).join(' or '),
+      top: 10,
+    });
+    const byId = new Map((defs || []).map((d) => [odataGuid(d.settingdefinitionid).toLowerCase(), d.uniquename]));
+    if (!byId.size) return out;
+    // Bound the read by the two DEFINITIONS, not by `$top`. Dataverse honours `$top` as a hard cap and
+    // omits `@odata.nextLink` (see COMPONENT_PAGE_CAP above), so an app-scoped read that leans on a row
+    // limit can return a partial page — and here a partial page is not a visible truncation but a WRONG
+    // ANSWER, because an absent row is indistinguishable from "inherits the environment". The app would
+    // round-trip without its override and rebuild into the classic shell, silently, which is the exact
+    // loss this function exists to stop. Filtering server-side makes the result at most one row per
+    // definition, so no number of unrelated settings on the app can push the shell rows off the page.
+    const defFilter = [...byId.keys()].map((id) => `_settingdefinitionid_value eq ${id}`).join(' or ');
+    const rows = await sdk.queryRecords('appsetting', {
+      select: ['value', '_settingdefinitionid_value'],
+      filter: `_parentappmoduleid_value eq ${odataGuid(appId)} and (${defFilter})`,
+      top: 10,
+    });
+    for (const r of rows || []) {
+      // Both sides of this join are normalized because a miss here is SILENT — an unrecognized id just
+      // `continue`s and the setting vanishes from the spec. Measured live, Dataverse returns both
+      // `settingdefinitionid` and `_settingdefinitionid_value` as bare lower-case GUIDs, so this is
+      // belt-and-braces on a fail-quiet path rather than a fix for an observed mismatch.
+      const name = byId.get(odataGuid(r && r._settingdefinitionid_value).toLowerCase());
+      const spec = name && SHELL_SETTINGS[name];
+      if (!spec) continue;
+      const decoded = spec.decode(r.value);
+      if (decoded !== undefined) out[spec.field] = decoded;
+    }
+  } catch {
+    // Best-effort, like every other capture here: a tenant without these setting definitions, or a
+    // caller without read access to appsettings, still gets a usable spec. Losing an optional shell
+    // setting must never fail a download.
   }
   return out;
 }
@@ -629,7 +691,7 @@ const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
 //   genuinely IS 'new': when the prefix is UNVERIFIED we cannot trust `startsWith(ownPrefix)`, so a genuine
 //   own custom icon (e.g. `crba3_nav.svg` while the fallback prefix is `new`) would fail the own-prefix test
 //   and — without this guard — be silently skipped with NO warning, re-introducing the exact broken-icon bug
-//   this fix exists to prevent (Opus review, Medium). So when `prefixResolved` is false we do NOT re-declare
+//   this fix exists to prevent. So when `prefixResolved` is false we do NOT re-declare
 //   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
 //   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
 //   ref is a system icon present in every env, so it stays silent (no false alarm).
@@ -654,7 +716,7 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
   // PASS 1 — path-derived custom icons (safety-gated). Done FIRST so a name referenced BOTH by a platform
   // path AND by a bare name is classified by the STRICTER path rules (and flagged `external`) before the
   // lenient bare pass can re-declare it as deletable — otherwise the overlap silently loses teardown
-  // protection and a shared nav icon gets deleted (Sol review, High).
+  // protection and a shared nav icon gets deleted.
   for (const name of [...(customRefs || []), ...(navRefs || [])]) {
     const key = String(name).toLowerCase();
     if (seen.has(key)) continue;
@@ -999,7 +1061,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // survives a rebuild into a fresh env that lacks it — but ONLY when it belongs to THIS app's own
   // publisher (`solution.publisherPrefix`). A FOREIGN-prefix / OOB reference is left as a bare reference:
   // re-declaring it would make the build try to createWebResource under an unregistered prefix on a fresh
-  // env → a hard BuildHalt, turning a cosmetic broken icon into a failed build (Opus review).
+  // env → a hard BuildHalt, turning a cosmetic broken icon into a failed build.
   const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs);
   if (unresolvedIcons && unresolvedIcons.length) {
     // A custom nav icon we couldn't safely round-trip: either an own-prefix WR that's absent on the source
@@ -1035,7 +1097,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // read didn't surface it: `appUnique` is the authoritative value (from the appmodule query) and is
     // guaranteed present here (the sitemap gate above bails when it's falsy). This is what lets a rebuild
     // resolve the EXISTING app by identity after a display-name rename instead of creating a duplicate.
-    app: async () => ({ ...app, uniquename: (app && app.uniquename) || appUnique }),
+    app: async () => ({ ...app, uniquename: (app && app.uniquename) || appUnique, ...(await readAppShellSettings(sdk, appId)) }),
     pages: async () => pages,
     entities: async () => entities,
     webResources: async () => webResources,
@@ -1180,4 +1242,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
