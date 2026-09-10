@@ -83,7 +83,7 @@ npx expo export --platform web
 
 (The current template does not define a `build` script, so this fallback is the normal path for freshly scaffolded apps. Both forms produce the same `dist/` web output.)
 
-**Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: `config.server.enhanceMiddleware` / `withPowerNativeMetroLogging` in `metro.config.js` holding an open handle — a web *export* should not need a dev server. **Not yet root-caused.**
+**Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: the Metro config returned by `createPowerAppsMetroConfig` (`metro.config.js`) installs a dev-server middleware internally, which appears to hold an open handle — a web *export* should not need a dev server. Note the template itself only calls `createPowerAppsMetroConfig`; the middleware is applied inside `@microsoft/power-apps-native-host`, not in app code. **Not yet root-caused.**
 
 **Do not wait on the process.** Run it detached and poll for the artifact:
 
@@ -120,24 +120,25 @@ Verify `dist/` exists with `index.html` before continuing.
 **Node version gate (required).** The native export crashes on **Node < 20.19.4** — it hits `util.styleText(['yellow','inverse','bold'], …)`, which older Node rejects, failing the Metro bundle with a cryptic `ERR_INVALID_ARG_VALUE`. Check first:
 
 ```bash
-node -v
+node -e 'const [M,m,p]=process.versions.node.split(".").map(Number); const ok = M>20 || (M===20 && (m>19 || (m===19 && p>=4))); if (!ok) { console.error(`Node ${process.versions.node} is too old; need >= 20.19.4`); process.exit(1); } console.log(`✓ Node ${process.versions.node}`);'
 ```
-If it prints below **v20.19.4**, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the native packaging commands on older Node.
+If it exits non-zero, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the native packaging commands on older Node.
 
 The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript.
 
 **Script preflight (required).** Both script names invoke the same `build-codegen-package` binary, but templates differ on naming: the current template ships `bundle:android` / `bundle:ios`, while some app folders carry `package:android` / `package:ios`. Detect whichever exists rather than assuming, or `npm run` fails with a bare `Missing script`:
 
 ```bash
-node -e '
+PKG_PREFIX=$(node -e '
 const s = require("./package.json").scripts || {};
 const prefix = ["bundle", "package"].find(p => s[p + ":android"] && s[p + ":ios"]);
 if (!prefix) { console.log("MISSING"); process.exit(1); }
 console.log(prefix);
-'
+') || { echo "No native packaging scripts found in package.json"; exit 1; }
+echo "Using script prefix: ${PKG_PREFIX}"
 ```
 
-Capture the printed value as the script prefix (`bundle` or `package`) and use it for both commands below.
+`PKG_PREFIX` now holds `bundle` or `package` and is used by both commands below. Keep it exported in the same shell session; if the commands run in a fresh shell, re-run the detection there.
 
 If it prints `MISSING`, STOP and tell the user exactly what to add — do not silently skip native packaging, and do not guess at the command:
 

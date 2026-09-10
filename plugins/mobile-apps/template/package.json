@@ -12,9 +12,7 @@
     "build:ios": "wrap ios",
     "bundle:android": "build-codegen-package android",
     "bundle:ios": "build-codegen-package ios",
-    "bundle:web": "js-bundle web",
-    "package:android": "build-codegen-package android",
-    "package:ios": "build-codegen-package ios"
+    "bundle:web": "js-bundle web"
   },
   "dependencies": {
     "@expo/metro-runtime": "55.0.11",
