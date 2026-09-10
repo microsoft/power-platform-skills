@@ -53,7 +53,8 @@ process.stdin.on('end', () => {
   const fp = toolInput.file_path || toolInput.filePath;
   if (typeof fp !== 'string') process.exit(0);
 
-  const hit = PROTECTED.find(({ rx }) => rx.test(fp));
+  const normalizedPath = fp.replace(/\\/g, '/');
+  const hit = PROTECTED.find(({ rx }) => rx.test(normalizedPath));
   if (!hit) process.exit(0);
 
   const rel = path.relative(process.cwd(), fp) || fp;
