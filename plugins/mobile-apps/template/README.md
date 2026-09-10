@@ -163,8 +163,11 @@ instead of modifying the old app in place. Commit or back up the old app first.
 4. Keep the new template's `package.json`, lock file, root configuration files,
 	`android/`, and `ios/`. In particular, do not copy the old
 	`power.config.json`; keep the file generated for the new app and selected
-	environment. Reapply old customizations selectively rather than copying
-	these files wholesale.
+	environment. If the old file contains intentional app settings such as
+	`appType` or `distPath`, review the new schema and reapply only those values;
+	do not copy environment IDs, data-source references, or the whole file.
+	Reapply other old customizations selectively rather than copying root files
+	wholesale.
 5. Run `npm install`, `npm run type-check`, and the bundle command for each
 	target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
 6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
@@ -189,7 +192,8 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `distPath` to `dist-web` in `power.config.json`, then run
-`npx pa app push --non-interactive`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
+`npx pa app push --non-interactive`. Ensure the Code App and Mobile App have
+different app IDs by removing the `appId` field before pushing the app.
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.
