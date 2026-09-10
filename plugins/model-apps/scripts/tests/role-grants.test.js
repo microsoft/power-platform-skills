@@ -254,7 +254,47 @@ test('roleGrants: apply calls the ADDITIVE SDK surface, with the declared scope 
   // The scope must survive the trip: the SDK maps it to Depth, and a dropped scope would silently
   // grant at Basic (user-owned records only) instead of the Organization access the author declared.
   assert.deepStrictEqual(call.privileges, [{ entity: 'contoso_order', access: ['read', 'write'], scope: 'organization' }]);
-  assert.ok(r.created.roleGrants['Contoso PM - Project Manager']);
+  // Keyed by the resolved ROLE ID, not the display name — see the collision test below. The name is
+  // carried in the value, so nothing readable is lost.
+  const recorded = r.created.roleGrants['33333333-3333-3333-3333-333333333333'];
+  assert.ok(recorded, JSON.stringify(r.created.roleGrants));
+  assert.strictEqual(recorded.name, 'Contoso PM - Project Manager');
+});
+
+test('roleGrants: two roles sharing a display name are BOTH recorded, not collapsed', async () => {
+  // The spec gate deliberately allows this: a role is identified by (name, business unit), so the
+  // same name in two BUs is two different roles. Keying the result map on the display name silently
+  // dropped the first grant from the emitted output — the apply did both, but `--json` reported one,
+  // which is the reporting half of exactly the defect roleGrants[] exists to fix.
+  const s = base();
+  s.roleGrants = [
+    { role: 'Shared', businessUnitId: '11111111-1111-1111-1111-111111111111', privileges: [{ entity: 'contoso_order', access: ['read'], scope: 'organization' }] },
+    { role: 'Shared', businessUnitId: '22222222-2222-2222-2222-222222222222', privileges: [{ entity: 'contoso_order', access: ['write'], scope: 'organization' }] },
+  ];
+  assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, 'the gate allows same-name roles in different BUs');
+
+  // Resolve each BU to its own role id, which is what makes them two distinct targets.
+  const byBu = {
+    '11111111-1111-1111-1111-111111111111': { roleid: 'aaaaaaaa-0000-0000-0000-000000000001', name: 'Shared' },
+    '22222222-2222-2222-2222-222222222222': { roleid: 'bbbbbbbb-0000-0000-0000-000000000002', name: 'Shared' },
+  };
+  const sdk = buildSdk();
+  sdk.queryRecords = async (set, o = {}) => {
+    if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+    if (set === 'role') {
+      const bu = Object.keys(byBu).find((id) => String(o.filter || '').includes(id));
+      return bu ? [byBu[bu]] : [];
+    }
+    return [];
+  };
+  const r = await applySecurity(s, sdk);
+  assert.strictEqual(r.ok, true, JSON.stringify(r).slice(0, 300));
+  assert.strictEqual(sdk.calls.addEntityPrivilegesToRole.length, 2, 'both grants must be applied');
+  assert.deepStrictEqual(
+    Object.keys(r.created.roleGrants).sort(),
+    ['aaaaaaaa-0000-0000-0000-000000000001', 'bbbbbbbb-0000-0000-0000-000000000002'],
+    `both must be RECORDED, not collapsed onto one name: ${JSON.stringify(r.created.roleGrants)}`,
+  );
 });
 
 test('roleGrants: a foreign role is NOT added to this app solution', async () => {

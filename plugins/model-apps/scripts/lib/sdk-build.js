@@ -340,7 +340,12 @@ function planFor(spec, opts) {
   if (has('data-model')) {
     for (const gc of spec.globalChoices || []) items.push({ phase: 'data-model', label: `global choice ${gc.name}` });
     for (const e of spec.entities) {
-      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${labelText(e.displayName, spec && spec.languageCode)}")` });
+      // `labelText` returns "" for an absent displayName, or for a localized map with nothing usable
+      // — which rendered a dry-run line as `table new_order ("")`, an empty quoted string the reader
+      // has to decode. Fall back to the schema name, which is what the CREATE itself falls back to
+      // (`displayName || schemaName`), so the plan says what the build will actually do.
+      const shown = labelText(e.displayName, spec && spec.languageCode) || e.schemaName;
+      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${shown}")` });
       if (quickCreateEnabledFor(spec, e)) items.push({ phase: 'data-model', label: `enable quick create on ${e.schemaName.toLowerCase()}` });
       for (const c of e.columns || []) {
         if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})` });
@@ -3139,7 +3144,13 @@ async function runSdkBuild(spec, opts = {}) {
           throw new BuildHalt(`roleGrant ${label} could not be applied: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-failed', recoverable: false });
         }
         const n = Array.isArray(applied) ? applied.length : 0;
-        result.created.roleGrants[target.name || target.roleId] = { roleId: target.roleId, name: target.name, managed: target.managed, privileges: applied || [] };
+        // Keyed on the resolved ROLE ID, with the display name carried in the value. Keying on
+        // `target.name` collapsed two DIFFERENT roles that share a display name — which the spec
+        // gate deliberately allows, because a role is identified by (name, business unit) and the
+        // same name in two BUs is two roles. The second grant then overwrote the first in this map,
+        // so `--json` consumers saw one grant where two were applied. The id is the identity the
+        // apply itself guards on, so it cannot collide.
+        result.created.roleGrants[target.roleId] = { roleId: target.roleId, name: target.name, managed: target.managed, privileges: applied || [] };
         // The role is NOT added to the app's solution. A persona role is ours to place; a pre-existing role
         // already lives wherever its owner put it, and adding a foreign (possibly managed) role to this
         // solution would take an ownership decision the author did not ask for. If the role is already a

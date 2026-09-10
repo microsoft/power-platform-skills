@@ -505,3 +505,26 @@ test('provision-input validates relationships[].lookup.displayName too', () => {
   bad.relationships[0].lookup.displayName = { 3082: 'Padre', 1033: 'Parent' };
   assert.strictEqual(validateProvisionInput(bad).ok, true, JSON.stringify(validateProvisionInput(bad)));
 });
+
+test('the dry-run plan never shows a table as an empty quoted label', () => {
+  // `labelText` returns "" for an absent displayName, so the plan line read `table new_order ("")`
+  // -- an empty string the reader has to decode. The CREATE falls back to the schema name
+  // (`displayName || schemaName`), so the plan must say the same thing the build will do.
+  const mk = (displayName) => {
+    const s = base();
+    if (displayName === undefined) delete s.entities[0].displayName;
+    else s.entities[0].displayName = displayName;
+    return s;
+  };
+  const tableLine = (s) => {
+    const { planFor } = require('../lib/sdk-build.js');
+    return (planFor(s, {}) || []).map((x) => x.label).find((l) => /^table /.test(l));
+  };
+  for (const absent of [undefined, '', { 9999: '' }]) {
+    const line = tableLine(mk(absent));
+    assert.doesNotMatch(line, /\(""\)/, `an unresolvable label must not render as an empty string: ${line}`);
+    assert.match(line, /contoso_order/, line);
+  }
+  // A resolvable label is still shown, so the fallback did not swallow the real one.
+  assert.match(tableLine(mk('Order')), /\("Order"\)/);
+});
