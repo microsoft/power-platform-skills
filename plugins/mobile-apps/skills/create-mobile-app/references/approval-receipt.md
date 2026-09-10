@@ -64,5 +64,13 @@ design changes to native-app-plan.md before Step 8**. Never silently refresh a w
 because the change "only adds design". Gate 4b must accept affected specs/design delta; schema
 changes additionally require Gate 1 and fresh evidence for the intended environment.
 
+Pre-approval visual proposals may refine inferred layout/media/emphasis without reopening
+unchanged data or behavior approvals. Leave the authoritative plan and receipt unchanged while
+authoring those proposals. When foreground writes the accepted presentation into the plan,
+invalidate its old plan-byte binding and complete affected screen-plan reapproval: the existing
+design review can explicitly accept the presentation/spec delta in one answer. Preserve all
+unaffected approval timestamps and contract/service declarations. This is not permission to
+change behavior, explicit brand constraints or schema under the name of a visual adjustment.
+
 Connector-only planning records user approvals in the plan but creates no Dataverse contract
 or receipt. Later Dataverse requirements return to required-mode planning, not an invented receipt.

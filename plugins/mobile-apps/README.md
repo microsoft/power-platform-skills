@@ -163,9 +163,11 @@ phase and pending work so the next invocation can verify and resume it.
   Before graph approval, consolidate states, filters, parameterized details and
   contextual actions; show the resulting route count and reasons for separate surfaces.
   Three preview screens are not a fixed app-screen budget.
-- Without supplied branding, the model derives composition from the product's
-  tasks. Named industry presets, style comparisons, and component galleries are
-  optional rather than defaults.
+- Before the first design, the maker can supply notes/Markdown, a logo, website,
+  screenshot, guidelines, CSS/tokens or an accessible Figma reference, or choose
+  **Let AI choose**. This choice is asked only when unanswered and is retained on resume.
+  Named app brands guide verified proposals; product-brand mentions do not automatically
+  rebrand the app. Named presets, style comparisons and galleries remain optional.
 - The normal design outputs are compact design decisions, runtime tokens/themes,
   and one directly AI-authored HTML intent preview, with three representative main
   screens by default. Relevant domain, data, connector, native, and design decisions
@@ -193,7 +195,7 @@ What happens:
 1. **Requirements brief** — confirms the user, primary job, operating context, and missing outcome-changing decisions.
 2. **Journey and capability planning** — identifies evidence capture, review, submission, and recovery without treating every data entity as a screen.
 3. **Foreground approval gates** — reviews data/native/connector decisions and the screen graph/specifications; child proposals never approve themselves.
-4. **Design system** — uses supplied brand inputs when available, otherwise derives a task-appropriate composition. Style comparisons and component galleries are optional.
+4. **Design system** — reuses supplied references or offers a one-time provide-or-infer choice before design generation. Accepted branding carries into the preview and native implementation. Style comparisons and component galleries are optional.
 5. **Intent preview** — demonstrates representative journey screens with coherent illustrative data and labeled interactions before screen implementation.
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
 7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device

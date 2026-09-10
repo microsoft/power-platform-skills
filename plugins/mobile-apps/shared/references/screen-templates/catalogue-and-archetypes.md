@@ -313,7 +313,9 @@ Use a visual element when it clarifies the state rather than just filling space.
 2. **Custom SVG** — if the brand provides illustrations, import via `react-native-svg`. Place in `assets/illustrations/`.
 3. **Placeholder image** — Expo Image `<Image source={require('../assets/empty-state.png')} contentFit="contain" />`. Must provide light + dark variants.
 
-**Never** use: generic stock photos, AI-generated images in the app itself, or emojis as primary illustration.
+Avoid unrelated stock photos or misleading synthetic content used merely to fill space.
+Task-relevant licensed imagery is allowed under the media-source policy; do not present
+illustrative media as real user evidence or use unexplained emojis as the primary illustration.
 
 ### Icon choices by screen type
 
@@ -331,10 +333,15 @@ Use a visual element when it clarifies the state rather than just filling space.
 
 ### Image handling
 
+- Local assets and verified licensed public HTTPS images, including CDNs, are both supported.
+  Follow [media sources](../media-sources.md); downloading/caching is required only by the
+  offline/delivery requirement or binary-column upload, not by image display itself.
 - Always use `expo-image` (not React Native `Image`) for remote images — it handles caching, progressive loading, and placeholder blur.
 - Provide `contentFit="cover"` for hero images, `contentFit="contain"` for logos.
 - Add a `$color4` background behind images so there's no flash of white during load.
 - For user avatars, include a fallback with initials (see [component recipes](../tamagui-component-recipes.md)).
+- Keep accessible text, reserved dimensions and explicit loading/error fallback; failure must
+  not hide usable record data. An uncached remote image requires network access.
 
 ### Dark mode assets
 

@@ -13,10 +13,17 @@ If `--no-design` was explicit, preserve the plan's opt-out/deferred context, use
 with task-appropriate composition rather than an industry preset, and skip this phase (including visual preview). This flag does not skip approvals,
 safe-area/accessibility rules or later TypeScript/quality checks.
 
-Otherwise invoke `/design-system --working-dir <working_dir>` in orchestrator mode
+Otherwise resolve the [one-time brand input choice](../../design-system/references/input-modes.md#one-time-input-choice)
+in foreground before design generation. Offer existing references or AI inference only when
+unanswered; reuse supplied material, an explicit choice, or an accepted design on resume.
+Record `Brand input` in the existing memory bank; cancellation or an unanswered source request
+remains `Pending decision`, not permission to proceed. No second picker inside the child.
+
+Then invoke `/design-system --working-dir <working_dir>` in orchestrator mode
 (`CODE_APPS_NATIVE_ORCHESTRATING=1`, or an explicit orchestrator context if the host does not
 inherit environment between tool calls). Supply the approved plan path, confirmed brief and
-workflow/domain context, platforms, known brand/aesthetic constraints and visual-companion preference.
+workflow/domain context, platforms, brand-input choice and safe source references, known
+brand/aesthetic constraints and visual-companion preference.
 Also supply relevant record relationships, independent states/business rules, planned connector
 reads/writes, approved native capabilities, and navigation/first-use behavior from existing plan
 sections. Pass compact facts, not raw schema inventories or tool logs; no provisioning is needed
@@ -34,6 +41,9 @@ interactions. It is not proof of native/data execution. Honor browser opt-out an
 
 **Foreground design approval:** after the proposal/intent preview is ready, show consequential
 choices and ask for accept / targeted revision through the permitted question tool.
+Require the preview's compact per-screen rendered experience evidence first. Surface any
+unverified screenshot/interaction checks with `DONE_WITH_CONCERNS`; a known unresolved review
+failure blocks progression. Do not substitute artifact existence or TypeScript for visual review.
 The design child does not hold another creation approval gate. `DONE` alone is not acceptance.
 On acceptance, record actual artifact paths, direction, confirmed status and `visual_companion`
 in memory bank. Set `Approved preview` to the accepted intent path and exact plan/design revision,
@@ -41,15 +51,23 @@ clear that `Pending decision`, and update `Current phase` after validation. It i
 Continue to Step 7, not directly to data or builders.
 
 The graph/spec gates in Step 3 were structural. Brand/design review belongs here, before screen
-implementation. If design changes shared conventions/specs, send only affected specs back to
-`mobile-app:screen-planner` with the locked graph and actual brand references; foreground reviews
-the delta. A graph change returns to Gate 4a; data/native/integration changes return to their gates.
+implementation. Inferred layout, media sizing and emphasis remain provisional until this review.
+The designer may improve them within approved behavior and explicit brand constraints without
+reopening business approvals; foreground presents the affected presentation delta here.
+A graph change returns to Gate 4a; data/native/integration changes return to their gates.
+If accepted design changes shared conventions/specs, send only affected specs back to
+`mobile-app:screen-planner` with the locked graph and accepted visual reference to reconcile
+presentation, not independently redesign it. Preserve approved operations and first-entry scope.
 Before screen implementation, reconcile the accepted preview's hierarchy, layout and interactions
 into those existing specs and design values. Builders use its relevant screen as a visual reference;
 do not approve one experience and then independently redesign it during native generation.
+Preserve the accepted first-viewport content order and below-fold access in Layout delta,
+including deliberately selected preview states versus normal app entry.
 
 **Receipt handoff:** `/design-system` never writes `.tmp/mobile-plan-status.json`.
 Any change to `native-app-plan.md` before Step 8 invalidates its old plan-byte binding.
 Use [approval-receipt.md](approval-receipt.md): show/reapprove affected design/spec deltas in
 foreground and refresh hashes only after acceptance; preserve unchanged data approval.
+The existing design review may explicitly accept that presentation/spec delta and complete
+the screen-plan reapproval in one answer; no second identical confirmation is needed.
 Do not blindly restamp the plan hash after a child returns `DONE`.

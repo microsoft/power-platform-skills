@@ -31,7 +31,9 @@ Use these headings for downstream compatibility; concise tables/bullets are enou
 
 ## Components
 <Only relevant decisions: hierarchy, composition, density, navigation, surfaces,
-media purpose/crop, input/action/state treatments. Per-screen differences are allowed.>
+media purpose/crop/visible-subject emphasis, input/action/state treatments. Distinguish fixed
+user requirements from provisional visual proposals until approval; per-screen differences are allowed.>
+<For remote images, include loading/error fallback and network/offline dependency per the media-source policy.>
 
 ## Motion
 <Functional purpose or none; reduced-motion behavior>
@@ -41,10 +43,15 @@ media purpose/crop, input/action/state treatments. Per-screen differences are al
 if none beyond shared constraints, say so. Style suggestions are not build gates.>
 
 ## Provenance
-<Input/source, inferred assumptions, confirmation state, date, integration gaps>
+<Brand input: supplied references or explicit AI-inference choice (reuse accepted legacy designs).
+Source/role: requirement versus inspiration; extracted evidence versus inferred values.
+Confirmation state, date, integration gaps; input choice is not design approval.
+Remote media: URL, license/permission evidence, attribution and verification result; never secrets.>
 ```
 
 Prefer existing camelCase color keys in both files; normalize legacy hyphenated labels when comparing drift. Legacy headings such as `## Negatives (HARD RULES)` remain readable. Explicit negatives are requirements; invented style prohibitions are not.
+Image provenance follows [media sources](../../../shared/references/media-sources.md); no separate
+media artifact is required for ordinary previews.
 
 ## `brand/tokens.ts`
 

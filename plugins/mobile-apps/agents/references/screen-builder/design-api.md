@@ -30,6 +30,11 @@ both valid; neither is the universal default. Preserve tablet-specific compositi
 Preserve the approved task-critical facts, relationships and next action, not just a preview's
 colors and containers. If an essential field/operation is absent from the verified contract,
 return the mismatch to foreground; do not invent production data to reproduce a richer mock.
+Implement the accepted entry composition from Layout delta and the accepted visual reference,
+not a superseded provisional planner suggestion: preserve first-viewport priorities, visible
+media-subject scale and below-fold access, not just colors or outer container dimensions.
+A selected preview state is not
+automatically the app's default filter or record; honor the approved Data/Navigation entry.
 
 ## Tamagui and host contract
 

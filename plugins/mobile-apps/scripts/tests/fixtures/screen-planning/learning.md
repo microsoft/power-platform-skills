@@ -26,6 +26,7 @@ Brief: Learners resume a short reading lesson, answer a practice question, and s
 |---|---|---|
 | practice | Shows learning content and the answer decision | question with selected answer and feedback |
 | completion | Shows persisted learning outcome and continuation | saved lesson progress with next lesson |
+| learn | Shows a useful content-first resume entry without promotional cards | current lesson at retained reading position |
 
 ### Navigation Contracts
 
@@ -37,10 +38,26 @@ Brief: Learners resume a short reading lesson, answer a practice question, and s
 
 ### Per-Screen Specs
 
+Layout suggestions are provisional until visual approval; operations, data and entry scope remain fixed.
+
+#### Learn (/(app)/home)
+- **Screen ID** — learn
+- **Archetype** — Reader
+- **Layout delta** — First viewport: lesson identity, retained reading position and readable lesson prose; Below fold: remaining prose and Practice after reading, reached by scrolling.
+- **Data** — Initial scope: current lesson at retained reading position; no invented streaks or leaderboard data.
+- **UX contract** — Resume reading before answering the lesson's practice question; no forced promotional hero or product grid.
+
 #### Practice (/(app)/lessons/[id]/practice)
 - **Screen ID** — practice
 - **Archetype** — Form
-- **Layout delta** — readable question and optional lesson extract → answer choices → save/continue.
+- **Layout delta** — First viewport: lesson context, readable question and selected answer choices; Below fold: feedback and save/continue after the choices, reached by scrolling.
+- **Data** — Initial scope: question with selected answer and feedback.
 - **UX contract** — Learner selects answer; Save completion persists answer and progress; if progress save fails, retry only that operation, not an already saved answer; success opens completion; failure retains answer.
 - **State delta** — failed answer/progress save is distinct from an unanswered question; no completion celebration before both required outcomes.
 - **Idempotency guards** — pending save disables action; resume uses existing answer ID rather than creating duplicates.
+
+#### Completion (/(app)/progress/[id])
+- **Screen ID** — completion
+- **Archetype** — Detail
+- **Layout delta** — First viewport: saved lesson progress and next-lesson identity with Continue learning; Below fold: none for this short result.
+- **Data** — Initial scope: saved lesson progress with next lesson; no completion before required saves.

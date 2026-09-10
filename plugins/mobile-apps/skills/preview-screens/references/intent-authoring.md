@@ -48,6 +48,15 @@ consequences for hierarchy, typography, container/surface strategy, and interact
 Apply it visibly across the selected screens without making every screen the same card stack.
 Explain the thesis briefly for review; assumptions are secondary to the screens.
 
+Use the selected screen's **Layout delta** as a provisional entry-composition proposal, not
+only the thesis's adjectives. For standalone intent use the brand spec's Components. Follow
+[behavior and presentation authority](../../../shared/references/design-planning.md#entry-composition-and-reference-transfer):
+improve suggested arrangement, media scale and emphasis within fixed behavior and explicit
+brand decisions. Missing content order alone does not require `NEEDS_CONTEXT`; propose it
+from the approved job. Conflicts with fixed requirements do require foreground resolution.
+Preview does not rewrite the plan; return presentation deltas for the existing visual approval.
+No hero, grid, or extra route is required to make a restrained design useful.
+
 ### Container hierarchy and phone density
 
 Use the parent skill's **device geometry** rule: match the reference device's width and height,
@@ -91,13 +100,22 @@ is valid. Do not broaden scope, duplicate records or pad cards merely to make a 
 Unconfirmed facts in mock-only work are labeled assumptions, never silently added to the
 approved schema or operations. Progress indicators need meaningful evidence, not invented percentages.
 
+Bind each selected frame's initial state to **Preview selection**: declared scope/filter,
+selected record, data state and outcome stage must agree with the visible controls, records
+and counts. Reset restores those exact values, not merely the route. A deliberate filtered,
+empty or later-stage preview is valid: label it and separately exercise the app's first-entry
+scope from Data/Navigation. Do not switch to All or add records to make the image look fuller.
+Exercise every offered filter and search with an expected match and no-match result; check
+record identities and count labels, not only that a handler ran. A loaded-page count must not
+be presented as a whole-dataset count.
+
 Before handoff, inspect each screen and ask: can the actor understand the situation and take
 the next supported step? Does selection open the relevant task/content, or only a related record?
 Does the composition make important relationships and priorities legible, rather than merely
 removing borders? Revise weak screens from this evidence. This is an authoring self-review,
 not a new maker questionnaire, approval gate, universal layout or domain-field checklist.
 
-Create one polished, self-contained HTML with working navigation and local action/state
+Create one polished HTML with self-contained code, working navigation and local action/state
 transitions. On a wide review canvas, put the three representative screens side by side above
 the fold where space permits, without resizing their device geometry. On narrow viewports, present one
 screen at a time with an accessible switcher. Fewer screens use the available canvas rather than
@@ -107,6 +125,10 @@ presentation, not a fixed app layout. Native scanning/capture and remote
 writes are labeled simulations, not fake successful device/API calls.
 Use actual approved token values as CSS variables directly. No brand input permits
 task-appropriate inferred presentation; explain it rather than silently choosing a preset.
+Use local assets or verified licensed HTTPS imagery per [media sources](../../../shared/references/media-sources.md).
+Optional remote images do not make remote scripts or live data calls acceptable. Reserve media
+dimensions and exercise loading/error fallback; download locally only when the delivery/offline
+requirement calls for it. Disclose external image dependencies in existing preview notes.
 
 Apply the parent skill's safety, accessibility, first-use, domain-transition, and interaction
 checks. Show what the user can judge and change. Avoid unrequested galleries, sidecars,
@@ -124,7 +146,8 @@ Exercise bindings before handoff:
   dependent views. Reset restores the exact initial scenario; shared context stays synchronized.
 - For phone previews at desktop and 320px widths, essential content/actions remain visible without horizontal
   overflow. Validate unique rendered IDs, reachable destinations, dialog focus/close/recovery,
-  no external resources/network calls, and no unescaped user text.
+  only declared verified image-media requests (no remote scripts or live data calls), and no
+  unescaped user text.
 - At the target device width, inspect container nesting and information density. Simplify
   borders, radii or shadows that add no meaning without flattening useful hierarchy or removing
   affordances. Confirm essential detail is legible and secondary detail remains reachable.
@@ -133,6 +156,62 @@ Exercise bindings before handoff:
 
 Do not report these checks from source inspection alone. Use available browser interaction;
 if unavailable, state which binding and responsive checks remain unverified.
+
+## Rendered experience review
+
+This is a required authoring review before foreground design approval, not a beauty score or
+an additional user gate. Apply it to every selected screen, not just Home. Use actual screenshots
+alongside normal browser interaction; an accessibility snapshot or valid CSS alone cannot show
+visual hierarchy. Inspect the target device viewport, internal scroll/bottom actions, 320px
+reflow and every offered theme without resizing the target device to hide weaknesses.
+
+| Check | Evidence to observe | Repair when |
+|---|---|---|
+| Context | Approved task, scope or selected-record identity is visible where needed | The screen could be mistaken for a different task or selected record |
+| Hierarchy | The intended focal content/decision is distinguishable from supporting information and controls | Task priorities are flattened into equal-weight blocks or competing decoration |
+| Decision/read evidence | Approved facts, prose, media or inputs needed for the next step are legible | Generic placeholders or missing facts prevent the intended comparison, reading or action |
+| Media proportions (when relevant) | Visible subject size/crop relative to its media container supports recognition or reading | A tiny subject is lost in a large empty frame, or cropping removes task-relevant detail |
+| Usable first viewport | Meaningful content begins; continuation and navigation are discoverable | Chrome, introduction or empty padding displaces the task, or essential content is clipped |
+| Action placement | Required controls are legible and reachable with normal click/keyboard actions, including after scrolling | Overlays, clipping or decoration obscure an action or separate it from prerequisite evidence |
+| State fidelity | Initial controls, records, counts and reset match the declared preview state | The illustration silently narrows scope, changes records or contradicts its labels |
+
+Measure the **visible subject**, media container, usable app width/height and scrolling viewport
+separately. An image element or SVG viewBox includes transparent/internal whitespace; its CSS
+dimensions do not establish the subject's prominence. Inspect the rendered silhouette/crop,
+using an explicitly labeled estimate if the visible bounds cannot be measured precisely.
+Keep decorative bezels outside the intended app viewport; compare designs at the same usable
+width rather than treating different bezel thicknesses as different content quality.
+
+When an introduction/hero is present, report its height relative to the scrolling viewport
+and which task content it displaces. Decide whether to shorten, remove or retain it based on
+the job, not a universal percentage or a presumption that a hero is better. More records,
+larger containers or an added hero are not evidence of better design. Preserve the fixture's
+approved facts and representative variation; do not invent metadata to make it appear richer.
+
+Only applicable task requirements can fail this review. No fixed hero, image, palette, card
+count, density or screenshot-similarity target. A short reader with clear prose and retained
+position can pass; a decorative introduction that pushes all reading below the fold cannot.
+A scoped queue with distinguishable pending rows can pass without a banner; generic rows
+missing the approved decision evidence cannot. Genuine empty/error scenarios pass when their
+context, recovery and state fidelity are correct. Long content and large text may scroll;
+do not shrink text or move every action above the fold merely to pass.
+
+Record a compact handoff row per screen/state: `Screen/state | viewport/theme | observed
+context, focal content and next step | pass/fail/unverified + reason | repair/recheck`.
+Name visible regions/labels and measured geometry, not "looks polished". Reuse the existing
+handoff; include subject/container proportions when media matters and viewport/chrome allocation
+when it affects the task. Do not create a score file, duplicate design document, or approval receipt.
+
+If any applicable check fails, make **one focused repair pass**, then rerun the affected
+visual and interaction checks. Do not restyle unrelated screens. Provisional visual changes
+within fixed constraints need no new business gate; include them in the design handoff.
+A fixed behavior/schema/route or explicit brand requirement
+change returns `NEEDS_CONTEXT` for foreground approval. A known failure remaining after the
+repair returns `BLOCKED: intent experience review failed` with the screen and reason; do not
+silently lower the bar or loop indefinitely. If browser/screenshot tools are unavailable or
+opening was declined, mark those checks unverified and return `DONE_WITH_CONCERNS`; do not
+invent visual evidence or treat tool absence as a design failure. No repair is required after
+a clean review. This procedure cannot guarantee aesthetic preference or native runtime behavior.
 
 ## Approval and implementation handoff
 

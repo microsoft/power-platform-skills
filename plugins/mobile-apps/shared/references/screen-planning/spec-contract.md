@@ -108,6 +108,9 @@ need no invented mutation, and useful repeated cards/forms remain valid.
 ```
 
 Reference existing Screen Map IDs; multiple states of the same ID are allowed. Select surfaces that demonstrate primary work and its result or consequential recovery. State names the specific populated, selected, blocked, success, error, or empty condition to illustrate. The rationale explains what a reviewer can judge there. This selection guides both early design validation and later previews, without pretending a static state verifies runtime behavior.
+Name the initial selection/filter and selected-record context in State when applicable. A preview
+may deliberately show a later or filtered state; label that variant instead of confusing it with
+the app's first-entry behavior in Data/Navigation. Do not default every collection to All.
 For the initial intent review, choose three representative main screens by default, fewer for a
 smaller product. Details/sheets and recovery states can support those screens; do not create
 filler destinations or constrain the eventual app to three screens.
@@ -139,7 +142,7 @@ Write `### Per-Screen Specs` with `#### <Screen name> (<route>)` entries. Use fl
 | **Domain layout decisions** | Name the facts/relationships needed to understand, compare, decide or act; choose their hierarchy before containers, then disclosure and composition. Use a representative scenario to assess this; no mandatory metadata fields, container types or record counts |
 | **Archetype** | Nearest useful composition hint: List, Detail, Form, Auth, Tab-root, Modal-Sheet, Empty-onboarding, or a described custom composition |
 | **Purpose**, **Route**, **File**, **Presentation** | Same as approved map; File resolves under working_dir |
-| **Layout delta** | Screen-specific structure and primary arrangement; no repeated shared chrome |
+| **Layout delta** | Screen-specific structure and primary arrangement; include the entry composition below for main destinations and selected preview screens; no repeated shared chrome |
 | **UX contract** | Actor decision/read; action label/placement; confirmed domain rules, authorized transitions and prerequisites; commit operation + postcondition; visible result; next destination; failure/retry/cancel path. Keep independent states distinct |
 | **Data** | Approved semantic service/schema dependencies before generation; exact generated services/methods/properties once available. Name selected fields, initial scope/filter with rationale, ordering; local/static/auth-only data is explicit |
 | **Navigation** | Top-level entry behavior, scan/deep-link context, outgoing actions, preserved return scope and direct-entry fallback. Selection opens the relevant task/content, not merely a related record unless that serves the approved job |
@@ -147,6 +150,34 @@ Write `### Per-Screen Specs` with `#### <Screen name> (<route>)` entries. Use fl
 | **State delta** | Domain empty/filter-empty, independently failing source, stale/conflict/permission/interruption states not covered by defaults; never present failed fetch as empty |
 | **Key user actions** | Buttons, form submission, gestures, read/selection behavior |
 | **Idempotency guards** | Navigation lock for primary navigation; submit lock and visible pending label for async writes; preserve input and remain on screen on failure |
+
+### Entry composition within existing specs
+
+For each main destination and selected preview screen, make **Layout delta** concrete before
+rendering: `First viewport: <proposed content order and focal evidence>; Below fold:
+<secondary content and how it is reached, or none>`. Mark model-suggested arrangement as
+provisional until visual approval; keep explicit user presentation requirements identified
+separately. This describes the initial usable screen area at the target device size, not the
+surrounding review canvas.
+
+- Name the actual approved context, facts/content, and next action or read outcome. "Clean",
+  "premium", "cards", or "use hierarchy" alone are not an entry composition.
+- Describe hierarchy with grouping, emphasis, typography, media purpose and action placement,
+  not just colors. For recognition media describe the visible subject's emphasis, not only its
+  container. A section label or inline context can be sufficient; no separate banner is required.
+- Keep first-entry scope in **Data/Navigation**, illustrative state in **Preview selection**, and
+  common chrome in **Shared Conventions**. Reuse those values; do not duplicate their authority.
+- Let meaningful content begin in the first viewport without shrinking text or touch targets.
+  Long forms, reading and larger text may scroll; do not force every action above the fold.
+- No mandatory hero, grid, dashboard, palette, card count, or minimum record count. A focused
+  reader can lead with retained reading context and prose; a review queue with scope and pending
+  rows. Neither needs promotional content to pass.
+
+These are additions to existing fields, not a new artifact or approval gate. Pre-design specs
+describe provisional visual intent, not a frozen composition. Apply the
+[behavior and presentation authority](../design-planning.md#entry-composition-and-reference-transfer):
+visual authors may improve arrangement within approved behavior and explicit brand constraints;
+foreground records the accepted composition at the existing design review.
 
 **Conditional fields** — omit when not relevant:
 

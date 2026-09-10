@@ -98,6 +98,10 @@ If no permitted question interface exists, stop with the pending approval; do no
 
 Brand selection is deferred to Step 6.75. Both screen phases use `skip_preview: true`; there is
 no plan-time browser open, style-picker early return, or requirement to render before Gate 4b.
+Gate 4b approves behavior, data/permissions and navigation, not model-inferred visual arrangement.
+Label suggested layout/media/emphasis as provisional until visual approval; explicit user brand
+and presentation constraints remain binding. Apply the
+[presentation authority boundary](${PLUGIN_ROOT}/shared/references/design-planning.md#entry-composition-and-reference-transfer).
 
 ## 3.3 — Direct screen-planner contract
 
@@ -130,6 +134,8 @@ Foreground reviews/embeds that graph into `plan_path` before dispatching specs.
 For `phase: specs`, read the locked `## Screens` in `plan_path`, not graph scratch; preserve
 graph, stable IDs, journeys, preview selections and conventions immutably. Update compact delta
 specs only in `plan_path` (never `_screens_section.md`), not repeated universal defaults.
+That lock applies to the spec worker's assigned phase; it does not promote provisional styling
+into fixed requirements for the later design author.
 Before generation, pass the approved normalized schema/evidence for semantic requirements;
 never require or invent generated services that cannot exist until Step 8. Resolve actual
 exports/signatures at Step 10.7 before skeletons/builders. On edits, supply verified existing

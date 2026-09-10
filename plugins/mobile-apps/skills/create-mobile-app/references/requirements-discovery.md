@@ -73,7 +73,8 @@ Question priority:
 1. Primary job/outcome or actor authority that changes product behavior.
 2. Data/system ownership needed to make approved operations real.
 3. Native feasibility or disconnected/offline requirement that changes the workflow.
-4. Brand/content input only when supplied or explicitly requested; no-brand design can proceed.
+4. Preserve supplied brand/content references here; defer the one-time provide-or-infer choice
+   to the design phase, not another intake questionnaire.
 
 Do not ask "how many screens," generic fidelity, or a feature checklist when the request already
 asks for a complete mobile app. Derive the smallest coherent screen set and a clickable intent

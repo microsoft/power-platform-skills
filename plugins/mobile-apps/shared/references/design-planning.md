@@ -6,7 +6,11 @@ Read when a planner or `/design-system` needs to resolve missing design decision
 
 Use the primary actor, task frequency, journey, content, decision risk, device posture, and environment. Industry is evidence about context, not an aesthetic router. Do not infer an inspection preset from “field,” a blue preset from “finance,” or an aviation preset from the app name. With sparse input, state modest assumptions and choose a useful hierarchy; do not ask the user to choose among three styles just to proceed.
 
-Respect supplied brand decisions. Without brand input, the model chooses the visual direction for the actual job. Existing named directions and reference brands remain optional explicit inputs. Tamagui's host baseline is an implementation resource, not the product's design brief.
+Respect supplied brand decisions. With explicit permission to infer, choose the visual direction
+for the actual job. Otherwise the design phase resolves the [one-time input choice](../../skills/design-system/references/input-modes.md#one-time-input-choice)
+before materialization; an inferred planning draft is not a user decision. Existing named
+directions and reference brands remain optional inputs. Tamagui's host baseline is an
+implementation resource, not the product's design brief.
 
 ## Resolve consequential choices
 
@@ -29,6 +33,41 @@ Choose content before containers; neither removing cards nor adding records auto
 Existing approved requirements bound the design; missing essential semantics return to foreground,
 not invented schema fields or operations for visual richness.
 
+## Entry composition and reference transfer
+
+Resolve the [entry composition](screen-planning/spec-contract.md#entry-composition-within-existing-specs)
+from selected screen Layout deltas; standalone designs record it under Components in the brand
+spec. "Clean/simple" means low cognitive load, not missing context or hierarchy.
+
+**Behavior and presentation authority:**
+
+- **Fixed:** approved data, operations, authorization, native/connector scope, routes/navigation
+  behavior, first-entry scope, and explicit user brand/presentation decisions. Changing these
+  requires the owning foreground approval; a visual reference cannot expand them.
+- **Provisional until visual approval:** model-suggested content arrangement, hero usage, media
+  size/crop, spacing, typography and emphasis. Record that status in existing Layout delta or
+  brand Components prose. Early structural/spec approval does not freeze these suggestions.
+  The design/intent author may revise them within fixed constraints without reopening business
+  approvals. Preserve required evidence and workflow sequence; a visual rearrangement must not
+  hide a prerequisite or change an operation.
+- **After visual approval:** the accepted presentation is the implementation reference, not the
+  earliest planner suggestion. Foreground reconciles affected specs and shared conventions with
+  the accepted design at the existing design review. Later visual changes need targeted review.
+  Children still do not edit the plan or approve themselves; foreground preserves receipt/hash
+  integrity when writing the accepted delta.
+
+For example, enlarging a recognition image within its container or removing an unrequested
+introductory banner is presentation work; adding ratings, routing facts or fulfilment promises
+is not. If a fixed requirement needs revision, return the delta to foreground rather than
+silently changing it. Missing layout detail alone is not missing product context: infer a
+presentation proposal from the approved job and disclose it for visual review.
+
+For a supplied screenshot or HTML reference, record **Adopt / Adapt / Exclude** in the existing
+brand provenance: transferable hierarchy/media/density, native or accessibility adjustments,
+and unsupported data/actions. A visual reference does not authorize new business behavior.
+Inspect it without executing imported scripts. If it cannot be viewed, disclose that limitation.
+Without a supplied reference, infer presentation from the approved job; do not require one.
+
 ## Constraints and active references
 
 - All app styling maps to supported Tamagui/native properties and tokens, not web-only CSS. HTML previews translate those decisions to CSS.
@@ -37,6 +76,8 @@ not invented schema fields or operations for visual richness.
 - Palette work only: [color palette architecture](./color-palette-architecture.md). Typography/tone work only: [typography and tone](./typography-and-tone.md).
 - Font assets must exist or have an approved loading plan using supported capabilities. Do not assume optional packages are installed or propose an unapproved native dependency.
 - Broader experience guidance, only when needed: [mobile design philosophy](./mobile-design-philosophy.md).
+- Imagery: [media sources](media-sources.md) permits verified licensed public HTTPS images as
+  well as local assets; distinguish URL display from Dataverse Image/File byte storage.
 
 ## Persist one compact design decision record
 
@@ -47,6 +88,7 @@ Write the existing plan's `## Design` section. Avoid a second design bundle or r
 - Context and rationale: <actor, primary job, operating conditions; key assumptions>
 - Direction: <context-led description or explicitly requested named direction>
 - Hierarchy/layout: <entry focus, grouping, container strategy, disclosure, important composition decisions>
+- Entry composition: <reference selected screen Layout deltas or standalone brand Components; do not duplicate>
 - Typography: <roles, available families/weights, loading/fallback; scanning/reading rationale>
 - Palette/theme: <approved brand or inferred choices; light/dark policy>
 - Density/targets: <contextual spacing and usable target dimensions>

@@ -46,13 +46,13 @@ Keep preview navigation controls distinct from app navigation. Use valid stable 
 - Define every CSS variable used, including `--surface0` and `--surface1`, in both advertised themes. Never substitute a generic palette for imported brand values.
 - Use available local font assets with the correct weights when possible. If unavailable in browser, label the fallback; do not silently fetch Google Fonts or claim an uninstalled native font is rendered.
 
-Do not execute arbitrary imported config, application services, auth code, or network requests to obtain preview data. Use static reading and installed documented token definitions; unresolved dynamic values are an explicit approximation.
+Do not execute arbitrary imported config, application services, auth code, or business-data network requests to obtain preview data. Verified image-media requests follow [media sources](../../shared/references/media-sources.md); they are not live data discovery. Use static reading and installed documented token definitions; unresolved dynamic values are an explicit approximation.
 
 ## 4 — Author screens and mock journey
 
 **Telemetry checkpoint: `render_screen_preview_frames`**
 
-**Intent:** choose composition from the approved purpose and per-screen decisions. Hierarchy, layout, media, and density may differ where the tasks differ. Token constraints do not mandate identical cards or a fixed template.
+**Intent:** choose composition from the approved purpose and per-screen decisions. Layout delta (or standalone brand Components) supplies provisional visual intent until visual approval, not a frozen layout. Follow the [rendered experience review](references/intent-authoring.md#rendered-experience-review) before handoff. Hierarchy, layout, media, and density may differ where the tasks differ. Token constraints do not mandate identical cards or a fixed template.
 
 **Implementation:** read the full selected screen TSX and its referenced local UI components/hooks as needed to understand rendered branches, navigation targets, action availability, and state feedback. Convert the actual JSX/Tamagui tree, dimensions, styles, and typography to HTML. Preserve source shortcomings and report them; the preview does not fix source.
 
@@ -62,19 +62,22 @@ For either mode:
 2. Model key actions with small in-memory JS: selection, filter/search, navigation/back, form edit/validation, confirmation, and a visible completion state as appropriate. Include relevant loading/empty/error/retry states through an accessible scenario control where needed. Reset restores the initial scenario.
 3. Implementation mock actions must correspond to handlers/states present in source. If absent, show and report the missing implementation rather than inventing a working success flow.
 4. Show native-only placeholders for camera/scanner/location, PDF viewer/report, pen/signature capture, sharing/printing, file upload, auth, and offline/device APIs. Label `Native-only — not executed in browser`. Illustrative captured/ready states may be selected as mock scenarios, never falsely triggered as native success.
-5. Preserve meaningful media proportions and crop using approved local illustrative assets, or an honest labeled placeholder. Use consistent icon approximations with accessible names; never replace critical action labels with unexplained emoji.
+5. Preserve meaningful media proportions and crop using local illustrative assets or verified, appropriately licensed public HTTPS image URLs, including CDNs, under the media-source policy. Provide accessible alternatives and loading/error fallbacks; local downloads are not mandatory. Use consistent icon approximations with accessible names; never replace critical action labels with unexplained emoji.
 6. Use semantic buttons/links/inputs, associated labels, keyboard operation, visible focus, text plus color for status, and contrast-tested pairs. Allow scrolling/reflow, text zoom, and reduced motion. Avoid double safe-area padding.
 
 **Device geometry:** when given a device reference, match its width and height (measure the device,
-not the surrounding screenshot). If dimensions are unavailable, state the estimate. Otherwise use
-390 x 844 CSS px as the phone frame default, not a production layout constraint; honor explicit
+not the surrounding screenshot) and identify the usable app area inside it. If dimensions are
+unavailable, state the estimate. Otherwise use 390 x 844 CSS px as the usable app viewport default,
+not a production layout constraint; place decorative bezels outside that area. Honor explicit
 phone/tablet targets. Keep the same geometry across screens and revisions. Measure usable content
-separately from decorative bezels. Do not stretch frames with grid columns or shorten them using
+separately from decorative bezels, system/app chrome and the scrolling viewport. Compare references
+at the same usable width; disclose reference estimates rather than silently widening the app.
+Do not stretch frames with grid columns or shorten them using
 browser `vh` to fit above the fold. Scroll content inside the device; keep app chrome consistent.
 If the review canvas cannot fit the devices, wrap or use a switcher. Test narrow reflow separately
 at 320px without claiming it is the original device size. Report measured frame/content dimensions.
 
-No live service calls, storage writes outside the preview file, credentials, CDN scripts, analytics, remote font dependencies, or browser handlers pretending to save/upload to the tenant. Local simulation is not an app test.
+No live service calls, storage writes outside the preview file, credentials, CDN scripts, analytics, remote font dependencies, or browser handlers pretending to save/upload to the tenant. Declared verified HTTPS image requests are allowed; disclose their network dependency. Local simulation is not an app test.
 
 ## 5 — Assemble and check
 
@@ -85,6 +88,8 @@ No live service calls, storage writes outside the preview file, credentials, CDN
 **Hard checks before handoff:**
 
 - Safety: external content escaped for its output context; no executable imported content, secrets, unexpected network calls, or production mutations.
+  Compare observed requests with declared image sources/validated redirects; remote image media
+  is allowed, remote executable scripts are not. Verify image errors preserve layout and usable data.
 - Links: unique screen/control IDs; every internal navigation target exists; external links are safe and intentional; no broken required journey destinations.
 - Required actions: primary journey can reach its completion and relevant recovery/reset; implementation gaps are visible, not fabricated.
 - Domain behavior: the illustrative transition follows the approved actor/preconditions and
@@ -94,6 +99,12 @@ No live service calls, storage writes outside the preview file, credentials, CDN
   useful return path. Include scanning only when approved. Do not auto-switch explicit filters.
 - Accessibility: controls have names/labels, keyboard/focus behavior, usable targets, readable contrast, non-color status cues, and no clipped essential content.
 - Token coherence: all CSS variable references resolve in every offered theme; compare representative surface/text/accent and typography values against actual resolved inputs.
+- Experience evidence (intent): compare rendered context, hierarchy, decision/read evidence,
+  media proportions, action placement, usable first viewport and initial-state consistency
+  against approved task requirements and the current visual-intent proposal, not a frozen
+  early layout suggestion.
+  Use the linked review's bounded repair and unavailable-tool rules; do not certify this from
+  HTML structure or successful handlers alone.
 
 Composition variety, resemblance to a named style, accent ratios, card counts, and screenshot similarity are **advisory**, not blocking tests. Check whether choices serve the task; do not enforce decorative sameness or diversity.
 
@@ -102,9 +113,13 @@ Composition variety, resemblance to a named style, accent ratios, card counts, a
 **Telemetry checkpoint: `open_screen_preview`**
 
 Honor `visual_companion: no` and legacy `skip` even on standalone invocation: print the file link without auto-opening. Otherwise use available browser tools first: reuse an existing page, open the preview, inspect the accessibility snapshot, exercise every scope/filter binding, top-level entry/filter-empty recovery, exact-record lookup and primary actions/back/reset, toggle resolved themes, compare the wide three-screen canvas, and check 320px reflow. Screenshots supplement these checks; they do not replace interaction.
+For intent, inspect an actual screenshot of every selected screen's initial state, its internal
+scrolling and bottom actions, at the target device size, at 320px reflow, and in every offered
+theme. Normal click/keyboard actions must work: forced clicks or injected handler calls are not
+evidence of reachability. Respect opt-out; unavailable screenshots are unverified, not passed.
 
 If browser tools are unavailable, use the OS opener (`open`, `xdg-open`, or PowerShell `Start-Process`) with safely quoted paths, or print the link. Do not install a browser/testing framework merely for preview. State that browser interaction was not verified when only file/static checks were possible.
 
-Return output path, mode, selected screens/scenario, checks actually run, and known gaps. Say “source-derived implementation approximation” after build, never “native app verified.”
+Return output path, mode, selected screens/scenario, checks actually run, and known gaps. For intent include the compact per-screen review evidence and any repairs; missing visual evidence returns `DONE_WITH_CONCERNS`, not a claimed visual pass. For implementation report source shortcomings rather than improving the preview to hide them. Say “source-derived implementation approximation” after build, never “native app verified.”
 
 Source is read-only: do not modify TSX, services, configs, plan, or memory bank from this skill. The caller persists selection/approval. Re-running replaces only that mode's HTML; generating intent never overwrites implementation and vice versa.

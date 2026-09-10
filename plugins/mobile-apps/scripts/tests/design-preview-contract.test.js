@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -14,6 +15,7 @@ const preview = read('skills/preview-screens/SKILL.md');
 const mapping = read('shared/references/tamagui-html-mapping.md');
 const integration = read('skills/design-system/references/tamagui-integration.md');
 const intent = read('skills/preview-screens/references/intent-authoring.md');
+const media = read('shared/references/media-sources.md');
 
 function markdownFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
@@ -31,7 +33,8 @@ test('design entry stays bounded and routes optional work instead of preloading 
   assert.ok(design.split(/\r?\n/).length <= 160, 'design entry exceeds 160 lines');
   assert.ok(Buffer.byteLength(design) <= 10_000, 'design entry exceeds 10 KB');
   assert.match(design, /Read only the active step and input reference/);
-  assert.match(design, /No brand input \| No extraction or preset reference/);
+  assert.match(design, /one-time input choice/);
+  assert.match(design, /Read only matching extractors and security policies/);
   assert.match(design, /Optional operations — read only on request/);
   assert.match(design, /brand\/design-system\.md/);
   assert.match(design, /brand\/tokens\.ts/);
@@ -72,11 +75,87 @@ test('design handoff keeps decisions and approval provenance in the foreground m
   assert.doesNotMatch(design, /INDUSTRY_CONFIRM_REQUESTED|DESIGN_VIBE_REQUESTED/);
 });
 
+test('brand intake distinguishes unanswered input from permission to infer before design generation', () => {
+  const inputs = read('skills/design-system/references/input-modes.md');
+  const phase = read('skills/create-mobile-app/references/phase-04-design.md');
+  const rules = [
+    [/Supplied design material or explicit app-brand\/named-direction request/, /without the generic input question/],
+    [/Explicit "Let AI choose", "you decide", or decline/, /without another question/],
+    [/Existing accepted design, including legacy artifacts/, /Preserve it on resume\/edit/],
+    [/No input decision, or only model-inferred draft values/, /before materialization/],
+    [/Cancel, no response, or unavailable question tool/, /pending and stop before design generation/],
+  ];
+  const rows = inputs.split('\n').filter(line => line.startsWith('| '));
+  for (const [evidence, behavior] of rules) {
+    const row = rows.find(line => evidence.test(line));
+    assert.ok(row, `missing input decision case: ${evidence}`);
+    assert.match(row, behavior);
+  }
+  assert.match(design, /Before generating tokens or preview HTML/);
+  assert.match(design, /a draft alone does not answer Step 2/);
+  assert.match(inputs, /A child returns `NEEDS_CONTEXT: brand input choice/);
+  assert.match(inputs, /--no-discovery` does not answer the brand question/);
+  assert.match(inputs, /--no-design` skips this entire phase/);
+  assert.match(inputs, /choose references without supplying any[\s\S]*keep that choice pending/);
+  assert.match(phase, /in foreground before design generation/);
+  assert.ok(phase.indexOf('one-time brand input choice') < phase.indexOf('Then invoke `/design-system'));
+  assert.match(phase, /No second picker inside the child/);
+  assert.doesNotMatch(design, /No-brand creation needs no question|No brand input means infer/);
+});
+
+test('brand references accept existing materials and combine them by intent, not format', () => {
+  const inputs = read('skills/design-system/references/input-modes.md');
+  const inputRows = inputs.split('\n').filter(line => line.startsWith('| '))
+    .map(line => line.split('|')[1].replace(/`/g, '').trim());
+  for (const input of [
+    'Pasted design notes, Markdown', '--brand-doc <path>', '--logo <path>',
+    'Screenshot / reference image / attached logo', '--from-url <url>',
+    '--stylesheet <path>', 'Token file (`.json` / `.ts`)', '--design-spec <path>',
+    '--from-figma <file-key>',
+  ]) assert.ok(inputRows.some(row => row.startsWith(input.replace(/`/g, ''))), `missing input form: ${input}`);
+  assert.match(inputs, /flags are shortcuts, not prerequisites/);
+  assert.match(inputs, /Accept combinations without requiring reformatting/);
+  assert.match(inputs, /requirements outrank inspiration and inference/);
+  assert.match(inputs, /source authority and stated intent, not file format/);
+  assert.match(inputs, /inaccessible Figma reference[\s\S]*request an accessible export/);
+  assert.match(inputs, /Never alter the original attachment/);
+  assert.match(inputs, /Strip EXIF only from an approved output copy, never the original/);
+  assert.match(inputs, /Reject traversal or symlinks escaping the approved input scope/);
+  assert.match(inputs, /No scripts or live site execution/);
+});
+
+test('named brands require contextual interpretation and source-backed proposals', () => {
+  const inputs = read('skills/design-system/references/input-modes.md');
+  assert.match(inputs, /A brand appearing only in products, suppliers or examples is not automatically the app's identity/);
+  assert.match(inputs, /If ambiguous, ask one focused clarification before adopting it/);
+  assert.match(inputs, /official public brand\/site references/);
+  assert.match(inputs, /Never fabricate a URL, official hex value or font from a name/);
+  assert.match(inputs, /Label sampled\/inferred values/);
+  assert.match(inputs, /without transferring its branding,\s+product claims, reviews, integrations or actions/);
+  assert.match(inputs, /No second palette-only approval or brand-name lookup table/);
+});
+
+test('brand choice survives resume and remains separate from visual approval and native handoff', () => {
+  const inputs = read('skills/design-system/references/input-modes.md');
+  const phase = read('skills/create-mobile-app/references/phase-04-design.md');
+  const schema = read('skills/design-system/references/design-system-schema.md');
+  assert.match(read('shared/memory-bank.md'), /\| Brand input \|.*pending until answered/);
+  assert.match(inputs, /Persist the actual choice promptly/);
+  assert.match(inputs, /`Pending decision` for missing input; do not mark design approval/);
+  assert.match(inputs, /Never create a bank or separate intake artifact solely for this/);
+  assert.match(inputs, /On resume, reuse that evidence/);
+  assert.match(schema, /Brand input: supplied references or explicit AI-inference choice/);
+  assert.match(schema, /input choice is not design approval/);
+  assert.match(phase, /brand-input choice and safe source references/);
+  assert.match(inputs, /preview\/design review for confirmation, then the same tokens\/specs into native implementation/);
+  assert.match(phase, /do not approve one experience and then independently redesign it during native generation/);
+});
+
 test('owned design and preview references remain reachable inside the installed plugin', () => {
   const files = [
     ...markdownFiles(path.join(pluginRoot, 'skills/design-system')),
     ...markdownFiles(path.join(pluginRoot, 'skills/preview-screens')),
-    ...['design-planning', 'tamagui-html-mapping', 'color-palette-architecture', 'typography-and-tone']
+    ...['design-planning', 'tamagui-html-mapping', 'color-palette-architecture', 'typography-and-tone', 'media-sources']
       .map(name => path.join(pluginRoot, 'shared/references', `${name}.md`)),
   ];
   let checked = 0;
@@ -122,7 +201,7 @@ test('intent authoring uses compact product context and three main screens witho
   assert.match(intent, /not HTML-to-TSX conversion/);
   assert.match(intent, /visual thesis/);
   assert.match(intent, /Container hierarchy and phone density/);
-  assert.match(preview, /390 x 844 CSS px as the phone frame default/);
+  assert.match(preview, /390 x 844 CSS px as the usable app viewport default/);
   assert.match(intent, /Do not widen the phone/);
   assert.match(intent, /avoid redundant nesting/);
   assert.match(intent, /image grids for\s+visual discovery/);
@@ -154,6 +233,8 @@ test('device references set both dimensions without changing the app composition
   assert.match(preview, /Do not stretch frames with grid columns or shorten them using\s+browser `vh`/);
   assert.match(preview, /Scroll content inside the device/);
   assert.match(preview, /Report measured frame\/content dimensions/);
+  assert.match(preview, /place decorative bezels outside that area/);
+  assert.match(preview, /Compare references\s+at the same usable width/);
   assert.match(intent, /Inspect every selected screen/);
   assert.match(intent, /not only an empty-state screenshot/);
   assert.match(intent, /without resizing their device geometry/);
@@ -174,6 +255,182 @@ test('task substance comes from product context without hardcoded visual or data
   assert.match(read('agents/references/screen-builder/design-api.md'), /do not invent production data to reproduce a richer mock/);
 });
 
+test('design references transfer composition without importing business behavior', () => {
+  const planning = read('shared/references/design-planning.md');
+  assert.match(design, /design-planning\.md#entry-composition-and-reference-transfer/);
+  assert.match(planning, /Adopt \/ Adapt \/ Exclude/);
+  assert.match(planning, /visual reference does not authorize new business behavior/);
+  assert.match(planning, /without executing imported scripts/);
+  assert.match(planning, /Layout deltas; standalone designs record it under Components/);
+  assert.match(planning, /"Clean\/simple" means low cognitive load/);
+  assert.match(planning, /return the delta to foreground rather than\s+silently changing it/);
+});
+
+test('pre-approval layout proposals do not override fixed behavior or explicit brand decisions', () => {
+  const planning = read('shared/references/design-planning.md');
+  const phase = read('skills/create-mobile-app/references/phase-04-design.md');
+  const receipt = read('skills/create-mobile-app/references/approval-receipt.md');
+  assert.match(planning, /\*\*Fixed:\*\* approved data, operations, authorization/);
+  assert.match(planning, /explicit user brand\/presentation decisions/);
+  assert.match(planning, /\*\*Provisional until visual approval:\*\*/);
+  assert.match(planning, /Early structural\/spec approval does not freeze these suggestions/);
+  assert.match(planning, /revise them within fixed constraints without reopening business\s+approvals/);
+  assert.match(planning, /accepted presentation is the implementation reference, not the\s+earliest planner suggestion/);
+  assert.match(planning, /Children still do not edit the plan or approve themselves/);
+  assert.match(intent, /Missing content order alone does not require `NEEDS_CONTEXT`/);
+  assert.match(intent, /Conflicts with fixed requirements do require foreground resolution/);
+  assert.doesNotMatch(intent, /Missing content order or a\s+conflict with locked input returns/);
+  assert.match(design, /Refine provisional presentation/);
+  assert.match(phase, /designer may improve them within approved behavior and explicit brand constraints/);
+  assert.match(phase, /existing design review may explicitly accept that presentation\/spec delta/);
+  assert.match(receipt, /Leave the authoritative plan and receipt unchanged while\s+authoring those proposals/);
+  assert.match(receipt, /invalidate its old plan-byte binding/);
+  assert.match(receipt, /Preserve all\s+unaffected approval timestamps and contract\/service declarations/);
+});
+
+test('intent state fidelity distinguishes illustrative selection from normal first entry', () => {
+  assert.match(intent, /initial state to \*\*Preview selection\*\*/);
+  assert.match(intent, /scope\/filter,\s+selected record, data state and outcome stage/);
+  assert.match(intent, /Reset restores those exact values, not merely the route/);
+  assert.match(intent, /separately exercise the app's first-entry\s+scope from Data\/Navigation/);
+  assert.match(intent, /Do not switch to All or add records/);
+  assert.match(intent, /every offered filter and search with an expected match and no-match result/);
+  assert.match(intent, /loaded-page count must not\s+be presented as a whole-dataset count/);
+});
+
+test('image media permits verified HTTPS sources without granting executable or data access', () => {
+  assert.match(media, /Remote image media is not remote executable\s+code/);
+  for (const use of ['HTML intent preview', 'Source-derived implementation preview',
+    'React Native image display', 'Sample data in an approved image-URL/Text column',
+    'Dataverse Image/File column']) {
+    assert.ok(media.includes(`| ${use} |`), `missing image-source use: ${use}`);
+  }
+  assert.match(preview, /local illustrative assets or verified, appropriately licensed public HTTPS image URLs/);
+  assert.match(intent, /local assets or verified licensed HTTPS imagery/);
+  assert.match(mapping, /local or verified public HTTPS imagery/);
+  assert.match(media, /do not\s+authorize CDN JavaScript, remote executable HTML, analytics\/tracking, remote fonts, live tenant\s+calls, business API calls or production writes/);
+  assert.match(preview, /Compare observed requests with declared image sources\/validated redirects/);
+  assert.doesNotMatch(intent, /no external resources\/network calls/);
+  assert.match(media, /Source-derived previews must not fabricate missing source handlers or media fallbacks/);
+});
+
+test('remote imagery requires provenance, bounded verification and stable failure states', () => {
+  assert.match(media, /license\/permission covering\s+the intended use, attribution and remote embedding/);
+  assert.match(media, /working URL does not prove licensing/);
+  assert.match(media, /validate public destinations and redirects/);
+  assert.match(media, /time\/size limits, and verify an image response and successful decode/);
+  assert.match(media, /not merely a URL suffix\s+or successful HEAD request/);
+  assert.match(media, /No credentials, authorization headers, signed access tokens, personal\/tenant data or tracking/);
+  assert.match(media, /referrerpolicy="no-referrer"/);
+  assert.match(media, /do not inline fetched SVG\/HTML or execute imported content/);
+  assert.match(media, /one failed image must not erase usable records or block an unrelated action/);
+  assert.match(media, /Local downloading\/caching is optional for online display/);
+  assert.match(media, /offline support,\s+self-contained delivery, reproducibility or an explicit user requirement/);
+  assert.match(media, /Honor network opt-out/);
+  assert.match(media, /Never claim that an\s+unchecked source was verified/);
+  assert.match(read('skills/design-system/references/design-system-schema.md'),
+    /Remote media: URL, license\/permission evidence, attribution and verification result/);
+});
+
+test('native and sample-media paths distinguish URL fields from binary storage', () => {
+  const seeding = read('skills/add-sample-data/SKILL.md');
+  const reads = read('agents/references/screen-builder/data-reads.md');
+  const catalogue = read('shared/references/screen-templates/catalogue-and-archetypes.md');
+  const shared = read('shared/shared-instructions.md');
+  assert.match(shared, /Rendering public HTTPS images with an image component is allowed/);
+  assert.match(reads, /not a connector-first violation/);
+  assert.match(catalogue, /Local assets and verified licensed public HTTPS images, including CDNs, are both supported/);
+  assert.match(catalogue, /Always use `expo-image`.*remote images/);
+  assert.match(media, /Store image\/file bytes, not a URL string/);
+  assert.match(media, /Do not change approved schema just to accommodate an illustrative preview image/);
+  assert.match(seeding, /image-URL\/Text field, store the verified URL directly; no download\/upload is\s+required/);
+  assert.match(seeding, /remote-sourced Image\/File media, download and validate bytes/);
+  assert.match(seeding, /Never set a File\/Image column to a CDN URL\. Store a URL only in an approved URL\/Text column/);
+  assert.match(reads, /Dataverse Image\/File columns hold bytes, never that URL/);
+});
+
+test('connector guard allows remote image component sources but still blocks direct service bypasses', () => {
+  // Supply a Write payload for a hypothetical app outside the plugin; no file or network is used.
+  const filePath = path.join(pluginRoot, '..', 'media-contract-fixture', 'app', 'image.tsx');
+  const check = content => spawnSync(process.execPath, [
+    path.join(pluginRoot, 'hooks/validate-connector-first.js'),
+  ], {
+    cwd: pluginRoot,
+    env: { ...process.env, PLUGIN_ROOT: pluginRoot, CLAUDE_PLUGIN_ROOT: pluginRoot },
+    encoding: 'utf8',
+    input: JSON.stringify({
+      tool_name: 'Write',
+      tool_input: { file_path: filePath, content },
+    }),
+  });
+  const image = check(`import { Image } from 'expo-image';
+    export const Cover = () => <Image source={{ uri: 'https://images.example.com/cover.webp' }} />;`);
+  assert.equal(image.status, 0, image.stderr);
+  for (const source of [
+    `fetch("https://graph.microsoft.com/v1.0/me")`,
+    `fetch("https://contoso.crm.dynamics.com/api/data/v9.2/accounts")`,
+    `import axios from 'axios';`,
+  ]) {
+    const forbidden = check(source);
+    assert.equal(forbidden.status, 2, forbidden.stderr);
+    assert.match(forbidden.stderr, /connector-first rule violated/);
+  }
+});
+
+test('rendered experience evidence is required without making decoration a quality gate', () => {
+  const review = intent.split('## Rendered experience review\n')[1]
+    ?.split('\n## Approval and implementation handoff')[0];
+  assert.ok(review);
+  for (const check of ['Context', 'Hierarchy', 'Decision/read evidence',
+    'Media proportions (when relevant)', 'Usable first viewport', 'Action placement', 'State fidelity']) {
+    assert.ok(review.includes(`| ${check} |`), `missing observed experience check: ${check}`);
+  }
+  assert.match(preview, /Experience evidence \(intent\)/);
+  assert.match(review, /every selected screen, not just Home/);
+  assert.match(review, /actual screenshots\s+alongside normal browser interaction/);
+  assert.match(review, /320px\s+reflow and every offered theme/);
+  assert.match(review, /No fixed hero, image, palette, card\s+count, density or screenshot-similarity target/);
+  assert.match(review, /Genuine empty\/error scenarios pass/);
+  assert.match(review, /Screen\/state \| viewport\/theme \| observed/);
+  assert.match(review, /pass\/fail\/unverified \+ reason \| repair\/recheck/);
+  assert.match(review, /not "looks polished"/);
+  assert.match(review, /Do not create a score file/);
+  assert.match(preview, /forced clicks or injected handler calls are not\s+evidence of reachability/);
+});
+
+test('rendered review distinguishes subject, container, bezel and chrome without fixed ratios', () => {
+  const review = intent.split('## Rendered experience review\n')[1];
+  assert.match(review, /Measure the \*\*visible subject\*\*, media container, usable app width\/height and scrolling viewport/);
+  assert.match(review, /SVG viewBox includes transparent\/internal whitespace/);
+  assert.match(review, /CSS\s+dimensions do not establish the subject's prominence/);
+  assert.match(review, /explicitly labeled estimate if the visible bounds cannot be measured precisely/);
+  assert.match(review, /compare designs at the same usable\s+width/);
+  assert.match(review, /height relative to the scrolling viewport\s+and which task content it displaces/);
+  assert.match(review, /shorten, remove or retain it based on\s+the job, not a universal percentage/);
+  assert.match(review, /More records,\s+larger containers or an added hero are not evidence of better design/);
+  assert.match(review, /do not invent metadata to make it appear richer/);
+  assert.match(review, /subject\/container proportions when media matters/);
+  const builder = read('agents/references/screen-builder/design-api.md');
+  assert.match(builder, /visible\s+media-subject scale/);
+  assert.match(builder, /not a superseded provisional planner suggestion/);
+});
+
+test('experience repairs are bounded and cannot fabricate validation or approval', () => {
+  assert.match(intent, /one focused repair pass/);
+  assert.match(intent, /rerun the affected\s+visual and interaction checks/);
+  assert.match(intent, /known failure remaining after the\s+repair returns `BLOCKED: intent experience review failed`/);
+  assert.match(intent, /change returns `NEEDS_CONTEXT` for foreground approval/);
+  assert.match(intent, /opening was declined.*unverified and return `DONE_WITH_CONCERNS`/);
+  assert.match(intent, /No repair is required after\s+a clean review/);
+  assert.match(intent, /cannot guarantee aesthetic preference or native runtime behavior/);
+  assert.match(preview, /For implementation report source shortcomings rather than improving the preview/);
+  assert.match(design, /Passing markup\/interaction tests alone is not visual approval/);
+  const handoff = read('skills/create-mobile-app/references/phase-04-design.md');
+  assert.match(handoff, /per-screen rendered experience evidence/);
+  assert.match(handoff, /known unresolved review\s+failure blocks progression/);
+  assert.match(handoff, /accepted first-viewport content order and below-fold access in Layout delta/);
+});
+
 test('journey contract requires coherent interactions without an archetype quota or invented native success', () => {
   assert.match(preview, /representative preview screen IDs and selection rationale/);
   assert.match(preview, /one coherent, clearly labeled illustrative scenario/);
@@ -192,7 +449,7 @@ test('preview guidance stays product-neutral instead of turning one pilot into u
   const contract = read('shared/references/screen-planning/spec-contract.md');
   const rules = contract.split('#### Domain rules and first-use review\n')[1]?.split('\n### Preview selection')[0];
   assert.ok(rules, 'domain review must stay in the existing screen contract');
-  assert.doesNotMatch(intent, /\bgym\b|\bequipment\b|\bwarrant(?:y|ies)\b|\brepair\b/i);
+  assert.doesNotMatch(intent, /\bgym\b|\bequipment\b|\bwarrant(?:y|ies)\b|\brepair (?:shop|order|ticket)s?\b/i);
   assert.doesNotMatch(rules, /\bgym\b|\bequipment\b|\bwork order\b|\basset availability\b/i);
   assert.match(rules, /Neither automatically couple nor artificially separate transitions/);
   assert.match(rules, /reader, resume point, workspace/);
