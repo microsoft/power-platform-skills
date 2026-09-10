@@ -1242,12 +1242,23 @@ wrapping; shorten labels or use icons when the full labels cannot fit.
 
 ---
 
-## Check 33 — `QACHK-ACTION-CONTRACT` (required action is missing, unreachable, or not wired)
+## Check 33 — `QACHK-ACTION-CONTRACT` (required action or record field is missing)
 
 **Problem:** A screen can display the expected entity while omitting or failing to wire a
-required action.
+required action. It can also render a sparse card or row that omits requested record
+fields even though its source and actions are valid.
 
-**Detect:** For every row in the screen brief's `## Required Actions` table:
+**Detect:** First, for every row in the screen brief's `## Required Record Fields` table:
+
+1. Find the named control inside the declared card, row, or detail hierarchy.
+2. Confirm its formula references the required source field on the current record. For a
+   combined control, confirm the formula references every field assigned to it.
+3. Confirm it is visible in the normal state, non-zero-sized, readable, inside the record
+   surface, and not clipped or displaced at desktop and phone widths.
+4. Reject a time-only, identity-only, icon-only, tooltip-only, accessible-label-only, or
+   action-only surface when the brief requires additional visible fields.
+
+Then, for every row in the screen brief's `## Required Actions` table:
 
 1. Find the named entry point and action control.
 2. Confirm it is visible, non-zero-sized, enabled, outside read-only ancestors, and
@@ -1274,9 +1285,10 @@ required action.
     named source and stable ID -> postcondition -> observer -> visible evidence. Confirm
     `Visible` and `DisplayMode` permit the Given state and every name in the trace exists.
 
-**Fix:** Surface the full canonical identity text and every planned entry control, and
-implement each required event behavior. Stack paired decisions or move both into the same
-immediately reachable detail rather than dropping one.
+**Fix:** Restore every required field binding and planned entry control, then implement
+each required event behavior. Keep field controls inside the record surface with readable
+layout bounds. Stack paired decisions or move both into the same immediately reachable
+detail rather than dropping one.
 
 **Exception:** None for a Required Actions row. If the brief cannot be implemented with
 the discovered controls or data source, return `Status: Blocked` rather than shipping a

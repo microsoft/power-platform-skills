@@ -157,7 +157,13 @@ Before writing plans:
 10. Classify the approved requirements with the capability inventory in
     `${PLUGIN_ROOT}/references/BehaviorGuide.md`. Use it to find missing behaviors, not to invent
     unrequested features.
-11. Build one Action Contract row for each requested or approved action. Do not infer
+11. Write `## Required Record Fields` when the app has a repeated record card, row, or
+    immediately reachable detail. Add one stable field key for the canonical identity and
+    every field the requirements say users must see, including named title, person, time
+    range, description, status, and similar values. Name the owner screen, record surface,
+    source field, and presentation requirement. Do not accept a time-only or identity-only
+    surface when additional fields are requested.
+12. Build one Action Contract row for each requested or approved action. Do not infer
     universal CRUD for supporting entities, but treat role-scoped management of primary
     records as requiring reachable list/detail, correction/update, and remove/cancel
     flows. A named role that must "manage all" primary records therefore requires separate
@@ -167,11 +173,11 @@ Before writing plans:
     When review has approved and rejected outcomes, require both Approve and Reject/Decline
     contracts on the same eligible record surface. A lone decision is an incomplete plan;
     phone density may change their arrangement but may not remove either contract.
-12. For every Action Contract, name its eligible precondition, source of truth, immutable
+13. For every Action Contract, name its eligible precondition, source of truth, immutable
     record identity, exact event, source transition, postcondition, observer formula, and
     visible evidence. Verify the observer reads the same source and field the event writes.
     A control label and an `OnSelect` formula are not a complete contract.
-13. For every mutation, name the target source, exact data operation, refresh or collection
+14. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
     stable ID, or deletion snapshot. Record the mutation's **write set** and **proof set** in
     its Action Contract. The write set lists every field or status the handler changes. The
@@ -181,10 +187,10 @@ Before writing plans:
     state, and one labeled binding per proof-set field. The changed list, detail, dashboard,
     or metric must also read the updated source, but navigation, a notification, or a record
     somewhere in a longer list cannot replace the receipt.
-14. Verify every Action Contract has a reachable entry point and owner screen. Include
+15. Verify every Action Contract has a reachable entry point and owner screen. Include
     supporting setup actions when they are necessary to exercise an explicitly requested
     lifecycle, comparison, relationship, or ranking with local/mock data.
-15. For create and edit contracts, specify every required input, requiredness, finite-choice
+16. For create and edit contracts, specify every required input, requiredness, finite-choice
     source, concrete option values, default/placeholder, stable record ID, and post-save
     destination. For short static choices, prefer visible radio or button choices, then a
     dropdown that commits by click or tap; do not plan a searchable combobox unless the set
@@ -193,13 +199,13 @@ Before writing plans:
     Edit entry point, selected-record state, prepopulation formulas, stable-ID update, cancel
     behavior, mutation write set, and receipt proof set shown after save. Reject the contract
     if any submitted visible field appears in the write set but not the proof set.
-16. Write a `## Functional Test Matrix` with at least one deterministic Given/When/Then
+17. Write a `## Functional Test Matrix` with at least one deterministic Given/When/Then
     success scenario per Action Contract and one scenario for each required boundary or
     negative path. Use concrete seeded IDs and values for local/mock data. Each `Then`
     names the source postcondition and the exact observer/evidence surface that proves it.
     In EDIT mode, add regression scenarios for existing behaviors whose source, fields,
     controls, or observer formulas are touched.
-17. For every selector or filter, couple the concrete option source, readable option
+18. For every selector or filter, couple the concrete option source, readable option
     formula, pointer-committed selected value, consumer predicate, active-selection
     indicator, and clear behavior. Apply the short-choice rule to filters as well as form
     inputs. Seed at least two matching records and one non-matching record for every
@@ -351,7 +357,7 @@ Follow `${PLUGIN_ROOT}/references/PlanTemplates.md`.
 Write only orchestration information:
 
 - Mode and requirements
-- Requirement coverage and complete Action Contracts
+- Requirement coverage, Required Record Fields, and complete Action Contracts
 - Functional Test Matrix
 - Working directory
 - Compact discovery summary
@@ -403,6 +409,8 @@ Each brief contains only what that builder needs:
 - Every Action Contract and Functional Test Matrix scenario owned or exercised by the
   screen, including preconditions, source/ID, transition, observer, evidence, and boundary
   behavior
+- Every Required Record Fields row owned by the screen, with its exact bound control,
+  formula, record-surface hierarchy, normal-state visibility, and layout budget
 
 Two things a builder cannot recover on its own, and both cost a full round trip:
 

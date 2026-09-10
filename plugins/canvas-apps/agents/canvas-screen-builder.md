@@ -150,6 +150,12 @@ Do not fix unrelated pre-existing issues.
 - Every primary-record row or its immediately reachable detail renders the canonical
   human-readable identity as full visible text. An avatar, initials, icon, record ID,
   accessible label, or tooltip may supplement the identity but cannot replace that text.
+- Implement every row in `Required Record Fields`. Keep the named control inside the
+  specified card, row, or detail; bind its exact formula to the current record; and make it
+  visible, non-zero-sized, and readable in the normal desktop and phone layouts. A
+  time-only card or another one-field summary fails when the brief requires title, person,
+  description, status, or other values. A combined control passes only when its formula
+  references every field assigned to it and its complete text fits or wraps.
 - When the brief contains paired Approve and Reject/Decline actions, implement both for
   every eligible pending record on the same row or in the same immediately reachable
   detail. Do not omit one action to reduce control count or fit a phone row; stack the

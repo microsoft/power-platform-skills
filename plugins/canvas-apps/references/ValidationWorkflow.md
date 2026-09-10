@@ -220,6 +220,12 @@ Source revision: [git revision, package version, or "unavailable"]
 | -------- | ------------- | --------------- | --------------------- | ---------------- | ----------------- | ------ |
 | [action] | [control]     | [exact formula] | [source and identity] | [exact formula]  | [path and bounds] | PASS   |
 
+## Required Record Field Evidence
+
+| Field key | Bound control | Exact formula | Record hierarchy | Visibility and layout evidence | Result |
+| --------- | ------------- | ------------- | ---------------- | ------------------------------ | ------ |
+| [key]     | [control]     | [formula]     | [card/row/detail path] | [normal-state bounds and text fit] | PASS |
+
 ## Functional Test Matrix Results
 
 | Scenario   | Static trace result | Evidence                       |
@@ -244,12 +250,18 @@ required because symbolic inspection is not browser execution. Replace it only w
 fresh runtime evaluator returns a recorded result for this generated app.
 
 The first line of the file must be exactly `Runtime evaluation: NOT RUN`; do not place a
-heading before it. The Action Contract table has exactly one row per Action Contract. The
-scenario table separately records every Functional Test Matrix row. The Screen QA table
-has one row per dispatch screen and preserves each worker's coverage, repairs, and N/A
-results. Copy event and observer formulas verbatim from final YAML. In the table, replace
-formula newlines with `<br>` and escape `|` as `\|`; do not paraphrase an exact formula
-into an action summary.
+heading before it. The Action Contract table has exactly one row per Action Contract. When
+the plan contains `## Required Record Fields`, the field-evidence table has exactly one
+row per field key. `PASS` requires a final-YAML control inside the declared record surface,
+an exact formula that reads every required source field assigned to it, and normal-state
+evidence that the value is visible, non-zero-sized, readable, and inside the card or row.
+Missing, hidden, blank, clipped, displaced, tooltip-only, accessible-label-only, or
+time-only substitutes fail. The scenario table separately records every Functional Test
+Matrix row. The Screen QA table has one row per dispatch screen and preserves each
+worker's coverage, repairs, and N/A results. Copy formulas verbatim from final YAML. In
+tables, replace formula newlines with `<br>` and escape `|` as `\|`; do not paraphrase an
+exact formula into an action summary. Omit `## Required Record Field Evidence` only when
+the plan omits `## Required Record Fields`.
 
 Do not replace `NOT RUN` with another value unless a runtime evaluator actually executed
 against this app and the artifact records its run ID or result URL and score.
@@ -321,8 +333,9 @@ not that a nonblank app is observable when the browser joins the coauthoring ses
 
 Immediately before the summary:
 
-1. Confirm `[working directory]/canvas-app-acceptance.md` has one evidence row for every Action Contract,
-   no failed row, and has passed its required validation.
+1. Confirm `[working directory]/canvas-app-acceptance.md` has one evidence row for every
+   Action Contract and every Required Record Fields key, no failed row, and has passed its
+   required validation.
 2. Confirm no delegated agent remains running or queued, every app, planning, and
    acceptance-artifact write is complete, and the coauthoring round-trip check above has
    passed when that check is available.

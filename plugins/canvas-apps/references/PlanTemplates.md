@@ -33,6 +33,19 @@ CREATE
 | ----------------------------------------------- | ------------------------------------ | ------------------------------- |
 | [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
 
+## Required Record Fields
+
+| Field key                        | Screen   | Record surface | Required field | Source field | Presentation requirement                  |
+| -------------------------------- | -------- | -------------- | -------------- | ------------ | ----------------------------------------- |
+| [screen/surface/field identifier] | [Screen] | [Card/row/detail] | [Visible meaning] | [Record field] | [Full text, combined format, label, etc.] |
+
+[Include one row for every field the requirements say must appear on a repeated record
+card, row, or immediately reachable detail. Include the canonical identity and every
+requested title, person, time range, description, status, or other display value. Use one
+stable unique field key per row. A surface that renders only one secondary value, such as
+time, does not satisfy omitted requested fields. Omit this section only when the app has no
+record list, card, row, or detail surface.]
+
 ## Action Contracts
 
 | Requested action            | Preconditions                             | Entry point                            | Owner screen | Control and event                     | Source and stable ID                          | Transition and postcondition                 | Mutation write set                   | Receipt proof set                                          | Observer and evidence                                              |
@@ -103,6 +116,17 @@ EDIT
 | Requirement                                     | Planned affordance                   | Fidelity                        |
 | ----------------------------------------------- | ------------------------------------ | ------------------------------- |
 | [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
+
+## Required Record Fields
+
+| Field key                        | Screen   | Record surface | Required field | Source field | Presentation requirement                  |
+| -------------------------------- | -------- | -------------- | -------------- | ------------ | ----------------------------------------- |
+| [screen/surface/field identifier] | [Screen] | [Card/row/detail] | [Visible meaning] | [Record field] | [Full text, combined format, label, etc.] |
+
+[Include every requested record field affected by the edit and every existing field whose
+surface, source, formula, visibility, or layout is touched. Preserve unaffected required
+fields on a modified surface. Omit this section only when the edit cannot affect a record
+list, card, row, or detail surface.]
 
 ## Action Contracts
 
@@ -259,6 +283,18 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
 - Navigation: [targets and triggers]
 - State: [OnVisible initialization]
 
+## Required Record Fields
+
+| Field key                         | Record surface | Required field | Source field | Bound control | Exact formula | Placement and visibility |
+| --------------------------------- | -------------- | -------------- | ------------ | ------------- | ------------- | ------------------------ |
+| [key copied from the plan index]  | [Card/row/detail] | [Visible meaning] | [Record field] | [Prefixed control] | [Exact binding] | [Hierarchy, sizing, normal-state visibility] |
+
+[Copy every Required Record Fields row owned by this screen. Each row names a concrete
+visible control inside the record surface, its exact formula, and enough layout detail to
+prove that the value is visible in the normal state. A combined control may satisfy
+multiple rows only when its formula references every named source field. Do not replace
+requested text with an icon, tooltip, accessible label, record ID, or time-only summary.]
+
 ## Required Actions
 
 | Action                              | Preconditions    | Entry point and event                                   | Source and stable ID                          | Transition and postcondition                  | Mutation write set                   | Receipt proof set                                 | Observer and evidence                                    |
@@ -337,6 +373,17 @@ then fails to compile.]
   must preserve]
 - Record presentation: [canonical identity field and full visible text binding; placement
   of paired review decisions on each eligible record, or N/A]
+
+## Required Record Fields
+
+| Field key                         | Record surface | Required field | Source field | Bound control | Exact formula | Placement and visibility |
+| --------------------------------- | -------------- | -------------- | ------------ | ------------- | ------------- | ------------------------ |
+| [key copied from the plan index]  | [Card/row/detail] | [Visible meaning] | [Record field] | [Control] | [Exact binding] | [Hierarchy, sizing, normal-state visibility] |
+
+[Copy every affected Required Record Fields row and every preserved row on a record
+surface whose source, formula, visibility, hierarchy, or layout changes. Do not allow a
+modified card or row to retain only one secondary value while required identity or detail
+fields disappear.]
 
 ## Controls to Add
 

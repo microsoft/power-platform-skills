@@ -2,6 +2,7 @@
 
 using System.Text;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 if (args.Length != 2)
 {
@@ -29,6 +30,10 @@ if (errors.Count > 0)
 var planLines = File.ReadAllLines(planPath);
 var acceptanceLines = File.ReadAllLines(acceptancePath);
 var skillVersion = ReadSkillVersion(skillPath, errors);
+var yamlLines = Directory
+    .EnumerateFiles(workspace, "*.pa.yaml", SearchOption.AllDirectories)
+    .SelectMany(File.ReadLines)
+    .ToArray();
 
 if (acceptanceLines.Length == 0 || acceptanceLines[0] != "Runtime evaluation: NOT RUN")
 {
@@ -46,9 +51,14 @@ var plannedActions = ReadColumn(planLines, "## Action Contracts", 0, errors);
 var plannedScenarios = ReadColumn(planLines, "## Functional Test Matrix", 0, errors);
 var plannedScreens = ReadColumn(planLines, "## Dispatch", 1, errors, keyColumn: 1);
 var plannedTargets = ReadColumn(planLines, "## Dispatch", 2, errors, keyColumn: 1);
+var plannedRecordFields = ReadOptionalRows(planLines, "## Required Record Fields", errors);
 var acceptedActions = ReadRows(acceptanceLines, "## Action Contract Acceptance", errors);
 var acceptedScenarios = ReadRows(acceptanceLines, "## Functional Test Matrix Results", errors);
 var acceptedScreens = ReadRows(acceptanceLines, "## Screen QA Evidence", errors);
+var acceptedRecordFields = ReadOptionalRows(
+    acceptanceLines,
+    "## Required Record Field Evidence",
+    errors);
 
 RequireNonEmpty("Action Contract", plannedActions);
 RequireNonEmpty("Functional Test Matrix scenario", plannedScenarios);
@@ -62,6 +72,25 @@ ValidateTargets(plannedTargets);
 CompareCoverage("Action Contract", plannedActions, acceptedActions, errors);
 CompareCoverage("Functional Test Matrix scenario", plannedScenarios, acceptedScenarios, errors);
 CompareCoverage("dispatch screen", plannedScreens, acceptedScreens, errors);
+CompareCoverage(
+    "required record field",
+    plannedRecordFields.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
+    acceptedRecordFields,
+    errors);
+
+foreach (var row in plannedRecordFields.Values)
+{
+    if (row.Count != 6)
+    {
+        errors.Add($"Required record field '{row[0]}' must have six planning columns.");
+        continue;
+    }
+
+    if (row.Skip(1).Any(value => string.IsNullOrWhiteSpace(Clean(value))))
+    {
+        errors.Add($"Required record field '{row[0]}' has incomplete planning evidence.");
+    }
+}
 
 foreach (var row in acceptedActions.Values)
 {
@@ -90,6 +119,56 @@ foreach (var row in acceptedScenarios.Values)
     }
 }
 
+foreach (var row in acceptedRecordFields.Values)
+{
+    if (row.Count != 6)
+    {
+        errors.Add($"Required record field '{row[0]}' must have six acceptance columns.");
+        continue;
+    }
+
+    if (string.IsNullOrWhiteSpace(Clean(row[1])) ||
+        !row[2].Contains('=') ||
+        string.IsNullOrWhiteSpace(Clean(row[3])) ||
+        string.IsNullOrWhiteSpace(Clean(row[4])))
+    {
+        errors.Add(
+            $"Required record field '{row[0]}' must identify its control, exact formula, " +
+            "record hierarchy, and visibility/layout evidence.");
+    }
+
+    if (!string.Equals(Clean(row[5]), "PASS", StringComparison.OrdinalIgnoreCase))
+    {
+        errors.Add($"Required record field '{row[0]}' does not pass.");
+    }
+
+    var control = Clean(row[1]);
+    var formula = NormalizeWhitespace(
+        Clean(row[2])
+            .Replace("<br>", " ", StringComparison.OrdinalIgnoreCase)
+            .Replace("\\|", "|", StringComparison.Ordinal));
+    if (!TryGetControlBlock(yamlLines, control, out var controlBlock))
+    {
+        errors.Add(
+            $"Required record field '{row[0]}' control '{control}' does not exist in app YAML.");
+    }
+    else if (!NormalizeWhitespace(controlBlock).Contains(formula, StringComparison.Ordinal))
+    {
+        errors.Add(
+            $"Required record field '{row[0]}' formula does not match control '{control}' " +
+            "in final app YAML.");
+    }
+
+    if (plannedRecordFields.TryGetValue(row[0], out var plannedRow) &&
+        plannedRow.Count == 6 &&
+        !ReferencesSourceField(formula, Clean(plannedRow[4])))
+    {
+        errors.Add(
+            $"Required record field '{row[0]}' formula does not reference planned source " +
+            $"field '{Clean(plannedRow[4])}'.");
+    }
+}
+
 foreach (var row in acceptedScreens.Values)
 {
     if (row.Count != 4 || !string.Equals(Clean(row[1]), "1-44 COMPLETE", StringComparison.OrdinalIgnoreCase))
@@ -111,7 +190,8 @@ if (errors.Count > 0)
 
 Console.WriteLine(
     $"PASS: {plannedActions.Count} actions, {plannedScenarios.Count} scenarios, " +
-    $"{plannedScreens.Count} screens; runtime evaluation NOT RUN.");
+    $"{plannedRecordFields.Count} required record fields, {plannedScreens.Count} screens; " +
+    "runtime evaluation NOT RUN.");
 return 0;
 
 void RequireFile(string path, string label)
@@ -239,6 +319,17 @@ static Dictionary<string, List<string>> ReadRows(
     return rows;
 }
 
+static Dictionary<string, List<string>> ReadOptionalRows(
+    string[] lines,
+    string heading,
+    List<string> errors,
+    int keyColumn = 0)
+{
+    return Array.Exists(lines, line => line.Trim() == heading)
+        ? ReadRows(lines, heading, errors, keyColumn)
+        : new(StringComparer.OrdinalIgnoreCase);
+}
+
 static HashSet<string> ReadColumn(
     string[] lines,
     string heading,
@@ -311,6 +402,52 @@ static List<string> SplitRow(string line)
 }
 
 static string Clean(string value) => value.Trim().Trim('`');
+
+static string NormalizeWhitespace(string value) =>
+    string.Join(
+        " ",
+        value.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+
+static bool TryGetControlBlock(
+    string[] yamlLines,
+    string control,
+    out string controlBlock)
+{
+    for (var index = 0; index < yamlLines.Length; index++)
+    {
+        var line = yamlLines[index];
+        if (!line.TrimStart().StartsWith($"- {control}:", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        var indentation = line.Length - line.TrimStart().Length;
+        var block = new StringBuilder(line);
+        for (var blockIndex = index + 1; blockIndex < yamlLines.Length; blockIndex++)
+        {
+            var blockLine = yamlLines[blockIndex];
+            if (!string.IsNullOrWhiteSpace(blockLine) &&
+                blockLine.Length - blockLine.TrimStart().Length <= indentation)
+            {
+                break;
+            }
+
+            block.Append('\n').Append(blockLine);
+        }
+
+        controlBlock = block.ToString();
+        return true;
+    }
+
+    controlBlock = "";
+    return false;
+}
+
+static bool ReferencesSourceField(string formula, string sourceField)
+{
+    var pattern = $@"(?<![A-Za-z0-9_]){Regex.Escape(sourceField)}(?![A-Za-z0-9_])";
+    return Regex.IsMatch(formula, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
 
 static string ReadSkillVersion(string skillPath, List<string> errors)
 {

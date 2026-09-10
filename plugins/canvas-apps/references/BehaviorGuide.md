@@ -89,6 +89,20 @@ Every action must form one traceable loop:
 - A required action below the fold needs an obvious, working scroll affordance and must not be trapped inside nested fixed-height containers.
 - Repeat the same destination set and ordering across screens so an evaluator or user does not need to rediscover navigation after each action.
 
+## Record presentation contract
+
+- For every repeated card, row, or immediately reachable detail, enumerate the fields the
+  requirements expect users to see. Render each field through a visible control bound to
+  the current record and keep that control inside the record surface.
+- The canonical identity is mandatory, but it is not sufficient when the request also
+  names people, time ranges, descriptions, statuses, or other details. A time-only card,
+  icon, tooltip, accessible label, hidden control, or clipped text does not prove those
+  fields are present.
+- A combined text control may render several fields only when its formula references every
+  required source field and the complete value fits or wraps in the normal layout.
+- After create or edit, update or refresh the source used by the record surface so the
+  required field bindings immediately show the new values without a manual refresh.
+
 ## Role-scoped record management and review
 
 A request for a named role to manage all records of the app's primary entity is an operational lifecycle requirement, not a request for a read-only list. It does not imply CRUD for supporting entities.

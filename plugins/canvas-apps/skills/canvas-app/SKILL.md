@@ -64,7 +64,12 @@ CREATE and complex EDIT workflows return here after the planner finishes.
 2. Verify its `## Requirement Coverage` table maps every concrete requested noun and
    interaction to a visible affordance. Any approximation must be explicit and must not
    use UI copy that claims the unavailable interaction is exact.
-3. Verify its `## Action Contracts` table:
+3. When the app contains record cards, rows, lists, or details, verify its
+   `## Required Record Fields` table has one stable key for the canonical identity and
+   every field the requirements say users must see. Reject a time-only, identity-only, or
+   action-only surface when additional title, person, time, description, status, or other
+   values are requested.
+4. Verify its `## Action Contracts` table:
     - Every requested or approved action has its own row and reachable entry point.
     - Create, edit, delete, search, filter, approve, reject, period, and export behaviors
       are not collapsed into vague combined rows.
@@ -81,7 +86,7 @@ CREATE and complex EDIT workflows return here after the planner finishes.
       stable identity, edit prepopulation, cancel/reset behavior, and post-save evidence.
     - Every row names a precondition, source and stable identity, exact transition and
       postcondition, observer reading that source, and visible evidence.
-4. Verify its `## Functional Test Matrix`:
+5. Verify its `## Functional Test Matrix`:
     - Every Action Contract has at least one deterministic Given/When/Then success row.
     - Every required invalid, blocked, empty, clear/reset, or boundary path has a row.
     - Every `Then` names a source postcondition and an evidence surface that reads it.
@@ -89,7 +94,7 @@ CREATE and complex EDIT workflows return here after the planner finishes.
       least two matching records and one non-matching record.
     - EDIT scenarios cover existing behavior touched by changed sources, fields, controls,
       or observer formulas.
-5. Verify its `## Dispatch` table:
+6. Verify its `## Dispatch` table:
     - Every row has `Action`, `Screen`, `Target File`, `YAML Key`, `Name Prefix`, and
       `Screen Brief`.
     - CREATE rows use `Create`; EDIT rows use `Modify` or `Create`.
@@ -98,11 +103,13 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - No two rows share a `Name Prefix`.
     - In CREATE mode the first row targets `[working directory]/Screen1.pa.yaml` with YAML key `Screen1`.
     - `## Editor State Changes` exists and contains exact final order lists or `None`.
-6. Confirm `[working directory]/canvas-app-shared.md` and every dispatch row's `Screen Brief` exists.
+7. Confirm `[working directory]/canvas-app-shared.md` and every dispatch row's `Screen Brief` exists.
    Verify each brief's assignment matches its dispatch row and includes every Action
    Contract owned by that screen under `## Required Actions` and every scenario it
-   exercises under `## Functional Test Scenarios`.
-7. Before dispatch, read every brief and reject it when:
+   exercises under `## Functional Test Scenarios`. It also includes every
+   `## Required Record Fields` row owned by that screen with an exact bound control,
+   formula, hierarchy, visibility rule, and layout budget.
+8. Before dispatch, read every brief and reject it when:
     - a used control lacks its exact creation keywords, supported input-property names, or
       the full `Enum name:` and compile-ready enum literal required by discovery;
     - a Required Action is only an identifier or summary instead of its complete
@@ -110,14 +117,14 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - a Functional Test Scenario is only an identifier instead of complete
       Given/When/Then text, boundary conditions, and expected evidence; or
     - it contains an unresolved placeholder or delegates discovery to the builder.
-8. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
+9. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
    `[working directory]/App.pa.yaml` now. Screens bind to those collections, formulas and variables, and
    compiling them against a stale `App.pa.yaml` produces a flood of false name errors.
-9. Confirm the planner reported a clean `compile_canvas` for `[working directory]/App.pa.yaml`. If it
+10. Confirm the planner reported a clean `compile_canvas` for `[working directory]/App.pa.yaml`. If it
    did not, compile now and resolve every `App`-level diagnostic before dispatching.
     For EDIT mode, compile after applying the before-builder app changes and resolve
     App-level diagnostics before dispatching.
-10. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
+11. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
    and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
    assignment. Run these workers in waves of **at most three**. Fire each wave together,
    wait for it to return, then dispatch the next.
@@ -226,6 +233,11 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - For every primary-record list, verify each row or its immediately reachable detail renders
   the canonical human-readable identity as full visible text. Avatar initials, icons,
   record IDs, accessible labels, or evaluator inference cannot replace the identity.
+- Verify every `## Required Record Fields` row against final YAML. The named control must
+  exist inside the declared record surface, bind the current record's required source
+  field, and remain visible, non-zero-sized, readable, and inside the card or row in the
+  normal desktop and phone layouts. Repair missing, hidden, blank, clipped, or displaced
+  fields, then compile and repeat this field check before writing acceptance evidence.
 - When Approve and Reject/Decline are paired contracts, verify every eligible pending record
   exposes both decisions on the same row or the same immediately reachable detail at phone
   width. Send the owning screen back when either decision is missing; never accept a
