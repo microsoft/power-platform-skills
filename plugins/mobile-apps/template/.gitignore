@@ -18,7 +18,7 @@ web-build/
 # ── Local environment overrides ──────────────────────────────────────────────
 .env
 .env*.local
-
+wrap.config.json
 
 # ── Build output / vendor ────────────────────────────────────────────────────
 vendor/

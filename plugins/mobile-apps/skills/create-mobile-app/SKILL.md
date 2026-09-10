@@ -222,7 +222,7 @@ Then collect with `AskUserQuestion` (batch where possible):
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
 ```bash
-npx pa app list --non-interactive 2>/dev/null | grep -F "<displayName>" >/dev/null && \
+npx pa app list --environment-id "$ACTIVE_ENV_ID" --non-interactive 2>/dev/null | grep -F "<displayName>" >/dev/null && \
   echo "COLLISION" || echo "OK"
 ```
 
@@ -234,7 +234,7 @@ If `COLLISION`, ask the user via `AskUserQuestion`:
 
 Re-prompt for name if (1). If (2), send the user to Maker portal to delete the existing app, then re-run the collision check. Only proceed once collision is resolved.
 
-If `npx pa app list --non-interactive` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
+If `npx pa app list --environment-id "$ACTIVE_ENV_ID" --non-interactive` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
 

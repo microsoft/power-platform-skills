@@ -124,12 +124,14 @@ instead of modifying the old app in place. Commit or back up the old app first.
     cp -R ../old-app/src/. src/
     ```
 
-3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
-    `power.config.json`, and `offline-profile.json` as needed. Review each file
-    before replacing the version supplied by the new template.
+3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`, and
+    `offline-profile.json` as needed. Review each file before replacing the
+    version supplied by the new template.
 4. Keep the new template's `package.json`, root configuration files,
-    `android/`, and `ios/`. Reapply old customizations selectively rather than
-    copying these files wholesale.
+    `android/`, and `ios/`. In particular, do not copy the old
+    `power.config.json`; keep the file generated for the new app and selected
+    environment. Reapply old customizations selectively rather than copying
+    these files wholesale.
 5. Run `npm install`, `npm run type-check`, and the bundle command for each
     target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
 6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
