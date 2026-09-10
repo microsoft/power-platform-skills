@@ -1374,6 +1374,51 @@ async function runSdkBuild(spec, opts = {}) {
     return added;
   };
 
+  // Fetch a just-created form before wiring its event handlers, tolerating the workspace-metadata
+  // race. AB#6688905.
+  //
+  // `buildArtifact` resolves once the form ROW exists, but the SDK persists the workspace copy as two
+  // files — `.maker-workspace/forms/<id>.json` and `.maker-workspace/.metadata/forms/<id>.meta.json`
+  // — and `fetchArtifact` reads the metadata one. Under `mapLimit` several forms are written
+  // concurrently, and the reporter hit the window between them:
+  //   UNKNOWN: unknown error, open '...\.maker-workspace\.metadata\forms\<id>.meta.json'
+  // with the sibling `.json` already on disk. `UNKNOWN` (not ENOENT) is what Windows reports for a
+  // concurrent-access/sharing violation, which is why this matches on the PATH rather than the code
+  // — matching only ENOENT would miss the shape that was actually observed.
+  //
+  // A retry is the correct remedy rather than a workaround: the reporter's second identical run
+  // succeeded, so the state is transient by construction, and the build is idempotent. Bounded and
+  // narrow on purpose — a form whose metadata never lands still fails, with a message that names the
+  // race instead of the bare `UNKNOWN` the operator could do nothing with.
+  //
+  // The durable fix belongs in the SDK (persist both files before resolving, or make the read
+  // tolerate a partially-written pair); this keeps a valid multi-form build from halting meanwhile.
+  const isWorkspaceMetadataRace = (err) => {
+    const msg = (err && err.message) || String(err || '');
+    return /[\\/]\.metadata[\\/]/.test(msg) && /\.meta\.json/.test(msg);
+  };
+  const fetchFormForWiring = async (id, f) => {
+    const attempts = 4;
+    let last;
+    for (let i = 0; i < attempts; i += 1) {
+      try {
+        return await provision.fetchArtifact('form', id);
+      } catch (err) {
+        last = err;
+        if (!isWorkspaceMetadataRace(err) || i === attempts - 1) break;
+        // Linear, not exponential: the writer is a local file flush, so the wait needed is
+        // milliseconds — a doubling backoff would spend seconds waiting for something already done.
+        await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+      }
+    }
+    if (isWorkspaceMetadataRace(last)) {
+      throw new Error(`form ${f && (f.name || f.entity)}: the workspace metadata for this form was still not readable after ${attempts} attempts `
+        + `(${(last && last.message) || last}). The form row itself was created — this is a local workspace write race, not a Dataverse failure. `
+        + 'Re-run the same command: the build is idempotent and the metadata will exist on the next run.');
+    }
+    throw last;
+  };
+
   // Reconcile an EXISTING form to the spec: fetch it, ADD any spec field/sub-grid not already placed
   // (semantic identity = bound fieldName / relationship, so a rebuild never duplicates), PRUNE fields
   // an explicit layout dropped, then push (halt on a 412 conflict), publish, and ensure it's a
@@ -1828,7 +1873,7 @@ async function runSdkBuild(spec, opts = {}) {
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
         await runner.run('forms', `wire ${wantedEvents.length} event handler(s) on ${d.f.entity}`, async () => {
-          await provision.fetchArtifact('form', id);
+          await fetchFormForWiring(id, d.f);
           // Merge into the root-bag <events> region (idempotent — a rebuild only pushes if a NEW
           // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
           if (await wireFormEvents(id, wantedEvents)) {

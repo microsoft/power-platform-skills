@@ -2255,6 +2255,19 @@ function validateAppSpec(spec, opts = {}) {
         if (sa.entity && sa.vectorIcon && !isPlatformIconRef(sa.vectorIcon)) {
           warnings.push(`sitemap subArea "${sa.title || ''}": vectorIcon '${sa.vectorIcon}' is a bare token — on an entity subarea a bare Fluent token breaks the app designer and is DROPPED from the sitemap. Use an SVG path (e.g. /WebResources/<pub>/icons/x.svg) or a $webresource:<name>.svg reference, or set entities[].vectorIcon (the table icon) for a custom nav glyph.`);
         }
+        // `icon` on a subarea is the LEGACY RASTER slot; `vectorIcon` is the modern SVG one. Putting
+        // an SVG in `icon` is accepted by Dataverse and then renders as a placeholder — which is the
+        // first half of AB#6688906: the author sees a broken glyph, switches to `vectorIcon`, and is
+        // then left with both attributes deployed because the SDK's sitemap reconcile MERGES the new
+        // attribute list onto the deployed node instead of replacing it, so the dropped `Icon`
+        // survives in the XML.
+        //
+        // Only the authoring half is fixable here, so only that is claimed. Declaring BOTH is left
+        // legal on purpose — a raster `icon` alongside a vector `vectorIcon` is a legitimate
+        // legacy-fallback pair, and the shipped smoke spec uses exactly that.
+        if (typeof sa.icon === 'string' && /\.svg$/i.test(sa.icon.trim()) && !isPlatformIconRef(sa.icon)) {
+          warnings.push(`sitemap subArea "${sa.title || ''}": icon '${sa.icon}' is an SVG, but 'icon' is the legacy RASTER slot — the modern navigation renders a placeholder for it. Use vectorIcon: "$webresource:${sa.icon.trim()}" instead. If this subarea was already deployed with the icon, note that dropping it from the spec does NOT currently remove the Icon attribute from the deployed sitemap (the reconcile merges attributes rather than replacing them), so clear it once in the sitemap.`);
+        }
       }
     }
   }

@@ -49,6 +49,21 @@ app-builder defects found while rebuilding a real app into a second environment.
 
 ### Fixed
 
+- **A requested row summary that was never created now FAILS verification** (AB#6689110). Verification
+  covered `ai.appFeatures` but had no check for `ai.summaries` at all, so a spec could request a row
+  summary, have the AI phase skip it (an unlicensed environment is a legitimate skip), and still
+  report `PASS`. The requested set is resolved with the same selector the build uses, so what is
+  verified is exactly what was asked for — including `default: "off"` plus one opted-in table.
+  An unreadable AI-model list fails closed rather than passing.
+- **An SVG in a sitemap subarea's legacy `icon` is flagged** (AB#6688906). `icon` is the raster slot;
+  the modern navigation renders a placeholder for an SVG there. The warning names the `vectorIcon`
+  replacement. A raster `icon` beside a vector `vectorIcon` stays legal — that pair is a deliberate
+  legacy fallback.
+- **A workspace-metadata race no longer halts a multi-form build** (AB#6688905). Creating several
+  forms with event handlers concurrently could start the event wiring before the SDK had persisted
+  that form's `.meta.json`, failing the build with a bare `UNKNOWN: unknown error, open …`. The read
+  is retried briefly; a persistent failure still fails, but says it is a local workspace race and
+  that a re-run clears it.
 - **Localized labels were silently discarded on the real build path.** A broad metadata read issued
   immediately before a create (`findTables` → `createTable`, `findColumns` → `createColumn`,
   `fetchEntityMetadata` → `createRelationship`) makes Dataverse keep only the base-language label.

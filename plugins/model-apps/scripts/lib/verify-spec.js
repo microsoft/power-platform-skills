@@ -11,6 +11,7 @@ const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
+const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
@@ -654,6 +655,54 @@ async function verifySpec(spec, read, opts = {}) {
           : !proof.exists
             ? `requested '${want}' but this app has NO app-scope override for '${setting}' (it is in effect as '${inForce}' only by environment fallback, so the app was never configured)`
             : `requested '${want}' but the app-scope override for '${setting}' holds '${proof.value === '' || proof.value === undefined ? '(empty)' : proof.value}'`);
+    }
+  }
+
+  // AI row summaries (`ai.summaries`). AB#6689110.
+  //
+  // Without this a spec that REQUESTS a row summary verified clean when none was created: the build
+  // legitimately degrades to a skip when the environment does not license AI Builder (see the
+  // ai-features phase), but nothing downstream re-asserted the request, so a licensed-environment
+  // failure and an unlicensed skip both ended in a green `PASS`. The reporter saw `PASS, 45/45` with
+  // the requested summary absent — a build that reports success while a declared artifact does not
+  // exist is the one outcome verification exists to prevent.
+  //
+  // `selectSummaryTables` is the SAME selector the build uses, so the set verified is exactly the set
+  // requested — including the `default: 'off'` + per-table `enabled: true` opt-in the reporter used.
+  // Duplicating the default-vs-override rule here would let the two drift, which is how a verifier
+  // starts proving something other than what was built.
+  //
+  // The oracle is the `msdyn_aimodel` row the SDK creates, named `<entity> row summary` — the same
+  // name the build's own orphan sweep matches, and the name the platform quotes back in its
+  // duplicate-key error, so it is the stored value rather than a guess.
+  //
+  // Reader-gated: `queryRecords` only. A reader without it skips rather than guessing.
+  const summaryTables = selectSummaryTables(spec);
+  if (summaryTables.length && typeof read.queryRecords === 'function') {
+    for (const logical of summaryTables) {
+      const modelName = `${String(logical).toLowerCase()} row summary`;
+      let rows = null;
+      let readError = null;
+      try {
+        rows = await read.queryRecords('msdyn_aimodel', {
+          select: ['msdyn_aimodelid', 'msdyn_name', 'statecode'],
+          filter: `msdyn_name eq '${odataLit(modelName)}'`,
+          top: 5,
+        });
+      } catch (e) { readError = (e && e.message) || String(e); }
+      // Fail CLOSED. `msdyn_aimodel` is readable by any role that can run the build, so an
+      // unreadable list is not evidence of absence — and reporting PASS on a read we could not make
+      // is the same false confidence this check exists to remove.
+      if (!Array.isArray(rows)) {
+        add('ai-summary', logical, false,
+          `could not read the AI model list to prove the requested row summary exists${readError ? `: ${readError}` : ''}`);
+        continue;
+      }
+      const present = rows.length > 0;
+      add('ai-summary', logical, present, present ? `'${modelName}' exists` :
+        `ai.summaries requests a row summary for '${logical}', but no AI model named '${modelName}' exists in this environment. `
+        + 'The build reports this as a skip when the environment does not license the row-summary (AI Builder) capability — '
+        + 'run against a licensed environment, or set the table to enabled:false so the spec stops requesting it.');
     }
   }
 
