@@ -279,9 +279,11 @@ Used for: finance, enterprise, health — any app with auth sessions.
 
 ---
 
-## 8. Offline Sync Queue UI
+## 8. App-Owned Sync Queue UI
 
-Used for: field apps, any app that works without connectivity.
+Use this pattern only for an approved product requirement backed by a real
+app-owned sync queue API. Mobile Offline Profile configuration is governed by
+[`connectivity-intent-ownership.md`](connectivity-intent-ownership.md).
 
 ```tsx
 // Sync status bar — sticky at top of list screens

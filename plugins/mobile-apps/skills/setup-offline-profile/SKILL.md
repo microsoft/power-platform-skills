@@ -18,7 +18,17 @@ model: opus
 
 End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (and any other compatible Power Apps client) can use to download data for offline access.
 
-**Scope of v0**: authoring only. This skill creates the Dataverse entities (`mobileofflineprofile`, `mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes the full app-level offline config — profile metadata, per-table scope, and the temporary SDK-workaround fields — to `offline-profile.json`. **This skill does NOT modify `power.config.json`** (that file is owned by `npx power-apps init` and its schema is controlled upstream). It also does NOT scaffold an offline runtime (SQLite store, sync engine, write queue) in the generated app — that's gated on upstream `@microsoft/power-apps-native-host` runtime support.
+**Scope of v0**: configuration only. This skill creates records in the existing
+Dataverse Mobile Offline Profile tables (`mobileofflineprofile`,
+`mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes
+the full app-level offline config — profile metadata, per-table scope, and the
+temporary SDK-workaround fields — to `offline-profile.json`. **This skill does
+NOT modify `power.config.json`** (that file is owned by `npx power-apps init`
+and its schema is controlled upstream). The template already bundles
+`@microsoft/power-apps-native-offline`; `@microsoft/power-apps-native-host`
+consumes the profile and owns local SQLite access, queued synchronization,
+reconnect behavior, and status UX. This skill does not scaffold duplicate
+app-owned offline runtime code.
 
 **Out of scope for v0**:
 - Custom filter mode (`recorddistributioncriteria=3`, savedquery picker) — defer to v0.5
@@ -79,7 +89,7 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 | `status` value | Action |
 |---|---|
 | (section absent) OR `status: none` | First-time run. Continue to Step 2. |
-| `status: not-applicable` | User previously opted out via `/create-mobile-app` Step 6.85 ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
+| `status: not-applicable` | User previously opted out during `/create-mobile-app` offline-profile setup ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
 | `status: done` AND a profile matching `profileId` still exists in env | Already complete. Print summary from the memory-bank block; ask user if they want to `/edit-offline-profile` (v0.2) or just exit. |
 | `status: done` BUT `GET /mobileofflineprofiles(<profileId>)` returns 404 | Profile was deleted externally (maker portal or another env). Treat as `none`; clear the section; continue to Step 2. |
 | `status: in-progress` AND profile exists in env | **Resume flow** — see below. |

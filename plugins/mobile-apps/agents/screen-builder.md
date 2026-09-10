@@ -1118,31 +1118,10 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     The large title collapses on scroll (iOS Settings / Mail / App Store). On Android it degrades to a standard toolbar. Pass `contentInsetAdjustmentBehavior="automatic"` to your `ScrollView` or `FlatList` so content scrolls under the collapsing header. Detail and Form screens pushed onto the stack do NOT use large title — they use `headerShown: true` with standard height.
 
-41. **Connectivity banner — use `@react-native-community/netinfo` (already in template).** Every app MUST show a persistent "No connection" banner when the device loses connectivity. Do NOT build this per-screen — it lives in `app/(app)/_layout.tsx` (or `src/components/ConnectivityBanner.tsx` if the orchestrator created it). If the banner primitive exists, do nothing. If your screen is the protected layout (`_layout.tsx`), wire it:
-
-    ```tsx
-    import NetInfo from '@react-native-community/netinfo';
-    import { useTheme } from 'tamagui';
-
-    const [isConnected, setIsConnected] = React.useState(true);
-    const theme = useTheme();
-    React.useEffect(() => {
-      const unsub = NetInfo.addEventListener(state => {
-        setIsConnected(state.isConnected ?? true);
-      });
-      return () => unsub();
-    }, []);
-
-    // Render above the slot/navigator:
-    {!isConnected && (
-      <XStack bg="$red4" px="$4" py="$2" items="center" justify="center" gap="$2">
-        <Ionicons name="cloud-offline-outline" size={16} color={theme.red10.val} />
-        <Text fontSize="$2" fontWeight="600" color="$red10">No connection</Text>
-      </XStack>
-    )}
-    ```
-
-    This is different from the offline *sync* bar (which tracks pending local writes). The connectivity banner is binary: connected or not. Field apps lose signal constantly — users must know before they tap Save and get a silent failure.
+41. **Connectivity UI follows the approved specification.** Apply
+    [`shared/references/connectivity-intent-ownership.md`](../shared/references/connectivity-intent-ownership.md).
+    Implement connectivity diagnostics or app-owned sync UI only when the
+    approved per-screen specification names that product feature.
 
 42. **Layout animations on list add/remove.** Every `FlatList` that supports create or delete MUST animate insertions and removals. Wrap `renderItem` content in Reanimated `Animated.View` with `entering`, `exiting`, and `layout` props:
 
