@@ -51,7 +51,7 @@ node -e "const c=require('./power.config.json');console.log(c.appId||'MISSING')"
 
   Then run Steps 2 → 2.4 → 2.5 → 3 **twice**. In cycle 2, `npm run build` *and* the Step 2.4 native packaging commands must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in. Step 2.5 (offline profile gate) may be skipped on cycle 2 **only if** no schema or profile file changed between the two cycles; if in doubt, re-run it — it is a local, no-network check.
 
-**Why two cycles are unavoidable.** `power-apps push` mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build (`PushApp.js`: `throw new Error('Build path ${buildPath} does not exist')`). So the ID cannot be minted before the first build, and the first build cannot contain the ID.
+**Why two cycles are unavoidable.** `power-apps push` mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build — it fails immediately if the configured `buildPath` (`./dist`) is absent. So the ID cannot be minted before the first build, and the first build cannot contain the ID.
 
 **Why this is so easy to miss.** The runtime guard is:
 
@@ -85,17 +85,19 @@ npx expo export --platform web
 
 **Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: the Metro config returned by `createPowerAppsMetroConfig` (`metro.config.js`) installs a dev-server middleware internally, which appears to hold an open handle — a web *export* should not need a dev server. Note the template itself only calls `createPowerAppsMetroConfig`; the middleware is applied inside `@microsoft/power-apps-native-host`, not in app code. **Not yet root-caused.**
 
-**Do not wait on the process.** Run it detached and poll for the artifact:
+**Do not wait on the process.** Run it detached and poll for the artifact. Per shared-instructions, scratch files stay project-local in `.tmp/` — a fixed `/tmp/` path would collide across concurrent projects, and a stale log there could satisfy the grep below and falsely report success:
 
 ```bash
-npx expo export --platform web > /tmp/expo-web-export.log 2>&1 &
+mkdir -p .tmp
+rm -f .tmp/expo-web-export.log
+npx expo export --platform web > .tmp/expo-web-export.log 2>&1 &
 EXPORT_PID=$!
 for _ in $(seq 1 90); do
-  grep -q "Exported: dist" /tmp/expo-web-export.log 2>/dev/null && break
+  grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null && break
   sleep 2
 done
-if ! grep -q "Exported: dist" /tmp/expo-web-export.log 2>/dev/null; then
-  echo "web export did not complete in 180s"; tail -30 /tmp/expo-web-export.log; exit 1
+if ! grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null; then
+  echo "web export did not complete in 180s"; tail -30 .tmp/expo-web-export.log; exit 1
 fi
 test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
 kill "$EXPORT_PID" 2>/dev/null || true
@@ -124,31 +126,11 @@ node -e 'const [M,m,p]=process.versions.node.split(".").map(Number); const ok = 
 ```
 If it exits non-zero, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the native packaging commands on older Node.
 
-The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript.
-
-**Script preflight (required).** Both script names invoke the same `build-codegen-package` binary, but templates differ on naming: the current template ships `bundle:android` / `bundle:ios`, while some app folders carry `package:android` / `package:ios`. Detect whichever exists rather than assuming, or `npm run` fails with a bare `Missing script`:
+The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript. Produce both platforms:
 
 ```bash
-PKG_PREFIX=$(node -e '
-const s = require("./package.json").scripts || {};
-const prefix = ["bundle", "package"].find(p => s[p + ":android"] && s[p + ":ios"]);
-if (!prefix) { console.log("MISSING"); process.exit(1); }
-console.log(prefix);
-') || { echo "No native packaging scripts found in package.json"; exit 1; }
-echo "Using script prefix: ${PKG_PREFIX}"
-```
-
-`PKG_PREFIX` now holds `bundle` or `package` and is used by both commands below. Keep it exported in the same shell session; if the commands run in a fresh shell, re-run the detection there.
-
-If it prints `MISSING`, STOP and tell the user exactly what to add — do not silently skip native packaging, and do not guess at the command:
-
-> "⚠️ This app has no native packaging scripts in `package.json`, so it predates CodeGen wrap support. Add `bundle:android` / `bundle:ios` (both `build-codegen-package <platform>`), copying them from the current plugin template at `plugins/mobile-apps/template/package.json`, and re-run. Without them the deploy produces a web-only build, and the wrapped native app will have no Hermes bundle to load."
-
-Once the preflight passes, produce both platforms using the detected prefix:
-
-```bash
-npm run "${PKG_PREFIX}:android"
-npm run "${PKG_PREFIX}:ios"
+npm run bundle:android
+npm run bundle:ios
 ```
 
 Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
