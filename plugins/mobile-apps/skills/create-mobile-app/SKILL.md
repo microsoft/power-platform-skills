@@ -2319,7 +2319,7 @@ Dev server    : npx expo start — running in background terminal <id>
 
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
 
-Then present exactly these 4 options:
+Then present exactly these 6 options:
 
 ```
 What now?
@@ -2329,6 +2329,7 @@ What now?
 3. Edit the app                (/edit-app)
 4. Add more capabilities       (/add-dataverse, /add-connector, /add-native)
 5. Configure auth later        (/set-app-registration-native)
+6. Set up Application Insights (/setup-app-insights)
 
 Which option? (or "none — I'll keep iterating locally")
 ```
