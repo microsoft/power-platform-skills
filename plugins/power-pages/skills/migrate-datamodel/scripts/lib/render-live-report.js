@@ -165,7 +165,7 @@ const APPROVAL_COPY = {
     heading: 'Approve to start Phase 3: Migration Execution',
     body: [
       'Phase 2 has finished: metadata migrated to EDM tables, customizations remediated and uploaded.',
-      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the metadata migration landed cleanly before refs are migrated (irreversible). Then it migrates transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-skipped if you chose <code>--mode all</code> in Phase 2), activates EDM via <code>--updateDataModelVersion</code>, and prompts you to restart the site.',
+      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the metadata migration landed cleanly before refs are migrated. Then it migrates transactional references via <code>pac pages migrate-datamodel --mode configurationDataReferences</code> (auto-skipped if you chose <code>--mode all</code> in Phase 2), activates EDM via <code>--updateDataModelVersion</code>, and prompts you to restart the site.',
     ],
     approve: '› Yes, start migration execution',
     cancel: '› Cancel — stop before migration',
@@ -174,7 +174,7 @@ const APPROVAL_COPY = {
     heading: 'Approve to start Phase 3: Migration Execution',
     body: [
       'Phase 2 confirmed configuration metadata is present in the target environment.',
-      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the upstream-imported metadata landed cleanly before refs are migrated (irreversible). Then it migrates transactional references, locates the auto-generated customization report, remediates any customizations that surface (stronger warning — Prod findings usually indicate an ALM gap), activates EDM, and prompts you to restart the site.',
+      '<strong>Phase 3</strong> starts with a pre-flight <strong>SDM ↔ EDM metadata diff</strong> so you can confirm the upstream-imported metadata landed cleanly before refs are migrated. Then it migrates transactional references, locates the auto-generated customization report, remediates any customizations that surface (stronger warning — Prod findings usually indicate an ALM gap), activates EDM, and prompts you to restart the site.',
     ],
     approve: '› Yes, start migration execution',
     cancel: '› Cancel — stop before migration',

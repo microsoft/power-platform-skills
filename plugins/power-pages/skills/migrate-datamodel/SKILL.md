@@ -1132,7 +1132,7 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 
 ## Phase 3: Migration Execution (track-branched)
 
-Phase 3 has **two different shapes** depending on the migration track. The Authoring Track is shorter (4 sub-steps) because customization remediation already happened in Phase 2.4. The Downstream Track is longer (6 sub-steps) because customizations get scanned and remediated here (Phase 2 for the Downstream Track was just metadata verification). **Both tracks start with the same pre-flight check (3.1):** a metadata-only SDM↔EDM diff that confirms the metadata migration in Phase 2 (Authoring) or the upstream ALM import (Downstream) landed cleanly before the irreversible refs migration runs.
+Phase 3 has **two different shapes** depending on the migration track. The Authoring Track is shorter (4 sub-steps) because customization remediation already happened in Phase 2.4. The Downstream Track is longer (6 sub-steps) because customizations get scanned and remediated here (Phase 2 for the Downstream Track was just metadata verification). **Both tracks start with the same pre-flight check (3.1):** a metadata-only SDM↔EDM diff that confirms the metadata migration in Phase 2 (Authoring) or the upstream ALM import (Downstream) landed cleanly before the refs migration runs.
 
 - [**Phase 3 — Authoring Track**](#phase-3--authoring-track) — Authoring Track (mode = `configurationData` or `all`). 4 sub-steps: verify metadata diff → migrate refs → activate → restart.
 - [**Phase 3 — Downstream Track**](#phase-3--downstream-track) — Downstream Track (mode = `configurationDataReferences`). 6 sub-steps: verify metadata diff → migrate refs → locate customization report → remediate → activate → restart.
@@ -1151,7 +1151,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 ### 3.1 Data Diff Validation (SDM ↔ EDM Metadata)
 
-**Goal**: Before running the irreversible refs migration, re-download the site as EDM, snapshot it, and diff against the SDM baseline captured in Phase 2.1. Surface the result so the user can decide whether to proceed with refs migration or pause to investigate. The Pages & Components card in the live report visualizes the per-category comparison.
+**Goal**: Before running the refs migration, re-download the site as EDM, snapshot it, and diff against the SDM baseline captured in Phase 2.1. Surface the result so the user can decide whether to proceed with refs migration or pause to investigate. The Pages & Components card in the live report visualizes the per-category comparison.
 
 **Why pre-refs:** at this point only metadata has been migrated (Phase 2.2 for Authoring; assumed via ALM solution import for Downstream) — refs haven't run yet. Catching a metadata mismatch here means the user can fix the source and re-run without having to roll back a completed migration.
 
@@ -1211,10 +1211,10 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Metadata diff status: `<PASS\|WARN\|FAIL>`. `<N>` missing, `<M>` extra, `<S>` state-changed. Refs migration (next step) is irreversible — proceed? | Pre-Refs Gate | Looks fine — proceed to refs migration, Concerning — pause so I can investigate, Cancel — stop the skill |
+   | Metadata diff status: `<PASS\|WARN\|FAIL>`. `<N>` missing, `<M>` extra, `<S>` state-changed. Ready to proceed to the transactional references migration? | Pre-Refs Gate | Looks good — proceed to refs migration, Let me review the diff first, Cancel — stop the skill |
 
-   - **Looks fine**: proceed to step 3.2.
-   - **Concerning**: halt Phase 3 cleanly. User can fix the metadata source (re-import solution / re-run Phase 2.2 in Authoring) and re-invoke the skill from this point.
+   - **Looks good**: proceed to step 3.2.
+   - **Let me review the diff first**: halt Phase 3 cleanly. User can review the diff and, if needed, fix the metadata source (re-import solution / re-run Phase 2.2 in Authoring) and re-invoke the skill from this point.
    - **Cancel**: halt cleanly.
 
 **Output**: Metadata SDM↔EDM diff complete, user has decided whether to proceed with refs migration or pause.
@@ -1246,6 +1246,8 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    Poll every 1 minute using `-s -v` so each iteration captures the full tracker payload (status, current step, step history, per-chunk outcomes) and refreshes the live report's **Transactional References Migration** card. Up to 30 attempts (30 minutes total). **Use this exact PowerShell loop** — don't improvise a Bash equivalent (same PATH-consistency reasoning as Phase 2.2).
 
+   > **Run this automatically in the background — do not ask the user to confirm before checking status.** Checking migration status (`-s -v` / `--checkMigrationStatus`) is a read-only, non-destructive query. Poll it silently and only surface a message when the status reaches a terminal state (Completed / Failed / Reverted) or genuinely appears stuck. Apply this to **any** read-only check in this skill: never gate a status/read operation behind a user confirmation.
+
    ```powershell
    $webSiteId = "<WEBSITE_ID>"
    $outputDir = "<OUTPUT_DIR>"
@@ -1267,7 +1269,15 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
      #                   (drop earlier `ConfigurationData*` metadata steps from Phase 2)
      #   runs          — array of { name, chunkTotal, completed, succeeded,
      #                   chunks: [{ name, runStatus, outcome, errorType, errorDetails }] }
-     #                   parsed from the "Migration Run N" + "Chunk Details" blocks
+     #                   parsed from the "Migration Run N" + "Chunk Details" blocks.
+     #                   ALWAYS populate chunks[] with EVERY chunk from the "Chunk Details"
+     #                   block — successes included, not just failures — and set each chunk's
+     #                   `name` to the entity/table it migrated (e.g. `adx_ad`, `adx_poll`,
+     #                   `adx_blog`). The report lists these per-entity rows; if you only fill
+     #                   in run-level totals and omit chunks[], the card shows "3/3 chunks" but
+     #                   NONE of the migrated record types (adx_ad, adx_poll, …) appear — which
+     #                   is exactly the gap to avoid. For succeeded chunks set errorType/
+     #                   errorDetails to null.
      #   error         — (step-level failures only) the top-level error message when the
      #                   command aborts or the tracker reports Failed for a reason not tied
      #                   to a specific chunk. Omit on success. Renders as an error banner.
@@ -1451,7 +1461,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
 ### 3.1 Data Diff Validation (SDM ↔ EDM Metadata)
 
-**Goal**: Before running the irreversible refs migration, capture an SDM baseline (Downstream Track has no Phase 2 SDM capture), re-download the site as EDM, and diff the two. Surface the result so the user can decide whether to proceed with refs migration or pause to investigate. The Pages & Components card in the live report visualizes the per-category comparison.
+**Goal**: Before running the refs migration, capture an SDM baseline (Downstream Track has no Phase 2 SDM capture), re-download the site as EDM, and diff the two. Surface the result so the user can decide whether to proceed with refs migration or pause to investigate. The Pages & Components card in the live report visualizes the per-category comparison.
 
 **Why pre-refs:** the Downstream Track assumes metadata arrived via ALM solution import — but until we diff against an SDM baseline, we have no proof that the import landed cleanly. Catching mismatches here lets the user fix the ALM source and re-import without having to roll back a completed refs migration.
 
@@ -1531,6 +1541,8 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 2. **Poll Status with Verbose Output**
 
    Poll every 1 minute using `-s -v` so each iteration captures the full tracker payload and refreshes the live report's **Transactional References Migration** card. Same loop shape as Authoring Track 3.2 step 3 — see there for the full PowerShell snippet and JSON payload schema. The Downstream Track loop is identical apart from the schema source comment.
+
+   > **Run this automatically in the background — do not ask the user to confirm before checking status.** Checking migration status is a read-only, non-destructive query; poll it silently and only surface a message on a terminal state (Completed / Failed / Reverted) or when genuinely stuck.
 
    ```powershell
    $webSiteId = "<WEBSITE_ID>"
