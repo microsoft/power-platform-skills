@@ -78,6 +78,7 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   const createSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8');
   const debugSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'debug-app', 'SKILL.md'), 'utf8');
   const deploySkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'deploy', 'SKILL.md'), 'utf8');
+  const reportIssueSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'report-issue', 'SKILL.md'), 'utf8');
   const agentsGuide = fs.readFileSync(path.join(pluginRoot, 'AGENTS.md'), 'utf8');
 
   const createFrontmatter = createSkill.split('---', 3)[1];
@@ -123,6 +124,14 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(debugSkill, /baseline read gets `ENOENT`/);
   assert.match(debugSkill, /watcher = fs\.watch/);
   assert.match(debugSkill, /observation: interval/);
+  assert.match(debugSkill, /a frame under `node_modules\/@microsoft\/power-apps-native-\*` is evidence, not proof/i);
+  assert.match(debugSkill, /confirmed package-owned defect routes to `\/report-issue`/i);
+  assert.match(debugSkill, /do not edit `node_modules\/`, generate `patch-package` artifacts or postinstall rewrites/i);
+  assert.match(debugSkill, /replace the dependency with a git\/tarball\/local path/i);
+  assert.match(reportIssueSkill, /collect its declared and lockfile-resolved versions from `package\.json` and `package-lock\.json`/);
+  assert.match(reportIssueSkill, /Do not read package source or metadata from `node_modules\/`/);
+  assert.match(reportIssueSkill, /### Affected native package/);
+  assert.match(agentsGuide, /First-party native package defects are reported, not patched in customer projects/);
   assert.doesNotMatch(debugSkill, /ordinary tool execution provides the cadence/);
   assert.doesNotThrow(() => new vm.Script(metroCollectorSource()));
   assert.doesNotThrow(() => new vm.Script(extractMetroCollector(debugSkill.replace(/\n/g, '\r\n'))));

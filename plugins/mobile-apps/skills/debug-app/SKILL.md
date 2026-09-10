@@ -88,6 +88,7 @@ For `help` / `--help` / `-h`, print the subcommands and monitoring-options table
 - **Defense-in-depth redaction** — The Metro logger removes credential-like lines before writing `.powernative`, but `/debug-app` must independently minimize and sanitize every value before persisting it to `.powernative/debug-app/`. Never copy raw response bodies, record objects, tokens, headers, trace payloads, or absolute home-directory paths into debugger state.
 - **The port is the log identity** — the dev-server port is the number the QR encodes, the device dials, and this skill verifies. Liveness is a socket probe (does the log's PID still hold that port?), never terminal scrollback. A `port-taken` status means the log belongs to a dead session and must not be diagnosed.
 - **Never fix history** — the log is a record of the past, so an error in it is not proof of a current problem. Errors found in the baseline window must pass the Phase 0.2.1 supersession check before any code is edited. Editing working code to chase an already-resolved error is a worse outcome than reporting nothing.
+- **First-party native packages are an immutable boundary** — a frame under `node_modules/@microsoft/power-apps-native-*` is evidence, not proof, of package ownership. First rule out invalid app inputs, unsupported configuration, and misuse of the package's documented API. Once the evidence confirms a defect inside an installed `@microsoft/power-apps-native-*` package, do not apply a customer-project workaround: do not edit `node_modules/`, create a `patch-package` patch or postinstall rewrite, vendor or fork package source, redirect the package through Metro/Babel/TypeScript aliases, or replace its dependency with a git, tarball, or local fork. Record a sanitized package-defect report and route the user to `/report-issue`.
 - **Host terminal APIs are optional only** — If the current host already exposes Metro terminal output, it may be consulted as a low-latency convenience. Never ask the user for a terminal ID, never persist one, and never make a diagnosis from host output without advancing the authoritative `.powernative` log cursor too.
 - **Context-first diagnosis** — Read `memory-bank.md` when present. Read `power.config.json` for environment, Dataverse, and connector context. Consult `native-app-plan.md` only when the failure concerns a planned screen, data model, connector, offline profile, or native capability; do not parse it for unrelated syntax/runtime errors.
 - **Reference resolution order** — For Dataverse/Power Platform errors: read [skills/add-dataverse/references/dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) first, inspect generated services/models and project context, then query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` when behavior remains uncertain. For Expo/Expo Router/React Native errors: inspect installed versions and project code first, then use targeted `WebFetch` against official `https://docs.expo.dev/` documentation. Use package documentation next and general web search only as a last resort.
@@ -858,6 +859,15 @@ Only after this sequence proves that a table/column/service/schema artifact is m
 2. Prefer installed package types/readmes for the exact version.
 3. If behavior remains uncertain, use a targeted `WebFetch` against official `https://docs.expo.dev/` documentation (Expo Router pages for routing; SDK pages for native modules). Do not query Microsoft Learn for Expo/React Native behavior.
 
+**First-party native package ownership gate:**
+
+Apply this gate before D3 whenever the failing stack, module, or export involves an installed package whose name matches `@microsoft/power-apps-native-*`.
+
+1. Treat a `node_modules/` frame as a lead only. Read the app call site, the installed package's public types/readme/exports, and the declared and lockfile-resolved package version. Check that the app uses a documented API with supported inputs and configuration.
+2. Classify the problem as customer code when correcting the caller, input, or supported configuration resolves the contract violation. Apply the normal D3 route in that case.
+3. Classify the problem as package-owned only when the supported app call is valid and the failure is caused by package-internal implementation, a missing/broken advertised export, or an internal package import. If ownership remains uncertain, do not patch either side; record the uncertainty and escalate.
+4. For a confirmed package-owned defect, stop automated fix attempts for that issue. Do not change app source, configuration, dependency resolution, or installed package contents to compensate. Capture only the package name, declared/resolved version, platform, minimal reproduction, expected/actual behavior, and a sanitized bounded stack/error summary. Then route the user to `/report-issue`; mention an official published fix or documented workaround when one is known, but do not apply it from `/debug-app`.
+
 #### D3. Apply the fix
 
 **For Import / Bundle category errors, jump to D3.1 first** — those have specific recipes that pre-empt the generic routing table below. For everything else (JS Runtime, Network/API, React, etc.), use the routing table:
@@ -871,6 +881,7 @@ Only after this sequence proves that a table/column/service/schema artifact is m
 | Dataverse schema (column/table missing) | Run D2's read-only Dataverse diagnostic sequence first. If live metadata/generated artifacts confirm the schema or service is missing, **hand off** to `/add-dataverse`. Do not mutate Dataverse or edit generated files from `/debug-app`. |
 | Auth / MSAL (`AADSTS65001`, `AADSTS50011`) | **Hand-off:** route user to the Power Apps Wrap page via `/set-app-registration-native`. Do not auto-edit registrations. |
 | Connection / connector reference missing | **Hand-off:** route user to `/list-connections` or `/add-connector`. |
+| Confirmed defect inside `@microsoft/power-apps-native-*` | **Do not fix in the customer project.** Emit the package-defect report below and route to `/report-issue`. This route takes precedence over native, import/bundle, and unrecognized-error recipes. |
 | Native module, `app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle` | **Inform the user.** Do NOT auto-edit native config — print the error + suggested action and skip to next issue. |
 | Unrecognized error pattern | **Best-effort autonomous fix** — see D3.2 below. The skill attempts a single named hypothesis instead of stopping; the existing 2-attempt escalation rule is the safety net. |
 
@@ -884,6 +895,20 @@ PDF/pen/geolocation-specific routing:
 
 For inline edits, keep the change minimal and surgical. Do not refactor surrounding code, rename symbols, or change component contracts.
 
+For a confirmed first-party native package defect, do not append a successful fix entry. Pass this report through the persistence redaction gate, append it to `.powernative/debug-app/unresolved.md`, clean up injected traces, and stop the loop so `/report-issue` can run:
+
+```text
+Confirmed first-party native package defect — no customer-project workaround applied
+Package: <@microsoft/power-apps-native-*>
+Declared/resolved version: <declared> / <resolved>
+Platform: <ios|android>
+Reproduction: <minimal sanitized steps>
+Expected: <bounded behavior>
+Actual: <bounded error/status>
+Ownership evidence: <why the documented caller contract is satisfied and the failure is package-internal>
+Next step: /report-issue "<package>: <sanitized summary>"
+```
+
 Append to `.powernative/debug-app/fixes.md`:
 ```
 [<HH:MM:SS>] <category> — <file>:<line> — <one-line description of fix>
@@ -892,6 +917,8 @@ Append to `.powernative/debug-app/fixes.md`:
 #### D3.1 Bundle / transform error fix recipes (Import / Bundle category)
 
 These recipes apply to errors classified as "Import / Bundle" in Step B. They are read from the persisted `.powernative` Metro log. Each recipe is opinionated: take the action listed if its precondition matches, otherwise fall through to the next.
+
+Before applying any recipe, run the first-party native package ownership gate when the cited source/importer or failed internal import is under `node_modules/@microsoft/power-apps-native-*`. A confirmed package-owned defect routes to `/report-issue`; never repair it with a resolver alias, copied source, patch, postinstall rewrite, or replacement dependency.
 
 | Error pattern | Precondition | Action |
 |---|---|---|
@@ -929,6 +956,7 @@ If no cite can be located by step 4: log a structured note to `.powernative/debu
 
 - If the error contains a Microsoft-stack token (`AADSTS\d+`, `Dataverse`, `Power Platform`, `MSAL`, `Entra`, `Graph API`): first run D2's project/reference/read-only diagnostic sequence, then query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` with the exact code or token when behavior remains uncertain.
 - If the error concerns Expo, Expo Router, an Expo SDK module, or React Native behavior: inspect the installed version and local package documentation, then use targeted `WebFetch` against `https://docs.expo.dev/`. Do not use Microsoft Learn for these errors.
+- If the error involves `@microsoft/power-apps-native-*`, run D2's first-party native package ownership gate. A confirmed package-owned defect is not eligible for best-effort editing.
 - Read the cited file ±15 lines for surrounding context. Note recent imports, the function signature, and any nearby `try/catch` or `useEffect` deps.
 - If the error mentions a third-party module (anything in `node_modules/` from the stack), one targeted `WebFetch` against the module's npm page or GitHub README is acceptable; do NOT do open-ended web searches in the loop.
 
@@ -1013,6 +1041,7 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 
 - **Never fix native config files** (`app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle`, `gradle.properties`) — report the error to the user with the exact line and a suggested manual action.
 - **Never modify `src/generated/`** — these files are auto-generated. Fix the upstream query / service / schema instead, then run `npm run generate-schemas`.
+- **Never patch or fork first-party native packages in a customer project** — for confirmed defects in `@microsoft/power-apps-native-*`, do not edit `node_modules/`, generate `patch-package` artifacts or postinstall rewrites, vendor/copy package source, generate or install a fork, replace the dependency with a git/tarball/local path, or add resolver aliases/shims that shadow the package. Route the sanitized evidence to `/report-issue`.
 - **Dataverse diagnosis is read-only** — `/debug-app` may resolve the configured environment and issue bounded Dataverse `GET` requests through the bundled scripts. It must never perform metadata/data writes, publish, seed records, intentionally trigger throttling, invalidate tokens, switch CLI accounts, or replace generated services with direct HTTP.
 - **Do not ask the user about errors mid-cycle** — investigate autonomously using the tools above. Only surface to the user when:
   1. The fix requires a native config change.
