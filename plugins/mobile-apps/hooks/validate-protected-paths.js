@@ -53,7 +53,10 @@ process.stdin.on('end', () => {
   const fp = toolInput.file_path || toolInput.filePath;
   if (typeof fp !== 'string') process.exit(0);
 
-  const hit = PROTECTED.find(({ rx }) => rx.test(fp));
+  // Windows-hosted tools can report `file_path` with backslashes, while the
+  // protected-path regexes use POSIX separators. Normalize before matching.
+  const normalizedPath = fp.replace(/\\/g, '/');
+  const hit = PROTECTED.find(({ rx }) => rx.test(normalizedPath));
   if (!hit) process.exit(0);
 
   const rel = path.relative(process.cwd(), fp) || fp;

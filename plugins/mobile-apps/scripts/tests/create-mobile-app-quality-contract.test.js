@@ -46,3 +46,23 @@ test('Power Apps initialization directly invokes the CLI with approved values', 
   assert.match(initialize, /If a populated file remains, STOP/);
   assert.doesNotMatch(initialize, /spawnSync|node <<'NODE'/);
 });
+
+test('scaffold changed-file validation separates preparation and generator ownership', () => {
+  const preparation = skill.slice(
+    skill.indexOf('### Step 5 — Prepare existing template'),
+    skill.indexOf('### Step 6 — Initialize'),
+  );
+  const memory = skill.slice(
+    skill.indexOf('### Step 6.7 — Seed the memory bank'),
+    skill.indexOf('### Step 6.75 — Design system'),
+  );
+  const shared = fs.readFileSync(path.resolve(__dirname, '../../shared/shared-instructions.md'), 'utf8');
+
+  assert.match(preparation, /result\.writtenFiles/);
+  assert.match(preparation, /removedPowerConfig.*removedLegacyFiles/);
+  assert.match(preparation, /Do not rebuild this list from `git status`/);
+  assert.match(memory, /Step 5's `writtenFiles`.*`memory-bank\.md`/);
+  assert.match(memory, /read-only.*Step 6/);
+  assert.match(shared, /not modified afterward by the skill or its subagents/);
+  assert.match(shared, /Do not suppress a protected-path finding/);
+});

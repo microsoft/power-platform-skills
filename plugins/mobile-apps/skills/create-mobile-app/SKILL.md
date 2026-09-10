@@ -919,6 +919,13 @@ process.stdout.write(`${JSON.stringify(result)}\n`);
 NODE
 ```
 
+Capture `result.writtenFiles` as the exact project-relative preparation validation targets.
+This list contains only files created or changed by this preparation call, excluding unchanged
+preserved files and deletions. Keep `removedPowerConfig` and `removedLegacyFiles` as removal
+outcomes, not `--file` targets: Step 6 can recreate the same config path with a different owner.
+Union targets across any preparation reruns rather than replacing earlier pending changes.
+Do not rebuild this list from `git status` or a directory scan after initialization.
+
 The script is the only owner of Step 5 mutations. It updates identity, removes
 only recognized legacy example hooks/query-client files, copies shared helpers
 only when missing, verifies that TypeScript inherits the host configuration,
@@ -1050,6 +1057,8 @@ environment instead of overwriting it or running `init` again.
 Verify `power.config.json` exists and both its `environmentId` and
 `appDisplayName` match the approved Step 2/Step 4 values. If initialization
 fails, report the exact error and STOP.
+Record the successful CLI command as the config's writer. These checks are read-only;
+do not add this CLI-generated file to Step 5's manual validation targets or hand-edit it.
 
 ### Step 6.5 — Verify dependencies
 
@@ -1095,6 +1104,12 @@ cp "${PLUGIN_ROOT}/shared/memory-bank.md" "<working_dir>/memory-bank.md"
 ```
 
 Fill in the Project facts and Power Platform context sections from Steps 2 and 4. From here on, every step appends to the relevant section of `<working_dir>/memory-bank.md` immediately after success — not at the end. This is what enables Step 0's resume on a future run.
+
+Before leaving this step, run the shared changed-file gate on Step 5's `writtenFiles`, `memory-bank.md`,
+and any other pending skill/subagent-authored files or scaffold repairs, using an exact `--file`
+argument for each. Exclude files verified as CLI-generated and not manually modified afterward;
+`power.config.json` is covered by the read-only identity checks in Step 6, not this write gate.
+The successful TypeScript check does not replace either validation.
 
 Immediately after creating `memory-bank.md`, flush any queued planner concerns from `DEFERRED_CONCERNS[]` into `## Concerns` (append-only). This flush is unconditional: if the queue is non-empty, write it now before continuing to Step 6.75.
 

@@ -560,6 +560,7 @@ function prepareMobileTemplate(options) {
   let removedPowerConfig;
   let removedLegacyFiles;
   let sharedFiles;
+  let writtenFiles;
   try {
     updateIdentity(projectRoot, options.displayName, options.slug);
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
@@ -567,6 +568,14 @@ function prepareMobileTemplate(options) {
     sharedFiles = copySharedFiles(projectRoot, samplesRoot);
     prepareRootLayout(projectRoot);
     assertNoDanglingLegacyImports(projectRoot);
+    writtenFiles = [...originalState.files]
+      .filter(([relativePath, snapshot]) => {
+        const filePath = path.join(projectRoot, relativePath);
+        if (!fs.existsSync(filePath)) return false;
+        return !snapshot.exists || !fs.readFileSync(filePath).equals(snapshot.content);
+      })
+      .map(([relativePath]) => relativePath.split(path.sep).join('/'))
+      .sort();
   } catch (error) {
     try {
       restorePreparationState(projectRoot, originalState);
@@ -578,6 +587,7 @@ function prepareMobileTemplate(options) {
 
   return {
     projectRoot,
+    writtenFiles,
     removedPowerConfig,
     removedLegacyFiles,
     copiedSharedFiles: sharedFiles.copied,

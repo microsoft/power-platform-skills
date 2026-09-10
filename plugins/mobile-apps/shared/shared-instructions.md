@@ -107,8 +107,8 @@ All non-Dataverse connectors require a connection ID or connection reference bef
 
 Plugin-level hooks also run during unrelated plugin workflows, so every mutating mobile skill owns its validation:
 
-1. Track every file written by the skill or its subagents. Exclude untouched output from trusted generators such as `npx pa app init --app-type MobileApp --non-interactive` and `npx pa app add data-source --non-interactive`.
-2. Before returning success, pass each changed file explicitly:
+1. Track changed files by writer: the skill/subagents and preparation helpers versus trusted generators. Use a helper's returned `writtenFiles` when available; track removals separately, not as files to validate. Output from `npx pa app init --app-type MobileApp --non-interactive` or `npx pa app add data-source --non-interactive` is excluded only when produced by that command and not modified afterward by the skill or its subagents. Newly generated does not mean manually written.
+2. Before returning success, pass each existing skill/helper-owned changed file explicitly:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
@@ -118,6 +118,14 @@ Plugin-level hooks also run during unrelated plugin workflows, so every mutating
    ```
 
 3. On exit `2`, repair every finding and rerun. Exit `0` is required before `DONE`.
+
+`--file` runs write-safety checks, not a read-only audit of generator output. For CLI-owned
+`power.config.json` and `src/generated/`, perform the owning phase's read-only identity,
+schema/service and TypeScript checks instead. Do not suppress a protected-path finding
+by excluding a file that was manually edited; stop and recover through its owning command
+under the existing approval/resume rules. Never infer ownership from the path alone or a
+whole-worktree diff. If the manual target list is empty, record that fact; do not invoke
+the validator with no files or add generated files to make a nonempty list.
 
 Never pass a directory or the whole project. Files with common text extensions (see `scripts/lib/mobile-validator-manifest.js`) receive content-based checks; other files receive path-safety-only checks. This gate remains required after a successful typecheck.
 ### MUST (required before acting)
