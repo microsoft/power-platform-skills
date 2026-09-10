@@ -132,33 +132,152 @@ Never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`,
 
 ## Typography binding
 
-The palette example above does not by itself apply `brandTokens.typography`.
-Read the spec's role-to-font/size bindings and current local font loading. For
-each used role, bind the approved family, size, weight, line-height, and tracking
-to `createFont` or an existing screen text primitive. For example, **if** the spec
-binds body to `$body` size `$5`, extend rather than replace the other font keys:
+The palette example above does not apply `brandTokens.typography`. Read the
+approved role-to-font/size bindings and current font loading. A role is a complete
+native tuple: **family, size, weight, line-height, tracking**. Plain Tamagui `Text`
+with only `fontFamily` and `fontSize` does not reliably acquire the role's intended
+weight. A heading can therefore look like regular body text even though the
+configured font size is correct.
 
-```ts
-import { createFont } from '@tamagui/core';
+Aim for excellent native design; preserving the accepted preview's hierarchy and
+layout is the minimum handoff quality, not an optional aspiration. Compare actual
+native text roles, wrapping, associated icons, and alignment across repeated
+items with the accepted composition. Dropped typography, missing icons, or uneven
+repeated layouts are implementation regressions to repair—not acceptable
+variation in generation quality. Adapt for native metrics and accessibility
+without silently weakening the approved hierarchy.
 
-const body = brandTokens.typography.body;
-const bodyFont = createFont({
-  ...defaultConfig.fonts.body,
-  family: body.family,
-  size: { ...defaultConfig.fonts.body.size, 5: body.size },
-  weight: { ...defaultConfig.fonts.body.weight, 5: body.weight },
-  lineHeight: { ...defaultConfig.fonts.body.lineHeight, 5: body.size * body.lineHeight },
-  letterSpacing: { ...defaultConfig.fonts.body.letterSpacing, 5: body.size * body.tracking },
-});
+Copy these focused samples into the app when absent; merge rather than overwrite
+an existing customized implementation:
+
+- [`src/tokens/native-typography.ts`](../../../shared/samples/src/tokens/native-typography.ts)
+  — `createNativeTypography`, `assertNativeFontDefaults`, and their role/props types.
+- [`src/components/TypographyText.tsx`](../../../shared/samples/src/components/TypographyText.tsx)
+  — a small `Text` wrapper that applies all five fields and preserves normal text
+  props, wrapping, accessibility, and font scaling.
+
+From the generated app directory, the initial copy is:
+
+```bash
+mkdir -p src/tokens src/components
+test -e src/tokens/native-typography.ts || \
+  cp "${PLUGIN_ROOT}/shared/samples/src/tokens/native-typography.ts" src/tokens/native-typography.ts
+test -e src/components/TypographyText.tsx || \
+  cp "${PLUGIN_ROOT}/shared/samples/src/components/TypographyText.tsx" src/components/TypographyText.tsx
 ```
 
-Merge `fonts: { ...existingCustomFonts, body: bodyFont }` into `customConfig`
-(omit `existingCustomFonts` when none exists). Apply the same process to the
-other **actual** bindings; do not force every heading onto one size. Preserve
-host `mono` and uncustomized fonts. Verify native loaded family/weight `face`
-entries when using separate font files; do not keep another family's face map
-on a changed family. If a family is unavailable, use the approved host fallback
-and record it rather than pretending to load it. See
+The existence guards preserve concurrent/customized implementations; they do not
+prove an older copy satisfies the current contract. Review and merge an existing
+helper before using it. Exported APIs are `createNativeTypography(baseFonts,
+bindings, options?)`, `assertNativeFontDefaults(config)`, `NativeTypographyRole`,
+`NativeTypographyTextProps`, and `TypographyText`.
+
+In `tamagui.config.ts`, extend the brand-import example **before** `customConfig`:
+
+```ts
+import {
+  createNativeTypography,
+  assertNativeFontDefaults,
+} from './src/tokens/native-typography';
+
+// Reuse this baseline if already obtained elsewhere in the config.
+// Read host-owned fonts, including mono; do not recreate the host fallback.
+const hostConfig = createPowerAppsTamaguiConfig({});
+export const nativeTypography = createNativeTypography(
+  { ...hostConfig.fonts }, // Also merge any existing custom fonts here.
+  {
+    // Illustrative bindings only: use the actual approved roles and scale keys.
+    body: { font: 'body', sizeToken: 4, role: brandTokens.typography.body },
+    heading: { font: 'heading', sizeToken: 8, role: brandTokens.typography.heading },
+  },
+);
+```
+
+Add `fonts: nativeTypography.fonts` to `customConfig`. Preserve existing fonts,
+themes, and token customizations; the host factory can replace the entire `fonts`
+property when supplied, so passing only a customized body font can drop `mono`
+and other fonts. After the **final** factory call, before its default export:
+
+```ts
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig);
+assertNativeFontDefaults(tamaguiConfig);
+export default tamaguiConfig;
+```
+
+Do not add a second final export or remove the `Conf`/module augmentation block.
+The baseline call above is only to read host defaults; the final config, with all
+overrides applied, is the one passed to `PowerAppsProvider` and validated.
+
+Expose the resulting role props through the app's token layer, for example in
+`src/tokens/typography.ts`:
+
+```ts
+import { nativeTypography } from '../../tamagui.config';
+export const typography = nativeTypography.text;
+```
+
+Consume the complete tuple at actual text call sites, including shared heading,
+label, metadata, and body primitives used by the journey:
+
+```tsx
+import { Text } from 'tamagui';
+import { TypographyText } from '@/components/TypographyText';
+import { typography } from '@/tokens/typography';
+
+<TypographyText typography={typography.heading}>Review findings</TypographyText>
+<Text {...typography.body}>Resolve the outstanding items before submitting.</Text>
+```
+
+The token-layer module must not be imported back into `tamagui.config.ts`; the
+config imports only the independent `native-typography` helper. Existing shared
+components can use the spread directly without introducing a wrapper. Do not
+leave role-bound text on `fontSize`/family-only props, override role metrics later
+in a `style` array, disable font scaling, or force a one-line heading to conceal
+layout problems. Define only the roles the task needs; no font size or domain
+preset is required.
+
+### Default size and metric consistency
+
+`createNativeTypography` merges each role into `createFont`, converts ratio
+line-height and em tracking to native logical units, and returns explicit text
+props. It retains unrelated fonts, scale entries, and font sections. Its default
+binding follows the original numbered slot, **not a hardcoded `$4` or size**:
+Tamagui v5 can start with `size.true === size[4] === 15`; changing only `size[4]`
+to 14 or another value leaves `true` without a numbered match. The helper updates
+`true` size, weight, line-height, and tracking together when that default slot
+is customized. Tamagui resolves a default through the first matching size slot:
+if another earlier slot has the same size but different metrics, the helper rejects
+that collision rather than silently selecting the wrong weight or changing unrelated
+roles. Choose a nonconflicting default binding or deliberately harmonize the metrics.
+
+If the original default has multiple matching slots, explicitly choose the
+approved one instead of guessing:
+
+```ts
+// Third createNativeTypography argument; select the actual approved slot.
+{ defaultSizeTokens: { body: 5 } }
+```
+
+The same option deliberately moves an existing default. Non-default role changes
+leave the current default tuple alone. Two roles cannot overwrite the same
+font/size binding or give a shared font conflicting families; use separate slots
+or separate font keys. Raw values and real Tamagui Variables are supported;
+unresolved `$token`/CSS variable strings, missing numbers, invalid weights, and
+non-finite metrics are errors rather than silently accepted fallbacks.
+
+`assertNativeFontDefaults` checks the final resolved config (including parsed
+Tamagui Variables), its selected default font, and every font's `true` size,
+numbered match, and default metrics. Missing/unresolved configuration is **not**
+a successful validation. This is runtime/config-helper validation, not a static
+checker that evaluates arbitrary application source. Keep the assertion after
+all subsequent font overrides as well.
+
+Verify native loaded family/weight `face` entries when using separate font files.
+For a binding, supply `face: { 700: { normal: 'Approved-Bold' } }` only when that
+native name really is loaded. The helper removes stale face maps on family
+changes and preserves an explicitly supplied map; it does not install/load assets
+or prove their availability. If a family is unavailable, use the approved host
+fallback and record it. See
 [typography guidance](../../../shared/references/typography-and-tone.md).
 
 ## Root Provider Wiring
@@ -242,7 +361,29 @@ npx tsc --noEmit
 Also verify that `tamagui.config.ts` contains no local color parser or semantic
 alias implementation and that both provider themes map every
 surface/text/accent value from `appLightTheme` / `appDarkTheme`.
-Verify used typography bindings and real font availability too. Refresh intent
+Verify used typography bindings and real font availability too. Load the app so
+the final-config assertion executes; type-checking alone does not execute it.
+Confirm representative `Text` calls receive the complete role tuple. The plugin's
+focused regression suite executes the real helper with installed host/Tamagui
+configurations and type-checks the native wrapper:
+
+```bash
+POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1 \
+MOBILE_SAMPLE_RUNTIME_REQUIRED=1 \
+node --test "${PLUGIN_ROOT}/scripts/tests/native-typography.test.js"
+```
+
+That suite validates helper behavior, not an arbitrary generated app's font
+loading or device rendering. This is a bounded helper/configuration contract:
+integration copies and wires the helper, scaffolding applies its complete role
+props, and final/edit validation type-checks and observes the final-config
+assertion during app loading. Do not execute arbitrary imported application
+source to manufacture static validation. If an existing config is unsupported,
+the copied helper has not been reconciled, or the final assertion cannot be
+observed, report typography consistency **unverified** rather than passing based
+on source spelling, type-checking, or the plugin regression suite alone.
+
+Refresh intent
 from approved inputs; refresh implementation from current source/config via
 [`/preview-screens`](../../preview-screens/SKILL.md). Browser review never verifies
 native rendering or connector behavior.

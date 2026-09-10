@@ -22,6 +22,10 @@ Implementation follows actual source even when the plan differs. Use the [native
 
 Raw `bg`/`surface`/`primary` brand fields may be transformed by `withPowerAppsSemanticAliases`; compare resolved aliases, not merely raw inputs. Light values must never leak into dark surfaces/text. Resolve any used nested theme explicitly.
 
+For plain native `Text`, inspect the actual applied props or shared role component. Do not infer
+bold weight or full line metrics from `fontFamily` and `fontSize` alone. Preserve and report an
+unapplied typography role rather than silently improving its HTML projection.
+
 Every `var(--name)` must have a value in every advertised theme. In particular, the shell defines **both `--surface0` and `--surface1`** in light and dark. Add other used variables from actual inputs. Missing tokens or assets are reported, not silently filled with a generic preset.
 
 ## 2. Component and behavior projection
@@ -111,15 +115,22 @@ Replace placeholders with escaped model-authored content and **resolved** values
   <nav class="preview-nav" aria-label="Preview screens">{{TABS}}</nav>
   <main class="phone"><div class="screen-area">{{SCREENS}}</div></main>
   <script>
+    let activeScreen = null;
+    const screenScroll = new Map();
     function showScreen(id, moveFocus = true) {
       const target = document.getElementById(id);
       if (!target || !target.classList.contains('screen')) return false;
+      if (activeScreen === target) return true;
+      const area = document.querySelector('.screen-area');
+      if (area && activeScreen) screenScroll.set(activeScreen.id, area.scrollTop);
       document.querySelectorAll('.screen').forEach(screen => { screen.hidden = screen !== target; });
       document.querySelectorAll('[data-screen]').forEach(button => {
         if (button.dataset.screen === id) button.setAttribute('aria-current', 'page');
         else button.removeAttribute('aria-current');
       });
-      if (moveFocus) target.focus();
+      activeScreen = target;
+      if (area) area.scrollTop = screenScroll.get(id) ?? 0;
+      if (moveFocus) target.focus({ preventScroll: true });
       return true;
     }
     document.querySelectorAll('[data-screen]').forEach(button => {
@@ -142,3 +153,33 @@ Replace placeholders with escaped model-authored content and **resolved** values
 Navigation example: `<button type="button" data-screen="screen-review">Review</button>`.
 Screen example: `<section class="screen" id="screen-review" tabindex="-1" aria-label="Review" hidden>…</section>`.
 Choose order/IDs from the journey. Add key-action transitions and reset in `{{MOCK_JOURNEY_SCRIPT}}`; merely switching preview tabs is not a working primary journey. Omit the theme toggle and unresolved theme block if only one theme is available, and disclose that limit.
+
+## Stable local updates
+
+Do not rebuild the entire canvas with `innerHTML`/`replaceChildren` for each click.
+The shell keeps screen nodes mounted, treats an already-selected tab as a no-op,
+and restores screen scroll. Update only affected summaries, row visibility, and
+the active dialog. Preserve input focus/caret and decoded image nodes; reset alone
+explicitly returns the scenario to its initial state. Load/error events must not
+rebuild unchanged screens or restart every image request.
+
+For a small, explicitly illustrative collection, this is sufficient:
+
+```js
+function filterPreviewRows(container, matches, countElement) {
+  let count = 0;
+  container.querySelectorAll('[data-row]').forEach(row => {
+    row.hidden = !matches(row.dataset.row);
+    if (!row.hidden) count++;
+  });
+  countElement.textContent = String(count);
+  return count;
+}
+```
+
+The callback reads in-memory fixture state; it does not query a tenant or replace
+the source app's server search. Filter/empty recovery should preserve unchanged
+nodes. This pattern is optional, not a new renderer or required runtime dependency.
+Verify with ordinary tab/filter/back actions and image-load observations. An idle
+preview should not mutate or flicker. When the user is inspecting a shared tab,
+announce interaction tests or use a clearly labeled separate verification tab.

@@ -566,23 +566,38 @@ test('provider examples forward both resolved themes instead of unrelated baseli
   assert.match(example, /darkTheme=\{brandedDarkTheme\}/);
 });
 
-test('typography example consumes approved roles and converts native units without replacing the scale', () => {
-  const example = fencedBlocks(integration, 'ts').find(block => block.includes('const bodyFont = createFont'));
-  const font = {
-    family: 'Existing', size: { 4: 14, 5: 16 }, weight: { 4: '400', 5: '500' },
-    lineHeight: { 4: 20, 5: 24 }, letterSpacing: { 4: 0, 5: 0 },
-  };
+test('typography example forwards approved roles and validates the final host configuration', () => {
+  const blocks = fencedBlocks(integration, 'ts');
+  const example = blocks.find(block => block.includes('export const nativeTypography'));
+  const final = blocks.find(block => block.includes('assertNativeFontDefaults(tamaguiConfig)'));
+  const fonts = { body: {}, heading: {}, mono: {} };
+  const calls = [];
+  const brandTokens = { typography: {
+    body: { family: 'Approved', size: 18, weight: '600', lineHeight: 1.5, tracking: 0.02 },
+    heading: { family: 'Approved', size: 26, weight: '700', lineHeight: 1.2, tracking: 0 },
+  } };
   const context = vm.createContext({
-    brandTokens: { typography: { body: { family: 'Approved', size: 18, weight: '600', lineHeight: 1.5, tracking: 0.02 } } },
-    defaultConfig: { fonts: { body: font } }, createFont: value => value,
+    brandTokens,
+    createPowerAppsTamaguiConfig: overrides => ({ fonts, ...overrides }),
+    createNativeTypography(base, bindings) {
+      calls.push({ base, bindings });
+      return { fonts: base, text: { body: bindings.body.role, heading: bindings.heading.role } };
+    },
+    assertNativeFontDefaults(config) { calls.push({ checked: config }); },
   });
-  vm.runInContext(`${example.slice(example.indexOf('const body ='))}\nglobalThis.result = bodyFont;`, context);
-  assert.equal(context.result.family, 'Approved');
-  assert.equal(context.result.size[4], 14);
-  assert.equal(context.result.size[5], 18);
-  assert.equal(context.result.weight[5], '600');
-  assert.equal(context.result.lineHeight[5], 27);
-  assert.equal(context.result.letterSpacing[5], 0.36);
+  vm.runInContext(example.slice(example.indexOf('const hostConfig')).replace('export const', 'const') +
+    '\nglobalThis.result = nativeTypography;', context);
+  assert.equal(calls[0].base.mono, fonts.mono);
+  assert.equal(calls[0].bindings.body.role, brandTokens.typography.body);
+  assert.equal(calls[0].bindings.heading.role, brandTokens.typography.heading);
+  context.customConfig = { fonts: context.result.fonts };
+  vm.runInContext(final.replace('export const', 'const').replace('export default tamaguiConfig;', '') +
+    '\nglobalThis.finalConfig = tamaguiConfig;', context);
+  assert.equal(calls[1].checked, context.finalConfig);
+  assert.equal(context.finalConfig.fonts, context.result.fonts);
+  assert.match(integration, /TypographyText typography=\{typography.heading\}/);
+  assert.match(integration, /<Text \{\.\.\.typography.body\}/);
+  // Native unit conversion/default behavior is exercised against real host APIs in native-typography.test.js.
 });
 
 function previewShell() {
@@ -626,7 +641,7 @@ test('preview shell projects resolved brand values and closes CSS variables in b
 function element(id, screen = false) {
   const classes = new Set(screen ? ['screen'] : []);
   return {
-    id, hidden: false, dataset: {}, attributes: {}, listeners: {}, focused: false,
+    id, hidden: false, dataset: {}, attributes: {}, listeners: {}, focused: false, focusCount: 0, scrollTop: 0,
     classList: {
       contains: value => classes.has(value),
       toggle(value) {
@@ -637,7 +652,7 @@ function element(id, screen = false) {
     setAttribute(name, value) { this.attributes[name] = value; },
     removeAttribute(name) { delete this.attributes[name]; },
     addEventListener(name, callback) { this.listeners[name] = callback; },
-    focus() { this.focused = true; },
+    focus() { this.focused = true; this.focusCount++; },
   };
 }
 
@@ -650,12 +665,13 @@ test('documented shell navigation is reachable, focusable, and safe for absent d
   reviewButton.dataset.screen = review.id;
   const theme = element('theme-toggle');
   const root = element('root');
+  const area = element('screen-area');
   const elements = [entry, review, startButton, reviewButton, theme];
   const document = {
     documentElement: root,
     getElementById: id => elements.find(item => item.id === id),
     querySelectorAll: selector => selector === '.screen' ? [entry, review] : [startButton, reviewButton],
-    querySelector: () => entry,
+    querySelector: selector => selector === '.screen-area' ? area : entry,
   };
   const script = previewShell().match(/<script>([\s\S]*?)<\/script>/)[1]
     .replace('{{MOCK_JOURNEY_SCRIPT}}', '');
@@ -664,6 +680,10 @@ test('documented shell navigation is reachable, focusable, and safe for absent d
   assert.equal(entry.hidden, false);
   assert.equal(review.hidden, true);
   assert.equal(startButton.attributes['aria-current'], 'page');
+  area.scrollTop = 240;
+  startButton.listeners.click();
+  assert.equal(entry.focusCount, 0, 'selecting current screen must not steal focus or reset scroll');
+  assert.equal(area.scrollTop, 240);
   reviewButton.listeners.click();
   assert.equal(entry.hidden, true);
   assert.equal(review.hidden, false);
@@ -679,4 +699,29 @@ test('documented shell navigation is reachable, focusable, and safe for absent d
   theme.listeners.click();
   assert.equal(root.classList.contains('dark'), false);
   assert.equal(context.showScreen(entry.id), true);
+  assert.equal(area.scrollTop, 240, 'return navigation restores the shared scroll area');
+});
+
+test('preview filters preserve existing row/image nodes across domains and empty recovery', () => {
+  const example = fencedBlocks(mapping, 'js').find(block => block.includes('function filterPreviewRows'));
+  assert.ok(example);
+  const context = vm.createContext({});
+  vm.runInContext(example, context);
+  for (const domain of ['catalog', 'inspection', 'reading']) {
+    const rows = [1, 2, 3].map(number => ({
+      dataset: { row: `${domain}-${number}` }, hidden: false,
+      image: { decoded: true },
+    }));
+    const originalImages = rows.map(row => row.image);
+    const container = { querySelectorAll: () => rows };
+    Object.defineProperty(container, 'innerHTML', { set() { throw new Error('Must not rebuild rows'); } });
+    const count = { textContent: '' };
+    assert.equal(context.filterPreviewRows(container, id => id.endsWith('-2'), count), 1);
+    assert.equal(count.textContent, '1');
+    assert.equal(rows[1].hidden, false);
+    assert.equal(context.filterPreviewRows(container, () => false, count), 0);
+    assert.equal(context.filterPreviewRows(container, () => true, count), 3);
+    rows.forEach((row, index) => assert.equal(row.image, originalImages[index]));
+    assert.ok(rows.every(row => !row.hidden));
+  }
 });

@@ -141,7 +141,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function checkSampleTypes() {
+function checkSampleTypes(extraSources = new Map()) {
   const template = path.join(root, 'template');
   const samples = path.join(root, 'shared/samples');
   const service = path.join(root, 'sample-service-probe.d.ts');
@@ -157,6 +157,7 @@ function checkSampleTypes() {
       static delete(id: string): Promise<{ success: boolean; error?: {message?: string} }>;
     }`],
     [scanner, cameraSkill.split('```tsx\n// src/native/barcodeScanner.tsx\n')[1].split('\n```')[0]],
+    ...extraSources,
   ]);
   const options = {
     noEmit: true, strict: true, skipLibCheck: true,
@@ -182,7 +183,7 @@ function checkSampleTypes() {
     'screen-form.tsx', 'screen-detail.tsx', 'src/hooks/useListData.ts',
     'src/hooks/useCursorListData.ts', 'src/components/index.tsx',
   ].map((file) => path.join(samples, file));
-  const program = ts.createProgram([...files, scanner, path.join(template, 'tamagui.config.ts')], options, host);
+  const program = ts.createProgram([...files, scanner, ...extraSources.keys(), path.join(template, 'tamagui.config.ts')], options, host);
   return ts.getPreEmitDiagnostics(program).map((diagnostic) => {
     const location = diagnostic.file
       ? `${path.relative(root, diagnostic.file.fileName)}:${diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line + 1}`

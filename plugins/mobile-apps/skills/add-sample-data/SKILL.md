@@ -202,10 +202,17 @@ For each selected table, generate N rows. Match values to column names + types:
 **How sample images are inserted:**
 
 1. Generate the normal record body first (name, lookup fields, status, etc.).
-2. For **Image columns**, attach a compact base64 payload in the create/PATCH body only if the generated model/service expects base64 for that column. Keep the image small enough for mobile thumbnails.
+2. For **Image columns**, attach the approved image bytes as base64 in the create/PATCH body only if that contract supports it. Size the original for its actual large/detail use within the configured capacity; Dataverse generates the thumbnail. Only the primary image can be supplied on create; upload a non-primary image after the row exists.
 3. For **File columns**, do NOT put bytes/base64/URLs in the create body. Insert the metadata row first, capture the GUID from Step 5's `BATCH-RECORDS` result, then upload the generated file to `(recordId, columnName)` in Step 5d.
 4. Stop once the media cap is reached. Remaining records keep null Image/File columns and use local placeholders in the app UI.
 5. If no upload helper exists for File columns, leave the column null and report `sample media skipped — upload helper missing`. Never fake File/Image data with a URL string.
+
+When full-size display is required, run the [image read-back gate](../../shared/references/media-sources.md#authoring-read-back-gate)
+before uploading and after each authorized original upload. Verify live storage settings, then
+download and compare original bytes; neither a non-null image ID nor a successful PATCH proves
+full-size retention. HTTP 204 full-image responses require checking the setting **at upload time**.
+Restoring existing rows needs scoped approval and preservation checks for other fields. Do not
+rewrite healthy records, fabricate image success, or repair schema inside an unapproved seed pass.
 
 **Pull context from the requirements brief.** The user described what the app does (e.g. "HVAC inspection app for field technicians"); use that to flavor the data — sites named after streets typical for the user's industry, statuses in the right vocabulary. Generic Lorem Ipsum is the failure mode.
 

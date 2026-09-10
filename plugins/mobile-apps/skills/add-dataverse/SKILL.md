@@ -1103,6 +1103,14 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   Return to the owning reconciliation step; do not mark that table materialized
   or invent a new table to replace a missing reuse target.
 
+For created/changed Image columns, table existence is insufficient. Re-read the published
+ImageAttributeMetadata and compare `CanStoreFullImage` and capacity with the approved contract
+using the [image read-back gate](../../shared/references/media-sources.md#authoring-read-back-gate).
+A successful metadata write does not prove the setting persisted. On mismatch, preserve
+actual observed values, report the discrepancy and reconcile through the existing approved
+metadata workflow; do not mark the requested values verified or silently change schema.
+This check runs after the deterministic manifest path too, before final handoff/seeding.
+
 ### Step 6d — Write `.datamodel-manifest.json`
 
 After schema verification in Step 6c and generated-service verification in
@@ -1145,6 +1153,7 @@ from an earlier run is repaired by repeating Step 6's read-only service verifier
 and Steps 6c–6d, not by replaying successful schema writes. Recording a reused
 table does not authorize a metadata POST or republish; the existing sample-data
 record-count checks and standard-system-table exclusions still apply.
+Image storage values come from the Step 6c read-back, not a copy of the proposed payload.
 
 ### Step 7 — Inspect generated files
 

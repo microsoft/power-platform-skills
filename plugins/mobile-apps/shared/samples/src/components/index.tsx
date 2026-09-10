@@ -10,7 +10,7 @@
  */
 
 import React from 'react';
-import { ScrollView } from 'react-native';
+import { ScrollView, useWindowDimensions } from 'react-native';
 import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -214,23 +214,28 @@ export function InfoRow({
   label,
   value,
   mono,
+  layout = 'inline',
 }: {
   label: string;
   value: string | number;
   mono?: boolean;
+  layout?: 'inline' | 'stacked';
 }) {
   return (
-    <XStack justify="space-between" py="$2" items="center">
-      <Text color="$color10" fontSize="$4" flex={1}>{label}</Text>
+    <YStack
+      flexDirection={layout === 'inline' ? 'row' : 'column'}
+      justify="space-between" py="$2" gap={layout === 'inline' ? '$3' : '$1'}
+    >
+      <Text color="$color10" fontSize="$4" flex={layout === 'inline' ? 1 : undefined} minW={0}>{label}</Text>
       <Text
         fontSize="$4" fontWeight="500"
         fontFamily={mono ? '$mono' : undefined}
-        color="$color12" text="right" flex={1}
-        numberOfLines={1}
+        color="$color12" text={layout === 'inline' ? 'right' : 'left'}
+        flex={layout === 'inline' ? 1 : undefined} minW={0}
       >
         {String(value)}
       </Text>
-    </XStack>
+    </YStack>
   );
 }
 
@@ -266,7 +271,7 @@ export function ActionRow({
           color={destructive ? theme.statusOverdue.val : theme.color10.val}
         />
       )}
-      <YStack flex={1} gap="$0.5">
+      <YStack flex={1} minW={0} gap="$0.5">
         <Text fontSize="$4" color={destructive ? '$statusOverdue' : '$color12'}>{label}</Text>
         {subtitle && <Text fontSize="$2" color="$color10">{subtitle}</Text>}
       </YStack>
@@ -370,13 +375,21 @@ export function EmptyState({
 
 // ─── BottomActionBar ─────────────────────────────────────────────────────────
 
-export function BottomActionBar({ children }: { children: React.ReactNode }) {
+export function BottomActionBar({
+  children,
+  includeBottomInset = true,
+}: {
+  children: React.ReactNode;
+  /** Disable when a non-overlay tab bar or outer safe area already owns this edge. */
+  includeBottomInset?: boolean;
+}) {
   const insets = useSafeAreaInsets();
   return (
     <YStack
+      shrink={0}
       px="$4"
       pt="$3"
-      pb={insets.bottom > 0 ? insets.bottom + 20 : 20}
+      pb={20 + (includeBottomInset ? insets.bottom : 0)}
       bg="$surface1"
       borderTopWidth={1}
       borderTopColor="$borderColor"
@@ -384,6 +397,37 @@ export function BottomActionBar({ children }: { children: React.ReactNode }) {
     >
       {children}
     </YStack>
+  );
+}
+
+export function CompactActionBar({
+  summary, actionLabel, onAction, pending = false, pendingLabel = 'Working…',
+  disabled = false, error, includeBottomInset = true,
+}: {
+  summary: React.ReactNode;
+  actionLabel: string;
+  onAction: () => void;
+  pending?: boolean;
+  pendingLabel?: string;
+  disabled?: boolean;
+  error?: string;
+  includeBottomInset?: boolean;
+}) {
+  const { fontScale } = useWindowDimensions();
+  return (
+    <BottomActionBar includeBottomInset={includeBottomInset}>
+      {error && <Text role="alert" color="$statusOverdue">{error}</Text>}
+      <XStack items="center" flexWrap="wrap" gap="$3">
+        <YStack flex={1} minW={112}>{summary}</YStack>
+        <Button
+          flex={1} minW={fontScale > 1.25 ? '100%' : 160} minH={48} height="auto" py="$3"
+          role="button" aria-label={pending ? pendingLabel : actionLabel}
+          aria-busy={pending} disabled={disabled || pending} onPress={onAction}
+        >
+          <Button.Text shrink={1}>{pending ? pendingLabel : actionLabel}</Button.Text>
+        </Button>
+      </XStack>
+    </BottomActionBar>
   );
 }
 
@@ -445,7 +489,8 @@ export function FilterChipRow({
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}
+      style={{ flexGrow: 0, flexShrink: 0, minHeight: 56 }}
+      contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 4, alignItems: 'center' }}
     >
       {options.map((option) => {
         const selected = option.key === selectedKey;
@@ -456,7 +501,9 @@ export function FilterChipRow({
             size="$3"
             rounded="$10"
             px="$3"
-            minH={44}
+            minH={48}
+            height="auto"
+            py="$2"
             bg={selected ? '$accentBase' : '$surface2'}
             borderWidth={selected ? 0 : 1}
             borderColor="$borderColor"
@@ -483,6 +530,8 @@ export function ScreenHeader({
   meta,
   rightAction,
   children,
+  variant = 'standard',
+  backAction,
 }: {
   title: string;
   subtitle?: string;
@@ -490,20 +539,40 @@ export function ScreenHeader({
   meta?: React.ReactNode;
   rightAction?: React.ReactNode;
   children?: React.ReactNode;
+  variant?: 'standard' | 'compact';
+  backAction?: { onPress: () => void; label?: string; disabled?: boolean };
 }) {
+  const theme = useTheme();
+
   return (
-    <YStack px="$5" pb="$3" gap="$2" borderBottomWidth={1} borderBottomColor="$borderColor">
-      <XStack items="center" justify="space-between" gap="$3">
-        <YStack flex={1} gap="$1">
+    <YStack
+      px={variant === 'compact' ? '$4' : '$5'} pb="$3" gap="$2" shrink={0}
+      borderBottomWidth={1} borderBottomColor="$borderColor"
+    >
+      <XStack items="center" justify="space-between" gap="$2" minH={48}>
+        {backAction && (
+          <Button
+            chromeless minW={48} minH={48} height="auto" p="$2" shrink={0}
+            onPress={backAction.onPress}
+            disabled={backAction.disabled}
+            role="button"
+            aria-label={backAction.label ?? 'Back'}
+            icon={<Ionicons name="chevron-back" size={24} color={theme.color12.val} accessible={false} />}
+          />
+        )}
+        <YStack flex={1} minW={0} gap="$1">
           <XStack items="center" gap="$2" flexWrap="wrap">
-            <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
+            <Text
+              fontSize={variant === 'compact' ? 20 : 28} fontWeight="700" letterSpacing={0}
+              shrink={1} minW={0} role="heading"
+            >{title}</Text>
             {status}
           </XStack>
           {subtitle && (
             <Text fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
           )}
         </YStack>
-        {rightAction}
+        {rightAction && <XStack shrink={1} minW={0} items="center">{rightAction}</XStack>}
       </XStack>
       {meta}
       {children}
@@ -576,7 +645,7 @@ export function RowPick({
   const theme = useTheme();
   return (
     <XStack
-      px="$3" py="$3" minH={48} items="center" justify="space-between" rounded="$3"
+      px="$3" py="$3" minH={48} gap="$3" items="center" justify="space-between" rounded="$3"
       borderWidth={1}
       borderColor={selected ? '$accentBase' : '$borderColor'}
       bg={selected ? '$accentBase' : '$background'}
@@ -586,7 +655,7 @@ export function RowPick({
       aria-pressed={selected}
       pressStyle={{ opacity: 0.7 }}
     >
-      <YStack>
+      <YStack flex={1} minW={0}>
         <Text fontSize={15} fontWeight="600" color={selected ? '$accentOnAccent' : '$color12'}>{label}</Text>
         {subtitle ? (
           <Text fontSize={12} color={selected ? '$accentOnAccent' : '$color10'} mt="$1">
@@ -594,9 +663,11 @@ export function RowPick({
           </Text>
         ) : null}
       </YStack>
-      {selected && (
-        <Ionicons name="checkmark-circle" size={20} color={theme.accentOnAccent.val} />
-      )}
+      <YStack width={20} shrink={0}>
+        {selected && (
+          <Ionicons name="checkmark-circle" size={20} color={theme.accentOnAccent.val} accessible={false} />
+        )}
+      </YStack>
     </XStack>
   );
 }

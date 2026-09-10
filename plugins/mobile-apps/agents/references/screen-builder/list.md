@@ -37,3 +37,98 @@
 For unresolved cursor/query API details read the matching section of
 `shared/references/data-performance.md`; `shared/samples/screen-list.tsx` is optional
 API guidance, not a mandatory layout.
+
+## Repeated-item geometry belongs to the content
+
+Choose rows, cards, sections, or an approved grid from the next decision and available
+width; none is a mandatory default. Align the repeated information roles, not invented
+field names. Keep media/leading-icon slots, title/metadata start edges, and trailing
+affordances consistent **where those slots exist**. Do not add blank media or fabricated
+status to make records look alike.
+
+- Rows: constrain the text column with `flex={1}` and `minW={0}`, leave icon/chevron
+  columns non-shrinking, and allow essential titles, warnings, and decision text to
+  wrap. Shared `ActionRow` and `RowPick` already provide this text column. `RowPick`
+  reserves its selection marker so selecting an item does not shift text width.
+- Paired comparison tiles: only when that comparison is approved, stretch the outer
+  cells **and the inner card surfaces**. Stretching a pressable wrapper alone leaves
+  short content's background shorter. Let a growing body push the footer down instead
+  of pinning a fixed card height or padding individual records to match.
+  If the accepted preview establishes that alignment, uneven native surfaces are a
+  regression—not an acceptable substitute for the approved repeated-item treatment.
+- Ordinary feed/reading rows can have different heights. Never make every row equal
+  height, truncate important text, or force a grid just to align bottoms. A long
+  label/localization or larger system text may require one column or stacked metadata.
+- Effective actions are at least 44pt on iOS and 48dp on Android; use 48 minimum targets
+  for shared examples. Minimums may grow with content. Independent actions remain
+  siblings, not buttons inside a pressable card.
+
+This **optional approved pair** demonstrates the inner-stretch requirement. The
+240dp minimum column is specific to this example's content, not an app-wide breakpoint
+or a grid mandate. The available-width/font-scale check is conservative; verify the
+actual longest text in the rendered app. Width changes and larger text fall back to
+one column without losing either action.
+
+```tsx
+// Native layout example: inspection-pair
+import React from 'react';
+import { Pressable, useWindowDimensions } from 'react-native';
+import { Text, XStack, YStack } from 'tamagui';
+
+type InspectionOption = { id: string; title: string; description: string };
+
+export function InspectionPair({
+  items, onChoose, allowColumns = false,
+}: {
+  items: readonly [InspectionOption, InspectionOption];
+  onChoose: (id: string) => void;
+  allowColumns?: boolean;
+}) {
+  const { width, fontScale } = useWindowDimensions();
+  const sideBySide = allowColumns && (width - 32 - 12) / 2 >= 240 * Math.max(1, fontScale);
+  return (
+    <XStack flexDirection={sideBySide ? 'row' : 'column'} items="stretch" gap={12} px={16}>
+      {items.map((item) => (
+        <Pressable
+          key={item.id}
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${item.title}`}
+          onPress={() => onChoose(item.id)}
+          style={({ pressed }) => ({
+            flex: sideBySide ? 1 : undefined, minWidth: 0, minHeight: 48,
+            alignSelf: 'stretch', opacity: pressed ? 0.8 : 1,
+          })}
+        >
+          <YStack grow={sideBySide ? 1 : undefined} minW={0} p="$4" gap="$3" bg="$color2" rounded="$4">
+            <YStack grow={1} minW={0} gap="$2">
+              <Text fontSize="$5" fontWeight="700">{item.title}</Text>
+              <Text fontSize="$4" color="$color10">{item.description}</Text>
+            </YStack>
+            <Text fontSize="$4" fontWeight="600">Open checklist</Text>
+          </YStack>
+        </Pressable>
+      ))}
+    </XStack>
+  );
+}
+```
+
+For a reading queue, use a variable-height `ActionRow` instead; its entire row is
+one labeled target and the subtitle can wrap. A status, author, or cover is optional
+only when required by the approved queue decision—not inferred from this example.
+
+```tsx
+// Native layout example: reading-row
+import React from 'react';
+import { ActionRow } from '@/components';
+
+export function ReadingRow({
+  title, summary, onOpen,
+}: {
+  title: string;
+  summary?: string;
+  onOpen: () => void;
+}) {
+  return <ActionRow iconName="book-outline" label={title} subtitle={summary} onPress={onOpen} />;
+}
+```

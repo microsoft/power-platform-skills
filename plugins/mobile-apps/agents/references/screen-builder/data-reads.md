@@ -36,6 +36,54 @@ contract needs route-focus refresh beyond mutation invalidation, use
 Do not add a parallel manual loader to a query-backed screen. Manual-loader fallback
 uses `useFocusEffect`, not a mount-only `useEffect`; use existing shared list hooks.
 
+## Shared queries and observer visibility
+
+Queries with the same key share data and a query function, even when one observer is
+disabled (for example a thumbnail row beside a full-size detail). Keep observer-local
+visibility in `enabled`; never capture it in the shared `queryFn` access guard.
+Authentication/record scope belongs in the query function and remains mandatory for
+manual refetches. All observers use the same provider-derived access decision.
+
+The following bounded helper only constructs options; callers supply the real generated
+download callback and verified scope. It does not replace the host QueryClient:
+
+```ts
+// Shared image query example
+import { normalizeDataverseGuid } from '@/utils';
+import { readDataverseImage, type ImageDownloader } from '@/utils/dataverse-image';
+
+export function imageQueryOptions<Column extends string>({
+  recordId, column, scopeKey, imageVersion, canRead, download,
+}: {
+  recordId: string;
+  column: Column;
+  scopeKey: string;
+  imageVersion: string;
+  canRead: boolean;
+  download: ImageDownloader<Column>;
+}) {
+  const id = normalizeDataverseGuid(recordId);
+  return {
+    queryKey: ['record-image', scopeKey, id, column, imageVersion, 'full'] as const,
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
+      if (!canRead || !scopeKey || !id) throw new Error('Image access is unavailable');
+      if (signal.aborted) throw new Error('Image request cancelled');
+      const bytes = await readDataverseImage(download, { id, column, resolution: 'full' });
+      if (signal.aborted) throw new Error('Image request cancelled');
+      return bytes;
+    },
+  };
+}
+```
+
+Each consumer passes `{ ...options, enabled: canRead && isVisible }` to `useQuery`;
+a thumbnail-only observer can stay disabled without poisoning a detail fetch. Put
+every result-affecting input in the key (including resolution/version and the app's
+account/environment scope), not visual state. Clear private query data on sign-out;
+an opaque scope key is not authorization. A cancelled/late response must not restore
+another record's image. Test two observers sharing a key, access denied, cancellation
+and account/version changes. Never use a second cache or raw HTTP as the fix.
+
 ## Fields and cross-entity reads
 
 - Use `select` for real columns, deterministic order for lists, generated model types
@@ -54,8 +102,12 @@ uses `useFocusEffect`, not a mount-only `useEffect`; use existing shared list ho
   `SystemusersService` / `azureactivedirectoryobjectid`, rejecting disabled, missing,
   or duplicate users. Inspect the profile model's exact systemuser lookup read key;
   never guess `_lookup_value` or fall back to email matching. Missing service/key blocks.
-- Dataverse Image display selects the real image/base64 column and builds a data URI
-  when present; no guessed URL or display shadow properties.
+- Dataverse Image values selected with a record are thumbnails, not the retained full-size
+  image. They can suit small rows/icons; do not stretch them into detail media. For larger
+  surfaces inspect the generated `downloadImage(id, columnName, fullSize)` signature and
+  request `fullSize: true` through that service when full-image storage is supported.
+  See [image resolution](../../../shared/references/media-sources.md#dataverse-image-resolution).
+  Never construct an authenticated URL or call raw HTTP to bypass the generated service.
 - An approved URL/Text image field may hold a public HTTPS URL for direct image-component
   display with loading/error fallback. Dataverse Image/File columns hold bytes, never that URL.
 

@@ -19,6 +19,74 @@ See [image column data](https://learn.microsoft.com/power-apps/developer/data-pl
 and [file column data](https://learn.microsoft.com/power-apps/developer/data-platform/file-column-data).
 Do not change approved schema just to accommodate an illustrative preview image.
 
+## Dataverse image resolution
+
+[Dataverse's image contract](https://learn.microsoft.com/power-apps/developer/data-platform/image-column-data#full-size-and-thumbnail-sized-images)
+distinguishes the thumbnail returned with a record from separately downloaded full-size bytes.
+Selecting the Image column or putting its base64 value into a data URI does not upgrade it.
+
+| Surface | Read contract |
+|---|---|
+| Small record icon / compact row | The selected thumbnail can be sufficient; verify its decoded dimensions against the intended display size and density |
+| Large card / detail / evidence inspection | Inspect the generated service's image-download signature and request its full-size option explicitly when supported; a default/omitted `false` still requests a thumbnail |
+| Full-size unavailable or download failed | Keep record text/actions usable, show a disclosed lower-resolution/error state and bounded retry; do not claim full-size success or silently return an unrelated image |
+
+For generated services exposing `downloadImage(id, columnName, fullSize = false)`, the high-resolution
+path passes `true`, checks the operation result's `success`, and consumes the returned bytes using
+the installed host/native image conversion contract. Validate the exact generated types rather
+than inventing a method or assuming an Image column is an unauthenticated URL.
+
+For screens needing downloads, foreground may copy the focused
+[readDataverseImage helper](../samples/src/utils/dataverse-image.ts), with its existing
+`dataverse.ts` dependency, into app-owned utilities before builders. It requires an explicit
+`thumbnail`/`full` choice and a callback bound to the actual generated method; it rejects failed
+or empty results without a hidden fallback request. Use it inside the existing query function,
+not inside `renderItem`. It returns bytes, not an image-component URI; use the installed
+host/native conversion contract and keep the decoding error state visible.
+
+- Confirm `CanStoreFullImage` and actual availability; supported metadata does not prove every
+  row has an original. Missing full-image storage does not authorize an unapproved schema change.
+- Re-read the live setting after publish and before seeding originals; a requested payload or
+  local manifest is not verification. Full-image Web API downloads can return HTTP 204 when
+  `CanStoreFullImage` is false now **or was false at upload time**. Enabling storage does not
+  recreate discarded originals. Obtain separate approval for metadata changes and for restoring
+  image bytes on existing records; preserve other fields and verify the downloaded originals.
+- Use the existing query/cache layer with keys including record, image column, resolution and
+  image version/id where available. Follow the app's account/environment cache boundary; clear
+  private cached media on sign-out as required. Avoid a full-image request per rendered list row.
+- Keep loading, error and image-decode failures separate from record-data errors. On record/image
+  change, clear stale display/error state; do not show a previous record's asynchronous result.
+- Validate both retrieval modes and failure/retry behavior. Record thumbnail and detail decoded
+  dimensions in rendered evidence; do not infer resolution from file extension or container size.
+- Artwork quality is independent: downloading full-size geometric sample art makes it sharper,
+  not photographic. Use appropriate, licensed imagery when recognition requires it.
+
+### Authoring read-back gate
+
+Use [`scripts/lib/image-verification.js`](../../scripts/lib/image-verification.js) from the
+schema/seeding workflow with the existing `createDataverseRequestExecutor`. It performs only
+metadata reads and read-only image-download messages; it does not grant mutation consent:
+
+```js
+const { verifyImageColumn, verifyImageRoundTrip } = require(
+  `${pluginRoot}/scripts/lib/image-verification.js`,
+);
+const observed = await verifyImageColumn(request, {
+  table, column, canStoreFullImage: true, maxSizeInKB: approvedCapacity,
+});
+// After the separately authorized image upload, use its exact original bytes.
+const evidence = await verifyImageRoundTrip(request, {
+  table, primaryIdAttribute, column, recordId, expectedBytes: originalBytes,
+});
+```
+
+Derive names/IDs from current metadata and the actual inserted/reconciled row; do not guess
+the primary ID property or reuse historical GUIDs. Use returned observed settings in the
+existing manifest and record byte-length/hash evidence in existing sample-media results.
+Never record the file continuation token, credentials or base64 payload as verification.
+Unavailable verification remains explicit, not success. This authoring helper is not an app
+runtime API: native rendering continues through generated services and the host.
+
 ## Verify remote imagery
 
 - Use a stable, public HTTPS image URL with a documented source and license/permission covering
