@@ -220,6 +220,84 @@ test('checkpoint CLI keeps the invoking hook session across fresh processes', (t
   assert.equal(new Set(records.map((record) => record.data.correlationId)).size, 3);
 });
 
+test('runner emits the Application Insights selection event', (t) => {
+  const context = fixture(t);
+  const probePath = path.join(context.root, 'probe.json');
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(HOOKS, 'run-telemetry.js'),
+      'app-insights-selection',
+      'enabled',
+      'prompt',
+      context.projectRoot,
+    ],
+    {
+      cwd: context.projectRoot,
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: context.configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: context.ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '',
+      },
+    },
+  );
+
+  assert.equal(result.status, 0);
+  const probe = waitForJson(probePath);
+  assert.ok(probe);
+  const envelope = JSON.parse(probe.body);
+  const dimensions = JSON.parse(envelope.data.customDimensions);
+  assert.equal(envelope.data.event_Name, 'app_insights_selection');
+  assert.deepEqual(dimensions.eventInfo, {
+    appInstanceId: null,
+    appInsightsSelection: 'enabled',
+    invocationSource: 'prompt',
+  });
+});
+
+test('runner threads the pretool source into the Application Insights selection event', (t) => {
+  const context = fixture(t);
+  const probePath = path.join(context.root, 'probe.json');
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(HOOKS, 'run-telemetry.js'),
+      'app-insights-selection',
+      'disabled',
+      'pretool',
+      context.projectRoot,
+    ],
+    {
+      cwd: context.projectRoot,
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: context.configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: context.ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '',
+      },
+    },
+  );
+
+  assert.equal(result.status, 0);
+  const probe = waitForJson(probePath);
+  assert.ok(probe);
+  const envelope = JSON.parse(probe.body);
+  const dimensions = JSON.parse(envelope.data.customDimensions);
+  assert.equal(envelope.data.event_Name, 'app_insights_selection');
+  assert.deepEqual(dimensions.eventInfo, {
+    appInstanceId: null,
+    appInsightsSelection: 'disabled',
+    invocationSource: 'pretool',
+  });
+});
+
 test('prompt and pretool paths emit independent start signals', (t) => {
   const context = fixture(t);
   assert.equal(runHook('prompt', {

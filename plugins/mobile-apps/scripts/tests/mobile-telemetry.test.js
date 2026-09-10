@@ -9,6 +9,7 @@ const { spawnSync } = require('node:child_process');
 
 const {
   createTelemetryContext,
+  emitAppInsightsSelection,
   emitCheckpoint: emitCheckpointEvent,
   emitSkillStarted,
 } = require('../lib/mobile-telemetry');
@@ -256,6 +257,44 @@ test('started event is allowlisted and carries no user, tenant, prompt, or path 
   for (const forbidden of ['orgId', 'tenantId', 'pacCliVersion', 'aadObjectId', 'prompt', 'cwd', 'path']) {
     assert.equal(Object.prototype.hasOwnProperty.call(event.data, forbidden), false);
   }
+});
+
+test('Application Insights prompt selections emit only the approved choice', (t) => {
+  const context = contextFor(provisioned);
+  for (const selection of ['enabled', 'disabled']) {
+    let captured;
+    const event = emitAppInsightsSelection(context, selection, {
+      emit: (value) => { captured = value; },
+      readAiAgent: () => ({}),
+      correlationId: 'correlation-1',
+      cwd: tempProject(t),
+    });
+    assert.equal(captured, event);
+    assert.equal(event.data.eventName, 'app_insights_selection');
+    assert.equal(event.data.skillName, 'setup-app-insights');
+    assert.deepEqual(event.data.eventInfo, {
+      appInstanceId: null,
+      appInsightsSelection: selection,
+      invocationSource: 'prompt',
+    });
+  }
+});
+
+test('Application Insights selection honors an explicit invocation source', (t) => {
+  const context = contextFor(provisioned);
+  const event = emitAppInsightsSelection(context, 'enabled', {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    correlationId: 'correlation-1',
+    cwd: tempProject(t),
+    source: 'pretool',
+  });
+  assert.equal(event.data.eventName, 'app_insights_selection');
+  assert.deepEqual(event.data.eventInfo, {
+    appInstanceId: null,
+    appInsightsSelection: 'enabled',
+    invocationSource: 'pretool',
+  });
 });
 
 test('checkpoint payload accepts only tracked skills and static snake_case fields', () => {

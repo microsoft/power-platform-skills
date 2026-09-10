@@ -1,6 +1,6 @@
 ---
 name: edit-app
-description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
+description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update Application Insights configuration, the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus
@@ -30,6 +30,9 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 - "Generate an evidence PDF and retain it on the inspection record"
 - "Add a View PDF action for an HTTPS report URL"
 - "Reorder screens — move profile out of tabs, into a modal from the home header"
+- "Enable Application Insights for this app"
+- "Change the Application Insights resource used by this app"
+- "Disable Application Insights for this app"
 
 ## When NOT to use
 
@@ -40,7 +43,7 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 
 ## Workflow
 
-0. Locate app + health/drift probe → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply app mutations → 6. Rebuild affected screens → 7. Verify + quality sweep → 8. Preview + memory-bank update + optional debug handoff
+0. Locate app + health/drift probe → 0.5 Application Insights fast path when applicable → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply app mutations → 6. Rebuild affected screens → 7. Verify + quality sweep → 8. Preview + memory-bank update + optional debug handoff
 
 ---
 
@@ -60,6 +63,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 | Native capability | Native allowlist gate, wrapper existence gate, final `tsc` |
 | Pure-JavaScript dependency | Approved exact-version dependency table, package-content gate, package validation, final `tsc` |
 | Design/component/density | Design-system gate, affected-screen style sweep, final `tsc`, preview |
+| Application Insights configuration only | Valid `app.json`, provider `appConfig` wiring, final `tsc` only if `app/_layout.tsx` changed |
 
 **When a gate fails:** capture full output once, classify by root cause, repair in a batch, rerun the same gate once. Do not make line-by-line fixes with `tsc` after every tiny edit. Continue only when the gate is clean or record a `BLOCKED:` / `DONE_WITH_CONCERNS:` entry in `memory-bank.md`.
 
@@ -106,6 +110,36 @@ Run these existing-app health checks before any mutation:
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
 
 If the app already fails `npx tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
+
+### Step 0.5 — Application Insights configuration fast path
+
+Use this fast path when the request is only to enable Application Insights, change its resource, or disable it. Application Insights is host/runtime configuration, not a connector or plan section, so do not run the planner, data-model, native, design, screen, or preview flows.
+
+If the request also adds or changes custom events in app screens, configure Application Insights here first, then continue through the normal edit workflow for those source changes.
+
+All Application Insights logic lives in the dedicated `/setup-app-insights` skill. Delegate to it rather than duplicating Azure discovery, connection-string handling, provider wiring, or privacy rules here:
+
+```
+Invoke skill: /setup-app-insights
+
+Environment:
+  CODE_APPS_NATIVE_ORCHESTRATING=1
+
+Arguments:
+  --working-dir <working_dir>
+  --action <enable|change-resource|disable>   # omit to let the skill infer + ask
+```
+
+Determine `--action` from the request (`enable` / `change-resource` / `disable`); omit it if the request only says "update Application Insights" and let the skill ask. The skill owns the mutation preview, approval, `app.json` + `PowerAppsProvider` `appConfig` wiring, `memory-bank.md` updates, and the selection telemetry emit.
+
+Handle the return per the status protocol (AGENTS.md rule #12):
+
+- `DONE` → print the action completed. Then, if the return includes `instrumentation_offer: available` (a successful enable/change-resource), ask the user one question, defaulting to **No**: "Application Insights is on. Want me to add custom telemetry to your app's major operations (create / update / delete)?"
+  - **Yes** → continue into the normal edit workflow (Step 1 onward) with this brief: *"Add custom events at each successful create, update, and delete boundary for the app's main entities; emit named events through `getCustomEventsLogger` with approved scalar properties only (no operation results, payloads, form values, free text, record titles, personal identifiers, tokens, precise coordinates, nested objects, or complete URLs); use `trackScenario()` for any duration."* Screen-planner and screen-builder own the source edits under their existing privacy allowlist.
+  - **No** (or `instrumentation_offer: none`) → stop; do not continue to Step 1.
+- `DONE_WITH_CONCERNS` → surface concerns, then stop.
+- `NEEDS_CONTEXT` → surface the question, re-invoke with the answer.
+- `BLOCKED` → surface the error (usually `app.json` unusable) and stop.
 
 ### Step 1 — Discover intent + inspect existing app
 

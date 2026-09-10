@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → 6.75 design system → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design-system integration → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -237,6 +237,8 @@ Re-prompt for name if (1). If (2), send the user to Maker portal to delete the e
 If `npx power-apps list-codeapps` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
+
+**Application Insights requirement normalization:** If the user's description asks for Application Insights, telemetry, app analytics, diagnostics, traces, or monitoring of this generated app, note it for a post-creation `/setup-app-insights` run (Application Insights is no longer configured during creation) and explicitly tell the planner that it is host/runtime configuration, not a data connector or planning constraint. The planner must not propose the Azure Application Insights connector, a custom telemetry connector, telemetry tables, or telemetry screens unless the user separately asked to build an in-app analytics dashboard. If the user names specific custom events (for example `OrderSubmitted` or `InspectionCompleted`), preserve those event names and their approved scalar properties in the corresponding per-screen specs so screen builders can emit them through `getCustomEventsLogger()`; do not convert them into connectors or data-model artifacts.
 
 ### Step 2b — Requirements discovery
 
@@ -1019,6 +1021,7 @@ Key points:
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
 - **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. Each route must use `SafeAreaView` or explicit insets for its own visible edges.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
+- Import `app.json` and pass it through the `appConfig` prop. `PowerAppsProvider` reads `expo.extra.appInsightsConfig` and enforces its `enabled` opt-in; this explicit app-config boundary is required because the fixed Dev Player does not expose the loaded app's extras through `Constants.expoConfig`. Never print the connection string, copy it to `memory-bank.md`, or include it in a summary.
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
 **Fix 4 — Shared TypeScript configuration**
@@ -1140,7 +1143,7 @@ Arguments:
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
-- `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
+- `DONE` → continue to Step 6.85. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
@@ -1172,7 +1175,7 @@ The user skipped the design system but still deserves to see their screens befor
 
 4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
 
-  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
+  > `→ Preview rendered with default styling. Continuing to Step 6.85. (Interrupt and re-run /design-system or /edit-app to revise.)`
 
 This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
 
@@ -2323,6 +2326,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+App Insights  : <enabled for selected customer-owned resource | disabled>
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────
@@ -2330,7 +2334,7 @@ Dev server    : npx expo start — running in background terminal <id>
 
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
 
-Then present exactly these 4 options:
+Then present exactly these 6 options:
 
 ```
 What now?
@@ -2340,6 +2344,7 @@ What now?
 3. Edit the app                (/edit-app)
 4. Add more capabilities       (/add-dataverse, /add-connector, /add-native)
 5. Configure auth later        (/set-app-registration-native)
+6. Set up Application Insights (/setup-app-insights)
 
 Which option? (or "none — I'll keep iterating locally")
 ```
