@@ -11,6 +11,35 @@ const skillPath = path.resolve(
 );
 const skill = fs.readFileSync(skillPath, 'utf8');
 
+test('foreground Dataverse planning bypasses cached environment resolution', () => {
+  const planningStart = skill.indexOf('### Step 3.0 — Foreground Dataverse planning');
+  const planningEnd = skill.indexOf(
+    'Build `<working_dir>/.tmp/dataverse-concepts.json`',
+    planningStart,
+  );
+  assert.notStrictEqual(planningStart, -1);
+  assert.notStrictEqual(planningEnd, -1);
+  assert.match(
+    skill.slice(planningStart, planningEnd),
+    /resolve-environment\.js" "\$ACTIVE_ENV_ID" --no-cache/,
+  );
+});
+
+test('offline setup follows materialized Dataverse data and never infers connector-only from absence', () => {
+  const dataModel = skill.indexOf('### Step 8 — Apply data model');
+  const sampleData = skill.indexOf('### Step 8.5 — Seed sample data');
+  const offline = skill.indexOf('### Step 8.85 — Offline profile');
+  const native = skill.indexOf('### Step 9 — Apply native capabilities');
+
+  assert.ok(dataModel < sampleData);
+  assert.ok(sampleData < offline);
+  assert.ok(offline < native);
+  assert.doesNotMatch(skill, /### Step 6\.85/);
+  assert.match(skill, /Do not classify a missing\s+manifest as connector-only/);
+  assert.match(skill, /Missing,\s+malformed, or empty manifests are `BLOCKED/);
+  assert.match(skill, /seeding step fails for a non-manifest reason[\s\S]*continue to Step 8\.85/);
+});
+
 test('template preparation is delegated to the deterministic script', () => {
   const start = skill.indexOf('### Step 5 — Prepare existing template');
   const end = skill.indexOf('### Step 6 — Initialize');

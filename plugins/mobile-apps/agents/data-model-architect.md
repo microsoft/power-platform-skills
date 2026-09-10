@@ -4,6 +4,7 @@ description: Use when an orchestrator needs a Dataverse data model proposed (exi
 user-invocable: false
 color: cyan
 model: sonnet
+
 tools:
   - Read
   - Write
@@ -22,10 +23,12 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - Wizard answers (target users, aesthetic, features)
 - The working directory
 - The plugin root
-- **Normalized Dataverse foreground planning snapshot path (preferred)** — an absolute path to
-  `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`.
-- **Planning evidence path (preferred)** — an absolute path to the deterministic
-  Markdown appendix rendered from that same foreground planning snapshot.
+- **Normalized Dataverse foreground planning snapshot path (validation only)** —
+  an absolute path to
+  `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`. Do not read
+  this large artifact into model context.
+- **Compact architect evidence path (preferred)** — an absolute path to the
+  hash-bound JSON sidecar rendered from that foreground planning snapshot.
 - **Dataverse planning mode** — `required` or `connector-only`.
   `connector-only` intentionally has no snapshot/evidence paths.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
@@ -38,13 +41,16 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - **Reuse-first and target-grounded.** Use exact target metadata for every
   proposed table, including standard tables, and prefer reuse > extension >
   new. In planning-snapshot-only mode that evidence comes only from the validated
-  foreground planning snapshot. Don't propose a `cr123_customer` table if a verified
+  compact architect sidecar. Don't propose a `cr123_customer` table if a verified
   target `contact` table fits.
 - **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so every decision remains unverified and non-executable. Step 8 verifies approved decisions against fresh bounded metadata; it never invents `Adapt` or `Defer`.
 - **Mode fidelity.** `connector-only` means zero Dataverse tables and zero
-  Dataverse discovery. A Dataverse-required run with unreadable metadata is
-  blocked by the foreground orchestrator before this agent is dispatched.
-- **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), `Defer` (leave out of this run), or `Unverified` (target metadata could not be read). Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
+  Dataverse discovery. A Dataverse-required run with no trustworthy foreground
+  snapshot is stopped by the orchestrator for the user action needed to restore
+  environment, authentication, inventory, or artifact access. Individual
+  table-detail failures inside a valid snapshot are not blockers; classify the
+  affected table as `Defer`.
+- **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), `Defer` (leave out of this run), or, on the legacy live-discovery path only, `Unverified` (discovery could not run at all). A `detailLoadFailures` entry in a valid foreground snapshot is always `Defer`, never `Unverified`. Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
 - **No questions.** Do not ask the user anything — infer from the requirements provided. The planner runs the approval gate, not you.
@@ -91,45 +97,64 @@ artifact milestone, and return `DONE`.
 
 ## Snapshot-only fast path
 
-In `required` mode, both snapshot and planning-evidence paths must be supplied.
-Validate before planning:
+In `required` mode, both the full snapshot validation path and compact architect
+evidence path must be supplied. Before planning, validate their hash, environment,
+table facts, candidate order, and top-three cap without reading the full snapshot:
 
-- snapshot `version >= 3`;
-- snapshot environment URL and tenant match the foreground-resolved target;
-- inventory, detailed tables, candidate ranking, proposed-name checks, and
-  timing metrics are present;
-- the evidence appendix names the same environment and generated timestamp.
+```bash
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+  --snapshot "<foreground snapshot path>" \
+  --output "<compact architect evidence path>" \
+  --validate-only
+```
+
+The compact sidecar must have `schemaVersion: 1`, the foreground environment URL
+and tenant, and a valid `sourceSnapshotSha256`. A non-zero validation result is
+`NEEDS_CONTEXT: matching-dataverse-snapshot-and-evidence`.
 
 If validation succeeds, this path is mandatory:
 
-1. Read the snapshot once and the evidence appendix once.
+1. Read the compact architect evidence once. Do not use `Read`, `Grep`, or shell
+  output to load the full snapshot into model context; its path is only for the
+  deterministic validation command above and the post-contract decision gate.
 2. Skip Steps 1–3 environment resolution, access verification, and broad
    discovery. Skip every live Dataverse query in Step 5.
 3. Do **not** run Bash discovery or call `resolve-environment.js`,
    `verify-dataverse-access.js`, `dataverse-request.js`, or
    `list-table-columns.js`.
-4. Use `candidateRanking` for concept selection, `tables` for exact
-   column/relationship/key/choice/computed evidence, and
+4. Use `concepts[].topCandidates` for concept selection, `selectedTables` for
+  exact column/relationship/key/choice/computed evidence, and
    `proposedNameChecks` for Create/Adapt decisions. Do not rescan inventory.
-   Treat candidates with `detailStatus: unavailable` and matching
+  Treat candidates with `detailStatus: inventory-only` or `unavailable` and matching
    `detailLoadFailures` entries as advisory inventory evidence only; never
-   describe them as detailed. Proposed-name checks are collision evidence, not
-   required existing-table discovery.
-5. If a required existing candidate, relationship target, or standard/managed
-   dependency is present only in `inventory`, stop and return exactly:
+  describe them as detailed. A selected table with `detailLevel: core` lacks
+  decision-bearing enrichment and cannot authorize Reuse, Extend, or Adapt.
+  Proposed-name checks are collision evidence, not required existing-table discovery.
+  If the prompt includes `NEEDS_REVISION: dataverse-plan-validation`, revise
+  the conflicting decisions from this same evidence. Do not request another
+  metadata read or user answer merely because the previous contract proposed
+  an unavailable name.
+5. If a Reuse, Extend, or Adapt candidate, relationship target, or
+  standard/managed dependency is absent from `selectedTables`, is represented
+  only by a top candidate, or has `detailLevel: core`, stop and return exactly:
 
    `NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated-logical-names>`
 
-   Sort and de-duplicate the names. This requests one bounded foreground
-   expansion; do not downgrade the decision or perform another broad scan.
+   Sort and de-duplicate the names. The foreground performs an exact,
+   incremental expansion for names that have not already been attempted. Do
+   not downgrade a viable decision or perform another broad scan. If a name
+   was already attempted and remains unavailable, classify the dependency
+   `Defer` rather than requesting the same metadata again.
 6. Before emitting any `Create` or `Adapt` decision, verify its final logical
    name appears in `proposedNameChecks.checked`. If one or more final names are
    absent, stop and return exactly:
 
    `NEEDS_CONTEXT: proposed-dataverse-names:<comma-separated-logical-names>`
 
-   Sort and de-duplicate the names. The foreground will run one bounded
-   collision-only expansion; do not infer absence from an unchecked name.
+   Sort and de-duplicate the names. The foreground runs an incremental
+   collision-only expansion for names that have not already been checked. Do
+   not infer absence from an unchecked name, and do not request a name again
+   once its present/missing result is available.
 
 If either required artifact is missing, invalid, or mismatched, return
 `NEEDS_CONTEXT: matching-dataverse-snapshot-and-evidence`. Do not fall back to
@@ -230,8 +255,8 @@ count and elapsed time.
 > "→ Reconciling every required table and column against verified target metadata…"
 
 In the validated snapshot-only path, interpret this line as "against the
-foreground planning snapshot", run no command, and use detailed `snapshot.tables`
-entries plus the deterministic appendix. Before assigning any decision on the
+compact architect evidence", run no live Dataverse command, and use
+`selectedTables` plus its selection evidence. Before assigning any decision on the
 legacy live path, resolve every required entity — including `contact`,
 `account`, `incident`, other standard tables, and managed-solution
 dependencies — in a **single** filtered query that also expands their columns:
@@ -243,7 +268,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 
 Build the `$filter` by OR-ing every selected logical name. This is the [documented way to query multiple table definitions at once](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#basic-retrievemetadatachanges-example) and replaces 2N requests with one. Keep the expanded `$select` to base `AttributeMetadata` properties — one query [cannot cast to a derived column type](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions).
 
-A planned name **present** in `value[]` exists; a name **absent** from `value[]` does not. Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). Absence is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is `Defer` — it must be installed/imported or removed from the design, so leave it out of this run and record why. If the batched query itself fails, mark the affected entities `Unverified` rather than `Create`, and carry the reason into the section — `/add-dataverse` re-checks it at its own reconciliation step.
+A planned name **present** in `value[]` exists; a name **absent** from `value[]` does not. Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties (`.Value`). Absence is actionable only after considering the planned dependency kind: an absent new custom table may be created; an absent standard, managed, reused, or extended dependency is `Defer` — it must be installed/imported or removed from the design, so leave it out of this run and record why. On the legacy live-discovery path only, if the batched query itself fails before a trustworthy snapshot exists, mark the affected entities `Unverified` rather than `Create`. In snapshot-only mode, an attempted table-detail failure is `Defer`.
 
 For each required entity, classify it as exactly one of:
 
@@ -252,7 +277,7 @@ For each required entity, classify it as exactly one of:
 - **Create** — the planned item is explicitly a new custom table, the exact logical name returns 404, the publisher prefix is verified, and all required-existing dependencies are present
 - **Adapt** — a same-name custom table/column is incompatible or the intended custom table cannot be safely extended, so create an app-owned alternative under a new verified logical name and record the alias
 - **Defer** — a standard, managed, solution-owned, or required-existing dependency is missing/incompatible, or no safe app-owned alternative can preserve the intended semantics; leave it out of this run and record the prerequisite
-- **Unverified** — discovery could not run for this entity (Step 1/2 failure or a non-200/404 response). Record the intended decision plus the reason; `/add-dataverse` re-checks it before any write
+- **Unverified** — legacy live-discovery mode only: discovery could not run for this entity before a trustworthy foreground snapshot existed. Never use this state for a `detailLoadFailures` entry; that entry is `Defer`
 
 Classify every planned column before finalizing its table decision:
 
@@ -260,7 +285,7 @@ Classify every planned column before finalizing its table decision:
 - **Create** — column is absent, is explicitly a custom addition, and the target table permits attributes. The containing table becomes `Extend`, or the column is included inline when its table is `Create`.
 - **Adapt** — a same-name custom column is incompatible and the table permits a new custom column under a verified logical name; record the old-to-new alias.
 - **Defer** — a required standard/managed column is absent or incompatible, the target cannot be customized, or a renamed custom column would change the intended semantics.
-- **Unverified** — the live column metadata could not be read reliably; preserve the intended decision for `/add-dataverse` to re-check.
+- **Unverified** — legacy live-discovery mode only: column discovery could not run before a trustworthy foreground snapshot existed. A column affected by a snapshot `detailLoadFailures` entry is `Defer`.
 
 `Extend` is a table decision, not a column operation. Do not classify any item as `Replace`; Dataverse cannot change column types in place, and replacement needs an explicit migration outside this workflow.
 
@@ -271,7 +296,7 @@ Classify every planned column before finalizing its table decision:
 3. **Existing custom table by concept** → if a different-named existing table serves the same business purpose (e.g., an existing `cr8142a_site` table for a new "Inspection Site" entity), prefer Extend over Create.
 4. **Extension-cost guardrail** → reuse remains preferred when the existing record is authoritative/shared, but do not extend a merely similar custom table by default when the app would add more than 8 columns or more than 50% of the final required schema. Prefer a new app-owned table unless shared identity, integrations, security, or reporting make the existing table the true system of record. Record the metadata-write tradeoff and rationale in `Why`.
 5. **Create** → only when no existing table — standard or custom — serves the entity's purpose, the proposed custom logical name is absent in the target, and every required-existing dependency is verified.
-6. **Adapt / Defer / Unverified** → incompatible custom schema becomes Adapt when a safe app-owned alias preserves semantics; missing/incompatible standard, managed, or required-existing schema becomes Defer; unavailable target facts become Unverified. Never reinterpret any of these states as Create under the conflicting logical name.
+6. **Adapt / Defer / Unverified** → incompatible custom schema becomes Adapt when a safe app-owned alias preserves semantics; missing/incompatible standard, managed, required-existing, or attempted-but-unavailable snapshot metadata becomes Defer. Unverified is reserved for the legacy path where trustworthy discovery never ran. Never reinterpret any of these states as Create under the conflicting logical name.
 
 > **⚠️ Plan-time collision check (HARD).** Before classifying any entity as `Create`, look up its **proposed logical name** (e.g. `cr8142a_inspection`) in the Step 3 IsCustomEntity result. If a row with that exact `LogicalName` already exists, the entity **CANNOT** be classified as `Create`. Apply the following decision tree in order:
 >
@@ -279,7 +304,7 @@ Classify every planned column before finalizing its table decision:
 > 2. **Downgrade to Extend** — the existing table is the right concept but missing some custom columns (any overlap, or same entity type), and live `IsCustomizable.Value` plus `CanCreateAttributes.Value` permit extension. Add only the missing columns; never remove or rename existing ones.
 > 3. **Adapt (rename and create)** — use ONLY when the existing custom table is a completely different entity concept (e.g., `cr8142a_inspection` exists but contains payroll or product catalog data — fundamentally incompatible). Bump the proposed name to `<prefix>_<entity>v2`, record the alias, and document the evidence in the Notes column.
 >
-> **Default is Reuse or Extend only when compatibility is proven.** Adapt is the exceptional path, not the fallback. Request bounded detailed expansion only when the candidate is inventory-only. If live metadata could not be read, mark Unverified. If already-detailed metadata remains incompatible or ambiguous, classify Defer and record what evidence or prerequisite is missing; never loop a no-op expansion or extend merely to keep the workflow moving.
+> **Default is Reuse or Extend only when compatibility is proven.** Adapt is the exceptional path, not the fallback. Request incremental detailed expansion only when the candidate is inventory-only or core-only and has not already been fully attempted. If a valid snapshot records the detail read as unavailable, classify Defer. Use Unverified only on the legacy path where discovery never ran. If already-detailed metadata remains incompatible or ambiguous, classify Defer and record what evidence or prerequisite is missing; never loop a no-op expansion or extend merely to keep the workflow moving.
 >
 > Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 1 with a name that will explode at Step 5a of `/add-dataverse`.
 
@@ -295,7 +320,7 @@ Build a table:
 ```
 
 In snapshot-only mode, keep `Target evidence` concise: cite the relevant
-concept/table anchor in the planning evidence appendix and state only the
+concept/table anchor in the compact architect evidence and state only the
 decision-bearing fact (for example, "appendix: `contact`; customizable=yes;
 2/2 required columns present"). Do not restate raw inventory, option lists, or
 full column payloads.
@@ -407,8 +432,8 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 
 ### Planning Evidence
 
-- Deterministic appendix: `<relative planning evidence path>`
-- Environment and generated timestamp match the validated snapshot.
+- Compact hash-bound sidecar: `<relative architect evidence path>`
+- Environment and source snapshot hash passed deterministic validation.
 
 ### Target Reconciliation
 

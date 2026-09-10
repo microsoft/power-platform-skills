@@ -78,18 +78,19 @@ function renderPlanningEvidence(snapshot) {
 
   lines.push(
     '',
-    '## Skipped advisory detail failures',
+    '## Unavailable detail metadata',
     '',
-    '| Logical name | Selection reasons | Status | Error |',
-    '|---|---|---:|---|',
+    '| Logical name | Required | Selection reasons | Status | Error |',
+    '|---|---:|---|---:|---|',
   );
   const detailLoadFailures = snapshot.detailLoadFailures || [];
   if (detailLoadFailures.length === 0) {
-    lines.push('| — | — | — | None |');
+    lines.push('| — | — | — | — | None |');
   } else {
     for (const failure of detailLoadFailures) {
       lines.push(
         `| \`${escapeCell(failure.logicalName)}\` | `
+        + `${failure.required ? 'yes' : 'no'} | `
         + `${escapeCell(failure.selectionReasons.join(', '))} | `
         + `${failure.status ?? 'n/a'} | ${escapeCell(failure.error)} |`,
       );

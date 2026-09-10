@@ -1857,7 +1857,7 @@ function operationAffectedPublishTables(operation) {
 function revisedEquivalentOperation(previousOperation, previousManifest, normalized, context) {
   const expectedItemType = String(previousOperation?.id || '').startsWith('create-table:')
     ? 'table'
-    : String(previousOperation?.id || '').startsWith('extend-column:')
+    : /^(extend-column|configure-image):/.test(String(previousOperation?.id || ''))
       ? 'column'
       : String(previousOperation?.id || '').startsWith('create-relationship:')
         ? 'relationship'
@@ -1926,6 +1926,40 @@ function revisedEquivalentOperation(previousOperation, previousManifest, normali
     const effectiveColumn = normalizeName(
       column.adaptedLogicalName || column.logicalName,
     );
+    if (String(previousOperation.id).startsWith('configure-image:')) {
+      const definition = previousOperation.body;
+      if (!isImageConfigurationPut(previousOperation)
+        || normalizeColumnType(column.type) !== 'image'
+        || ['defer', 'unverified'].includes(table.plannedDecision)
+        || normalizeName(definition.LogicalName) !== effectiveColumn
+        || normalizeName(definition.SchemaName)
+          !== normalizeName(column.adaptedSchemaName || column.schemaName)) {
+        return null;
+      }
+      const comparison = baseColumnCompatibility(column, {
+        type: definition.AttributeType,
+        typeName: metadataValue(definition.AttributeTypeName),
+        sourceType: metadataValue(definition.SourceType) ?? null,
+        requiredLevel: metadataValue(definition.RequiredLevel),
+        primaryName: Boolean(definition.IsPrimaryName),
+        maxSizeInKB: definition.MaxSizeInKB,
+        canStoreFullImage: definition.CanStoreFullImage,
+      });
+      if (!comparison.compatible) return null;
+
+      // The completed PUT is hash-bound evidence of the full image definition.
+      // Preserve labels, immutable thumbnail fields, and any larger size already
+      // applied; a create-column payload would discard that existing metadata.
+      return operation(
+        0,
+        `configure-image:${effectiveTable}:${effectiveColumn}`,
+        'extensions',
+        `EntityDefinitions(LogicalName='${effectiveTable}')/Attributes(LogicalName='${effectiveColumn}')`,
+        stableClone(definition),
+        context.solutionUniqueName,
+        'PUT',
+      );
+    }
     return operation(
       0,
       `extend-column:${effectiveTable}:${effectiveColumn}`,

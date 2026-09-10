@@ -1149,7 +1149,7 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
   }
 });
 
-test('existing image full-size configuration is repaired once with a full-definition PUT', () => {
+function imageRepairFixture() {
   const contract = {
     schemaVersion: 1,
     publisherPrefix: 'cr1',
@@ -1187,6 +1187,11 @@ test('existing image full-size configuration is repaired once with a full-defini
       imageUpdateDefinition: imageDefinition,
     }),
   ]);
+  return { contract, imageDefinition, existing };
+}
+
+test('existing image full-size configuration is repaired once with a full-definition PUT', () => {
+  const { contract, imageDefinition, existing } = imageRepairFixture();
   const repair = buildManifest(buildInputs(contract, snapshot({ tables: [existing] })));
   const update = repair.execution.phases[1].operations[0];
 
@@ -1826,6 +1831,181 @@ test('collision checkpoint roll-forward preserves prior writes and rebinds revis
     }),
     /checkpoint table cr1_category is outside the revised contract without collision evidence/,
   );
+});
+
+function imageCollisionRecoveryFixture({ adaptedImage = false, existingSize = 10240 } = {}) {
+  const { contract, existing } = imageRepairFixture();
+  const item = contract.tables[0];
+  const image = item.columns.find((value) => value.type === 'image');
+  const liveImage = existing.columns.find((value) => value.logicalName === 'cr1_photo');
+  liveImage.maxSizeInKB = existingSize;
+  liveImage.imageUpdateDefinition.MaxSizeInKB = existingSize;
+  liveImage.imageUpdateDefinition.DisplayName = {
+    LocalizedLabels: [{ Label: 'Existing localized image label', LanguageCode: 1033 }],
+  };
+  liveImage.imageUpdateDefinition.IsPrimaryImage = false;
+  if (adaptedImage) {
+    image.plannedDecision = 'adapt';
+    image.adaptedLogicalName = 'cr1_photov2';
+    image.adaptedSchemaName = 'cr1_PhotoV2';
+    liveImage.logicalName = image.adaptedLogicalName;
+    liveImage.schemaName = image.adaptedSchemaName;
+    liveImage.imageUpdateDefinition.LogicalName = image.adaptedLogicalName;
+    liveImage.imageUpdateDefinition.SchemaName = image.adaptedSchemaName;
+  }
+  item.dependencyTier = 1;
+  item.columns.push(contractColumn('cr1_categoryid', 'lookup', 'create', {
+    lookupTarget: 'cr1_category',
+  }));
+  item.relationships.push({
+    kind: 'many-to-one',
+    schemaName: 'cr1_Category_Item',
+    plannedDecision: 'create',
+    parentTable: 'cr1_category',
+    childTable: 'cr1_item',
+    lookup: {
+      logicalName: 'cr1_categoryid',
+      schemaName: 'cr1_categoryid',
+      displayName: 'Category',
+      requiredLevel: 'None',
+    },
+  });
+  contract.tables.push(contractTable('cr1_category', 'reuse', 0, []));
+  const reconciliation = snapshot({ tables: [
+    existing,
+    table('cr1_category', [column('cr1_name', 'String', { primaryName: true })]),
+  ] });
+  const priorInputs = buildInputs(contract, reconciliation, '# Prior image plan\n');
+  const priorManifest = buildManifest(priorInputs);
+  const operations = priorManifest.execution.phases.flatMap((phase) => phase.operations);
+  assert.equal(priorManifest.executable, true);
+  assert.deepEqual(operations.map((value) => value.method), ['PUT', 'POST', 'POST']);
+  const [completedOperation, collisionOperation] = operations;
+  const journal = {
+    schemaVersion: 1,
+    binding: {
+      environmentUrl: CONTEXT.environmentUrl,
+      solution: CONTEXT.solutionUniqueName,
+    },
+    completed: {
+      [operationFingerprint(completedOperation, CONTEXT.solutionUniqueName)]: {
+        operationId: completedOperation.id,
+        status: 204,
+      },
+    },
+    recoveries: [],
+    inFlight: {
+      index: collisionOperation.index,
+      operationId: collisionOperation.id,
+      fingerprint: operationFingerprint(collisionOperation, CONTEXT.solutionUniqueName),
+      manifestHash: priorManifest.integritySha256,
+      reconciliationHash: priorManifest.binding.reconciliationSha256,
+      failure: { status: 400, collision: true },
+    },
+  };
+  liveImage.canStoreFullImage = true;
+  liveImage.imageUpdateDefinition = structuredClone(completedOperation.body);
+  const revisedContract = structuredClone(contract);
+  const revisedItem = revisedContract.tables.find((value) => value.logicalName === 'cr1_item');
+  const relationship = revisedItem.relationships[0];
+  relationship.plannedDecision = 'adapt';
+  relationship.adaptedSchemaName = 'cr1_Category_ItemV2';
+  relationship.lookup.adaptedLogicalName = 'cr1_categoryidv2';
+  relationship.lookup.adaptedSchemaName = 'cr1_CategoryIdV2';
+  const lookup = revisedItem.columns.find((value) => value.type === 'lookup');
+  lookup.plannedDecision = 'adapt';
+  lookup.adaptedLogicalName = relationship.lookup.adaptedLogicalName;
+  lookup.adaptedSchemaName = relationship.lookup.adaptedSchemaName;
+  function revisionInputs(revise = () => {}) {
+    const revised = structuredClone(revisedContract);
+    revise(revised.tables.find((value) => value.logicalName === 'cr1_item'));
+    return buildInputs(revised, reconciliation, '# Revised image plan\n');
+  }
+  function rollForward(inputs) {
+    return rollForwardPublishCheckpoint({
+      checkpoint: priorManifest.publishCheckpoint,
+      previousManifest: priorManifest,
+      journal,
+      contract: inputs.contract,
+      approvalReceipt: inputs.approvalReceipt,
+      contractBytes: inputs.contractBytes,
+      planBytes: inputs.planBytes,
+      context: CONTEXT,
+      rolledAt: NOW,
+    });
+  }
+  return { priorManifest, completedOperation, revisionInputs, rollForward };
+}
+
+test('image checkpoint roll-forward preserves completed PUTs and resumes relationship publication', () => {
+  for (const adaptedImage of [false, true]) {
+    const fixture = imageCollisionRecoveryFixture({ adaptedImage, existingSize: 20480 });
+    const priorBytes = stableJson(fixture.priorManifest);
+    const inputs = fixture.revisionInputs();
+    const rolled = fixture.rollForward(inputs);
+    assert.deepEqual(rolled.tables, ['cr1_item']);
+    assert.equal(rolled.binding.planSha256, sha256(inputs.planBytes));
+    assert.deepEqual(rolled.rollForwards[0].previousCheckpoint, fixture.priorManifest.publishCheckpoint);
+    assert.equal(stableJson(fixture.priorManifest), priorBytes);
+    assert.equal(fixture.completedOperation.body.MaxSizeInKB, 20480);
+    assert.equal(fixture.completedOperation.body.MaxHeight, 144);
+    assert.equal(fixture.completedOperation.body.IsPrimaryImage, false);
+    assert.equal(fixture.completedOperation.body.DisplayName.LocalizedLabels[0].Label, 'Existing localized image label');
+
+    const manifest = buildManifest({ ...inputs, publishCheckpoint: rolled });
+    assert.equal(manifest.executable, true);
+    assert.deepEqual(
+      manifest.execution.phases.flatMap((phase) => phase.operations).map((value) => value.id),
+      ['create-relationship:cr1_category_itemv2', 'publish-customizations'],
+    );
+    assert.match(
+      manifest.execution.phases[4].operations[0].body.ParameterXml,
+      /<entity>cr1_item<\/entity>/,
+    );
+    const validation = validateManifest(manifest, {
+      ...inputs, publishCheckpoint: rolled, requireExecutable: true,
+    });
+    assert.equal(validation.valid, true, validation.errors.join('; '));
+  }
+});
+
+test('image checkpoint roll-forward rejects incompatible or removed completed image components', () => {
+  const fixture = imageCollisionRecoveryFixture();
+  const cases = [
+    ['removed', (item) => { item.columns = item.columns.filter((value) => value.type !== 'image'); }],
+    ['table deferred', (item) => { item.plannedDecision = 'defer'; }],
+    ['table unverified', (item) => { item.plannedDecision = 'unverified'; }],
+    ['table renamed', (item) => {
+      item.plannedDecision = 'adapt';
+      item.adaptedLogicalName = 'cr1_itemv2';
+      item.adaptedSchemaName = 'cr1_ItemV2';
+    }],
+    ...[
+      ['type', { type: 'file' }],
+      ['deferred', { plannedDecision: 'defer' }],
+      ['unverified', { plannedDecision: 'unverified' }],
+      ['reuse', { plannedDecision: 'reuse' }],
+      ['retention', { canStoreFullImage: false }],
+      ['larger size', { maxSizeInKB: 20480 }],
+      ['required level', { requiredLevel: 'ApplicationRequired' }],
+      ['primary name', { primaryName: true }],
+      ['renamed', {
+        plannedDecision: 'adapt',
+        adaptedLogicalName: 'cr1_photov2',
+        adaptedSchemaName: 'cr1_PhotoV2',
+      }],
+    ].map(([name, updates]) => [
+      name,
+      (item) => Object.assign(item.columns.find((value) => value.type === 'image'), updates),
+    ]),
+  ];
+  for (const [name, revise] of cases) {
+    assert.throws(
+      () => fixture.rollForward(fixture.revisionInputs(revise)),
+      /completed metadata component configure-image:cr1_item:cr1_photo was removed or changed/,
+      name,
+    );
+  }
 });
 
 test('checkpoint roll-forward rejects removed completed columns, relationships, and keys', () => {

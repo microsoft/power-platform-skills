@@ -79,7 +79,7 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 | `status` value | Action |
 |---|---|
 | (section absent) OR `status: none` | First-time run. Continue to Step 2. |
-| `status: not-applicable` | User previously opted out via `/create-mobile-app` Step 6.85 ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
+| `status: not-applicable` | User previously opted out via `/create-mobile-app` Step 8.85 ("doesn't need offline support"). Re-confirm: "Memory-bank says this app doesn't need offline. Override and proceed? (y/N)". Default N stops here. |
 | `status: done` AND a profile matching `profileId` still exists in env | Already complete. Print summary from the memory-bank block; ask user if they want to `/edit-offline-profile` (v0.2) or just exit. |
 | `status: done` BUT `GET /mobileofflineprofiles(<profileId>)` returns 404 | Profile was deleted externally (maker portal or another env). Treat as `none`; clear the section; continue to Step 2. |
 | `status: in-progress` AND profile exists in env | **Resume flow** — see below. |

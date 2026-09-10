@@ -290,4 +290,18 @@ test('resolveClusterEnvironment refreshes legacy metadata, skips saved lookups, 
   assert.equal(await resolveClusterEnvironment(root), null);
   assert.equal(requests.length, 2);
   assert.deepEqual(JSON.parse(fs.readFileSync(appPath, 'utf8')), app);
+
+  offline = false;
+  const readOnlyEnvironmentId = '33333333-3333-4333-8333-333333333333';
+  const beforeReadOnly = [appPath, authPath, powerPath].map(filePath => fs.readFileSync(filePath));
+  const readOnlyResult = await resolverModule.exports.resolveEnvironment(
+    readOnlyEnvironmentId, root, false, { noCache: true },
+  );
+  assert.equal(readOnlyResult.source, 'environment-id');
+  assert.equal(readOnlyResult.environmentId, readOnlyEnvironmentId);
+  assert.equal(readOnlyResult.clusterEnvironment, 'Prod');
+  assert.equal(readOnlyResult.clusterGeoName, 'US');
+  assert.equal(requests.length, 3);
+  assert.equal(fs.existsSync(cachePath), false);
+  assert.deepEqual([appPath, authPath, powerPath].map(filePath => fs.readFileSync(filePath)), beforeReadOnly);
 });
