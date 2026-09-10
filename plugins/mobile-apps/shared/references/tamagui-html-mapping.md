@@ -37,7 +37,7 @@ Every `var(--name)` must have a value in every advertised theme. In particular, 
 | `Card`, `ListItem`, `Separator` | Preserve intended grouping/border/radius; do not add a border/shadow by archetype |
 | `Switch`, checkbox | Native HTML control with visible label and usable target |
 | `AlertDialog`, `Sheet` | Accessible dialog semantics; focus entry/containment/return, Escape/cancel |
-| `Avatar`, image/media | Approved local illustrative asset and original crop/aspect, or labeled placeholder |
+| `Avatar`, image/media | Suitable local or verified public HTTPS imagery under the media-source policy; preserve source crop/aspect and label private-media substitutes |
 | `Spinner`, skeleton | Scenario-selectable loading feedback; respect reduced motion |
 | `Theme`, press/focus/disabled style | Resolve subtree theme and actual interaction appearance |
 | Native camera/PDF/pen/share/upload etc. | Named native-only placeholder, never fake a native invocation |
@@ -46,11 +46,12 @@ Shorthands preserve meaning: `p`/`px`/`py` → padding, `bg` → background, `it
 
 Use a coherent illustrative scenario, not independent random filler on every screen. Read source handlers/branches for implementation. Browser state is small and in-memory; never reimplement auth, connectors, device APIs, or production persistence. A relevant error/retry or validation branch is part of the journey, not something to omit automatically.
 
-Use consistent simple icon approximations and text labels; decorative icons are `aria-hidden`. Icons alone need an accessible name. Keep approved local media when it communicates the task. A missing image/font must have an honest fallback label, not an unrelated remote placeholder.
+Use consistent simple icon approximations and text labels; decorative icons are `aria-hidden`. Icons alone need an accessible name. Keep suitable source media, local or remote, when it communicates the task. Apply [media sources](media-sources.md) for URL verification, licensing and private-media substitutions. Do not invent missing source loading/error handlers; report the gap. A missing image/font must have an honest fallback label, not an unrelated remote placeholder.
 
 ## 3. Safety and fidelity
 
 Escape untrusted values separately for text, attributes, CSS, and JS (including closing-script sequences); prefer `textContent` for dynamic labels. No imported executable HTML/JS, external scripts, remote font imports, live tenant data, or unexpected network calls. Never interpolate untrusted values into shell commands.
+Declared verified HTTPS image-media requests are expected, not a blanket network violation.
 
 Hard checks: unique IDs, reachable required actions/destinations, names/labels, keyboard/focus, contrast, essential-content reflow, token closure in both themes, and clear mock/native boundaries. Style similarity and composition heuristics are advisory.
 

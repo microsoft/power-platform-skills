@@ -98,6 +98,7 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 
 | Aspect | Status |
 |---|---|
+| Brand input | _pending until answered; supplied references and their role, or explicit AI inference; not design approval_ |
 | Tamagui config | Tamagui 2 with default `@tamagui/config/v5` (no brand tokens) |
 | Brand tokens | _<none, or list>_ |
 | Theme variants | light, dark |

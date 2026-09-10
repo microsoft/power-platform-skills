@@ -25,6 +25,7 @@ Brief: Approvers open submitted claims from a queue or notification, inspect amo
 |---|---|---|
 | expense-review | Shows the actual policy/evidence decision, not an industry-themed dashboard | pending claim with receipt and rejection reason |
 | expense-review | Makes safe recovery reviewable | decision conflict with retained reason and reload action |
+| expense-queue | Shows a scoped decision queue rather than all records for visual density | submitted claims awaiting a decision |
 
 ### Navigation Contracts
 
@@ -36,10 +37,20 @@ Brief: Approvers open submitted claims from a queue or notification, inspect amo
 
 ### Per-Screen Specs
 
+Layout suggestions are provisional until visual approval; operations, data and entry scope remain fixed.
+
+#### Review queue (/(app)/home)
+- **Screen ID** — expense-queue
+- **Archetype** — List
+- **Layout delta** — First viewport: submitted-claim scope, then claim identity, amount and policy evidence summary in scannable rows; Below fold: remaining submitted claims through cursor paging.
+- **Data** — Initial scope: submitted claims awaiting a decision; never switch to all claims to fill the screen.
+- **UX contract** — Select a submitted claim to inspect its receipt and policy evidence before deciding.
+
 #### Review claim (/(app)/claims/[id])
 - **Screen ID** — expense-review
 - **Archetype** — Detail
-- **Layout delta** — claim amount and identity → receipt/policy evidence → decision controls and reason field.
+- **Layout delta** — First viewport: claim amount and identity followed by receipt/policy evidence; Below fold: remaining evidence, decision controls and retained reason field, reached by scrolling.
+- **Data** — Initial scope: pending claim with receipt and rejection reason; the separately selected conflict variant retains that same claim and reason.
 - **UX contract** — Approver records approve/reject; rejection requires reason; ClaimDecisionsService.create atomically commits decision/state; confirmed result returns to expense-queue; conflict preserves reason and reloads current claim before another decision.
 - **State delta** — receipt fetch error offers its own retry; decision conflict is not success or empty data; missing notification caller uses queue fallback.
 - **Idempotency guards** — pending decision disables both actions; stale claims cannot receive a second decision.

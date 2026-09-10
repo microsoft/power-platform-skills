@@ -34,6 +34,11 @@ Turn the user's jobs into useful mobile surfaces, then give builders implementab
 | unset / legacy | Same evidence, graph then specs in one run | Full `## Screens` in `_screens_section.md`; optional legacy preview | Foreground combined review |
 
 **Specs never writes `_screens_section.md`.** The approved graph, IDs, journeys, preview selection, routes, and conventions are immutable. Return `NEEDS_CONTEXT: graph revision required — <reason>` for a missing destination or changed dependency.
+This locks workflow/navigation semantics during spec expansion, not inferred visual styling
+for the later design phase. Mark model-suggested composition provisional until visual approval;
+explicit user presentation requirements stay fixed.
+For foreground-directed design reconciliation, update only the accepted presentation delta
+in specs and visual conventions; preserve approved graph, workflow and first-entry semantics.
 
 Update specs inside `## Screens`, before the next level-two section (often `## Approvals`). Retries replace prior specs, not unrelated sections; no duplicates or approval receipts.
 
@@ -96,6 +101,7 @@ Read [spec fields](../shared/references/screen-planning/spec-contract.md#per-scr
 
 - **Domain layout decisions** connect task information, decision, and composition. Content, sequence, permissions, or behavior can distinguish a domain; no decorative novelty requirement.
 - Preserve existing **Archetype**, **Purpose**, **Route**, **File**, **Presentation**, **Layout delta**, **UX contract**, **Data**, **Navigation**, and **State delta** fields. Add the stable **Screen ID** reference. Name actual controls/actions; do not emit empty filler fields.
+- For main destinations and selected preview screens, put the [entry composition](../shared/references/screen-planning/spec-contract.md#entry-composition-within-existing-specs) in **Layout delta**. Keep first-entry scope in Data/Navigation distinct from deliberately selected preview variants. Describe provisional focal content, media emphasis and below-fold access before brand styling; do not add a new sidecar or freeze a suggested layout.
 - **UX contract** connects decision, commit/postcondition, visible result, destination, and recovery; include disabled reasons, roles, selection, or counts only where needed.
 - A read-only screen still needs meaningful content and recovery, but no invented mutation, edit/delete action, or celebration.
 - Data names approved semantic dependencies before generation; mark export/lookup-key resolution pending Step 10.7. Builders require verified calls and `@odata.bind` keys. Preserve cursor ordering and supported related-data reads.
@@ -113,6 +119,7 @@ Check requirements and journey coverage, not entity-to-screen coverage:
 3. Screen IDs join Screen Map, Primary journeys, Preview selection, and specs without dangling references. All outgoing routes and parameter unions are covered.
 4. Preserve the graph and approved model. Unresolved schema/native needs return `NEEDS_CONTEXT`; expected service generation is a recorded verification handoff, not a planning block.
 5. No extra screen, dashboard, signature, connector, or decorative feature was inferred merely from a table or industry label.
+6. Main destinations and selected preview screens have concrete first-viewport content and below-fold access, not only aesthetic adjectives. Initial scope and illustrative state are explicit where applicable.
 
 Write once. Omit Standard Imports/Resolved Imports; builders resolve them. Report task/action/journey coverage without claiming runtime tests ran.
 

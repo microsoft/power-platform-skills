@@ -104,6 +104,31 @@ function validateFragment(document) {
   return { screens, journeys, navigation };
 }
 
+function validateEntryComposition(document) {
+  assert.match(document, /Layout suggestions are provisional until visual approval/,
+    'authored fixture must distinguish provisional presentation');
+  const source = document.split('### Per-Screen Specs\n')[1];
+  assert.ok(source, 'entry composition needs existing screen specs');
+  const specs = source.split(/^#### /m).slice(1).map(section => {
+    const field = name => section.split(/\r?\n/)
+      .find(line => line.startsWith(`- **${name}** — `))
+      ?.split(' — ').slice(1).join(' — ');
+    const layout = field('Layout delta') || '';
+    assert.match(layout, /^First viewport: \S.+; Below fold: \S.+$/,
+      'entry composition needs first viewport and below-fold access');
+    assert.match(field('Data') || '', /^Initial scope: \S.+/,
+      'entry composition needs explicit initial scope');
+    return { id: field('Screen ID'), layout, data: field('Data') };
+  });
+  const home = table(document, 'Screen Map').find(screen => screen.Route === '/(app)/home');
+  assert.ok(specs.some(spec => spec.id === home.ID), 'main destination needs entry composition');
+  for (const selected of table(document, 'Preview selection')) {
+    assert.ok(specs.some(spec => spec.id === selected['Screen ID']),
+      'selected preview screen needs entry composition');
+  }
+  return specs;
+}
+
 test('planner selects jobs and outcomes instead of mandatory entity screens or dashboards', () => {
   assert.match(planner, /actor → task → entry → decision → committed outcome → next destination → recovery/);
   assert.match(planner, /Supporting entities.*do not need independent screens/);
@@ -209,6 +234,34 @@ test('creation plans semantic dependencies before generated-service verification
   assert.match(contract, /pending Step 10\.7 verification/);
 });
 
+test('entry composition strengthens existing fields without a universal layout or new gate', () => {
+  assert.match(planner, /entry composition.*Layout delta/);
+  assert.match(planner, /first-entry scope.*distinct from deliberately selected preview variants/);
+  const entry = contract.split('### Entry composition within existing specs\n')[1]
+    ?.split('**Conditional fields**')[0];
+  assert.ok(entry);
+  assert.match(entry, /First viewport:/);
+  assert.match(entry, /Below fold:/);
+  assert.match(entry, /actual approved context, facts\/content, and next action or read outcome/);
+  assert.match(entry, /first-entry scope in \*\*Data\/Navigation\*\*/);
+  assert.match(entry, /illustrative state in \*\*Preview selection\*\*/);
+  assert.match(entry, /not a new artifact or approval gate/);
+  assert.match(entry, /Long forms, reading and larger text may scroll/);
+  assert.match(entry, /No mandatory hero, grid, dashboard, palette, card count, or minimum record count/);
+  assert.match(entry, /provisional until visual approval/);
+  assert.match(entry, /explicit user presentation requirements identified\s+separately/);
+  assert.match(entry, /visible subject's emphasis, not only its\s+container/);
+  assert.match(entry, /provisional visual intent, not a frozen composition/);
+  assert.match(planner, /not inferred visual styling\s+for the later design phase/);
+  assert.match(planner, /foreground-directed design reconciliation, update only the accepted presentation delta/);
+  const planning = read('skills/create-mobile-app/references/phase-02-planning.md');
+  assert.match(planning, /Gate 4b approves behavior, data\/permissions and navigation, not model-inferred visual arrangement/);
+  assert.match(planning, /does not promote provisional styling\s+into fixed requirements/);
+  assert.match(contract, /Do not default every collection to All/);
+  assert.match(read('agents/references/screen-builder/design-api.md'),
+    /accepted entry composition from Layout delta/);
+});
+
 test('requirements distinguish approval, attachments and provider-neutral collaboration', () => {
   const rows = table(discovery.replace('## Evidence-to-requirement mapping',
     '### Evidence-to-requirement mapping'), 'Evidence-to-requirement mapping');
@@ -232,7 +285,7 @@ test('requirements ask only outcome-changing maker questions', () => {
   assert.match(discovery, /Data\/system ownership needed to make approved operations real/);
   assert.match(discovery, /Native feasibility or disconnected\/offline requirement/);
   assert.match(discovery, /Do not ask \"how many screens,\" generic fidelity, or a feature checklist/);
-  assert.match(discovery, /no-brand design can proceed/);
+  assert.match(discovery, /defer the one-time provide-or-infer choice\s+to the design phase/);
 });
 
 test('on-demand planning links and selected recipe anchors remain resolvable', () => {
@@ -265,6 +318,9 @@ for (const fixture of cases) {
     assert.match(document, fixture.supporting);
     assert.match(document, fixture.behavior);
     const { screens, journeys } = validateFragment(document);
+    const entrySpecs = validateEntryComposition(document);
+    const homeSpec = entrySpecs.find(spec => spec.id === fixture.home);
+    assert.ok(homeSpec);
     assert.equal(screens.find(screen => screen.Route === '/(app)/home').ID, fixture.home);
     assert.equal(journeys[0].Actor, fixture.actor);
     assert.match(journeys[0]['Committed outcome'], fixture.outcome);
@@ -274,12 +330,40 @@ for (const fixture of cases) {
     assert.doesNotMatch(document, /home-dashboard|KPI tiles/);
     if (fixture.name === 'expense-approval') {
       assert.ok(screens.every(screen => screen.Native === 'none'), 'approval does not require ink capture');
+      assert.match(homeSpec.data, /submitted claims awaiting a decision; never switch to all claims/);
+    }
+    if (fixture.name === 'learning') {
+      assert.match(homeSpec.layout, /retained reading position and readable lesson prose/);
+      assert.match(homeSpec.data, /current lesson at retained reading position/);
+    }
+    if (fixture.name === 'shopping') {
+      assert.match(homeSpec.layout, /product images, names, prices and availability/);
+      assert.match(homeSpec.data, /active collection across all categories/);
     }
     if (fixture.name === 'inspection') {
       assert.equal(screens.find(screen => screen.ID === 'checklist').Native, 'expo-camera');
+      assert.match(homeSpec.data, /current user's assigned site checks/);
     }
   });
+
 }
+
+test('authored entry checks reject missing composition, scope and main destination', () => {
+  const document = read('scripts/tests/fixtures/screen-planning/learning.md');
+  assert.throws(() => validateEntryComposition(document.replace(
+    'Layout suggestions are provisional until visual approval', 'All layout suggestions are fixed')),
+  /distinguish provisional presentation/);
+  assert.throws(() => validateEntryComposition(document.replace('First viewport:', 'Polished layout:')),
+    /first viewport and below-fold access/);
+  assert.throws(() => validateEntryComposition(document.replace('; Below fold:', '; More content:')),
+    /first viewport and below-fold access/);
+  assert.throws(() => validateEntryComposition(document.replace('Initial scope:', 'Data:')),
+    /explicit initial scope/);
+  assert.throws(() => validateEntryComposition(document.replace('- **Screen ID** — learn',
+    '- **Screen ID** — unrelated')), /main destination/);
+  assert.throws(() => validateEntryComposition(document.replace('- **Screen ID** — completion',
+    '- **Screen ID** — unrelated')), /selected preview screen/);
+});
 
 test('fixture checks reject broken joins, route collisions and lost sender parameters', () => {
   const shopping = read('scripts/tests/fixtures/screen-planning/shopping.md');

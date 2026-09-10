@@ -172,17 +172,24 @@ For each selected table, generate N rows. Match values to column names + types:
 | **Choice (Picklist)** | **Query options first** (Step 4b), then pick from valid integer values. |
 | **MultiSelect Choice** | Pick 1-3 valid values per row from the option set. |
 | **Lookup** | Reference a record from the parent table that was (or will be) inserted in this run. Track parent GUIDs from Step 5's POST responses. |
-| **Image / File** | Default: skip — leave null. If media seeding is enabled and the column is business data (product image, inspection evidence, NC proof), use generated/synthetic local files from `assets/sample-*` and record provenance. Never upload decorative UI hero assets to Dataverse. |
+| **Image / File** | Default: skip — leave null. If business-media seeding is enabled, use approved local/generated assets or bytes obtained from verified licensed HTTPS sources per the media-source policy; record provenance. Never upload decorative UI hero assets to Dataverse. |
 
 **Media seeding policy (business data only, only if needed):**
 
 - Default: do not seed binary media. Seed metadata rows and leave Image/File columns null unless the screen plan or user request requires visible sample media.
 - Seed Dataverse images/files only when the image belongs to a record users inspect in list/detail screens: product photos, evidence, attachments, signatures, issue proof. Do NOT seed Home hero, splash, app icon, empty-state art, or decorative detail backgrounds.
-- Prefer generated/synthetic assets with no logos, no real product labels, no faces, no watermarks, and no competitor branding. If the user supplies approved assets, use those and record their source.
+- Use approved local/generated assets or verified licensed public HTTPS imagery under
+  [media sources](../../shared/references/media-sources.md). Keep generated fixtures synthetic
+  and free of misleading identity/branding; do not strip watermarks or invent license permission.
 - CDN URLs are valid only for explicit URL/Text columns (e.g. `imageurl`, `photourl`). Do not put CDN URLs into File/Image columns.
+- For an approved image-URL/Text field, store the verified URL directly; no download/upload is
+  required. This seeding distinction does not prohibit CDN image display in HTML or React Native.
+- For remote-sourced Image/File media, download and validate bytes before the supported
+  upload. Keep temporary upload files project-local; do not require local image copies for
+  unrelated online previews or URL-field samples.
 - Dataverse Image columns receive base64 in the row payload or generated service shape. Dataverse File columns require a second upload step after the metadata row exists.
 - For product/channel apps, product images are core sample data when product list/detail screens are visual, but they are capped. Generate and upload only a representative subset; use local placeholders or null image fields for the rest.
-- Maintain `assets/images/asset-manifest.json` or `assets/sample-media/asset-manifest.json` with file, purpose, source/license, and safety notes.
+- Maintain `assets/images/asset-manifest.json` or `assets/sample-media/asset-manifest.json` with local file or remote URL, purpose, source/license, verification, and safety notes; never invent a local file for a URL-only sample.
 
 **Media volume limits (HARD):**
 
@@ -389,7 +396,7 @@ After each tier's `BATCH-RECORDS` response, fill `recordId` from the in-memory `
 
 **Never do these:**
 
-- Never set a File/Image column to a CDN URL unless the column is actually a URL/Text column.
+- Never set a File/Image column to a CDN URL. Store a URL only in an approved URL/Text column.
 - Never stuff base64 into a File column.
 - Never upload UI hero/splash/icon assets to Dataverse.
 - Never guess `columnName`; use `.datamodel-manifest.json` / `field_bindings.file_columns` exact logical names.

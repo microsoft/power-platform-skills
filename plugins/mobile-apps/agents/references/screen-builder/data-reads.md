@@ -5,6 +5,9 @@ Graph, `fetch`, or axios. Use the supplied signatures/Generated Services snapsho
 inspect only needed methods and model declarations. If the snapshot is absent,
 glob generated services as an older-plan fallback. Missing service/method is a
 foreground prerequisite, not a guessed import, substitute service, or fake data.
+Displaying public HTTPS image URLs through the installed image component is permitted by
+[media sources](../../../shared/references/media-sources.md), not a connector-first violation.
+Fetch records/URL fields through generated services; do not add an HTTP client to render imagery.
 
 ## Result and query boundaries
 
@@ -53,6 +56,8 @@ uses `useFocusEffect`, not a mount-only `useEffect`; use existing shared list ho
   never guess `_lookup_value` or fall back to email matching. Missing service/key blocks.
 - Dataverse Image display selects the real image/base64 column and builds a data URI
   when present; no guessed URL or display shadow properties.
+- An approved URL/Text image field may hold a public HTTPS URL for direct image-component
+  display with loading/error fallback. Dataverse Image/File columns hold bytes, never that URL.
 
 Live `[]` is valid data, not a fixture trigger. Source mode must be explicit and
 visible when showing fixtures. A failed request cannot become a successful empty state.

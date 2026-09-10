@@ -26,6 +26,7 @@ Brief: Inspectors select assigned site checks, mark checklist responses, and cap
 |---|---|---|
 | checklist | Shows evidence capture tied to failed checks | failed response with required photo capture |
 | inspection-review | Distinguishes local evidence from committed submission | upload failed, local capture retained, Submit disabled with reason |
+| assigned-checks | Shows task context and reachable assigned work without unrelated summaries | current user's assigned site checks |
 
 ### Navigation Contracts
 
@@ -37,10 +38,27 @@ Brief: Inspectors select assigned site checks, mark checklist responses, and cap
 
 ### Per-Screen Specs
 
+Layout suggestions are provisional until visual approval; operations, data and entry scope remain fixed.
+
+#### Assigned checks (/(app)/home)
+- **Screen ID** — assigned-checks
+- **Archetype** — List
+- **Layout delta** — First viewport: assignment scope, site/check identity and work state in selectable rows; Below fold: remaining assigned checks through cursor paging.
+- **Data** — Initial scope: current user's assigned site checks; preserve assignments rather than exposing unrelated checks.
+- **UX contract** — Open the exact selected assignment and retain the return scope.
+
+#### Checklist (/(app)/inspections/[id])
+- **Screen ID** — checklist
+- **Archetype** — Form
+- **Layout delta** — First viewport: site/check identity, failed response and required-photo prompt with capture action; Below fold: remaining checklist responses and review action, reached by scrolling.
+- **Data** — Initial scope: failed response with required photo capture on the selected assignment.
+- **UX contract** — Capture is native-only in previews; never simulate completed upload from a local capture action.
+
 #### Review submission (/(app)/inspections/[id]/review)
 - **Screen ID** — inspection-review
 - **Archetype** — Form
-- **Layout delta** — response summary + per-evidence retained/upload status → Submit inspection with blockers.
+- **Layout delta** — First viewport: response summary and failed upload with retained local evidence; Below fold: remaining per-evidence retained/upload status and Submit inspection with blockers, reached by scrolling.
+- **Data** — Initial scope: upload failed, local capture retained, Submit disabled with reason.
 - **UX contract** — Submit only when responses and required uploads are retained; InspectionsService.update commits submitted state; success returns to assigned-checks; failed upload retains local capture for retry, not a successful submission.
 - **Artifact persistence** — child Evidence table through verified EvidenceService upload contract; local capture is intermediate, not retained evidence.
 - **State delta** — uploadFailed offers retry; permissionDenied explains missing required camera evidence without bypass; no invented offline queue.
