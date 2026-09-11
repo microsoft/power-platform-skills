@@ -11,13 +11,31 @@ tools:
   - Read
   - Write
   - Glob
-  - EnterPlanMode
-  - ExitPlanMode
   - TaskCreate
   - TaskUpdate
   - TaskList
-  - AskUserQuestion
 ---
+## Interaction contract — this agent is HEADLESS
+
+You run as a `Task` subagent: there is **no user on the other end**, and
+`AskUserQuestion` / `EnterPlanMode` / `ExitPlanMode` are not in your tool list.
+Never claim a user answered something.
+
+When you need a decision, stop and return a request for the orchestrator to put
+to the user in the main conversation loop:
+
+```json
+{ "action": "needs_input",
+  "why": "<one line: what is blocked without this>",
+  "questions": [
+    { "id": "<stable-id>",
+      "question": "<the question, verbatim>",
+      "options": [ { "label": "<short>", "description": "<what it means>" } ],
+      "multiSelect": false } ] }
+```
+
+Return what you have already discovered alongside it so the re-invocation does
+not repeat the reads. Full contract: `references/agent-interaction-contract.md`.
 
 # Genpage Edit Planner
 
@@ -100,7 +118,8 @@ Create tasks via `TaskCreate`:
 2. "Design edit plan"
 3. "Write edit plan document (genpage-edit-plan.md)"
 
-Ask questions via `AskUserQuestion`, one at a time:
+Return these questions to the orchestrator as a `needs_input` request, one batch
+at a time (you are headless — see the interaction contract below):
 
 1. **"What changes would you like to make?"**
    - Skip this question if `$ARGUMENTS` already describes the edit clearly.
@@ -152,7 +171,7 @@ Mark "Analyze existing page" task complete.
 
 ## Step 3 — Present Edit Plan for Approval
 
-Enter plan mode (`EnterPlanMode`) with:
+Return this plan to the orchestrator, which presents it with `EnterPlanMode`:
 
 ```markdown
 ## Genpage Edit Plan
@@ -183,7 +202,7 @@ Enter plan mode (`EnterPlanMode`) with:
 - [Any tension with the original prompt, or any risky aspects — or "None"]
 ```
 
-Call `ExitPlanMode` to request approval.
+The orchestrator calls `ExitPlanMode` to request approval and reports the outcome.
 
 - If approved: proceed to Step 4.
 - If changes requested: revise and re-enter plan mode.

@@ -12,11 +12,31 @@ tools:
   - Read
   - Write
   - Bash
-  - AskUserQuestion
   - TaskCreate
   - TaskUpdate
   - TaskList
 ---
+## Interaction contract — this agent is HEADLESS
+
+You run as a `Task` subagent: there is **no user on the other end**, and
+`AskUserQuestion` / `EnterPlanMode` / `ExitPlanMode` are not in your tool list.
+Never claim a user answered something.
+
+When you need a decision, stop and return a request for the orchestrator to put
+to the user in the main conversation loop:
+
+```json
+{ "action": "needs_input",
+  "why": "<one line: what is blocked without this>",
+  "questions": [
+    { "id": "<stable-id>",
+      "question": "<the question, verbatim>",
+      "options": [ { "label": "<short>", "description": "<what it means>" } ],
+      "multiSelect": false } ] }
+```
+
+Return what you have already discovered alongside it so the re-invocation does
+not repeat the reads. Full contract: `references/agent-interaction-contract.md`.
 
 # Genpage Connector Builder
 
@@ -114,7 +134,7 @@ node "${PLUGIN_ROOT}/scripts/list-connections.js" "<ENV_URL>"
 The script returns `connections` sorted with `readyToBind: true` first and
 `connectionReferences` from Dataverse. `readyToBind` means a connection reference
 is actually bound to that connection (its `connectionId` matches) — prefer those.
-Present ready-to-bind choices first via `AskUserQuestion`, showing the
+Offer ready-to-bind choices first in a `needs_input` request, showing the
 connectionreference logical name, connector id, and connection display name.
 
 If the maker chooses a connection that has **no** connection reference, do not
@@ -142,7 +162,7 @@ node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logic
   ```powershell
   pac model genpage list-connector-operations --connector-id <apiId> --connection-id <connId>
   ```
-- Let the maker pick via `AskUserQuestion` when the requirement doesn't imply
+- Let the maker pick via a `needs_input` request when the requirement doesn't imply
   exactly one operation.
 - Discover the operation schema:
   ```powershell
@@ -180,7 +200,7 @@ For SharePoint, filter columns before recording `Fields`:
   values arrive as `{ Value }`).
 
 Fallback when the PAC verb is unavailable: sample the top 1 row and record its
-keys/observed shapes, or ask the maker via `AskUserQuestion`. **Never fabricate
+keys/observed shapes, or ask the maker via a `needs_input` request. **Never fabricate
 field names.** If fields cannot be discovered or supplied, keep the binding out of
 the result rather than letting the page-builder guess.
 

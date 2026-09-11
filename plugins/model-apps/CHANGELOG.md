@@ -31,6 +31,14 @@ A dry run that says what an apply would actually do, and sample data that can ex
 
 ### Fixed
 
+- **`/genpage` Phase 1 is reachable again** ([#541]). It was specified to run its whole interactive
+  flow — prerequisites, auth, the "create new / edit existing" question and plan-mode approval —
+  **inside** the `genpage-planner` `Task` subagent, while the plugin's own `AGENTS.md` documented
+  that subagents are headless and `/app-builder` enforced the opposite. There was no compliant path
+  through Phase 1, so create flows could not complete. Interaction now runs in the main conversation
+  loop; the agents are headless discovery/generation workers and return a `needs_input` request when
+  they need a decision (`references/agent-interaction-contract.md`). The `workflow-log.md` format is
+  unchanged — it records what was asked, not who asked it.
 - **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]). It is
   removed by the table delete, but teardown also tried to delete it first and got
   `referenced by 2 other components` — so a run that left the environment completely clean printed
@@ -39,6 +47,7 @@ A dry run that says what an apply would actually do, and sample data that can ex
   discovery was a flat `readdir`, so a nested suite would be committed, reviewed, reported green and
   never execute. Every suite is top-level today, which is exactly why this needed a test.
 
+[#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544
 [#559]: https://github.com/microsoft/power-platform-skills/issues/559
 

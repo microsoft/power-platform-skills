@@ -78,7 +78,12 @@ A second skill (`/app-builder`) builds a whole **model-driven app** (tables, col
 relationships, adaptive forms with sub-grids, views, Choice-column charts, app module +
 sitemap) from a natural-language intent — distinct from `/genpage`, which builds generative
 *pages*. The **whole flow runs in the main conversation loop, never a `Task` subagent** — subagents
-are headless, so `AskUserQuestion` and plan mode cannot reach the user. For the end-to-end flow,
+are headless, so `AskUserQuestion` and plan mode cannot reach the user. **This applies to `/genpage`
+too**: its agents are headless discovery/generation workers, and an agent that needs a decision
+returns a `needs_input` request for the main loop to ask (`references/agent-interaction-contract.md`).
+`scripts/validate-agent-interactivity.js` fails the build if any `plugins/model-apps/agents/*.md`
+declares an interactive tool — the frontmatter is prose to every other test, which is how `/genpage`
+Phase 1 specified an unreachable interactive flow for ~2.5 months. For the end-to-end flow,
 stage→phase mapping and page-identity model, see
 [`docs/architecture.md`](docs/architecture.md) → `## /app-builder — build pipeline`; that doc owns
 the pipeline and delegates each script's **behavioral spec** to the entries below.
