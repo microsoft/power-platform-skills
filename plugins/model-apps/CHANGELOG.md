@@ -55,15 +55,30 @@ app-builder defects found while rebuilding a real app into a second environment.
   report `PASS`. The requested set is resolved with the same selector the build uses, so what is
   verified is exactly what was asked for — including `default: "off"` plus one opted-in table.
   An unreadable AI-model list fails closed rather than passing.
+- **AI features are written even when an org gate reads off** (AB#6688904). The gate used to be a
+  precondition, and for four of the seven features that "gate" is the very per-app row the write is
+  about to set — so a brand-new app, sitting at the platform default, looked forbidden and the build
+  reported success having written nothing. Every write is now attempted and then verified, and a gate
+  is read only to explain an absence. The build also re-issues a gate-explained failure after the app
+  is published, because no app-scope write persists before that point.
 - **An SVG in a sitemap subarea's legacy `icon` is flagged** (AB#6688906). `icon` is the raster slot;
   the modern navigation renders a placeholder for an SVG there. The warning names the `vectorIcon`
   replacement. A raster `icon` beside a vector `vectorIcon` stays legal — that pair is a deliberate
-  legacy fallback.
+  legacy fallback. The platform half is vendored too: a chrome attribute dropped from the spec is now
+  removed from the deployed sitemap instead of surviving in it forever.
 - **A workspace-metadata race no longer halts a multi-form build** (AB#6688905). Creating several
   forms with event handlers concurrently could start the event wiring before the SDK had persisted
   that form's `.meta.json`, failing the build with a bare `UNKNOWN: unknown error, open …`. The read
   is retried briefly; a persistent failure still fails, but says it is a local workspace race and
-  that a re-run clears it.
+  that a re-run clears it. The SDK now retries the underlying file read as well.
+- **Teardown removes a row summary the build created by default** — previously it planned that
+  removal only when the spec had an explicit `ai.summaries` block, but the build creates one per
+  eligible table whenever `ai` is present at all. For a spec carrying only `ai.appFeatures` the
+  orphaned AI model then blocked the table delete, so teardown finished *with errors* and left the
+  table and its data behind. Both sides now derive the set from the same selector.
+- **`appendTo` no longer reports a false verification failure.** The access token was matched
+  case-sensitively against a lower-cased lookup, so any persona or `roleGrants[]` entry declaring
+  `appendTo` was reported as *"the table exposes no such privilege"* on a correctly granted role.
 - **Localized labels were silently discarded on the real build path.** A broad metadata read issued
   immediately before a create (`findTables` → `createTable`, `findColumns` → `createColumn`,
   `fetchEntityMetadata` → `createRelationship`) makes Dataverse keep only the base-language label.
@@ -101,9 +116,17 @@ app-builder defects found while rebuilding a real app into a second environment.
   (`["Pending", "Pending"]`) is now a warning: it is visible on the line and Dataverse allows it. A
   blank entry *inside* a localized map, and a cross-language collision the author cannot see, both
   still fail.
-- **SDK uptake `cds-maker-sdk b9947026`.** Brings the platform halves of three bugs above:
+- **SDK uptake `cds-maker-sdk 331b9f56`.** Brings the platform halves of five bugs above:
   multi-`LocalizedLabels` in the label serializer, `formTypes` on the form listing (it was hardcoded
-  to Main), and the public additive `addEntityPrivilegesToRole` that `roleGrants[]` compiles to.
+  to Main), the public additive `addEntityPrivilegesToRole` that `roleGrants[]` compiles to,
+  `setAppAiFeatures` no longer pre-empting a write on a gate read (AB#6688904), a sitemap property
+  you remove from the spec being removed from the deployed sitemap rather than merged forward
+  (AB#6688906), and bounded retries around the workspace file pair (AB#6688905).
+- **The role-privilege read moved onto the SDK.** `verify-model-app` composed its own
+  `EntityDefinitions(…)?$select=Privileges` request because the SDK could write roles but never read
+  what a table exposes. The bundle now carries `getEntityPrivileges`, so the last raw-HTTP escape
+  hatch in the app-builder scripts is gone. No behaviour change — an unreadable privilege set still
+  fails the check closed.
 
 [#537]: https://github.com/microsoft/power-platform-skills/issues/537
 [#513]: https://github.com/microsoft/power-platform-skills/issues/513

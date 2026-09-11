@@ -446,24 +446,35 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   half-applied. The SDK **proves every write** against the app-scope override row, retrying with backoff
   (an immediate read can still return the environment fallback, which previously produced a false
   `notPersisted` on first apply). `applied` is the ONLY success bucket; a feature otherwise lands in
-  `skipped` (org gate off), `notPersisted` (no override observed for the whole retry budget — Dataverse
-  can accept an app-scope `SaveSettingValue` with HTTP 204 and store nothing), `unverified` (the write
+  `notPersisted` (no override observed for the whole retry budget — Dataverse
+  can accept an app-scope `SaveSettingValue` with HTTP 204 and store nothing), `skipped` (the same
+  absence, PLUS the feature's org readiness gate reads off, which is offered as the explanation),
+  `unverified` (the write
   was issued but the proof could not be read) or `failed` (the write threw; the rest of the batch still
-  reports). The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
+  reports). **A gate is never a PRECONDITION** (AB#6688904): the SDK attempts every write and reads a
+  gate only afterwards, to explain an absence that actually happened. It used to read the gate first,
+  and for four of the seven features that "gate" IS the per-app setting the write is about to set — so
+  on a new app its platform-default `0` looked like an admin refusal and the build shipped an app with
+  no AI features while reporting success. The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
   — buckets are read off the result object, so one a future SDK adds is reported verbatim rather than
   silently dropped — and `--verify` fails on any of them. **An app-scope setting WRITE is a no-op until
   the app is published** (live-measured: the write reports `notPersisted` and `appsettings` holds no row
   at all, while publishing and re-issuing the same call applies every feature). This is not read lag, so
   re-*proving* after publish cannot fix it — the build **re-issues** the write after publish for anything
-  the first attempt did not apply. Verification proves the override ROW, keyed by `appmoduleid`, so the
+  the first attempt did not apply, `skipped` INCLUDED. On a fresh app nothing persists pre-publish, so
+  the gate diagnosis fires for every feature that has one; abandoning those would leave `--verify`
+  failing on a row the build declined to write a second time, and a reported customer environment ran a
+  working app at `NLGridSearchSetting = 2` with `EnableNLGridSearch` off. Anything still `skipped` after
+  the re-issue is reported as an admin action. Verification proves the override ROW, keyed by `appmoduleid`, so the
   build passes the id it already holds rather than have the SDK resolve it by name (an unpublished
   appmodule is not readable). See the `ai-features` phase in `scripts/lib/sdk-build.js` for the full
   sequence and its bounds.
   The flag set is resolved ONCE by `scripts/lib/ai-app-settings.js` and shared by the build and the
   verifier: a spec with an `ai` block but no `ai.appFeatures` still gets defaults written, so
   reconciling only the DECLARED features left them applied-but-unverified.
-  All AI features are **admin-gated**: the skill preflights
-  and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
+  All AI features need an environment admin to have enabled them: the skill preflights
+  and warns; it cannot flip admin or tenant switches. What it does NOT do is decline to write on the
+  strength of that preflight — see the bucket note above. `scripts/lib/ai-candidates.js` selects
   good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
   prompts. The `ai` block in the App Spec configures the full set; see
   [`references/app-spec-schema.md`](references/app-spec-schema.md) → `## ai`.
@@ -862,17 +873,18 @@ Dataverse simply are not in it.
 | Hatch | Use for | Examples in tree |
 |---|---|---|
 | `dataverseRequest()` in `lib/dataverse-auth.js` (and the `dataverse-request.js` CLI) | Dataverse surfaces the SDK does not model at all | `WhoAmI` (`check-auth.js`), `customapis` (`list-custom-apis.js`), `connectionreferences` (`create-connection-reference.js`), solution-component adds (`add-page-to-solution.js`) |
-| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | `entityPrivileges` in `verify-model-app.js` — `fetchEntityMetadata` returns `{logicalName, displayName, entitySetName, attributes, relationships}` and drops `Privileges` entirely. The projection's omission is permanent (it is disk-cached and best-effort, the wrong contract for a security read) and pinned by an SDK guardrail test. **Transitional:** the SDK is gaining a dedicated `getEntityPrivileges()`; switch to it and drop this raw read once the vendored bundle carries it |
+| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | **No caller today.** The one that existed — `entityPrivileges` in `verify-model-app.js` — is gone: the SDK had no privilege READ at all, and `fetchEntityMetadata` drops `Privileges` permanently by design, so the check composed its own `EntityDefinitions(...)?$select=Privileges` request. The vendored bundle now carries `getEntityPrivileges`, and the reader takes it. The hatch stays documented because the *category* recurs; opening it again needs the same justification |
 
 **Prefer `dataverseRequest()` over the raw client.** It already handles the API path, auth, headers
 and timeouts. Reach for `httpClient` only when you must share the exact client instance the SDK is
-using, as the verify reader does.
+using — and check first that the SDK has not since grown the method, as it did for entity privileges.
 
 When you do go direct, all four of these apply:
 
 1. **Comment WHY the SDK cannot serve it** — name the SDK method you would otherwise call and what it
    drops or lacks. "Deliberately not `sdk.fetchEntityMetadata`" is the difference between a
-   documented exception and something a later reader "simplifies" back into a silent bug.
+   documented exception and something a later reader "simplifies" back into a silent bug. Say what
+   would retire the hatch, so the note is actionable rather than permanent.
 2. **Absolute URL including `/api/data/v9.2`** when using the raw `httpClient`. It is the transport
    the SDK drives, so it takes full request URLs and validates them with `new URL(url)` for its
    same-origin guard — a relative path throws there rather than resolving against the org.
@@ -881,7 +893,9 @@ When you do go direct, all four of these apply:
 4. **Test the reader itself, not only an injected stub.** The `entityPrivileges` URL bug shipped
    because every test injected a fake reader into `verifySpec`, so the real one was never executed —
    and `verify-spec` catches per-entity read failures, so it would have failed silently on every live
-   run rather than crashing. Drive at least one test through the real client's request seam.
+   run rather than crashing. Drive at least one test through the real seam: the client's request path
+   for a raw read, or the **real vendored bundle** for one that goes through the SDK. A hand-written
+   SDK stub proves only that the mapping is self-consistent with itself.
 
 
 - Keep SKILL.md under 500 lines

@@ -1,14 +1,14 @@
 {
-  "commit": "b9947026ccdaa1d47cec5b48fae9840b755d33d7",
-  "subject": "[DA Test Chat] Consume updated catalyst plugin for Host Provided AgentData in SSR",
+  "commit": "331b9f56705b8f5887f73bd40a1cceddc9fbf2e1",
+  "subject": "Revert 'fix: scheduled trigger skips its first run when the start time is in the future'",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-09T01:01:26.621Z",
-  "newestSrcAt": "2026-09-09T01:00:18.987Z",
+  "libBuiltAt": "2026-09-11T02:08:20.161Z",
+  "newestSrcAt": "2026-09-11T02:03:26.756Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v22.13.1",
-  "builtAt": "2026-09-09T01:03:14.062Z",
-  "bundleSha256": "b3aefa22f9714359c0f34029a6739bba8a2de02aa74fced4edaabaaf0f2a8bd9",
-  "bundleBytes": 694269
+  "builtAt": "2026-09-11T02:08:49.251Z",
+  "bundleSha256": "e51103ce286d9b7749b1c542e5313d837374978c3584184c47f48d2886d9e248",
+  "bundleBytes": 695310
 }

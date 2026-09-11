@@ -1391,8 +1391,14 @@ async function runSdkBuild(spec, opts = {}) {
   // narrow on purpose — a form whose metadata never lands still fails, with a message that names the
   // race instead of the bare `UNKNOWN` the operator could do nothing with.
   //
-  // The durable fix belongs in the SDK (persist both files before resolving, or make the read
-  // tolerate a partially-written pair); this keeps a valid multi-form build from halting meanwhile.
+  // ⚠ THE SDK NOW RETRIES TOO, and this is deliberately kept as a SECOND layer rather than deleted.
+  // The vendored `WorkspaceManager` retries `EPERM`/`EACCES`/`EBUSY`/`UNKNOWN` on its own and treats a
+  // file deleted between its `exists` probe and its open as absent. Two reasons this outer retry still
+  // earns its place: the SDK's authors explicitly decline to call that fix MEASURED (a two-process
+  // harness never reproduced the failure, so the trigger is environmental — an AV scanner or indexer
+  // holding a handle), and an exhausted SDK budget rethrows the bare `UNKNOWN` unchanged, which is the
+  // message the operator could do nothing with. The layering costs nothing on the happy path. Delete
+  // this only against evidence that the SDK's budget is sufficient, not merely because it exists.
   const isWorkspaceMetadataRace = (err) => {
     const msg = (err && err.message) || String(err || '');
     return /[\\/]\.metadata[\\/]/.test(msg) && /\.meta\.json/.test(msg);
@@ -2862,10 +2868,9 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
-  //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
-  //     skips features whose admin gate is off; it never throws.
-  // Features the SDK did not put in `applied`, deferred for a post-publish re-proof (see inside the
+  // 7c. AI features (opt-in via spec.ai). Enable app-level agents + configure per-table row
+  //     summaries. `setAppAiFeatures` never throws — every outcome arrives as data in a bucket.
+  // Features the SDK did not put in `applied`, deferred for a post-publish re-issue (see inside the
   // ai-features phase for why the verdict cannot honestly be decided at write time).
   const pendingAiReconfirm = [];
 
@@ -2907,10 +2912,15 @@ async function runSdkBuild(spec, opts = {}) {
       // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing):
       //   notPersisted — the write returned 204 but no override was observed for the whole retry
       //                  budget; Dataverse can accept an app-scope write and store nothing.
+      //   skipped      — as notPersisted, PLUS the feature's org readiness gate reads off, which is
+      //                  offered as the explanation. Since AB#6688904 the SDK ATTEMPTS every write
+      //                  and reads the gate only afterwards, to explain a failure that happened —
+      //                  it no longer pre-empts the write, so this bucket is now evidence, not a
+      //                  prediction.
       //   unverified   — the write was issued but the proof could not be READ (no access to
       //                  appsettings/settingdefinitions/appmodules, or a transport error).
-      //   failed       — the write (or its org-gate read) threw. The SDK keeps going so the rest
-      //                  of the batch still reports, so this arrives as data, never as an exception.
+      //   failed       — the write threw. The SDK keeps going so the rest of the batch still
+      //                  reports, so this arrives as data, never as an exception.
       //
       // RE-CONFIRMATION (safety net): with `appModuleId` supplied above, the SDK can prove the
       // override row here, pre-publish, so the normal path decides the verdict in this phase. The
@@ -2921,10 +2931,20 @@ async function runSdkBuild(spec, opts = {}) {
       // `reconfirmAiFeatures` below) against the identical override-row oracle the verifier uses.
       // The re-proof can only ever UPGRADE a feature, never hide a real failure.
       //
+      // `skipped` is deferred WITH the rest, and that is the plugin half of AB#6688904. On a freshly
+      // created app NO app-scope write persists until the app is published, so the SDK's post-write
+      // gate read fires for every feature — and for the ones that happen to have a distinct org gate
+      // (`nlSearch`, `nlChart`, `formFillSmartPaste`) an org-wide `false` then labels them `skipped`.
+      // Treating that as a final answer would abandon them before the one sequence measured to work,
+      // and `--verify` would then fail on an override row the build gave up on writing. The reported
+      // environment ran a working app at `NLGridSearchSetting = 2` with `EnableNLGridSearch` off, so
+      // a gate reading off is not proof the app-scope write cannot land — only the retry can settle
+      // it. Anything still `skipped` after the retry is reported as an admin action, not a defect.
+      //
       // Derive the non-success buckets from the RESULT, not a fixed list: a bucket added by a future
       // SDK revision is then reported verbatim rather than silently dropped (which is the very bug
       // class this phase exists to remove). `outcomes` is per-feature detail, not a bucket.
-      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'skipped' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
+      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
       for (const key of problemKeys) {
         for (const feature of r[key]) {
           const outcome = (r.outcomes || []).find((o) => o && o.feature === feature);
@@ -2933,9 +2953,8 @@ async function runSdkBuild(spec, opts = {}) {
       }
       const parts = [];
       if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
-      if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
       if (pendingAiReconfirm.length) parts.push(`retrying after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
-      return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
+      return parts.length ? parts.join('; ') : '(none)';
     });
     // Same rule as the plan: `selectSummaryTables` owns the default-vs-override decision, so calling
     // it unconditionally is what lets `default: 'off'` + `tables[x].enabled: true` opt a single table
@@ -3378,8 +3397,13 @@ async function runSdkBuild(spec, opts = {}) {
     const appUnique = appUniqueName(spec);
     const BUCKET_LABELS = {
       notPersisted: ['NOT PERSISTED', 'Dataverse accepted the write but no app-scope override holding the requested value was observed'],
+      // Distinct wording from NOT PERSISTED on purpose: both mean the override row is absent, but
+      // `skipped` carries a diagnosis the operator can ACT on — an environment admin has to turn the
+      // feature on before any app can. The SDK's own per-feature `reason` names the gate and its
+      // value, and it is preferred over this text wherever it is present.
+      skipped: ['ADMIN GATE OFF', 'the write was issued, no app-scope override appeared, and the feature\u2019s org readiness gate reads off \u2014 an environment admin must enable it first'],
       unverified: ['UNVERIFIED', 'the write was issued but could not be confirmed \u2014 verify manually before relying on it'],
-      failed: ['FAILED', 'the write or its org-gate read threw'],
+      failed: ['FAILED', 'the write threw'],
     };
     // Replicate the sequence proven to work live, in order: fetch the app (so the workspace holds the
     // server's copy), publish it, then write. Each step is best-effort — a failure here must not fail
@@ -3433,7 +3457,12 @@ async function runSdkBuild(spec, opts = {}) {
     const af = result.created.ai && result.created.ai.appFeatures;
     if (af && reproven.length) {
       af.applied = [...(af.applied || []), ...reproven];
-      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'skipped') af[key] = af[key].filter((f) => !reproven.includes(f));
+      // `skipped` is cleaned up like every other non-success bucket. It used to be exempt, back when
+      // the SDK pre-empted a gated write and `skipped` therefore meant "never attempted" — a state
+      // no retry could change. Since AB#6688904 the write IS attempted, so a feature can genuinely
+      // move from `skipped` to `applied`, and leaving it listed in both would make
+      // `created.ai.appFeatures` contradict itself for any `--json` consumer.
+      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'outcomes') af[key] = af[key].filter((f) => !reproven.includes(f));
       for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = reprovenBy.get(o.feature); }
     }
     // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and

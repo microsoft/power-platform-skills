@@ -67,6 +67,7 @@ const SKILL_SDK_SURFACE = [
   'getAiReadiness',
   'getArtifact',
   'getColumnVisualization',
+  'getEntityPrivileges',
   'getSolution',
   'initWorkspace',
   'insertStatusValue',

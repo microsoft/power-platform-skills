@@ -555,13 +555,19 @@ test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)
 });
 
 // -- verify wiring -----------------------------------------------------------------------------
-// Asserted against SOURCE because the wiring lives inside main(), which is not exported, and the
-// failure mode is SILENT: verify-spec skips role-privileges unless BOTH readers are present, so
-// omitting httpClient/envUrl made --apply --verify report a clean PASS having never checked what
-// any persona role actually grants. Found live -- the standalone verifier ran 10 checks against the
-// same app where the build inline verify ran 8. A behavioural test would need a live SDK; this pins
-// the exact regression at zero cost.
-test('build --verify wires the role-privilege readers (httpClient + envUrl)', () => {
+// The failure mode being guarded is SILENT: verify-spec skips the role-privileges check unless BOTH
+// `rolePrivileges` and `entityPrivileges` readers are present, so a build that under-wires them
+// reports a clean `--apply --verify` PASS having never checked what any persona role actually grants.
+// Found live — the standalone verifier ran 10 checks against the same app where the build's inline
+// verify ran 8.
+//
+// This used to assert that the wiring line mentioned `httpClient` and `envUrl`, which the
+// `entityPrivileges` reader needed to compose its own absolute `EntityDefinitions(...)` request. That
+// read now goes through the SDK's `getEntityPrivileges`, so those two arguments are gone — and a test
+// pinned to them would have failed for a change that STRENGTHENED what it guards. The assertions
+// below are re-pointed at the invariant rather than the mechanism: build the reader from the exact
+// options the build passes and check that neither privilege reader is missing.
+test('build --verify wires readers that verify-spec will NOT skip role-privileges over', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   // Matched on the wiring, not the exact arity: the deps.verify lambda gained a second parameter so
   // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
@@ -569,20 +575,48 @@ test('build --verify wires the role-privilege readers (httpClient + envUrl)', ()
   // for a change that did not touch what it is actually guarding.
   const call = src.split(/\r?\n/).find((l) => /verify: \([^)]*\) => verifySpec/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
-  assert.match(call, /httpClient/, 'entityPrivileges needs the raw client');
-  assert.match(call, /envUrl: env/, 'entityPrivileges needs the org url to build an absolute request');
-  // And the second argument must actually be forwarded, or the environment-skip list is silently
+  assert.match(call, /readerFor\(provisionSdk,/, 'verify must read through the provisioning SDK');
+  // The second argument must actually be forwarded, or the environment-skip list is silently
   // dropped and verify keeps failing on rules the build already reported it could not create.
   assert.match(call, /verifySpec\(\s*s\s*,[\s\S]*\)\s*,\s*verifyOpts\s*\)/,
     'the caller-supplied verify options must reach verifySpec');
+
+  // The substantive half: the option bag on that line, fed to the real `readerFor`, must yield BOTH
+  // privilege readers. A source match alone would keep passing if `entityPrivileges` were made
+  // conditional again on something the build does not supply.
+  const optsSrc = /readerFor\(provisionSdk,[^,]+,\s*(\{[^}]*\})\s*\)/.exec(call);
+  assert.ok(optsSrc, `could not extract the readerFor options from: ${call}`);
+  // Shorthand-aware: `{ genpageCli: makeGenpageCli(env), workspaceDir }` carries one `key:` and one
+  // SHORTHAND key. A colon-only pattern silently saw just `genpageCli`, which made the assertion
+  // below weaker than it looks — it would have kept passing for an option bag that had lost
+  // `workspaceDir` entirely. Match a name followed by `:`, `,` or `}`.
+  const optKeys = [...optsSrc[1].matchAll(/([A-Za-z_$][\w$]*)\s*(?::|[,}])/g)].map((m) => m[1]);
+  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpageCli'),
+    `expected both readerFor options to be extracted, got ${JSON.stringify(optKeys)}`);
+  const { readerFor } = require('../verify-model-app.js');
+  // A bare object is enough: every base reader is a lazy closure, so this asserts PRESENCE, which is
+  // exactly what verify-spec's method-presence gate tests.
+  const reader = readerFor({}, 'contoso_app', Object.fromEntries(optKeys.map((k) => [k, k === 'workspaceDir' ? __dirname : {}])));
+  for (const name of ['rolePrivileges', 'entityPrivileges']) {
+    assert.strictEqual(typeof reader[name], 'function',
+      `verify-spec silently skips role-privileges without '${name}'; the build's options are ${JSON.stringify(optKeys)}`);
+  }
 });
 
-test('makeSdk returns the httpClient so the caller can wire verify', () => {
-  // Returning the SAME instance rather than constructing a second one keeps token acquisition and
-  // retry state shared; a second client would re-acquire a token per verify run.
+test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement', () => {
+  // A mismatch here is silent: destructuring a key the factory stopped returning yields `undefined`,
+  // and the first symptom is a TypeError deep in an apply run. Compared as SETS rather than pinned to
+  // a specific key list, so this keeps guarding the invariant as the shape legitimately changes — it
+  // previously asserted the literal `{ sdk, provisionSdk, httpClient, cleanup }`, and `httpClient` was
+  // removed when the raw-client escape hatch was retired in favour of `sdk.getEntityPrivileges`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /return \{ sdk, provisionSdk, httpClient, cleanup \}/, 'makeSdk must expose httpClient');
-  assert.match(src, /const \{ sdk, provisionSdk, httpClient, cleanup \} = makeSdk\(/, 'main must destructure it');
+  const returned = /return \{ ([^}]*) \};/.exec(src.slice(src.indexOf('function makeSdk')));
+  assert.ok(returned, 'expected makeSdk to return an object literal');
+  const destructured = /const \{ ([^}]*) \} = makeSdk\(/.exec(src);
+  assert.ok(destructured, 'expected main to destructure makeSdk()');
+  const names = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).sort();
+  assert.deepStrictEqual(names(destructured[1]), names(returned[1]),
+    'main destructures keys makeSdk does not return (or ignores ones it does)');
 });
 
 // #447 follow-up: an LCID reaches Dataverse as a label LanguageCode, so a value that merely SURVIVES

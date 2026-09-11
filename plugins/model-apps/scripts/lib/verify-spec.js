@@ -606,9 +606,11 @@ async function verifySpec(spec, read, opts = {}) {
   // with three features written and ZERO verified: a clean PASS for features the platform may never
   // have stored. One resolver, both callers.
   //
-  // A feature the org gate SKIPPED therefore fails here, which is intended: the spec asked for it and
-  // it is not configured on the app. The effective value is still read, but only as context in the
-  // failure message ("in effect as X by environment fallback").
+  // A feature whose write did not persist therefore FAILS here, which is intended: the spec asked for
+  // it and it is not configured on the app. That includes one the SDK bucketed as `skipped` — since
+  // AB#6688904 that means "attempted, absent, and an org gate reads off", i.e. an admin action is
+  // outstanding, not that the request was withdrawn. The effective value is still read, but only as
+  // context in the failure message ("in effect as X by environment fallback").
   //
   // Reader-gated like the other content checks: this needs BOTH `retrieveSetting` (context) and
   // `queryRecords` (the proof), so an existence-only reader skips it entirely rather than falling

@@ -1105,9 +1105,13 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   // the SDK's own, so an out-of-range value is rejected here rather than aborting the build half-applied.
   //
   // These write PER-APP settings, which are distinct from the org-level admin gates the build
-  // preflights; a feature whose org gate is off is skipped with a warning and never silently applied.
-  // ENABLING is gated that way; DISABLING is not — a `false` is written even when the gate is off,
-  // which is why an incorrect `false` is the more damaging mistake of the two.
+  // preflights. The gate is NOT a precondition: every write is attempted and then verified, and a
+  // gate is read only to EXPLAIN a write that did not persist (AB#6688904 — for four of these
+  // features the "gate" IS this same per-app row, so reading it first made a brand-new app look
+  // forbidden and nothing was written at all). A feature whose write does not persist is surfaced
+  // with a warning naming the admin action; it is never silently reported as applied.
+  // DISABLING is treated identically — a `false` is written whatever the gate says, which is why an
+  // incorrect `false` is the more damaging mistake of the two.
   "appFeatures": {
     "formFill":  true,   // Copilot-assisted form fill (data entry)
     "nlSearch":  true,   // natural-language grid/view search (data exploration)
