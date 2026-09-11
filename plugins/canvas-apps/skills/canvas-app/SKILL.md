@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.9
+version: 3.0.8
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,10 +22,10 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.9`.
-   Read `${PLUGIN_ROOT}/qa-contract.json` and require coverage `1-44`, highest check `44`,
-   and required marker `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with
-   the expected and observed paths and versions; do not mix prompt generations.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.8`.
+   Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
+   `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
+   observed paths and versions; do not mix prompt generations.
 3. Reuse the current directory when it already contains `App.pa.yaml` and every existing
    file in that directory is a `.pa.yaml` file.
 4. Otherwise, reuse the single immediate child directory containing `App.pa.yaml`, when
@@ -205,9 +205,9 @@ After all builders finish:
     AutoLayout lacks `Width: =Parent.Width`;
     `PASS` is valid after a complete inspection finds no defect; never reject it solely
     because the screen has many controls.
-    The builder's deterministic preflight must pass before these semantic claims are
-    accepted. The remaining defects — clipped headings, invisible buttons, placeholder
-    cards, and broken behavior — are invisible to `compile_canvas`.
+    This costs one cheap turn. The defects these checks catch — clipped headings, invisible
+    buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
+    app ships broken while reporting clean.
 - If any builder says checks 42-44 are undefined, stop instead of rerunning self-QA.
 Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - A self-QA follow-up is not a rebuild or a screen-generation re-dispatch. Tell the

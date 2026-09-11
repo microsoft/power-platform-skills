@@ -1,10 +1,5 @@
 # Canvas App YAML — QA Self-Check Guide
 
-This is the detailed repair reference. Normal screen generation runs
-`scripts/validate-canvas-screen.cs` and reads the compact
-`references/QAChecksRuntime.md`; load this file only when a targeted validator message or
-semantic defect needs deeper explanation.
-
 This guide lists runtime layout issues that `compile_canvas` does NOT catch. The
 compiler validates syntax and property names. It cannot tell you that your
 scrollable container will never scroll, that a transparent overlay button

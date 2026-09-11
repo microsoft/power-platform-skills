@@ -29,9 +29,7 @@ hooks/
   hooks.json                   ← Claude-format hooks: UserPromptSubmit
   inject-sync-reminder.cs      ← File-based .NET app that emits the sync reminder for both hosts
 scripts/
-  validate-canvas-screen.cs    ← Deterministic per-screen QA preflight with targeted findings
   validate-canvas-acceptance.cs ← Blocks completion when final evidence does not cover the plan
-qa-contract.json               ← Small provenance and QA coverage contract
 references/
   YamlSyntax.md                ← .pa.yaml structure, syntax rules, and parse-error triage
   ControlGuide.md              ← Control selection, property contracts, enums, and versions
@@ -39,8 +37,7 @@ references/
   GridLayoutGuide.md           ← Conditional GridLayout formulas and invariants
   PowerFxGuide.md              ← State, events, named formulas, and mock data
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
-  QAChecksRuntime.md           ← Compact semantic checklist loaded by screen builders
-  QAChecks.md                  ← Detailed repair reference, not loaded during normal generation
+  QAChecks.md                  ← Named runtime anti-pattern checks for per-screen self-QA
   PlanTemplates.md             ← Progressive index, shared plan, and screen-brief structures
   CreateWorkflow.md            ← Empty-app planning and planner handoff
   EditWorkflow.md              ← Simple vs complex edit routing and planning

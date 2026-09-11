@@ -49,10 +49,10 @@ exactly, record an explicit approximation and reason; never silently rename butt
 "drag-style", call buttons "handles", or put copy in the app that promises an interaction
 the controls do not provide.
 
-Before discovery, read the supplied plugin root's `qa-contract.json`. Stop with
-`Status: Provenance Blocked` unless it declares coverage `1-44`, highest check `44`, and
-required marker `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived
-from the working directory.
+Before discovery, read the supplied plugin root's `references/QAChecks.md`. Stop with
+`Status: Provenance Blocked` unless the QA guide defines
+`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the
+working directory.
 
 Complete discovery and compose every artifact before attempting the first write. Use
 `apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. If the tool is
