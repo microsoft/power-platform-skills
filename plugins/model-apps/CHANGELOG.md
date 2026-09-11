@@ -28,6 +28,13 @@ Three defects an author hits before reaching an environment, and a session-start
   so nothing rewrote them and validation reported one "not a known page key" / "unknown page" error
   per page, none of which named the cause. Authored keys now survive migration; a key is minted only
   for a page that has none, and every authored key is reserved first so a minted one cannot steal it.
+- **A `//` or `/* */` comment inside a JSX opening tag no longer makes a valid page look truncated**
+  ([#542]). `jsxTag` mode had no comment handling, so an apostrophe in the comment prose was read as
+  an attribute-value quote — and that scanner does not stop at a newline, because a JSX attribute
+  value legitimately may span lines. It ran to end of file, blanking the real `export default` and
+  miscounting every bracket after it, so `promote-intent-pages` rejected a complete page as
+  truncated. Promotion is transactional, so one such page blocked the whole batch. Block comments
+  had the same defect, which the report did not cover.
 - **`eq-businessid` / `ne-businessid` are accepted in a view filter** ([#546]). Both are value-less
   FetchXML operators — the business-unit equivalents of `eq-userid` / `ne-userid` — and the lint
   demanded a value they must not carry. The operator list is now the documented value-less set,
@@ -39,6 +46,7 @@ Three defects an author hits before reaching an environment, and a session-start
   moved to `hooks/README.md`, and a repo-wide CI check now fails any manifest with an unrecognised
   top-level key — the symptom is otherwise invisible to both tests and review.
 
+[#542]: https://github.com/microsoft/power-platform-skills/issues/542
 [#545]: https://github.com/microsoft/power-platform-skills/issues/545
 [#546]: https://github.com/microsoft/power-platform-skills/issues/546
 [#555]: https://github.com/microsoft/power-platform-skills/issues/555

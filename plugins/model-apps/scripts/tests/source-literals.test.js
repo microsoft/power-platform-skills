@@ -110,6 +110,18 @@ test('JSX text is text, not code — the false-positive cases that block real us
     'JSX with an explicit type argument': 'export default function P(){ return <Table<Row> rows={r} />; }\n',
     'fragment': 'export default function P(){ return <><span>a</span><span>b</span></>; }\n',
     'comparison operators': 'const b = a < c && c > a;\nexport default function P(){ return <div/>; }\n',
+    // #542. A `//` or `/* */` comment BETWEEN ATTRIBUTES in a JSX opening tag is valid TSX and a
+    // natural thing for a generator to emit when explaining an attribute. `jsxTag` mode had no
+    // comment handling at all, so an apostrophe inside one was read as an attribute-value quote,
+    // which then ran to EOF (the attribute scanner does not stop at a newline, because a JSX
+    // attribute value legitimately may span lines). That blanked the real `export default` and
+    // miscounted every bracket after it, so promotion rejected a complete page as "truncated" —
+    // and because promotion is transactional, one such page blocked the whole batch.
+    'in-tag line comment': 'export default function P(){ return <button\n  type="button"\n  // wins over the base border shorthand\n  className={x}\n>hi</button>; }\n',
+    'in-tag line comment with an apostrophe': 'export default function P(){ return <button\n  type="button"\n  // wins over Griffel\'s atomic output\n  className={x}\n>hi</button>; }\n',
+    'in-tag block comment with an apostrophe': 'export default function P(){ return <button\n  type="button"\n  /* Griffel\'s atomic output wins */\n  className={x}\n>hi</button>; }\n',
+    'in-tag comment containing a quote and a bracket': 'export default function P(){ return <button\n  // don\'t count this ( or this "\n  className={x}\n>hi</button>; }\n',
+    'in-tag comment before a self-closing tag': 'export default function P(){ return <div><Icon\n  // Griffel\'s output\n  aria-hidden\n/></div>; }\n',
   };
   for (const [name, code] of Object.entries(cases)) {
     assert.equal(hasDefaultExport(code), true, `default export missed: ${name}`);
