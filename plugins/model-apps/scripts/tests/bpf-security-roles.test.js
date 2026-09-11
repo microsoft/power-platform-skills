@@ -499,6 +499,45 @@ test('#513 verify resolves the persona case-insensitively too, or it would repor
   assert.ok(c && c.present, `expected a passing bpf-roles check; filters=${JSON.stringify(queried)} check=${JSON.stringify(c)}`);
 });
 
+test('#513 verify FAILS when the flow does not exist, instead of probing a derived table name', async () => {
+  // The fail-open this closes: with no workflow row, `deployed` was falsy and the DERIVED backing
+  // name (`bpfUniqueName(flow.name)`) stayed in place. If an unrelated table happened to hold that
+  // name and the persona happened to hold privileges on it, verify reported PASS for a business
+  // process flow that does not exist at all. A successful query returning NO ROWS is positive
+  // evidence of absence — quite different from a read that threw, where the derivation still stands
+  // and the privilege read fails closed on its own.
+  const { verifySpec } = require('../lib/verify-spec.js');
+  const asked = [];
+  const read = {
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set) => {
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') return [{ roleid: 'role-1', name: 'Dispatcher', description: SDK_ROLE_MARKER }];
+      if (set === 'workflow') return []; // the flow was never created
+      return [];
+    },
+    // The trap: a DIFFERENT table happens to carry the derived name and grants everything.
+    entityPrivileges: async (t) => {
+      asked.push(t);
+      return BPF_ROLE_ACCESS.map((a) => ({ Name: `prv${a}`, PrivilegeId: `bpf-${a}`, PrivilegeType: a[0].toUpperCase() + a.slice(1) }));
+    },
+    rolePrivileges: async () => BPF_ROLE_ACCESS.map((a) => ({ privilegeId: `bpf-${a}`, depth: 'Global' })),
+  };
+  const r = await verifySpec(base({ securityRoles: { personas: ['Dispatcher'] } }), read);
+  const c = r.checks.find((x) => x.kind === 'bpf-roles');
+  assert.ok(c, 'a bpf-roles check must still be recorded');
+  assert.strictEqual(c.present, false, `an absent flow must FAIL: ${JSON.stringify(c)}`);
+  assert.match(c.detail, /no business process flow named/, c.detail);
+  // Scoped to the DERIVED backing-table name. The persona role-privileges check legitimately reads
+  // privileges for the spec's own entities, so asserting "nothing was asked" would fail for an
+  // unrelated reason and prove nothing about this fix.
+  const derived = require('../lib/app-spec.js').bpfUniqueName(FLOW.name);
+  assert.ok(!asked.includes(derived),
+    `it must not read privileges on '${derived}' — a name it could not confirm belongs to the flow; asked=${JSON.stringify(asked)}`);
+});
+
 test('#513 a flow the phase did not build is SKIPPED with a reason, never granted blind', async () => {
   // The backing table only exists once the flow is activated. Granting anyway would fail against a
   // missing table; skipping SILENTLY would report success while nobody can run the process.

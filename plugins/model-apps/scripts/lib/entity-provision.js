@@ -422,7 +422,17 @@ async function findExistingColumns(provision, logical, warn) {
 // Returns `true`/`false`, or `null` when it genuinely could not tell — the caller treats null the
 // way the old `catch {}` did (assume absent and let the create's own already-exists handling deal
 // with it), because a table created moments ago legitimately 404s here.
-async function relationshipExists(provision, entityLogical, schemaName, type) {
+//
+// `hasLocalizedLabels` closes the same hole `findExistingTable` documents, for the same reason and
+// with the same rule. `fetchEntityMetadata` → `createRelationship` is one of the three broad-read →
+// create pairs that makes Dataverse keep ONLY the base-language label (AB#6686428), so falling back
+// to it after an inconclusive narrow probe would silently reintroduce the bug on a transient 5xx —
+// invisibly, because the request body is byte-identical either way and the relationship is still
+// created. For a localized lookup label the fallback is therefore skipped and `null` is returned:
+// "assume absent" costs at most a redundant create that already-exists handling absorbs, whereas the
+// poisoning read costs a label nobody can see is wrong until a user switches language.
+// A relationship with a plain-string label keeps the fallback exactly as before.
+async function relationshipExists(provision, entityLogical, schemaName, type, { hasLocalizedLabels = false } = {}) {
   const collection = type === 'ManyToMany' ? 'ManyToManyRelationships' : 'OneToManyRelationships';
   const raw = provision && provision.dataverse;
   if (raw && typeof raw.get === 'function') {
@@ -433,6 +443,8 @@ async function relationshipExists(provision, entityLogical, schemaName, type) {
       }
       if (res && res.status === 404) return false;
     } catch { /* fall through */ }
+    // Inconclusive AND localized: never resolve it with the broad read.
+    if (hasLocalizedLabels) return null;
   }
   if (typeof (provision && provision.fetchEntityMetadata) !== 'function') return null;
   try {
@@ -1003,8 +1015,10 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       const schema = relationshipSchemaName(rel, publisherPrefix);
       // `null` (could not tell) is treated as absent, exactly as the previous `catch {}` did: a table
       // created moments earlier legitimately 404s here, and the create's own already-exists handling
-      // covers the race.
-      const exists = await relationshipExists(provision, rel.referenced.toLowerCase(), schema, 'OneToMany');
+      // covers the race. A localized lookup label suppresses the broad-read fallback inside the
+      // probe — see relationshipExists.
+      const exists = await relationshipExists(provision, rel.referenced.toLowerCase(), schema, 'OneToMany',
+        { hasLocalizedLabels: localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0 });
       if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
         const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode });

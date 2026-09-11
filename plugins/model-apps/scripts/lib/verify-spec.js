@@ -540,7 +540,15 @@ async function verifySpec(spec, read, opts = {}) {
     // which is the worse of the two. Falls back to the derivation only when the row cannot be read,
     // where it remains correct for anything this tool created.
     // See https://learn.microsoft.com/en-us/power-automate/developer/business-process-flows-code
+    //
+    // Three outcomes, kept apart because two of them used to collapse into one. A successful query
+    // returning NO ROWS means the flow does not exist — it was never created, or never activated —
+    // and the derivation must NOT be used then: `bpfUniqueName(f.name)` could coincide with an
+    // unrelated table, whose privileges would verify clean and report a PASS for a flow that is
+    // absent. That is the one direction this check exists to prevent. A read that THREW is different:
+    // we could not look, so the derivation stands and the privilege read below fails closed anyway.
     let backingTable = bpfUniqueName(f.name);
+    let flowMissing = false;
     try {
       const rows = await read.queryRecords('workflow', {
         select: ['workflowid', 'uniquename'],
@@ -548,9 +556,17 @@ async function verifySpec(spec, read, opts = {}) {
         orderBy: 'createdon asc',
         top: 5,
       });
-      const deployed = rows && rows[0] && rows[0].uniquename;
-      if (deployed) backingTable = String(deployed).toLowerCase();
-    } catch { /* keep the derivation — the privilege read below fails closed anyway */ }
+      const row = rows && rows[0];
+      if (!row) flowMissing = true;
+      else if (row.uniquename) backingTable = String(row.uniquename).toLowerCase();
+      // A row WITHOUT a uniquename keeps the derivation: the flow demonstrably exists, so the
+      // derived name is the best available answer for anything this tool created.
+    } catch { /* could not look — keep the derivation; the privilege read below fails closed */ }
+    if (flowMissing) {
+      add('bpf-roles', f.name, false,
+        `no business process flow named '${f.name}' exists on '${String(f.entity).toLowerCase()}', so its backing table cannot be identified and no role grant on it can be verified`);
+      continue;
+    }
     let privs = null;
     try {
       privs = await read.entityPrivileges(backingTable);
