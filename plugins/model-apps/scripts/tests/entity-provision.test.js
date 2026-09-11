@@ -549,6 +549,173 @@ test('buildSeedGroup omits matchOn (no dedup) when the key value is empty in a r
   assert.ok(!('primaryAttribute' in group));
 });
 
+// --- #544: self-referencing $parent (a hierarchy on one table) ---------------------------------
+// seedRecordGraph resolves EVERY bind in a group before creating ANY of that group's rows, and only
+// publishes the group's ids afterwards. Topological ordering BETWEEN entities therefore does not
+// help WITHIN one, so a `$parent` pointing at the row's own entity could never resolve — the whole
+// sample-data phase halted, several phases into a build that had already written data. The spec
+// cannot work around it either: the plugin, not the author, decides the grouping.
+const hierarchySpec = () => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [{ schemaName: 'new_org', displayName: 'Org', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+  relationships: [
+    { type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId', displayName: 'Parent Org' } },
+  ],
+  sampleData: {
+    new_org: [
+      { new_name: 'Root' },
+      { new_name: 'Child', $parent: { entity: 'new_org', match: { new_name: 'Root' } } },
+      { new_name: 'Grandchild', $parent: { entity: 'new_org', match: { new_name: 'Child' } } },
+    ],
+  },
+});
+
+// Capture every seedRecordGraph call so the WAVES are observable, and return ids the way the real
+// bundle does: one id per record of the group it was handed, in order.
+function recordingSdk() {
+  const calls = [];
+  let n = 0;
+  return {
+    calls,
+    seedRecordGraph: async (groups, opts) => {
+      const g = groups[0];
+      calls.push({ names: g.records.map((r) => r.body.new_name), binds: g.records.map((r) => r.binds), createdIds: JSON.parse(JSON.stringify(opts.createdIds || {})) });
+      return { createdIds: { [g.entityLogical]: g.records.map(() => `id-${n++}`) } };
+    },
+  };
+}
+
+async function runHierarchy(spec) {
+  const runner = makeRunner({ emit: () => {}, total: 1 });
+  const sdk = recordingSdk();
+  const dataModel = { entities: { new_org: { logicalName: 'new_org', entitySetName: 'new_orgs' } }, statusReasonValues: {} };
+  const res = await provisionSampleData({ sdk, provision: {}, runner, spec, dataModel });
+  return { sdk, res };
+}
+
+test('#544 a self-referencing $parent seeds in waves instead of failing the whole phase', async () => {
+  const { sdk } = await runHierarchy(hierarchySpec());
+  assert.deepStrictEqual(sdk.calls.map((c) => c.names), [['Root'], ['Child'], ['Grandchild']],
+    'one wave per depth: a row is seeded only after the row it points at');
+});
+
+test('#544 each wave receives its parents ids at their ORIGINAL record index', async () => {
+  const { sdk, res } = await runHierarchy(hierarchySpec());
+  // The bind carries parentIndex = the parent's index in the entity's FULL sample list, and the SDK
+  // looks it up as createdIds[entity][parentIndex]. A wave-local array would misresolve every bind.
+  assert.deepStrictEqual(sdk.calls[1].binds[0], [{ navProperty: 'new_ParentOrgId', parentEntity: 'new_org', parentIndex: 0 }]);
+  assert.strictEqual(sdk.calls[1].createdIds.new_org[0], 'id-0', "wave 2 sees Root's id at index 0");
+  assert.strictEqual(sdk.calls[2].createdIds.new_org[1], 'id-1', "wave 3 sees Child's id at index 1");
+  assert.deepStrictEqual(res.records.new_org, ['id-0', 'id-1', 'id-2'], 'the entity reports one id per ORIGINAL row, in order');
+});
+
+test('#544 a spec with no self-reference still seeds in exactly one call (no behaviour change)', async () => {
+  const spec = hierarchySpec();
+  delete spec.sampleData.new_org[1].$parent;
+  delete spec.sampleData.new_org[2].$parent;
+  const { sdk } = await runHierarchy(spec);
+  assert.strictEqual(sdk.calls.length, 1, 'unchanged specs must not be split into waves');
+  assert.deepStrictEqual(sdk.calls[0].names, ['Root', 'Child', 'Grandchild']);
+  assert.strictEqual(sdk.calls[0].createdIds.new_org, undefined, 'and must not gain a self-entity key in options');
+});
+
+// Waves are by DEPTH, not by row order: independent rows at the same depth go in one call, and a row
+// declared BEFORE its parent still lands after it. Order in the array must not matter.
+test('#544 rows at the same depth share a wave, and a parent declared LATER still goes first', async () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org = [
+    { new_name: 'Leaf', $parent: { entity: 'new_org', match: { new_name: 'Mid' } } },     // depth 2, declared first
+    { new_name: 'Mid', $parent: { entity: 'new_org', match: { new_name: 'Root' } } },     // depth 1
+    { new_name: 'Root' },                                                                 // depth 0, declared last
+    { new_name: 'OtherRoot' },                                                            // depth 0
+    { new_name: 'OtherMid', $parent: { entity: 'new_org', match: { new_name: 'OtherRoot' } } }, // depth 1
+  ];
+  const { sdk, res } = await runHierarchy(spec);
+  assert.deepStrictEqual(sdk.calls.map((c) => c.names), [
+    ['Root', 'OtherRoot'],
+    ['Mid', 'OtherMid'],
+    ['Leaf'],
+  ], 'one call per depth, independent rows batched together');
+  // Ids still come back indexed by the ORIGINAL declaration order, which is what every bind means.
+  assert.strictEqual(res.records.new_org.length, 5);
+  assert.ok(res.records.new_org.every((id) => typeof id === 'string'), JSON.stringify(res.records.new_org));
+});
+
+// `$parents` (the array form used by junction rows) must be treated identically — it is the same
+// bind list, so a self-reference through it has to drive the waves too.
+test('#544 a self-reference expressed through $parents drives the waves as well', async () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org = [
+    { new_name: 'Child', $parents: [{ entity: 'new_org', match: { new_name: 'Root' } }] },
+    { new_name: 'Root' },
+  ];
+  const { sdk } = await runHierarchy(spec);
+  assert.deepStrictEqual(sdk.calls.map((c) => c.names), [['Root'], ['Child']]);
+});
+
+// A CROSS-entity parent must not be mistaken for a self-reference: it is already handled by the
+// topological ordering BETWEEN entities, and splitting on it would add calls for no reason.
+test('#544 a cross-entity $parent does not trigger wave splitting', async () => {
+  const spec = hierarchySpec();
+  spec.entities.push({ schemaName: 'new_owner', displayName: 'Owner', primaryAttribute: { schemaName: 'new_name' }, columns: [] });
+  spec.relationships.push({ type: 'OneToMany', referenced: 'new_owner', referencing: 'new_org', lookup: { schemaName: 'new_OwnerId', displayName: 'Owner' } });
+  spec.sampleData.new_owner = [{ new_name: 'Acme' }];
+  spec.sampleData.new_org = [
+    { new_name: 'A', $parent: { entity: 'new_owner', match: { new_name: 'Acme' } } },
+    { new_name: 'B', $parent: { entity: 'new_owner', match: { new_name: 'Acme' } } },
+  ];
+  const { sdk } = await runHierarchy(spec);
+  const orgCalls = sdk.calls.filter((c) => c.names.includes('A') || c.names.includes('B'));
+  assert.strictEqual(orgCalls.length, 1, 'both org rows seed in one call');
+});
+
+test('#544 a self-reference CYCLE fails with a message naming the rows, not a hang', async () => {  const spec = hierarchySpec();
+  spec.sampleData.new_org[0].$parent = { entity: 'new_org', match: { new_name: 'Grandchild' } };
+  await assert.rejects(runHierarchy(spec), (err) => {
+    assert.match(err.message, /cycle/i);
+    assert.match(err.message, /new_org/);
+    assert.match(err.message, /Root|Grandchild/, `the message must name the rows involved: ${err.message}`);
+    return true;
+  });
+});
+
+test('#544 a row that is its own parent is reported as a cycle', async () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org = [{ new_name: 'Loop', $parent: { entity: 'new_org', match: { new_name: 'Loop' } } }];
+  await assert.rejects(runHierarchy(spec), /cycle/i);
+});
+
+// The ambiguity this fix makes REACHABLE: `$parent` resolves through relationshipFor, which returns
+// the FIRST OneToMany for the pair. A hierarchy table commonly has two self-lookups, and silently
+// binding the wrong one asserts something false about the data.
+test('#544 two relationships for the same pair are rejected unless $parent names the lookup', () => {
+  const spec = hierarchySpec();
+  spec.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_org, statusReasonValues: {} }),
+    /ambiguous|more than one/i
+  );
+});
+
+test('#544 $parent.lookup selects which relationship to bind', () => {
+  const spec = hierarchySpec();
+  spec.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  spec.sampleData.new_org[1].$parent.lookup = 'new_GroupAncestorId';
+  spec.sampleData.new_org[2].$parent.lookup = 'new_ParentOrgId';
+  const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_org, statusReasonValues: {} });
+  assert.strictEqual(group.records[1].binds[0].navProperty, 'new_GroupAncestorId');
+  assert.strictEqual(group.records[2].binds[0].navProperty, 'new_ParentOrgId');
+});
+
+test('#544 an unknown $parent.lookup names the valid ones', () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org[1].$parent.lookup = 'new_NopeId';
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_org, statusReasonValues: {} }),
+    /new_NopeId[\s\S]*new_ParentOrgId/
+  );
+});
+
 // --- provisionSampleData: F9 keyless-seeding warning ------------------------------------------
 function runSample(spec) {
   // The F9 warning goes to stderr (non-fatal), so capture stderr for the duration of the run.

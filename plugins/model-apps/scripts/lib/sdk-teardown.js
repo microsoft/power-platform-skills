@@ -821,6 +821,25 @@ function planTeardown(spec) {
   }
   for (const r of spec.relationships || []) {
     const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r, spec.solution && spec.solution.publisherPrefix) : relationshipSchemaName(r, spec.solution && spec.solution.publisherPrefix);
+    // A SELF-referencing 1:N (a hierarchy — `referenced === referencing`) is removed BY the table
+    // delete two phases below, and deleting it on its own first fails:
+    //   ✗ relationship lph_org_lph_org — HTTP 400 … The EntityRelationship(…) cannot be deleted
+    //     because it is referenced by 2 other components.
+    // Its lookup lives on the same table that also hosts the form and views referencing it, so
+    // unlike a two-table relationship there is nothing left to unpick it from — Gap 6 above clears
+    // the default view, but the table's own main form still holds the lookup. MEASURED live: the
+    // teardown printed that error and exited NON-ZERO on a run that then deleted the table
+    // successfully and left the environment completely clean. That is a cry-wolf failure on the one
+    // operation whose report has to be trustworthy, and self-referencing hierarchies became a
+    // mainstream shape once sample data could seed them (#544).
+    //
+    // Narrow on purpose: skipped ONLY when this run also deletes the table (an `existing: true`
+    // table is NOT deleted, so its relationship must still be removed here).
+    const selfReferencing = r.type === 'OneToMany'
+      && String(r.referenced || '').toLowerCase() === String(r.referencing || '').toLowerCase();
+    const ownerIsDeleted = selfReferencing && (spec.entities || []).some(
+      (e) => e && e.existing !== true && String(e.schemaName || '').toLowerCase() === String(r.referenced || '').toLowerCase());
+    if (ownerIsDeleted) continue;
     steps.push({ kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } });
   }
   // AI row-summary records must be removed BEFORE tables: the summary record references the
