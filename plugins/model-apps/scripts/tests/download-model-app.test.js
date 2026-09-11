@@ -1341,13 +1341,18 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   // reconstruct, and carry that report in the RESULT so `--json` consumers see it too. The unit
   // tests in download-not-round-tripped.test.js pin the wording; this pins that it is actually
   // reached from a real download, which a source-shape assertion could not.
-  assert.match(text, /NOTE: this download does not reconstruct forms\[\], views\[\] or charts\[\]/);
+  //
+  // This app has only forms, and the sentence now names only the classes actually reported — it used
+  // to read "forms[], views[] or charts[]" regardless, telling the operator two things were missing
+  // that were never there.
+  assert.match(text, /NOTE: this download does not reconstruct forms\[\] —/);
+  assert.doesNotMatch(text, /does not reconstruct[^\n]*views\[\]/, 'no views were found, so none may be claimed');
   assert.ok(res.notRoundTripped, 'the summary must ride on the runDownload result, not only on stderr');
   assert.strictEqual(res.notRoundTripped.total, 2, JSON.stringify(res.notRoundTripped));
   // SORTED, not in the order the mock returned them. `notRoundTripped` is compared between runs, so
   // it sorts at every level; `descriptionInventory` below is the raw read and keeps Dataverse's
   // order, which is why the two lists differ here.
-  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [] }]);
+  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [], businessRules: [] }]);
   // The spec on disk still carries them under descriptionInventory — the note's claim must be true.
   assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Everyone Form', 'Dispatcher Form']);
 });

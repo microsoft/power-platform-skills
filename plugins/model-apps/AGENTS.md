@@ -235,10 +235,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **`languageCode` is the language for a PLAIN label, not the only language available.** An
   author-facing name (`entities[].displayName`/`pluralName`, `primaryAttribute.displayName`,
   `columns[].displayName`, `alternateKeys[].displayName`, `relationships[].lookup.displayName`,
-  `globalChoices[].displayName` and any `options[]` entry) may instead be a **map keyed by LCID**,
+  and an **inline** Choice option on `columns[].options[]`) may instead be a **map keyed by LCID**,
   which the SDK's label serializer turns into a multi-entry `LocalizedLabels` array
-  (AB#6686428 / #537). The plugin
-  passes such a value through **unflattened** — flattening it here would silently restore the
+  (AB#6686428 / #537). ⚠ **`globalChoices[]` is the exception and is REJECTED, not supported** —
+  neither its `displayName` nor its `options[]` may be localized, because Dataverse accepts the
+  multi-language payload for a global option set and stores only the base language (measured, even
+  through a raw `POST` that bypasses the SDK). Listing it here as localizable sent authors into a
+  validation error; use an inline Choice on the column when option labels must be localized. The plugin
+  passes a supported value through **unflattened** — flattening it here would silently restore the
   English-only behaviour while validation and the design doc still claimed two languages. Everything
   that RENDERS or DERIVES FROM a label must go through `labelText()` (never string-interpolate a
   label), and anything that resolves an author's reference BY label text must go through

@@ -32,7 +32,7 @@ test('notRoundTrippedSummary counts every omitted class and groups by table', ()
   assert.deepStrictEqual(s.classes.map((c) => [c.kind, c.count]), [['forms', 2], ['views', 1], ['charts', 1]]);
   // Sorted by table so two runs against the same app produce the same report.
   assert.deepStrictEqual(s.entities.map((e) => e.entity), ['contoso_project', 'contoso_projectbaseline']);
-  assert.deepStrictEqual(s.entities[0], { entity: 'contoso_project', forms: ['Project'], views: ['Active Projects'], charts: ['By Status'] });
+  assert.deepStrictEqual(s.entities[0], { entity: 'contoso_project', forms: ['Project'], views: ['Active Projects'], charts: ['By Status'], businessRules: [] });
 });
 
 test('notRoundTrippedSummary returns null when there is nothing to report', () => {
@@ -58,7 +58,28 @@ test('notRoundTrippedSummary skips nameless rows instead of printing blanks', ()
 
 test('notRoundTrippedSummary buckets a row with no table under "unknown" rather than dropping it', () => {
   const s = notRoundTrippedSummary({ forms: [{ id: 'f1', name: 'Orphan' }] });
-  assert.deepStrictEqual(s.entities, [{ entity: 'unknown', forms: ['Orphan'], views: [], charts: [] }]);
+  assert.deepStrictEqual(s.entities, [{ entity: 'unknown', forms: ['Orphan'], views: [], charts: [], businessRules: [] }]);
+});
+
+// --- the classes actually reported ---------------------------------------------------------------
+// `hydrateSpec` reconstructs neither BUSINESS RULES nor GLOBAL CHOICES, and both are inventoried, so
+// both belong in a report whose whole purpose is naming what did not round-trip. Leaving them out
+// made the report quietly incomplete about a real cross-environment loss.
+
+test('a business rule is reported, grouped by its table like any other artifact', () => {
+  const s = notRoundTrippedSummary(inventory({ businessRules: [{ id: 'br1', name: 'Require close reason', entity: 'contoso_project' }] }));
+  assert.ok(s.classes.some((c) => c.kind === 'businessRules' && c.count === 1), JSON.stringify(s.classes));
+  assert.deepStrictEqual(s.entities.find((e) => e.entity === 'contoso_project').businessRules, ['Require close reason']);
+  assert.match(notRoundTrippedWarning(s), /businessRules: Require close reason/);
+});
+
+test('a global choice is reported WITHOUT a table, because it does not belong to one', () => {
+  // Filing an org-wide option set under a table would assert a relationship Dataverse does not have.
+  const s = notRoundTrippedSummary(inventory({ globalChoices: [{ id: 'gc1', name: 'contoso_status' }] }));
+  assert.ok(s.classes.some((c) => c.kind === 'globalChoices' && c.count === 1));
+  assert.deepStrictEqual(s.orgScoped, [{ kind: 'globalChoices', label: 'global choice', names: ['contoso_status'] }]);
+  assert.ok(!s.entities.some((e) => e.entity === 'unknown'), 'it must not be bucketed under a fake table');
+  assert.match(notRoundTrippedWarning(s), /\(environment-wide\) globalChoices: contoso_status/);
 });
 
 // --- the wording, which is the whole point of the fix -------------------------------------------
@@ -85,8 +106,22 @@ test('the warning names the counts, the tables and the artifacts', () => {
 test('the warning says what to DO about it', () => {
   // A report with no remedy just relocates the problem.
   const w = notRoundTrippedWarning(notRoundTrippedSummary(inventory()));
-  assert.match(w, /re-declare the ones you need in forms\[\] \/ views\[\] \/ charts\[\]/);
+  assert.match(w, /re-declare the ones you need in forms\[\], views\[\], charts\[\]/);
   assert.match(w, /solution export/);
+});
+
+test('the class list in the wording FOLLOWS the content — it is not a fixed sentence', () => {
+  // It used to read "forms[], views[] or charts[]" no matter what was reported, so a download with
+  // only forms told the operator views and charts were missing too, and adding business rules to the
+  // report left the sentence naming the wrong classes. The remedy line has to name the same set.
+  const onlyForms = notRoundTrippedWarning(notRoundTrippedSummary(inventory({ views: [], charts: [] })));
+  assert.match(onlyForms, /does not reconstruct forms\[\] —/);
+  assert.doesNotMatch(onlyForms, /views\[\]/, 'must not claim views were omitted when none were found');
+  assert.doesNotMatch(onlyForms, /charts\[\]/);
+
+  const withRules = notRoundTrippedWarning(notRoundTrippedSummary(inventory({ businessRules: [{ id: 'b', name: 'R', entity: 'contoso_project' }] })));
+  assert.match(withRules, /does not reconstruct forms\[\], views\[\], charts\[\], businessRules\[\] —/);
+  assert.match(withRules, /re-declare the ones you need in forms\[\], views\[\], charts\[\], businessRules\[\]/);
 });
 
 test('notRoundTrippedWarning is empty for an empty summary, so nothing is printed', () => {

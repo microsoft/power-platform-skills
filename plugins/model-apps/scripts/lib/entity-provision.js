@@ -14,6 +14,7 @@ const {
   quickCreateEnabledFor,
   normalizeLanguageCode,
   labelText,
+  isLocalizedLabelMap,
   localizedLabelLcids,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -802,7 +803,20 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         // plural fallback is only reachable for a STRING displayName; validateAppSpec requires an
         // explicit `pluralName` beside a localized one, because appending "s" is not a plural rule
         // outside English and would write "Línea base del proyectos" into Dataverse.
-        const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${labelText(e.displayName, resolvedLanguageCode) || e.schemaName}s`,
+        //
+        // The schema-name fallback is NOT cosmetic. `displayName` is optional in the App Spec — the
+        // validator accepts an omitted or blank one, exactly as it does for a column — and every
+        // other create site here already falls back (`c.displayName || c.schemaName` for columns,
+        // customer columns and alternate keys). The table was the one that did not, and handing the
+        // SDK `undefined` throws inside its label builder with `Cannot convert undefined or null to
+        // object` BEFORE any request is issued — an opaque failure with nothing naming the table or
+        // the field. MEASURED against the real vendored bundle; `''` gets past it but would label the
+        // table blank. A localized MAP must pass through untouched, so it is never routed through
+        // `labelText`, which would flatten it to one language.
+        const tableDisplayName = isLocalizedLabelMap(e.displayName)
+          ? e.displayName
+          : (labelText(e.displayName, resolvedLanguageCode) || e.schemaName);
+        const createOpts = { schemaName: e.schemaName, displayName: tableDisplayName, pluralName: e.pluralName || `${labelText(tableDisplayName, resolvedLanguageCode) || e.schemaName}s`,
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;

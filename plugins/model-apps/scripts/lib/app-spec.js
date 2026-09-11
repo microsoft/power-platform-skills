@@ -702,6 +702,21 @@ function isLocalizedLabelMap(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+// Is a label ABSENT for the purpose of a required-label check?
+//
+// `undefined` alone is not enough. `null` is what a JSON author writes for "nothing", and a blank or
+// whitespace-only string is the same statement typed differently — yet all three would satisfy an
+// `=== undefined` test while meaning the opposite. That gap shipped once: the "a localized
+// displayName needs an explicit pluralName" guard checked only `undefined`, so `pluralName: null`,
+// `""` and `"   "` all passed validation and the build then derived an ENGLISH plural for a
+// bilingual table (or wrote the whitespace through as the label), silently discarding the very
+// thing the guard exists to demand. A localized MAP is always present — `validateLabel` checks what
+// is inside it separately.
+function labelIsMissing(value) {
+  if (value === undefined || value === null) return true;
+  return typeof value === 'string' && value.trim() === '';
+}
+
 // The LCIDs a localized label declares, in ASCENDING numeric order. That is not a choice: V8
 // enumerates integer-like object keys ascending regardless of how they were written, so this can
 // never reflect the author's write order. Returns [] for a string or a non-canonical key.
@@ -1365,7 +1380,9 @@ function validateAppSpec(spec, opts = {}) {
     // A LOCALIZED displayName cannot derive a plural. The English fallback appends "s"
     // (`${displayName}s`), which is wrong in most languages and meaningless for a label map — so
     // rather than write "Línea base del proyectos" into Dataverse, require the author to say it.
-    if (isLocalizedLabelMap(e.displayName) && e.pluralName === undefined) {
+    // `labelIsMissing` rather than `=== undefined`: `null`, `""` and `"   "` are the same statement
+    // and all three used to slip through into that English derivation.
+    if (isLocalizedLabelMap(e.displayName) && labelIsMissing(e.pluralName)) {
       errors.push(`entity ${e.schemaName}: pluralName is required when displayName is a localized label — the plural cannot be derived by appending "s" in every language`);
     }
     validateDescription(e.description, `entity ${e.schemaName}`, errors);
@@ -2797,6 +2814,7 @@ module.exports = {
   labelText,
   labelAliases,
   isLocalizedLabelMap,
+  labelIsMissing,
   localizedLabelLcids,
   validateLabel,
   quickCreateEnabledFor,

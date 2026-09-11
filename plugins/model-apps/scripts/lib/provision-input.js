@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, rejectLocalizedGlobalChoice, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -119,7 +119,7 @@ function validateProvisionInput(input) {
     // disagree about what a label IS teach the author two different rules for one field.
     validateLabel(e.displayName, `entity '${e.schemaName}': displayName`, errors, { baseLanguageCode: input.languageCode });
     validateLabel(e.pluralName, `entity '${e.schemaName}': pluralName`, errors, { baseLanguageCode: input.languageCode });
-    if (isLocalizedLabelMap(e.displayName) && e.pluralName === undefined) {
+    if (isLocalizedLabelMap(e.displayName) && labelIsMissing(e.pluralName)) {
       errors.push(`entity '${e.schemaName}': pluralName is required when displayName is a localized label — the plural cannot be derived by appending "s" in every language`);
     }
     if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {

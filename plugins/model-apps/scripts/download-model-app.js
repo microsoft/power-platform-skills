@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -581,20 +581,42 @@ function isRoleRestrictedFormXml(formxml) {
 //
 // Returns null when there is nothing to report, so a caller can skip the warning entirely.
 function notRoundTrippedSummary(inventory) {
+  // Data-driven, and the set is derived from what `hydrateSpec` actually emits — NOT from what is
+  // convenient to format. `hydrateSpec` returns `views: []`, `charts: []`, `forms: []`,
+  // `commands: []` and no `businessRules`/`globalChoices` key at all, so all of these are absent
+  // from the rebuildable spec. Reporting only forms/views/charts contradicted the report's own
+  // purpose and left a business rule — a real cross-environment loss — silent.
+  //
+  // `entityScoped: false` for global choices because they are ORG-wide: grouping one under a table
+  // would invent a relationship the platform does not have.
+  //
+  // ⚠ `commands[]` is missing from this list for a different reason, and it is a KNOWN gap rather
+  // than an oversight: `readDescriptionInventory` never collects commands, so there is no count to
+  // report. Adding the class here would emit a permanent "0 commands" that reads as "this app has
+  // none" — the exact false reassurance the `incomplete` channel exists to avoid. Inventory them
+  // first, then add the class.
   const CLASSES = [
-    { key: 'forms', label: 'form' },
-    { key: 'views', label: 'view' },
-    { key: 'charts', label: 'chart' },
+    { key: 'forms', label: 'form', entityScoped: true },
+    { key: 'views', label: 'view', entityScoped: true },
+    { key: 'charts', label: 'chart', entityScoped: true },
+    { key: 'businessRules', label: 'business rule', entityScoped: true },
+    { key: 'globalChoices', label: 'global choice', entityScoped: false },
   ];
   const classes = [];
-  const byEntity = new Map(); // table logical -> { forms:[], views:[], charts:[] }
-  for (const { key, label } of CLASSES) {
+  const orgScoped = []; // [{ key, label, names: [] }] — classes with no owning table
+  const byEntity = new Map(); // table logical -> { <classKey>: [names] }
+  const blankEntityRow = () => Object.fromEntries(CLASSES.filter((c) => c.entityScoped).map((c) => [c.key, []]));
+  for (const { key, label, entityScoped } of CLASSES) {
     const rows = (inventory && Array.isArray(inventory[key]) ? inventory[key] : []).filter((r) => r && r.name);
     if (!rows.length) continue;
     classes.push({ kind: key, count: rows.length, label });
+    if (!entityScoped) {
+      orgScoped.push({ kind: key, label, names: rows.map((r) => String(r.name)).sort((a, b) => a.localeCompare(b)) });
+      continue;
+    }
     for (const r of rows) {
       const entity = String(r.entity || 'unknown').toLowerCase();
-      if (!byEntity.has(entity)) byEntity.set(entity, { forms: [], views: [], charts: [] });
+      if (!byEntity.has(entity)) byEntity.set(entity, blankEntityRow());
       byEntity.get(entity)[key].push(r.name);
     }
   }
@@ -613,6 +635,7 @@ function notRoundTrippedSummary(inventory) {
   // into the operator's output and compared between runs, so an unstable order reads as a change
   // that did not happen, which is the opposite of the point: the report exists to make a real
   // difference visible. `classes` is already deterministic (built from the fixed CLASSES list).
+  const entityKeys = CLASSES.filter((c) => c.entityScoped).map((c) => c.key);
   return {
     classes,
     total: classes.reduce((n, c) => n + c.count, 0),
@@ -620,10 +643,9 @@ function notRoundTrippedSummary(inventory) {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([entity, v]) => ({
         entity,
-        forms: [...v.forms].sort((a, b) => String(a).localeCompare(String(b))),
-        views: [...v.views].sort((a, b) => String(a).localeCompare(String(b))),
-        charts: [...v.charts].sort((a, b) => String(a).localeCompare(String(b))),
+        ...Object.fromEntries(entityKeys.map((k) => [k, [...(v[k] || [])].sort((a, b) => String(a).localeCompare(String(b)))])),
       })),
+    ...(orgScoped.length ? { orgScoped } : {}),
     ...(incomplete.length ? { incomplete } : {}),
   };
 }
@@ -635,18 +657,30 @@ function notRoundTrippedWarning(summary) {
   const lines = [];
   if (summary.classes.length) {
     const counts = summary.classes.map((c) => `${c.count} ${c.label}${c.count === 1 ? '' : 's'}`).join(', ');
+    // The class list is rendered from the summary rather than hardcoded. It used to read
+    // "forms[], views[] or charts[]" regardless of what was actually reported, so once business
+    // rules and global choices joined the inventory the sentence named the wrong things — a report
+    // about silent loss quietly misdescribing its own contents.
+    const names = summary.classes.map((c) => (c.kind === 'globalChoices' ? 'globalChoices[]' : `${c.kind}[]`)).join(', ');
+    const tables = summary.entities.length;
     lines.push(
-      `NOTE: this download does not reconstruct forms[], views[] or charts[] — ${counts} on ${summary.entities.length} table(s) are absent from the rebuildable spec.`,
+      `NOTE: this download does not reconstruct ${names} — ${counts}${tables ? ` on ${tables} table(s)` : ''} are absent from the rebuildable spec.`,
       '  They are NOT lost: every one is listed under `descriptionInventory` in app-spec.json, and they remain on the deployed app.',
       '  Rebuilding into THIS environment leaves them untouched. Rebuilding into a DIFFERENT environment will NOT recreate them —',
-      '  re-declare the ones you need in forms[] / views[] / charts[], or copy them with a solution export.',
+      `  re-declare the ones you need in ${names}, or copy them with a solution export.`,
     );
     for (const e of summary.entities) {
       const parts = [];
-      if (e.forms.length) parts.push(`forms: ${e.forms.join(', ')}`);
-      if (e.views.length) parts.push(`views: ${e.views.join(', ')}`);
-      if (e.charts.length) parts.push(`charts: ${e.charts.join(', ')}`);
-      lines.push(`    ${e.entity} — ${parts.join('; ')}`);
+      for (const c of summary.classes) {
+        const list = e[c.kind];
+        if (Array.isArray(list) && list.length) parts.push(`${c.kind}: ${list.join(', ')}`);
+      }
+      if (parts.length) lines.push(`    ${e.entity} — ${parts.join('; ')}`);
+    }
+    // Org-scoped classes are listed separately and WITHOUT a table, because they do not belong to
+    // one; filing a global choice under a table would assert a relationship Dataverse does not have.
+    for (const o of summary.orgScoped || []) {
+      lines.push(`    (environment-wide) ${o.kind}: ${o.names.join(', ')}`);
     }
   }
   if (summary.incomplete && summary.incomplete.length) {
@@ -739,7 +773,14 @@ function entityFromMetadata(meta, logical) {
   return {
     schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
     displayName: displayName !== undefined ? displayName : ((meta && meta.displayName) || logical),
-    ...(displayName && typeof displayName === 'object' && pluralName !== undefined ? { pluralName } : {}),
+    // Emitted when EITHER label is localized, not only when the singular is. `validateAppSpec`
+    // requires `pluralName` beside a localized `displayName`, which is why the singular's shape is
+    // checked — but a table can carry a single-language `DisplayName` and a multi-language
+    // `DisplayCollectionName` (the two are independent in Dataverse, and an unprovisioned language is
+    // dropped per-label on read). Keying only off the singular silently discarded those plural
+    // translations and a rebuild then derived an English plural. Two PLAIN labels still omit it: a
+    // plain plural is derivable and emitting it would add noise to every download.
+    ...((isLocalizedLabelMap(displayName) || isLocalizedLabelMap(pluralName)) && pluralName !== undefined ? { pluralName } : {}),
     ...(descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) ? { description: descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) } : {}),
     // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
     // does not have, which is exactly the bug this fixes.
