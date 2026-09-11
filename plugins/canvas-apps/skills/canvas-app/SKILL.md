@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.8
+version: 3.0.9
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.8`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.9`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -99,7 +99,12 @@ CREATE and complex EDIT workflows return here after the planner finishes.
       least two matching records and one non-matching record.
     - EDIT scenarios cover existing behavior touched by changed sources, fields, controls,
       or observer formulas.
-6. Verify its `## Dispatch` table:
+6. When the plan contains an opposing directional pair, require `## Directional Mutation
+   Evidence` before dispatch. It must state a stable selected-record ID expression, a
+   `=Blank()` operation default, a disabled blank/non-positive submission gate, exact final
+   formulas for both directions, a canonical-source observer, and receipt bindings for
+   operation, old value, amount, expected value, and actual persisted value.
+7. Verify its `## Dispatch` table:
     - Every row has `Action`, `Screen`, `Target File`, `YAML Key`, `Name Prefix`, and
       `Screen Brief`.
     - CREATE rows use `Create`; EDIT rows use `Modify` or `Create`.

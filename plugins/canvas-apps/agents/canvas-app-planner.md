@@ -215,7 +215,13 @@ Before writing plans:
     separate scenario using a concrete old value and amount. For arithmetic pairs, require
     `increase = old + amount` and `decrease = old - amount`, and require the receipt to
     show operation, old value, amount, expected new value, and actual persisted new value.
-18. For every selector or filter, couple the concrete option source, readable option
+18. When Action Contracts contain an opposing directional pair, write the
+    `## Directional Mutation Evidence` table from `PlanTemplates.md`. It is a required
+    deterministic validation contract: declare the exact selected-record ID expression,
+    blank operation binding, invalid-submit gate, both final mutation formulas, canonical
+    observer binding, and all five final receipt bindings. Do not use this table for
+    narrative or inferred behavior; every formula must be copied from final YAML.
+19. For every selector or filter, couple the concrete option source, readable option
     formula, pointer-committed selected value, consumer predicate, active-selection
     indicator, and clear behavior. Apply the short-choice rule to filters as well as form
     inputs. Seed at least two matching records and one non-matching record for every

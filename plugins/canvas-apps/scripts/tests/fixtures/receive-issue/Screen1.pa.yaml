@@ -1,0 +1,52 @@
+Screens:
+    Screen1:
+        Children:
+            - cmbAdjustItem:
+                Control: Classic/ComboBox
+                Properties:
+                    Items: =colInventory
+            - drpOperation:
+                Control: Classic/DropDown
+                Properties:
+                    Default: =Blank()
+                    Items: =["Receive", "Issue"]
+            - txtAmount:
+                Control: Classic/TextInput
+                Properties:
+                    Format: =TextFormat.Number
+            - btnApply:
+                Control: Classic/Button
+                Properties:
+                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+            - btnReceive:
+                Control: Classic/Button
+                Properties:
+                    OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))
+            - btnIssue:
+                Control: Classic/Button
+                Properties:
+                    OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))
+            - galInventory:
+                Control: Gallery
+                Properties:
+                    Items: =colInventory
+            - lblReceiptOperation:
+                Control: Classic/Label
+                Properties:
+                    Text: =varLastOperation
+            - lblReceiptOld:
+                Control: Classic/Label
+                Properties:
+                    Text: =varOldQuantity
+            - lblReceiptAmount:
+                Control: Classic/Label
+                Properties:
+                    Text: =varAmount
+            - lblReceiptExpected:
+                Control: Classic/Label
+                Properties:
+                    Text: =varExpectedQuantity
+            - lblReceiptActual:
+                Control: Classic/Label
+                Properties:
+                    Text: =varLastMutation.Quantity

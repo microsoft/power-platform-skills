@@ -51,3 +51,6 @@ Thumbs.db
 
 # oh-my-claudecode scratch state
 .omc/
+
+# canvas-apps validator integration-test scratch workspaces
+plugins/canvas-apps/scripts/tests/.work/

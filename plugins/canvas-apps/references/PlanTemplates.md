@@ -81,6 +81,19 @@ Evidence surface; do not use appearance, navigation, or notification as proof. O
 transitions require separate scenarios with the same concrete old value and amount so
 their expected results prove both arithmetic directions.]
 
+## Directional Mutation Evidence
+
+[Include this section when the Action Contracts contain both directions of Receive/Issue,
+Increase/Decrease, Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable/Disable.
+Use one row per pair. Copy the exact final-YAML `Control.Property: =formula` bindings into
+the acceptance artifact. The selected-record expression must be the exact stable-ID target
+used by both mutations. Receipt bindings must be separated with `<br>` and include
+`operation`, `old`, `amount`, `expected`, and `actual`.]
+
+| Pair | Selected-record expression | Blank operation binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings |
+| ---- | -------------------------- | ----------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- |
+| [Receive/Issue] | [e.g. `cmbAdjustItem.Selected.ID`] | [e.g. `drpOperation.Default: =Blank()`] | [e.g. `btnApply.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \|\| Value(txtAmount.Text) <= 0, DisplayMode.Disabled, DisplayMode.Edit)`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [e.g. `operation=lblReceiptOperation.Text: =varLastOperation<br>old=lblReceiptOld.Text: =varOldQuantity<br>amount=lblReceiptAmount.Text: =varAmount<br>expected=lblReceiptExpected.Text: =varExpectedQuantity<br>actual=lblReceiptActual.Text: =varLastMutation.Quantity`] |
+
 ## Working Directory
 
 [absolute working directory]

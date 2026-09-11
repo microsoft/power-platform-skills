@@ -232,6 +232,12 @@ Source revision: [git revision, package version, or "unavailable"]
 | ---------- | ------------------- | ------------------------------ |
 | [scenario] | PASS                | [Action Contract and observer] |
 
+## Directional Mutation Evidence
+
+| Pair | Selected-record expression | Blank operation binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings | Result |
+| ---- | -------------------------- | ----------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- | ------ |
+| [Receive/Issue] | [exact selected ID expression] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [five `<br>`-separated bindings: `operation`, `old`, `amount`, `expected`, `actual`] | PASS |
+
 ## Screen QA Evidence
 
 | Screen   | Coverage      | Repairs                        | N/A                    |
@@ -263,6 +269,14 @@ tables, replace formula newlines with `<br>` and escape `|` as `\|`; do not para
 exact formula into an action summary. Omit `## Required Record Field Evidence` only when
 the plan omits `## Required Record Fields`.
 
+When the plan contains an opposing directional pair, include `## Directional Mutation
+Evidence` with exactly one row per pair. This is an executable gate, not a self-reported
+trace: copy final-YAML formulas exactly. The validator independently requires a blank
+initial operation, a gate that disables blank-operation and non-positive amount states, a
+stable selected-record ID in both mutations, plus/minus arithmetic, one canonical source
+read by the observer, and five receipt bindings including an actual persisted `Patch`
+result.
+
 Do not replace `NOT RUN` with another value unless a runtime evaluator actually executed
 against this app and the artifact records its run ID or result URL and score.
 
@@ -278,6 +292,13 @@ The validator compares the acceptance rows with the plan's Action Contracts, Fun
 Test Matrix, and dispatch screens. A nonzero exit blocks completion. Repair the artifact
 and rerun the validator until it passes; never summarize success without its `PASS`
 result.
+
+The validator itself is regression-tested. `scripts/tests/` drives it against the
+`receive-issue` fixture (a correctly-signed Receive/Issue workspace must `PASS`; a
+reversed-sign one must fail on the directional check) via `node scripts/run-tests.js`,
+which the `canvas-apps-script-tests` CI workflow runs on every change under
+`plugins/canvas-apps/**`. This is a static conformance gate only — it does not execute the
+app, and a live browser evaluation remains the authority for the runtime functional grade.
 
 
 For mutations, also compare the handler, write set, proof set, receipt bindings, and

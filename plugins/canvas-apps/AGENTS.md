@@ -30,6 +30,10 @@ hooks/
   inject-sync-reminder.cs      ← File-based .NET app that emits the sync reminder for both hosts
 scripts/
   validate-canvas-acceptance.cs ← Blocks completion when final evidence does not cover the plan
+  run-tests.js                   ← Regression gate: runs scripts/tests/*.test.js (needs .NET 10 SDK)
+  tests/
+    validate-canvas-acceptance.test.js ← Drives the validator against the receive-issue fixture
+    fixtures/receive-issue/      ← Directional-mutation (Receive/Issue) workspace + templates + README
 references/
   YamlSyntax.md                ← .pa.yaml structure, syntax rules, and parse-error triage
   ControlGuide.md              ← Control selection, property contracts, enums, and versions
