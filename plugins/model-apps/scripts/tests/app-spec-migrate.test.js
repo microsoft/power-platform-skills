@@ -140,6 +140,41 @@ test('#545: an authored key that equals another page\'s name is not retargeted b
   assert.strictEqual(m.appShell.areas[0].groups[0].subAreas[0].page, 'orders');
 });
 
+// Review finding. The key-first rewrite must key off AUTHORED keys, not every final key. A MINTED
+// key is derived from a name, so it collides with a different page's name by construction: pages
+// "All Orders" and "all-orders" mint 'all-orders' and 'all-orders-2'. Treating a minted key as
+// authoritative left a legacy name-ref to the SECOND page pointing at the first.
+test('#545: a legacy name-ref is still resolved by name when the match is a MINTED key', () => {
+  const legacy = {
+    solution: { uniqueName: 'c', publisherPrefix: 'c' }, app: { name: 'C' }, entities: [],
+    pages: [
+      { name: 'All Orders', codeFile: 'a.tsx' },
+      { name: 'all-orders', codeFile: 'b.tsx', navigatesTo: [{ targetKey: 'all-orders' }] },
+    ],
+  };
+  const m = migrateAppSpec(legacy);
+  assert.deepStrictEqual(m.pages.map((p) => p.key), ['all-orders', 'all-orders-2']);
+  assert.strictEqual(m.pages[1].navigatesTo[0].targetKey, 'all-orders-2',
+    'the name-ref names the SECOND page; a minted key must not capture it');
+});
+
+// Review finding. A key the author WROTE but got wrong must reach validation unchanged. Minting
+// over it silently repairs a typo the author needs to see — and contradicts the preservation this
+// pass documents. Only a page with no `key` property at all gets one minted.
+test('#545: a present-but-malformed key is preserved verbatim for validation to name', () => {
+  for (const key of [42, '', '   ', null]) {
+    const s = { solution: { uniqueName: 'c', publisherPrefix: 'c' }, app: { name: 'C' }, entities: [], pages: [{ key, name: 'Orders', source: { kind: 'intent' } }] };
+    const m = migrateAppSpec(s);
+    assert.deepStrictEqual(m.pages[0].key, key, `key ${JSON.stringify(key)} must survive migration`);
+    const r = validateAppSpec(m, { profile: 'plan' });
+    assert.ok(r.errors.some((e) => /stable key|invalid key grammar/.test(e)),
+      `validation must name the key problem for ${JSON.stringify(key)}: ${JSON.stringify(r.errors)}`);
+  }
+  // ...while a page with NO key property still gets one minted, as before.
+  const s = { solution: { uniqueName: 'c', publisherPrefix: 'c' }, app: { name: 'C' }, entities: [], pages: [{ name: 'Orders', source: { kind: 'intent' } }] };
+  assert.strictEqual(migrateAppSpec(s).pages[0].key, 'orders');
+});
+
 // IMPORTANT #2 regression: a navigatesTo name-ref whose target name collides with a minted key
 // for a DIFFERENT page must resolve to the correct (first) page and not be double-rewritten.
 //

@@ -633,11 +633,12 @@ node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<abs-path-to-app-spec.jso
 
 Replace `<abs-path-to-app-spec.json>` with the actual absolute path to
 `<working-dir>/app-spec.json`. Pass an absolute path so it resolves regardless of cwd.
-The CLI runs the same three steps a deploying CLI runs on load — migrate → `validateAppSpec`
-→ `lintAppSpec` — and exits non-zero on errors. It validates under the `plan` profile, which
-allows pages that are still intents (they are generated in Phase 1.5, after this gate). Errors
-are tagged `schema:` (the hard gate) or `lint:` (authoring guardrails); fix the `schema:` ones
-first, because lint advice on a spec that fails the gate is advice on a spec that cannot build.
+The CLI runs migration and `validateAppSpec` — the gates the build itself runs on load — plus
+the `lintAppSpec` authoring guardrails, which the builder does **not** run. It exits non-zero on
+errors. It validates under the `plan` profile, which allows pages that are still intents (they
+are generated in Phase 1.5, after this gate); `plan` relaxes only that rule. Errors are tagged
+`schema:` (the hard gate) or `lint:` (authoring guardrails); fix the `schema:` ones first,
+because lint advice on a spec that fails the gate is advice on a spec that cannot build.
 
 **Interpret the result:**
 

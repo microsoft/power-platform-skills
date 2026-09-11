@@ -206,7 +206,7 @@ every prompt yourself via `AskUserQuestion`. In short:
    ```bash
    node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<working-dir>/app-spec.json --json
    ```
-   This runs the same three steps every deploying CLI runs on load — migrate → `validateAppSpec` → `lintAppSpec` — so a clean result means the same thing the build's dry run means by it. It exits non-zero on errors. It validates under the `plan` profile (which allows not-yet-generated intent pages), matching Step 6's dry run.
+   This runs migration and `validateAppSpec` — the gates the build itself runs on load — plus the `lintAppSpec` authoring guardrails, which the builder does **not** run. It exits non-zero on errors. It validates under the `plan` profile (which allows not-yet-generated intent pages), matching Step 6's dry run.
 6. **Plan-mode approval (the single build approval)** — present the plan **including the build
    dry-run's phase-grouped plan** (run `build-model-app.js` without `--apply`, using the `plan`
    profile that allows intent pages) inside `EnterPlanMode`, then `ExitPlanMode` to get the user's

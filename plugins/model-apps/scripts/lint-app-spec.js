@@ -9,20 +9,25 @@
 // undiscoverable and easy to get wrong (it is the MIGRATED spec that must be validated, not the
 // file as written; see below).
 //
-// This runs the same three steps, in the same order, that every deploying CLI runs on load:
+// This runs the gates a build runs on load, plus the authoring guardrails:
 //   1. migrateAppSpec  — upgrade a legacy spec to schemaVersion 2 (mints page keys, rewrites
 //                        name-refs). Skipping it lints a shape the build never sees.
 //   2. validateAppSpec — the hard gate. Its errors are what `--apply` refuses on.
-//   3. lintAppSpec     — advisory guardrails: errors AND warnings.
+//   3. lintAppSpec     — advisory guardrails: errors AND warnings. NOTE: `build-model-app.js` does
+//                        NOT run this; it migrates and validates only. The `lint:` findings here
+//                        are therefore ADDITIONAL to what the builder reports, which is the point —
+//                        the skill's plan gate is where they are meant to be caught.
 //
 // Exit codes: 0 when there are no errors from either step (warnings alone do not fail, so a CI job
 // can gate on correctness without being blocked by advice), 1 otherwise. `--strict` also fails on
 // warnings, for a pipeline that wants them treated as errors.
 //
 // `--profile` selects validateAppSpec's strictness and DEFAULTS TO `plan`, not `deploy`. The deploy
-// profile requires every generative page to be implemented and every persona job to carry
-// privileges — state a spec legitimately lacks while it is still being authored, which is exactly
-// when the authoring flow runs this. Pass `--profile deploy` to gate a final, deployable spec.
+// profile requires every generative page to be IMPLEMENTED (`source.kind: 'tsx'` with a codeFile),
+// which a spec legitimately lacks until generate-pages runs — and that is exactly when the
+// authoring flow invokes this. `plan` relaxes only that; it does NOT relax any other rule (a
+// persona job still requires `privileges[]` under every profile). Pass `--profile deploy` to gate
+// a final, deployable spec.
 //
 // Usage:
 //   node lint-app-spec.js --spec @<app-folder>/app-spec.json
@@ -38,11 +43,12 @@ const USAGE = 'Usage: node lint-app-spec.js --spec @<path-to-app-spec.json> [--p
 // process or writing fixture files to disk.
 //
 // `profile` selects how strict `validateAppSpec` is. It matters more than it looks: the DEPLOY
-// profile requires every generative page to be implemented (`source.kind: 'tsx'` with a codeFile)
-// and every persona job to carry privileges — both of which are deliberately absent while a spec is
-// still being authored. Defaulting to deploy made this CLI reject a perfectly normal work-in-
-// progress spec at the two gates the authoring flow actually runs it at, so the default is `plan`,
-// the same profile the builder's own dry run uses. A caller checking a FINAL, deployable spec
+// profile requires every generative page to be implemented (`source.kind: 'tsx'` with a codeFile),
+// which is deliberately not true while pages are still intents. Defaulting to deploy made this CLI
+// reject a perfectly normal work-in-progress spec at the two gates the authoring flow actually runs
+// it at, so the default is `plan`, the same profile the builder's own dry run uses. `plan` relaxes
+// ONLY that rule — a persona job still requires `privileges[]` under every profile. A caller
+// checking a FINAL, deployable spec
 // (a CI gate before `--apply`) should pass `--profile deploy` explicitly.
 function lintSpec(rawSpec, opts) {
   const profile = (opts && opts.profile) || 'plan';
@@ -85,22 +91,30 @@ function lintSpec(rawSpec, opts) {
 
 function main() {
   const { flags } = parseArgs(process.argv.slice(2));
-  const specArg = flags.spec;
-  if (!specArg) return emitResult(false, new Error(USAGE));
 
-  // parseArgs yields `true` for a bare `--flag` and a string for `--flag=value`, so accept both.
+  // parseArgs yields `true` for a bare `--flag` and a string for `--flag=value` / `--flag value`.
+  // For a VALUE-taking flag, that bare `true` is a usage error and must be rejected rather than
+  // coerced: a bare `--profile` silently falling back to the default would skip a `deploy` gate a
+  // CI job believed it had requested, and a bare `--spec` would reach readJsonArg and surface as
+  // "spec is not an object" — a gate report about a file the caller never named.
   const isOn = (v) => v === true || v === 'true';
+  const specArg = flags.spec;
+  if (specArg === undefined) return emitResult(false, new Error(USAGE));
+  if (typeof specArg !== 'string') return emitResult(false, new Error(`--spec needs a path\n${USAGE}`));
+  if (flags.profile !== undefined && typeof flags.profile !== 'string') {
+    return emitResult(false, new Error(`--profile needs one of: ${VALIDATION_PROFILES.join(', ')}\n${USAGE}`));
+  }
 
   let rawSpec;
   try {
-    rawSpec = readJsonArg(typeof specArg === 'string' && !specArg.startsWith('@') ? '@' + specArg : specArg);
+    rawSpec = readJsonArg(specArg.startsWith('@') ? specArg : '@' + specArg);
   } catch (err) {
     // A spec that is not readable/parseable is the single most common "why did nothing happen"
     // failure, so name the file and the parser's own message rather than a generic gate error.
     return emitResult(false, new Error(`could not read spec ${specArg}: ${err.message}`));
   }
 
-  const report = lintSpec(rawSpec, { profile: typeof flags.profile === 'string' ? flags.profile : undefined });
+  const report = lintSpec(rawSpec, { profile: flags.profile });
   const strict = isOn(flags.strict);
   const failed = !report.ok || (strict && report.warnings.length > 0);
 

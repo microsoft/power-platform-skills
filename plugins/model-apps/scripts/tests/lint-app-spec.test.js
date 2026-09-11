@@ -198,3 +198,32 @@ test('CLI with no --spec prints usage', () => {
   assert.strictEqual(out.code, 1);
   assert.match(out.stderr, /Usage: node lint-app-spec\.js/);
 });
+
+// Review finding. parseArgs turns a bare `--flag` into `true`. For a VALUE-taking flag that is a
+// usage error, not a default: a bare `--profile` silently falling back to `plan` would skip a
+// `deploy` gate a CI job believed it had requested, and a bare `--spec` would reach readJsonArg and
+// report "spec is not an object" — a gate verdict about a file the caller never named.
+test('CLI rejects a value-taking flag given with no value', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-app-spec-'));
+  const file = path.join(dir, 'app-spec.json');
+  fs.writeFileSync(file, JSON.stringify(good()));
+  try {
+    for (const [args, expected] of [
+      [[CLI, '--spec'], /--spec needs a path/],
+      [[CLI, '--spec', '@' + file, '--profile'], /--profile needs one of: design, plan, deploy, structural/],
+    ]) {
+      let out;
+      try {
+        execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        out = { code: 0, stderr: '' };
+      } catch (err) {
+        out = { code: err.status, stderr: String(err.stderr || '') };
+      }
+      assert.strictEqual(out.code, 1, `expected a usage failure for ${args.slice(1).join(' ')}`);
+      assert.match(out.stderr, expected);
+      assert.doesNotMatch(out.stderr, /spec is not an object/, 'a usage error must not surface as a gate verdict');
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -14,11 +14,10 @@ Three defects an author hits before reaching an environment, and a session-start
 - **`scripts/lint-app-spec.js` — lint and validate a spec without touching an environment** ([#560]).
   `validateAppSpec` (the gate `--apply` enforces) and `lintAppSpec` (the authoring guardrails) were
   library exports with no entry point, so a headless author or a CI job had to reach in with
-  `node -e`. The CLI runs the same three steps every deploying CLI runs on load — migrate →
-  validate → lint — tags each finding `schema:` or `lint:`, and exits non-zero on errors.
-  `--profile` defaults to `plan` (pages may still be intents, jobs may still lack privileges), so
-  gate a final, deployable spec with `--profile deploy`. `--strict` also fails on warnings;
-  `--json` emits the report.
+  `node -e`. The CLI runs migrate → validate → lint, tags each finding `schema:` or `lint:`, and
+  exits non-zero on errors. `--profile` defaults to `plan` (pages may still be intents), so gate a
+  final, deployable spec with `--profile deploy`. `--strict` also fails on warnings; `--json`
+  emits the report.
 
 ### Fixed
 
