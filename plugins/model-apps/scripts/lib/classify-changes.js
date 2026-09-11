@@ -168,8 +168,11 @@ function classifyAdditive(cur, prior, phase, type, arrKey, opts = {}) {
   for (const c of common) {
     if (stableStringify(c.cur) !== stableStringify(c.prior)) {
       const onlyConverged = convergedKeys.length && equalExcept(c.cur, c.prior, convergedKeys);
+      // Name only the keys that actually differ. "status/securityRoles changed" when just one did is
+      // the kind of small inaccuracy that makes a reader stop trusting the whole report.
+      const changed = convergedKeys.filter((k) => stableStringify(c.cur && c.cur[k]) !== stableStringify(c.prior && c.prior[k]));
       out.full.push(onlyConverged
-        ? `${phase}: ${type} '${c.id}' ${convergedKeys.join('/')} changed — reconciled by a full build`
+        ? `${phase}: ${type} '${c.id}' ${(changed.length ? changed : convergedKeys).join('/')} changed — reconciled by a full build`
         : `${phase}: ${type} '${c.id}' edited — the additive build engine skips edits to an existing ${type}`);
       if (!onlyConverged) out.debt.push({ artifactType: type, identity: c.id, reason: `${type}-edit-not-convergent` });
     }
@@ -231,7 +234,12 @@ function classifyChanges(current, prior) {
       // is real debt. The ONE exception is `status`: both reuse branches converge statecode in both
       // directions, so a status-only change is applied by a rebuild and is not debt.
       case 'business-rules': merge(classifyAdditive(cur, prior, 'business-rules', 'businessRule', 'businessRules', { convergedKeys: ['status'] })); break;
-      case 'business-process-flows': merge(classifyAdditive(cur, prior, 'business-process-flows', 'businessProcessFlow', 'businessProcessFlows', { convergedKeys: ['status'] })); break;
+      // `securityRoles` converges too, and for a stronger reason than `status`: a BPF grant always
+      // targets a PERSONA role, which the security phase applies with `ReplacePrivilegesRole` — so a
+      // rebuild both ADDS a newly-declared persona and REMOVES one that was dropped. Filing it as
+      // permanent debt disabled every later fast apply over a divergence that a full build erases.
+      // (`roleGrants[]` would NOT qualify: it is additive and cannot revoke.)
+      case 'business-process-flows': merge(classifyAdditive(cur, prior, 'business-process-flows', 'businessProcessFlow', 'businessProcessFlows', { convergedKeys: ['status', 'securityRoles'] })); break;
       default:
         // An unrecognized changed phase must never silently pass as fast (fail-closed).
         fullReasons.push(`${phase}: changed — no fast-path shape recognized`);

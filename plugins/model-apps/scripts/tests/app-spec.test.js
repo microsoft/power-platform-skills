@@ -1176,3 +1176,40 @@ test('the value describer cannot itself throw (BigInt / a throwing getter)', () 
     assert.strictEqual(res.ok, false, `${label} must still be rejected`);
   }
 });
+
+// --- AB#6686426: default-form selection must be deterministic --------------------------------------
+//
+// Promotion used to run INSIDE the concurrent per-form build, so every Main form on an owned custom
+// table promoted itself and the LAST to finish won. Which form a table opened with therefore depended
+// on completion order — an alternate read-only or OnSave-blocked form could silently become the
+// default. Promotion is now ONE serialized pass after every form exists, choosing an explicit
+// `isDefault` first and otherwise the first Main form in spec order.
+
+const deskWithForms = (forms) => { const s = cloneDesk(); s.forms = forms; return s; };
+const mainForm = (name, over = {}) => ({
+  entity: desk.entities[0].schemaName, name, formType: 'Main',
+  sections: [{ label: 'General', columns: [desk.entities[0].primaryAttribute.schemaName] }], ...over,
+});
+
+test('AB#6686426: isDefault must be a boolean', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: 'yes' })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /isDefault must be a boolean/);
+});
+
+test('AB#6686426: two Main forms cannot both claim isDefault', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: true }), mainForm('B', { isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /exactly one form can be the table's default/);
+});
+
+test('AB#6686426: isDefault on a NON-Main form is rejected — only Main forms are promoted', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('QC', { formType: 'QuickCreate', isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /only meaningful on a Main form/);
+});
+
+test('AB#6686426: one isDefault among several Main forms is valid', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A'), mainForm('B', { isDefault: true }), mainForm('C')]), { profile: 'plan' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});

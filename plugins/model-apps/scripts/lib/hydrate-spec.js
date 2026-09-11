@@ -208,14 +208,24 @@ async function hydrateSpec(read) {
     entities,
     webResources,
     views: [],
-    // NOT yet round-tripped (documented limitation): views, charts, forms, and commands. VIEWS were
+    // NOT reconstructed (documented limitation): views, charts, forms, and commands. VIEWS were
     // tried (F3) but reverted — the deployed savedquery set can't reliably distinguish app-builder-
     // authored views from Dataverse's auto-generated Active/Inactive/QuickFind/Lookup/AdvancedFind
     // system views (LIVE-verified: `isdefault` marks the AUTHORED primary "Active" view TRUE and the
     // SYSTEM "Inactive" view FALSE, so no `isdefault`/`querytype` filter isolates author views — it
     // grabbed the wrong one). Charts/forms/commands also need structured reads the SDK doesn't expose.
-    // All four survive on the live app — a rebuild preserves them by discovery — but are absent from the
-    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-capabilities.
+    //
+    // FORMS specifically stay out even though the SDK now exposes `formTypes` on its form listing:
+    // listing them was never the blocker. The App Spec form shape cannot express everything a
+    // deployed `formxml` carries (header/footer, business-process control, related-entity nav,
+    // control parameters, event libraries), so a reconstruction would be lossy — and a lossy form
+    // declared in the spec is worse than an absent one, because rebuilding into a FRESH environment
+    // would recreate a form that silently lost those controls while reporting success.
+    //
+    // All four survive on the live app — a rebuild into the SAME environment preserves them — but are
+    // absent from the downloaded spec, so edit them in Maker or a fresh spec. This is no longer
+    // silent: every deployed form/view/chart is listed in `descriptionInventory` below, and
+    // `download-model-app` reports the omission by class and table on every run (AB#6686423).
     charts: [],
     forms: [],
     commands: [],

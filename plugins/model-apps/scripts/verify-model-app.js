@@ -25,11 +25,12 @@ function makeProvision(env, workspaceDir) {
   fs.mkdirSync(workspaceDir, { recursive: true });
   const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
   sdk.initWorkspace();
-  // The httpClient is returned alongside the SDK because one read has no SDK surface: the role
-  // privilege check needs `EntityDefinitions(...)?$select=Privileges`, and `fetchEntityMetadata`
-  // projects that field away (see the `entityPrivileges` reader below). The caller must also pass
-  // the org URL to `readerFor` — this client takes FULL absolute request URLs, not paths.
-  return { sdk, httpClient };
+  // Only the SDK is returned. The raw `httpClient` used to come back with it because the role
+  // privilege check had no SDK surface to read `EntityDefinitions(...)?$select=Privileges`; the
+  // vendored bundle now exposes `getEntityPrivileges`, so that escape hatch is gone. Handing the
+  // raw transport back with no caller is worse than useless — it advertises a bypass of the SDK
+  // that this file deliberately no longer takes.
+  return sdk;
 }
 
 // Resolve the app's sitemap XML: appmodule (by unique name) -> appmodulecomponents (type 62) ->
@@ -139,50 +140,34 @@ function readerFor(sdk, appUnique, opts) {
   };
 
   // entityPrivileges(logical): the privilege set a table exposes, as [{ PrivilegeId, PrivilegeType, ... }].
-  // Read from the SAME source the SDK resolves against when it WRITES the role —
-  // `EntityDefinitions(LogicalName='x')?$select=Privileges` — so the comparison cannot disagree with
-  // the write about which PrivilegeId means "Read on account".
+  // Read through the SDK's `getEntityPrivileges`, which resolves the SAME source the SDK uses when it
+  // WRITES a role, so the comparison cannot disagree with the write about which PrivilegeId means
+  // "Read on account".
   //
-  // Deliberately NOT `sdk.fetchEntityMetadata`: that returns a PROJECTED, camelCased shape
-  // ({logicalName, displayName, entitySetName, attributes, relationships}) which drops `Privileges`
-  // entirely, so routing through it would silently report every privilege as unreadable.
+  // This used to be a raw `httpClient` read of `EntityDefinitions(LogicalName='x')?$select=Privileges`,
+  // because the SDK had no privilege READ at all — it could create and delete roles but never see what
+  // a table exposes — and `fetchEntityMetadata` PROJECTS `Privileges` away permanently by design (its
+  // `$select` never asks for them, and it is a disk-cached best-effort projection, the wrong contract
+  // for a security read). That escape hatch is now retired: the vendored bundle carries the dedicated
+  // method, which is the condition AGENTS.md set for making this switch.
   //
-  // The projection's omission is PERMANENT by design — its `$select` never asks for `Privileges`,
-  // and the SDK pins that with a guardrail test asserting the projection must not surface them even
-  // when the server returns them. That projection is disk-cached and documents its enrichments as
-  // best-effort, which is the wrong contract for a security read. Verified against the vendored
-  // bundle: feeding it a response that DOES carry `Privileges` still yields a projection without them.
+  // Two shape differences the mapping below absorbs:
+  //  * The SDK returns camelCase `{ name, privilegeId, privilegeType, access?, scopes }`; the pure
+  //    comparison in lib/role-privileges.js reads Dataverse's PascalCase `{ Name, PrivilegeId,
+  //    PrivilegeType }`, which is also what the eventual `ReplacePrivilegesRole` payload speaks. The
+  //    comparison keeps the wire vocabulary and the adaptation happens here, at the seam.
+  //  * The SDK THROWS for a table that exposes no privileges (an unknown or non-securable table is an
+  //    error, not an answer) where the raw read returned null. verify-spec wraps every call site in a
+  //    try/catch and reports an unreadable entity as a FINDING, so both land in the same fail-closed
+  //    place — an absent privilege set is never read as "nothing missing".
   //
-  // TODO: the SDK is gaining a dedicated `getEntityPrivileges(logicalName)` — the privilege READ it
-  // previously lacked (it could create/delete roles but never read what a table exposes). Switch to
-  // it once the vendored bundle carries it, and drop this raw read. Note the SDK returns camelCased
-  // `{ name, privilegeId, privilegeType }` and throws when a table exposes none, where this returns
-  // PascalCase rows and `null`; `compareRolePrivileges` reads the PascalCase shape today, and
-  // verify-spec already treats a throw as a per-entity finding, so the swap is a mapping change plus
-  // a bundle bump — not a behaviour change.
-  //
-  // The URL must be ABSOLUTE and carry the `/api/data/v9.2` prefix. `createAzHttpClient` is the raw
-  // transport the SDK drives, so it receives full request URLs and enforces a same-origin check by
-  // parsing the argument with `new URL(url)` — a relative path throws there ("Refusing to send the
-  // Dataverse token to a non-absolute URL") rather than resolving against the org. That failure is
-  // caught per-entity in verify-spec, so a relative URL would not crash: it would silently report
-  // EVERY entity's privileges as unreadable and fail the role-privileges check on every live run.
-  //
-  // Wired only when BOTH the org URL and the raw client are available. When they are not, the reader
-  // is ABSENT rather than broken, which makes verify-spec skip the role-privileges check entirely
-  // (it requires both `rolePrivileges` and `entityPrivileges` to be functions) instead of reporting a
-  // false failure.
-  if (opts.httpClient && opts.envUrl) {
-    const apiRoot = `${String(opts.envUrl).replace(/\/+$/, '')}/api/data/v9.2`;
-    // Returns null on any non-2xx — verify-spec turns that into a finding rather than a pass.
-    base.entityPrivileges = async (logical) => {
-      const name = String(logical).toLowerCase();
-      const url = `${apiRoot}/EntityDefinitions(LogicalName='${odataLit(name)}')?$select=LogicalName,Privileges`;
-      const res = await opts.httpClient.get(url);
-      if (!res || res.status < 200 || res.status >= 300) return null;
-      return (res.body && res.body.Privileges) || null;
-    };
-  }
+  // Still conditional on a wired SDK for the same reason as before: when the reader cannot be built
+  // it must be ABSENT rather than broken, so verify-spec skips the role-privileges check entirely
+  // (it requires both `rolePrivileges` and `entityPrivileges`) instead of reporting a false failure.
+  base.entityPrivileges = async (logical) => {
+    const rows = await sdk.getEntityPrivileges(String(logical).toLowerCase());
+    return (rows || []).map((p) => ({ Name: p.name, PrivilegeId: p.privilegeId, PrivilegeType: p.privilegeType }));
+  };
 
   // Only expose page-authority readers when a genpageCli is wired — absent it, verifySpec fails closed
   // for a page-bearing spec (Imp7/C6: missing methods → unableToRun).
@@ -263,9 +248,9 @@ async function main() {
   const v = validateAppSpec(spec, { profile: 'deploy' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const { sdk, httpClient } = makeProvision(env, workspaceDir);
+  const sdk = makeProvision(env, workspaceDir);
   const genpageCli = makeGenpageCli(env);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, httpClient, envUrl: env }));
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.

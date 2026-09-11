@@ -52,6 +52,21 @@ able to tell what moved from the docs alone):
 Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
 tree and teardown order both did before).
 
+**Issue references belong in history and in code, never in use-the-plugin reference material.**
+`references/*.md` and `skills/*/SKILL.md` are loaded verbatim into an agent's context so it can
+*author a spec*. A tracker link there costs tokens, cannot be dereferenced by the reader it is shown
+to, and goes stale while the doc lives on — so state the rule and the **why**, and stop. The test is
+simple: if deleting the link loses nothing operational, it was provenance, not explanation.
+
+Provenance is welcome in the *other* class of doc — the material that explains **why the code is the
+way it is** rather than how to use it: this file, `CHANGELOG.md`, and code comments, where the
+repo-root `AGENTS.md` actively asks for one. Its reader is a contributor who can open the link and
+act on it. Prefer the bare id (`AB#6686428`, `#537`) over a full URL even there: it carries the same
+provenance, costs less, and cannot rot.
+
+A corollary for **error messages**: an error must stand alone. `operator 'X' is not usable — see
+<issue url>` sends an author to a tracker to find out what they did wrong; say what is wrong instead.
+
 **This repo is public.** Before adding to any of these docs, re-read the repo-root `AGENTS.md` →
 *"This Repo Is PUBLIC"*. The docs here have already had to be scrubbed once for internal repo paths,
 a real Dataverse environment name, review provenance, and indexes into documents an outside reader
@@ -118,9 +133,16 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   converges only Active/Draft **state**, never stage structure — and `bpfFilter` scopes every query in
   build/verify/teardown to the DEFINITION row, excluding both the platform's activated `type 2` copy and
   same-named TASK flows (also category 4). v1 is deliberately single-entity and linear: cross-entity
-  stages, branching, stage actions and `securityRoles` are **rejected at the spec gate** rather than
-  silently dropped, because the build cannot yet verify them (a BPF's role grants are privileges on the
-  backing table that ACTIVATION creates, so they belong to the `security` phase). The rejection is an
+  stages, branching and stage actions are **rejected at the spec gate** rather than silently dropped,
+  because the build cannot yet verify them. `securityRoles` was rejected alongside them and is now
+  **supported** (`{ "personas": [...] }`): a BPF's role grants are `create/read/write/delete` privileges
+  on the backing table that ACTIVATION creates, so they are applied in the **`security` phase**, after
+  both the flow and the personas' roles exist — persona lookup there is **case-insensitive**, since a
+  persona is a display name the author repeats by hand across two sections of the spec, and the target
+  table is the flow's **deployed `uniquename` read back** from the workflow row rather than derived
+  from its display name (a flow authored in Maker, or renamed later, keeps an unrelated unique name). There is no
+  `everyone`/`fallbackForm`/`order`: those are `forms[].securityRoles` concepts written into formxml,
+  and a privilege has no such equivalent. The rejection is an
   **allow-list at flow, stage AND step level**, because the SDK's normalizers copy a fixed key set and
   discard the rest — so a `branch` written on a stage (where the SDK actually models it), or the very
   plausible `fieldLogicalName` instead of `field` on a step, would otherwise validate clean and deploy
@@ -171,7 +193,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `--language-code` → App Spec `languageCode` → the org's base language → 1033. Without this, an org
   that has not provisioned 1033 fails the data-model phase with `The language code 1033 is not a valid
   language for this organization`
-  ([#447](https://github.com/microsoft/power-platform-skills/issues/447)) — and confusingly only on
+  (#447) — and confusingly only on
   *some* column types, because (observed 2026-08) Dataverse tolerates an unprovisioned LCID on
   `EntityMetadata` and `PicklistAttributeMetadata` but rejects it on `DateTime`/`Memo`. Every fallback
   to 1033 warns, as does an explicitly supplied LCID that had to be discarded.
@@ -189,7 +211,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **Scope — this now extends to the `forms`, `dashboards` and `app-shell` phases too.** Those go
   through the vendored SDK's artifact serializers, which used to hardcode `1033` into FormXML
   (`<label languagecode="1033">`), SiteMap XML (`<Title LCID="1033">`) and dashboard XML with **no
-  caller override** ([#455](https://github.com/microsoft/power-platform-skills/issues/455)). The SDK
+  caller override** (#455). The SDK
   now takes the authoring LCID as a **construction-time** option (`MakerSdkOptions.languageCode`),
   which is why `main()` resolves the language over the transport hatch (`resolveAuthoringLanguage`,
   `scripts/lib/entity-provision.js`) **before** calling `makeSdk`, and passes the identical value on
@@ -203,13 +225,29 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   multi-language labelling is blocked a layer lower anyway, since the SDK's label serializer emits a
   one-element `LocalizedLabels` array by design. `entities[].languageCode` and
   `entities[].localizedLabels` are therefore **rejected by validation**
-  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)) rather than accepted and
+  (#537) rather than accepted and
   dropped: `entities[]` had no allow-list, so both validated clean and were silently ignored, and an
   author asking for one table in a second language got a successful build with the request gone. Any
   unknown table key now fails the same way (see `ENTITY_KEYS`, `scripts/lib/app-spec.js`). Note that
   `references/localization.md` is about generated **page** code, not Dataverse labels.
   Note the SDK deliberately does **not** language-parameterize BusinessRule: its mapper's language
   parameter is the *environment base* language, a different concept.
+  **`languageCode` is the language for a PLAIN label, not the only language available.** An
+  author-facing name (`entities[].displayName`/`pluralName`, `primaryAttribute.displayName`,
+  `columns[].displayName`, `alternateKeys[].displayName`, `relationships[].lookup.displayName`,
+  and an **inline** Choice option on `columns[].options[]`) may instead be a **map keyed by LCID**,
+  which the SDK's label serializer turns into a multi-entry `LocalizedLabels` array
+  (AB#6686428 / #537). ⚠ **`globalChoices[]` is the exception and is REJECTED, not supported** —
+  neither its `displayName` nor its `options[]` may be localized, because Dataverse accepts the
+  multi-language payload for a global option set and stores only the base language (measured, even
+  through a raw `POST` that bypasses the SDK). Listing it here as localizable sent authors into a
+  validation error; use an inline Choice on the column when option labels must be localized. The plugin
+  passes a supported value through **unflattened** — flattening it here would silently restore the
+  English-only behaviour while validation and the design doc still claimed two languages. Everything
+  that RENDERS or DERIVES FROM a label must go through `labelText()` (never string-interpolate a
+  label), and anything that resolves an author's reference BY label text must go through
+  `labelAliases()` so a reference written in any provisioned language matches. Both live in
+  `app-spec.js`; `references/localization.md` is about generated **page** code, a separate concern.
   Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
   would keep passing against a bundle that ignored the option.
   `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
@@ -296,9 +334,20 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   round-trip.** (View hydration was tried and reverted — LIVE-verified that the deployed savedquery set
   can't reliably tell app-builder-authored views from Dataverse's auto-generated Active/Inactive/QuickFind
   system views: `isdefault` is TRUE on the authored primary view and FALSE on the system Inactive view, so
-  no filter isolates author views. Forms/charts/commands need structured reads the SDK doesn't expose.)
-  All four survive on the live app (a rebuild preserves them by discovery), but are absent from the
-  downloaded spec, so edit them in Maker or a fresh spec.
+  no filter isolates author views. Charts/commands need structured reads the SDK doesn't expose. FORMS are
+  a deliberate refusal rather than a missing capability: the SDK does expose `formTypes` on its form
+  listing, but the App Spec form shape cannot express everything a deployed `formxml` carries — header/
+  footer, business-process control, related-entity nav, control parameters, event libraries — and a LOSSY
+  form declared in the spec is *worse* than an absent one, because a rebuild into a fresh environment
+  recreates it having silently lost those controls while reporting success.)
+  All four survive on the live app (a rebuild into the SAME environment preserves them), but are absent
+  from the downloaded spec, so edit them in Maker or a fresh spec.
+  **The omission is reported, not silent** (AB#6686423): every deployed form/view/chart is listed in the
+  spec's `descriptionInventory`, and each run prints a note naming the counts, the tables and the
+  artifacts, plus a `notRoundTripped` block on the JSON result. It is a NOTE, never a gate — every app
+  has forms and views, so failing the download would break every download, and the omission is not
+  destructive in the environment the app came from. Do not "fix" this by reconstructing `forms[]`
+  without also solving the lossy-layout problem above.
   **Entities are the sitemap's tables UNIONED with the entities owned by the app's VIEW / CHART /
   FORM components** (`appComponentEntities`) — a maker-built app can include tables reachable only via
   a lookup/sub-grid/related view, with no sitemap entry of their own, and reconstructing from the
@@ -401,24 +450,35 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   half-applied. The SDK **proves every write** against the app-scope override row, retrying with backoff
   (an immediate read can still return the environment fallback, which previously produced a false
   `notPersisted` on first apply). `applied` is the ONLY success bucket; a feature otherwise lands in
-  `skipped` (org gate off), `notPersisted` (no override observed for the whole retry budget — Dataverse
-  can accept an app-scope `SaveSettingValue` with HTTP 204 and store nothing), `unverified` (the write
+  `notPersisted` (no override observed for the whole retry budget — Dataverse
+  can accept an app-scope `SaveSettingValue` with HTTP 204 and store nothing), `skipped` (the same
+  absence, PLUS the feature's org readiness gate reads off, which is offered as the explanation),
+  `unverified` (the write
   was issued but the proof could not be read) or `failed` (the write threw; the rest of the batch still
-  reports). The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
+  reports). **A gate is never a PRECONDITION** (AB#6688904): the SDK attempts every write and reads a
+  gate only afterwards, to explain an absence that actually happened. It used to read the gate first,
+  and for four of the seven features that "gate" IS the per-app setting the write is about to set — so
+  on a new app its platform-default `0` looked like an admin refusal and the build shipped an app with
+  no AI features while reporting success. The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
   — buckets are read off the result object, so one a future SDK adds is reported verbatim rather than
   silently dropped — and `--verify` fails on any of them. **An app-scope setting WRITE is a no-op until
   the app is published** (live-measured: the write reports `notPersisted` and `appsettings` holds no row
   at all, while publishing and re-issuing the same call applies every feature). This is not read lag, so
   re-*proving* after publish cannot fix it — the build **re-issues** the write after publish for anything
-  the first attempt did not apply. Verification proves the override ROW, keyed by `appmoduleid`, so the
+  the first attempt did not apply, `skipped` INCLUDED. On a fresh app nothing persists pre-publish, so
+  the gate diagnosis fires for every feature that has one; abandoning those would leave `--verify`
+  failing on a row the build declined to write a second time, and a reported customer environment ran a
+  working app at `NLGridSearchSetting = 2` with `EnableNLGridSearch` off. Anything still `skipped` after
+  the re-issue is reported as an admin action. Verification proves the override ROW, keyed by `appmoduleid`, so the
   build passes the id it already holds rather than have the SDK resolve it by name (an unpublished
   appmodule is not readable). See the `ai-features` phase in `scripts/lib/sdk-build.js` for the full
   sequence and its bounds.
   The flag set is resolved ONCE by `scripts/lib/ai-app-settings.js` and shared by the build and the
   verifier: a spec with an `ai` block but no `ai.appFeatures` still gets defaults written, so
   reconciling only the DECLARED features left them applied-but-unverified.
-  All AI features are **admin-gated**: the skill preflights
-  and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
+  All AI features need an environment admin to have enabled them: the skill preflights
+  and warns; it cannot flip admin or tenant switches. What it does NOT do is decline to write on the
+  strength of that preflight — see the bucket note above. `scripts/lib/ai-candidates.js` selects
   good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
   prompts. The `ai` block in the App Spec configures the full set; see
   [`references/app-spec-schema.md`](references/app-spec-schema.md) → `## ai`.
@@ -539,6 +599,7 @@ scripts/
     spec-shape.js              ← shared structural normalization for both authoring gates
     surface-resolver.js        ← pure: resolve personas[].jobs[].surfaces[] to the spec artifacts that satisfy them
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
+                                  (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
     genpage-cli.js             ← pac model genpage upload/list/download wrapper
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
@@ -816,17 +877,18 @@ Dataverse simply are not in it.
 | Hatch | Use for | Examples in tree |
 |---|---|---|
 | `dataverseRequest()` in `lib/dataverse-auth.js` (and the `dataverse-request.js` CLI) | Dataverse surfaces the SDK does not model at all | `WhoAmI` (`check-auth.js`), `customapis` (`list-custom-apis.js`), `connectionreferences` (`create-connection-reference.js`), solution-component adds (`add-page-to-solution.js`) |
-| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | `entityPrivileges` in `verify-model-app.js` — `fetchEntityMetadata` returns `{logicalName, displayName, entitySetName, attributes, relationships}` and drops `Privileges` entirely. The projection's omission is permanent (it is disk-cached and best-effort, the wrong contract for a security read) and pinned by an SDK guardrail test. **Transitional:** the SDK is gaining a dedicated `getEntityPrivileges()`; switch to it and drop this raw read once the vendored bundle carries it |
+| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | **No caller today.** The one that existed — `entityPrivileges` in `verify-model-app.js` — is gone: the SDK had no privilege READ at all, and `fetchEntityMetadata` drops `Privileges` permanently by design, so the check composed its own `EntityDefinitions(...)?$select=Privileges` request. The vendored bundle now carries `getEntityPrivileges`, and the reader takes it. The hatch stays documented because the *category* recurs; opening it again needs the same justification |
 
 **Prefer `dataverseRequest()` over the raw client.** It already handles the API path, auth, headers
 and timeouts. Reach for `httpClient` only when you must share the exact client instance the SDK is
-using, as the verify reader does.
+using — and check first that the SDK has not since grown the method, as it did for entity privileges.
 
 When you do go direct, all four of these apply:
 
 1. **Comment WHY the SDK cannot serve it** — name the SDK method you would otherwise call and what it
    drops or lacks. "Deliberately not `sdk.fetchEntityMetadata`" is the difference between a
-   documented exception and something a later reader "simplifies" back into a silent bug.
+   documented exception and something a later reader "simplifies" back into a silent bug. Say what
+   would retire the hatch, so the note is actionable rather than permanent.
 2. **Absolute URL including `/api/data/v9.2`** when using the raw `httpClient`. It is the transport
    the SDK drives, so it takes full request URLs and validates them with `new URL(url)` for its
    same-origin guard — a relative path throws there rather than resolving against the org.
@@ -835,7 +897,9 @@ When you do go direct, all four of these apply:
 4. **Test the reader itself, not only an injected stub.** The `entityPrivileges` URL bug shipped
    because every test injected a fake reader into `verifySpec`, so the real one was never executed —
    and `verify-spec` catches per-entity read failures, so it would have failed silently on every live
-   run rather than crashing. Drive at least one test through the real client's request seam.
+   run rather than crashing. Drive at least one test through the real seam: the client's request path
+   for a raw read, or the **real vendored bundle** for one that goes through the SDK. A hand-written
+   SDK stub proves only that the mapping is self-consistent with itself.
 
 
 - Keep SKILL.md under 500 lines
@@ -905,6 +969,14 @@ The bundler now **refuses** (exit 3) when `lib/index.js` predates the newest `.t
 Second, "built from master" is not provenance, because master moves; the SHA is what lets a
 reviewer reproduce the artifact. Re-running the build on the same inputs must reproduce the same
 sha256 — check it.
+
+⚠ **`subject` is the subject of the commit the bundle was BUILT FROM — normally master's HEAD — and
+is usually unrelated to the change you are taking up.** It is recorded verbatim from git on purpose
+(`sanitize-subject.js` only strips merge-tool prefixes), because editorialising it would break the
+one thing provenance is for. So expect it to read like `Revert 'fix: scheduled trigger skips its
+first run…'` while the uptake is about AI settings: master simply moved on after the commit that
+carried the fix. Do not "correct" it, and do not read it as a description of the uptake — name the
+change in `CHANGELOG.md` instead, which is where a reader looks for what actually arrived.
 
 `scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
 method the engines call (`SKILL_SDK_SURFACE`, kept in sync with the `provision.*` / `sdk.*` call

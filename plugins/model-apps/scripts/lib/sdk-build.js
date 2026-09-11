@@ -35,6 +35,9 @@ const {
   canonicalPersonaName,
   BUSINESS_RULE_VALUELESS_OPERATORS,
   bpfUniqueName,
+  labelText,
+  choiceValueMap,
+  BPF_ROLE_ACCESS,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -74,7 +77,7 @@ const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 
@@ -294,15 +297,21 @@ function resolvePhases({ only, skip, from, to } = {}) {
 
 // Resolve a view-filter value: a Choice/MultiChoice label becomes its option int; everything
 // else (raw ints, strings, ISO dates) passes through. No-value operators omit the value entirely.
+//
+// Resolution goes through `choiceValueMap`, the SHARED rule, rather than `options.indexOf(val)`.
+// Two reasons, and the first is a real defect the naive version had: a LOCALIZED option is an
+// object (`{ "1033": "Open", "3082": "Abierto" }`), so `indexOf("Abierto")` returns -1 and the
+// LABEL was sent as the value of a numeric picklist condition — an invalid or silently ineffective
+// view filter. The second is that `choiceValueMap` also resolves a column bound to a `globalChoice`,
+// which the inline-only lookup never did.
 function resolveFilterValue(spec, entityLogical, attr, val) {
   if (typeof val !== 'string') return val;
   const e = entityByLogical(spec, entityLogical);
   const c = e && (e.columns || []).find((x) => x.schemaName.toLowerCase() === String(attr).toLowerCase());
-  if (c && (c.type === 'Choice' || c.type === 'MultiChoice') && Array.isArray(c.options)) {
-    const i = c.options.indexOf(val);
-    if (i >= 0) return 100000000 + i;
-  }
-  return val;
+  if (!c || (c.type !== 'Choice' && c.type !== 'MultiChoice')) return val;
+  const byLabel = choiceValueMap(e, spec)[String(c.schemaName).toLowerCase()];
+  const hit = byLabel && byLabel[val];
+  return typeof hit === 'number' ? hit : val;
 }
 
 function primaryNameOf(spec, logical) {
@@ -331,7 +340,12 @@ function planFor(spec, opts) {
   if (has('data-model')) {
     for (const gc of spec.globalChoices || []) items.push({ phase: 'data-model', label: `global choice ${gc.name}` });
     for (const e of spec.entities) {
-      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${e.displayName}")` });
+      // `labelText` returns "" for an absent displayName, or for a localized map with nothing usable
+      // — which rendered a dry-run line as `table new_order ("")`, an empty quoted string the reader
+      // has to decode. Fall back to the schema name, which is what the CREATE itself falls back to
+      // (`displayName || schemaName`), so the plan says what the build will actually do.
+      const shown = labelText(e.displayName, spec && spec.languageCode) || e.schemaName;
+      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${shown}")` });
       if (quickCreateEnabledFor(spec, e)) items.push({ phase: 'data-model', label: `enable quick create on ${e.schemaName.toLowerCase()}` });
       for (const c of e.columns || []) {
         if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})` });
@@ -372,7 +386,7 @@ function planFor(spec, opts) {
   if (has('pages') && (spec.pages || []).length && appHasCrossPageNav(spec)) items.push({ phase: 'pages', label: 'resolve cross-page navigation' });
   if (has('pages') && (spec.pages || []).length) items.push({ phase: 'pages', label: `page manifest ${appUniqueName(spec)}_pagemanifest` });
   if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
-  if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
+  if (has('ai-features') && specOptsIntoAi(spec)) {
     items.push({ phase: 'ai-features', label: 'enable app AI features' });
     // Do NOT short-circuit on `summaries.default === 'off'`. `selectSummaryTables` already implements
     // the documented semantics — `default` is the app-level DEFAULT and `tables[x].enabled: true` is
@@ -386,10 +400,21 @@ function planFor(spec, opts) {
     const n = (p.jobs || []).length;
     items.push({ phase: 'security', label: `security role "${p.persona}" (${n} job${n === 1 ? '' : 's'})` });
   }
+  // Role grants are planned after personas because they run after them (a grant on a role this spec
+  // also authors is rejected at validation, but the ORDER still matters for reading the plan).
+  if (has('security')) for (const g of spec.roleGrants || []) {
+    const n = (g.privileges || []).length;
+    items.push({ phase: 'security', label: `grant privileges on ${n} table${n === 1 ? '' : 's'} to existing role ${roleGrantLabel(g)}` });
+  }
   // Form role assignment is planned under `security` (not `forms`) because it can only run once the
   // roles exist — see the 7b block in the engine for why.
   if (has('security')) for (const f of spec.forms || []) {
     if (f && f.securityRoles) items.push({ phase: 'security', label: `form roles for ${f.name || f.formType || 'Main'} on ${f.entity}` });
+  }
+  // Flow role grants are planned under `security` for the same reason form ones are: they target the
+  // backing table ACTIVATION creates, and they need persona roles that do not exist until this phase.
+  if (has('security')) for (const f of spec.businessProcessFlows || []) {
+    if (f && f.securityRoles) items.push({ phase: 'security', label: `flow roles for ${f.name} (backing table ${bpfUniqueName(f.name)})` });
   }
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -491,7 +516,11 @@ function defaultViewColumns(spec, entity, opts = {}) {
 function subgridLabel(spec, sg) {
   if (sg.label) return sg.label;
   const child = entityByLogical(spec, String(sg.childEntity || '').toLowerCase());
-  return (child && (child.pluralName || child.displayName)) || sg.childEntity;
+  // Resolved through labelText: a LOCALIZED plural/display name is an object, and returning it here
+  // put "[object Object]" into the form's section and control labels — and, because the form
+  // projection stringifies for change detection, made two DIFFERENT localized labels hash the same.
+  const lang = spec && spec.languageCode;
+  return labelText(child && child.pluralName, lang) || labelText(child && child.displayName, lang) || sg.childEntity;
 }
 // True when a table has enough declared columns to make enriching its default views worthwhile
 // (opt out per-entity with enrichDefaultViews:false).
@@ -1079,9 +1108,12 @@ async function ensureAppNotAvailableToRole(sdk, appId, roleId) {
 // Resolve the business unit a persona's role lives in, so role QUERIES (teardown, verify) scope to the
 // SAME (name, BU) identity the SDK uses on create (createPersonaRole keys a role by name WITHIN a BU).
 // Returns the explicit `businessUnitId`, else the org ROOT business unit (the SDK's own default — a BU
-// with no parent), else null when it can't be resolved (caller then falls back to a name-only match:
-// best-effort, so a transient BU-lookup failure never blocks teardown/verify). `q` is a queryRecords fn
-// (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU lookup for the run.
+// with no parent), else NULL when it cannot be resolved. Every current caller treats null as FAIL
+// CLOSED and reports the role as missing rather than matching on name alone (teardown
+// sdk-teardown.js, verify verify-spec.js, and the roleGrant apply path) — a name-only match could
+// touch a same-named role in a DIFFERENT business unit, which for a grant is privilege escalation.
+// `q` is a queryRecords fn (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU
+// lookup for the run.
 async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
   if (businessUnitId && FORM_GUID_RE.test(businessUnitId)) return businessUnitId;
   if (Object.prototype.hasOwnProperty.call(cache, 'rootBu')) return cache.rootBu;
@@ -1098,10 +1130,57 @@ async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
 }
 
 // The `_businessunitid_value eq <guid>` OData clause (Edm.Guid is UNQUOTED) that scopes a role query to a
-// business unit. Empty string when the BU is unknown (name-only fallback). `bu` is GUID-validated by
+// business unit. Empty string when the BU is unknown — but no caller reaches that today: every one
+// treats an unresolved BU as fail-closed before calling this. `bu` is GUID-validated by
 // resolveRoleBusinessUnit, so interpolation is injection-safe.
 function roleBuClause(bu) {
   return bu && FORM_GUID_RE.test(String(bu)) ? ` and _businessunitid_value eq ${bu}` : '';
+}
+
+// A stable, human-readable name for a `roleGrants[]` entry, used in plan lines, progress labels and
+// errors. Prefers the display name the author wrote; falls back to the pinned id.
+function roleGrantLabel(g) {
+  const name = g && typeof g.role === 'string' ? g.role.trim() : '';
+  return name ? `"${name}"` : `${(g && g.roleId) || '?'}`;
+}
+
+// Resolve the EXISTING role a `roleGrants[]` entry extends. AB#6686429.
+//
+// Fail-closed on every ambiguity, because the write is a privilege grant: granting on the wrong role is
+// a silent access-control defect that no later phase would catch.
+//   - `roleId` pinned → confirm the row EXISTS (an absent id is a stale pin, not a create trigger — this
+//     surface never creates a role) and report its name so the build log names what was actually changed.
+//   - `role` name → exact-match within the resolved business unit (explicit `businessUnitId`, else the org
+//     ROOT BU — the same identity `createPersonaRole`, teardown and verify use). 0 matches and >1 match
+//     are BOTH errors; ">1" happens when the same role name exists in several BUs and the author must
+//     disambiguate.
+//
+// Unlike the persona path this deliberately does NOT require the SDK ownership marker: the whole point is
+// to extend a role somebody else built. `ismanaged` is not a blocker either — Dataverse permits
+// AddPrivilegesRole on a managed role, and refusing would block the bug's actual scenario (a solution's
+// shipped roles). It IS surfaced in the returned detail so the log says what was touched.
+async function resolveRoleGrantTarget(provision, grant, buCache) {
+  if (grant.roleId) {
+    const rows = await provision.queryRecords('role', { select: ['roleid', 'name', 'ismanaged'], filter: `roleid eq ${grant.roleId}`, top: 1 });
+    const row = rows && rows[0];
+    if (!row) throw new Error(`roleGrant: pinned roleId ${grant.roleId} does not exist on this environment — correct the id, or target the role by name`);
+    return { roleId: String(row.roleid), name: row.name || '', managed: row.ismanaged === true };
+  }
+  const name = String(grant.role).trim();
+  const bu = await resolveRoleBusinessUnit((e, o) => provision.queryRecords(e, o), grant.businessUnitId, buCache);
+  // FAIL CLOSED when the BU cannot be resolved. Teardown/verify fall back to a name-only match because a
+  // false negative there is merely noisy; here a name-only match could grant privileges on a same-named
+  // role in a DIFFERENT business unit, which is a real privilege escalation.
+  if (!bu) throw new Error(`roleGrant "${name}": could not resolve the business unit to scope the role lookup — pin the role with 'roleId' instead`);
+  const rows = await provision.queryRecords('role', {
+    select: ['roleid', 'name', 'ismanaged'],
+    filter: `name eq '${String(name).replace(/'/g, "''")}'${roleBuClause(bu)}`,
+    top: 5,
+  });
+  const matches = (rows || []).filter((r) => r && r.roleid);
+  if (!matches.length) throw new Error(`roleGrant "${name}": no security role with that name exists in business unit ${bu} — check the spelling (the name must match EXACTLY), or pin the role with 'roleId'`);
+  if (matches.length > 1) throw new Error(`roleGrant "${name}": ${matches.length} roles share that name in business unit ${bu} — pin the one you mean with 'roleId'`);
+  return { roleId: String(matches[0].roleid), name: matches[0].name || name, managed: matches[0].ismanaged === true };
 }
 
 
@@ -1124,7 +1203,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1293,6 +1372,57 @@ async function runSdkBuild(spec, opts = {}) {
       added = true;
     }
     return added;
+  };
+
+  // Fetch a just-created form before wiring its event handlers, tolerating the workspace-metadata
+  // race. AB#6688905.
+  //
+  // `buildArtifact` resolves once the form ROW exists, but the SDK persists the workspace copy as two
+  // files — `.maker-workspace/forms/<id>.json` and `.maker-workspace/.metadata/forms/<id>.meta.json`
+  // — and `fetchArtifact` reads the metadata one. Under `mapLimit` several forms are written
+  // concurrently, and the reporter hit the window between them:
+  //   UNKNOWN: unknown error, open '...\.maker-workspace\.metadata\forms\<id>.meta.json'
+  // with the sibling `.json` already on disk. `UNKNOWN` (not ENOENT) is what Windows reports for a
+  // concurrent-access/sharing violation, which is why this matches on the PATH rather than the code
+  // — matching only ENOENT would miss the shape that was actually observed.
+  //
+  // A retry is the correct remedy rather than a workaround: the reporter's second identical run
+  // succeeded, so the state is transient by construction, and the build is idempotent. Bounded and
+  // narrow on purpose — a form whose metadata never lands still fails, with a message that names the
+  // race instead of the bare `UNKNOWN` the operator could do nothing with.
+  //
+  // ⚠ THE SDK NOW RETRIES TOO, and this is deliberately kept as a SECOND layer rather than deleted.
+  // The vendored `WorkspaceManager` retries `EPERM`/`EACCES`/`EBUSY`/`UNKNOWN` on its own and treats a
+  // file deleted between its `exists` probe and its open as absent. Two reasons this outer retry still
+  // earns its place: the SDK's authors explicitly decline to call that fix MEASURED (a two-process
+  // harness never reproduced the failure, so the trigger is environmental — an AV scanner or indexer
+  // holding a handle), and an exhausted SDK budget rethrows the bare `UNKNOWN` unchanged, which is the
+  // message the operator could do nothing with. The layering costs nothing on the happy path. Delete
+  // this only against evidence that the SDK's budget is sufficient, not merely because it exists.
+  const isWorkspaceMetadataRace = (err) => {
+    const msg = (err && err.message) || String(err || '');
+    return /[\\/]\.metadata[\\/]/.test(msg) && /\.meta\.json/.test(msg);
+  };
+  const fetchFormForWiring = async (id, f) => {
+    const attempts = 4;
+    let last;
+    for (let i = 0; i < attempts; i += 1) {
+      try {
+        return await provision.fetchArtifact('form', id);
+      } catch (err) {
+        last = err;
+        if (!isWorkspaceMetadataRace(err) || i === attempts - 1) break;
+        // Linear, not exponential: the writer is a local file flush, so the wait needed is
+        // milliseconds — a doubling backoff would spend seconds waiting for something already done.
+        await new Promise((r) => setTimeout(r, 150 * (i + 1)));
+      }
+    }
+    if (isWorkspaceMetadataRace(last)) {
+      throw new Error(`form ${f && (f.name || f.entity)}: the workspace metadata for this form was still not readable after ${attempts} attempts `
+        + `(${(last && last.message) || last}). The form row itself was created — this is a local workspace write race, not a Dataverse failure. `
+        + 'Re-run the same command: the build is idempotent and the metadata will exist on the next run.');
+    }
+    throw last;
   };
 
   // Reconcile an EXISTING form to the spec: fetch it, ADD any spec field/sub-grid not already placed
@@ -1746,21 +1876,10 @@ async function runSdkBuild(spec, opts = {}) {
     }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
       const id = await buildArtifact('form', d.def);
-      // Gap 2: make our main form the entity's default so the app opens it, not the blank stock form.
-      // Guarded to a table THIS build OWNS — a custom, publisher-prefixed table that isn't flagged
-      // `existing`. A system/reused table (account, systemuser, or anything without our prefix) must
-      // never have its default form re-pointed: that's a shared, environment-wide side effect.
-      if ((d.f.formType || 'Main') === 'Main') {
-        const entSpec = entityByLogical(spec, d.f.entity.toLowerCase());
-        const prefix = spec.solution && spec.solution.publisherPrefix;
-        const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
-          String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-        if (isOwnCustomTable) await promoteDefaultForm(id, d.f.entity.toLowerCase(), d.f.deactivateOtherMainForms === true);
-      }
       const wantedEvents = (d.f.events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
       if (wantedEvents.length) {
         await runner.run('forms', `wire ${wantedEvents.length} event handler(s) on ${d.f.entity}`, async () => {
-          await provision.fetchArtifact('form', id);
+          await fetchFormForWiring(id, d.f);
           // Merge into the root-bag <events> region (idempotent — a rebuild only pushes if a NEW
           // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
           if (await wireFormEvents(id, wantedEvents)) {
@@ -1773,7 +1892,77 @@ async function runSdkBuild(spec, opts = {}) {
     });
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
-    defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
+    //
+    // AB#6686426 — default-form promotion, ONCE per entity, AFTER every form exists.
+    //
+    // This used to run inside the concurrent per-form build above, so on a table with several Main
+    // forms every one of them promoted itself and the LAST to finish won. Which form a table opened
+    // with therefore depended on completion order — an alternate read-only or OnSave-blocked form
+    // could silently become the default, changing normal app behaviour.
+    //
+    // Selection is explicit first (`forms[].isDefault`), then a documented stable fallback: the FIRST
+    // Main form in spec order. Both are order-independent, which is the property that was missing.
+    // Still guarded to a table THIS build owns — re-pointing the default form of a system or reused
+    // table is an environment-wide side effect.
+    const promotedEntities = new Set();
+    const mainByEntity = new Map(); // entity -> { id, f } chosen for promotion
+    defs.forEach((d, i) => {
+      if ((d.f.formType || 'Main') !== 'Main') return;
+      const key = d.f.entity.toLowerCase();
+      const current = mainByEntity.get(key);
+      // An explicit isDefault always wins; otherwise the first Main form in spec order holds the slot.
+      if (!current || (d.f.isDefault === true && current.f.isDefault !== true)) {
+        mainByEntity.set(key, { id: ids[i], f: d.f });
+      }
+    });
+    for (const [entityLogical, chosen] of mainByEntity) {
+      const entSpec = entityByLogical(spec, entityLogical);
+      const prefix = spec.solution && spec.solution.publisherPrefix;
+      const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
+        String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
+      if (!isOwnCustomTable) continue;
+      // Serialized deliberately: two promotions racing is the bug being fixed.
+      await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      promotedEntities.add(entityLogical);
+    }
+    if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
+      [...mainByEntity].filter(([k]) => promotedEntities.has(k)).map(([k, v]) => [k, v.id])
+    );
+
+    // overwrites the first. That is correct for what the map is for — the app shell wires one form
+    // per entity — but it is invisible to a consumer reading the emitted JSON, who reasonably
+    // concludes the other ids were lost. `created.formIds` below is keyed by the (entity, formType,
+    // name) triple and normally holds them all.
+    //
+    // The warning deliberately does NOT promise that `formIds` is complete: `formIdentityKey` omits
+    // `formId`, which the App Spec supports precisely so two forms can share an entity, type and
+    // name. Two such pinned forms collide in `formIds` as well, and claiming otherwise would send
+    // the reader to a map that cannot answer them either.
+    const mainFormSeen = new Map(); // entity -> { shownName, identityKey } for the first Main form, in spec order
+    defs.forEach((d, i) => {
+      if ((d.f.formType || 'Main') !== 'Main') return;
+      const key = d.f.entity.toLowerCase();
+      // `name` is optional on a form and is compiled to "<entity> form"; using the raw spec value
+      // here would print "undefined" for exactly the forms the author did not name.
+      const shownName = d.f.name || (d.def && d.def.name) || `${key} form`;
+      if (!mainFormSeen.has(key)) {
+        mainFormSeen.set(key, { shownName, identityKey: formIdentityKey(d.f) });
+      } else if (typeof opts.warn === 'function') {
+        const first = mainFormSeen.get(key);
+        // Compared on the stored IDENTITY KEY of the earlier form, not on a key rebuilt from its
+        // DISPLAY name. Those differ for an UNNAMED form: `formIdentityKey` uses `f.name || ''`
+        // while `shownName` falls back to "<entity> form", so rebuilding from the display name made
+        // two unnamed Main forms look distinct when they actually collide in `created.formIds` —
+        // and the warning then pointed the reader at a map that could not separate them either.
+        const distinct = formIdentityKey(d.f) !== first.identityKey;
+        opts.warn(`entity ${key} has more than one Main form ("${first.shownName}" and "${shownName}"); `
+          + `created.forms keeps ONE id per entity for the app shell, so it now reports "${shownName}". `
+          + (distinct
+            ? 'The other ids are in created.formIds, keyed "entity|formType|name" — read that map rather than re-querying systemform.'
+            : 'These two share an entity, type and name, so created.formIds cannot separate them either — give them distinct names.'));
+      }
+      result.created.forms[key] = ids[i];
+    });
     // Every form, addressable individually. `created.forms` is keyed by ENTITY and holds only the
     // Main form, which is all the app shell needs — but `forms[].securityRoles` is applied in the
     // SECURITY phase (roles do not exist until then), by which time the forms phase is long over and
@@ -2081,7 +2270,14 @@ async function runSdkBuild(spec, opts = {}) {
       const entityLogical = String(flow.entity).toLowerCase();
       const key = `${entityLogical}|${flow.name}`;
       const existing = await provision.queryRecords('workflow', {
-        select: ['workflowid', 'statecode', 'createdon'],
+        // `uniquename` is selected, not derived. Activation creates the flow's backing TABLE with
+        // exactly this name, and the security phase grants privileges on that table. For a flow this
+        // build created, `bpfUniqueName(flow.name)` IS the deployed value — but a REUSED flow may
+        // have been authored in Maker or by another tool under any unique name at all, and a
+        // later display-name rename does not follow it. Deriving instead of reading would then grant
+        // on a table that either does not exist or, worse, belongs to something else entirely.
+        // See https://learn.microsoft.com/en-us/power-automate/developer/business-process-flows-code
+        select: ['workflowid', 'statecode', 'createdon', 'uniquename'],
         // Definition rows only, and BusinessFlow only — see bpfFilter.
         filter: bpfFilter(flow.name, entityLogical),
         // Ordered and > 1 for the same reason as business rules: `top: 1` unordered adopts an
@@ -2118,6 +2314,10 @@ async function runSdkBuild(spec, opts = {}) {
           runner.skip('business-process-flows', `business process flow "${flow.name}" on ${flow.entity} (exists — reuse; stage edits aren't applied on rebuild, recreate to change)`);
         }
         result.created.businessProcessFlows[key] = existingId;
+        // The DEPLOYED backing-table name, read back rather than derived (see the select above). A
+        // row with no `uniquename` (an older projection, or a double that does not model the field)
+        // falls back to the derivation, which is still the right answer for anything this tool made.
+        result.created.bpfBackingTables[key] = String(existing[0].uniquename || bpfUniqueName(flow.name)).toLowerCase();
         // Reconcile solution membership on the REUSE path too. `addSolutionComponent` is otherwise
         // only reached by the create branch, so a run where the flow was created but the component
         // add failed (or a flow created by an earlier build of a different solution) would be reused
@@ -2188,6 +2388,11 @@ async function runSdkBuild(spec, opts = {}) {
         const art = provision.createArtifact('bpf', bpfDef(flow));
         const pushed = requireSuccessfulPush(await provision.pushArtifact('bpf', art.id), `business process flow ${flow.name}`, opts.warn);
         result.created.businessProcessFlows[key] = pushed.id;
+        // On the CREATE path the derivation is authoritative: the build supplied `flow.name`, the
+        // adapter derived `uniquename` from it, and `unique` above is that same derivation — already
+        // proven collision-free by the clash checks. Recorded explicitly so the security phase reads
+        // ONE map regardless of which branch produced the flow.
+        result.created.bpfBackingTables[key] = unique;
         // componentType 29 (workflow) — a BPF is a workflow row, so it ships in the solution the same
         // way a business rule does. Without this the process is left out of the solution and does not
         // travel on export/import.
@@ -2663,14 +2868,13 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
-  //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
-  //     skips features whose admin gate is off; it never throws.
-  // Features the SDK did not put in `applied`, deferred for a post-publish re-proof (see inside the
+  // 7c. AI features (opt-in via spec.ai). Enable app-level agents + configure per-table row
+  //     summaries. `setAppAiFeatures` never throws — every outcome arrives as data in a bucket.
+  // Features the SDK did not put in `applied`, deferred for a post-publish re-issue (see inside the
   // ai-features phase for why the verdict cannot honestly be decided at write time).
   const pendingAiReconfirm = [];
 
-  if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
+  if (has('ai-features') && specOptsIntoAi(spec)) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);
     const flags = resolveAiFlags(spec);
@@ -2708,10 +2912,15 @@ async function runSdkBuild(spec, opts = {}) {
       // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing):
       //   notPersisted — the write returned 204 but no override was observed for the whole retry
       //                  budget; Dataverse can accept an app-scope write and store nothing.
+      //   skipped      — as notPersisted, PLUS the feature's org readiness gate reads off, which is
+      //                  offered as the explanation. Since AB#6688904 the SDK ATTEMPTS every write
+      //                  and reads the gate only afterwards, to explain a failure that happened —
+      //                  it no longer pre-empts the write, so this bucket is now evidence, not a
+      //                  prediction.
       //   unverified   — the write was issued but the proof could not be READ (no access to
       //                  appsettings/settingdefinitions/appmodules, or a transport error).
-      //   failed       — the write (or its org-gate read) threw. The SDK keeps going so the rest
-      //                  of the batch still reports, so this arrives as data, never as an exception.
+      //   failed       — the write threw. The SDK keeps going so the rest of the batch still
+      //                  reports, so this arrives as data, never as an exception.
       //
       // RE-CONFIRMATION (safety net): with `appModuleId` supplied above, the SDK can prove the
       // override row here, pre-publish, so the normal path decides the verdict in this phase. The
@@ -2722,10 +2931,20 @@ async function runSdkBuild(spec, opts = {}) {
       // `reconfirmAiFeatures` below) against the identical override-row oracle the verifier uses.
       // The re-proof can only ever UPGRADE a feature, never hide a real failure.
       //
+      // `skipped` is deferred WITH the rest, and that is the plugin half of AB#6688904. On a freshly
+      // created app NO app-scope write persists until the app is published, so the SDK's post-write
+      // gate read fires for every feature — and for the ones that happen to have a distinct org gate
+      // (`nlSearch`, `nlChart`, `formFillSmartPaste`) an org-wide `false` then labels them `skipped`.
+      // Treating that as a final answer would abandon them before the one sequence measured to work,
+      // and `--verify` would then fail on an override row the build gave up on writing. The reported
+      // environment ran a working app at `NLGridSearchSetting = 2` with `EnableNLGridSearch` off, so
+      // a gate reading off is not proof the app-scope write cannot land — only the retry can settle
+      // it. Anything still `skipped` after the retry is reported as an admin action, not a defect.
+      //
       // Derive the non-success buckets from the RESULT, not a fixed list: a bucket added by a future
       // SDK revision is then reported verbatim rather than silently dropped (which is the very bug
       // class this phase exists to remove). `outcomes` is per-feature detail, not a bucket.
-      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'skipped' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
+      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
       for (const key of problemKeys) {
         for (const feature of r[key]) {
           const outcome = (r.outcomes || []).find((o) => o && o.feature === feature);
@@ -2734,9 +2953,8 @@ async function runSdkBuild(spec, opts = {}) {
       }
       const parts = [];
       if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
-      if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
       if (pendingAiReconfirm.length) parts.push(`retrying after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
-      return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
+      return parts.length ? parts.join('; ') : '(none)';
     });
     // Same rule as the plan: `selectSummaryTables` owns the default-vs-override decision, so calling
     // it unconditionally is what lets `default: 'off'` + `tables[x].enabled: true` opt a single table
@@ -2908,6 +3126,165 @@ async function runSdkBuild(spec, opts = {}) {
       });
     }
 
+    // 7a-bis. Role grants (`roleGrants[]`) — ADD privileges for a table to a PRE-EXISTING role. AB#6686429.
+    //
+    // The scenario this exists for: a table is added to an app whose solution already ships four data
+    // roles. Before this, the table, its forms and its nav deployed while every non-admin persona still
+    // had no access to it, and nothing said so.
+    //
+    // ADDITIVE, never converging. `addEntityPrivilegesToRole` compiles to `AddPrivilegesRole`, so a
+    // privilege the role already holds is re-asserted and every privilege the spec does NOT mention is
+    // left alone. That is what makes it safe to point at a role somebody else owns — and it is also why
+    // this surface cannot REVOKE (documented in references/app-spec-schema.md).
+    //
+    // Idempotency comes from Dataverse, not from a read-compare here: re-POSTing a grant the role already
+    // holds at the same depth succeeds and changes nothing. Re-POSTing at a HIGHER depth raises it. We do
+    // not pre-read the role's privileges, because a read-then-write would be racy and the write is
+    // already the converged operation.
+    //
+    // Runs AFTER the persona loop so that, if a future change ever allowed both to touch one role, the
+    // additive grant lands last rather than being converged away. Today validation rejects that overlap
+    // outright (see validateRoleGrants).
+    const roleGrantBuCache = {}; // memoize the root-BU lookup across grants in this build
+    // Resolved-id guards. The static validator can only compare NAMES, so a `roleId` pinned at a role
+    // a persona also authors, or a name-and-id pair aliasing one role, both slip past it. Both are
+    // caught here on the identity that actually matters — the resolved Dataverse role id:
+    //   * persona overlap would let ReplacePrivilegesRole converge the grant away on the next build,
+    //     and a failure BETWEEN the two passes leaves the access removed;
+    //   * two grants on one role split a depth conflict across two SDK calls, where the SDK's
+    //     "entities sharing one privilege must request one depth" check cannot see it and the later
+    //     write silently wins.
+    const personaRoleIds = new Map(); // lowercased roleId -> persona name, from the loop above
+    for (const [name, rr] of Object.entries(result.created.roles || {})) {
+      if (rr && rr.roleId) personaRoleIds.set(String(rr.roleId).toLowerCase(), name);
+    }
+    const grantedRoleIds = new Map(); // lowercased roleId -> the label of the grant that claimed it
+    // TWO PASSES, deliberately. Resolving and guarding EVERY grant before applying ANY is what makes
+    // the identity guards below worth having: with resolve-guard-apply interleaved per grant, a spec
+    // whose second entry aliases the first applied grant #1 and only then halted, leaving one role
+    // changed and one not, with nothing in the output saying which. Every guard here rejects a spec
+    // that is wrong independently of the environment, so it costs nothing to learn that first.
+    const resolvedGrants = [];
+    for (const grant of spec.roleGrants || []) {
+      const label = roleGrantLabel(grant);
+      let target;
+      try {
+        target = await resolveRoleGrantTarget(provision, grant, roleGrantBuCache);
+      } catch (err) {
+        // Fail-closed: an unresolvable or ambiguous role means we do not know what we would be granting
+        // on. Halting is better than skipping, because a skipped grant reads as a successful build whose
+        // users still cannot open the table — the exact failure this feature was filed for.
+        throw new BuildHalt(`roleGrant ${label} could not be resolved: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-unresolved', recoverable: false });
+      }
+      const idKey = String(target.roleId).toLowerCase();
+      if (personaRoleIds.has(idKey)) {
+        throw new BuildHalt(
+          `roleGrant ${label} resolves to role ${target.roleId}, which is also persona "${personaRoleIds.get(idKey)}" in this spec. `
+          + 'The build CONVERGES a persona\'s role (privileges not declared on the persona are removed), so this grant would be '
+          + 'undone on the next build — declare these privileges on that persona\'s job instead.',
+          { phase: 'security', code: 'role-grant-persona-overlap', recoverable: false },
+        );
+      }
+      if (grantedRoleIds.has(idKey)) {
+        throw new BuildHalt(
+          `roleGrant ${label} resolves to role ${target.roleId}, which roleGrant ${grantedRoleIds.get(idKey)} already targets. `
+          + 'Merge them into one entry: two entries can request conflicting depths for one shared Dataverse privilege, and the '
+          + 'SDK only detects that within a single call, so the later write would silently win.',
+          { phase: 'security', code: 'role-grant-duplicate-target', recoverable: false },
+        );
+      }
+      grantedRoleIds.set(idKey, label);
+      resolvedGrants.push({ grant, label, target });
+    }
+    for (const { grant, label, target } of resolvedGrants) {
+      await runner.run('security', `grant privileges to existing role ${label}`, async () => {
+        let applied;
+        try {
+          applied = await provision.addEntityPrivilegesToRole(target.roleId, grant.privileges);
+        } catch (err) {
+          // Apply-time metadata guards live here: a table that exposes no such access, and the SDK's
+          // shared-privilege rule (two tables aliasing to one prv* must request one depth). Both are
+          // author errors that only live metadata can detect, so they surface with the SDK's own message.
+          throw new BuildHalt(`roleGrant ${label} could not be applied: ${err && err.message ? err.message : err}`, { phase: 'security', code: 'role-grant-failed', recoverable: false });
+        }
+        const n = Array.isArray(applied) ? applied.length : 0;
+        // Keyed on the resolved ROLE ID, with the display name carried in the value. Keying on
+        // `target.name` collapsed two DIFFERENT roles that share a display name — which the spec
+        // gate deliberately allows, because a role is identified by (name, business unit) and the
+        // same name in two BUs is two roles. The second grant then overwrote the first in this map,
+        // so `--json` consumers saw one grant where two were applied. The id is the identity the
+        // apply itself guards on, so it cannot collide.
+        result.created.roleGrants[target.roleId] = { roleId: target.roleId, name: target.name, managed: target.managed, privileges: applied || [] };
+        // The role is NOT added to the app's solution. A persona role is ours to place; a pre-existing role
+        // already lives wherever its owner put it, and adding a foreign (possibly managed) role to this
+        // solution would take an ownership decision the author did not ask for. If the role is already a
+        // component of this solution, its updated privileges export with it either way.
+        return `${n} privilege${n === 1 ? '' : 's'} granted on ${target.name || target.roleId}${target.managed ? ' (managed role)' : ''}`;
+      });
+    }
+
+    // 7b-bis. Business process flow role grants (`businessProcessFlows[].securityRoles`). #513.
+    //
+    // Runs in SECURITY, not in the flow phase, for the same reason `forms[].securityRoles` does: a
+    // persona's role does not exist until the loop above has run.
+    //
+    // The target is the flow's BACKING TABLE, not the flow row. Activating a flow makes the platform
+    // create an org-owned table, and holding privileges on THAT is what lets a persona run the
+    // process. Two things were measured live before this was written (see validateBpfSecurityRoles):
+    // the table is organization-owned and every privilege is Global-only, so there is no scope to
+    // author; and the public `addEntityPrivilegesToRole` grants on it (the SDK's internal BPF role
+    // helper is not on its public surface).
+    //
+    // The table NAME is taken from `created.bpfBackingTables`, which the flow phase read back from
+    // the deployed `workflow.uniquename`. It is only DERIVED from the display name as a last resort:
+    // a flow authored elsewhere, or renamed after creation, keeps its original unique name, and
+    // granting on the derivation would target a table that does not exist — or one that belongs to
+    // something else. The fallback still covers the doubles and older projections that do not carry
+    // the field, where the derivation is the correct answer anyway.
+    const flowsWithRoles = (spec.businessProcessFlows || []).filter((f) => f && f.securityRoles);
+    for (const f of flowsWithRoles) {
+      const flowKey = `${String(f.entity).toLowerCase()}|${f.name}`;
+      const backingTable = result.created.bpfBackingTables[flowKey] || bpfUniqueName(f.name);
+      const label = `flow "${f.name}" (backing table ${backingTable})`;
+      // The flow must have been built in THIS invocation, or its backing table may not exist —
+      // ACTIVATION is what creates it. Checked BEFORE runner.run and reported through runner.skip,
+      // because a value returned from runner.run is not emitted: a silent skip would report a clean
+      // build in which nobody can run the process, which is the failure #513 exists to fix.
+      // The key mirrors the flow phase's own `${entityLogical}|${flow.name}`.
+      const built = result.created.businessProcessFlows[flowKey];
+      if (!built) {
+        runner.skip('security', `flow roles for ${f.name} (the business-process-flows phase did not run in this invocation, so the backing table may not exist yet)`);
+        continue;
+      }
+      await runner.run('security', `flow roles for ${f.name}`, async () => {
+        const personas = (f.securityRoles.personas || []);
+        // Case-INSENSITIVE, exactly like the form path immediately below — and for the same reason.
+        // `validateBpfSecurityRoles` resolves the persona reference against a LOWERCASED set, so a
+        // spec naming "dispatcher" for a persona declared as "Dispatcher" validates clean. A
+        // case-sensitive lookup here would then halt at the near-last phase, with a message claiming
+        // the persona "has no role in this build" — which is false; it was declared and its role was
+        // created. Late halt, wrong diagnosis, half-built app.
+        const roleByLower = new Map(Object.entries(result.created.roles || {})
+          .map(([name, rr]) => [String(name).trim().toLowerCase(), rr]));
+        const roleIds = personas.map((p) => {
+          const rr = roleByLower.get(String(canonicalPersonaName({ persona: p }) || '').toLowerCase());
+          if (!rr || !rr.roleId) throw new BuildHalt(`${label}: persona '${p}' has no role in this build`, { phase: 'security', code: 'bpf-role-unresolved', recoverable: false });
+          return { persona: p, roleId: rr.roleId };
+        });
+        for (const { persona, roleId } of roleIds) {
+          try {
+            // Organization scope is not a choice: the backing table is org-owned and its privileges
+            // report CanBeGlobal only, so any other depth is rejected by the platform.
+            await provision.addEntityPrivilegesToRole(roleId, [{ entity: backingTable, access: BPF_ROLE_ACCESS, scope: 'organization' }]);
+          } catch (err) {
+            throw new BuildHalt(`${label}: could not grant to persona '${persona}': ${err && err.message ? err.message : err}`, { phase: 'security', code: 'bpf-role-grant-failed', recoverable: false });
+          }
+        }
+        result.created.bpfRoleGrants[f.name] = { backingTable, personas };
+        return `${roleIds.length} persona(s) granted ${BPF_ROLE_ACCESS.join('/')} on ${backingTable}`;
+      });
+    }
+
     // 7b. Offer forms to specific security roles (`forms[].securityRoles`). AB#6648526.
     //
     // This runs in the SECURITY phase, not the forms phase, because a persona's role does not exist
@@ -3020,8 +3397,13 @@ async function runSdkBuild(spec, opts = {}) {
     const appUnique = appUniqueName(spec);
     const BUCKET_LABELS = {
       notPersisted: ['NOT PERSISTED', 'Dataverse accepted the write but no app-scope override holding the requested value was observed'],
+      // Distinct wording from NOT PERSISTED on purpose: both mean the override row is absent, but
+      // `skipped` carries a diagnosis the operator can ACT on — an environment admin has to turn the
+      // feature on before any app can. The SDK's own per-feature `reason` names the gate and its
+      // value, and it is preferred over this text wherever it is present.
+      skipped: ['ADMIN GATE OFF', 'the write was issued, no app-scope override appeared, and the feature\u2019s org readiness gate reads off \u2014 an environment admin must enable it first'],
       unverified: ['UNVERIFIED', 'the write was issued but could not be confirmed \u2014 verify manually before relying on it'],
-      failed: ['FAILED', 'the write or its org-gate read threw'],
+      failed: ['FAILED', 'the write threw'],
     };
     // Replicate the sequence proven to work live, in order: fetch the app (so the workspace holds the
     // server's copy), publish it, then write. Each step is best-effort — a failure here must not fail
@@ -3075,7 +3457,12 @@ async function runSdkBuild(spec, opts = {}) {
     const af = result.created.ai && result.created.ai.appFeatures;
     if (af && reproven.length) {
       af.applied = [...(af.applied || []), ...reproven];
-      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'skipped') af[key] = af[key].filter((f) => !reproven.includes(f));
+      // `skipped` is cleaned up like every other non-success bucket. It used to be exempt, back when
+      // the SDK pre-empted a gated write and `skipped` therefore meant "never attempted" — a state
+      // no retry could change. Since AB#6688904 the write IS attempted, so a feature can genuinely
+      // move from `skipped` to `applied`, and leaving it listed in both would make
+      // `created.ai.appFeatures` contradict itself for any `--json` consumer.
+      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'outcomes') af[key] = af[key].filter((f) => !reproven.includes(f));
       for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = reprovenBy.get(o.feature); }
     }
     // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and
@@ -3091,4 +3478,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

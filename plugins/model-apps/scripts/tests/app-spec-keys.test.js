@@ -220,15 +220,28 @@ test('#537: entities[].languageCode is rejected and names the spec-level languag
   }
 });
 
-test('#537: entities[].localizedLabels is rejected and says multi-language is unsupported', () => {
+test('#537: entities[].localizedLabels is rejected, and names the shape that DOES work', () => {
+  // The key stays rejected after 2.7.0 added multi-language labels — but for a different reason, and
+  // the message had to change with it. A localized label is an LCID map on the label FIELD; a
+  // separate per-table block cannot address a Choice OPTION or a lookup's display name without
+  // inventing a parallel addressing scheme. So "not supported" became "write it here instead",
+  // which is the whole point of rejecting a key rather than dropping it.
   for (const profile of ['plan', 'deploy']) {
     const s = base();
     s.entities[0].localizedLabels = { 3082: 'Cliente', 1033: 'Customer' };
     const r = validateAppSpec(s, { profile });
     const hit = (r.errors || []).find((e) => /unknown key 'localizedLabels'/.test(e));
     assert.ok(hit, `${profile}: ` + JSON.stringify(r.errors));
-    assert.match(hit, /multi-language labels are not supported/);
+    assert.match(hit, /LCID map on the label FIELD/, hit);
+    assert.doesNotMatch(hit, /not supported/, `2.7.0 supports multi-language labels; the hint must not deny it: ${hit}`);
   }
+
+  // And the shape it points at must actually validate, or the error sends the author into a wall.
+  const ok = base();
+  ok.entities[0].displayName = { 1033: 'Customer', 3082: 'Cliente' };
+  ok.entities[0].pluralName = { 1033: 'Customers', 3082: 'Clientes' };
+  assert.strictEqual(validateAppSpec(ok, { profile: 'plan' }).ok, true,
+    JSON.stringify(validateAppSpec(ok, { profile: 'plan' }).errors));
 });
 
 test('#537: a misspelled entity key fails loudly instead of being dropped', () => {

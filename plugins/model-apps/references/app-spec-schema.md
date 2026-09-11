@@ -59,6 +59,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "sampleData":    { /* optional, keyed by entity schemaName */ },
   "ai":            { /* optional — AI feature flags + row-summary config */ },
   "personas":      [ /* optional — one security role per persona (see below) */ ],
+  "roleGrants":    [ /* optional — ADD privileges to a role you did NOT author (see below) */ ],
   "languageCode":  1031 /* optional — LCID for Dataverse labels; defaults to the org's base language */
 }
 ```
@@ -106,8 +107,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
   stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
   reason, relationship and alternate-key display names) **and** form, dashboard and sitemap labels.
-  The serializers used to hardcode 1033 with no caller override
-  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)); they now take the
+  The serializers used to hardcode 1033 with no caller override; they now take the
   authoring language, so a non-English build no longer produces translated columns next to English
   form labels.
   **Normally omit it**: the build reads the organization's base language
@@ -124,10 +124,11 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   discarded value rather than a silent fall-through.
   **It is build-wide.** One LCID is resolved and applied to every table, column, choice, status
   value, relationship and alternate key in the spec. There is **no per-table language**: an
-  `entities[].languageCode` or `entities[].localizedLabels` is **rejected**
-  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)), because the
-  build cannot honour either — the SDK takes the language as a construction-time option and its
-  label serializer emits one label per name by design. Multi-language labelling is not supported.
+  `entities[].languageCode` is rejected, because the build cannot honour it — the SDK takes the
+  language as a construction-time option. To label something in **several** languages, write the
+  field itself as an LCID map (see *Localized labels* below); an `entities[].localizedLabels` block
+  is rejected too, because the map belongs beside the name it labels rather than in a parallel
+  addressing scheme.
   **Emitted by `download-model-app.js` only if you pinned it yourself.** It is deliberately never
   read from Dataverse: an LCID copied out of the source org would be re-applied verbatim when the
   spec is rebuilt somewhere else, which is exactly how a spec starts failing in an org that lacks
@@ -135,6 +136,74 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **you** wrote is carried across a download from the previous `app-spec.json` at that path, so a
   pin is not silently lost — losing it would leave newly created columns in the org default while
   the existing ones keep the pinned language, with no error anywhere.
+
+## Localized labels — one name, several languages
+
+`languageCode` above sets the **one** language every plain label is written in. To label something in
+**several** languages, write the field as a map keyed by LCID instead of a string:
+
+```jsonc
+"displayName": "Project Baseline"                                       // one language
+"displayName": { "1033": "Project Baseline", "3082": "Línea base" }     // two
+```
+
+This works on every author-facing name the SDK can localize. **Measured**, per surface, against an
+organization with 1033 and 3082 provisioned — the table is the honest scope of the claim:
+
+| Where | Field | Status |
+|---|---|---|
+| `entities[]` | `displayName`, `pluralName` | **verified** — stored in both languages |
+| `entities[].primaryAttribute` | `displayName` | **verified** |
+| `entities[].columns[]` | `displayName` | **verified** |
+| `entities[].columns[]` | inline Choice `options[]` | **verified** |
+| `relationships[].lookup` | `displayName` | **verified** |
+| `entities[].alternateKeys[]` | `displayName` | accepted; not consistently reproducible |
+| `globalChoices[]` | `displayName`, `options[]` | **REJECTED at the spec gate** — see below |
+
+**Global choices are the exception, and it is not this plugin's doing.** Measured: a global option set
+created with a two-language label stores only the base language — **including through a raw
+`POST /GlobalOptionSetDefinitions` that bypasses the SDK entirely** (0/4). Because Dataverse reports
+nothing when it drops the language, a localized `globalChoices[]` label is **rejected by validation**
+rather than sent: accepting it would produce a green build with the author's second language silently
+gone, which is the exact failure this feature exists to end. Use an **inline** Choice on the column
+(`columns[].options[]`, verified) when you need localized option labels, or set the global set's
+labels in Maker. Plain-string global-choice labels are unaffected.
+
+**Why a map on the field, not a `localizedLabels` block.** The label belongs beside the name it
+labels. A table-level block cannot address a Choice **option** or a lookup's display name without
+inventing a parallel addressing scheme, and it splits one value across two places that then drift.
+An `entities[].localizedLabels` key is therefore **not** a supported shape.
+
+**Rules**
+- Keys are **canonical positive integer LCIDs** up to 65535 — `3082`, not `"03082"` and not
+  `"es-ES"`. A language tag is rejected rather than guessed: `es-ES` is 3082 *or* 1034 depending on
+  sort order, and guessing wrong would not fail — it would label everything in the wrong language.
+- Every value must be a non-empty string; an empty map is rejected (the SDK rejects one too).
+- `pluralName` becomes **required** beside a localized `displayName`. The English fallback appends
+  `"s"`, which is not a plural rule in most languages — so the spec asks rather than inventing
+  *"Línea base del proyectos"*.
+- Omitting the spec's own `languageCode` from a map is a **warning**, not an error. Dataverse serves
+  the base-language label to every user whose UI language has none, so leaving it out usually means
+  those users read a schema name — but a deliberately single-non-English label is legal.
+- Labels for all languages are written in **one** create call. That matters: a later single-language
+  `PUT` can overwrite the base label even with merge semantics.
+- **Every LCID you name must be provisioned in the organization, and the build halts if one is not.**
+  This is the guard the feature depends on, not a nicety. Live-measured against a 1033-only org:
+  `createTable` carrying `{ "1033": …, "3082": … }` returns **success** and stores **only** the 1033
+  label — Dataverse does not warn, error, or report the drop anywhere. Without the halt you would get
+  a green build with the second language silently gone, which is the exact failure this feature
+  exists to end. The check is best-effort in the same way the existing `languageCode` check is: an
+  unreadable `RetrieveProvisionedLanguages` leaves the build unchanged, and a spec with only plain
+  string labels never pays the round trip.
+
+**Referencing a localized label.** Anywhere the spec names an artifact by its label — `sampleData`
+choosing a Choice option, or `personas[].jobs[].surfaces[]` naming a screen — **any** of its
+languages resolves to the same artifact. One option, one value, several names.
+
+**Round-trip.** `download-model-app` reconstructs localized labels from Dataverse: a table, plural,
+column or option labelled in several languages comes back as a map, and one labelled in a single
+language comes back as a plain string (so no existing spec changes shape). The download emits
+`pluralName` alongside a localized `displayName`, so its own output re-validates.
 
 ## `description` — write one on everything that takes one
 
@@ -253,11 +322,11 @@ it exists is accepted by validation, builds green, and does not change the deplo
   ]
 }
 ```
-- **Unknown table keys are REJECTED, not ignored**
-  ([#537](https://github.com/microsoft/power-platform-skills/issues/537)). A table accepts exactly the keys above
+- **Unknown table keys are REJECTED, not ignored.** A table accepts exactly the keys above
   plus `statusReasons` / `alternateKeys`. Anything else — a misspelled `pluralname`, or a
-  `languageCode` / `localizedLabels` asking for a per-table or second language — fails validation
-  naming the alternative, rather than validating clean and being dropped from the build.
+  `languageCode` / `localizedLabels` asking for a per-table language or a parallel label block —
+  fails validation naming the alternative, rather than validating clean and being dropped from the
+  build.
 - **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
@@ -443,8 +512,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   `filters[].attr`. Not `[{ "name": "..." }]` — that is the shape `forms[]` uses for its fields, and
   it used to be accepted here and stringified into the view's FetchXML as `[object object]`. The
   build then failed at the platform, mid-run, and left behind a view row that could not be read or
-  deleted, so every later build failed the same way
-  ([#525](https://github.com/microsoft/power-platform-skills/issues/525)). It is now rejected up
+  deleted, so every later build failed the same way. It is now rejected up
   front, naming the view and the offending entry.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
@@ -1037,9 +1105,13 @@ entirely optional; omitting it leaves every AI feature at its platform default.
   // the SDK's own, so an out-of-range value is rejected here rather than aborting the build half-applied.
   //
   // These write PER-APP settings, which are distinct from the org-level admin gates the build
-  // preflights; a feature whose org gate is off is skipped with a warning and never silently applied.
-  // ENABLING is gated that way; DISABLING is not — a `false` is written even when the gate is off,
-  // which is why an incorrect `false` is the more damaging mistake of the two.
+  // preflights. The gate is NOT a precondition: every write is attempted and then verified, and a
+  // gate is read only to EXPLAIN a write that did not persist (AB#6688904 — for four of these
+  // features the "gate" IS this same per-app row, so reading it first made a brand-new app look
+  // forbidden and nothing was written at all). A feature whose write does not persist is surfaced
+  // with a warning naming the admin action; it is never silently reported as applied.
+  // DISABLING is treated identically — a `false` is written whatever the gate says, which is why an
+  // incorrect `false` is the more damaging mistake of the two.
   "appFeatures": {
     "formFill":  true,   // Copilot-assisted form fill (data entry)
     "nlSearch":  true,   // natural-language grid/view search (data exploration)
@@ -1179,4 +1251,121 @@ requested access, and the rule that different entities sharing one Dataverse pri
 same scope.
 
 **Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
-security. The security surface today is role-per-persona only.
+security. The security surface today is role-per-persona plus `roleGrants[]` (below).
+
+## roleGrants[] (optional — extend a role you did NOT author)
+
+Adds privileges for a table to a security role that **already exists** — typically the roles an
+existing solution ships. Use it when you add a table to an app whose access model somebody else owns:
+without it the table, its forms and its navigation deploy while every non-admin persona still cannot
+open the table, and nothing reports it.
+
+```jsonc
+"roleGrants": [
+  {
+    // Name the EXISTING role. Either `role` (display name) or `roleId` (GUID) — never both.
+    "role": "Contoso PM - Project Manager",
+    "businessUnitId": "…",                 // optional; scopes the NAME lookup (defaults to the org root BU)
+    "privileges": [
+      { "entity": "contoso_projectbaseline",
+        "access": ["create", "read", "write", "delete", "append", "appendTo", "assign", "share"],
+        "scope": "organization" }
+    ]
+  },
+  { "role": "Contoso PM - Viewer",
+    "privileges": [ { "entity": "contoso_projectbaseline", "access": ["read"], "scope": "organization" } ] }
+]
+```
+
+**How it differs from `personas[]` — and why both exist.** A persona role is **converged**: the build
+applies it with `ReplacePrivilegesRole`, so every privilege not in the spec is **removed**. That is
+right for a role the spec created and catastrophic for one it did not — pointing a persona at an
+existing role to add one table would silently strip everything else that role held. A `roleGrant`
+compiles to `AddPrivilegesRole` instead, which is purely **additive**: it re-asserts what you declare
+and leaves everything else alone.
+
+| | `personas[]` | `roleGrants[]` |
+|---|---|---|
+| Owns the role | yes (creates it, SDK-marked) | no — the role already exists |
+| Semantics | converges (replace) | adds only |
+| Can revoke | yes, by dropping the privilege | **no** — see below |
+| Managed role | refused (fail-closed conflict) | allowed |
+| Teardown | deletes the role | does nothing |
+
+**A grant is one-way.** Dropping an entry from `roleGrants[]` does **not** revoke the privilege, and
+`teardown` never removes one. `AddPrivilegesRole` does not record who added what, so a revoke could not
+tell a privilege this spec granted from one the role already held (or one a second spec granted) —
+stripping the latter is exactly the outcome this surface exists to avoid. **Revoke in Maker.**
+
+**Field reference**
+- `role` **or** `roleId` (**required**, exactly one) — the existing role's display name, or its GUID. Setting both is rejected: they can disagree and only one can be honoured.
+- `businessUnitId` (optional GUID) — scopes a lookup by `role` name. Rejected alongside `roleId`, where nothing would consult it.
+- `privileges[]` (**required**, ≥1) — identical shape to a persona's: `{ entity, access[], scope? }`. `scope` reaches Dataverse intact as the privilege `Depth`.
+- `description` (optional) — a note for readers of the spec; never written to Dataverse.
+
+**Resolution fails closed.** Granting on the wrong role is a silent access-control defect no later
+phase would catch, so every ambiguity is a **build halt**, never a skip: a name that matches no role,
+a name that matches more than one role in the business unit, a stale pinned `roleId`, or a business
+unit that cannot be resolved (a name-only fallback could grant on a same-named role in a *different*
+business unit). Unlike the persona path this does **not** require the SDK ownership marker, and a
+`ismanaged` role is allowed — extending a solution's shipped roles is the point.
+
+**Validation rules** (`validateAppSpec`): exactly one of `role` / `roleId`; GUID shapes; a non-empty
+`privileges[]` with valid `access` / `scope` tokens; **one entry per role** (two entries could request
+conflicting depths for a shared Dataverse privilege — the SDK only detects that *within* one call, so
+a split would let both writes through and the later would silently win); and a role that is **also a
+persona in this spec** is rejected, because the persona pass would converge the grant away on the next
+build. The apply-time metadata guards (a table that exposes no such access; two tables sharing one
+`prv*` at different depths) surface as a build halt with the SDK's own message.
+
+**Verification.** `verify-model-app` proves the role exists (`role-grant`) and — when the reader
+supplies privilege access — that it actually **holds** every granted privilege at at least the declared
+depth (`role-grant-privileges`). This matters more here than for a persona: a persona role's existence
+implies its content (it was converged), whereas a grant is additive onto a role that existed before and
+still exists whether or not the privileges landed. Subset semantics again — the role's other privileges
+belong to somebody else and are never a finding.
+
+## businessProcessFlows[].securityRoles — who may run a flow
+
+Same shape and same persona idiom as `forms[].securityRoles`, so there is one thing to learn:
+
+```jsonc
+{ "name": "Ticket Handling", "entity": "contoso_ticket", "status": "Active",
+  "securityRoles": { "personas": ["Dispatcher"] },
+  "stages": [ /* … */ ] }
+```
+
+The **mechanic** is different, though, and it explains every rule below. A form's roles live inside
+its formxml. A flow's live on a **table**: activating a flow makes the platform create an
+organization-owned backing table, and holding privileges on that table is what lets a persona run the
+process. Three things measured live before this surface was designed:
+
+- the backing table's logical name is the flow's **deployed `uniquename`**, which the build **reads
+  back** rather than deriving. For a flow this build creates the derivation is correct by
+  construction, but a flow authored in Maker — or one renamed after creation — keeps a unique name
+  unrelated to its display name, and granting on the derivation would target a table that does not
+  exist, or an unrelated one that happens to hold that name. The plan can still *name* the derived
+  table before the flow exists; the grant uses the value read at build time;
+- the table is organization-owned and **every privilege is Global-only** — so there is **no `scope`**
+  to author, because the platform accepts no other depth;
+- the access granted is fixed at `create`, `read`, `write`, `delete` — a partial set produces a flow a
+  user can see but not advance.
+
+**Rejected rather than ignored**
+- `everyone`, `fallbackForm`, `order` — formxml concepts with no equivalent here. The error says so
+  rather than just listing allowed keys, because an author who wrote them learned them from `forms[]`.
+- an **empty** `personas[]` — unlike a form (offered to everyone until restricted), a flow's backing
+  table grants to nobody by default, so an empty list is a request that cannot be satisfied.
+- `securityRoles` on a **Draft** flow — the backing table is created by *activation*, so there is
+  nothing to grant on yet.
+
+Applied in the **security** phase, after `personas[]` roles exist. If the flow was not built in the
+same invocation the grant is **skipped with a stated reason**, never applied blind.
+`verify-model-app` proves each persona holds the privileges on the backing table (`bpf-roles`) and
+fails closed when that table cannot be read — which also catches a flow that never activated.
+Teardown plans nothing: measured, the flow (and with it the backing table and its privileges) is
+deleted before the roles, and the run completes with 0 failures.
+
+
+**Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
+security.
