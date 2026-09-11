@@ -97,11 +97,19 @@ connector wiring.
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+	`/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
+	runs schema generation and type-checking before Expo starts.
+	The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
+	allowing `/debug-app` to work across VS Code, Copilot CLI, and Claude Code
+	without a terminal ID.
+
+	To start Metro manually instead, run the command below from the app directory.
+	Manual starts and `/debug-app` use the same `.powernative` log source.
 
 	```bash
 	npm run dev
 	```
+
 
 6. Preview the app by scanning the QR code with the Power Apps Developer app
 
@@ -186,7 +194,7 @@ Web builds are supported in Code Apps. They are also supported in Power Pages
 when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
-and `distPath` to `dist-web` in `power.config.json`, then run
+and `buildPath` to `dist-web` in `power.config.json`, then run
 `npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
