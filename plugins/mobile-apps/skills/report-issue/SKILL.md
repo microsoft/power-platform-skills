@@ -67,6 +67,24 @@ test -f native-app-plan.md && echo "plan=present"
 ls src/generated/services/ 2>/dev/null | head -10
 ```
 
+If the description names a package matching `@microsoft/power-apps-native-*`, collect its declared and lockfile-resolved versions from `package.json` and `package-lock.json`. Do not read package source or metadata from `node_modules/`.
+
+```bash
+node - <<'NODE'
+const fs = require('node:fs');
+const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const lockfile = fs.existsSync('package-lock.json')
+  ? JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+  : null;
+const dependencies = { ...manifest.dependencies, ...manifest.devDependencies };
+for (const [name, declared] of Object.entries(dependencies)) {
+  if (!name.startsWith('@microsoft/power-apps-native-')) continue;
+  const resolved = lockfile?.packages?.[`node_modules/${name}`]?.version ?? 'unknown';
+  console.log(`${name}\tdeclared=${declared}\tresolved=${resolved}`);
+}
+NODE
+```
+
 For native-build issues also capture:
 
 ```bash
@@ -93,6 +111,7 @@ If the user pasted an error, capture verbatim. Otherwise look for recent failure
 - Contents of `.env` or any file matching `.env*`
 - Connection IDs unless the user explicitly opted in (PII / can map to tenant)
 - Anything under `node_modules/`
+- Package source excerpts, patched package contents, or proposed fork code
 
 ### Step 4 — Render issue body
 
@@ -141,6 +160,15 @@ Print this block — user copies into a new issue:
 <if not in project>
 Not run inside a mobile-app project.
 </if>
+
+### Affected native package
+
+<include only when the issue concerns @microsoft/power-apps-native-*>
+- Package: `<package name>`
+- Declared version: `<package.json range>`
+- Resolved version: `<package-lock.json version or unknown>`
+- Platform: `<iOS / Android>`
+- Ownership evidence: <why the documented caller contract is satisfied and the failure is package-internal>
 
 ### Reproduction steps
 

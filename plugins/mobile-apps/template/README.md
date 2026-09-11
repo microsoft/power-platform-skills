@@ -97,11 +97,19 @@ connector wiring.
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+	`/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
+	runs schema generation and type-checking before Expo starts.
+	The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
+	allowing `/debug-app` to work across VS Code, Copilot CLI, and Claude Code
+	without a terminal ID.
+
+	To start Metro manually instead, run the command below from the app directory.
+	Manual starts and `/debug-app` use the same `.powernative` log source.
 
 	```bash
 	npm run dev
 	```
+
 
 6. Preview the app by scanning the QR code with the Power Apps Developer app
 

@@ -20,7 +20,7 @@ Generates a self-contained HTML file that renders every screen in the app as a p
 
 ## When NOT to use
 
-- To run the actual app → use `npx expo start`
+- To run the actual app → use `npm run dev`
 - To modify screens → use `/edit-app`; `screen-builder` is an internal agent invoked by orchestrator skills
 
 ## Workflow

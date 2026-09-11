@@ -36,8 +36,8 @@ The Expo template snapshot ships bundled inside this plugin at `template/`. It i
 
 | Edit | Purpose |
 |---|---|
-| `app.config.js`: `name`, `slug` | Replace `'Power Apps Dev Player'` / `'powerapps-dev-player'` with wizard answers |
-| `package.json`: `name` | Replace `'powerapps-dev-app'` with the app slug |
+| `app.config.js`: `name`, `slug` | Replace `'Power Apps Standalone App'` / `'powerapps-standalone-app'` with wizard answers |
+| `package.json`: `name` | Replace `'powerapps-standalone-app'` with the app slug |
 | Remove an empty placeholder `power.config.json` | Preserve populated environment configuration; `npx power-apps init` creates a missing file |
 | Remove legacy example hooks and query-client files | Preserve every artifact under `src/generated/` |
 | `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` | Use host light/dark defaults until generated brand themes are explicitly wired |
@@ -73,6 +73,9 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
+13. **Metro lifecycle is project-local** — template `metro.config.js` delegates to `createPowerAppsMetroConfig`, whose host implementation writes sanitized `.powernative/metro-logs/` output during normal `npm run dev`; `/debug-app` locates and tails those files directly, with its cursor, health, and audit state under `.powernative/debug-app/`. Do not restore required `BashOutput`/terminal-ID behavior or host-specific project state directories. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never diagnose a log unless the logged PID/port still look live.
+14. **First-party native package defects are reported, not patched in customer projects** — a `node_modules/@microsoft/power-apps-native-*` frame alone is not proof of package ownership; first rule out invalid app usage against the package's public contract. Once a defect is confirmed inside one of these packages, do not edit `node_modules/`, generate `patch-package` or postinstall rewrites, vendor or fork the package, replace it with a git/tarball/local dependency, or shadow it through resolver aliases. Capture sanitized reproduction evidence and route to `/report-issue`.
+
 ## Telemetry
 
 Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.
@@ -93,6 +96,7 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)
 - ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), writes that tenant to `auth.config.json`, then lets the user paste an app registration client ID, create one from the Power Apps Wrap page and paste it, or skip auth for later. `/set-app-registration-native` is a manual helper for the same Wrap-page + pasted-client-ID flow.
 - ✅ `/add-native` v0 scope: camera, location, push, biometrics, secure-store (already in template)
+- ✅ Cross-host Metro diagnostics: user-owned `npm run dev`, port-probe liveness and stale-PID protection, sanitized project-local logs, a durable debug cursor, and read-only `status` plus foreground-loop `stop` commands
 - ✅ Template is supplied as a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `npx power-apps init`.
 - ✅ `brand/` directory convention: `/design-system` (Step 6.75) writes `brand/design-system.md` (spec), `brand/tokens.ts` (importable Tamagui tokens), and `brand/design-system.html` (visual gallery). Screen-builders MUST read `brand/design-system.md` if present; `## Negatives` = HARD RULES. `/create-mobile-app` Step 9b imports `brand/tokens.ts` via `skills/design-system/references/tamagui-integration.md`. Projects without `brand/` fall back to `## Design Direction` only — no breakage.
 - ✅ Offline profile creation is **author-only in v0.1** — `/setup-offline-profile` and `/enable-tables-offline` POST `mobileofflineprofile` / `mobileofflineprofileitem` / `mobileofflineprofileitemassociation` to Dataverse and write `offline-profile.json` to the project, but do NOT scaffold offline runtime code (SQLite store, sync engine, write queue) into the generated app. Runtime support is gated on upstream `@microsoft/power-apps-native-host` confirmation.
