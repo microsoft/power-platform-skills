@@ -1,0 +1,3 @@
+# This generated runtime has a recorded byte-level SHA-256 digest, so Git must
+# not rewrite its line endings on Windows checkouts.
+plugins/mcp-apps/assets/self-contained/mcp-app-runtime.min.js -text
