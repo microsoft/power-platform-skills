@@ -5,7 +5,54 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.7.0
+## [Unreleased] — 2.7.1
+
+Three defects an author hits before reaching an environment, and a session-start warning.
+
+### Added
+
+- **`scripts/lint-app-spec.js` — lint and validate a spec without touching an environment** ([#560]).
+  `validateAppSpec` (the gate `--apply` enforces) and `lintAppSpec` (the authoring guardrails) were
+  library exports with no entry point, so a headless author or a CI job had to reach in with
+  `node -e`. The CLI runs migrate → validate → lint, tags each finding `schema:` or `lint:`, and
+  exits non-zero on errors. `--profile` defaults to `plan` (pages may still be intents), so gate a
+  final, deployable spec with `--profile deploy`. `--strict` also fails on warnings; `--json`
+  emits the report.
+
+### Fixed
+
+- **A spec that declares `schemaVersion` per page but not at the top level no longer breaks every
+  page reference** ([#545]). Migration mints a stable key per page, and it did so *unconditionally* —
+  overwriting hand-authored keys with a slug of the page name. The references hold keys, not names,
+  so nothing rewrote them and validation reported one "not a known page key" / "unknown page" error
+  per page, none of which named the cause. Authored keys now survive migration; a key is minted only
+  for a page that has none, and every authored key is reserved first so a minted one cannot steal it.
+- **A `//` or `/* */` comment inside a JSX opening tag no longer makes a valid page look truncated**
+  ([#542]). `jsxTag` mode had no comment handling, so an apostrophe in the comment prose was read as
+  an attribute-value quote — and that scanner does not stop at a newline, because a JSX attribute
+  value legitimately may span lines. It ran to end of file, blanking the real `export default` and
+  miscounting every bracket after it, so `promote-intent-pages` rejected a complete page as
+  truncated. Promotion is transactional, so one such page blocked the whole batch. Block comments
+  had the same defect, which the report did not cover.
+- **`eq-businessid` / `ne-businessid` are accepted in a view filter** ([#546]). Both are value-less
+  FetchXML operators — the business-unit equivalents of `eq-userid` / `ne-userid` — and the lint
+  demanded a value they must not carry. The operator list is now the documented value-less set,
+  which also adds `eq-userlanguage`, the user-hierarchy operators, and the relative fiscal-period
+  ones.
+- **No more `hooks.json: unknown key "_comment" ignored` at every session start** ([#555], [#558],
+  affects `model-apps` and `mobile-apps`). The hooks manifest is validated against a closed schema,
+  so the documentation key it carried was reported as a misconfiguration on every launch. The prose
+  moved to `hooks/README.md`, and a repo-wide CI check now fails any manifest with an unrecognised
+  top-level key — the symptom is otherwise invisible to both tests and review.
+
+[#542]: https://github.com/microsoft/power-platform-skills/issues/542
+[#545]: https://github.com/microsoft/power-platform-skills/issues/545
+[#546]: https://github.com/microsoft/power-platform-skills/issues/546
+[#555]: https://github.com/microsoft/power-platform-skills/issues/555
+[#558]: https://github.com/microsoft/power-platform-skills/issues/558
+[#560]: https://github.com/microsoft/power-platform-skills/issues/560
+
+## [2.7.0]
 
 Multi-language Dataverse labels, granting access on roles this spec does not own, and the
 app-builder defects found while rebuilding a real app into a second environment.

@@ -35,6 +35,30 @@ test('malformed top-level collections return lint errors instead of throwing', (
   }
 });
 
+// #546. `eq-businessid` / `ne-businessid` are value-less FetchXML condition operators — the
+// business-unit equivalents of `eq-userid` / `ne-userid` — and are the natural way to express
+// "rows owned by my business unit". They were missing from NO_VALUE_OPS, so the lint demanded a
+// `value` the operator must not carry and rejected a correct spec.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/condition-operator
+test('#546 view filters: value-less operators are accepted without a value', () => {
+  for (const op of ['eq-businessid', 'ne-businessid', 'eq-userid', 'ne-userid', 'null', 'this-week']) {
+    const s = base();
+    s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'owningbusinessunit', op }] }];
+    const r = lintAppSpec(s);
+    assert.strictEqual(r.ok, true, `${op} must not require a value: ${JSON.stringify(r.errors)}`);
+  }
+});
+
+// The complement: an operator that DOES take a value must still be caught when the value is
+// omitted, or widening the set above would have turned the check into a rubber stamp.
+test('#546 view filters: a value-taking operator with no value is still an error', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'new_priority', op: 'eq' }] }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /needs a value/.test(e)), JSON.stringify(r.errors));
+});
+
 test('a view named like the stock default ("Active <Plural>") WARNS about the merge-onto-default collision', () => {
   const s = base();
   s.views = [{ entity: 'new_ticket', name: 'Active Tickets', columns: ['new_name', 'new_priority'], activeOnly: true }];

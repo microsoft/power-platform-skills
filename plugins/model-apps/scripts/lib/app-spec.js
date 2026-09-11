@@ -2777,29 +2777,77 @@ function migrateAppSpec(spec) {
   // defensively — but do NOT rewrite the value, or validateAppSpec would see a repaired spec and
   // report nothing. The shape error stays for the gate to find.
   const arr = (v) => (Array.isArray(v) ? v : []);
-  // Pass 1: mint every key and wrap legacy codeFile→source. nameToKey is fully populated
-  // after this loop so the rewrite pass below needs only a single scan (no forward-ref gaps).
+  // A key the author actually wrote AND that is usable as an identifier. A present-but-malformed
+  // `key` (42, null, "", "   ") is deliberately NOT usable: it is neither reserved nor used to
+  // resolve a reference, but it is still preserved on the page (see pass 1) so validateAppSpec
+  // reports the author's real mistake instead of this pass papering over it.
+  const usableKey = (p) => (typeof p.key === 'string' && p.key.trim() ? p.key : '');
+  const authoredKeys = new Set();
+  // Pass 0: RESERVE every hand-authored key before minting anything.
+  //
+  // A spec can declare `schemaVersion: 2` on each PAGE — with hand-authored stable keys and
+  // key-based `navigatesTo`/appShell refs — while omitting the TOP-LEVEL `schemaVersion`, which is
+  // precisely what routes it here. Minting `slugify(name)` over an authored key silently re-keys
+  // the page, and because the refs hold KEYS (not names) pass 2 never rewrites them, so every
+  // reference dangles and validation reports one "not a known page key" / "unknown page" error per
+  // page — none of them naming the real cause. Reserving first also stops a key minted for an
+  // earlier page from stealing a key that a later page authored. See #545.
   for (const p of arr(out.pages)) {
     if (!p || typeof p !== 'object') continue;
-    let key = slugify(p.name);
-    let n = 1;
-    while (used.has(key)) { n += 1; key = `${slugify(p.name)}-${n}`; }
-    used.add(key);
+    const k = usableKey(p);
+    if (k) { used.add(k); authoredKeys.add(k); }
+  }
+  // Pass 1: mint keys for KEYLESS pages only, and wrap legacy codeFile→source. nameToKey is fully
+  // populated after this loop so the rewrite pass below needs only a single scan (no forward-ref gaps).
+  for (const p of arr(out.pages)) {
+    if (!p || typeof p !== 'object') continue;
+    // An authored key is kept verbatim — including a malformed one. validateAppSpec then reports it
+    // by name ("key 'X' has an invalid key grammar", or "needs a stable key" for a non-string),
+    // which the author can act on; replacing it with a slug here would either resurrect the
+    // dangling-reference failure above or silently repair a typo the author needs to see. A key is
+    // minted ONLY when the page carries no `key` property at all.
+    let key = usableKey(p);
+    if (!key) {
+      const declared = Object.prototype.hasOwnProperty.call(p, 'key') && p.key !== undefined;
+      if (declared) {
+        key = p.key; // present but malformed — hand it to validation unchanged
+      } else {
+        key = slugify(p.name);
+        let n = 1;
+        while (used.has(key)) { n += 1; key = `${slugify(p.name)}-${n}`; }
+        used.add(key);
+      }
+    }
     p.key = key;
-    nameToKey.set(p.name, key);
+    // Only a usable key can stand in for this page in a reference. Registering a malformed one
+    // would rewrite a legacy name-ref to `42` or `""` and bury the real error under a second one.
+    if (typeof key === 'string' && key.trim()) nameToKey.set(p.name, key);
     if (!p.source && typeof p.codeFile === 'string') { p.source = { kind: 'tsx', codeFile: p.codeFile }; delete p.codeFile; }
   }
   // Pass 2: rewrite name-refs to keys exactly once. Because nameToKey is complete, forward refs
   // (a page referencing a later-declared page) resolve correctly without a repeated second pass.
+  //
+  // An exact AUTHORED-key match wins over a name match. Once authored keys survive migration
+  // (pass 0), a reference can legitimately already BE a key — and a spec may contain a page whose
+  // authored key equals a DIFFERENT page's name (key 'orders' on "All Orders", plus a page actually
+  // named "orders"). Rewriting unconditionally would silently retarget that reference to the other
+  // page and still validate, because the substituted value is itself a valid key.
+  //
+  // The test is `authoredKeys`, NOT every final key: a MINTED key is derived from a name, so it can
+  // collide with a different page's name by construction (pages "All Orders" and "all-orders" mint
+  // 'all-orders' and 'all-orders-2'). Treating a minted key as authoritative would leave a legacy
+  // name-ref to the second page pointing at the first. A legacy spec has no authored keys at all,
+  // so it keeps exactly its previous name-first behaviour.
+  const rewrite = (ref) => (authoredKeys.has(ref) ? ref : (nameToKey.has(ref) ? nameToKey.get(ref) : ref));
   for (const p of arr(out.pages)) {
     if (!p || typeof p !== 'object') continue;
-    for (const nav of arr(p.navigatesTo)) { if (nav && nameToKey.has(nav.targetKey)) nav.targetKey = nameToKey.get(nav.targetKey); }
+    for (const nav of arr(p.navigatesTo)) { if (nav && typeof nav.targetKey === 'string') nav.targetKey = rewrite(nav.targetKey); }
   }
   for (const a of arr(out.appShell && out.appShell.areas)) {
     if (!a || typeof a !== 'object') continue;
     for (const g of arr(a.groups)) {
       if (!g || typeof g !== 'object') continue;
-      for (const sa of arr(g.subAreas)) { if (sa && sa.page && nameToKey.has(sa.page)) sa.page = nameToKey.get(sa.page); }
+      for (const sa of arr(g.subAreas)) { if (sa && typeof sa.page === 'string') sa.page = rewrite(sa.page); }
     }
   }
   return out;

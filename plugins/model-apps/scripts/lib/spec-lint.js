@@ -9,9 +9,24 @@ const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolve
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
 // FetchXML operators that take no <value> (so a filter may omit value/values).
-const NO_VALUE_OPS = new Set(['null', 'not-null', 'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams',
+//
+// The list is the documented value-less ConditionOperator set, NOT a curated subset: an operator
+// missing here makes the lint demand a value the operator must not carry and reject a correct spec
+// (#546 — `eq-businessid` / `ne-businessid`, the business-unit equivalents of `eq-userid` /
+// `ne-userid`, which are the natural way to express "rows owned by my business unit"). The reverse
+// error matters too, so do not add a value-TAKING operator here: that would silently stop the lint
+// catching a missing value and push the failure to the platform at build time.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const NO_VALUE_OPS = new Set(['null', 'not-null',
+  // current-user / current-business-unit context
+  'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-businessid', 'ne-businessid', 'eq-userlanguage',
+  // relative date
   'today', 'yesterday', 'tomorrow', 'this-week', 'last-week', 'next-week', 'this-month', 'last-month', 'next-month',
-  'this-year', 'last-year', 'next-year', 'this-fiscal-year', 'last-seven-days', 'next-seven-days']);
+  'this-year', 'last-year', 'next-year', 'last-seven-days', 'next-seven-days',
+  // relative fiscal period
+  'this-fiscal-year', 'last-fiscal-year', 'next-fiscal-year',
+  'this-fiscal-period', 'last-fiscal-period', 'next-fiscal-period']);
 
 function lintAppSpec(spec) {
   const errors = [];
