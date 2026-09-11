@@ -194,7 +194,7 @@ Web builds are supported in Code Apps. They are also supported in Power Pages
 when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
-and `distPath` to `dist-web` in `power.config.json`, then run
+and `buildPath` to `dist-web` in `power.config.json`, then run
 `npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
