@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; frame-src about:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>__HTML_TITLE__ — Style workbench</title>
+  <style nonce="__ATTR_CSP_NONCE__">
+    :root {
+      color-scheme: light;
+      --paper: #f4f3ee;
+      --surface: #fffefa;
+      --ink: #242c29;
+      --muted: #606a64;
+      --line: #dcded5;
+      --accent: #345b50;
+      --accent-soft: #e8efe8;
+      --warm: #f4eddc;
+      --warm-ink: #79541d;
+      --error: #a2332c;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font: 14px/1.5 "Avenir Next", "Trebuchet MS", sans-serif; }
+    button, input, select { font: inherit; }
+    button, select { cursor: pointer; }
+    button { border: 1px solid var(--line); border-radius: 6px; padding: 9px 15px; background: var(--surface); color: var(--ink); font-weight: 600; }
+    button:hover { background: #eeefe8; border-color: #9ca99f; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible {
+      outline: 3px solid #386b91; outline-offset: 3px;
+    }
+    button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+    button.primary:hover { background: #294a40; }
+    button.small { font-size: 12px; padding: 6px 11px; }
+    button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); border-color: #9aac9f; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 9px; font: 38px/1.14 "Palatino Linotype", "Book Antiqua", Georgia, serif; letter-spacing: -.8px; overflow-wrap: anywhere; }
+    h2 { font-size: 17px; }
+    h3 { font-size: 14px; }
+    code, pre, .mono { font-family: "Cascadia Code", Consolas, monospace; }
+    code { font-size: 12px; overflow-wrap: anywhere; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 62px; border-bottom: 1px solid var(--line); padding: 12px 34px; background: var(--surface); }
+    .wordmark { display: flex; align-items: center; gap: 13px; }
+    .mark { width: 28px; height: 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; transform: rotate(-8deg); }
+    .mark span { border: 1px solid var(--accent); border-radius: 2px; }
+    .mark span:first-child { background: var(--accent); }
+    .brand { font-weight: 700; letter-spacing: .02em; }
+    .brand small { margin-left: 12px; padding-left: 13px; border-left: 1px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 400; letter-spacing: .08em; text-transform: uppercase; }
+    .quiet { color: var(--muted); font-size: 12px; }
+    .status-dot::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
+    main { max-width: 1720px; margin: 0 auto; padding: 29px 34px 40px; }
+    .hero { display: flex; justify-content: space-between; align-items: center; gap: 32px; margin-bottom: 24px; }
+    .eyebrow { margin-bottom: 10px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
+    .hero p:last-child { margin: 0; max-width: 690px; color: var(--muted); }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; flex-shrink: 0; }
+    .workbench { display: grid; grid-template-columns: 292px minmax(0, 1fr); align-items: start; gap: 20px; }
+    .panel { border: 1px solid var(--line); background: var(--surface); border-radius: 10px; overflow: hidden; }
+    .rail-head { padding: 20px 20px 17px; border-bottom: 1px solid var(--line); }
+    .rail-head h2 { margin: 0 0 3px; }
+    .rail-head p { margin: 0; }
+    .rail-section { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+    .rail-section:last-child { border-bottom: none; }
+    .field-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    select, input[type="text"] { width: 100%; min-height: 39px; border: 1px solid #cdd3c9; border-radius: 5px; padding: 8px 10px; color: var(--ink); background: #fff; }
+    select { padding-right: 25px; }
+    .badge { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid #d4dfd4; padding: 3px 8px; border-radius: 4px; color: var(--accent); background: var(--accent-soft); font-size: 10px; font-weight: 700; letter-spacing: .035em; }
+    .badge.simulation { border-color: #e4d9c4; background: var(--warm); color: var(--warm-ink); }
+    .badge.neutral { color: var(--muted); background: #eeefe9; border-color: var(--line); }
+    .badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 9px; }
+    #component-hook { display: block; }
+    #style-select-wrap { margin-top: 17px; }
+    .placement { margin: 13px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .placement strong { display: block; margin-top: 9px; color: var(--ink); font-size: 11px; font-weight: 600; }
+    #style-rationale, #studio-action { margin: 10px 0 0; font-size: 12px; }
+    #studio-action { padding: 10px; border-left: 2px solid #a08d60; background: var(--warm); color: #65481c; }
+    .control { margin: 0 0 16px; }
+    .control:last-child { margin-bottom: 0; }
+    .control label { display: block; margin-bottom: 5px; font-size: 12px; font-weight: 600; }
+    .control .control-row { display: flex; align-items: center; gap: 7px; }
+    .control input[type="text"] { font: 12px/1.5 "Cascadia Code", Consolas, monospace; min-width: 0; }
+    .control input[type="color"] { flex: 0 0 37px; width: 37px; height: 36px; padding: 2px; border: 1px solid #cdd3c9; border-radius: 5px; background: #fff; cursor: pointer; }
+    .control small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+    .control [aria-invalid="true"] { border-color: var(--error); background: #fff4f0; }
+    #controls-error { margin: 0 0 14px; font-size: 12px; color: var(--error); }
+    .draft-count { font: 11px/1.4 "Cascadia Code", Consolas, monospace; color: var(--muted); }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding: 14px 17px; border-bottom: 1px solid var(--line); }
+    .toolbar-group { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+    .toolbar-label { margin-right: 5px; color: var(--muted); font-size: 11px; }
+    .toolbar select { width: auto; min-height: 31px; padding: 4px 23px 4px 8px; font-size: 11px; }
+    .preview-intro { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 17px 18px 0; }
+    .preview-intro h2 { margin: 0; font-size: 14px; }
+    .comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; padding: 16px 18px 18px; }
+    .comparison.proposed-only { grid-template-columns: minmax(0, 1fr); }
+    .comparison.proposed-only .before-card { display: none; }
+    .preview-card { min-width: 0; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #eeefe8; }
+    .preview-card.proposed-card { border-color: #a8b9ac; }
+    .preview-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 48px; padding: 11px 13px; background: #f8f8f3; border-bottom: 1px solid var(--line); }
+    .preview-card header h3 { margin: 0; font-size: 12px; }
+    .preview-card header small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; font-weight: 400; }
+    .proposed-card header { background: #edf2eb; }
+    .frame-stage { padding: 12px; overflow: auto; background-image: radial-gradient(#cfd5cb .65px, transparent .65px); background-size: 10px 10px; }
+    .frame-window { position: relative; margin: 0 auto; background: white; box-shadow: 0 2px 6px #243a2710; overflow: hidden; }
+    iframe { display: block; border: 0; background: #fff; transform-origin: top left; }
+    .frame-caption { min-height: 50px; padding: 10px 12px; border-top: 1px solid var(--line); background: #fafaf5; color: var(--muted); font-size: 10px; }
+    .fidelity { margin: 0 18px 18px; padding: 12px 14px; border: 1px solid #e4d9c4; border-radius: 5px; background: #fcf8ed; font-size: 11px; color: #695637; }
+    .fidelity p { margin: 0; }
+    #source-provenance { display: block; margin-top: 6px; font-size: 10px; overflow-wrap: anywhere; }
+    .details-panel { margin-top: 16px; }
+    details { border-top: 1px solid var(--line); }
+    details:first-child { border-top: none; }
+    summary { cursor: pointer; padding: 14px 18px; font-size: 12px; font-weight: 600; }
+    .details-content { padding: 0 18px 17px; }
+    .layer-list { margin: 0; padding: 0 0 0 21px; }
+    .layer-list li { padding: 7px 0 7px 4px; border-top: 1px solid #e8eae2; font-size: 11px; }
+    .layer-list li:first-child { border-top: none; }
+    .layer-list code { display: block; font-size: 11px; }
+    .layer-list small { color: var(--muted); }
+    pre { max-height: 300px; overflow: auto; margin: 11px 0 0; padding: 15px; background: #eff1ea; border-radius: 5px; color: #33483e; font-size: 11px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #warnings { margin: 0; padding-left: 19px; color: var(--muted); font-size: 12px; }
+    #warnings li { margin-bottom: 8px; }
+    .footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 21px; color: var(--muted); font-size: 11px; }
+    #status { min-height: 18px; }
+    .footer p { margin: 0; }
+    .skip-link { position: fixed; top: -70px; left: 15px; z-index: 10; padding: 10px 15px; background: #fff; color: var(--ink); }
+    .skip-link:focus { top: 10px; }
+    [hidden] { display: none !important; }
+    @media (min-width: 1450px) { .workbench { grid-template-columns: 312px minmax(0, 1fr); gap: 24px; } }
+    @media (max-width: 1050px) {
+      .hero { align-items: flex-start; }
+      .actions { max-width: 210px; justify-content: flex-end; }
+      .workbench { grid-template-columns: 250px minmax(0, 1fr); gap: 14px; }
+      .comparison { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 720px) {
+      .topbar { padding: 14px 18px; }
+      .brand small, .topbar > .quiet { display: none; }
+      main { padding: 24px 16px; }
+      .hero { display: block; margin-bottom: 20px; }
+      h1 { font-size: 31px; }
+      .actions { margin-top: 18px; max-width: none; justify-content: flex-start; }
+      .workbench { grid-template-columns: 1fr; }
+      .rail-section { padding: 15px 18px; }
+      .footer { display: block; }
+      .footer p + p { margin-top: 8px; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .workbench { animation: arrive .35s ease-out both; }
+      @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#preview-heading">Skip to comparison</a>
+  <header class="topbar">
+    <div class="wordmark">
+      <div class="mark" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="brand">Style workbench <small>Power Pages · Classic</small></div>
+    </div>
+    <span class="quiet status-dot">Offline · no site connection</span>
+  </header>
+  <main>
+    <section class="hero" aria-labelledby="title">
+      <div>
+        <p class="eyebrow">Local review / Before anything changes</p>
+        <h1 id="title">__HTML_TITLE__</h1>
+        <p>Refine the details. Compare against the original. Export a draft for a new proposal—not an approval or a deployment.</p>
+      </div>
+      <div class="actions">
+        <button id="reset-button" type="button">Reset adjustments</button>
+        <button id="export-button" class="primary" type="button">Export draft JSON ↓</button>
+      </div>
+    </section>
+    <div class="workbench">
+      <aside class="panel" aria-label="Component settings">
+        <div class="rail-head"><h2>Fine-tune</h2><p id="draft-count" class="draft-count">Original proposal · no adjustments</p></div>
+        <section class="rail-section">
+          <label class="field-label" for="component-select">Component</label>
+          <select id="component-select"></select>
+          <div class="badges"><span id="component-kind" class="badge neutral"></span><span id="source-badge" class="badge"></span></div>
+          <code id="component-hook"></code>
+          <div id="style-select-wrap">
+            <label class="field-label" for="style-select">Style group</label>
+            <select id="style-select"></select>
+          </div>
+          <div class="badges"><span id="owner-badge" class="badge"></span><span id="scope-badge" class="badge neutral"></span></div>
+          <code id="style-selector"></code>
+          <p id="placement" class="placement"></p>
+          <p id="style-rationale"></p>
+          <p id="class-edit-summary" class="placement" hidden></p>
+          <p id="studio-action" hidden></p>
+        </section>
+        <section class="rail-section" aria-label="Editable declaration values">
+          <p class="field-label">Declaration values</p>
+          <p id="controls-error" role="alert" hidden></p>
+          <div id="controls"></div>
+        </section>
+        <section class="rail-section"><p class="quiet" style="margin:0">Only the declarations in this request are editable. Placement, ownership, class additions and scope stay fixed.</p></section>
+      </aside>
+      <section aria-labelledby="preview-heading">
+        <div class="panel">
+          <div class="toolbar">
+            <div class="toolbar-group" aria-label="Preview viewport">
+              <span class="toolbar-label">Viewport</span>
+              <button id="desktop-button" class="small" type="button" aria-pressed="true">Desktop</button>
+              <button id="mobile-button" class="small" type="button" aria-pressed="false">Mobile</button>
+              <span id="viewport-label" class="quiet">960 px</span>
+            </div>
+            <div class="toolbar-group">
+              <label for="state-select" class="toolbar-label">Preview state</label>
+              <select id="state-select"><option value="default">Default</option></select>
+              <button id="compare-button" class="small" type="button" aria-pressed="true">Compare</button>
+            </div>
+          </div>
+          <div class="preview-intro"><h2 id="preview-heading" tabindex="-1">Component comparison</h2><span id="bootstrap-badge" class="badge neutral"></span></div>
+          <div id="comparison" class="comparison">
+            <article class="preview-card before-card">
+              <header><h3>Before <small>Unchanged local baseline</small></h3><span class="badge neutral">Original</span></header>
+              <div class="frame-stage"><div class="frame-window"><iframe id="before-frame" title="Before: unchanged local component" sandbox="" referrerpolicy="no-referrer"></iframe></div></div>
+              <div id="before-caption" class="frame-caption"></div>
+            </article>
+            <article class="preview-card proposed-card">
+              <header><h3>Proposed <small>Custom edits + labeled Studio simulation</small></h3><span id="proposal-badge" class="badge">Draft</span></header>
+              <div class="frame-stage"><div class="frame-window"><iframe id="after-frame" title="Proposed: locally simulated component" sandbox="" referrerpolicy="no-referrer"></iframe></div></div>
+              <div id="after-caption" class="frame-caption"></div>
+            </article>
+          </div>
+          <div class="fidelity">
+            <p><strong>Local visual preview, not the Power Pages runtime.</strong> Scripts, Liquid, external resources and submissions never run. Images are placeholders. Forms and lists use synthetic samples. Hover and keyboard focus can be inspected; server behavior, permissions and Studio compatibility cannot.</p>
+            <span id="source-provenance"></span>
+          </div>
+        </div>
+        <div class="panel details-panel">
+          <details>
+            <summary>CSS layer order &amp; exact custom rules</summary>
+            <div class="details-content">
+              <p class="quiet">Original stylesheets stay in their proposed order. Edits replace their managed block in the selected file—not in a new stylesheet appended at the end.</p>
+              <ol id="layer-list" class="layer-list"></ol>
+              <pre id="custom-css" aria-label="Compiled custom CSS"></pre>
+              <div id="studio-css-wrap" hidden><h3 style="margin:16px 0 0">Studio simulation · never applied as local custom CSS</h3><pre id="studio-css"></pre></div>
+            </div>
+          </details>
+          <details>
+            <summary>Evidence &amp; preview limitations</summary>
+            <div class="details-content"><ul id="warnings"></ul></div>
+          </details>
+          <details>
+            <summary>Current draft request · export requires regeneration</summary>
+            <div class="details-content"><p class="quiet">Export contains the request only, including Studio handoff values. Ask the agent to prepare and render a fresh proposal, then explicitly approve that revision.</p><pre id="draft-json"></pre></div>
+          </details>
+        </div>
+      </section>
+    </div>
+    <footer class="footer">
+      <p id="status" role="status" aria-live="polite">Ready. Your site files have not been changed.</p>
+      <p>Base proposal <code id="plan-hash"></code> · draft only</p>
+    </footer>
+  </main>
+  <noscript>This workbench requires its bundled local script. It does not require an internet connection.</noscript>
+  <script nonce="__ATTR_CSP_NONCE__">
+  'use strict';
+  (() => {
+    const plan = __JSON_PLAN__;
+    const samples = __JSON_SAMPLES__;
+    __RAW_STYLE_RUNTIME__
+
+    const clone = (value) => JSON.parse(JSON.stringify(value));
+    const originalRequest = clone(plan.request);
+    let request = clone(originalRequest);
+    let componentId = request.components[0].id;
+    let styleId = request.styles.find((style) => style.componentId === componentId)?.id;
+    let previewState = 'default';
+    let viewport = 960;
+    const invalidControls = new Map();
+    const byId = (id) => document.getElementById(id);
+    const controls = byId('controls');
+    const titleCase = (value) => value.replace(/(^|-)([a-z])/g, (_, gap, char) => `${gap ? ' ' : ''}${char.toUpperCase()}`);
+    const selectedComponent = () => plan.preview.components.find((component) => component.id === componentId);
+    const selectedStyle = () => request.styles.find((style) => style.id === styleId);
+    const option = (value, label) => {
+      const element = document.createElement('option');
+      element.value = value;
+      element.textContent = label;
+      return element;
+    };
+
+    const choices = {
+      'font-family': ['inherit', 'serif', 'sans-serif', 'monospace', 'Georgia, serif'],
+      'font-weight': ['normal', 'bold', '100', '200', '300', '400', '500', '600', '700', '800', '900'],
+      'text-align': ['start', 'end', 'left', 'right', 'center'],
+      'border-style': ['none', 'solid', 'dashed', 'dotted'],
+      'outline-style': ['solid', 'dashed', 'dotted'],
+      'object-fit': ['cover', 'contain'],
+      'box-shadow': ['none', '0 2px 8px #0000001a', '0 8px 24px #00000026', '0 12px 32px #00000033'],
+    };
+    const hints = {
+      color: 'Hex, transparent, currentColor, inherit or var(--token).',
+      'background-color': 'Hex, transparent, currentColor, inherit or var(--token).',
+      'border-color': 'Hex, transparent, currentColor, inherit or var(--token).',
+      'outline-color': 'Hex, transparent, currentColor, inherit or var(--token).',
+      padding: '1–4 nonnegative values, e.g. 16px 24px. Units: px, rem, em, %.',
+      margin: '1–4 nonnegative values, e.g. 0 16px. Units: px, rem, em, %.',
+      'border-radius': '1–4 nonnegative values, e.g. 8px or 0.5rem.',
+      'border-width': '1–4 nonnegative values, e.g. 1px. Units: px, rem, em, %.',
+      width: 'auto, 100%, 0 or a nonnegative px, rem, em, % value.',
+      'max-width': 'none, 100%, 0 or a nonnegative px, rem, em, % value.',
+      'line-height': 'normal or a unitless value from 1 to 3.999.',
+      opacity: 'A number from 0 to 1, with up to three decimal places.',
+    };
+
+    // DOMParser is inert, but resource-bearing HTML can still initiate downloads
+    // in some engines. The parent CSP blocks every non-data resource before parse;
+    // only fresh allowlisted elements enter the opaque, script-disabled frame.
+    // https://developer.mozilla.org/en-US/docs/Web/API/DOMParser/parseFromString
+    const allowedTags = new Set(('div span section article main header footer nav aside p h1 h2 h3 h4 h5 h6 ' +
+      'a button img figure figcaption ul ol li dl dt dd table caption colgroup col thead tbody tfoot tr th td ' +
+      'form fieldset legend label input textarea select option optgroup strong em b i u s small mark blockquote ' +
+      'pre code br hr address time sup sub abbr').split(' '));
+    const discardedTags = new Set(('script style iframe frame frameset object embed applet link meta base head title ' +
+      'template noscript svg math audio video source track canvas').split(' '));
+    const allowedAttributes = new Set(('id class style title role lang dir for scope colspan rowspan span width height ' +
+      'alt disabled readonly required multiple selected checked placeholder maxlength min max step rows cols wrap').split(' '));
+    const imagePlaceholder = 'data:image/svg+xml,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">' +
+      '<rect width="720" height="360" fill="#e8ede6"/><circle cx="535" cy="95" r="37" fill="#c6d2c3"/>' +
+      '<path d="M0 285L180 105L420 360H0Z" fill="#91a994"/><path d="M245 360L470 154L720 360Z" fill="#bdc9b8"/>' +
+      '<path d="M0 328Q195 268 370 322T720 310V360H0Z" fill="#718d7c"/></svg>');
+
+    function stripLiquid(source) {
+      // Both whitespace-trim forms ({%- ... -%}, {{- ... -}}) are included.
+      // Branches remain representative text; this deliberately is not a renderer.
+      return source.replace(/\{%-?\s*comment\b[\s\S]*?\{%-?\s*endcomment\s*-?%\}/gi, '')
+        .replace(/\{%[\s\S]*?%\}/g, '').replace(/\{\{[\s\S]*?\}\}/g, '[Dynamic content]');
+    }
+
+    function sanitizeHtml(source) {
+      const parsed = new DOMParser().parseFromString(stripLiquid(source), 'text/html');
+      const safe = document.implementation.createHTMLDocument('');
+      let remaining = 12000;
+      function attributes(from, to) {
+        for (const attribute of from.attributes) {
+          const name = attribute.name.toLowerCase();
+          if (allowedAttributes.has(name) || /^aria-[a-z-]+$/.test(name) || /^data-[a-z0-9-]+$/.test(name)) {
+            to.setAttribute(name, attribute.value);
+          }
+        }
+        if (from.hasAttribute('tabindex')) to.setAttribute('tabindex', from.getAttribute('tabindex') === '-1' ? '-1' : '0');
+      }
+      function clean(node, depth) {
+        if (--remaining < 0 || depth > 64) return null;
+        if (node.nodeType === Node.TEXT_NODE) return safe.createTextNode(node.textContent);
+        if (node.nodeType !== Node.ELEMENT_NODE) return null;
+        const tag = node.localName.toLowerCase();
+        if (discardedTags.has(tag) || (tag === 'input' && node.getAttribute('type')?.toLowerCase() === 'hidden')) return null;
+        const element = allowedTags.has(tag) ? safe.createElement(tag) : safe.createDocumentFragment();
+        if (element.nodeType === Node.ELEMENT_NODE) {
+          attributes(node, element);
+          if (tag === 'a') element.setAttribute('href', '#');
+          if (tag === 'button') element.setAttribute('type', 'button');
+          if (tag === 'input') {
+            const type = node.getAttribute('type')?.toLowerCase() || 'text';
+            element.setAttribute('type', ['text', 'email', 'number', 'tel', 'checkbox', 'radio', 'button', 'date', 'range'].includes(type) ? type : 'text');
+            if (node.hasAttribute('value')) element.setAttribute('value', node.getAttribute('value'));
+          }
+          if (tag === 'img') {
+            // No project URL, data URI or SVG is trusted. Only this code-owned
+            // illustration is used, preserving the element's layout and alt text.
+            element.setAttribute('src', imagePlaceholder);
+            if (!element.hasAttribute('alt')) element.setAttribute('alt', 'Offline image placeholder');
+          }
+        }
+        for (const child of node.childNodes) {
+          const cleaned = clean(child, depth + 1);
+          if (cleaned) element.appendChild(cleaned);
+        }
+        return element;
+      }
+      attributes(parsed.body, safe.body);
+      for (const child of parsed.body.childNodes) {
+        const cleaned = clean(child, 0);
+        if (cleaned) safe.body.appendChild(cleaned);
+      }
+      return safe.body;
+    }
+
+    function sampleBody(component) {
+      const sample = samples.versions[plan.bootstrap.major][component.kind];
+      const html = sample.states?.[previewState] || sample.html;
+      return sanitizeHtml(html.split('pp-style-preview-component').join(component.className));
+    }
+
+    function elementPath(element, root) {
+      const indices = [];
+      while (element && element !== root) {
+        indices.unshift(Array.prototype.indexOf.call(element.parentElement.children, element));
+        element = element.parentElement;
+      }
+      return indices;
+    }
+
+    function elementAt(root, indices) {
+      return indices.reduce((element, index) => element?.children[index], root);
+    }
+
+    function isolate(element, root, replacement) {
+      let branch = (replacement || element).cloneNode(true);
+      let ancestor = element.parentElement;
+      while (ancestor && ancestor !== root) {
+        const wrapper = ancestor.cloneNode(false);
+        wrapper.appendChild(branch);
+        branch = wrapper;
+        ancestor = ancestor.parentElement;
+      }
+      return {
+        html: branch.outerHTML,
+        bodyAttributes: Array.from(root.attributes)
+          .map((attribute) => `${attribute.name}="${escapeHtmlAttribute(attribute.value)}"`).join(' '),
+      };
+    }
+
+    function componentMarkup(component, proposed) {
+      const afterBody = component.after === null ? null : sanitizeHtml(component.after);
+      const sourceBody = proposed ? afterBody : component.before === null ? null : sanitizeHtml(component.before);
+      const afterTarget = afterBody?.getElementsByClassName(component.className)[0];
+      let target = sourceBody?.getElementsByClassName(component.className)[0];
+      let corresponding = false;
+      if (!target && sourceBody && afterTarget) {
+        // A class addition changes attributes only. Match the same sanitized
+        // structural location for Before, without giving it the new class.
+        target = elementAt(sourceBody, elementPath(afterTarget, afterBody));
+        corresponding = Boolean(target);
+      }
+      const representative = ['form', 'list'].includes(component.kind) || previewState !== 'default' || !target;
+      let result;
+      if (representative) {
+        const body = sampleBody(component);
+        const sample = body.firstElementChild;
+        if (target) {
+          sample.classList.remove(component.className);
+          for (const attribute of target.attributes) {
+            if (attribute.name === 'class') {
+              for (const className of target.classList) sample.classList.add(className);
+            } else if (attribute.name !== 'id' && attribute.name !== 'src') sample.setAttribute(attribute.name, attribute.value);
+          }
+          result = isolate(target, sourceBody, sample);
+        } else result = isolate(sample, body);
+      } else result = isolate(target, sourceBody);
+      result.simulation = representative || component.simulation;
+      result.caption = representative ? 'Simulation · representative markup and synthetic values.' :
+        component.simulation ? 'Simulation · sanitized static extract; Liquid and runtime content omitted.' :
+          'Sanitized source · selected component with its static ancestor context.';
+      if (corresponding) result.caption += ' Before uses the corresponding source element before the class addition.';
+      if (proposed && (request.classEdits || []).some((edit) => edit.className === component.className)) {
+        result.caption += ` Proposed structural change: add .${component.className}; existing markup structure is preserved.`;
+      }
+      const count = sourceBody?.getElementsByClassName(component.className).length || 0;
+      if (count > 1) result.caption += ` First of ${count} matching instances.`;
+      return result;
+    }
+
+    function frameDocument(markup, proposed, preview) {
+      const styles = preview.layers.map((layer) => {
+        const css = proposed ? layer.after : layer.before;
+        // HTML recognizes </style> even in CSS comments/strings. Neutralize the
+        // terminator without reordering or reparsing the rest of the stylesheet.
+        return `<style data-layer="${escapeHtmlAttribute(layer.path)}">${css.replace(/<\/style/gi, '<\\/style')}</style>`;
+      }).join('\n');
+      const studio = proposed && preview.studioCss
+        ? `<style data-studio-simulation="true">${preview.studioCss.replace(/<\/style/gi, '<\\/style')}</style>` : '';
+      const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'none'; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+      // Parent style-src allows inline CSS because srcdoc inherits its policy.
+      // The stricter child policy blocks URLs/imports; sandbox has NO tokens:
+      // no scripts, same-origin, submissions, downloads, popups or navigation.
+      return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+        `<meta http-equiv="Content-Security-Policy" content="${escapeHtmlAttribute(csp)}">` +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<style data-preview-framing="true">body{margin:0;padding:24px}html{color-scheme:light}</style>' +
+        styles + studio + `</head><body ${markup.bodyAttributes}>${markup.html}</body></html>`;
+    }
+
+    function fitFrames() {
+      for (const id of ['before-frame', 'after-frame']) {
+        const frame = byId(id);
+        const stage = frame.closest('.frame-stage');
+        const available = Math.max(1, stage.clientWidth - 24);
+        const scale = Math.min(1, available / viewport);
+        frame.style.width = `${viewport}px`;
+        frame.style.height = '640px';
+        frame.style.transform = `scale(${scale})`;
+        frame.parentElement.style.width = `${viewport * scale}px`;
+        frame.parentElement.style.height = `${640 * scale}px`;
+      }
+    }
+
+    function updateDraftStatus() {
+      let changes = 0;
+      for (const style of request.styles) {
+        const original = originalRequest.styles.find((entry) => entry.id === style.id);
+        changes += Object.keys(style.declarations).filter((key) => style.declarations[key] !== original.declarations[key]).length;
+      }
+      byId('draft-count').textContent = changes ? `Draft · ${changes} adjusted value${changes === 1 ? '' : 's'}` : 'Original proposal · no adjustments';
+      byId('proposal-badge').textContent = changes ? 'Adjusted draft' : 'Draft';
+      byId('draft-json').textContent = JSON.stringify(request, null, 2);
+      byId('export-button').disabled = invalidControls.size > 0;
+      byId('controls-error').hidden = invalidControls.size === 0;
+      byId('controls-error').textContent = invalidControls.size
+        ? 'Correct the highlighted value before exporting. The preview keeps the last valid value.' : '';
+    }
+
+    function renderFrames(includeBefore = true) {
+      const component = selectedComponent();
+      const preview = rebuildPreview(plan, request);
+      const after = componentMarkup(component, true);
+      byId('after-frame').srcdoc = frameDocument(after, true, preview);
+      byId('after-caption').textContent = after.caption + (preview.studioCss ? ' Studio values are preview-only CSS simulations.' : '');
+      if (includeBefore) {
+        const before = componentMarkup(component, false);
+        byId('before-frame').srcdoc = frameDocument(before, false, plan.preview);
+        byId('before-caption').textContent = before.caption;
+      }
+      byId('source-badge').textContent = after.simulation ? 'Simulation' : 'Sanitized source';
+      byId('source-badge').className = after.simulation ? 'badge simulation' : 'badge';
+      byId('source-provenance').textContent = component.sourcePath
+        ? `Source: ${component.sourcePath} · .${component.className}. Siblings and external assets are omitted; ancestor styles and inline declarations are retained where safe.`
+        : `No local source selected. Original Bootstrap ${plan.bootstrap.major} representative sample; native theme effects are approximate.`;
+      byId('custom-css').textContent = compileStyles(request).map((rule) => {
+        const placement = plan.placements.find((entry) => entry.styleId === rule.id);
+        return `/* ${placement.path} · ${placement.scope} */\n${rule.css}`;
+      }).join('\n\n') || 'No local custom CSS. This is a Studio-only proposal.';
+      byId('studio-css').textContent = preview.studioCss;
+      byId('studio-css-wrap').hidden = !preview.studioCss;
+      updateDraftStatus();
+      fitFrames();
+    }
+
+    function applyValue(style, property, input, swatch) {
+      const key = `${style.id}:${property}`;
+      const value = input.value.trim();
+      const valid = Object.hasOwn(VALUES, property) && VALUES[property].test(value);
+      input.setAttribute('aria-invalid', String(!valid));
+      input.setCustomValidity(valid ? '' : 'Use a supported declaration value.');
+      if (!valid) {
+        invalidControls.set(key, value);
+        updateDraftStatus();
+        return;
+      }
+      invalidControls.delete(key);
+      style.declarations[property] = value;
+      if (swatch && /^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(value)) {
+        swatch.value = value.length === 4 ? '#' + value.slice(1).split('').map((char) => char + char).join('') : value;
+      }
+      renderFrames(false);
+      byId('status').textContent = `${titleCase(property)} updated in the draft. Before remains unchanged.`;
+    }
+
+    function renderControls() {
+      controls.replaceChildren();
+      const style = selectedStyle();
+      if (!style) {
+        controls.textContent = 'No style group targets this component.';
+        return;
+      }
+      for (const [property, value] of Object.entries(style.declarations)) {
+        const field = document.createElement('div');
+        field.className = 'control';
+        const label = document.createElement('label');
+        const id = `control-${style.id}-${property}`;
+        label.htmlFor = id;
+        label.textContent = titleCase(property);
+        const row = document.createElement('div');
+        row.className = 'control-row';
+        const permitted = choices[property]?.filter((choice) => VALUES[property].test(choice));
+        const input = document.createElement(permitted ? 'select' : 'input');
+        input.id = id;
+        input.dataset.styleId = style.id;
+        input.dataset.property = property;
+        if (permitted) input.append(...permitted.map((choice) => option(choice, choice)));
+        else { input.type = 'text'; input.spellcheck = false; input.autocomplete = 'off'; input.maxLength = 120; }
+        input.value = invalidControls.get(`${style.id}:${property}`) ?? value;
+        input.setAttribute('aria-invalid', String(invalidControls.has(`${style.id}:${property}`)));
+        input.setAttribute('aria-describedby', `${id}-hint`);
+        row.appendChild(input);
+        let swatch;
+        if (property === 'color' || property.endsWith('-color')) {
+          swatch = document.createElement('input');
+          swatch.type = 'color';
+          swatch.setAttribute('aria-label', `Choose hexadecimal ${titleCase(property).toLowerCase()}`);
+          swatch.value = /^#[0-9a-f]{6}$/i.test(value) ? value :
+            /^#[0-9a-f]{3}$/i.test(value) ? '#' + value.slice(1).split('').map((char) => char + char).join('') : '#000000';
+          swatch.addEventListener('input', () => { input.value = swatch.value; applyValue(style, property, input, swatch); });
+          row.appendChild(swatch);
+        }
+        input.addEventListener('input', () => applyValue(style, property, input, swatch));
+        const hint = document.createElement('small');
+        hint.id = `${id}-hint`;
+        hint.textContent = permitted ? 'Choose one of the permitted request values.' :
+          hints[property] || 'Nonnegative value with px, rem, em or %, or 0. Up to three decimal places.';
+        field.append(label, row, hint);
+        controls.appendChild(field);
+      }
+      updateDraftStatus();
+    }
+
+    function renderPlacement() {
+      const component = selectedComponent();
+      const style = selectedStyle();
+      byId('component-kind').textContent = titleCase(component.kind);
+      byId('component-hook').textContent = `.${component.className}`;
+      byId('style-selector').textContent = style ? `.${component.className}${style.part || ''}` : '';
+      byId('owner-badge').textContent = style?.owner === 'studio' ? 'Studio-managed · Simulation' : style ? 'Custom CSS' : 'No style group';
+      byId('owner-badge').className = style?.owner === 'studio' ? 'badge simulation' : 'badge';
+      byId('scope-badge').textContent = style ? `${titleCase(style.scope)} scope` : 'View only';
+      const placement = plan.placements.find((entry) => entry.styleId === styleId);
+      byId('placement').textContent = placement?.path
+        ? `${placement.path}\n${placement.affectedPageIds?.length || 0} affected page record(s).`
+        : style ? 'Native Studio control. No local stylesheet is written for this group.' : '';
+      byId('style-rationale').textContent = style?.rationale || '';
+      const classEdits = (request.classEdits || []).filter((edit) => edit.className === component.className);
+      byId('class-edit-summary').hidden = classEdits.length === 0;
+      byId('class-edit-summary').textContent = classEdits.map((edit) =>
+        `Proposed structural change: add .${edit.className} in ${edit.path}. Before shows the corresponding source before this addition.`).join(' ');
+      byId('studio-action').hidden = style?.owner !== 'studio';
+      byId('studio-action').textContent = style?.studioAction || '';
+      renderControls();
+    }
+
+    function selectComponent() {
+      const component = selectedComponent();
+      const styles = request.styles.filter((style) => style.componentId === componentId);
+      byId('style-select').replaceChildren(...styles.map((style) => option(style.id, titleCase(style.id))));
+      styleId = styles[0]?.id;
+      byId('style-select-wrap').hidden = styles.length < 2;
+      const states = Object.keys(samples.versions[plan.bootstrap.major][component.kind].states || {});
+      byId('state-select').replaceChildren(option('default', 'Default'), ...states.map((state) => option(state, `${titleCase(state)} · simulation`)));
+      byId('state-select').disabled = states.length === 0;
+      previewState = 'default';
+      renderPlacement();
+      renderFrames();
+    }
+
+    function resetDraft() {
+      request = clone(originalRequest);
+      invalidControls.clear();
+      renderPlacement();
+      renderFrames(false);
+      byId('status').textContent = 'All declaration adjustments reset to the original proposal. No site files changed.';
+    }
+
+    function exportDraft() {
+      if (invalidControls.size) {
+        byId('status').textContent = 'Correct invalid values before exporting.';
+        return;
+      }
+      validateDraftValues(request);
+      const blob = new Blob([JSON.stringify(request, null, 2) + '\n'], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'style-site-draft-request.json';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      byId('status').textContent = 'Draft request exported. Regenerate and review a new proposal before giving approval.';
+    }
+
+    function setViewport(width) {
+      viewport = width;
+      byId('desktop-button').setAttribute('aria-pressed', String(width === 960));
+      byId('mobile-button').setAttribute('aria-pressed', String(width === 390));
+      byId('viewport-label').textContent = `${width} px · fit to panel`;
+      fitFrames();
+    }
+
+    byId('component-select').append(...request.components.map((component) => option(component.id, component.label)));
+    byId('component-select').addEventListener('change', (event) => { componentId = event.target.value; selectComponent(); });
+    byId('style-select').addEventListener('change', (event) => { styleId = event.target.value; renderPlacement(); });
+    byId('state-select').addEventListener('change', (event) => { previewState = event.target.value; renderFrames(); });
+    byId('reset-button').addEventListener('click', resetDraft);
+    byId('export-button').addEventListener('click', exportDraft);
+    byId('desktop-button').addEventListener('click', () => setViewport(960));
+    byId('mobile-button').addEventListener('click', () => setViewport(390));
+    byId('compare-button').addEventListener('click', () => {
+      const single = byId('comparison').classList.toggle('proposed-only');
+      byId('compare-button').setAttribute('aria-pressed', String(!single));
+      byId('compare-button').textContent = single ? 'Show comparison' : 'Compare';
+      fitFrames();
+    });
+    byId('bootstrap-badge').textContent = `Bootstrap ${plan.bootstrap.version || plan.bootstrap.major}`;
+    byId('plan-hash').textContent = plan.planHash.slice(0, 12);
+    for (const layer of plan.preview.layers) {
+      const item = document.createElement('li');
+      const file = document.createElement('code');
+      file.textContent = layer.path;
+      const context = document.createElement('small');
+      context.textContent = layer.pageOnly ? 'Exact page CSS · original position retained' : `Display order ${layer.order ?? 'unknown'} · inherited CSS`;
+      if (layer.before !== layer.after) context.textContent += ' · contains proposed managed block';
+      item.append(file, context);
+      byId('layer-list').appendChild(item);
+    }
+    const evidence = (plan.bootstrap.evidence || []).map((entry) =>
+      `Bootstrap evidence: ${entry.source || 'export metadata'} — ${entry.version || `major ${entry.major}`} (${entry.kind || 'export'}).`);
+    const limitations = [
+      'Stylesheet order is inferred, not runtime-verified. Custom templates, missing ancestors or external assets can change the result.',
+      'Sanitization removes scripts, embeds, comments, Liquid markup and unsafe elements/attributes. Image dimensions are retained, but image content and remote fonts are not.',
+      'The selected component retains its sanitized ancestor chain, not neighboring components. Unsupported or missing DOM uses a labeled version-aware sample.',
+      'Studio values are a separate preview-only approximation. Native inline styles, specificity and importance can still win; the preview never forces overrides.',
+      'Preview states do not change the exported request. Test focus, hover, contrast, responsive layout and real server states again in Studio and the deployed runtime.',
+    ];
+    for (const warning of [...plan.warnings, ...evidence, ...limitations]) {
+      const item = document.createElement('li');
+      item.textContent = warning;
+      byId('warnings').appendChild(item);
+    }
+    selectComponent();
+    new ResizeObserver(fitFrames).observe(byId('comparison'));
+    window.styleSitePreview = Object.freeze({
+      getRequest: () => clone(request),
+      getPreview: () => clone(rebuildPreview(plan, request)),
+      reset: resetDraft,
+      exportDraft,
+    });
+  })();
+  </script>
+</body>
+</html>

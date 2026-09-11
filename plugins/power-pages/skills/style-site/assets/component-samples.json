@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "description": "Original static preview samples. All content is synthetic; no submission, authentication, live records, scripts, or Bootstrap replacement is provided.",
+  "versions": {
+    "3": {
+      "section": {
+        "html": "<section class=\"__COMPONENT_CLASS__ sectionBlockLayout\"><div class=\"container-fluid\"><div class=\"row\"><div class=\"col-sm-8\"><h2>A place to get started</h2><p>Find useful information and take your next step.</p></div><div class=\"col-sm-4\"><button type=\"button\" class=\"btn btn-primary\">Explore services</button></div></div></div></section>"
+      },
+      "text": {
+        "html": "<div class=\"__COMPONENT_CLASS__\"><h2>Good things start with a conversation</h2><p>This is representative text, not content retrieved from your website.</p><p><strong>Clear information.</strong> A comfortable reading rhythm.</p><a href=\"#\">Read the overview</a></div>"
+      },
+      "button": {
+        "html": "<button type=\"button\" class=\"__COMPONENT_CLASS__ btn btn-primary\">Explore services</button>",
+        "states": {
+          "disabled": "<button type=\"button\" class=\"__COMPONENT_CLASS__ btn btn-primary\" disabled>Not available</button>",
+          "loading": "<button type=\"button\" class=\"__COMPONENT_CLASS__ btn btn-primary\" disabled aria-busy=\"true\">Loading\u2026</button>"
+        }
+      },
+      "image": {
+        "html": "<figure class=\"__COMPONENT_CLASS__\"><img class=\"img-responsive\" alt=\"Representative landscape; original images are unavailable offline\" width=\"720\" height=\"360\"><figcaption>Offline image placeholder</figcaption></figure>"
+      },
+      "navigation": {
+        "html": "<nav class=\"__COMPONENT_CLASS__ navbar navbar-default\" aria-label=\"Sample navigation\"><div class=\"container-fluid\"><div class=\"navbar-header\"><a class=\"navbar-brand\" href=\"#\">Your site</a></div><ul class=\"nav navbar-nav\"><li class=\"active\"><a href=\"#\" aria-current=\"page\">Overview</a></li><li><a href=\"#\">Services</a></li><li><a href=\"#\">Contact</a></li></ul></div></nav>"
+      },
+      "form": {
+        "html": "<div class=\"__COMPONENT_CLASS__ entity-form\"><form><h2>Example request</h2><p>Synthetic fields. Nothing is submitted.</p><div class=\"form-group\"><label for=\"sample-name\">Display name</label><input class=\"form-control\" id=\"sample-name\" type=\"text\" value=\"Sample visitor\"></div><div class=\"form-group\"><label for=\"sample-topic\">Topic</label><select class=\"form-control\" id=\"sample-topic\"><option>General question</option><option>Service information</option></select></div><button type=\"button\" class=\"btn btn-primary\">Send request</button></form></div>",
+        "states": {
+          "error": "<div class=\"__COMPONENT_CLASS__ entity-form\"><div class=\"alert alert-danger\" role=\"alert\">Example validation: add a short description.</div><div class=\"form-group has-error\"><label class=\"control-label\" for=\"sample-description\">Description</label><textarea class=\"form-control\" id=\"sample-description\" aria-invalid=\"true\" aria-describedby=\"sample-error\"></textarea><span class=\"help-block\" id=\"sample-error\">A description is required.</span></div><button type=\"button\" class=\"btn btn-primary\">Send request</button></div>",
+          "loading": "<div class=\"__COMPONENT_CLASS__ entity-form\" aria-busy=\"true\"><p>Loading example form\u2026</p><button type=\"button\" class=\"btn btn-default\" disabled>Please wait</button></div>",
+          "disabled": "<div class=\"__COMPONENT_CLASS__ entity-form\"><div class=\"form-group\"><label for=\"sample-unavailable\">Display name</label><input class=\"form-control\" id=\"sample-unavailable\" value=\"Sample visitor\" disabled></div><button type=\"button\" class=\"btn btn-primary\" disabled>Send request</button></div>"
+        }
+      },
+      "list": {
+        "html": "<div class=\"__COMPONENT_CLASS__ entitylist\"><h2>Example requests</h2><p>Two synthetic records. Sorting and paging are not simulated.</p><div class=\"view-grid table-responsive\"><table class=\"table table-striped\"><caption>Sample service requests</caption><thead><tr><th scope=\"col\">Request</th><th scope=\"col\">Status</th><th scope=\"col\">Updated</th></tr></thead><tbody><tr><td>Example A</td><td>Open</td><td>Today</td></tr><tr><td>Example B</td><td>Complete</td><td>Yesterday</td></tr></tbody></table></div></div>",
+        "states": {
+          "empty": "<div class=\"__COMPONENT_CLASS__ entitylist\"><div class=\"alert alert-info\">No example requests to show.</div></div>",
+          "loading": "<div class=\"__COMPONENT_CLASS__ entitylist\" aria-busy=\"true\"><p>Loading example requests\u2026</p></div>",
+          "error": "<div class=\"__COMPONENT_CLASS__ entitylist\"><div class=\"alert alert-danger\" role=\"alert\">Example error: requests are unavailable.</div><button type=\"button\" class=\"btn btn-default\">Try again</button></div>"
+        }
+      },
+      "card": {
+        "html": "<article class=\"__COMPONENT_CLASS__ panel panel-default\"><div class=\"panel-body\"><p>FOR YOUR NEXT STEP</p><h2>Local services</h2><p>Practical information and a little help getting started.</p><button type=\"button\" class=\"btn btn-primary\">Explore services</button></div></article>"
+      }
+    },
+    "5": {
+      "section": {
+        "html": "<section class=\"__COMPONENT_CLASS__ sectionBlockLayout\"><div class=\"container-fluid\"><div class=\"row\"><div class=\"col-md-8\"><h2>A place to get started</h2><p>Find useful information and take your next step.</p></div><div class=\"col-md-4\"><button type=\"button\" class=\"btn btn-primary\">Explore services</button></div></div></div></section>"
+      },
+      "text": {
+        "html": "<div class=\"__COMPONENT_CLASS__\"><h2>Good things start with a conversation</h2><p>This is representative text, not content retrieved from your website.</p><p><strong>Clear information.</strong> A comfortable reading rhythm.</p><a href=\"#\">Read the overview</a></div>"
+      },
+      "button": {
+        "html": "<button type=\"button\" class=\"__COMPONENT_CLASS__ btn btn-primary\">Explore services</button>",
+        "states": {
+          "disabled": "<button type=\"button\" class=\"__COMPONENT_CLASS__ btn btn-primary\" disabled>Not available</button>",
+          "loading": "<button type=\"button\" class=\"__COMPONENT_CLASS__ btn btn-primary\" disabled aria-busy=\"true\">Loading\u2026</button>"
+        }
+      },
+      "image": {
+        "html": "<figure class=\"__COMPONENT_CLASS__\"><img class=\"img-fluid\" alt=\"Representative landscape; original images are unavailable offline\" width=\"720\" height=\"360\"><figcaption>Offline image placeholder</figcaption></figure>"
+      },
+      "navigation": {
+        "html": "<nav class=\"__COMPONENT_CLASS__ navbar navbar-expand navbar-light bg-light\" aria-label=\"Sample navigation\"><div class=\"container-fluid\"><a class=\"navbar-brand\" href=\"#\">Your site</a><ul class=\"navbar-nav\"><li class=\"nav-item\"><a class=\"nav-link active\" href=\"#\" aria-current=\"page\">Overview</a></li><li class=\"nav-item\"><a class=\"nav-link\" href=\"#\">Services</a></li><li class=\"nav-item\"><a class=\"nav-link\" href=\"#\">Contact</a></li></ul></div></nav>"
+      },
+      "form": {
+        "html": "<div class=\"__COMPONENT_CLASS__ entity-form\"><form><h2>Example request</h2><p>Synthetic fields. Nothing is submitted.</p><div class=\"mb-3\"><label class=\"form-label\" for=\"sample-name\">Display name</label><input class=\"form-control\" id=\"sample-name\" type=\"text\" value=\"Sample visitor\"></div><div class=\"mb-3\"><label class=\"form-label\" for=\"sample-topic\">Topic</label><select class=\"form-select\" id=\"sample-topic\"><option>General question</option><option>Service information</option></select></div><button type=\"button\" class=\"btn btn-primary\">Send request</button></form></div>",
+        "states": {
+          "error": "<div class=\"__COMPONENT_CLASS__ entity-form\"><div class=\"alert alert-danger\" role=\"alert\">Example validation: add a short description.</div><div class=\"mb-3\"><label class=\"form-label\" for=\"sample-description\">Description</label><textarea class=\"form-control is-invalid\" id=\"sample-description\" aria-invalid=\"true\" aria-describedby=\"sample-error\"></textarea><div class=\"invalid-feedback\" id=\"sample-error\">A description is required.</div></div><button type=\"button\" class=\"btn btn-primary\">Send request</button></div>",
+          "loading": "<div class=\"__COMPONENT_CLASS__ entity-form\" aria-busy=\"true\"><p>Loading example form\u2026</p><button type=\"button\" class=\"btn btn-secondary\" disabled>Please wait</button></div>",
+          "disabled": "<div class=\"__COMPONENT_CLASS__ entity-form\"><div class=\"mb-3\"><label class=\"form-label\" for=\"sample-unavailable\">Display name</label><input class=\"form-control\" id=\"sample-unavailable\" value=\"Sample visitor\" disabled></div><button type=\"button\" class=\"btn btn-primary\" disabled>Send request</button></div>"
+        }
+      },
+      "list": {
+        "html": "<div class=\"__COMPONENT_CLASS__ entitylist\"><h2>Example requests</h2><p>Two synthetic records. Sorting and paging are not simulated.</p><div class=\"view-grid table-responsive\"><table class=\"table table-striped\"><caption>Sample service requests</caption><thead><tr><th scope=\"col\">Request</th><th scope=\"col\">Status</th><th scope=\"col\">Updated</th></tr></thead><tbody><tr><td>Example A</td><td>Open</td><td>Today</td></tr><tr><td>Example B</td><td>Complete</td><td>Yesterday</td></tr></tbody></table></div></div>",
+        "states": {
+          "empty": "<div class=\"__COMPONENT_CLASS__ entitylist\"><div class=\"alert alert-info\">No example requests to show.</div></div>",
+          "loading": "<div class=\"__COMPONENT_CLASS__ entitylist\" aria-busy=\"true\"><p>Loading example requests\u2026</p></div>",
+          "error": "<div class=\"__COMPONENT_CLASS__ entitylist\"><div class=\"alert alert-danger\" role=\"alert\">Example error: requests are unavailable.</div><button type=\"button\" class=\"btn btn-secondary\">Try again</button></div>"
+        }
+      },
+      "card": {
+        "html": "<article class=\"__COMPONENT_CLASS__ card\"><div class=\"card-body\"><p>FOR YOUR NEXT STEP</p><h2 class=\"card-title\">Local services</h2><p class=\"card-text\">Practical information and a little help getting started.</p><button type=\"button\" class=\"btn btn-primary\">Explore services</button></div></article>"
+      }
+    }
+  }
+}

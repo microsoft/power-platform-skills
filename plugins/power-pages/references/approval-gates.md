@@ -185,6 +185,7 @@ Required, normalized vocabulary:
 | `cross-host-stamp-moved` | Pattern 15 force-link partially completed. |
 | `external-state-pending` | Skill cancelled while external system (PP Pipelines) was in `PendingApproval` — the run remains on the host in that state. |
 | `invalid-secret-in-file` | `deployment-settings.json` carries Secret values in invalid formats (e.g. `@KeyVault(...)` short-form). Cancel leaves the file as-is so the user can hand-fix with canonical Key Vault URIs. |
+| `local-style-state` | `style-site` retains local review artifacts and any earlier approved or partial local edits/receipt. Before first application only review artifacts exist; cancellation never causes new site edits, rollback, remote writes, or deployment. |
 
 Custom values are allowed when none of the above fits — lint accepts any kebab-case slug but flags duplicate slugs across the catalog for de-duplication.
 
@@ -711,6 +712,23 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 | `migrate-webapi-selectall:4.apply-plan` | gate | consent | 4 | Approves every wildcard replacement, required source projection, selected explicit hardening, and local edits. No partial wildcard option is offered. | reviewed migration report |
 | `migrate-webapi-selectall:7.deploy` | gate | final | 7 | Approves one independently verified deployment after re-confirming environment, website, site type, data model, and profile. Repeat for another target. | local migration |
 | `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
+
+---
+
+### 6.33 `style-site` (4 gate IDs + 2 data-gathering prompts)
+
+Classic-site styling in a local VS Code Desktop workspace. The workflow ends locally, not with a deployment question. Browser controls/exports express draft intent, never approval; only the host question tool can approve the exact proposal hash. Repeated revisions do not inherit earlier approval.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| Phase 1 local site/work directory | sub-prompt | — | 1 | Resolves a missing path, multiple classic-site candidates, or an artifact directory outside the uploadable tree. Data-gathering only; grants no write authority. | Existing local files unchanged |
+| Phase 3 appearance/components/locales | sub-prompt | — | 3 | Collects missing appearance, component, language, and reuse requirements for the placement table. | Existing local files unchanged |
+| `style-site:3.scope` | gate | plan | 3 | **Confirm scope and preview / Revise scope / Cancel** — approves ownership, placement, locale, and affected pages/descendants. Fires initially and whenever those scopes change; not apply consent. | local-style-state |
+| `style-site:5.approve` | gate | plan | 5 | **Approve this revision locally / Revise preview / Cancel** — approves final interactive preview, complete local diff, warnings, and proposal hash **per revision**. Studio-only variant: **Approve Studio handoff only**; no local styling application. | local-style-state |
+| `style-site:6.reapprove` | gate | progress | 6 | **Regenerate and review / Keep current local state and stop** — fires **per occurrence** of input/selection/target drift or partial-write failure. Return through preview and Phase 5 approval of the new hash; this answer does not authorize a changed patch. | local-style-state |
+| `style-site:7.review` | gate | progress | 7 | **Finish locally / Request another revision / Stop and keep local state** — post-verification review per completed revision. A revision must regenerate/reapprove; never dispatches deployment. | local-style-state |
+
+On the first pass, cancellation before application leaves at most inspection/proposal/preview artifacts outside the site tree. After an application or partial failure, preserve and report exact current local state plus receipt/recovery evidence; never reset or silently roll back concurrent edits. Canceled drafts do not add tracking files. All branches leave remote state untouched. If the host cannot obtain explicit approval, keep a draft and stop.
 
 ---
 ### Cross-plugin shared skills — out of catalog scope

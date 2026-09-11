@@ -4,6 +4,8 @@ Create and deploy Power Pages code sites using modern frontend frameworks. This 
 
 **Supported frameworks**: React, Angular, Vue, Astro (static SPAs)
 
+For an existing **classic, server-rendered Power Pages site**, `/style-site` provides a separate local Desktop styling workflow; it does not create a SPA or deploy changes.
+
 ## Installation
 
 ### From the marketplace
@@ -38,7 +40,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 35 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, classic-site styling, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -377,6 +379,20 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 - Offers auto-fixes with explicit per-fix user confirmation
 
 ### Polish
+
+#### `/style-site`
+
+> "Style the new contact section and existing list on my classic Power Pages site; show me before and after first"
+
+Styles **classic, server-rendered sites only**, from a local download in **VS Code Desktop**. Shows the requested components in an interactive before/after preview with design controls and desktop/mobile widths, then applies only an explicitly approved local change set.
+
+- Supports new/existing native sections, text, buttons, images, navigation, forms/lists, and Liquid/web-template components; labels Liquid and Dataverse simulations
+- Keeps supported theme/component properties in Design Studio; Studio-only requests produce a preview and guided handoff without competing CSS
+- Distinguishes exact-page, language-specific CSS from a CSS Web File's parent-and-descendant scope
+- Preserves existing Bootstrap assets, default stylesheets, native behavior, and unrelated local edits
+- Uses a bounded safe CSS/part schema with real source/class hooks; component creation and unsupported styling require a separate reviewed authoring task
+- Leaves preview/proposal/recovery artifacts outside the uploadable site tree; **no upload, publishing, activation, remote writes, or cache clearing**
+- Not for SPA/code sites, PCF/third-party internals, Bootstrap migration, or VS Code for the Web remote saves
 
 #### `/add-seo`
 

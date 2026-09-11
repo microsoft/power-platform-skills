@@ -20,8 +20,9 @@ const PLACEHOLDER_RE = /__(?:(HTML|ATTR|JSON|RAW)_)?([A-Z][A-Z0-9_]*)__/g;
  * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
  * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
+ * @param {boolean} [options.copyIcon=true] - Copy the shared icon; disable for self-contained previews.
  */
-function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys }) {
+function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys, copyIcon = true }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
@@ -85,7 +86,9 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
     process.exit(1);
   }
 
-  fs.writeFileSync(outputPath, result, 'utf8');
+  // The existence check explains the conflict; exclusive creation also covers a
+  // file appearing between that check and this write.
+  fs.writeFileSync(outputPath, result, { encoding: 'utf8', flag: 'wx' });
 
   // Silently copy the shared Power Pages icon next to the rendered HTML so the
   // template's <img src="./power-pages-icon.png"> reference resolves when the
@@ -94,7 +97,7 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
   const iconSrc = path.join(__dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png');
   const iconDest = path.join(outputDir, 'power-pages-icon.png');
   try {
-    if (fs.existsSync(iconSrc)) {
+    if (copyIcon && fs.existsSync(iconSrc)) {
       fs.copyFileSync(iconSrc, iconDest);
     }
   } catch {
