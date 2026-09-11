@@ -182,7 +182,12 @@ Before writing plans:
     A control label and an `OnSelect` formula are not a complete contract. For opposing
     transitions, name the visible pointer-selectable operation control and require the
     submit action to remain disabled while the operation or required amount/value is
-    hidden, clipped, blank, invalid, unset, or unreachable. Never permit an implicit,
+    hidden, clipped, blank, invalid, unset, or unreachable. Require that operation control
+    to be a `Dropdown`, radio group, or visible button-group that commits on click; forbid
+    an autocomplete/searching combobox whose selection does not deterministically and
+    visibly commit. Also require the positive case: the submit action must actually become
+    enabled and clickable once a valid operation and positive amount are set — a gate that
+    can never enable is a defect, not a pass. Never permit an implicit,
     default, or stale mutation direction.
 14. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
@@ -215,11 +220,19 @@ Before writing plans:
     separate scenario using a concrete old value and amount. For arithmetic pairs, require
     `increase = old + amount` and `decrease = old - amount`, and require the receipt to
     show operation, old value, amount, expected new value, and actual persisted new value.
+    When both directions act on the same record type, also require one same-record
+    compound scenario that applies one direction then the opposite on the identical record
+    (e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`) and proves the second operation
+    reads the already-mutated value from the canonical source, not the original.
 18. When Action Contracts contain an opposing directional pair, write the
     `## Directional Mutation Evidence` table from `PlanTemplates.md`. It is a required
     deterministic validation contract: declare the exact selected-record ID expression,
     blank operation binding, invalid-submit gate, both final mutation formulas, canonical
-    observer binding, and all five final receipt bindings. Do not use this table for
+    observer binding, and all five final receipt bindings. When both directions act on the
+    same record type, also fill the `## Compound Sequence Evidence` table from
+    `PlanTemplates.md`: name the same-record ID, the start->op1->mid->op2->end sequence, and
+    the second operation's old-value binding proving it reads the mutated canonical value.
+    Do not use these tables for
     narrative or inferred behavior; every formula must be copied from final YAML.
 19. For every selector or filter, couple the concrete option source, readable option
     formula, pointer-committed selected value, consumer predicate, active-selection

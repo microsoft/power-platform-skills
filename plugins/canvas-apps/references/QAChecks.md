@@ -1335,14 +1335,22 @@ prove that the requested outcome occurred.
     outcomes.
 11. Confirm the operation selector and required amount/value input are visible,
     pointer-selectable, inside parent bounds, and reachable in the scenario's Given state.
-    Confirm submit is disabled when either input is hidden, clipped, blank, invalid, unset,
-    or unreachable.
+    Confirm the operation selector is a Dropdown, radio group, or visible button-group that
+    commits on click — not an autocomplete/searching combobox whose selection does not
+    deterministically and visibly commit. Confirm submit is disabled when either input is
+    hidden, clipped, blank, invalid, unset, or unreachable, and confirm the opposite: that
+    submit positively becomes enabled and clickable once a valid operation and positive
+    amount are set. A gate that can never enable in any state fails this check.
 12. Trace the current selected operation into the mutation formula. Reject a hard-coded
     default direction, a stale variable from an earlier interaction, or a toggle that
     infers the requested direction from prior state.
 13. For arithmetic pairs, substitute the same concrete old value and amount into both
     scenarios. Increase must produce `old + amount`; decrease must produce
-    `old - amount`. Reject a reversed sign even when the formula compiles.
+    `old - amount`. Reject a reversed sign even when the formula compiles. When both
+    directions act on the same record type, also trace a same-record compound sequence
+    (e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`) and confirm the second operation's
+    old value is read from the canonical source the first mutation already updated, not a
+    stale original value.
 14. Confirm the receipt binds the selected operation, old value, amount, expected new
     value, and actual persisted new value, and that the destination observer shows the
     same actual value.

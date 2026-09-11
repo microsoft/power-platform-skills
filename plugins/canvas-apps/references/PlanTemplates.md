@@ -94,6 +94,20 @@ used by both mutations. Receipt bindings must be separated with `<br>` and inclu
 | ---- | -------------------------- | ----------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- |
 | [Receive/Issue] | [e.g. `cmbAdjustItem.Selected.ID`] | [e.g. `drpOperation.Default: =Blank()`] | [e.g. `btnApply.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \|\| Value(txtAmount.Text) <= 0, DisplayMode.Disabled, DisplayMode.Edit)`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [e.g. `operation=lblReceiptOperation.Text: =varLastOperation<br>old=lblReceiptOld.Text: =varOldQuantity<br>amount=lblReceiptAmount.Text: =varAmount<br>expected=lblReceiptExpected.Text: =varExpectedQuantity<br>actual=lblReceiptActual.Text: =varLastMutation.Quantity`] |
 
+## Compound Sequence Evidence
+
+[Include this section when both directions of an opposing pair act on the **same record
+type**. One row per pair. It proves the second operation reads the value the first mutation
+already persisted, not the original — the runtime failure a single-operation scenario cannot
+catch. The `Second-op old-value binding` must copy the exact final-YAML `Control.Property:
+=formula` that sources the old value for the second operation from the canonical source (e.g.
+a `LookUp` over the patched collection), not a stale selection snapshot. The validator does
+not machine-check this table; it is a required reviewer/authoring proof.]
+
+| Pair | Same-record ID expression | Sequence (start -> op1 amount -> mid -> op2 amount -> end) | Second-op old-value binding (reads mutated canonical source) | Result |
+| ---- | ------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------ |
+| [Receive/Issue] | [e.g. `cmbAdjustItem.Selected.ID`] | [e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`] | [exact `Control.Property: =formula` reading canonical source, e.g. `btnIssue.OnSelect: =Set(varOldQuantity, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity); ...`] | PASS |
+
 ## Working Directory
 
 [absolute working directory]

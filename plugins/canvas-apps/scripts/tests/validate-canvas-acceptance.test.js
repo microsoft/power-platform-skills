@@ -22,6 +22,7 @@ const testsDir = __dirname;
 const pluginRoot = path.resolve(testsDir, '..', '..');
 const validator = path.join(pluginRoot, 'scripts', 'validate-canvas-acceptance.cs');
 const fixtureDir = path.join(testsDir, 'fixtures', 'receive-issue');
+const compoundFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-compound');
 const workRoot = path.join(testsDir, '.work');
 
 // The valid issue mutation subtracts the amount from the old value (`old - amount`).
@@ -39,17 +40,17 @@ const REVERSED_ISSUE_ARITHMETIC = 'varAmount - varOldQuantity';
 const CORRECT_ISSUE_PATCH_WRITE = '{Quantity: varOldQuantity - varAmount}';
 const REVERSED_ISSUE_PATCH_WRITE = '{Quantity: varOldQuantity + varAmount}';
 
-function materialize(caseName, { reverseIssue = false, reverseIssuePatchOnly = false } = {}) {
+function materialize(caseName, { reverseIssue = false, reverseIssuePatchOnly = false, sourceDir = fixtureDir } = {}) {
     const workspace = path.join(workRoot, caseName);
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.mkdirSync(workspace, { recursive: true });
 
     // App.pa.yaml and Screen1.pa.yaml are copied verbatim (they contain no placeholders);
     // the two Markdown artifacts are templated with the run-specific absolute paths.
-    let appYaml = fs.readFileSync(path.join(fixtureDir, 'App.pa.yaml'), 'utf8');
-    let screenYaml = fs.readFileSync(path.join(fixtureDir, 'Screen1.pa.yaml'), 'utf8');
-    let plan = fs.readFileSync(path.join(fixtureDir, 'canvas-app-plan.template.md'), 'utf8');
-    let acceptance = fs.readFileSync(path.join(fixtureDir, 'canvas-app-acceptance.template.md'), 'utf8');
+    let appYaml = fs.readFileSync(path.join(sourceDir, 'App.pa.yaml'), 'utf8');
+    let screenYaml = fs.readFileSync(path.join(sourceDir, 'Screen1.pa.yaml'), 'utf8');
+    let plan = fs.readFileSync(path.join(sourceDir, 'canvas-app-plan.template.md'), 'utf8');
+    let acceptance = fs.readFileSync(path.join(sourceDir, 'canvas-app-acceptance.template.md'), 'utf8');
 
     plan = plan.split('{{WORKSPACE}}').join(workspace);
     acceptance = acceptance.split('{{PLUGIN_ROOT}}').join(pluginRoot);
@@ -118,4 +119,21 @@ test('rejects a reversed-sign Issue Patch write even when the expected-value pre
     // The failure must name the Patch write specifically, proving the check binds the operator to
     // the persisted value and not to the still-correct expected-value preview.
     assert.match(stderr, /issue mutation must apply '-'[^\n]*in its Patch write/);
+});
+
+test('accepts a same-record compound-sequence Receive/Issue workspace', () => {
+    // Static scope only: this asserts the compound fixture's final YAML and evidence artifacts
+    // pass the same file-based validator (correct +/- arithmetic, blank-operation gate, stable
+    // selected-record ID, canonical observer, five receipt bindings). The compound fixture reads
+    // each operation's old value from the canonical source
+    // (`LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity`) and documents the
+    // `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11` sequence in a `## Compound Sequence Evidence`
+    // table. The validator does NOT execute the app, so it cannot prove that at runtime the
+    // second operation truly reads the mutated 13 (not a stale 10) or that the submit button
+    // becomes clickable — that stays the live browser evaluation's job. This test only locks in
+    // that the compound fixture and its extra evidence table remain validator-clean.
+    const workspace = materialize('receive-issue-compound-pass', { sourceDir: compoundFixtureDir });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /PASS:/);
 });

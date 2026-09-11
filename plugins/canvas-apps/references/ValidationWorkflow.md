@@ -238,6 +238,14 @@ Source revision: [git revision, package version, or "unavailable"]
 | ---- | -------------------------- | ----------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- | ------ |
 | [Receive/Issue] | [exact selected ID expression] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [five `<br>`-separated bindings: `operation`, `old`, `amount`, `expected`, `actual`] | PASS |
 
+## Compound Sequence Evidence
+
+[Include only when both directions of the pair act on the same record type. One row per pair.]
+
+| Pair | Same-record ID expression | Sequence (start -> op1 amount -> mid -> op2 amount -> end) | Second-op old-value binding (reads mutated canonical source) | Result |
+| ---- | ------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------ |
+| [Receive/Issue] | [exact selected ID expression] | [e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`] | [exact `Control.Property: =formula` sourcing the old value from the canonical collection] | PASS |
+
 ## Screen QA Evidence
 
 | Screen   | Coverage      | Repairs                        | N/A                    |
@@ -276,6 +284,16 @@ initial operation, a gate that disables blank-operation and non-positive amount 
 stable selected-record ID in both mutations, plus/minus arithmetic, one canonical source
 read by the observer, and five receipt bindings including an actual persisted `Patch`
 result.
+
+When both directions of that pair act on the same record type, also include `## Compound
+Sequence Evidence` with one row per same-record pair. It records the same-record ID, the
+`start -> op1 -> mid -> op2 -> end` sequence, and the exact final-YAML binding that sources
+the second operation's old value from the canonical collection (e.g. a `LookUp` over the
+patched source), proving the second operation reads the already-mutated value, not the
+original. Unlike the directional table, the validator does not machine-check this table —
+no static check can prove the running app's submit button becomes clickable or that the
+second read observes the mutated value; that remains the live browser evaluation's job — so
+copy the formulas exactly and treat it as a required authoring/reviewer proof.
 
 Do not replace `NOT RUN` with another value unless a runtime evaluator actually executed
 against this app and the artifact records its run ID or result URL and score.

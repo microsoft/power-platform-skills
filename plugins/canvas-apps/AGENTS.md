@@ -32,8 +32,9 @@ scripts/
   validate-canvas-acceptance.cs ← Blocks completion when final evidence does not cover the plan
   run-tests.js                   ← Regression gate: runs scripts/tests/*.test.js (needs .NET 10 SDK)
   tests/
-    validate-canvas-acceptance.test.js ← Drives the validator against the receive-issue fixture
+    validate-canvas-acceptance.test.js ← Drives the validator against the receive-issue fixtures
     fixtures/receive-issue/      ← Directional-mutation (Receive/Issue) workspace + templates + README
+    fixtures/receive-issue-compound/ ← Same-record compound-sequence (Qty 10→Receive 3→13→Issue 2→11) fixture + README
 references/
   YamlSyntax.md                ← .pa.yaml structure, syntax rules, and parse-error triage
   ControlGuide.md              ← Control selection, property contracts, enums, and versions

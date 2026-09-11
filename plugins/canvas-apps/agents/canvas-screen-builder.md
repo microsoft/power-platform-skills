@@ -139,10 +139,25 @@ Do not fix unrelated pre-existing issues.
   mutation formula on the current explicit selection, and never reuse stale or implicit
   direction state. Disable submission when the operation or required amount/value is
   hidden, clipped, blank, invalid, unset, or unreachable.
+- Give the operation selector an unambiguous, deterministically committing control: a
+  `Dropdown`, radio group, or visible button-group whose selection commits on click. Never
+  an autocomplete/searching combobox whose selection state depends on typed filtering or
+  keyboard-only commitment, because its selection may not visibly latch and the mutation
+  then branches on a blank or stale value.
+- Disabling submission on invalid input is only half the gate. Also confirm the submit
+  control positively **becomes enabled and clickable** the moment a valid operation and a
+  positive amount are set. A gate that can never reach `DisplayMode.Edit` in any state
+  (blocking every real submission) is a defect, not a passing safety check.
 - For arithmetic pairs, capture the old value before mutation and implement the exact
   direction: increase uses `oldValue + amount`; decrease uses `oldValue - amount`. The
   receipt renders operation, old value, amount, expected new value, and actual persisted
   new value, and the destination surface reads that same persisted value.
+- When both directions act on the same record type, also implement a same-record
+  sequence: apply one direction, then the opposite direction on the identical record, and
+  read the old value for the second operation from the canonical source (the value the
+  first mutation already persisted), never a stale selection snapshot. `Qty 10 -> Receive 3
+  -> 13 -> Issue 2 -> 11` must land on 11, proving the second operation reads the mutated
+  13, not the original 10.
 - Implement every row in `Functional Test Scenarios`. Use its Given state to verify
   visibility and enablement, mentally execute the exact When interaction, then trace the
   resulting source values through the named observer and evidence. Implement boundary and
