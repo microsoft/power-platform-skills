@@ -4,6 +4,7 @@ description: >-
   Styles new or existing native components in a CLASSIC, server-rendered Power Pages
   site from a local VS Code Desktop download. Use for classic-site branding, scoped
   CSS, page or section styling, native forms/lists, and Liquid/web-template components.
+  Optionally inspects a user-provided runtime portal URL to discover rendered DOM hooks.
   Shows the requested before/after interactive preview, preserves Design Studio
   ownership, and applies only explicitly approved local changes. Not for SPA/code
   sites, PCF, third-party component internals, Bootstrap migration, or deployment.
@@ -26,7 +27,7 @@ model: opus
 - Studio owns its supported theme and component properties. Preview those as **Studio-managed** handoff items, never competing custom CSS. Entirely Studio-owned requests need no local styling edits.
 - Never replace/deactivate/delete/reorder default CSS files, inject another Bootstrap version, change its runtime flag, or use broad `!important`/specificity escalation to defeat Studio.
 - Exact-page CSS belongs to the correct localized page sidecar. A `.css` Web File affects its **parent and descendants**; approve that scope explicitly.
-- No PAC execution, Dataverse authentication, remote writes, upload, publishing, activation, cache clearing, or automatic deployment. VS Code for the Web saves remotely; it is not this local apply path. The Desktop site's **Preview** action also accesses uploaded content and clears cache: use the generated local HTML instead.
+- No PAC execution, automated authentication, remote authoring/submission actions, upload, publishing, activation, cache clearing, or automatic deployment. An optional, explicitly approved runtime URL may be opened for read-only DOM inspection; normal page scripts and requests still run when it loads. VS Code for the Web saves remotely; it is not this local apply path. The Desktop site's **Preview** action also accesses uploaded content and clears cache: use the generated local HTML instead.
 - Keep every preview, proposal, selection export, and receipt outside the uploadable site tree. Never install dependencies or overwrite generated CSS to make this workflow run.
 
 ## Bundled resources
@@ -37,14 +38,16 @@ Read these from `${PLUGIN_ROOT}/skills/style-site/references/`; an installed plu
 |---|---|
 | [styling-policy.md](references/styling-policy.md) | Always, before choosing ownership, placement, scope, or selectors |
 | [bootstrap-and-studio.md](references/bootstrap-and-studio.md) | During discovery; for versions, localization, native hooks, or authoring-surface limits |
+| [runtime-dom-discovery.md](references/runtime-dom-discovery.md) | When a runtime URL is supplied, to collect DOM evidence and reconcile it with local source |
 | [preview-and-verification.md](references/preview-and-verification.md) | Request schema, allowed CSS/parts, exact CLI commands, preview/import, and verification |
 | [sources.md](references/sources.md) | To refresh official support guidance or check a historical technique's caveats |
 
-Use the bundled scripts at `${PLUGIN_ROOT}/skills/style-site/scripts/` for deterministic operations and the request/CLI contract in the preview reference. Inspect/prepare require **`--siteRoot`**; render can confirm it. Apply/validate use the plan's bound site root and do **not** accept that flag. Do not invent fields/options or rely on ambient site discovery.
+Use the bundled scripts at `${PLUGIN_ROOT}/skills/style-site/scripts/` for deterministic operations and the request/CLI contract in the preview reference. Local `inspect-style-context.js` and preparation require **`--siteRoot`**; render can confirm it. The browser-function generator `inspect-runtime-dom.js` instead requires **`--url`**. Apply/validate use the plan's bound site root and do **not** accept `--siteRoot`. Do not invent fields/options or rely on ambient site discovery.
 
 | Script | Role |
 |---|---|
-| `inspect-style-context.js` | Read-only inspection; JSON output with evidence, scope, warnings, and input hashes |
+| `inspect-style-context.js` | Read-only inspection; optionally reconcile an external runtime snapshot with a selected local page |
+| `inspect-runtime-dom.js` | Generate the bounded, read-only browser function for an explicitly approved runtime URL; no browser launch or network call from Node |
 | `prepare-style-plan.js` | Validate the request and prepare the reviewable proposal without site edits |
 | `render-style-preview.js` | Render the requested interactive before/after preview from that proposal |
 | `apply-style-plan.js` | Dry-run by default; explicitly approved, hash-bound local application and recovery receipt |
@@ -56,8 +59,8 @@ Create all seven phase tasks upfront using `TaskCreate`, with `subject`, `active
 
 Confirm a local Desktop workspace and Node are available. Resolve one classic site without assuming `.powerpages-site` means classic or that data model determines Bootstrap. Reject SPA/code sites; explain the route to the appropriate workflow without creating another site.
 
-<!-- not-a-gate: data-gathering — resolves a missing local site path or multiple classic-site candidates; does not approve writes -->
-Use `AskUserQuestion` only if the site path/identity or local work directory is missing or ambiguous. Echo the selected site and ensure the work directory is outside its uploadable tree. Do not download or overwrite a site to resolve ambiguity.
+<!-- not-a-gate: data-gathering — resolves a missing local site path, requested runtime URL, or multiple classic-site candidates; does not approve writes or navigation -->
+Use `AskUserQuestion` only if the site path/identity, local work directory, or URL for requested runtime discovery is missing or ambiguous. A runtime URL is optional; otherwise retain the offline flow. Echo the selected site and ensure the work directory is outside its uploadable tree. Do not infer a runtime host, download, or overwrite a site to resolve ambiguity.
 
 Read the policy/version references. Refresh relevant Microsoft Learn guidance via search/fetch when available, especially CSS management and Bootstrap support. When unavailable or conflicting, state the limitation and use the source index's caveats; do not invent support. Read `.solution-manifest.json` if present only for the later handoff; no ALM calls or solution changes occur.
 
@@ -68,6 +71,20 @@ Run `inspect-style-context.js` for the resolved site. Review relevant stylesheet
 Report the actual Bootstrap evidence, not a guess based on age or class names. **Unknown/conflicting Bootstrap stops version-dependent output**, including preview samples. Identify missing assets and unsupported/ambiguous metadata before proposing writes. Do not infer a root page from its name or silently select the first locale.
 
 For new native components, inspect their actual locally available markup/metadata; when absent, offer a labeled Studio-only simulation and a separate supported-authoring handoff rather than replacing native controls with sample HTML. The scripts do not create components: custom styling needs a real `sourcePath` and an actual `pp-*` class hook or explicit guarded `classEdits`. Web-template sources must be statically reachable from the selected localized page/template/header/footer relationships; unresolved dynamic includes require relationship resolution, not a bypass. Every web-template preview is a **Simulation**, even for static-looking source.
+
+### Optional runtime DOM discovery
+
+When the user supplies a portal URL, follow [runtime-dom-discovery.md](references/runtime-dom-discovery.md). Confirm which local page/language and deployment it represents; do not assume a URL or runtime DOM ID is a Dataverse page/component ID.
+
+<!-- gate: style-site:2.runtime | category=progress | cancel-leaves=local-style-state -->
+> 🚦 **Gate (progress · style-site:2.runtime):** Open the specified runtime page for read-only DOM inspection.
+> **Trigger:** Before runtime navigation/inspection; repeat for a different URL, redirect, signed-in context, or expanded scope.
+> **Why we ask:** Loading the page runs its normal scripts/requests. The collector reads structural IDs/classes and selected computed styles, not field values, text, credentials or storage.
+> **Cancel leaves:** Existing local files/review artifacts. No inspection is initiated; previously loaded pages may retain their normal browser state.
+
+Use `AskUserQuestion`: **Inspect this runtime page / Continue offline / Cancel**. For an approved inspection, generate the browser function with `inspect-runtime-dom.js --url`, run it using the connected browser's evaluate tool, and save only its result outside the site tree. Reconcile it with `inspect-style-context.js --runtimeSnapshot ... --pageId ...`. Do not click portal controls, submit forms, sign in automatically, crawl other pages, capture data values, or inspect embedded/PCF internals. On a login redirect, stop; the user handles authentication and reconfirms the final page.
+
+Use the inventory to propose component aliases and stable source hooks. Review `candidate-match`, `ambiguous`, and `unresolved` results against their local file/line and source hash. Even a unique candidate is advisory: runtime IDs/positional locators never become automatic apply selectors. Resolve a real local wrapper/class; an unmatched runtime control cannot bypass preparation. Runtime discovery does not insert captured HTML into the offline preview or prove future Studio editability.
 
 ## Phase 3: Confirm intent and placement
 

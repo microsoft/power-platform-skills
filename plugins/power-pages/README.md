@@ -387,6 +387,7 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 Styles **classic, server-rendered sites only**, from a local download in **VS Code Desktop**. Shows the requested components in an interactive before/after preview with design controls and desktop/mobile widths, then applies only an explicitly approved local change set.
 
 - Supports new/existing native sections, text, buttons, images, navigation, forms/lists, and Liquid/web-template components; labels Liquid and Dataverse simulations
+- Optionally inspects a user-provided portal runtime URL, with permission, to discover rendered IDs/classes and compare them with local source; no form actions or automatic sign-in
 - Keeps supported theme/component properties in Design Studio; Studio-only requests produce a preview and guided handoff without competing CSS
 - Distinguishes exact-page, language-specific CSS from a CSS Web File's parent-and-descendant scope
 - Preserves existing Bootstrap assets, default stylesheets, native behavior, and unrelated local edits

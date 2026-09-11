@@ -715,20 +715,21 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 ---
 
-### 6.33 `style-site` (4 gate IDs + 2 data-gathering prompts)
+### 6.33 `style-site` (5 gate IDs + 2 data-gathering prompts)
 
 Classic-site styling in a local VS Code Desktop workspace. The workflow ends locally, not with a deployment question. Browser controls/exports express draft intent, never approval; only the host question tool can approve the exact proposal hash. Repeated revisions do not inherit earlier approval.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| Phase 1 local site/work directory | sub-prompt | — | 1 | Resolves a missing path, multiple classic-site candidates, or an artifact directory outside the uploadable tree. Data-gathering only; grants no write authority. | Existing local files unchanged |
+| Phase 1 local site/work directory/runtime URL | sub-prompt | — | 1 | Resolves a missing path, multiple classic-site candidates, an outside artifact directory, or the URL for requested runtime discovery. Grants no write or navigation authority. | Existing local files unchanged |
 | Phase 3 appearance/components/locales | sub-prompt | — | 3 | Collects missing appearance, component, language, and reuse requirements for the placement table. | Existing local files unchanged |
+| `style-site:2.runtime` | gate | progress | 2 | **Inspect this runtime page / Continue offline / Cancel** — approves opening/scoped structural inspection of the exact URL. Repeat for changed URL, redirects, signed-in context, or scope. Normal page scripts/requests run; no agent-initiated form actions, authentication, crawling or remote authoring. | local-style-state |
 | `style-site:3.scope` | gate | plan | 3 | **Confirm scope and preview / Revise scope / Cancel** — approves ownership, placement, locale, and affected pages/descendants. Fires initially and whenever those scopes change; not apply consent. | local-style-state |
 | `style-site:5.approve` | gate | plan | 5 | **Approve this revision locally / Revise preview / Cancel** — approves final interactive preview, complete local diff, warnings, and proposal hash **per revision**. Studio-only variant: **Approve Studio handoff only**; no local styling application. | local-style-state |
 | `style-site:6.reapprove` | gate | progress | 6 | **Regenerate and review / Keep current local state and stop** — fires **per occurrence** of input/selection/target drift or partial-write failure. Return through preview and Phase 5 approval of the new hash; this answer does not authorize a changed patch. | local-style-state |
 | `style-site:7.review` | gate | progress | 7 | **Finish locally / Request another revision / Stop and keep local state** — post-verification review per completed revision. A revision must regenerate/reapprove; never dispatches deployment. | local-style-state |
 
-On the first pass, cancellation before application leaves at most inspection/proposal/preview artifacts outside the site tree. After an application or partial failure, preserve and report exact current local state plus receipt/recovery evidence; never reset or silently roll back concurrent edits. Canceled drafts do not add tracking files. All branches leave remote state untouched. If the host cannot obtain explicit approval, keep a draft and stop.
+On the first pass, cancellation before application leaves at most inspection/proposal/preview artifacts outside the site tree. After an application or partial failure, preserve and report exact current local state plus receipt/recovery evidence; never reset or silently roll back concurrent edits. Canceled drafts do not add tracking files. No branch initiates remote authoring or submission actions. Optional approved runtime navigation executes the portal's normal scripts/requests and can retain browser/application-defined state; explain that before inspection. If the host cannot obtain explicit approval, keep a draft and stop.
 
 ---
 ### Cross-plugin shared skills — out of catalog scope

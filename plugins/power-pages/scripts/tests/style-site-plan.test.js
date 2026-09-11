@@ -182,6 +182,10 @@ test('class editing respects HTML attribute boundaries, including quoted > chara
     '<div title="<section>"><section class="pp-card">Content</section></div>');
   assert.throws(() => addClass('<!-- <section> -->', { match: '<section>', className: 'pp-card' }), /exactly one/);
   assert.deepEqual(classHooks('<textarea><section class="pp-card"></section></textarea>'), []);
+  assert.deepEqual(classHooks('{% comment %}<section class="pp-card"></section>{% endcomment %}'), []);
+  const liquidComment = '{% comment %}<section>{% endcomment %}\n<section>Visible</section>';
+  assert.equal(addClass(liquidComment, { match: '<section>', className: 'pp-card' }),
+    '{% comment %}<section>{% endcomment %}\n<section class="pp-card">Visible</section>');
 });
 
 test('unused templates fail, while reachable Liquid components are explicitly simulated', (t) => {

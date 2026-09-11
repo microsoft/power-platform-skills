@@ -57,6 +57,7 @@ References: [basic form metadata](https://learn.microsoft.com/power-pages/config
 | Surface | What it establishes | Boundary |
 |---|---|---|
 | VS Code Desktop + downloaded site + Node | Local inspection, proposal generation, separate HTML preview, and approved local edits | Normal styling requires no PAC execution or Dataverse authentication |
+| Explicitly approved portal runtime URL | Rendered DOM IDs/classes and selected computed values for source reconciliation | Read-only observation via the connected browser; no form actions, automatic sign-in or crawling. Normal page scripts/requests run; see [runtime discovery](runtime-dom-discovery.md) |
 | Desktop Power Pages **Preview** action | Uploaded site's runtime, not unsaved/unuploaded local changes | It also clears the site cache; **do not invoke it** for this workflow |
 | VS Code for the Web | Supported online editing of site content | Lacks the local PAC/Node execution path; saving updates remote content, so it is not a local apply alternative |
 | Design Studio | Native property editing and later maker-compatibility checks | Guided handoff only; never perform remote saves or Sync on behalf of this local-only skill |

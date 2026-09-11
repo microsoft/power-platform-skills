@@ -20,6 +20,8 @@ Display prominently: **Local visual preview — not the Power Pages runtime. Liq
 
 The request is the editable input to `prepare-style-plan.js`, not the compiled plan. The authoritative validator and exports (`KINDS`, `PARTS`, `VALUES`) are in `${PLUGIN_ROOT}/scripts/lib/style-site-plan.js`; site relationships and paths come from `inspect-style-context.js`, backed by `${PLUGIN_ROOT}/scripts/lib/classic-site-style-context.js`. Unknown fields and unsupported CSS are rejected.
 
+Optionally use an approved runtime URL to discover IDs/classes and reconcile them with local source as described in [runtime-dom-discovery.md](runtime-dom-discovery.md). Runtime evidence is separate discovery input, not a new request field or permission to use generated DOM IDs. The offline preview still uses local source and labeled samples; it never embeds captured runtime HTML or values.
+
 | Field | Contract |
 |---|---|
 | `title` | Required nonempty text, maximum 240 characters |
@@ -229,9 +231,10 @@ Hooks cannot infer an arbitrary `--out` location or revision filename. `plan-r2.
 |---|---|
 | Local static validation | Paths, metadata, hashes, selectors, scope, and patch consistency were checked |
 | Local visual preview | Sanitized static content and labeled representative states rendered at the checked widths |
+| Optional runtime DOM observation | The approved deployed page exposed the recorded IDs/classes and computed values at capture time; no submission, permission, future local-change or Studio-editability claim |
 | Design Studio round-trip | **Only after separately performed checks:** native properties remain editable, component handles/markers work, and save/reopen preserves custom styling |
 | Deployed runtime | **Only after separately authorized deployment/testing:** real Liquid, permissions, authentication, form submit, list filtering/paging, and dynamic loading work |
 
-Leave Studio/runtime checks explicitly **pending** at this skill's end. Provide exact Studio property/value instructions and a later checklist: compare a refreshed download safely; check component editability and locale; verify native behaviors at mobile/desktop widths; check actual computed-style winners. Do not claim a simulation proved any of these.
+Leave post-change Studio/runtime checks explicitly **pending** at this skill's end. Report any earlier read-only runtime observation separately; it does not verify an unuploaded local patch. Provide exact Studio property/value instructions and a later checklist: compare a refreshed download safely; check component editability and locale; verify native behaviors at mobile/desktop widths; check actual computed-style winners. Do not claim a simulation proved any of these.
 
 Do not invoke deployment, the Desktop site's Preview command, Studio Sync, or cache clearing. Cache differences can explain later discrepancies ([caching context](https://www.engineeredcode.com/blog/power-pages-many-layers-of-caching)), but are not permission to change remote state.

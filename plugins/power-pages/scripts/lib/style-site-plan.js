@@ -157,7 +157,15 @@ function openingTag(text) {
   return null;
 }
 
+function maskLiquidComments(source) {
+  // These regions never become runtime DOM. Keep character offsets/newlines so
+  // guarded edits and source-location reports still address the original text.
+  return source.replace(/\{%-?\s*comment\b[\s\S]*?\{%-?\s*endcomment\s*-?%\}/gi,
+    (comment) => comment.replace(/[^\r\n]/g, ' '));
+}
+
 function sourceTags(source) {
+  source = maskLiquidComments(source);
   const tags = [];
   let index = 0;
   while ((index = source.indexOf('<', index)) !== -1) {
@@ -231,7 +239,7 @@ function reachableTemplates(context, page) {
     visited.add(relative);
     const absolute = safePath(context.siteRoot, relative);
     if (!fs.existsSync(absolute)) continue;
-    const text = readText(absolute);
+    const text = maskLiquidComments(readText(absolute)).replace(/<!--[\s\S]*?-->/g, '');
     for (const match of text.matchAll(/\{%-?\s*(?:include|extends)\s+(['"])(.*?)\1/gi)) {
       const candidates = context.templates.filter((entry) => entry.name === match[2]);
       if (candidates.length > 1) throw new Error(`Ambiguous included web template: ${match[2]}`);
@@ -508,6 +516,7 @@ function saveJson(output, data, siteRoot) {
 }
 
 module.exports = {
-  KINDS, PARTS, VALUES, validateRequest, compileStyles, replaceBlock, addClass, openingTag, classHooks,
+  KINDS, PARTS, VALUES, validateRequest, compileStyles, replaceBlock, addClass, openingTag, sourceTags, classHooks,
+  reachableTemplates, assertKeys,
   ancestry, orderedCss, preparePlan, validatePlan, planHash, saveJson,
 };
