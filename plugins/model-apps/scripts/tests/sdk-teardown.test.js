@@ -228,6 +228,53 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   assert.deepStrictEqual(kinds, ['app', 'genpage', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
 });
 
+// Regression (found by LIVE teardown of a self-referencing hierarchy): a 1:N whose referenced and
+// referencing tables are the SAME table is removed by the table delete. Deleting it on its own first
+// fails — its lookup sits on the same table that hosts the form still referencing it — so teardown
+// printed `✗ relationship … referenced by 2 other components` and exited NON-ZERO on a run that then
+// deleted the table and left the environment completely clean. Self-referencing hierarchies became a
+// mainstream shape once sample data could seed them (#544), so this cry-wolf is now routine.
+test('#544 a SELF-referencing relationship is not planned separately — the table delete removes it', () => {
+  const spec = {
+    solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
+    app: { name: 'Hier App' },
+    entities: [{ schemaName: 'new_org', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_org' }] }] }] },
+  };
+  const steps = planTeardown(spec);
+  assert.deepStrictEqual(steps.filter((s) => s.kind === 'relationship'), [], 'no standalone relationship delete');
+  assert.ok(steps.some((s) => s.kind === 'table' && s.target.logical === 'new_org'), 'the table is still deleted');
+});
+
+// The narrowing that makes the skip safe: an `existing: true` table is NOT deleted, so its
+// self-referencing relationship has nothing to cascade from and must still be removed here.
+test('#544 a self-referencing relationship on an EXISTING (not deleted) table is still planned', () => {
+  const spec = {
+    solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
+    app: { name: 'Hier App' },
+    entities: [{ schemaName: 'new_org', primaryAttribute: { schemaName: 'new_name' }, columns: [], existing: true }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_org' }] }] }] },
+  };
+  assert.strictEqual(planTeardown(spec).filter((s) => s.kind === 'relationship').length, 1);
+});
+
+// And a normal two-table relationship is untouched by the narrowing.
+test('#544 a relationship between two DIFFERENT tables is still planned', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [
+      { schemaName: 'new_parent', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+      { schemaName: 'new_child', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [{ type: 'OneToMany', referenced: 'new_parent', referencing: 'new_child', lookup: { schemaName: 'new_ParentId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_parent' }] }] }] },
+  };
+  assert.strictEqual(planTeardown(spec).filter((s) => s.kind === 'relationship').length, 1);
+});
+
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so
 // it must be planned AFTER the table; and the build's generated default app icon web resource must
 // be cleaned up or it leaks as an orphan the spec never declared.
