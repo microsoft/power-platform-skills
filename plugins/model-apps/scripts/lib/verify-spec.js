@@ -723,11 +723,27 @@ async function verifySpec(spec, read, opts = {}) {
           `could not read the AI model list to prove the requested row summary exists${readError ? `: ${readError}` : ''}`);
         continue;
       }
-      const present = rows.length > 0;
-      add('ai-summary', logical, present, present ? `'${modelName}' exists` :
-        `ai.summaries requests a row summary for '${logical}', but no AI model named '${modelName}' exists in this environment. `
-        + 'The build reports this as a skip when the environment does not license the row-summary (AI Builder) capability — '
-        + 'run against a licensed environment, or set the table to enabled:false so the spec stops requesting it.');
+      const active = rows.filter((r) => Number(r && r.statecode) === 1);
+      const present = active.length > 0;
+      // `statecode` was selected but not USED — existence alone was the test. That is a reachable
+      // false PASS rather than a theoretical one: on an environment that does not license the
+      // row-summary capability the SDK CREATES the `msdyn_aimodel` row and only then fails to
+      // publish it, leaving a committed but unusable row behind (the same orphan the build's own
+      // sweep tries to remove, and deliberately leaves in place when it cannot). Verify then found a
+      // row with the right name and reported PASS for a summary nobody can use.
+      //
+      // The encoding is MEASURED from the environment's own metadata, not assumed:
+      //   EntityDefinitions(LogicalName='msdyn_aimodel')/Attributes(LogicalName='statecode') →
+      //   0 = Inactive (defaultStatus 0), 1 = Active (defaultStatus 1)
+      // See https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities
+      add('ai-summary', logical, present, present ? `'${modelName}' exists and is active` :
+        rows.length
+          ? `ai.summaries requests a row summary for '${logical}', and an AI model named '${modelName}' exists but is INACTIVE `
+            + `(statecode ${rows.map((r) => Number(r && r.statecode)).join(', ')}). The model row is created before it is published, so an `
+            + 'environment that does not license the row-summary (AI Builder) capability leaves exactly this behind — the summary will not run.'
+          : `ai.summaries requests a row summary for '${logical}', but no AI model named '${modelName}' exists in this environment. `
+            + 'The build reports this as a skip when the environment does not license the row-summary (AI Builder) capability — '
+            + 'run against a licensed environment, or set the table to enabled:false so the spec stops requesting it.');
     }
   }
 

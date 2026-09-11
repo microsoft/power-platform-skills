@@ -65,8 +65,13 @@ app-builder defects found while rebuilding a real app into a second environment.
   reconstruct `forms[]`, `views[]`, `charts[]`, `businessRules[]` or `globalChoices[]`, and a spec
   with `"forms": []` was indistinguishable from an app that has none. Runs now name the counts and
   artifacts and return a `notRoundTripped` block. It is a note, not a gate: the loss is real only
-  when rebuilding into a *different* environment. A failed table-label read is reported too, because
-  it silently degrades a multi-language table to one language.
+  when rebuilding into a *different* environment. Every inventory read that **fails** — a failed
+  table-label read, an unreadable business-rule or global-choice list, or a component page that hit
+  its cap — is reported as an UNKNOWN class rather than an empty one, so "we could not look" never
+  reads as "the app has none".
+- **An inactive row-summary model no longer verifies clean.** The AI model row is created before it
+  is published, so an environment that does not license the capability leaves a committed but
+  unusable row behind; matching on the name alone reported PASS for a summary nobody can run.
 - **The Azure CLI identity is checked before any Dataverse read** (AB#6686427). A token from the
   wrong tenant surfaced as an *empty download* — every best-effort read swallowed its 401. A terminal
   401 now names the identity, tenant and environment (AB#6686424); a re-`az login` is the only fix,

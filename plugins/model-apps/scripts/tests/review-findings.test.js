@@ -289,14 +289,96 @@ test('#6a readDescriptionInventory RECORDS a per-class read failure', async () =
     dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
   };
   const inv = await readDescriptionInventory(sdk, APP, null);
-  assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind), ['forms'], JSON.stringify(inv.incomplete));
-  assert.match(inv.incomplete[0].reason, /403/);
+  // `globalChoices` is now reported too: the stub answers that metadata read with a 404, and a
+  // non-2xx is no longer coerced to an empty list. Before, it read as "this environment has no
+  // global choices" — a positive claim made from a failed read.
+  assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['forms', 'globalChoices'], JSON.stringify(inv.incomplete));
+  assert.match(inv.incomplete.find((i) => i.kind === 'forms').reason, /403/);
   // The class that DID read is still present — one failed query must not blank the others.
   assert.deepStrictEqual(inv.views.map((v) => v.name), ['Active Orders']);
   // ...and the summary built from it reports both halves.
   const w = notRoundTrippedWarning(notRoundTrippedSummary(inv));
   assert.match(w, /1 view on 1 table\(s\)/);
   assert.match(w, /forms — HTTP 403/);
+});
+
+test('#6a3 a non-2xx global-choice read is UNKNOWN, not "this environment has none"', async () => {
+  // `sdk.dataverse.get` resolves a non-2xx as a VALUE, so the old `|| []` put the failure beyond the
+  // catch's reach and the class simply vanished from the report. That mattered the moment
+  // `notRoundTrippedSummary` started reporting global choices: a class it omits reads as absent.
+  const { readDescriptionInventory } = require('../download-model-app.js');
+  const base = { queryRecords: async () => [] };
+  for (const [label, get] of [
+    ['non-2xx', async () => ({ status: 403, headers: {}, body: {} })],
+    ['malformed body', async () => ({ status: 200, headers: {}, body: { notValue: 1 } })],
+    ['throws', async () => { throw new Error('socket hang up'); }],
+  ]) {
+    const inv = await readDescriptionInventory({ ...base, dataverse: { get } }, null, null);
+    assert.ok((inv.incomplete || []).some((i) => i.kind === 'globalChoices'),
+      `${label}: expected globalChoices to be recorded as unknown, got ${JSON.stringify(inv.incomplete)}`);
+  }
+  // And a GOOD read records nothing.
+  const ok = await readDescriptionInventory({ ...base, dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [{ Name: 'contoso_status' }] } }) } }, null, null);
+  assert.ok(!(ok.incomplete || []).some((i) => i.kind === 'globalChoices'));
+  assert.deepStrictEqual((ok.globalChoices || []).map((g) => g.name), ['contoso_status']);
+});
+
+test('#6a4 a failed BUSINESS-RULE read is UNKNOWN, not "this app has no business rules"', async () => {
+  // This path needs a solutionUniqueName, which the fixtures above pass as null — so the guard was
+  // shipped untested until a mutation run showed removing it changed nothing. It matters for the
+  // same reason as the others: `notRoundTrippedSummary` reports a class only when it has rows, so a
+  // 403 on the solution/workflow read made the report assert the app HAS no business rules.
+  const { readDescriptionInventory } = require('../download-model-app.js');
+  const noop = { dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [] } }) } };
+
+  const throwing = await readDescriptionInventory({
+    ...noop,
+    queryRecords: async (logical) => { if (logical === 'solution') throw new Error('HTTP 403 on solution'); return []; },
+  }, null, 'contoso_sln');
+  assert.ok((throwing.incomplete || []).some((i) => i.kind === 'businessRules' && /403/.test(i.reason)),
+    `expected businessRules recorded as unknown, got ${JSON.stringify(throwing.incomplete)}`);
+
+  // A SUCCESSFUL read that genuinely finds none records nothing — otherwise the warning would cry
+  // wolf on every app without business rules.
+  const clean = await readDescriptionInventory({
+    ...noop,
+    queryRecords: async (logical) => (logical === 'solution' ? [{ solutionid: 's1' }] : []),
+  }, null, 'contoso_sln');
+  assert.ok(!(clean.incomplete || []).some((i) => i.kind === 'businessRules'), JSON.stringify(clean.incomplete));
+});
+
+test('#6a5 a TRUNCATED component page marks the class incomplete, not undercounted', async () => {
+  // `$top` is a hard cap and Dataverse omits `@odata.nextLink` when it is honoured, so a full page is
+  // indistinguishable from a truncated one and there is no signal to read afterwards. This list feeds
+  // `notRoundTrippedSummary`, which reports a COUNT — so a truncated read there is not merely a
+  // missing artifact, it is a smaller number presented as the whole truth.
+  //
+  // Written after a mutation run showed the guard was shipped untested: disabling it changed no test.
+  const { readDescriptionInventory } = require('../download-model-app.js');
+  const APP = '11111111-1111-1111-1111-111111111111';
+  const CAP = 1000; // COMPONENT_PAGE_CAP — module-private, so pinned here deliberately.
+  const full = Array.from({ length: CAP }, (_, i) => ({ objectid: `v-${i}`, componenttype: 26 }));
+  const sdk = (rows) => ({
+    dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [] } }) },
+    queryRecords: async (logical, opts) => {
+      if (logical === 'appmodule') return [{ appmoduleidunique: APP }];
+      // Only the VIEW class (componenttype 26) is saturated; the others return a short page.
+      if (logical === 'appmodulecomponent') return /componenttype eq 26/.test((opts && opts.filter) || '') ? rows : [];
+      if (logical === 'savedquery') return [];
+      return [];
+    },
+  });
+
+  const truncated = await readDescriptionInventory(sdk(full), APP, null);
+  const v = (truncated.incomplete || []).find((i) => i.kind === 'views');
+  assert.ok(v, `views must be marked incomplete at the cap, got ${JSON.stringify(truncated.incomplete)}`);
+  assert.match(v.reason, /truncated/i, v.reason);
+  // Scoped: the classes that read a SHORT page are not tarred with it.
+  assert.ok(!(truncated.incomplete || []).some((i) => i.kind === 'charts'), JSON.stringify(truncated.incomplete));
+
+  // One row under the cap is a complete read and must stay silent, or the warning cries wolf.
+  const under = await readDescriptionInventory(sdk(full.slice(0, CAP - 1)), APP, null);
+  assert.ok(!(under.incomplete || []).some((i) => i.kind === 'views'), JSON.stringify(under.incomplete));
 });
 
 test('#6a2 an unreadable app-component list marks EVERY class unknown', async () => {
@@ -308,7 +390,7 @@ test('#6a2 an unreadable app-component list marks EVERY class unknown', async ()
     dataverse: { get: async () => ({ status: 500, headers: {}, body: {} }) },
   };
   const inv = await readDescriptionInventory(sdk, '11111111-1111-1111-1111-111111111111', null);
-  assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['charts', 'forms', 'views']);
+  assert.deepStrictEqual((inv.incomplete || []).map((i) => i.kind).sort(), ['charts', 'forms', 'globalChoices', 'views']);
 });
 
 test('#6b a partial failure reports BOTH what was found and what is unknown', () => {

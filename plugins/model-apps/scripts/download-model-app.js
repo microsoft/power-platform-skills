@@ -333,6 +333,18 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
             filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
             top: COMPONENT_PAGE_CAP,
           });
+          // A FULL page is indistinguishable from a truncated one, so treat it as truncated. `$top` is
+          // a HARD cap and Dataverse omits `@odata.nextLink` when it is honoured, so there is no
+          // signal to read afterwards. `appComponentEntities` warns about the same cap on its own
+          // query, but THIS list feeds `notRoundTrippedSummary`, which reports a count — so a
+          // truncated read there is not merely a missing table, it is a smaller number presented as
+          // the whole truth. Marking the class incomplete makes the report say it cannot vouch for
+          // the class instead. A false positive at exactly the cap costs one honest
+          // "could not be inventoried" line; the alternative is a silent undercount.
+          if ((rows || []).length >= COMPONENT_PAGE_CAP) {
+            fail(INVENTORY_KIND_BY_SET[src.set] || src.set,
+              new Error(`more than ${COMPONENT_PAGE_CAP} app components of this type; the list was truncated, so this class is incomplete`));
+          }
           const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
           if (src.set === 'savedquery') {
             inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
@@ -399,7 +411,15 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
         }
       }
     }
-  } catch { /* business-rule descriptions are an inspection aid, not a rebuild prerequisite */ }
+  } catch (err) {
+    // FAIL CLOSED, not silent. This used to swallow the error as "an inspection aid, not a rebuild
+    // prerequisite", which was defensible while nothing consumed the list. It is not any more:
+    // `notRoundTrippedSummary` now reports business rules as a class that does not round-trip, and it
+    // reports a class only when it has rows — so a 403 or 500 here leaves the list empty and the
+    // report silently asserts the app HAS no business rules. "Unknown" and "none" must never look
+    // alike in a report whose entire purpose is naming what was left behind.
+    fail('businessRules', err);
+  }
 
   try {
     // Global option sets are not app components, but their Description is another Dataverse Label. This
@@ -412,11 +432,18 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
     // and the catch below would swallow it — leaving this inventory permanently empty while the
     // download still reported success. Same trap, and same fix, as readEntityWithDescriptions.
     //
-    // `dataverse.get` RESOLVES on a non-2xx instead of throwing, so the status is checked explicitly.
+    // `dataverse.get` RESOLVES on a non-2xx instead of throwing, so an unsuccessful or malformed
+    // response has to be REJECTED explicitly. Coercing it to `[]` (the previous `|| []`) put the
+    // failure beyond the catch's reach, so a metadata 403 was indistinguishable from an environment
+    // with no global choices — and now that the report consumes this list, that reads as a positive
+    // claim rather than an absence of information.
     const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description');
-    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || [];
-    inventory.globalChoices.push(...rows.map((r) => withDescription({ name: r.Name }, r.Description)));
-  } catch { /* optional inventory */ }
+    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+    if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
+    inventory.globalChoices.push(...res.body.value.map((r) => withDescription({ name: r.Name }, r.Description)));
+  } catch (err) {
+    fail('globalChoices', err);
+  }
 
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
 }

@@ -47,13 +47,37 @@ test('AB#6689110: a requested row summary that does not exist FAILS verification
   assert.match(c.detail, /licens/i, 'the message must name the usual cause so the operator can act');
 });
 
-test('AB#6689110: a row summary that DOES exist passes', async () => {
+test('AB#6689110: a row summary that DOES exist AND is active passes', async () => {
   // The counterfactual. Without it the check could pass the test above by failing unconditionally,
   // which would make every licensed environment fail verification instead.
-  const r = await verifySpec(summarySpec(), summaryReader({ rows: [{ msdyn_aimodelid: 'm1', msdyn_name: 'contoso_workitem row summary' }] }));
+  const r = await verifySpec(summarySpec(), summaryReader({ rows: [{ msdyn_aimodelid: 'm1', msdyn_name: 'contoso_workitem row summary', statecode: 1 }] }));
   const c = r.checks.find((x) => x.kind === 'ai-summary');
   assert.strictEqual(c.present, true, JSON.stringify(c));
   assert.strictEqual(r.ok, true, JSON.stringify(r.checks.filter((x) => !x.present)));
+});
+
+test('AB#6689110: an INACTIVE row-summary model FAILS — existence alone is not enough', async () => {
+  // A reachable false PASS, not a theoretical one. On an environment that does not license the
+  // row-summary capability the SDK CREATES the `msdyn_aimodel` row and only then fails to publish
+  // it, leaving a committed but unusable row behind — the same orphan the build's own sweep tries to
+  // remove and deliberately leaves when it cannot. Matching on the name alone reported PASS for a
+  // summary nobody can use.
+  //
+  // `statecode` 0 = Inactive / 1 = Active is MEASURED from the environment's own
+  // `msdyn_aimodel` statecode option set, not assumed.
+  const r = await verifySpec(summarySpec(), summaryReader({ rows: [{ msdyn_aimodelid: 'm1', msdyn_name: 'contoso_workitem row summary', statecode: 0 }] }));
+  const c = r.checks.find((x) => x.kind === 'ai-summary');
+  assert.strictEqual(c.present, false, JSON.stringify(c));
+  assert.match(c.detail, /INACTIVE/, c.detail);
+  assert.match(c.detail, /statecode 0/, 'the observed state must reach the operator');
+  assert.strictEqual(r.ok, false);
+});
+
+test('AB#6689110: a row with NO statecode is not assumed active', async () => {
+  // Fail closed on a reader that did not supply the column, rather than treating an unknown state as
+  // a working summary.
+  const r = await verifySpec(summarySpec(), summaryReader({ rows: [{ msdyn_aimodelid: 'm1', msdyn_name: 'contoso_workitem row summary' }] }));
+  assert.strictEqual(r.checks.find((x) => x.kind === 'ai-summary').present, false);
 });
 
 test('AB#6689110: an unreadable AI model list fails CLOSED, it does not pass', async () => {
