@@ -11,6 +11,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { annotateLivePlan, planFor } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
+const { relationshipSchemaName, manyToManySchemaName } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 // A minimal provision double. `tables` maps logical -> { columns: [], relationships: [] }; `rows`
 // maps an entity set to the rows a query should return. Records every read so the tests can assert
@@ -22,6 +23,13 @@ function reader({ tables = {}, rows = {}, failMetadata = false, failQuery = fals
       get: async (url) => {
         reads.push(url);
         if (failMetadata) throw new Error('metadata service unavailable');
+        // Relationship collections: /EntityDefinitions(LogicalName='x')/OneToManyRelationships?$select=SchemaName
+        const rel = /EntityDefinitions\(LogicalName='([^']+)'\)\/(OneToMany|ManyToMany)Relationships/.exec(url);
+        if (rel) {
+          const t = tables[rel[1]];
+          if (!t) return { status: 404, body: {} };
+          return { status: 200, body: { value: (t.relationships || []).map((s) => ({ SchemaName: s })) } };
+        }
         // /EntityDefinitions(LogicalName='x')?$select=... and .../Attributes?$select=...
         const m = /EntityDefinitions\(LogicalName='([^']+)'\)(\/Attributes)?/.exec(url);
         const logical = m && m[1];
@@ -191,8 +199,85 @@ test('#559 an item with no key is left unprobed rather than guessed', async () =
   assert.deepStrictEqual(reads, [], 'and nothing is read for it');
 });
 
+// Review finding. `findExistingColumns` is written for the APPLY path, where a failed read safely
+// means "assume every column is new" (the create absorbs duplicates). A dry run has nothing to
+// absorb anything, so the same `[]` would print `+ create` for columns that exist.
+test('#559 a failed ATTRIBUTE read is unknown, not "every column is new"', async () => {
+  const plan = [{ phase: 'data-model', label: 'column new_t.new_a', key: { kind: 'column', entity: 'new_t', name: 'new_a' } }];
+  const { provision } = reader({ tables: { new_t: { columns: ['new_a'] } } });
+  const realGet = provision.dataverse.get;
+  provision.dataverse.get = async (url) => (/\/Attributes/.test(url) ? { status: 503, body: {} } : realGet(url));
+  provision.findColumns = undefined;
+  await annotateLivePlan(plan, { spec: {}, provision });
+  assert.strictEqual(plan[0].state, 'unknown');
+  assert.match(plan[0].stateWhy, /attributes could not be read/);
+});
+
+// Review finding. `relationshipExists` returns null when inconclusive. The apply path treats that as
+// absent because its create absorbs the race; a plan must say it does not know.
+test('#559 an inconclusive RELATIONSHIP probe is unknown, not create', async () => {
+  const plan = [{ phase: 'data-model', label: 'relationship 1:N a->b', key: { kind: 'relationship', entity: 'new_p', name: 'new_a_b', relType: 'OneToMany' } }];
+  const { provision } = reader({ tables: { new_p: { columns: [], relationships: [] } } });
+  provision.dataverse.get = async () => ({ status: 503, body: {} });
+  await annotateLivePlan(plan, { spec: {}, provision });
+  assert.strictEqual(plan[0].state, 'unknown');
+});
+
+// Review finding. The BROAD `fetchEntityMetadata` fallback inside relationshipExists writes the
+// fetched metadata into the on-disk workspace, which a read-only dry run must not do — it would
+// change cached state a later apply reads.
+test('#559 the relationship probe never takes the workspace-writing fetchEntityMetadata fallback', async () => {
+  const plan = [{ phase: 'data-model', label: 'relationship 1:N a->b', key: { kind: 'relationship', entity: 'new_p', name: 'new_a_b', relType: 'OneToMany' } }];
+  const { provision, reads } = reader({ tables: { new_p: { columns: [], relationships: ['new_a_b'] } } });
+  provision.dataverse.get = async () => ({ status: 503, body: {} }); // force the inconclusive path
+  await annotateLivePlan(plan, { spec: {}, provision });
+  assert.ok(!reads.some((r) => r.startsWith('fetchEntityMetadata:')), JSON.stringify(reads));
+});
+
+// Review finding. A pinned `formId` that is stale/foreign makes the APPLY halt. Reporting that as a
+// confident create or reuse hides it; `resolveExistingFormId` raises, and the reason is actionable.
+test('#559 a stale pinned formId surfaces as unknown with the resolver\'s own message', async () => {
+  const plan = [{ phase: 'forms', label: 'form for new_t', key: { kind: 'form', entity: 'new_t', name: 'Main', formType: 'Main', formId: '11111111-1111-1111-1111-111111111111' } }];
+  const { provision } = reader({ tables: { new_t: { columns: [] } }, rows: { systemform: [] } });
+  await annotateLivePlan(plan, { spec: {}, provision });
+  assert.strictEqual(plan[0].state, 'unknown');
+  assert.match(plan[0].stateWhy, /does not exist on this environment/);
+});
+
 // planFor must attach the keys the annotator joins on. A key silently dropped from a plan line turns
 // that line permanently unprobed — which looks exactly like the bug #559 fixed.
+// Review finding, HIGH. The probe identity must match the one the APPLY path uses, or an existing
+// relationship is confidently reported as `create`. `provisionDataModel` queries the REFERENCED
+// (parent) entity's OneToManyRelationships — the child's collection does not contain it — and builds
+// the schema name WITH the publisher prefix. Both were wrong here, and both are invisible for a
+// SELF-referencing relationship (referenced === referencing), which is the shape this was first
+// tested on: the live run that "verified" it could not have caught either.
+test('#559 the relationship key matches the identity the apply path probes', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'zzz' },
+    app: { name: 'A' },
+    entities: [
+      { schemaName: 'zzz_parent', displayName: 'P', pluralName: 'Ps', primaryAttribute: { schemaName: 'zzz_name', displayName: 'N' }, columns: [] },
+      { schemaName: 'zzz_child', displayName: 'C', pluralName: 'Cs', primaryAttribute: { schemaName: 'zzz_name', displayName: 'N' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'zzz_parent', referencing: 'zzz_child', lookup: { schemaName: 'zzz_ParentId', displayName: 'P' } },
+      { type: 'ManyToMany', entity1: 'zzz_parent', entity2: 'zzz_child' },
+    ],
+  };
+  const plan = planFor(spec, { sampleData: false, publish: false, phases: undefined });
+  const oneToMany = plan.find((p) => p.label.includes('relationship 1:N')).key;
+  const manyToMany = plan.find((p) => p.label.includes('relationship N:N')).key;
+
+  assert.strictEqual(oneToMany.entity, 'zzz_parent',
+    'the 1:N probe targets the REFERENCED entity — the child holds no OneToManyRelationships entry');
+  assert.strictEqual(manyToMany.entity, 'zzz_parent', 'N:N probes entity1, as the apply path does');
+  // The schema names must be the prefixed ones the apply path builds, or the probe looks for a name
+  // Dataverse never created.
+  assert.strictEqual(oneToMany.name, relationshipSchemaName(spec.relationships[0], 'zzz'));
+  assert.strictEqual(manyToMany.name, manyToManySchemaName(spec.relationships[1], 'zzz'));
+});
+
 test('#559 planFor attaches keys to the probeable artifact classes', () => {
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'new' },

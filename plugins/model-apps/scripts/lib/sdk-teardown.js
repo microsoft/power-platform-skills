@@ -819,28 +819,31 @@ function planTeardown(spec) {
     if (!lookupColumnsFor(spec, logical).length) continue;
     steps.push({ kind: 'resetDefaultViews', phase: 'views', label: `reset default views for ${logical} (drop parent lookups)`, target: { entityLogical: logical, cols: defaultViewColumns(spec, e, { includeLookups: false }) } });
   }
+  const selfRefRelSteps = [];
   for (const r of spec.relationships || []) {
     const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r, spec.solution && spec.solution.publisherPrefix) : relationshipSchemaName(r, spec.solution && spec.solution.publisherPrefix);
-    // A SELF-referencing 1:N (a hierarchy — `referenced === referencing`) is removed BY the table
-    // delete two phases below, and deleting it on its own first fails:
-    //   ✗ relationship lph_org_lph_org — HTTP 400 … The EntityRelationship(…) cannot be deleted
-    //     because it is referenced by 2 other components.
-    // Its lookup lives on the same table that also hosts the form and views referencing it, so
-    // unlike a two-table relationship there is nothing left to unpick it from — Gap 6 above clears
-    // the default view, but the table's own main form still holds the lookup. MEASURED live: the
-    // teardown printed that error and exited NON-ZERO on a run that then deleted the table
-    // successfully and left the environment completely clean. That is a cry-wolf failure on the one
-    // operation whose report has to be trustworthy, and self-referencing hierarchies became a
-    // mainstream shape once sample data could seed them (#544).
+    const step = { kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } };
+    // A SELF-referencing 1:N (a hierarchy — `referenced === referencing`) is deleted AFTER its table
+    // rather than before. Deleting it first fails:
+    //   ✗ relationship lph_org_lph_org — HTTP 400 … cannot be deleted because it is referenced by
+    //     2 other components.
+    // Its lookup lives on the same table that also hosts the form referencing it, so unlike a
+    // two-table relationship there is nothing left to unpick it from (Gap 6 above clears the default
+    // view, but the table's own main form still holds the lookup). MEASURED live: teardown printed
+    // that error and exited NON-ZERO on a run that then deleted the table and left the environment
+    // completely clean — a cry-wolf failure on the one operation whose report must be trustworthy.
+    // Self-referencing hierarchies became a mainstream shape once sample data could seed them (#544).
     //
-    // Narrow on purpose: skipped ONLY when this run also deletes the table (an `existing: true`
-    // table is NOT deleted, so its relationship must still be removed here).
-    const selfReferencing = r.type === 'OneToMany'
-      && String(r.referenced || '').toLowerCase() === String(r.referencing || '').toLowerCase();
-    const ownerIsDeleted = selfReferencing && (spec.entities || []).some(
-      (e) => e && e.existing !== true && String(e.schemaName || '').toLowerCase() === String(r.referenced || '').toLowerCase());
-    if (ownerIsDeleted) continue;
-    steps.push({ kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } });
+    // DEFERRING rather than skipping is what keeps it safe. If the table was deleted, the delete
+    // already cascaded this away and the step resolves to "not found", which this kind already
+    // tolerates (`tolerateNotFound: true`). If the table was RETAINED — `existing: true`, or one
+    // live discovery finds is not custom — the delete still runs, so nothing leaks. The spec alone
+    // cannot tell those two cases apart, which is why this is an ordering change, not a skip.
+    if (r.type === 'OneToMany' && String(r.referenced || '').toLowerCase() === String(r.referencing || '').toLowerCase()) {
+      selfRefRelSteps.push(step);
+      continue;
+    }
+    steps.push(step);
   }
   // AI row-summary records must be removed BEFORE tables: the summary record references the
   // table and would block its delete.
@@ -892,6 +895,10 @@ function planTeardown(spec) {
   for (const e of topoOrderEntities(spec).slice().reverse()) {
     steps.push({ kind: 'table', phase: 'tables', label: `table ${e.schemaName}`, target: { logical: e.schemaName.toLowerCase(), schemaName: e.schemaName, existing: e.existing === true } });
   }
+  // Self-referencing relationships, deferred from the relationships phase above — see the reasoning
+  // there. After the tables: gone with a deleted table (tolerated not-found), still deletable on a
+  // table this run retained.
+  for (const step of selfRefRelSteps) steps.push(step);
   // Web resources AFTER tables (see the order note in the file header): a form's JS is referenced
   // by its form (deleted in the forms phase), but a table's vector/raster ICON web resource is
   // referenced by the TABLE — Dataverse rejects the delete with "referenced by N other components"
