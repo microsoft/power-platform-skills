@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('node:child_process');
 const fs = require('fs');
 const Module = require('module');
 const os = require('os');
@@ -83,9 +84,12 @@ test('preparation is idempotent and preserves generated and existing helper file
   fs.mkdirSync(path.dirname(existingHelperPath), { recursive: true });
   fs.writeFileSync(generatedPath, '// generated-owner sentinel\n');
   fs.writeFileSync(existingHelperPath, '// existing-helper sentinel\n');
+  fs.mkdirSync(path.join(projectRoot, 'src', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'src', 'hooks', 'useContacts.ts'), '// legacy example\n');
   fs.writeFileSync(path.join(projectRoot, 'power.config.json'), '{"environmentId":""}\n');
   fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Approved plan\n');
 
+  const beforeFirstRun = fileSnapshot(projectRoot);
   const first = prepareMobileTemplate({
     workingDir: projectRoot,
     displayName: "R&D $& Inspector's Workspace",
@@ -93,6 +97,18 @@ test('preparation is idempotent and preserves generated and existing helper file
   });
 
   assert.strictEqual(first.removedPowerConfig, true);
+  const changedFiles = [...fileSnapshot(projectRoot)]
+    .filter(([relativePath, content]) => (
+      !beforeFirstRun.has(relativePath) || !content.equals(beforeFirstRun.get(relativePath))
+    ))
+    .map(([relativePath]) => relativePath.split(path.sep).join('/'))
+    .sort();
+  assert.deepStrictEqual(first.writtenFiles, changedFiles);
+  assert.ok(!first.writtenFiles.includes('power.config.json'));
+  assert.ok(!first.writtenFiles.includes('src/hooks/useContacts.ts'));
+  assert.ok(first.removedLegacyFiles.includes('src/hooks/useContacts.ts'));
+  assert.ok(!first.writtenFiles.includes('src/components/index.tsx'));
+  assert.ok(!first.writtenFiles.includes('src/generated/index.ts'));
   assert.deepStrictEqual(fs.readFileSync(generatedPath, 'utf8'), '// generated-owner sentinel\n');
   assert.deepStrictEqual(fs.readFileSync(existingHelperPath, 'utf8'), '// existing-helper sentinel\n');
   assert.deepStrictEqual(
@@ -129,7 +145,56 @@ test('preparation is idempotent and preserves generated and existing helper file
   });
   const afterSecondRun = fileSnapshot(projectRoot);
   assert.ok(second.preservedSharedFiles.length > 0);
+  assert.deepStrictEqual(second.writtenFiles, []);
   assertSnapshotsEqual(beforeSecondRun, afterSecondRun);
+});
+
+test('scaffold validation uses preparation writes, not later generator output', (t) => {
+  const projectRoot = copyTemplate();
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  const configPath = path.join(projectRoot, 'power.config.json');
+  fs.writeFileSync(configPath, '{"environmentId":""}\n');
+  const options = { workingDir: projectRoot, displayName: 'Validation App', slug: 'validation-app' };
+  const prepared = prepareMobileTemplate(options);
+  assert.strictEqual(prepared.removedPowerConfig, true);
+
+  // Simulate init recreating the deleted placeholder and schema generation writing output.
+  const generatedConfig = '{"environmentId":"approved-environment","appDisplayName":"Validation App"}\n';
+  fs.writeFileSync(configPath, generatedConfig);
+  const generatedPath = path.join(projectRoot, 'src', 'generated', 'index.ts');
+  fs.mkdirSync(path.dirname(generatedPath), { recursive: true });
+  fs.writeFileSync(generatedPath, 'export {};\n');
+  const repeated = prepareMobileTemplate(options);
+  assert.strictEqual(repeated.removedPowerConfig, false);
+  assert.deepStrictEqual(repeated.writtenFiles, []);
+  assert.strictEqual(fs.readFileSync(configPath, 'utf8'), generatedConfig);
+  fs.writeFileSync(path.join(projectRoot, 'memory-bank.md'), '# Verified scaffold\n');
+
+  function validate(files) {
+    return spawnSync(process.execPath, [
+      path.join(pluginRoot, 'scripts', 'validate-mobile-files.js'),
+      '--project-root', projectRoot,
+      ...files.flatMap((file) => ['--file', file]),
+    ], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' },
+    });
+  }
+
+  const manualFiles = [...prepared.writtenFiles, 'memory-bank.md'];
+  const valid = validate(manualFiles);
+  assert.strictEqual(valid.status, 0, valid.stderr);
+  for (const file of ['power.config.json', path.relative(projectRoot, generatedPath)]) {
+    const blocked = validate([file]);
+    assert.strictEqual(blocked.status, 2, blocked.stderr);
+    assert.match(blocked.stderr, /BLOCKED: protected path/);
+  }
+
+  fs.writeFileSync(configPath, '{"environmentId":"manual-edit"}\n');
+  const manualEdit = validate(['power.config.json']);
+  assert.strictEqual(manualEdit.status, 2, manualEdit.stderr);
+  assert.match(manualEdit.stderr, /owned by `npx power-apps init`/);
 });
 
 test('preparation round-trips JavaScript line terminators in app display names', () => {
