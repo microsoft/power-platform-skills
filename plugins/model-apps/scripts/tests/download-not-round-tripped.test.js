@@ -188,7 +188,11 @@ const { readEntityWithDescriptions, entityFromMetadata } = require('../download-
 
 const labelSdk = (get) => ({
   fetchEntityMetadata: async (l) => ({ logicalName: l, displayName: 'Ticket', primaryNameAttribute: 'new_name', attributes: [] }),
-  dataverse: { get },
+  // `readEntityWithDescriptions` makes TWO metadata reads — the table labels and the column labels —
+  // and BOTH now record a failure. A stub that answers one response for both made the
+  // success case fail on the Attributes read, so route by URL and keep the column read healthy;
+  // the column read has its own tests below.
+  dataverse: { get: async (url) => (/\/Attributes\?/.test(url) ? { status: 200, headers: {}, body: { value: [] } } : get(url)) },
 });
 
 test('a non-2xx label read is RECORDED, not read as "this table has no other languages"', async () => {
@@ -213,4 +217,40 @@ test('the failure marker never reaches the emitted spec', async () => {
   const meta = await readEntityWithDescriptions(labelSdk(async () => ({ status: 500, body: {} })), 'new_t');
   assert.ok(meta.labelReadFailed, 'precondition: the marker is set');
   assert.ok(!Object.keys(entityFromMetadata(meta, 'new_t')).includes('labelReadFailed'));
+});
+// The COLUMN-label read is a second source of the same loss, and was fixed one commit later than the
+// table one — it is the only source of multi-language labels for every non-primary column and for the
+// primary attribute, and it was still coercing a non-2xx to null and swallowing a throw.
+const twoReadSdk = (tableGet, attrGet) => ({
+  fetchEntityMetadata: async (l) => ({ logicalName: l, displayName: 'Ticket', primaryNameAttribute: 'new_name', attributes: [{ logicalName: 'new_name' }] }),
+  dataverse: { get: async (url) => (/\/Attributes\?/.test(url) ? attrGet(url) : tableGet(url)) },
+});
+const OK_TABLE = async () => ({ status: 200, headers: {}, body: { DisplayName: { LocalizedLabels: [{ Label: 'T', LanguageCode: 1033 }] } } });
+const OK_ATTRS = async () => ({ status: 200, headers: {}, body: { value: [{ LogicalName: 'new_name', DisplayName: { LocalizedLabels: [{ Label: 'N', LanguageCode: 1033 }] } }] } });
+
+test('a non-2xx COLUMN-label read is recorded, not silently coerced to "no columns"', async () => {
+  const meta = await readEntityWithDescriptions(twoReadSdk(OK_TABLE, async () => ({ status: 403, headers: {}, body: {} })), 'new_t');
+  assert.strictEqual(meta.labelReadFailed, 'HTTP 403');
+});
+
+test('a THROWN column-label read is recorded', async () => {
+  const meta = await readEntityWithDescriptions(twoReadSdk(OK_TABLE, async () => { throw new Error('socket hang up'); }), 'new_t');
+  assert.match(meta.labelReadFailed, /socket hang up/);
+});
+
+test('a malformed column-label body is recorded rather than merged as nothing', async () => {
+  const meta = await readEntityWithDescriptions(twoReadSdk(OK_TABLE, async () => ({ status: 200, headers: {}, body: { notValue: 1 } })), 'new_t');
+  assert.match(meta.labelReadFailed, /value\[\] array/);
+});
+
+test('both reads succeeding records no failure, and the column labels are merged', async () => {
+  const meta = await readEntityWithDescriptions(twoReadSdk(OK_TABLE, OK_ATTRS), 'new_t');
+  assert.strictEqual(meta.labelReadFailed, undefined);
+  assert.ok(meta.attributes[0].DisplayName, 'the column label must actually be merged onto the attribute');
+});
+
+test('a TABLE-level failure is not overwritten by a later column failure', async () => {
+  // The first reason is the more useful one to show, and both describe the same outcome.
+  const meta = await readEntityWithDescriptions(twoReadSdk(async () => ({ status: 401, headers: {}, body: {} }), async () => { throw new Error('later'); }), 'new_t');
+  assert.strictEqual(meta.labelReadFailed, 'HTTP 401');
 });

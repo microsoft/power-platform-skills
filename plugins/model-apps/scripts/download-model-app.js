@@ -862,29 +862,36 @@ async function readEntityWithDescriptions(sdk, logical) {
       meta.labelReadFailed = `HTTP ${res && res.status}`;
     }
   } catch (err) {
-    // Best-effort for DESCRIPTIONS — they are cosmetic, and sinking a whole download over one is
-    // wrong. But this same read is the ONLY source of multi-language labels, and failing it silently
-    // degrades to the SDK's flattened single-language `displayName`: the download succeeds, the spec
-    // looks complete, and every other language is gone. That is the exact silent-loss shape
-    // AB#6686428 exists to end, so the failure is RECORDED rather than swallowed and the caller
-    // warns. The download still proceeds — an English-only spec beats no spec.
     meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
   }
   try {
     // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
     // `targets` (lookup target tables) and `attributeType`, which this projection does not, and
     // entityFromMetadata/other callers rely on them.
+    //
+    // This read carries the SAME weight as the table-level one above: it is the only source of
+    // multi-language labels for every non-primary COLUMN and for the primary attribute. Treating it
+    // as "column descriptions are best-effort" was right when descriptions were all it fetched, and
+    // became wrong the moment labels rode along — a 403 here returns a spec whose columns are
+    // single-language, with nothing saying so. Same recording, same reason.
     const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName`);
-    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || null;
-    if (Array.isArray(rows)) {
-      const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r]));
-      meta.attributes = (meta.attributes || []).map((a) => {
-        const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
-        const row = byLogical.get(key);
-        return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName } : a;
-      });
+    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+    if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
+    const rows = res.body.value;
+    const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r]));
+    meta.attributes = (meta.attributes || []).map((a) => {
+      const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
+      const row = byLogical.get(key);
+      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName } : a;
+    });
+  } catch (err) {
+    // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded
+    // above, because the first reason is the more useful one to show and both describe the same
+    // outcome for the operator: this table came back single-language.
+    if (!meta.labelReadFailed) {
+      meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
     }
-  } catch { /* column descriptions are best-effort */ }
+  }
   return meta;
 }
 
@@ -1303,7 +1310,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // English-only spec is still a usable spec, and failing a read-only command over it would be worse.
   if (labelReadFailures.size) {
     const detail = [...labelReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
-    process.stderr.write(`WARNING: the table-label read failed for ${labelReadFailures.size} table(s) (${detail}). Their labels fall back to ONE language, so a table labelled in several languages downloads as single-language and a rebuild would recreate it that way. Re-run the download to recover the other languages before rebuilding into a different environment.\n`);
+    process.stderr.write(`WARNING: a label read failed for ${labelReadFailures.size} table(s) (${detail}). The table AND COLUMN labels for those tables fall back to ONE language, so anything labelled in several languages downloads as single-language and a rebuild would recreate it that way. Re-run the download to recover the other languages before rebuilding into a different environment.\n`);
   }
   // A column whose App Spec type could not be substantiated — a Choice/MultiChoice (whose options
   // this download does not read) or an attribute type the spec cannot declare. Rebuilding into an
