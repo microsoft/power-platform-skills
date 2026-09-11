@@ -202,10 +202,11 @@ every prompt yourself via `AskUserQuestion`. In short:
      right" (see the CRITICAL note above).** The user must be able to SEE each form, the sitemap, and
      the page intents they are approving. For a single form only: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
    - **Don't pre-create tables/columns** — the build does it idempotently.
-5. **Guardrail lint (hard gate)** — run the **full** `spec-lint.js` on the complete spec; **errors block**, warnings teach. If it blocks (or warns), **paste the findings into your chat reply** — tool output is collapsed and invisible to the user (see the CRITICAL note above), so the user can't fix what they can't see:
+5. **Guardrail lint (hard gate)** — run the **full** lint on the complete spec; **errors block**, warnings teach. If it blocks (or warns), **paste the findings into your chat reply** — tool output is collapsed and invisible to the user (see the CRITICAL note above), so the user can't fix what they can't see:
    ```bash
-   node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
+   node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<working-dir>/app-spec.json --json
    ```
+   This runs the same three steps every deploying CLI runs on load — migrate → `validateAppSpec` → `lintAppSpec` — so a clean result means the same thing the build's dry run means by it. It exits non-zero on errors. It validates under the `plan` profile (which allows not-yet-generated intent pages), matching Step 6's dry run.
 6. **Plan-mode approval (the single build approval)** — present the plan **including the build
    dry-run's phase-grouped plan** (run `build-model-app.js` without `--apply`, using the `plan`
    profile that allows intent pages) inside `EnterPlanMode`, then `ExitPlanMode` to get the user's
