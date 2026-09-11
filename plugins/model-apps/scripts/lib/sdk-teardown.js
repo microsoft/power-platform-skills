@@ -57,6 +57,7 @@ const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingForm
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
+const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
@@ -825,18 +826,19 @@ function planTeardown(spec) {
   // AI row-summary records must be removed BEFORE tables: the summary record references the
   // table and would block its delete.
   //
-  // Gated on `spec.ai` ALONE, deliberately — NOT on `spec.ai.summaries`. `selectSummaryTables` owns
-  // the default-vs-override decision, and the BUILD calls it unconditionally whenever `spec.ai`
-  // exists, so a spec carrying only `ai.appFeatures` still gets a row summary per eligible table.
+  // Gated on the SHARED opt-in predicate, deliberately — NOT on `spec.ai.summaries`, and not on
+  // `selectSummaryTables` alone. `selectSummaryTables` owns the default-vs-override decision but is a
+  // CANDIDATE selector, not an opt-in test: handed a spec with no `ai` block at all it returns every
+  // entity with a descriptive column. The BUILD creates a summary per eligible table whenever the
+  // spec opts into `ai`, so a spec carrying only `ai.appFeatures` still gets one.
   // Short-circuiting on `spec.ai.summaries` here meant teardown planned NOTHING for exactly that
   // spec, and the orphaned `msdyn_aimodel` then blocked the table delete:
   //   ✗ table new_uptakeorder — HTTP 400 … cannot be deleted because it is referenced by 1 other
   //     components
   // MEASURED live on a spec with `ai.appFeatures` and no `summaries` block. The failure is worse
   // than a leaked record: teardown reports errors and leaves the TABLE — and any data in it —
-  // behind, on the one operation whose job is to remove them. This is the same short-circuit the
-  // build phase already had to unlearn; the rule is that only `selectSummaryTables` decides.
-  if (spec.ai) {
+  // behind, on the one operation whose job is to remove them.
+  if (specOptsIntoAi(spec)) {
     for (const schema of selectSummaryTables(spec)) {
       const logical = String(schema).toLowerCase();
       steps.push({ kind: 'aiSummary', phase: 'ai-summaries', label: `row summary ${logical}`, target: { entityLogicalName: logical } });

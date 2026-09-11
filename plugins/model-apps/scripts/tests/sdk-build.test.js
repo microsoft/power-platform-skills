@@ -2625,6 +2625,70 @@ test('ai-features phase: a result missing the newer buckets does not throw (olde
   assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'error').length, 0, 'no error events');
 });
 
+// ── AB#6688904: `skipped` is now a RETRYABLE outcome, not a final one ─────────────────────────
+// The SDK used to pre-empt a write when an org readiness gate read off, so `skipped` meant "never
+// attempted" and no retry could change it — correctly excluded from the post-publish re-issue. Since
+// AB#6688904 the write IS attempted and `skipped` means "attempted, absent, and a gate explains it".
+// That matters because NO app-scope write persists before the app is published, so on a fresh app
+// the gate diagnosis fires for every gate-bearing feature (`nlSearch`, `nlChart`,
+// `formFillSmartPaste`) and abandoning them leaves `--verify` failing on override rows the build
+// declined to write a second time.
+//
+// Driven through the mock rather than the real bundle deliberately: the bundle's own behaviour is
+// pinned by ai-app-features-real-bundle.test.js, whereas what is under test here is the ENGINE's
+// choice of which buckets to defer — which no bundle-level test can see.
+const aiRetrySpec = () => makeSpec({ ai: { appFeatures: { nlSearch: true }, summaries: { default: 'off' } } });
+const withAiResults = (results) => {
+  const { sdk, calls } = mockSdk();
+  let n = 0;
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return results[Math.min(n++, results.length - 1)];
+  };
+  return { sdk, calls };
+};
+const skippedResult = () => ({
+  applied: [], skipped: ['nlSearch'], notPersisted: [], unverified: [], failed: [],
+  outcomes: [{ feature: 'nlSearch', setting: 'NLGridSearchSetting', status: 'skipped', appOverrideExists: false, reason: "the org readiness gate 'EnableNLGridSearch' reads 'false'" }],
+});
+
+test('ai-features phase: a `skipped` feature is RE-ISSUED after publish and reported applied', async () => {
+  const { sdk, calls } = withAiResults([
+    skippedResult(),
+    { applied: ['nlSearch'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [{ feature: 'nlSearch', status: 'applied' }] },
+  ]);
+  const events = [];
+  const r = await runSdkBuild(aiRetrySpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'the gate-explained failure must be re-issued after publish');
+  const af = r.created.ai.appFeatures;
+  assert.ok(af.applied.includes('nlSearch'), `expected nlSearch applied, got ${JSON.stringify(af.applied)}`);
+  assert.ok(!af.skipped.includes('nlSearch'),
+    'it must also be REMOVED from `skipped`, or created.ai.appFeatures contradicts itself for a --json consumer');
+  const outcome = (af.outcomes || []).find((o) => o.feature === 'nlSearch');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.strictEqual(outcome.appOverrideExists, true);
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0,
+    'a recovered feature must not also be reported as a problem');
+});
+
+test('ai-features phase: a `skipped` feature the re-issue cannot recover is reported as ADMIN GATE OFF', async () => {
+  // The honest other half: when the gate really is blocking, the re-issue changes nothing and the
+  // operator gets an actionable message rather than a silent success — and the SDK's own per-feature
+  // reason (which names the gate and its value) is preferred over the canned bucket text.
+  const { sdk, calls } = withAiResults([skippedResult()]);
+  const events = [];
+  const r = await runSdkBuild(aiRetrySpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'it is still re-issued — only the outcome differs');
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warnings.some((e) => /ADMIN GATE OFF: nlSearch/.test(e.label)),
+    `expected an ADMIN GATE OFF warning, got ${JSON.stringify(warnings.map((e) => e.label))}`);
+  assert.ok(warnings.some((e) => /EnableNLGridSearch/.test(e.label)),
+    'the SDK reason names the gate, which is the actionable part');
+  assert.ok(!r.created.ai.appFeatures.applied.includes('nlSearch'), 'and it is NOT claimed as applied');
+});
+
 test('ai-features phase: passes a raised verify budget so a fresh app module is not falsely reported', async () => {
   // Regression guard for a live false `notPersisted`: this phase runs moments after app-shell CREATED
   // the app module, and the SDK's default budget (4 attempts / 500ms linear ~= 3s) expired before the

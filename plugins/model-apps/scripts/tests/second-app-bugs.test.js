@@ -79,6 +79,63 @@ test('AB#6689110: verification uses the SAME table selector as the build', async
   assert.strictEqual(r.ok, true);
 });
 
+// The gap that test did NOT close, found by review after the fact. It pins that a spec which asks
+// for nothing is checked for nothing — but only within a spec that HAS an `ai` block. A spec with no
+// `ai` block at all took a different path: `selectSummaryTables` was called ungated, and with no
+// `summaries` key it reads `{}` as "default auto" and returns every entity carrying a descriptive
+// column. Verify then FAILED, claiming "ai.summaries requests a row summary for 'x'" for a summary
+// nobody requested and the build never created.
+//
+// That is a false failure on `--verify`'s exit code, and it hits the common case rather than an edge
+// one: almost every table has a text column, and most specs never mention AI. `columns: []` in
+// `summarySpec` is exactly why the existing coverage missed it — an entity with no columns is never
+// an auto-candidate, so the only table it ever exercised was the explicit opt-in.
+test('AB#6689110 follow-up: a spec with NO `ai` block is not checked for row summaries at all', async () => {
+  const s = summarySpec();
+  delete s.ai;
+  // A descriptive column is what makes the entity an auto-candidate — without one this test would
+  // pass against the broken code too, which is the trap the original fixture fell into.
+  s.entities[0].columns = [{ schemaName: 'contoso_notes', displayName: 'Notes', type: 'Memo' }];
+  const { selectSummaryTables } = require('../lib/ai-candidates.js');
+  assert.deepStrictEqual(selectSummaryTables(s), ['contoso_workitem'],
+    'precondition: the candidate selector DOES return this table — the gate is the only thing stopping it');
+
+  const r = await verifySpec(s, { ...summaryReader({ rows: [] }), findColumns: async () => [{ logicalName: 'contoso_notes' }] });
+  assert.strictEqual(r.checks.some((x) => x.kind === 'ai-summary'), false,
+    `a spec that never mentions ai must not be verified for row summaries: ${JSON.stringify(r.checks.filter((x) => x.kind === 'ai-summary'))}`);
+  assert.strictEqual(r.ok, true, 'and it must not fail verification');
+});
+
+test('AB#6689110 follow-up: build, verify and teardown share ONE ai opt-in predicate', async () => {
+  // The instance above was the second time a caller treated `selectSummaryTables` as an opt-in test
+  // rather than a candidate selector (teardown gated on `spec.ai.summaries` and planned no removal
+  // for an `appFeatures`-only spec, stranding a row summary that then blocked the table delete).
+  // Pin the predicate itself so the next caller cannot invent a third spelling.
+  const { specOptsIntoAi } = require('../lib/ai-app-settings.js');
+  assert.strictEqual(specOptsIntoAi({ ai: { appFeatures: { formFill: true } } }), true);
+  assert.strictEqual(specOptsIntoAi({ ai: {} }), true, 'an empty ai block is still an opt-in');
+  assert.strictEqual(specOptsIntoAi({}), false);
+  assert.strictEqual(specOptsIntoAi({ ai: null }), false, 'null is what a JSON caller writes for "no AI"');
+  assert.strictEqual(specOptsIntoAi(undefined), false);
+
+  // And that teardown agrees with the build for the shape that regressed: `appFeatures` only.
+  const { planTeardown } = require('../lib/sdk-teardown.js');
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_memo', primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_body', type: 'Memo' }] }],
+    relationships: [],
+    ai: { appFeatures: { formFill: true } },
+  };
+  assert.deepStrictEqual(
+    planTeardown(spec).filter((s) => s.kind === 'aiSummary').map((s) => s.target.entityLogicalName),
+    selectSummaryTablesFor(spec),
+    'teardown must plan exactly the set the build creates');
+  // …and plans nothing when the spec opts out entirely.
+  assert.deepStrictEqual(planTeardown({ ...spec, ai: undefined }).filter((s) => s.kind === 'aiSummary'), []);
+});
+const selectSummaryTablesFor = (s) => require('../lib/ai-candidates.js').selectSummaryTables(s).map((x) => String(x).toLowerCase());
+
 // --- AB#6688906: an SVG in the legacy raster `icon` slot -----------------------------------------
 
 const iconSpec = (subArea) => ({

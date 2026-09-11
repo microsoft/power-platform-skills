@@ -8,7 +8,7 @@ const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
-const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -679,7 +679,14 @@ async function verifySpec(spec, read, opts = {}) {
   // duplicate-key error, so it is the stored value rather than a guess.
   //
   // Reader-gated: `queryRecords` only. A reader without it skips rather than guessing.
-  const summaryTables = selectSummaryTables(spec);
+  //
+  // AI-OPT-IN gated FIRST, via the shared predicate. `selectSummaryTables` is a candidate selector,
+  // not an opt-in test: handed a spec with no `ai` block it reads `summaries` as `{}` — "default
+  // auto" — and returns every entity with a descriptive column. Calling it ungated made verify FAIL
+  // a spec that never mentioned AI, reporting "ai.summaries requests a row summary for 'x'" for a
+  // summary nobody requested and the build never created. That is a false failure on the build's own
+  // `--verify` exit code, and it hits most specs, since almost every table has a text column.
+  const summaryTables = specOptsIntoAi(spec) ? selectSummaryTables(spec) : [];
   if (summaryTables.length && typeof read.queryRecords === 'function') {
     for (const logical of summaryTables) {
       const modelName = `${String(logical).toLowerCase()} row summary`;

@@ -54,7 +54,8 @@ app-builder defects found while rebuilding a real app into a second environment.
   summary, have the AI phase skip it (an unlicensed environment is a legitimate skip), and still
   report `PASS`. The requested set is resolved with the same selector the build uses, so what is
   verified is exactly what was asked for — including `default: "off"` plus one opted-in table.
-  An unreadable AI-model list fails closed rather than passing.
+  An unreadable AI-model list fails closed rather than passing. A spec with no `ai` block is not
+  checked for row summaries at all: build, verify and teardown now share one opt-in predicate.
 - **AI features are written even when an org gate reads off** (AB#6688904). The gate used to be a
   precondition, and for four of the seven features that "gate" is the very per-app row the write is
   about to set — so a brand-new app, sitting at the platform default, looked forbidden and the build
