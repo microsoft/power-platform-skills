@@ -966,6 +966,14 @@ Second, "built from master" is not provenance, because master moves; the SHA is 
 reviewer reproduce the artifact. Re-running the build on the same inputs must reproduce the same
 sha256 — check it.
 
+⚠ **`subject` is the subject of the commit the bundle was BUILT FROM — normally master's HEAD — and
+is usually unrelated to the change you are taking up.** It is recorded verbatim from git on purpose
+(`sanitize-subject.js` only strips merge-tool prefixes), because editorialising it would break the
+one thing provenance is for. So expect it to read like `Revert 'fix: scheduled trigger skips its
+first run…'` while the uptake is about AI settings: master simply moved on after the commit that
+carried the fix. Do not "correct" it, and do not read it as a description of the uptake — name the
+change in `CHANGELOG.md` instead, which is where a reader looks for what actually arrived.
+
 `scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
 method the engines call (`SKILL_SDK_SURFACE`, kept in sync with the `provision.*` / `sdk.*` call
 sites by a source-scan test that also covers `artifact-intent.js`) is a function on the real vendored
