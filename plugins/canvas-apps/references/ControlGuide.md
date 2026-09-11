@@ -153,6 +153,33 @@ ItemDisplayText: =ThisItem.Value
 A dropdown whose options all appear empty is almost always this mistake. When `Items` is
 already a single-column table you can omit `ItemDisplayText` entirely.
 
+For Dropdown, ComboBox, and other controls with a `Default` property, `Items` is not an
+output property and cannot be referenced as `Self.Items` from the default formula. Use an
+explicit value or record compatible with `Items`, or derive it directly from the same
+source expression:
+
+```yaml
+Items: '=[{Value:"All"},{Value:"Open"},{Value:"Closed"}]'
+Default: '=First([{Value:"All"},{Value:"Open"},{Value:"Closed"}])'
+```
+
+`TemplateSize` is an input property used in authored YAML to configure each Gallery
+item's size. It cannot be referenced in formulas as `Self.TemplateSize`. To size a
+vertical Gallery to its rendered rows, use the output property `Self.TemplateHeight`:
+
+```yaml
+Height: =CountRows(Self.AllItems) * Self.TemplateHeight
+```
+
+For a horizontal Gallery, use the output property `Self.TemplateWidth`.
+
+For charts, `ItemColorSet` expects a single-column table of color values. Supply the
+colors directly instead of wrapping them in records with custom field names:
+
+```yaml
+ItemColorSet: =[RGBA(0,102,204,1), RGBA(16,124,65,1)]
+```
+
 ## Properties are per-control — never transfer them by analogy
 
 Three traps produce most `Unknown property` errors.
@@ -401,7 +428,7 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 - `LayoutGap` — spacing between items
 - `LayoutOverflowY` — vertical overflow (`Scroll` for scrollable containers)
 - `FillPortions` — proportional sizing
-- `PaddingTop`/`Bottom`/`Left`/`Right` — container padding
+- `PaddingTop`/`PaddingBottom`/`PaddingLeft`/`PaddingRight` — container padding
 
 ## Troubleshooting
 

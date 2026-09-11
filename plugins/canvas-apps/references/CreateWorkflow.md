@@ -58,7 +58,11 @@ Use this format:
 
 List every requested behavior in Functional Scope before decorative or optional screens. Do not present the plan as ready when a named action has only a control and no source transition or visible success state.
 
-Wait for user approval. Revise and re-present if requested.
+When the request explicitly identifies itself as a noninteractive automation run and says
+that a reasonable plan is pre-approved, construct the complete plan internally and continue
+directly to the planner. Do not pause, ask for confirmation, or end the turn after planning.
+
+Otherwise, wait for user approval. Revise and re-present if requested.
 
 ## 4. Invoke the Planner
 
@@ -69,6 +73,7 @@ Mode: CREATE
 Working directory: `[working directory]`
 Plan index: `[working directory]/canvas-app-plan.md`
 Shared plan: `[working directory]/canvas-app-shared.md`
+Plugin root: `${PLUGIN_ROOT}`
 Requirements: [user requirements]
 Approved plan: [full approved plan]
 Target users and device: [stated or inferred]
@@ -76,6 +81,9 @@ Target users and device: [stated or inferred]
 
 The planner discovers resources, writes `[working directory]/App.pa.yaml`, the plan index, shared plan,
 and one screen brief per dispatch row. It does not redesign the approved plan.
+
+If it returns `Status: Tooling Blocked`, apply its complete inline artifact payloads
+verbatim as required by the skill before entering Planned Build Handoff.
 
 Wait for the planner to finish, then return to **Planned Build Handoff** in the
 `canvas-app` skill.
