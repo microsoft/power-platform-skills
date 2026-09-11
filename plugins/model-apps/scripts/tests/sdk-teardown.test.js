@@ -234,7 +234,7 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
 // printed `✗ relationship … referenced by 2 other components` and exited NON-ZERO on a run that then
 // deleted the table and left the environment completely clean. Self-referencing hierarchies became a
 // mainstream shape once sample data could seed them (#544), so this cry-wolf is now routine.
-test('#544 a SELF-referencing relationship is not planned separately — the table delete removes it', () => {
+test('#544 a SELF-referencing relationship is deleted AFTER its table, not before', () => {
   const spec = {
     solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
     app: { name: 'Hier App' },
@@ -243,13 +243,17 @@ test('#544 a SELF-referencing relationship is not planned separately — the tab
     appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_org' }] }] }] },
   };
   const steps = planTeardown(spec);
-  assert.deepStrictEqual(steps.filter((s) => s.kind === 'relationship'), [], 'no standalone relationship delete');
-  assert.ok(steps.some((s) => s.kind === 'table' && s.target.logical === 'new_org'), 'the table is still deleted');
+  const kinds = steps.map((s) => s.kind);
+  const relIdx = kinds.indexOf('relationship');
+  const tblIdx = kinds.indexOf('table');
+  assert.ok(relIdx !== -1, 'it is still planned — deferring, not skipping, is what keeps it safe');
+  assert.ok(tblIdx !== -1 && tblIdx < relIdx, 'the table delete (which cascades it) comes first');
 });
 
-// The narrowing that makes the skip safe: an `existing: true` table is NOT deleted, so its
-// self-referencing relationship has nothing to cascade from and must still be removed here.
-test('#544 a self-referencing relationship on an EXISTING (not deleted) table is still planned', () => {
+// If the table is RETAINED, the deferred delete is what stops the relationship leaking. The spec
+// cannot tell a retained table from a deleted one (live discovery also skips non-custom tables),
+// which is why this is an ordering change rather than a skip.
+test('#544 a self-referencing relationship on an EXISTING (retained) table is still planned', () => {
   const spec = {
     solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
     app: { name: 'Hier App' },
@@ -260,8 +264,14 @@ test('#544 a self-referencing relationship on an EXISTING (not deleted) table is
   assert.strictEqual(planTeardown(spec).filter((s) => s.kind === 'relationship').length, 1);
 });
 
-// And a normal two-table relationship is untouched by the narrowing.
-test('#544 a relationship between two DIFFERENT tables is still planned', () => {
+// The `relationship` kind already tolerates not-found, which is what makes the deferral safe when
+// the table delete cascaded it away. Asserting it here so a future change to that flag is caught.
+test('#544 the relationship kind tolerates not-found (what makes the deferral safe)', () => {
+  assert.strictEqual(KIND_HANDLERS.relationship.tolerateNotFound, true);
+});
+
+// And a normal two-table relationship is untouched by the narrowing — still BEFORE the tables.
+test('#544 a relationship between two DIFFERENT tables is still planned before the tables', () => {
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     app: { name: 'A' },
@@ -272,7 +282,9 @@ test('#544 a relationship between two DIFFERENT tables is still planned', () => 
     relationships: [{ type: 'OneToMany', referenced: 'new_parent', referencing: 'new_child', lookup: { schemaName: 'new_ParentId' } }],
     appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_parent' }] }] }] },
   };
-  assert.strictEqual(planTeardown(spec).filter((s) => s.kind === 'relationship').length, 1);
+  const kinds = planTeardown(spec).map((s) => s.kind);
+  assert.strictEqual(kinds.filter((k) => k === 'relationship').length, 1);
+  assert.ok(kinds.indexOf('relationship') < kinds.indexOf('table'), 'unchanged ordering for a two-table relationship');
 });
 
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so

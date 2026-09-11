@@ -341,6 +341,12 @@ function planFor(spec, opts) {
   const sol = spec.solution;
   if (has('solution')) items.push({ phase: 'solution', label: `solution ${sol.uniqueName} (publisher ${sol.publisherPrefix})` });
   if (has('data-model')) {
+    // The relationship probe identity must match the one the APPLY path uses, or an existing
+    // relationship reads as `create`. `provisionDataModel` queries the REFERENCED (parent) entity's
+    // OneToManyRelationships — the child's collection does not contain it — and builds the schema
+    // name WITH the publisher prefix. Getting either wrong is invisible for a self-referencing
+    // relationship (referenced === referencing), which is exactly the shape this was first tested on.
+    const relPrefix = spec.solution && spec.solution.publisherPrefix;
     for (const gc of spec.globalChoices || []) items.push({ phase: 'data-model', label: `global choice ${gc.name}` });
     for (const e of spec.entities) {
       // `labelText` returns "" for an absent displayName, or for a localized map with nothing usable
@@ -357,8 +363,8 @@ function planFor(spec, opts) {
       for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
     }
     for (const r of spec.relationships || []) {
-      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}`, key: { kind: 'relationship', entity: r.referencing, name: relationshipSchemaName(r), relType: 'OneToMany' } });
-      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}`, key: { kind: 'relationship', entity: r.entity1, name: manyToManySchemaName(r), relType: 'ManyToMany' } });
+      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}`, key: { kind: 'relationship', entity: r.referenced, name: relationshipSchemaName(r, relPrefix), relType: 'OneToMany' } });
+      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}`, key: { kind: 'relationship', entity: r.entity1, name: manyToManySchemaName(r, relPrefix), relType: 'ManyToMany' } });
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -1224,30 +1230,61 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
   const tableCache = new Map();   // entity logical -> { found: bool|null }
   const columnCache = new Map();  // entity logical -> Set<logicalName> | null
 
+  // `findExistingColumns` is written for the APPLY path, where a failed read is safe to treat as
+  // "assume every column is new" — the create's own already-exists handling absorbs the duplicates.
+  // A dry run has no create to absorb anything, so the same `[]` would print `+ create` for columns
+  // that exist. The helper calls `warn` exactly when it is returning that fallback, so the warning
+  // is the signal that the answer was not conclusive.
+  const columnsOf = async (logical) => {
+    if (!columnCache.has(logical)) {
+      let readFailed = false;
+      try {
+        const cols = await findExistingColumns(provision, logical, (msg) => {
+          readFailed = true;
+          if (typeof warn === 'function') warn(msg);
+        });
+        columnCache.set(logical, readFailed ? null : new Set((cols || []).map((c) => String(c.logicalName || '').toLowerCase())));
+      } catch { columnCache.set(logical, null); }
+    }
+    return columnCache.get(logical);
+  };
+
+  // `relationshipExists` falls back to the BROAD `fetchEntityMetadata` read when the narrow one is
+  // inconclusive. Two reasons not to take that fallback here: the vendored implementation WRITES the
+  // fetched metadata into the on-disk workspace, which a read-only dry run must not do (it would
+  // change cached state a later apply reads); and the apply path deliberately treats its `null` as
+  // "absent" because the create absorbs the race, which a dry run must not copy. Handing it a
+  // reader with no `fetchEntityMetadata` makes an inconclusive probe return `null`, which becomes
+  // `unknown` below.
+  const relReader = { dataverse: provision && provision.dataverse };
+
   const tableState = async (logical) => {
     if (!tableCache.has(logical)) {
       try {
         const hit = await findExistingTable(provision, logical, { hasLocalizedLabels });
         tableCache.set(logical, { found: !!hit });
       } catch (err) {
+        // Includes the BuildHalt findExistingTable raises for a LOCALIZED spec whose probe is
+        // inconclusive — which is precisely an "unknown", not an absence.
         tableCache.set(logical, { found: null, why: String((err && err.message) || err) });
       }
     }
     return tableCache.get(logical);
   };
 
-  const columnsOf = async (logical) => {
-    if (!columnCache.has(logical)) {
-      try {
-        const cols = await findExistingColumns(provision, logical, warn);
-        columnCache.set(logical, new Set((cols || []).map((c) => String(c.logicalName || '').toLowerCase())));
-      } catch { columnCache.set(logical, null); }
-    }
-    return columnCache.get(logical);
-  };
-
-  // The identity query the build itself uses to decide reuse for view/chart/form/app.
+  // Resolve view/chart/form/app the way the BUILD resolves them, so the plan cannot claim a state
+  // the apply then contradicts:
+  //   - forms go through `resolveExistingFormId`, which validates a pinned `formId` (a stale or
+  //     foreign pin makes the apply HALT — reporting that as create/reuse would hide it) and throws
+  //     on two same-(entity,type,name) forms;
+  //   - views/charts go through `provision.findArtifact`, which raises on an ambiguous identity;
+  //   - the app is keyed by its deterministic unique name.
+  // Anything thrown becomes `unknown` with the resolver's own message, which is the actionable one.
   const artifactPresent = async (kind, def) => {
+    if (kind === 'form') return !!(await resolveExistingFormId(provision, def));
+    if ((kind === 'view' || kind === 'chart') && typeof provision.findArtifact === 'function') {
+      return !!(await provision.findArtifact(kind, { name: def.name, entity: def.entityLogicalName }));
+    }
     const q = artifactIdentityQuery(kind, def);
     if (!q) return null;
     const rows = await provision.queryRecords(q.set, { select: [q.idField], filter: q.filter, top: 1 });
@@ -1273,8 +1310,11 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         if (!cols) { item.state = 'unknown'; item.stateWhy = 'the table\'s attributes could not be read'; continue; }
         item.state = cols.has(String(k.name).toLowerCase()) ? 'reuse' : 'create';
       } else if (k.kind === 'relationship') {
-        const present = await relationshipExists(provision, String(k.entity).toLowerCase(), k.name, k.relType, { hasLocalizedLabels });
-        item.state = present ? 'reuse' : 'create';
+        // Tri-state: `null` means the probe could not tell. The apply path treats that as absent
+        // (its create absorbs the race); a plan has nothing to absorb it, so it must say so.
+        const present = await relationshipExists(relReader, String(k.entity).toLowerCase(), k.name, k.relType, { hasLocalizedLabels });
+        item.state = present === null || present === undefined ? 'unknown' : (present ? 'reuse' : 'create');
+        if (item.state === 'unknown') item.stateWhy = 'the relationship metadata read was inconclusive';
       } else if (k.kind === 'app') {
         const present = await artifactPresent('app', { uniqueName: k.uniqueName });
         item.state = present ? 'reuse' : 'create';
@@ -1283,7 +1323,7 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         // would 400 on the metadata cache — so answer from the table, as the build's own lookup does.
         const t = await tableState(String(k.entity).toLowerCase());
         if (t.found === false) { item.state = 'create'; continue; }
-        const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, uniqueName: k.uniqueName });
+        const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
         item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
       }
     } catch (err) {
