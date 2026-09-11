@@ -122,6 +122,11 @@ test('JSX text is text, not code — the false-positive cases that block real us
     'in-tag block comment with an apostrophe': 'export default function P(){ return <button\n  type="button"\n  /* Griffel\'s atomic output wins */\n  className={x}\n>hi</button>; }\n',
     'in-tag comment containing a quote and a bracket': 'export default function P(){ return <button\n  // don\'t count this ( or this "\n  className={x}\n>hi</button>; }\n',
     'in-tag comment before a self-closing tag': 'export default function P(){ return <div><Icon\n  // Griffel\'s output\n  aria-hidden\n/></div>; }\n',
+    // The other position a `//` can appear inside a tag WITHOUT being a comment: a template-literal
+    // TYPE argument. Its content is data, so it must be consumed whole — otherwise the comment
+    // branch above blanks to end of line and rejects a valid module.
+    'template-literal type argument containing `//`': 'export default function P(){ return <C<`https://${string}`> />; }\n',
+    'template-literal type argument containing `/*`': 'export default function P(){ return <C<`a/*b`> />; }\n',
   };
   for (const [name, code] of Object.entries(cases)) {
     assert.equal(hasDefaultExport(code), true, `default export missed: ${name}`);
@@ -145,6 +150,11 @@ test('hasUnbalancedBrackets flags a truncated write but tolerates JSX and generi
   assert.equal(hasUnbalancedBrackets('const x: Array<Record<string, number>> = [];\nexport default () => <div a={1} />;\n'), false);
   // Brackets inside strings/comments must not count.
   assert.equal(hasUnbalancedBrackets('const s = "{{{"; // )))\nexport default () => null;\n'), false);
+  // ...but blanking a comment must not become a way to HIDE a real defect. A template-literal type
+  // argument in a tag is consumed as data, so a malformed expression after it on the same line is
+  // still visible. (When the `//` inside the template was mistaken for a comment, the rest of the
+  // line — including this `{(}` — was blanked and the file read as balanced.)
+  assert.equal(hasUnbalancedBrackets('export default function P() {\n  return <C<`https://${string}`> value={(} />;\n}\n'), true);
 });
 
 test('every committed .tsx the repo ships is accepted (false-positive corpus)', () => {
