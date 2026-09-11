@@ -65,7 +65,8 @@ app-builder defects found while rebuilding a real app into a second environment.
   reconstruct `forms[]`, `views[]`, `charts[]`, `businessRules[]` or `globalChoices[]`, and a spec
   with `"forms": []` was indistinguishable from an app that has none. Runs now name the counts and
   artifacts and return a `notRoundTripped` block. It is a note, not a gate: the loss is real only
-  when rebuilding into a *different* environment.
+  when rebuilding into a *different* environment. A failed table-label read is reported too, because
+  it silently degrades a multi-language table to one language.
 - **The Azure CLI identity is checked before any Dataverse read** (AB#6686427). A token from the
   wrong tenant surfaced as an *empty download* — every best-effort read swallowed its 401. A terminal
   401 now names the identity, tenant and environment (AB#6686424); a re-`az login` is the only fix,
@@ -91,11 +92,17 @@ app-builder defects found while rebuilding a real app into a second environment.
   escape hatch in the app-builder scripts. No behaviour change — an unreadable privilege set still
   fails the check closed.
 
+### Known limitations
+
+- **A single-language label loses its LCID on download.** A table labelled only in, say, 3082 comes
+  back as a plain string, and a rebuild applies it at the target build's resolved language — correct
+  in the same organization, wrong in one with a different base language. Pin `languageCode` in the
+  spec before a cross-organization rebuild.
+
 [#537]: https://github.com/microsoft/power-platform-skills/issues/537
 [#513]: https://github.com/microsoft/power-platform-skills/issues/513
 
 ## [2.6.1]
-
 ### Fixed
 
 - **A table key the build cannot honour now fails instead of being dropped** ([#537]).

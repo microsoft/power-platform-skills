@@ -829,8 +829,20 @@ async function readEntityWithDescriptions(sdk, logical) {
       meta.Description = res.body.Description;
       meta.DisplayName = res.body.DisplayName;
       meta.DisplayCollectionName = res.body.DisplayCollectionName;
+    } else {
+      // A non-2xx is NOT "this table has no extra languages" — it is "we could not look". Recorded so
+      // the caller can say so; see the catch below for why silence here is the wrong default.
+      meta.labelReadFailed = `HTTP ${res && res.status}`;
     }
-  } catch { /* description best-effort — never sink an otherwise usable download */ }
+  } catch (err) {
+    // Best-effort for DESCRIPTIONS — they are cosmetic, and sinking a whole download over one is
+    // wrong. But this same read is the ONLY source of multi-language labels, and failing it silently
+    // degrades to the SDK's flattened single-language `displayName`: the download succeeds, the spec
+    // looks complete, and every other language is gone. That is the exact silent-loss shape
+    // AB#6686428 exists to end, so the failure is RECORDED rather than swallowed and the caller
+    // warns. The download still proceeds — an English-only spec beats no spec.
+    meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
+  }
   try {
     // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
     // `targets` (lookup target tables) and `attributeType`, which this projection does not, and
@@ -861,6 +873,16 @@ async function readEntityWithDescriptions(sdk, logical) {
 // every single-language table would change the shape of every spec this tool has ever written, for
 // no gain, and would make every download diff noisy. Returns undefined when there is nothing usable,
 // so a caller can fall back to the SDK's flattened `displayName` rather than write an empty label.
+//
+// ⚠ KNOWN LIMITATION, accepted rather than overlooked: the LCID of a SINGLE label is not preserved.
+// A table labelled only in 3082 downloads as a plain string, and a rebuild applies it at the target
+// build's resolved language — correct when rebuilding into the same organization (its base language
+// is the same), wrong when rebuilding into one with a different base, where Spanish text is stored
+// as an English label. Fixing it means threading the org's base language into this pure function and
+// emitting a one-entry map whenever the two differ, which changes the emitted shape for a case that
+// is currently indistinguishable from the common one. `download` also deliberately never pins the
+// org's LCID into the spec (that would make the spec non-portable), so there is no existing signal
+// to key off. Pin `languageCode` in the spec before a cross-organization rebuild.
 function labelFromDataverse(value) {
   if (!value || typeof value !== 'object') return undefined;
   const rows = Array.isArray(value.LocalizedLabels) ? value.LocalizedLabels : [];
@@ -1198,6 +1220,10 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const noPrimaryName = [];   // sitemap tables — a hard failure (the user asked for these)
   const droppedComponents = []; // component-only tables — dropped with a warning (best-effort input)
   const metadataErrors = new Map(); // logical -> error message (the read itself failed)
+  // Tables whose LABEL read failed. Distinct from `metadataErrors`: the table itself was recovered
+  // and the spec is usable, but only the SDK's flattened single-language `displayName` survived, so
+  // a multi-language table silently downloads as English-only. Reported rather than swallowed.
+  const labelReadFailures = new Map(); // logical -> reason
   for (const logical of allLogicals) {
     let e;
     // A metadata READ failure is not the same as metadata that reports no primary name, and it must
@@ -1206,7 +1232,9 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // the confusing downstream error the explicit branch below exists to avoid. Bucket it by origin
     // exactly like the no-primary-name case, so the user is told the table AND the reason.
     try {
-      e = entityFromMetadata(await readEntityWithDescriptions(sdk, logical), logical);
+      const meta = await readEntityWithDescriptions(sdk, logical);
+      if (meta && meta.labelReadFailed) labelReadFailures.set(logical, meta.labelReadFailed);
+      e = entityFromMetadata(meta, logical);
     } catch (err) {
       metadataErrors.set(logical, (err && err.message) || String(err));
       (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
@@ -1240,6 +1268,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   }
   if (droppedComponents.length) {
     process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${withReason(droppedComponents)}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
+  }
+  // AB#6686428: the label read is the ONLY source of multi-language labels. When it fails the table
+  // is still recovered, so the download succeeds and the spec looks complete — but it carries the
+  // SDK's flattened single-language `displayName` and every other language is gone. Silently
+  // degrading there is the same shape as the bug this feature fixes, so say so. Not a gate: an
+  // English-only spec is still a usable spec, and failing a read-only command over it would be worse.
+  if (labelReadFailures.size) {
+    const detail = [...labelReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
+    process.stderr.write(`WARNING: the table-label read failed for ${labelReadFailures.size} table(s) (${detail}). Their labels fall back to ONE language, so a table labelled in several languages downloads as single-language and a rebuild would recreate it that way. Re-run the download to recover the other languages before rebuilding into a different environment.\n`);
   }
   // A column whose App Spec type could not be substantiated — a Choice/MultiChoice (whose options
   // this download does not read) or an attribute type the spec cannot declare. Rebuilding into an

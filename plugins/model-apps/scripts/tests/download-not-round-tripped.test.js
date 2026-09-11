@@ -177,3 +177,40 @@ test('the report is stable whatever order Dataverse returns rows in', () => {
   assert.deepStrictEqual(one.entities[1].forms, ['Alpha', 'Mid', 'Zeta']);
   assert.deepStrictEqual(one.incomplete.map((i) => i.kind), ['charts', 'views']);
 });
+
+
+// --- AB#6686428: a failed LABEL read must not degrade silently -----------------------------------
+// The table-label read is the ONLY source of multi-language labels. When it fails the table is still
+// recovered, so the download SUCCEEDS and the spec looks complete while carrying the SDK's flattened
+// single-language `displayName` — every other language gone. That is the same silent-loss shape the
+// localized-label feature exists to end, so the failure is recorded and reported.
+const { readEntityWithDescriptions, entityFromMetadata } = require('../download-model-app.js');
+
+const labelSdk = (get) => ({
+  fetchEntityMetadata: async (l) => ({ logicalName: l, displayName: 'Ticket', primaryNameAttribute: 'new_name', attributes: [] }),
+  dataverse: { get },
+});
+
+test('a non-2xx label read is RECORDED, not read as "this table has no other languages"', async () => {
+  const meta = await readEntityWithDescriptions(labelSdk(async () => ({ status: 403, body: {} })), 'new_t');
+  assert.strictEqual(meta.labelReadFailed, 'HTTP 403');
+});
+
+test('a THROWN label read is recorded with its reason', async () => {
+  const meta = await readEntityWithDescriptions(labelSdk(async () => { throw new Error('socket hang up'); }), 'new_t');
+  assert.match(meta.labelReadFailed, /socket hang up/);
+});
+
+test('a SUCCESSFUL label read records no failure', async () => {
+  const meta = await readEntityWithDescriptions(labelSdk(async () => ({ status: 200, body: { DisplayName: { LocalizedLabels: [{ Label: 'T', LanguageCode: 1033 }] } } })), 'new_t');
+  assert.strictEqual(meta.labelReadFailed, undefined);
+});
+
+test('the failure marker never reaches the emitted spec', async () => {
+  // `entityFromMetadata` builds an explicit literal, so the marker is dropped — asserted rather than
+  // assumed, because a stray key here would be written into app-spec.json and fail its validation
+  // (the same class as the raw Dataverse Label object that used to leak through as a column name).
+  const meta = await readEntityWithDescriptions(labelSdk(async () => ({ status: 500, body: {} })), 'new_t');
+  assert.ok(meta.labelReadFailed, 'precondition: the marker is set');
+  assert.ok(!Object.keys(entityFromMetadata(meta, 'new_t')).includes('labelReadFailed'));
+});
