@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -9,13 +10,20 @@ const {
   LOCALIZATION_CAPABILITIES,
   detectFramework,
   detectLocalization,
+  detectSiteLanguage,
+  detectSiteLanguageForFramework,
   discoverLocalizationImplementation,
+  getLocaleDirection,
+  inspectProject,
   protectedTokenSignature,
+  resolveLocale,
   verifyInitializationEvidence,
   validateLocalizationManifestShape,
   validateLocales,
 } = require('../lib/localization-config');
 const { createTempProject, writeProjectFile } = require('./test-utils');
+
+const CONFIG_PATH = path.join(__dirname, '..', 'lib', 'localization-config.js');
 
 function writePackage(projectRoot, dependencies) {
   writeProjectFile(projectRoot, 'package.json', JSON.stringify({ dependencies }, null, 2));
@@ -142,6 +150,155 @@ test('canonicalizes, visibly deduplicates, and validates registry subtags', () =
   assert.deepEqual(result.canonicalization, [{ input: 'en-us', canonical: 'en-US' }]);
   assert.deepEqual(result.duplicates, [{ input: 'en-US', canonical: 'en-US' }]);
   assert.match(result.invalid[0].reason, /unknown language subtag "xx"/);
+});
+
+test('resolves a single locale and its writing direction', () => {
+  const spanish = resolveLocale('es-es');
+  assert.equal(spanish.locale, 'es-ES');
+  assert.equal(spanish.direction, 'ltr');
+  assert.equal(getLocaleDirection('ar-SA'), 'rtl');
+  assert.equal(getLocaleDirection('x-contoso'), 'ltr');
+});
+
+test('detects the persisted single-site language from document attributes', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'index.html', '<html lang="es-ES" dir="ltr"><body></body></html>');
+
+  assert.deepEqual(detectSiteLanguage(projectRoot, 'react'), {
+    detected: true,
+    valid: true,
+    locale: 'es-ES',
+    direction: 'ltr',
+    source: 'index.html',
+    conflicts: [],
+  });
+});
+
+test('reports missing or incorrect document direction', (t) => {
+  const missingRoot = createTempProject(t);
+  writeProjectFile(missingRoot, 'src/index.html', '<html lang="ar-SA"><body></body></html>');
+  assert.match(
+    detectSiteLanguage(missingRoot, 'angular').conflicts.join('\n'),
+    /missing a valid html dir attribute/
+  );
+
+  const mismatchedRoot = createTempProject(t);
+  writeProjectFile(
+    mismatchedRoot,
+    'src/index.html',
+    '<html lang="ar-SA" dir="ltr"><body></body></html>'
+  );
+  assert.match(
+    detectSiteLanguage(mismatchedRoot, 'angular').conflicts.join('\n'),
+    /resolves to "rtl"/
+  );
+});
+
+test('does not inspect site language until one supported framework is resolved', (t) => {
+  const unsupportedRoot = createTempProject(t);
+  writePackage(unsupportedRoot, { lodash: '^4.17.21' });
+  writeProjectFile(
+    unsupportedRoot,
+    'index.html',
+    '<html lang="fr-FR" dir="ltr"><body></body></html>'
+  );
+
+  const unsupported = inspectProject(unsupportedRoot);
+  assert.equal(unsupported.framework.framework, null);
+  assert.equal(unsupported.framework.ambiguous, false);
+  assert.deepEqual(unsupported.siteLanguage, {
+    detected: false,
+    valid: false,
+    locale: null,
+    direction: null,
+    source: null,
+    conflicts: [],
+    reason: 'framework-unsupported',
+  });
+
+  const ambiguousRoot = createTempProject(t);
+  writePackage(ambiguousRoot, {
+    react: '^19.0.0',
+    'react-dom': '^19.0.0',
+    vue: '^3.5.0',
+  });
+  writeProjectFile(
+    ambiguousRoot,
+    'index.html',
+    '<html lang="fr-FR" dir="ltr"><body></body></html>'
+  );
+
+  const ambiguous = inspectProject(ambiguousRoot);
+  assert.equal(ambiguous.framework.ambiguous, true);
+  assert.equal(ambiguous.siteLanguage.detected, false);
+  assert.equal(ambiguous.siteLanguage.reason, 'framework-ambiguous');
+
+  const supportedRoot = createTempProject(t);
+  writePackage(supportedRoot, { react: '^19.0.0', 'react-dom': '^19.0.0' });
+  writeProjectFile(
+    supportedRoot,
+    'index.html',
+    '<html lang="de-DE" dir="ltr"><body></body></html>'
+  );
+
+  const supported = inspectProject(supportedRoot);
+  assert.equal(supported.framework.framework, 'react');
+  assert.equal(supported.siteLanguage.detected, true);
+  assert.equal(supported.siteLanguage.locale, 'de-DE');
+});
+
+test('detects site language after an evidence-backed framework selection', (t) => {
+  const projectRoot = createTempProject(t);
+  writePackage(projectRoot, {
+    react: '^19.0.0',
+    'react-dom': '^19.0.0',
+    astro: '^6.1.0',
+  });
+  writeProjectFile(
+    projectRoot,
+    'src/layouts/Layout.astro',
+    '<html lang="ar-SA" dir="rtl"><body><slot /></body></html>'
+  );
+
+  const result = detectSiteLanguageForFramework(projectRoot, 'astro');
+  assert.equal(result.detected, true);
+  assert.equal(result.locale, 'ar-SA');
+  assert.equal(result.direction, 'rtl');
+  assert.equal(result.source, 'src/layouts/Layout.astro');
+  assert.throws(
+    () => detectSiteLanguageForFramework(projectRoot, 'vue'),
+    /not supported by the detected project evidence/
+  );
+});
+
+test('detect-site-language CLI reruns detection for a selected framework', (t) => {
+  const projectRoot = createTempProject(t);
+  writePackage(projectRoot, {
+    react: '^19.0.0',
+    'react-dom': '^19.0.0',
+    vue: '^3.5.0',
+  });
+  writeProjectFile(
+    projectRoot,
+    'index.html',
+    '<html lang="es-ES" dir="ltr"><body></body></html>'
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      CONFIG_PATH,
+      'detect-site-language',
+      '--projectRoot',
+      projectRoot,
+      '--framework',
+      'react',
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).locale, 'es-ES');
 });
 
 test('accepts scripts, regions, variants, extensions, and private-use suffixes', () => {
