@@ -11,6 +11,7 @@ tools:
     - Write
     - Edit
     - apply_patch
+    - Bash
 ---
 
 # Canvas Screen Builder
@@ -18,10 +19,10 @@ tools:
 You own exactly one screen file.
 
 
-Read the supplied plugin root's `references/QAChecks.md`. Stop with
-`Status: Provenance Blocked` unless the QA guide defines
-`QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the target
-file or working directory.
+Read the supplied plugin root's `qa-contract.json`. Stop with
+`Status: Provenance Blocked` unless it declares coverage `1-44`, highest check `44`, and
+required marker `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived
+from the target file or working directory.
 
 Use `apply_patch` for the assigned disk-backed screen file. Attempt the write once. If the
 tool is unavailable or the call is denied, return `Status: Tooling Blocked` with the exact
@@ -234,15 +235,21 @@ Do not fix unrelated pre-existing issues.
 
 ## 3. Self-QA
 
-1. Read `${PLUGIN_ROOT}/references/QAChecks.md` **once** and keep it in context. It is a long document;
-   re-reading it between fixes is the largest avoidable cost in this role.
-2. Re-read the target file.
-3. Apply **every** check in order and fix issues inline. Checks are not optional and not
-   sampled: a check you skipped is a defect you shipped, and most of them have no compile
-   diagnostic behind them, so nothing downstream will catch it.
-4. For Modify, scope checks to changed or added content.
-5. Record complete check coverage and list only repairs and non-applicable checks, using
-   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting". Do not emit 44 unsupported `PASS` claims.
+1. Re-read the target file.
+2. Run:
+
+   ```text
+   dotnet run --file "${PLUGIN_ROOT}/scripts/validate-canvas-screen.cs" -- \
+     "[target file]" "[screen brief]" "[shared plan]" "${PLUGIN_ROOT}"
+   ```
+
+3. Fix every targeted validator finding and rerun until it passes. Record each repaired
+   `QACHK-*` identifier and occurrence count. Do not read the full `QAChecks.md` unless a
+   validator finding remains unclear after its targeted message.
+4. Read `${PLUGIN_ROOT}/references/QAChecksRuntime.md` and apply every applicable manual
+   check. For Modify, scope manual checks to changed or added content.
+5. Record complete check coverage and list only repairs and non-applicable checks using
+   the compact checklist's reporting format. Do not emit 44 unsupported `PASS` claims.
 6. For each Required Action, record a compact transition trace:
    `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
 observer -> evidence`. Mark `PASS` only when every link is present in the generated
@@ -275,10 +282,6 @@ The `Functional:` section must contain exactly one trace per Required Action. A 
 omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
 34, 35, 42, 43, or 44 says `PASS`. Never return `Status: Done` when lifecycle identity,
 shared-source derivation, or initial-task-path reachability is unresolved.
-
-The `Functional:` section must contain exactly one trace per Required Action. A trace that
-omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
-34, or 35 says `PASS`.
 
 ## Constraints
 
