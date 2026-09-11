@@ -10,6 +10,9 @@ const {
   detectFramework,
   detectSiteLanguage,
 } = require('../../../scripts/lib/localization-config');
+const {
+  auditBidirectionalReadiness,
+} = require('../../../scripts/lib/bidirectional-readiness');
 
 runValidation((cwd) => {
   const configPath = findPath(cwd, 'powerpages.config.json');
@@ -82,6 +85,17 @@ runValidation((cwd) => {
     } else if (!siteLanguage.valid) {
       errors.push(`Document language is invalid:\n  ${siteLanguage.conflicts.join('\n  ')}`);
     }
+  }
+
+  // 8. New sites must be structurally safe for either writing direction. The
+  // audit blocks only deterministic defects; geometry that may be intentionally
+  // physical remains a review finding for the create-site browser pass.
+  const bidiAudit = auditBidirectionalReadiness(projectRoot);
+  for (const finding of bidiAudit.findings.filter((item) => item.severity === 'error')) {
+    errors.push(
+      `Bidirectional readiness ${finding.file}:${finding.line} ` +
+      `[${finding.rule}]: ${finding.message}`
+    );
   }
 
   if (errors.length > 0) {
