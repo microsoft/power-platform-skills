@@ -14,17 +14,15 @@ Screens:
                 Control: Classic/TextInput
                 Properties:
                     Format: =TextFormat.Number
-            - btnApply:
-                Control: Classic/Button
-                Properties:
-                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
             - btnReceive:
                 Control: Classic/Button
                 Properties:
+                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))
             - btnIssue:
                 Control: Classic/Button
                 Properties:
+                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))
             - galInventory:
                 Control: Gallery

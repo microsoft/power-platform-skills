@@ -1,15 +1,15 @@
 Runtime evaluation: NOT RUN
 
 Plugin root: {{PLUGIN_ROOT}}
-Skill contract version: 3.0.9
+Skill contract version: 3.0.10
 Source revision: test-fixture
 
 ## Action Contract Acceptance
 
 | Action  | Handler    | Event formula                        | Observer   | Observer formula        | Notes | Result |
 | ------- | ---------- | ------------------------------------ | ---------- | ----------------------- | ----- | ------ |
-| Receive | btnReceive | OnSelect = Patch(colInventory, ...)  | galInventory | Items = colInventory  | adds  | PASS   |
-| Issue   | btnIssue   | OnSelect = Patch(colInventory, ...)  | galInventory | Items = colInventory  | subs  | PASS   |
+| Receive | btnReceive | `btnReceive.OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))` | galInventory | Items = colInventory | adds  | PASS   |
+| Issue   | btnIssue   | `btnIssue.OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))` | galInventory | Items = colInventory | subs  | PASS   |
 
 ## Functional Test Matrix Results
 

@@ -188,7 +188,18 @@ Before writing plans:
     visibly commit. Also require the positive case: the submit action must actually become
     enabled and clickable once a valid operation and positive amount are set — a gate that
     can never enable is a defect, not a pass. Never permit an implicit,
-    default, or stale mutation direction.
+    default, or stale mutation direction. When directional selector events commit operation
+    state and a distinct guarded event consumes that state to mutate, define each selector
+    as selection-only and name that exact mutation event in both directional contracts;
+    selectors may additionally set receipt/display state, but the operation state is the
+    value consumed by the mutation owner. Control names and labels do not determine
+    ownership. The invalid gate must blank-check the same operation state that an
+    event-bearing selector can assign and the mutation branches consume, and the gated
+    control must own or route to that mutation. Reject a dead gated control placed beside
+    direct-mutation selectors. Plan
+    button, dropdown, and radio selectors as valid alternatives when they commit an
+    explicit direction. Do not force this shared-operation pattern onto separate direct
+    actions; they are valid when each owns its mutation and complete eligibility gate.
 14. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
     stable ID, or deletion snapshot. Record the mutation's **write set** and **proof set** in
@@ -232,8 +243,11 @@ Before writing plans:
     same record type, also fill the `## Compound Sequence Evidence` table from
     `PlanTemplates.md`: name the same-record ID, the start->op1->mid->op2->end sequence, and
     the second operation's old-value binding proving it reads the mutated canonical value.
-    Do not use these tables for
-    narrative or inferred behavior; every formula must be copied from final YAML.
+    For a shared-operation flow, also declare every selection-only event binding, the
+    common guarded mutation event binding, and the common operation state so
+    final acceptance can compare the implemented topology rather than infer it. Do not use
+    these tables for narrative or inferred behavior; every formula must be copied from
+    final YAML.
 19. For every selector or filter, couple the concrete option source, readable option
     formula, pointer-committed selected value, consumer predicate, active-selection
     indicator, and clear behavior. Apply the short-choice rule to filters as well as form

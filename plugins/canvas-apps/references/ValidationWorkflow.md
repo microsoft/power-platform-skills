@@ -218,7 +218,7 @@ Source revision: [git revision, package version, or "unavailable"]
 
 | Action   | Entry control | Event formula   | Source / stable ID    | Observer formula | Reachability      | Result |
 | -------- | ------------- | --------------- | --------------------- | ---------------- | ----------------- | ------ |
-| [action] | [control]     | [exact formula] | [source and identity] | [exact formula]  | [path and bounds] | PASS   |
+| [action] | [control]     | [exact final-YAML `Control.Property: =formula` binding(s)] | [source and identity] | [exact formula]  | [path and bounds] | PASS   |
 
 ## Required Record Field Evidence
 
@@ -273,9 +273,24 @@ Missing, hidden, blank, clipped, displaced, tooltip-only, accessible-label-only,
 time-only substitutes fail. The scenario table separately records every Functional Test
 Matrix row. The Screen QA table has one row per dispatch screen and preserves each
 worker's coverage, repairs, and N/A results. Copy formulas verbatim from final YAML. In
-tables, replace formula newlines with `<br>` and escape `|` as `\|`; do not paraphrase an
-exact formula into an action summary. Omit `## Required Record Field Evidence` only when
-the plan omits `## Required Record Fields`.
+tables, preserve quoted and block-scalar formula content, normalize formula newlines to
+`<br>`, and escape `|` as `\|`; do not assume a one-line plain scalar or paraphrase an
+exact formula into an action summary. A phrase such as “Action uses Patch” is not an event
+formula. Record the exact final-YAML event binding for every event-bearing control involved
+in selection or mutation; do not add passive value inputs that have no relevant event.
+For a shared-operation flow — selector events commit operation state and a distinct guarded
+event consumes it to mutate — each directional Action Contract row must contain its exact
+selector event binding and the exact common mutation event binding. The two rows must name
+the same mutation `Control.Property` and operation state; control names and labels do not
+establish ownership. Selector bindings may set that state plus receipt/display UI state,
+but must not mutate; the actual operation state is the one the mutation event consumes.
+An event-bearing selector must assign it, the invalid gate must blank-check it, and the
+gated control must own or route to the mutation. A dead gated control beside
+direct-mutation buttons fails. When direct actions own their mutations instead,
+independently gated handlers remain valid and each row records its own exact event binding.
+Omit
+`## Required Record Field Evidence` only when the plan omits
+`## Required Record Fields`.
 
 When the plan contains an opposing directional pair, include `## Directional Mutation
 Evidence` with exactly one row per pair. This is an executable gate, not a self-reported
@@ -285,11 +300,36 @@ stable selected-record ID in both mutations, plus/minus arithmetic, one canonica
 read by the observer, and five receipt bindings including an actual persisted `Patch`
 result.
 
+Receipt controls may include visible label text. Static evidence still has to expose one
+unambiguous underlying value expression for each required receipt field. A direct value
+formula is valid, as is literal label decoration around exactly one dynamic value
+expression after quoted/block-scalar normalization. When multiple dynamic expressions
+could be the field value, fail with a dedicated ambiguous-receipt-expression error; do not
+guess an operand or accept the visible text alone.
+
+During final validation, cross-check the Action Contract cells against final YAML and
+against `## Directional Mutation Evidence`; do not allow either table to contradict the
+other. For a shared-operation flow, trace every exact selector binding into the same
+operation state and the same exact distinct mutation event, then verify only that event
+contains the mutation. Verify an event-bearing selector assigns that exact state, the
+invalid gate blank-checks it, the gated control owns or routes to the mutation, and the
+mutation consumes it. Reject a dead gated control beside direct-mutation buttons. For
+arithmetic pairs, associate the operation values with their
+specific branches and prove increase reaches `old + amount` while decrease reaches
+`old - amount`; the mere presence of both expressions is insufficient. Perform these
+comparisons on normalized formula content so quoted and block-scalar YAML forms are
+equivalent after newlines are represented as `<br>`. Static text/formula checks establish
+conformance, not runtime pointer reachability or event execution: a live browser
+evaluation must still prove that each selector and the distinct mutation control can be
+reached and clicked in the stated Given state.
+
 The directional gate also checks the two static shapes behind QAChecks Check 34
 "staging-variable liveness" and Check 43 "LookUp key integrity." A receipt old/amount
-operand that is a staging variable must be assigned from a live `.Selected`, `.Text`, or
-`.Value` expression before `Patch` in the mutation handler or in a control `OnChange`; an
-`App.OnStart` or `Screen.OnVisible` seed alone fails. The `LookUp`/`Filter` key used by the
+operand that is a global `var*` or screen-context `loc*` staging variable must be assigned
+from a live `.Selected`, `.Text`, or `.Value` expression before `Patch`, either through
+`Set(...)`/`UpdateContext({...})` in the mutation prelude or through a reachable
+event-bearing input/selector control. An `App.OnStart` or `Screen.OnVisible` seed alone
+fails, and an assignment after `Patch` is too late. The `LookUp`/`Filter` key used by the
 mutation must use the raw selected-record expression with no concatenation or arithmetic
 suffix. These checks prove that the final YAML contains a live-input assignment and an
 untransformed key; they cannot prove that the running app actually fires the event, that

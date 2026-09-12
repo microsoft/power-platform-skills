@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.9
+version: 3.0.10
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.9`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.10`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -78,6 +78,15 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - Opposing transitions such as Receive/Issue, Increase/Decrease, Credit/Debit,
       Allocate/Release, Check-in/Check-out, and Enable/Disable have separate contracts even
       when one shared form implements both.
+    - When opposing actions use a shared-operation flow — directional selector events
+      commit operation state and a distinct guarded event consumes that state to mutate —
+      each selector is selection-only and that distinct event is the single mutation entry
+      point, regardless of control name or label. Both contracts name that same mutation
+      event and operation state; a
+      selector that calls `Patch`, `SubmitForm`, `Collect`, `Remove`, `RemoveIf`,
+      `UpdateIf`, or a connector mutation is invalid. Separate direct-action controls
+      remain valid when no distinct shared mutation event exists and each action has its
+      own complete eligibility gate.
     - Every mutation names an observable bound result, not only a confirmation message.
     - Every mutation declares a write set and receipt proof set. For create/edit, reject the
       plan when any user-entered or user-selected write-set field is absent from the proof set.
@@ -103,7 +112,9 @@ CREATE and complex EDIT workflows return here after the planner finishes.
    Evidence` before dispatch. It must state a stable selected-record ID expression, a
    `=Blank()` operation default, a disabled blank/non-positive submission gate, exact final
    formulas for both directions, a canonical-source observer, and receipt bindings for
-   operation, old value, amount, expected value, and actual persisted value.
+   operation, old value, amount, expected value, and actual persisted value. For a
+   shared-operation flow, the plan must also identify each selection-only binding, the
+   common guarded mutation event, and their common operation state.
 7. Verify its `## Dispatch` table:
     - Every row has `Action`, `Screen`, `Target File`, `YAML Key`, `Name Prefix`, and
       `Screen Brief`.
@@ -235,6 +246,16 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   every user-entered or user-selected field written by the handler needs a readable labeled
   receipt binding. Navigation, a notification, hidden state, or a row somewhere in a longer
   list cannot replace it. Compile success does not prove runtime usability.
+- For a shared-operation flow, inspect the final YAML and verify selectors only set the
+  declared operation state plus optional receipt/display state, never mutate, while the
+  distinct event that performs the guarded mutation is the only mutation entry point. The
+  actual operation state is the one this mutation event consumes. Both directional
+  contracts must resolve to that exact event and state. Verify an event-bearing selector
+  can assign that state, the invalid gate blank-checks it, and the gated control owns or
+  routes to the mutation. Reject a dead gated control beside selector buttons that mutate
+  directly. Verify each `+`/`-` expression is inside the branch for its selected operation,
+  not merely present elsewhere in the handler. Preserve independently gated direct-action
+  implementations when no distinct shared mutation event exists.
 - For every opposing mutation pair, verify both contracts and both concrete scenarios.
   The operation control is visible and pointer-selectable; submission is disabled while
   operation or required amount/value is hidden, clipped, blank, invalid, unset, or
@@ -242,6 +263,10 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   default state. For arithmetic pairs, substitute the scenario values and verify increase
   uses `old + amount`, decrease uses `old - amount`, and the receipt shows operation, old
   value, amount, expected new value, and actual persisted new value.
+- Treat global `var*` and screen-context `loc*` operands alike: a reachable event must
+  assign them from live input with `Set(...)` or `UpdateContext({...})` before `Patch`, or
+  the mutation must read the input inline. `App.OnStart`/`Screen.OnVisible`-only and
+  after-`Patch` assignments are not live evidence.
 - Execute every `## Functional Test Matrix` row symbolically against the final formulas.
   Confirm the Given state makes the entry point eligible, the When event targets the
   declared source and stable ID, the Then values follow from the operation, and the

@@ -15,17 +15,15 @@ Screens:
                 Properties:
                     Default: =0
                     Format: =TextFormat.Number
-            - btnMngApply:
-                Control: Classic/Button
-                Properties:
-                    DisplayMode: =If(IsBlank(drpMngOperation.Selected.Value) || Not(Value(numMngAdjustAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
             - btnMngReceive:
                 Control: Classic/Button
                 Properties:
+                    DisplayMode: =If(IsBlank(drpMngOperation.Selected.Value) || Not(Value(numMngAdjustAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Receive"); Set(varReceiptExpectedQuantity, varReceiptOldQuantity + varReceiptAmount); Set(varLastInventoryMutation, Patch(colInventory, LookUp(colInventory, ID = drpMngAdjustItem.Selected.ID & " ID"), {Quantity: varReceiptOldQuantity + varReceiptAmount}))
             - btnMngIssue:
                 Control: Classic/Button
                 Properties:
+                    DisplayMode: =If(IsBlank(drpMngOperation.Selected.Value) || Not(Value(numMngAdjustAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Issue"); Set(varReceiptExpectedQuantity, varReceiptOldQuantity - varReceiptAmount); Set(varLastInventoryMutation, Patch(colInventory, LookUp(colInventory, ID = drpMngAdjustItem.Selected.ID & " ID"), {Quantity: varReceiptOldQuantity - varReceiptAmount}))
             - galInventory:
                 Control: Gallery

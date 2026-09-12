@@ -1321,7 +1321,12 @@ prove that the requested outcome occurred.
 5. Inspect the receipt controls and confirm each proof-set field has a readable label and a
    visible binding to the captured state. Input values before submission, hidden variables,
    agent memory, unlabeled or truncated text, and fields available only in a scrolled list
-   do not count. `Notify()` and navigation do not pass.
+   do not count. A receipt formula may render literal label text, but static evidence must
+   expose exactly one unambiguous underlying dynamic value expression for that field:
+   either bind the value directly or decorate one dynamic value with literals. If multiple
+   dynamic expressions could be the value, report a dedicated
+   ambiguous-receipt-expression error rather than guessing. `Notify()` and navigation do
+   not pass.
 6. For edit, require stable-ID selection and update, complete prepopulation, preservation
    of unchanged fields, and non-mutating Cancel behavior.
 7. For a shared create/edit form, require intentional state reset after create and save.
@@ -1334,6 +1339,19 @@ prove that the requested outcome occurred.
 10. For opposing transitions, confirm each direction has a separate Required Action and
     concrete scenario. A shared form may share controls but not contracts or expected
     outcomes.
+    When directional selector events commit operation state and a distinct guarded event
+    consumes that state to mutate, inspect every directional selector event: each may set
+    only the common operation state plus selection, receipt, or display UI state, and must not
+    call `Patch`, `SubmitForm`, `Collect`, `Remove`, `RemoveIf`, `UpdateIf`, or a connector
+    mutation. Confirm both directions name the same operation state and the same distinct
+    mutation event, and that this event is the only mutation entry point; its control name
+    or label is irrelevant. The actual operation state is the one that event consumes.
+    Confirm an event-bearing selector assigns it, its invalid gate blank-checks it, and the
+    gated control owns or routes to the mutation. Reject a dead gated control beside
+    direct-mutation buttons. Button, dropdown, and radio selectors all pass when they
+    commit explicit direction state. Do not apply the shared-handler restriction to
+    separate direct actions: they pass when each has its own complete eligibility gate and
+    mutation handler, provided no dead shared gate is claimed.
 11. Confirm the operation selector and required amount/value input are visible,
     pointer-selectable, inside parent bounds, and reachable in the scenario's Given state.
     Confirm the operation selector is a Dropdown, radio group, or visible button-group that
@@ -1347,7 +1365,9 @@ prove that the requested outcome occurred.
     infers the requested direction from prior state.
 13. For arithmetic pairs, substitute the same concrete old value and amount into both
     scenarios. Increase must produce `old + amount`; decrease must produce
-    `old - amount`. Reject a reversed sign even when the formula compiles. When both
+    `old - amount`. Trace the branch condition and reject a reversed sign when the increase
+    operation selects the subtraction branch or the decrease operation selects the
+    addition branch, even if both expressions occur somewhere in the handler. When both
     directions act on the same record type, also trace a same-record compound sequence
     (e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`) and confirm the second operation's
     old value is read from the canonical source the first mutation already updated, not a
@@ -1358,32 +1378,40 @@ prove that the requested outcome occurred.
 15. **Staging-variable liveness.** When any operand the mutation reads — a `Patch`/`Collect`
     change value, an arithmetic operand, an `If`/`Switch` condition, or a `LookUp`/`Filter`
     key — is a variable meant to carry a user-entered or user-selected value (a *staging
-    variable* such as `varAmount`, `varOldQuantity`, `varReceiptAmount`), trace every place
-    that variable is written. It MUST be written from the live input at the moment the user
-    supplies the value: either an explicit `OnChange` on the input control
+    variable* such as a global `varAmount`/`varOldQuantity` or screen-context
+    `locAmount`/`locOldQuantity`), trace every place that variable is written. It MUST be
+    written from the live input before the mutation consumes it: either in the mutation
+    event before `Patch`, or in a reachable input/selector event such as `OnChange` or
+    `OnSelect`
     (`ModernNumberInput`, `ModernTextInput`, `ModernDropdown`, slider, combo box, …) that
-    runs `Set(varStaging, Control.Value)` / `Set(varStaging, Control.Selected)`, or the
-    handler reading `Control.Value` / `Control.Selected` inline at mutation time. A staging
-    variable initialized only in `App.OnStart` or `Screen.OnVisible` and never re-written
-    from an input control is **dead**: it keeps its seed value (`0`, `Blank()`) forever, so
-    the mutation silently computes against the seed instead of the typed amount, and the
-    formula still compiles and still passes every directional/sign check. Reject it. The
-    preferred, grep-verifiable form is to read the input directly at the point of mutation
-    (`Value(txtAmount.Text)`, `cmbItem.Selected.ID`); when a staging variable is used
-    instead, its `Set(...)` from the corresponding input control must be present and
-    reachable before the mutation consumes it, not only its `OnStart` seed.
+    runs `Set(varStaging, Control.Value)` / `Set(varStaging, Control.Selected)` or
+    `UpdateContext({locStaging: Control.Value})` /
+    `UpdateContext({locStaging: Control.Selected})`, or by reading `Control.Value` /
+    `Control.Selected` inline at mutation time. An assignment after `Patch` cannot supply
+    that write and fails. A staging variable initialized only in `App.OnStart` or
+    `Screen.OnVisible` and never re-written from a live input event is **dead**: it keeps
+    its seed value (`0`, `Blank()`) forever, so the mutation silently computes against the
+    seed instead of the typed amount, and the formula still compiles and still passes every
+    directional/sign check. Reject it. The preferred, grep-verifiable form is to read the
+    input directly at the point of mutation (`Value(txtAmount.Text)`,
+    `cmbItem.Selected.ID`); when a staging variable is used instead, its `Set(...)` or
+    `UpdateContext({...})` assignment from the corresponding input control must be present
+    and reachable before the mutation consumes it, not only its initialization seed.
     `validate-canvas-acceptance.cs` enforces this bounded static provenance for directional
     receipt old/amount operands. The runtime inspection remains necessary because a static
-    formula match cannot prove that `OnChange` fires or that the control is reachable.
+    formula match cannot prove that `OnChange` fires, that a selector or mutation control
+    is pointer-reachable, or that an enabled control can actually be clicked.
 
 **Fix:** Preserve the affected record state, update or refresh the visible binding, and add
 the required in-viewport mutation receipt with write-set/proof-set parity and one labeled
 binding per proof-set field. For opposing transitions, split merged contracts and
 scenarios, expose a reachable operation selector, fail closed on invalid inputs, repair the
 arithmetic direction, and show complete before/after receipt evidence. Wire every staging
-variable to its live input control (an `OnChange` `Set`, or an inline
-`Control.Value`/`Control.Selected` read at mutation time) rather than leaving it at an
-`OnStart` seed. `Notify()` alone is not an observable outcome.
+variable to its live input control (a reachable `Set`/`UpdateContext` before `Patch`, or an
+inline `Control.Value`/`Control.Selected` read at mutation time) rather than leaving it at
+an `App.OnStart`/`Screen.OnVisible` seed or assigning it after the write. For
+shared-operation flows, move mutations out of selectors and into the one distinct guarded
+mutation event. `Notify()` alone is not an observable outcome.
 
 **Exception:** None for a mutation named in `## Required Actions`.
 

@@ -66,7 +66,17 @@ each proof-set field. Opposing transitions have separate rows even when they sha
 For an arithmetic pair, each row names old value, amount, explicit `+` or `-` arithmetic,
 and a proof set containing operation, old value, amount, expected new value, and actual
 persisted new value. Do not use navigation, a notification, or a row somewhere in a longer
-list as the Observable result.]
+list as the Observable result. For a shared-operation flow — directional selector events
+commit operation state and a distinct guarded event consumes that state to mutate — each
+directional row must name its selection-only event, the same operation state, and the same
+distinct mutation event, regardless of control names or labels. Selectors never mutate,
+but may also set receipt/display state; the actual operation state is the one consumed by
+the mutation owner. An event-bearing selector must assign it, the invalid gate must
+blank-check it, and the gated control must own or route to the mutation. A dead gated
+control beside direct-mutation buttons is invalid. Each arithmetic branch is associated
+with its matching operation. Button, dropdown, and radio selectors are all valid when
+they commit explicit direction state. Separate direct actions remain valid when each
+action is independently gated and no dead shared gate is claimed.]
 
 ## Functional Test Matrix
 
@@ -88,7 +98,21 @@ Increase/Decrease, Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable
 Use one row per pair. Copy the exact final-YAML `Control.Property: =formula` bindings into
 the acceptance artifact. The selected-record expression must be the exact stable-ID target
 used by both mutations. Receipt bindings must be separated with `<br>` and include
-`operation`, `old`, `amount`, `expected`, and `actual`.]
+`operation`, `old`, `amount`, `expected`, and `actual`. For a shared-operation flow, both
+mutation columns name the same distinct event binding and identify the operation value and
+branch that reaches the corresponding arithmetic; isolated `+` and `-` excerpts are not
+evidence. The invalid-submit gate must blank-check the exact operation state written by
+every selector and consumed by that event. Preserve quoted or block-scalar formulas and
+normalize embedded newlines to `<br>` in the table. A receipt may render readable label
+text, but static evidence must expose one unambiguous underlying value expression for each
+of `operation`, `old`, `amount`, `expected`, and `actual`. Use either a direct value
+formula or literal label decoration around exactly one dynamic value expression. If a
+binding contains multiple plausible dynamic values and the underlying value cannot be
+uniquely extracted, record a dedicated ambiguous-receipt-expression error rather than
+guessing. A `var*` or `loc*` operand is live only when a reachable event assigns it from
+the input with `Set(...)` or `UpdateContext({...})` before the mutation, or the mutation
+reads the input inline. `App.OnStart`/`Screen.OnVisible`-only and after-mutation assignments
+do not establish liveness.]
 
 | Pair | Selected-record expression | Blank operation binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings |
 | ---- | -------------------------- | ----------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- |

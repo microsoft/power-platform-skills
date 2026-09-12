@@ -52,6 +52,54 @@ const ISSUE_STALE_WRITE = '{Quantity: varReceiptOldQuantity - varReceiptAmount})
 const LATE_STAGING_ASSIGNMENTS =
     '; Set(varReceiptOldQuantity, drpMngAdjustItem.Selected.Quantity)' +
     '; Set(varReceiptAmount, Value(numMngAdjustAmount.Text))';
+const RECEIVE_ACTION_BINDING =
+    '`btnReceive.OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))`';
+const ISSUE_ACTION_BINDING =
+    '`btnIssue.OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))`';
+const RECEIVE_ACTION_FORMULA = RECEIVE_ACTION_BINDING.slice('`btnReceive.OnSelect: '.length, -1);
+const ISSUE_ACTION_FORMULA = ISSUE_ACTION_BINDING.slice('`btnIssue.OnSelect: '.length, -1);
+const SHARED_SWITCH =
+    'Switch(varOperation, "Receive", varOldQuantity + varAmount, "Issue", varOldQuantity - varAmount)';
+const REVERSED_SHARED_SWITCH =
+    'Switch(varOperation, "Receive", varOldQuantity - varAmount, "Issue", varOldQuantity + varAmount)';
+const SHARED_APPLY_FORMULA =
+    `=Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, ${SHARED_SWITCH}); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: ${SHARED_SWITCH}}))`;
+const SHARED_APPLY_BINDING = `\`btnApply.OnSelect: ${SHARED_APPLY_FORMULA}\``;
+
+function replaceAllRequired(value, expected, replacement, label) {
+    assert.ok(value.includes(expected), `fixture transformation could not find ${label}: ${expected}`);
+    return value.split(expected).join(replacement);
+}
+
+function replaceOnceRequired(value, expected, replacement, label) {
+    const first = value.indexOf(expected);
+    assert.notStrictEqual(first, -1, `fixture transformation could not find ${label}: ${expected}`);
+    assert.strictEqual(
+        value.indexOf(expected, first + expected.length),
+        -1,
+        `fixture transformation expected exactly one ${label}`);
+    return value.replace(expected, replacement);
+}
+
+function replaceFirstRequired(value, expected, replacement, label) {
+    assert.ok(value.includes(expected), `fixture transformation could not find ${label}: ${expected}`);
+    return value.replace(expected, replacement);
+}
+
+function readFixture(file) {
+    const raw = fs.readFileSync(file, 'utf8');
+    return {
+        eol: raw.includes('\r\n') ? '\r\n' : '\n',
+        text: raw.replace(/\r\n/g, '\n'),
+    };
+}
+
+function writeFixture(file, fixture) {
+    const output = fixture.eol === '\n'
+        ? fixture.text
+        : fixture.text.replace(/\n/g, fixture.eol);
+    fs.writeFileSync(file, output);
+}
 
 function materialize(
     caseName,
@@ -61,6 +109,42 @@ function materialize(
         repairPhantomKey = false,
         wireStagingOnChange = false,
         wireStagingAfterPatch = false,
+        contradictReceiveActionBinding = false,
+        sharedApplyFlow = false,
+        sharedSelectorMutates = false,
+        omitSharedMutationBinding = false,
+        reverseSharedBranches = false,
+        mismatchedSharedVariables = false,
+        mismatchedSharedOwner = false,
+        mutationDoesNotConsumeOperation = false,
+        mismatchedSharedGate = false,
+        operationLiteralSuffix = false,
+        unrelatedOperationLiteral = false,
+        dropdownSelector = false,
+        quoteYamlFormulas = false,
+        blockYamlFormula = false,
+        blockYamlKeepTrailingNewline = false,
+        actionBindingLineBreak = false,
+        misleadingApplyDirect = false,
+        orphanApplyGate = false,
+        labeledReceiptValues = false,
+        ambiguousReceiptValue = false,
+        selectorReceiptAssignment = false,
+        sharedActionHandlerOnly = false,
+        dropdownDirectShared = false,
+        updateContextSelectors = false,
+        sharedIfBranches = false,
+        ambiguousSharedDispatch = false,
+        mutatingSelectorFunction = null,
+        selectGateRouting = false,
+        unrelatedGateMutation = false,
+        requiredRecordScalar = null,
+        mixedTopology = false,
+        multiFieldPatch = false,
+        ambiguousMultiFieldPatch = false,
+        multiBlankGate = false,
+        contextStagingOnChange = false,
+        contextStagingAfterPatch = false,
         sourceDir = fixtureDir,
     } = {}) {
     const workspace = path.join(workRoot, caseName);
@@ -69,10 +153,14 @@ function materialize(
 
     // App.pa.yaml and Screen1.pa.yaml are copied verbatim (they contain no placeholders);
     // the two Markdown artifacts are templated with the run-specific absolute paths.
-    let appYaml = fs.readFileSync(path.join(sourceDir, 'App.pa.yaml'), 'utf8');
-    let screenYaml = fs.readFileSync(path.join(sourceDir, 'Screen1.pa.yaml'), 'utf8');
-    let plan = fs.readFileSync(path.join(sourceDir, 'canvas-app-plan.template.md'), 'utf8');
-    let acceptance = fs.readFileSync(path.join(sourceDir, 'canvas-app-acceptance.template.md'), 'utf8');
+    const appFixture = readFixture(path.join(sourceDir, 'App.pa.yaml'));
+    const screenFixture = readFixture(path.join(sourceDir, 'Screen1.pa.yaml'));
+    const planFixture = readFixture(path.join(sourceDir, 'canvas-app-plan.template.md'));
+    const acceptanceFixture = readFixture(path.join(sourceDir, 'canvas-app-acceptance.template.md'));
+    let appYaml = appFixture.text;
+    let screenYaml = screenFixture.text;
+    let plan = planFixture.text;
+    let acceptance = acceptanceFixture.text;
 
     plan = plan.split('{{WORKSPACE}}').join(workspace);
     acceptance = acceptance.split('{{PLUGIN_ROOT}}').join(pluginRoot);
@@ -80,8 +168,10 @@ function materialize(
     if (reverseIssue) {
         // Reverse the sign in BOTH the YAML (so the binding still matches the app exactly
         // and only the directional check fires) and the acceptance issue-mutation cell.
-        screenYaml = screenYaml.split(CORRECT_ISSUE_ARITHMETIC).join(REVERSED_ISSUE_ARITHMETIC);
-        acceptance = acceptance.split(CORRECT_ISSUE_ARITHMETIC).join(REVERSED_ISSUE_ARITHMETIC);
+        screenYaml = replaceAllRequired(
+            screenYaml, CORRECT_ISSUE_ARITHMETIC, REVERSED_ISSUE_ARITHMETIC, 'Issue arithmetic in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, CORRECT_ISSUE_ARITHMETIC, REVERSED_ISSUE_ARITHMETIC, 'Issue arithmetic evidence');
     }
 
     if (reverseIssuePatchOnly) {
@@ -89,37 +179,623 @@ function materialize(
         // `Set(varExpectedQuantity, varOldQuantity - varAmount)` intact. Apply to both the YAML
         // and the acceptance cell so the binding still matches the app and only the directional
         // Patch-write check fires.
-        screenYaml = screenYaml.split(CORRECT_ISSUE_PATCH_WRITE).join(REVERSED_ISSUE_PATCH_WRITE);
-        acceptance = acceptance.split(CORRECT_ISSUE_PATCH_WRITE).join(REVERSED_ISSUE_PATCH_WRITE);
+        screenYaml = replaceAllRequired(
+            screenYaml, CORRECT_ISSUE_PATCH_WRITE, REVERSED_ISSUE_PATCH_WRITE, 'Issue Patch write in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, CORRECT_ISSUE_PATCH_WRITE, REVERSED_ISSUE_PATCH_WRITE, 'Issue Patch write evidence');
     }
 
     if (repairPhantomKey) {
-        screenYaml = screenYaml.split(PHANTOM_RECORD_ID).join(LIVE_RECORD_ID);
-        acceptance = acceptance.split(PHANTOM_RECORD_ID).join(LIVE_RECORD_ID);
+        screenYaml = replaceAllRequired(
+            screenYaml, PHANTOM_RECORD_ID, LIVE_RECORD_ID, 'phantom record ID in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, PHANTOM_RECORD_ID, LIVE_RECORD_ID, 'phantom record ID evidence');
+    }
+
+    if (contextStagingOnChange || contextStagingAfterPatch) {
+        for (const [stale, context] of [
+            ['varReceiptOldQuantity', 'locOldQuantity'],
+            ['varReceiptAmount', 'locAmount'],
+        ]) {
+            appYaml = replaceAllRequired(appYaml, stale, context, `${stale} App context name`);
+            screenYaml = replaceAllRequired(screenYaml, stale, context, `${stale} YAML context name`);
+            acceptance = replaceAllRequired(
+                acceptance, stale, context, `${stale} evidence context name`);
+        }
+
+        if (contextStagingOnChange) {
+            screenYaml = replaceFirstRequired(
+                screenYaml,
+                '                    Items: =colInventory',
+                '                    Items: =colInventory\n' +
+                '                    OnChange: =UpdateContext({locOldQuantity: drpMngAdjustItem.Selected.Quantity})',
+                'context selected-record assignment');
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    Format: =TextFormat.Number',
+                '                    Format: =TextFormat.Number\n' +
+                '                    OnChange: =UpdateContext({locAmount: Value(numMngAdjustAmount.Text)})',
+                'context amount assignment');
+        }
+
+        if (contextStagingAfterPatch) {
+            const assignments =
+                '; UpdateContext({locOldQuantity: drpMngAdjustItem.Selected.Quantity, ' +
+                'locAmount: Value(numMngAdjustAmount.Text)})';
+            for (const tail of [
+                '{Quantity: locOldQuantity + locAmount}))',
+                '{Quantity: locOldQuantity - locAmount}))',
+            ]) {
+                screenYaml = replaceAllRequired(
+                    screenYaml, tail, tail + assignments, 'late context assignment YAML');
+                acceptance = replaceAllRequired(
+                    acceptance, tail, tail + assignments, 'late context assignment evidence');
+            }
+        }
     }
 
     if (wireStagingOnChange) {
-        screenYaml = screenYaml.replace(
+        // The selected-record combo box is the first of two controls bound to colInventory.
+        screenYaml = replaceFirstRequired(
+            screenYaml,
             '                    Items: =colInventory',
             '                    Items: =colInventory\n' +
-            '                    OnChange: =Set(varReceiptOldQuantity, drpMngAdjustItem.Selected.Quantity)');
-        screenYaml = screenYaml.replace(
+            '                    OnChange: =Set(varReceiptOldQuantity, drpMngAdjustItem.Selected.Quantity)',
+            'selected-record Items binding');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
             '                    Format: =TextFormat.Number',
             '                    Format: =TextFormat.Number\n' +
-            '                    OnChange: =Set(varReceiptAmount, Value(numMngAdjustAmount.Text))');
+            '                    OnChange: =Set(varReceiptAmount, Value(numMngAdjustAmount.Text))',
+            'amount Format binding');
     }
 
     if (wireStagingAfterPatch) {
         for (const mutationTail of [RECEIVE_STALE_WRITE, ISSUE_STALE_WRITE]) {
-            screenYaml = screenYaml.split(mutationTail).join(mutationTail + LATE_STAGING_ASSIGNMENTS);
-            acceptance = acceptance.split(mutationTail).join(mutationTail + LATE_STAGING_ASSIGNMENTS);
+            screenYaml = replaceAllRequired(
+                screenYaml, mutationTail, mutationTail + LATE_STAGING_ASSIGNMENTS, 'stale Patch write in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, mutationTail, mutationTail + LATE_STAGING_ASSIGNMENTS, 'stale Patch write evidence');
         }
     }
 
-    fs.writeFileSync(path.join(workspace, 'App.pa.yaml'), appYaml);
-    fs.writeFileSync(path.join(workspace, 'Screen1.pa.yaml'), screenYaml);
-    fs.writeFileSync(path.join(workspace, 'canvas-app-plan.md'), plan);
-    fs.writeFileSync(path.join(workspace, 'canvas-app-acceptance.md'), acceptance);
+    if (contradictReceiveActionBinding) {
+        const claimedBinding = '`btnReceive.OnSelect: =Set(varOperation, "Receive")`';
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING} |`,
+            `| Receive | btnReceive | ${claimedBinding} |`,
+            'Receive Action Contract row');
+    }
+
+    if (sharedApplyFlow) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnApply:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    DisplayMode: =If(IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            `                    OnSelect: ${SHARED_APPLY_FORMULA}\n` +
+            '            - btnReceive:',
+            'shared Apply control');
+
+        const mutatingReceiveSelectorBinding = RECEIVE_ACTION_BINDING.replace(
+            '=Set(varLastOperation, "Receive")',
+            '=Set(varOperation, "Receive"); Set(varLastOperation, "Receive")');
+        const receiveSelectorBinding = sharedSelectorMutates
+            ? mutatingReceiveSelectorBinding
+            : '`btnReceive.OnSelect: =Set(varOperation, "Receive")`';
+        const issueSelectorBinding = '`btnIssue.OnSelect: =Set(varOperation, "Issue")`';
+        if (!sharedSelectorMutates) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+                `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+                '                    OnSelect: =Set(varOperation, "Receive")',
+                'Receive selector YAML');
+        } else {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+                `                    OnSelect: ${mutatingReceiveSelectorBinding.slice(
+                    '`btnReceive.OnSelect: '.length, -1)}`,
+                'mutating Receive selector YAML');
+        }
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+            '                    OnSelect: =Set(varOperation, "Issue")',
+            'Issue selector YAML');
+
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING} |`,
+            `| Receive | btnReceive + btnApply | ${receiveSelectorBinding}<br>${SHARED_APPLY_BINDING} |`,
+            'Receive shared Action Contract row');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Issue   | btnIssue   | ${ISSUE_ACTION_BINDING} |`,
+            `| Issue   | btnIssue + btnApply | ${issueSelectorBinding}<br>${SHARED_APPLY_BINDING} |`,
+            'Issue shared Action Contract row');
+        assert.ok(
+            acceptance.includes('drpOperation.Default: =Blank()'),
+            'shared fixture must retain exact blank operation evidence');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnApply.DisplayMode: =If(IsBlank(varOperation) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'shared Apply gate evidence');
+        if (!sharedSelectorMutates) {
+            acceptance = replaceOnceRequired(
+                acceptance,
+                RECEIVE_ACTION_BINDING.slice(1, -1),
+                SHARED_APPLY_BINDING.slice(1, -1),
+                'Receive directional mutation evidence');
+        }
+        acceptance = replaceOnceRequired(
+            acceptance,
+            ISSUE_ACTION_BINDING.slice(1, -1),
+            SHARED_APPLY_BINDING.slice(1, -1),
+            'Issue directional mutation evidence');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'operation=lblReceiptOperation.Text: =varLastOperation',
+            'operation=lblReceiptOperation.Text: =varOperation',
+            'shared operation receipt evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varLastOperation',
+            '                    Text: =varOperation',
+            'shared operation receipt YAML');
+
+        if (reverseSharedBranches) {
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_SWITCH, REVERSED_SHARED_SWITCH, 'shared Switch branches in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_SWITCH, REVERSED_SHARED_SWITCH, 'shared Switch branch evidence');
+        }
+
+        if (omitSharedMutationBinding) {
+            acceptance = replaceAllRequired(
+                acceptance,
+                `<br>${SHARED_APPLY_BINDING}`,
+                '',
+                'shared mutation binding in Action Contract');
+        }
+
+        if (mismatchedSharedVariables) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    OnSelect: =Set(varOperation, "Issue")',
+                '                    OnSelect: =Set(varIssueOperation, "Issue")',
+                'Issue selector variable in YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`',
+                '`btnIssue.OnSelect: =Set(varIssueOperation, "Issue")`',
+                'Issue selector variable evidence');
+        }
+
+        if (mismatchedSharedOwner) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '            - btnReceive:',
+                '            - btnCommitAdjustment:\n' +
+                '                Control: Classic/Button\n' +
+                '                Properties:\n' +
+                '                    DisplayMode: =If(IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+                `                    OnSelect: ${SHARED_APPLY_FORMULA}\n` +
+                '            - btnReceive:',
+                'second shared mutation owner YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`<br>' +
+                SHARED_APPLY_BINDING,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`<br>' +
+                SHARED_APPLY_BINDING.replace('btnApply', 'btnCommitAdjustment'),
+                'Issue mutation owner evidence');
+        }
+
+        if (mutationDoesNotConsumeOperation) {
+            const disconnectedFormula = SHARED_APPLY_FORMULA.replaceAll(
+                'varOperation',
+                'varMutationMode');
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_APPLY_FORMULA, disconnectedFormula, 'disconnected mutation YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_APPLY_FORMULA, disconnectedFormula, 'disconnected mutation evidence');
+        }
+
+        if (mismatchedSharedGate) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                'DisplayMode: =If(IsBlank(varOperation)',
+                'DisplayMode: =If(IsBlank(varGateOperation)',
+                'shared gate variable in YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                'btnApply.DisplayMode: =If(IsBlank(varOperation)',
+                'btnApply.DisplayMode: =If(IsBlank(varGateOperation)',
+                'shared gate variable evidence');
+        }
+
+        if (operationLiteralSuffix) {
+            for (const [literal, replacement] of [
+                ['"Receive"', '"Receive inventory"'],
+                ['"Issue"', '"Issue inventory"'],
+            ]) {
+                screenYaml = replaceAllRequired(
+                    screenYaml, literal, replacement, `${literal} operation literal in YAML`);
+                acceptance = replaceAllRequired(
+                    acceptance, literal, replacement, `${literal} operation literal evidence`);
+            }
+        }
+
+        if (unrelatedOperationLiteral) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    OnSelect: =Set(varOperation, "Receive")',
+                '                    OnSelect: =Set(varOperation, "Inbound")',
+                'unrelated Receive selector literal in YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnReceive.OnSelect: =Set(varOperation, "Receive")`',
+                '`btnReceive.OnSelect: =Set(varOperation, "Inbound")`',
+                'unrelated Receive selector literal evidence');
+        }
+
+        if (dropdownSelector) {
+            const dropdownEvent = '`drpOperation.OnChange: =Set(varOperation, Self.Selected.Value)`';
+            const dropdownItems = '`drpOperation.Items: =["Receive", "Issue"]`';
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    Items: =["Receive", "Issue"]',
+                '                    Items: =["Receive", "Issue"]\n' +
+                '                    OnChange: =Set(varOperation, Self.Selected.Value)',
+                'dropdown selector YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnReceive.OnSelect: =Set(varOperation, "Receive")`',
+                `${dropdownEvent}<br>${dropdownItems}`,
+                'Receive dropdown selector evidence');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                '`btnIssue.OnSelect: =Set(varOperation, "Issue")`',
+                `${dropdownEvent}<br>${dropdownItems}`,
+                'Issue dropdown selector evidence');
+        }
+
+        if (selectorReceiptAssignment) {
+            for (const direction of ['Receive', 'Issue']) {
+                screenYaml = replaceOnceRequired(
+                    screenYaml,
+                    `OnSelect: =Set(varOperation, "${direction}")`,
+                    `OnSelect: =Set(varOperation, "${direction}"); Set(varReceiptAction, "${direction}")`,
+                    `${direction} selector receipt assignment in YAML`);
+                acceptance = replaceOnceRequired(
+                    acceptance,
+                    `OnSelect: =Set(varOperation, "${direction}")\``,
+                    `OnSelect: =Set(varOperation, "${direction}"); Set(varReceiptAction, "${direction}")\``,
+                    `${direction} selector receipt assignment evidence`);
+            }
+        }
+
+        if (sharedActionHandlerOnly || dropdownDirectShared || updateContextSelectors || mixedTopology) {
+            for (const direction of ['Receive', 'Issue']) {
+                acceptance = replaceOnceRequired(
+                    acceptance,
+                    `\`btn${direction}.OnSelect: =Set(varOperation, "${direction}")\`<br>`,
+                    '',
+                    `${direction} selector omission from Action Contract`);
+            }
+        }
+
+        if (updateContextSelectors) {
+            for (const direction of ['Receive', 'Issue']) {
+                screenYaml = replaceOnceRequired(
+                    screenYaml,
+                    `OnSelect: =Set(varOperation, "${direction}")`,
+                    `OnSelect: =UpdateContext({varOperation: "${direction}"})`,
+                    `${direction} UpdateContext selector YAML`);
+            }
+        }
+
+        if (dropdownDirectShared) {
+            for (const direction of ['Receive', 'Issue']) {
+                screenYaml = replaceOnceRequired(
+                    screenYaml,
+                    `                    OnSelect: =Set(varOperation, "${direction}")`,
+                    '',
+                    `${direction} Set selector removal`);
+            }
+            screenYaml = replaceAllRequired(
+                screenYaml,
+                'varOperation',
+                'drpOperation.Selected.Value',
+                'dropdown-direct operation source in YAML');
+            acceptance = replaceAllRequired(
+                acceptance,
+                'varOperation',
+                'drpOperation.Selected.Value',
+                'dropdown-direct operation source evidence');
+        }
+
+        if (sharedIfBranches) {
+            const sharedIf =
+                'If(varOperation = "Receive", varOldQuantity + varAmount, ' +
+                'varOperation = "Issue", varOldQuantity - varAmount)';
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_SWITCH, sharedIf, 'guarded If branches in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_SWITCH, sharedIf, 'guarded If branch evidence');
+        }
+
+        if (ambiguousSharedDispatch) {
+            const ambiguous =
+                `(${SHARED_SWITCH}) + 0 * (${SHARED_SWITCH})`;
+            screenYaml = replaceAllRequired(
+                screenYaml, SHARED_SWITCH, ambiguous, 'ambiguous shared dispatch in YAML');
+            acceptance = replaceAllRequired(
+                acceptance, SHARED_SWITCH, ambiguous, 'ambiguous shared dispatch evidence');
+        }
+
+        if (mixedTopology) {
+            const mixedSharedBinding = reverseSharedBranches
+                ? SHARED_APPLY_BINDING.replaceAll(SHARED_SWITCH, REVERSED_SHARED_SWITCH)
+                : SHARED_APPLY_BINDING;
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '                    OnSelect: =Set(varOperation, "Issue")',
+                `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+                'mixed direct Issue YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                `| Issue   | btnIssue + btnApply | ${mixedSharedBinding} |`,
+                `| Issue   | btnIssue | ${ISSUE_ACTION_BINDING} |`,
+                'mixed direct Issue Action Contract');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                ` | ${mixedSharedBinding.slice(1, -1)} | galInventory.Items: =colInventory |`,
+                ` | ${ISSUE_ACTION_BINDING.slice(1, -1)} | galInventory.Items: =colInventory |`,
+                'mixed direct Issue mutation evidence');
+        }
+
+        if (multiBlankGate) {
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                'IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0)',
+                'IsBlank(varOperation) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0)',
+                'multi-IsBlank gate YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                'IsBlank(varOperation) \\|\\| Not(Value(txtAmount.Text) > 0)',
+                'IsBlank(varOperation) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0)',
+                'multi-IsBlank gate evidence');
+        }
+
+        if (mutatingSelectorFunction) {
+            const mutations = {
+                ClearCollect: 'ClearCollect(colScratch, {Value: 1})',
+                Clear: 'Clear(colScratch)',
+                Update: 'Update(colScratch, First(colScratch), {Value: 2})',
+                Relate: 'Relate(ThisItem.Children, First(colScratch))',
+                Unrelate: 'Unrelate(ThisItem.Children, First(colScratch))',
+            };
+            const mutation = mutations[mutatingSelectorFunction];
+            assert.ok(mutation, `missing selector mutation fixture for ${mutatingSelectorFunction}`);
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                'OnSelect: =Set(varOperation, "Receive")',
+                `OnSelect: =Set(varOperation, "Receive"); ${mutation}`,
+                `${mutatingSelectorFunction} selector YAML`);
+            acceptance = replaceOnceRequired(
+                acceptance,
+                'OnSelect: =Set(varOperation, "Receive")`',
+                `OnSelect: =Set(varOperation, "Receive"); ${mutation}\``,
+                `${mutatingSelectorFunction} selector evidence`);
+        }
+    }
+
+    if (quoteYamlFormulas) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+            `                    OnSelect: '${RECEIVE_ACTION_FORMULA}'`,
+            'single-quoted Receive YAML formula');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+            `                    OnSelect: ${JSON.stringify(ISSUE_ACTION_FORMULA)}`,
+            'double-quoted Issue YAML formula');
+    }
+
+    if (blockYamlFormula) {
+        const literalMarker = blockYamlKeepTrailingNewline ? '|' : '|-';
+        const foldedMarker = blockYamlKeepTrailingNewline ? '>' : '>-';
+        const receiveBlockFormula = blockYamlKeepTrailingNewline
+            ? RECEIVE_ACTION_FORMULA.replace(
+                '; Set(varOldQuantity',
+                ';\n\n                        Set(varOldQuantity')
+            : RECEIVE_ACTION_FORMULA;
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
+            `                    OnSelect: ${literalMarker}\n` +
+            `                        ${receiveBlockFormula}`,
+            'literal block Receive YAML formula');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
+            `                    OnSelect: ${foldedMarker}\n` +
+            `                        ${ISSUE_ACTION_FORMULA}`,
+            'folded block Issue YAML formula');
+    }
+
+    if (actionBindingLineBreak) {
+        acceptance = replaceOnceRequired(
+            acceptance,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING} |`,
+            `| Receive | btnReceive | ${RECEIVE_ACTION_BINDING.replace(
+                '; Set(varOldQuantity',
+                ';<br>Set(varOldQuantity')} |`,
+            'Action Contract formula line break');
+    }
+
+    if (misleadingApplyDirect) {
+        screenYaml = replaceAllRequired(
+            screenYaml, 'btnReceive', 'btnReceiveApply', 'Apply-named direct control in YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'btnReceive', 'btnReceiveApply', 'Apply-named direct control evidence');
+    }
+
+    if (orphanApplyGate) {
+        const orphanGate =
+            '=If(IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)';
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnApply:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            `                    DisplayMode: ${orphanGate}\n` +
+            '            - btnReceive:',
+            'orphan Apply gate YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            `btnApply.DisplayMode: ${orphanGate.replace('||', '\\|\\|')}`,
+            'orphan Apply gate evidence');
+    }
+
+    if (labeledReceiptValues || ambiguousReceiptValue) {
+        const oldFormula = ambiguousReceiptValue
+            ? '=varOldQuantity & varAmount'
+            : '="Old quantity: " & varOldQuantity';
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varOldQuantity',
+            `                    Text: ${oldFormula}`,
+            'old receipt label YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'old=lblReceiptOld.Text: =varOldQuantity',
+            `old=lblReceiptOld.Text: ${oldFormula}`,
+            'old receipt label evidence');
+    }
+
+    if (labeledReceiptValues) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varAmount',
+            '                    Text: ="Amount: " & Text(varAmount, "0")',
+            'amount receipt label YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'amount=lblReceiptAmount.Text: =varAmount',
+            'amount=lblReceiptAmount.Text: ="Amount: " & Text(varAmount, "0")',
+            'amount receipt label evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Text: =varLastMutation.Quantity',
+            '                    Text: ="Actual: " & Text(varLastMutation.Quantity)',
+            'actual receipt label YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'actual=lblReceiptActual.Text: =varLastMutation.Quantity',
+            'actual=lblReceiptActual.Text: ="Actual: " & Text(varLastMutation.Quantity)',
+            'actual receipt label evidence');
+    }
+
+    if (selectGateRouting) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnRouteMutation:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    OnSelect: =Select(btnReceive)\n' +
+            '            - btnReceive:',
+            'Select gate route YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnRouteMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'Select gate route evidence');
+    }
+
+    if (unrelatedGateMutation) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - btnReceive:',
+            '            - btnUnrelatedMutation:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    OnSelect: =Clear(colScratch)\n' +
+            '            - btnReceive:',
+            'unrelated gated mutation YAML');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnUnrelatedMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'unrelated gated mutation evidence');
+    }
+
+    if (requiredRecordScalar) {
+        const scalar = requiredRecordScalar === 'quoted'
+            ? '"=ThisItem.Quantity"'
+            : '|-\n                        =ThisItem.Quantity';
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - galInventory:',
+            '            - lblRequiredQuantity:\n' +
+            '                Control: Classic/Label\n' +
+            '                Properties:\n' +
+            `                    Text: ${scalar}\n` +
+            '            - galInventory:',
+            'required record field YAML');
+        plan +=
+            '\n## Required Record Fields\n\n' +
+            '| Field | Screen | Control | Formula | Source Field | Notes |\n' +
+            '| ----- | ------ | ------- | ------- | ------------ | ----- |\n' +
+            '| Quantity | Screen1 | lblRequiredQuantity | Text | Quantity | visible |\n';
+        acceptance +=
+            '\n## Required Record Field Evidence\n\n' +
+            '| Field | Control | Formula | Record hierarchy | Visibility/layout | Result |\n' +
+            '| ----- | ------- | ------- | ---------------- | ----------------- | ------ |\n' +
+            '| Quantity | lblRequiredQuantity | Text: =ThisItem.Quantity | gallery row | visible | PASS |\n';
+    }
+
+    if (multiFieldPatch || ambiguousMultiFieldPatch) {
+        for (const expression of [
+            'varOldQuantity + varAmount',
+            'varOldQuantity - varAmount',
+        ]) {
+            const extra = ambiguousMultiFieldPatch
+                ? `, Delta: ${expression}`
+                : ', Notes: "adjusted"';
+            screenYaml = replaceAllRequired(
+                screenYaml,
+                `{Quantity: ${expression}}`,
+                `{Quantity: ${expression}${extra}}`,
+                `${expression} multi-field Patch YAML`);
+            acceptance = replaceAllRequired(
+                acceptance,
+                `{Quantity: ${expression}}`,
+                `{Quantity: ${expression}${extra}}`,
+                `${expression} multi-field Patch evidence`);
+        }
+    }
+
+    writeFixture(path.join(workspace, 'App.pa.yaml'), { ...appFixture, text: appYaml });
+    writeFixture(path.join(workspace, 'Screen1.pa.yaml'), { ...screenFixture, text: screenYaml });
+    writeFixture(path.join(workspace, 'canvas-app-plan.md'), { ...planFixture, text: plan });
+    writeFixture(
+        path.join(workspace, 'canvas-app-acceptance.md'),
+        { ...acceptanceFixture, text: acceptance });
     return workspace;
 }
 
@@ -142,6 +818,376 @@ test('accepts a correctly-signed Receive/Issue workspace', () => {
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('rejects an orphan operation variable on a non-mutating Apply gate', () => {
+    const workspace = materialize('receive-orphan-apply-gate', { orphanApplyGate: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected orphan Apply gate to fail validation');
+    assert.match(
+        stderr,
+        /blank-checks operation variable 'varOperation', but no reachable control event assigns it/);
+    assert.match(
+        stderr,
+        /gated control 'btnApply' must own or route to a declared mutation handler/);
+});
+
+test('accepts independent direct actions without a dead shared submit control', () => {
+    const workspace = materialize('receive-independent-direct-pass');
+    const screen = fs.readFileSync(path.join(workspace, 'Screen1.pa.yaml'), 'utf8');
+    assert.doesNotMatch(screen, /btnApply/);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects the ADO-export contradiction between a claimed selector and direct-mutation YAML', () => {
+    const workspace = materialize(
+        'receive-action-binding-contradiction',
+        { contradictReceiveActionBinding: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected contradictory Action Contract evidence to fail validation');
+    assert.match(
+        stderr,
+        /Action Contract for 'Receive' binding 'btnReceive\.OnSelect' does not match final app YAML/);
+    assert.match(stderr, /Action Contract omits the distinct mutation-handler binding/);
+});
+
+test('rejects an accurately recorded selector that mutates in a shared Apply flow', () => {
+    const workspace = materialize(
+        'receive-shared-selector-mutates',
+        { sharedApplyFlow: true, sharedSelectorMutates: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(
+        stderr,
+        /Directional action 'Receive' selector 'btnReceive' must select the operation without mutating data/);
+});
+
+test('accepts selectors that set a shared operation consumed by the mutating Apply control', () => {
+    const workspace = materialize('receive-shared-apply-pass', { sharedApplyFlow: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /PASS:/);
+});
+
+test('accepts correct shared branches when Action Contract contains only the handler', () => {
+    const workspace = materialize(
+        'receive-shared-handler-only-pass',
+        { sharedApplyFlow: true, sharedActionHandlerOnly: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed shared branches when Action Contract omits selectors', () => {
+    const workspace = materialize(
+        'receive-shared-handler-only-reversed',
+        {
+            sharedApplyFlow: true,
+            sharedActionHandlerOnly: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected evidence-shaped shared branch bypass to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('accepts shared handler branching directly on dropdown state', () => {
+    const workspace = materialize(
+        'receive-dropdown-direct-pass',
+        { sharedApplyFlow: true, dropdownDirectShared: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed shared branches that consume dropdown state directly', () => {
+    const workspace = materialize(
+        'receive-dropdown-direct-reversed',
+        {
+            sharedApplyFlow: true,
+            dropdownDirectShared: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected reversed dropdown-direct branches to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('accepts correct shared Receive with direct Issue mixed topology', () => {
+    const workspace = materialize(
+        'receive-mixed-topology-pass',
+        { sharedApplyFlow: true, mixedTopology: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed shared Receive in mixed topology', () => {
+    const workspace = materialize(
+        'receive-mixed-topology-reversed',
+        {
+            sharedApplyFlow: true,
+            mixedTopology: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mixed-topology reversed Receive to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+});
+
+test('accepts operation selectors assigned through UpdateContext for gate liveness', () => {
+    const workspace = materialize(
+        'receive-update-context-selector',
+        {
+            sharedApplyFlow: true,
+            sharedActionHandlerOnly: true,
+            updateContextSelectors: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('resolves operation source from receipt when a gate has multiple IsBlank operands', () => {
+    const workspace = materialize(
+        'receive-multi-blank-gate-pass',
+        { sharedApplyFlow: true, sharedActionHandlerOnly: true, multiBlankGate: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects reversed branches with a multi-IsBlank gate', () => {
+    const workspace = materialize(
+        'receive-multi-blank-gate-reversed',
+        {
+            sharedApplyFlow: true,
+            sharedActionHandlerOnly: true,
+            multiBlankGate: true,
+            reverseSharedBranches: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected reversed multi-IsBlank flow to fail');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('accepts shared arithmetic guarded by explicit If conditions', () => {
+    const workspace = materialize(
+        'receive-shared-if-pass',
+        { sharedApplyFlow: true, sharedIfBranches: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects ambiguous multiple matching operation dispatches', () => {
+    const workspace = materialize(
+        'receive-shared-ambiguous-dispatch',
+        { sharedApplyFlow: true, ambiguousSharedDispatch: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected ambiguous shared dispatch to fail closed');
+    assert.match(stderr, /must guard exactly one write branch/);
+});
+
+test('resolves shared operation state when selectors also assign receipt labels', () => {
+    const workspace = materialize(
+        'receive-shared-selector-receipt',
+        { sharedApplyFlow: true, selectorReceiptAssignment: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a shared selector whose Action Contract omits the mutation owner', () => {
+    const workspace = materialize(
+        'receive-shared-owner-omitted',
+        { sharedApplyFlow: true, omitSharedMutationBinding: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected omitted shared mutation evidence to fail validation');
+    assert.match(stderr, /Action Contract omits the distinct mutation-handler binding/);
+});
+
+test('rejects shared mutation branches whose Receive and Issue arithmetic is swapped', () => {
+    const workspace = materialize(
+        'receive-shared-reversed-branches',
+        { sharedApplyFlow: true, reverseSharedBranches: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected reversed shared branches to fail validation');
+    assert.match(stderr, /receive mutation must apply '\+'/);
+    assert.match(stderr, /issue mutation must apply '-'/);
+});
+
+test('rejects different operation variables across shared directional rows', () => {
+    const workspace = materialize(
+        'receive-shared-variable-mismatch',
+        { sharedApplyFlow: true, mismatchedSharedVariables: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched shared variables to fail validation');
+    assert.match(stderr, /shared rows must use the same operation state variable/);
+});
+
+test('rejects different mutation owners across shared directional rows', () => {
+    const workspace = materialize(
+        'receive-shared-owner-mismatch',
+        { sharedApplyFlow: true, mismatchedSharedOwner: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched shared mutation owners to fail validation');
+    assert.match(stderr, /shared rows must resolve to the same mutation control and event/);
+});
+
+test('rejects a shared mutation handler that does not consume selector operation state', () => {
+    const workspace = materialize(
+        'receive-shared-disconnected-mutation',
+        { sharedApplyFlow: true, mutationDoesNotConsumeOperation: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected disconnected shared mutation to fail validation');
+    assert.match(stderr, /mutation handler 'btnApply' must consume operation variable 'varOperation'/);
+});
+
+test('rejects a shared gate that blank-checks different operation state', () => {
+    const workspace = materialize(
+        'receive-shared-gate-mismatch',
+        { sharedApplyFlow: true, mismatchedSharedGate: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched shared gate state to fail validation');
+    assert.match(stderr, /shared mutation gate must blank-check operation variable 'varOperation'/);
+});
+
+test('accepts explicit operation literals that contain each direction word', () => {
+    const workspace = materialize(
+        'receive-shared-operation-labels',
+        { sharedApplyFlow: true, operationLiteralSuffix: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a selector operation literal unrelated to its direction', () => {
+    const workspace = materialize(
+        'receive-shared-unrelated-operation',
+        { sharedApplyFlow: true, unrelatedOperationLiteral: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated selector operation to fail validation');
+    assert.match(stderr, /must assign operation state to a declared value containing direction 'receive'/);
+});
+
+test('accepts a declared dropdown selection binding for shared operation state', () => {
+    const workspace = materialize(
+        'receive-shared-dropdown',
+        { sharedApplyFlow: true, dropdownSelector: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts valid single- and double-quoted YAML formulas', () => {
+    const workspace = materialize('receive-quoted-yaml', { quoteYamlFormulas: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts valid literal and folded YAML block-scalar formulas', () => {
+    const workspace = materialize('receive-block-yaml', { blockYamlFormula: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts block scalars that retain their trailing newline', () => {
+    const workspace = materialize(
+        'receive-block-yaml-keep',
+        { blockYamlFormula: true, blockYamlKeepTrailingNewline: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('normalizes documented br separators inside exact Action Contract bindings', () => {
+    const workspace = materialize(
+        'receive-action-binding-br',
+        { actionBindingLineBreak: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a direct mutation control whose name contains Apply', () => {
+    const workspace = materialize('receive-misleading-apply-name', { misleadingApplyDirect: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects common Power Fx mutation functions in a shared operation selector', () => {
+    for (const mutation of ['ClearCollect', 'Clear', 'Update', 'Relate', 'Unrelate']) {
+        const workspace = materialize(
+            `receive-selector-${mutation.toLowerCase()}`,
+            { sharedApplyFlow: true, mutatingSelectorFunction: mutation });
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected ${mutation} selector mutation to fail`);
+        assert.match(stderr, /selector 'btnReceive' must select the operation without mutating data/);
+    }
+});
+
+test('accepts a gated control that routes to a declared mutation with Select', () => {
+    const workspace = materialize(
+        'receive-select-gate-route',
+        { selectGateRouting: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a gated control whose unrelated mutation does not route to the declared handler', () => {
+    const workspace = materialize(
+        'receive-unrelated-gate-mutation',
+        { unrelatedGateMutation: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated gated mutation to fail routing validation');
+    assert.match(
+        stderr,
+        /gated control 'btnUnrelatedMutation' must own or route to a declared mutation handler/);
+});
+
+test('matches required record fields against quoted YAML formulas', () => {
+    const workspace = materialize(
+        'receive-required-record-quoted',
+        { requiredRecordScalar: 'quoted' });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('matches required record fields against block-scalar YAML formulas', () => {
+    const workspace = materialize(
+        'receive-required-record-block',
+        { requiredRecordScalar: 'block' });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts one directional arithmetic field in a multi-field Patch record', () => {
+    const workspace = materialize(
+        'receive-multi-field-patch',
+        { multiFieldPatch: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects multiple directional arithmetic fields in one Patch record', () => {
+    const workspace = materialize(
+        'receive-ambiguous-multi-field-patch',
+        { ambiguousMultiFieldPatch: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected ambiguous Patch fields to fail');
+    assert.match(stderr, /Patch record must contain exactly one field using both receipt arithmetic operands; found 2/);
+});
+
+test('extracts old and amount values from labeled receipt expressions', () => {
+    const workspace = materialize(
+        'receive-labeled-receipts',
+        { labeledReceiptValues: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects ambiguous multi-value receipt labels with a dedicated error', () => {
+    const workspace = materialize(
+        'receive-ambiguous-receipt',
+        { ambiguousReceiptValue: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected ambiguous receipt evidence to fail validation');
+    assert.match(stderr, /receipt binding 'old' has ambiguous label expression/);
+    assert.doesNotMatch(stderr, /old operand .*dead staging|must apply .*receipt old-value operand/);
 });
 
 test('rejects a reversed-sign Issue mutation (directional contract)', () => {
@@ -235,6 +1281,34 @@ test('accepts staging variables written from live control OnChange formulas', ()
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('accepts context staging values written by live UpdateContext OnChange formulas', () => {
+    const workspace = materialize(
+        'receive-live-context-onchange',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            contextStagingOnChange: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects context staging assignments that occur only after Patch', () => {
+    const workspace = materialize(
+        'receive-late-context-staging',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            contextStagingAfterPatch: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected late UpdateContext staging to fail');
+    assert.match(stderr, /receive old operand 'locOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'locAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'locOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'locAmount' is a dead staging variable/);
 });
 
 test('rejects staging assignments that occur only after Patch', () => {

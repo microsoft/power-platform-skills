@@ -144,6 +144,18 @@ Do not fix unrelated pre-existing issues.
   mutation formula on the current explicit selection, and never reuse stale or implicit
   direction state. Disable submission when the operation or required amount/value is
   hidden, clipped, blank, invalid, unset, or unreachable.
+- In a shared-operation flow, selector events may only commit the declared operation state
+  and update selection, receipt, or display UI state; they must not call `Patch`,
+  `SubmitForm`, `Collect`, `Remove`, `RemoveIf`, `UpdateIf`, or connector mutations. The
+  actual operation state is the one consumed by the mutation owner. Put the sole mutation
+  in the distinct guarded event that consumes that state, regardless of its control name
+  or label, and make both directional Required Actions name that exact event and state.
+  An event-bearing selector must assign the state, its invalid gate must blank-check it,
+  and the gated control must own or route to the mutation. Never leave a dead gated control
+  beside direct-mutation selectors. Place each arithmetic expression in the matching
+  operation branch so swapping the `+` and `-` branches cannot pass inspection. If the
+  brief instead specifies separate direct actions, keep their independently gated mutation
+  handlers; do not introduce a shared flow.
 - Give the operation selector an unambiguous, deterministically committing control: a
   `Dropdown`, radio group, or visible button-group whose selection commits on click. Never
   an autocomplete/searching combobox whose selection state depends on typed filtering or
@@ -275,7 +287,10 @@ Do not fix unrelated pre-existing issues.
 6. For each Required Action, record a compact transition trace:
    `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
 observer -> evidence`. Mark `PASS` only when every link is present in the generated
-   formulas. Mark `BLOCKED: [missing link]` otherwise and repair it before returning.
+   formulas. For a shared-operation flow, include the selector event and distinct guarded
+   mutation event in each directional trace, and confirm both name the same operation
+   state. Mark `BLOCKED: [missing link]` otherwise and repair it before
+   returning.
 
 Do not call `compile_canvas`; the orchestrator owns compilation. It compiles as soon as
 the first builder returns, so return promptly rather than polishing indefinitely.
