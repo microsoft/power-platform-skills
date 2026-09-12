@@ -1,0 +1,4 @@
+App:
+    Properties:
+        StartScreen: =Screen1
+        OnStart: =ClearCollect(colInventory, {ID: "A", Quantity: 5}); Set(varReceiptOldQuantity, 0); Set(varReceiptAmount, 0)

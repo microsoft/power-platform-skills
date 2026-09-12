@@ -432,6 +432,27 @@ void ValidateDirectionalMutation(
             $"Directional mutation pair '{pair}' {direction} mutation must target '{selectedRecordExpression}'.");
     }
 
+    // Phantom LookUp key (QAChecks Check 43). Merely *containing* the selected-record
+    // expression is not enough: the record identity that locates the row to Patch must be
+    // the selected record verbatim. Concatenating or computing onto it silently changes the
+    // key so `LookUp(...)` returns Blank() and `Patch` no-ops — the app looks wired but never
+    // mutates. The canonical defect is a stray string-concat suffix on the key, e.g.
+    //   LookUp(colInventory, ID = cmbAdjustItem.Selected.ID & " ID")
+    // where `... .Selected.ID` still appears as a substring (so the .Contains check above
+    // passes) but ` & " ID"` corrupts the match. A correct key terminates the selected-record
+    // expression with a delimiter (`)` closing the LookUp predicate, or `.` for `LookUp(...).Field`),
+    // never a binary operator. Flag any occurrence of the selected-record expression immediately
+    // followed (past whitespace) by a string-concat or arithmetic operator. `selectedRecordExpression`
+    // is code-adjacent evidence text but may contain regex metacharacters (dots), so escape it.
+    var transformedKey = new Regex(
+        Regex.Escape(selectedRecordExpression) + @"\s*[&+\-*/^]",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (transformedKey.IsMatch(formula))
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' {direction} mutation uses a transformed record-identity key: the selected-record expression '{selectedRecordExpression}' is concatenated or computed onto, so LookUp never matches and Patch no-ops (phantom LookUp key).");
+    }
+
     if (!string.IsNullOrWhiteSpace(source) &&
         !formula.Contains(source, StringComparison.OrdinalIgnoreCase))
     {

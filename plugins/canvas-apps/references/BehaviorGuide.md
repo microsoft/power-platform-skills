@@ -54,7 +54,8 @@ Every action must form one traceable loop:
 
 - Name the precondition and eligibility predicate. The control's `Visible` and `DisplayMode` formulas must permit that state.
 - Mutate the same source and field that the observer reads. A status button that patches `ReviewState` while the badge renders `Status` is broken even when both formulas compile.
-- Identify records by an immutable stable ID. Capture `ThisItem.ID` or the selected ID before mutation and look up the target from the source; do not infer identity from a display name.
+- Identify records by an immutable stable ID. Capture `ThisItem.ID` or the selected ID before mutation and look up the target from the source; do not infer identity from a display name. The `LookUp`/`Filter` that locates the target must compare the key field against the raw selected/context value with no concatenation, prefix, suffix, casing, or reshaping (`= Selected.ID & " ID"`, `"ITEM-" & Selected.ID`, `Left(...)`, `Trim(...)`) unless the documented schema stores the key that way. A reshaped key is a **phantom LookUp key**: it matches nothing, so `LookUp` returns `Blank()` and the `Patch` silently mutates no row even though the formula compiles.
+- Feed mutations from live input, not dead state. Any variable that is meant to carry a user-entered or user-selected value (`varAmount`, `varOldQuantity`, a staging variable) must be written from its input control at the moment of input — an `OnChange` that runs `Set(varStaging, Control.Value)`/`Set(varStaging, Control.Selected)`, or an inline `Control.Value`/`Control.Selected` read inside the handler. A staging variable initialized only in `App.OnStart` or `Screen.OnVisible` and never re-written from an input is **dead**: it stays at its seed (`0`, `Blank()`), so the mutation silently computes against the seed while still compiling and still passing sign/direction checks. Prefer reading the input directly at mutation time (`Value(txtAmount.Text)`, `cmbItem.Selected.ID`).
 - Use the mutation result or a fresh lookup by ID for the receipt. Do not read a potentially stale gallery `ThisItem` after `Patch` and assume it contains the new value.
 - Make success contingent on the operation. Reset inputs, exit edit mode, navigate, and reveal success evidence only on the success path.
 - Bind every downstream list, filter, metric, export, and decision surface to the same updated source or refresh the external source before observing it.
@@ -75,7 +76,10 @@ Given/When/Then scenarios.
 - For arithmetic pairs, capture the old value before mutation and encode the direction
   explicitly: increase is `newValue = oldValue + amount`; decrease is
   `newValue = oldValue - amount`. State pairs must likewise assign explicit opposing
-  target states rather than toggle implicit state.
+  target states rather than toggle implicit state. Read both operands from live state at
+  mutation time — the old value from the canonical source and the amount from the input
+  control (`Value(txtAmount.Text)` or an `OnChange`-populated staging variable), never from a
+  staging variable left at its `App.OnStart` seed.
 - The receipt shows the chosen operation, old value/state, amount when applicable,
   expected new value/state, and actual persisted new value/state. The destination observer
   must agree with that receipt.

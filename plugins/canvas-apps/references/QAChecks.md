@@ -61,7 +61,8 @@ are not part of the identifier.
 - Check 32 — `QACHK-ACTION-LABEL-FIT` — multiword action label does not fit its control
 - Check 33 — `QACHK-ACTION-CONTRACT` — required action or navigation is missing,
   unreachable, or not wired
-- Check 34 — `QACHK-MUTATION-OUTCOME` — data changes without a visible post-action result
+- Check 34 — `QACHK-MUTATION-OUTCOME` — data changes without a visible post-action result,
+  or a dead staging variable feeds the mutation (staging-variable liveness)
 - Check 35 — `QACHK-BEHAVIOR-ACCEPTANCE` — advanced behavior omits a required acceptance path
 - Check 36 — `QACHK-HORIZONTAL-BUDGET` — row content exceeds its available width
 - Check 37 — `QACHK-MANUAL-BOUNDS` — visible ManualLayout controls overlap or leave the parent
@@ -72,7 +73,7 @@ are not part of the identifier.
 - Check 42 — `QACHK-PRIMARY-ACTION-REACHABILITY` — required action is clipped, covered,
   undersized, or unavailable from the initial task path
 - Check 43 — `QACHK-LIFECYCLE-IDENTITY` — edit, delete, or review targets an unstable or
-  incorrect record identity
+  incorrect record identity, or a phantom LookUp key locates no row (LookUp key integrity)
 - Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` — filters, ordering, alerts, metrics, or
   reports read a different source from mutations
 
@@ -1354,13 +1355,32 @@ prove that the requested outcome occurred.
 14. Confirm the receipt binds the selected operation, old value, amount, expected new
     value, and actual persisted new value, and that the destination observer shows the
     same actual value.
+15. **Staging-variable liveness.** When any operand the mutation reads — a `Patch`/`Collect`
+    change value, an arithmetic operand, an `If`/`Switch` condition, or a `LookUp`/`Filter`
+    key — is a variable meant to carry a user-entered or user-selected value (a *staging
+    variable* such as `varAmount`, `varOldQuantity`, `varReceiptAmount`), trace every place
+    that variable is written. It MUST be written from the live input at the moment the user
+    supplies the value: either an explicit `OnChange` on the input control
+    (`ModernNumberInput`, `ModernTextInput`, `ModernDropdown`, slider, combo box, …) that
+    runs `Set(varStaging, Control.Value)` / `Set(varStaging, Control.Selected)`, or the
+    handler reading `Control.Value` / `Control.Selected` inline at mutation time. A staging
+    variable initialized only in `App.OnStart` or `Screen.OnVisible` and never re-written
+    from an input control is **dead**: it keeps its seed value (`0`, `Blank()`) forever, so
+    the mutation silently computes against the seed instead of the typed amount, and the
+    formula still compiles and still passes every directional/sign check. Reject it. The
+    preferred, grep-verifiable form is to read the input directly at the point of mutation
+    (`Value(txtAmount.Text)`, `cmbItem.Selected.ID`); when a staging variable is used
+    instead, its `Set(...)` from the corresponding input control must be present and
+    reachable in the app, not only its `OnStart` seed.
 
 **Fix:** Preserve the affected record state, update or refresh the visible binding, and add
 the required in-viewport mutation receipt with write-set/proof-set parity and one labeled
 binding per proof-set field. For opposing transitions, split merged contracts and
 scenarios, expose a reachable operation selector, fail closed on invalid inputs, repair the
-arithmetic direction, and show complete before/after receipt evidence. `Notify()` alone is
-not an observable outcome.
+arithmetic direction, and show complete before/after receipt evidence. Wire every staging
+variable to its live input control (an `OnChange` `Set`, or an inline
+`Control.Value`/`Control.Selected` read at mutation time) rather than leaving it at an
+`OnStart` seed. `Notify()` alone is not an observable outcome.
 
 **Exception:** None for a mutation named in `## Required Actions`.
 
@@ -1591,8 +1611,32 @@ object through edit prepopulation, the mutation target, preservation of unchange
 and the immediate result observer. Review/status actions must write the same status field
 that filters, badges, dashboards, and reports render.
 
+Also apply a **LookUp key integrity** pass to every `LookUp`/`Filter` used to locate a
+mutation target (`Patch`, `Remove`, `UpdateIf`, or a connector mutation). The key comparison
+must test the collection's real key field against the exact selected or context value —
+`LookUp(colInventory, ID = cmbItem.Selected.ID)` — with NO string concatenation, prefix,
+suffix, casing change, padding, or reshaping applied to either side
+(`... = cmbItem.Selected.ID & " ID"`, `"ITEM-" & cmbItem.Selected.ID`,
+`Left(...)`, `Trim(...)`, `Upper(...)`), UNLESS the collection's documented schema in the
+plan genuinely stores the key in that transformed form. A concatenated or reshaped key is a
+**phantom LookUp key**: it can never equal any stored key, so `LookUp`/`Filter` returns
+`Blank()`/empty and the `Patch` silently creates nothing or targets no row while the formula
+still compiles. The acceptance validator now rejects the most common shape of this defect —
+a directional-mutation key that appends a string-concat or arithmetic operator directly to
+the selected-record expression (`... = cmbItem.Selected.ID & " ID"`) — so it no longer slips
+past the directional and selected-ID checks. It does **not** model every reshaping: a prefix
+wrap (`"ITEM-" & cmbItem.Selected.ID`), a function reshape (`Left(...)`, `Trim(...)`,
+`Upper(...)`), or the same surgery inside a `Remove`/`UpdateIf`/`Filter` or connector
+mutation still compiles cleanly. Confirm by
+inspection that both sides of the comparison name real, identically-typed fields with no
+cosmetic string surgery, and that the key used to locate the target is the same identity the
+receipt and observer report.
+
 **Fix:** Store the selected stable ID or record, mutate that identity, and bind post-action
-evidence to the same source and identity.
+evidence to the same source and identity. Compare the `LookUp`/`Filter` key against the raw
+selected/context value with no concatenation, prefix, suffix, or reshaping unless the
+documented schema requires it; remove any phantom key surgery so the target row is actually
+found.
 
 **Exception:** Create has no prior identity, but must assign a unique stable ID used by
 later lifecycle actions.

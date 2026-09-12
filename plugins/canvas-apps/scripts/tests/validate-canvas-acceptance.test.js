@@ -23,6 +23,15 @@ const pluginRoot = path.resolve(testsDir, '..', '..');
 const validator = path.join(pluginRoot, 'scripts', 'validate-canvas-acceptance.cs');
 const fixtureDir = path.join(testsDir, 'fixtures', 'receive-issue');
 const compoundFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-compound');
+// Negative-space fixture embedding two runtime-fatal defects the "directionally correct"
+// evidence otherwise satisfies: a phantom LookUp key (`... .Selected.ID & " ID"`) and a dead
+// staging variable (`varReceipt*` seeded to 0 and never written from an input). Check 43
+// (phantom LookUp key) is now enforced statically by the validator, so this fixture FAILS
+// validation on the transformed record-identity key. The dead-staging-variable defect (Check
+// 34 "staging-variable liveness") still has no static rule — it needs whole-app dataflow the
+// acceptance-evidence contract does not carry — so it remains a prose-only responsibility and
+// rides along undetected behind the phantom-key failure.
+const staleStagingFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-stale-staging');
 const workRoot = path.join(testsDir, '.work');
 
 // The valid issue mutation subtracts the amount from the old value (`old - amount`).
@@ -136,4 +145,37 @@ test('accepts a same-record compound-sequence Receive/Issue workspace', () => {
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('fails static validation on a phantom LookUp key, still blind to the dead staging variable', () => {
+    // This fixture is directionally correct (Patch writes `old + amount` / `old - amount`,
+    // expected-value preview agrees, selected-record expression carries a stable ID, observer
+    // reads the canonical source), so it satisfies every prior contract. It embeds two
+    // runtime-fatal defects:
+    //   1. Phantom LookUp key — the Patch target is
+    //      `LookUp(colInventory, ID = drpMngAdjustItem.Selected.ID & " ID")`; the literal
+    //      ` & " ID"` suffix guarantees LookUp returns Blank() so no record is ever patched.
+    //   2. Dead/stale staging variables — `varReceiptOldQuantity`/`varReceiptAmount` are seeded
+    //      to 0 in App.OnStart and NEVER written from `numMngAdjustAmount`/`drpMngAdjustItem`
+    //      (no OnChange, no inline `.Value`/`.Selected` read at mutation time), so every
+    //      adjustment computes against 0 instead of the typed amount.
+    // Defect (1) is now statically enforced: the validator no longer accepts the selected-record
+    // expression as a mere substring of the mutation formula (which `... .Selected.ID & " ID"`
+    // satisfies) — it rejects a record-identity key that is concatenated or computed onto
+    // (QAChecks Check 43). So this fixture FAILS validation, once per direction, on the phantom
+    // key. Defect (2) remains invisible to the validator: proving a staging variable is never
+    // written from an input requires whole-app dataflow the acceptance-evidence contract does not
+    // carry, so Check 34 "staging-variable liveness" stays a prose-only responsibility. This test
+    // pins both facts — the phantom-key rejection AND that the failure is *only* the phantom key,
+    // documenting the still-open Check 34 gap. If Check 34 is ever hardened, add its error here.
+    const workspace = materialize('receive-issue-stale-staging-fail', { sourceDir: staleStagingFixtureDir });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stderr, /receive mutation uses a transformed record-identity key/);
+    assert.match(stderr, /issue mutation uses a transformed record-identity key/);
+    // Guard the documented gap: the only failures are the phantom-key errors. If a future change
+    // makes the validator also catch the dead staging variable, this assertion will trip and this
+    // test (and the fixture README) must be updated to reflect the new coverage.
+    const errorLines = stderr.split('\n').filter((line) => line.startsWith('ERROR:'));
+    assert.strictEqual(errorLines.length, 2, `expected exactly the two phantom-key errors, got:\n${stderr}`);
 });

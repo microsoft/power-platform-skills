@@ -100,7 +100,12 @@ Do not fix unrelated pre-existing issues.
 
 - Treat stable record identity as part of every lifecycle action. Edit and delete must
   operate on the selected record's stable ID or selected record object, never on display
-  text, gallery position, or a newly constructed partial record.
+  text, gallery position, or a newly constructed partial record. The `LookUp`/`Filter` that
+  locates a `Patch`/`Remove`/`UpdateIf` target must compare the key field against the raw
+  selected/context value — `LookUp(colInventory, ID = cmbItem.Selected.ID)` — with no
+  concatenation, prefix, suffix, casing, or reshaping of either side unless the plan's schema
+  documents that transformed key. Appending a literal like `& " ID"` is a **phantom LookUp
+  key**: it matches no row, so the `Patch` silently mutates nothing even though it compiles.
 - Keep one mutable source of truth per domain entity. Search, filters, ordering, alerts,
   KPIs, dashboards, and reports must derive from that same source rather than a copied
   counter, seed-only collection, or screen-local duplicate.
@@ -152,6 +157,15 @@ Do not fix unrelated pre-existing issues.
   direction: increase uses `oldValue + amount`; decrease uses `oldValue - amount`. The
   receipt renders operation, old value, amount, expected new value, and actual persisted
   new value, and the destination surface reads that same persisted value.
+- Feed the mutation from live input, never a dead staging variable. Any variable carrying a
+  user-entered or user-selected value (`varAmount`, `varOldQuantity`, `varReceiptAmount`)
+  must be written from its input control at input time — an `OnChange` running
+  `Set(varStaging, Control.Value)`/`Set(varStaging, Control.Selected)`, or an inline
+  `Control.Value`/`Control.Selected` read inside the handler. A staging variable set only in
+  `App.OnStart`/`Screen.OnVisible` and never re-written from an input is dead: it keeps its
+  seed (`0`, `Blank()`), so every adjustment computes against the seed while still compiling
+  and still passing the sign/direction check. Prefer reading the input directly at mutation
+  time (`Value(txtAmount.Text)`, `cmbItem.Selected.ID`).
 - When both directions act on the same record type, also implement a same-record
   sequence: apply one direction, then the opposite direction on the identical record, and
   read the old value for the second operation from the canonical source (the value the
