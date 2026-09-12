@@ -24,13 +24,10 @@ const validator = path.join(pluginRoot, 'scripts', 'validate-canvas-acceptance.c
 const fixtureDir = path.join(testsDir, 'fixtures', 'receive-issue');
 const compoundFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-compound');
 // Negative-space fixture embedding two runtime-fatal defects the "directionally correct"
-// evidence otherwise satisfies: a phantom LookUp key (`... .Selected.ID & " ID"`) and a dead
-// staging variable (`varReceipt*` seeded to 0 and never written from an input). Check 43
-// (phantom LookUp key) is now enforced statically by the validator, so this fixture FAILS
-// validation on the transformed record-identity key. The dead-staging-variable defect (Check
-// 34 "staging-variable liveness") still has no static rule — it needs whole-app dataflow the
-// acceptance-evidence contract does not carry — so it remains a prose-only responsibility and
-// rides along undetected behind the phantom-key failure.
+// evidence otherwise satisfies: a phantom LookUp key (`... .Selected.ID & " ID"`) and dead
+// staging variables (`varReceipt*` seeded to 0 and never written from an input). The validator
+// must report both defects. Individual tests repair the key or add live OnChange assignments
+// to prove each rule independently instead of allowing one failure to mask the other.
 const staleStagingFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-stale-staging');
 const workRoot = path.join(testsDir, '.work');
 
@@ -48,8 +45,24 @@ const REVERSED_ISSUE_ARITHMETIC = 'varAmount - varOldQuantity';
 // check isolates the Patch write and must FAIL this, because the persisted direction is wrong.
 const CORRECT_ISSUE_PATCH_WRITE = '{Quantity: varOldQuantity - varAmount}';
 const REVERSED_ISSUE_PATCH_WRITE = '{Quantity: varOldQuantity + varAmount}';
+const PHANTOM_RECORD_ID = 'drpMngAdjustItem.Selected.ID & " ID"';
+const LIVE_RECORD_ID = 'drpMngAdjustItem.Selected.ID';
+const RECEIVE_STALE_WRITE = '{Quantity: varReceiptOldQuantity + varReceiptAmount}))';
+const ISSUE_STALE_WRITE = '{Quantity: varReceiptOldQuantity - varReceiptAmount}))';
+const LATE_STAGING_ASSIGNMENTS =
+    '; Set(varReceiptOldQuantity, drpMngAdjustItem.Selected.Quantity)' +
+    '; Set(varReceiptAmount, Value(numMngAdjustAmount.Text))';
 
-function materialize(caseName, { reverseIssue = false, reverseIssuePatchOnly = false, sourceDir = fixtureDir } = {}) {
+function materialize(
+    caseName,
+    {
+        reverseIssue = false,
+        reverseIssuePatchOnly = false,
+        repairPhantomKey = false,
+        wireStagingOnChange = false,
+        wireStagingAfterPatch = false,
+        sourceDir = fixtureDir,
+    } = {}) {
     const workspace = path.join(workRoot, caseName);
     fs.rmSync(workspace, { recursive: true, force: true });
     fs.mkdirSync(workspace, { recursive: true });
@@ -78,6 +91,29 @@ function materialize(caseName, { reverseIssue = false, reverseIssuePatchOnly = f
         // Patch-write check fires.
         screenYaml = screenYaml.split(CORRECT_ISSUE_PATCH_WRITE).join(REVERSED_ISSUE_PATCH_WRITE);
         acceptance = acceptance.split(CORRECT_ISSUE_PATCH_WRITE).join(REVERSED_ISSUE_PATCH_WRITE);
+    }
+
+    if (repairPhantomKey) {
+        screenYaml = screenYaml.split(PHANTOM_RECORD_ID).join(LIVE_RECORD_ID);
+        acceptance = acceptance.split(PHANTOM_RECORD_ID).join(LIVE_RECORD_ID);
+    }
+
+    if (wireStagingOnChange) {
+        screenYaml = screenYaml.replace(
+            '                    Items: =colInventory',
+            '                    Items: =colInventory\n' +
+            '                    OnChange: =Set(varReceiptOldQuantity, drpMngAdjustItem.Selected.Quantity)');
+        screenYaml = screenYaml.replace(
+            '                    Format: =TextFormat.Number',
+            '                    Format: =TextFormat.Number\n' +
+            '                    OnChange: =Set(varReceiptAmount, Value(numMngAdjustAmount.Text))');
+    }
+
+    if (wireStagingAfterPatch) {
+        for (const mutationTail of [RECEIVE_STALE_WRITE, ISSUE_STALE_WRITE]) {
+            screenYaml = screenYaml.split(mutationTail).join(mutationTail + LATE_STAGING_ASSIGNMENTS);
+            acceptance = acceptance.split(mutationTail).join(mutationTail + LATE_STAGING_ASSIGNMENTS);
+        }
     }
 
     fs.writeFileSync(path.join(workspace, 'App.pa.yaml'), appYaml);
@@ -147,7 +183,7 @@ test('accepts a same-record compound-sequence Receive/Issue workspace', () => {
     assert.match(stdout, /PASS:/);
 });
 
-test('fails static validation on a phantom LookUp key, still blind to the dead staging variable', () => {
+test('rejects both a phantom LookUp key and dead staging variables', () => {
     // This fixture is directionally correct (Patch writes `old + amount` / `old - amount`,
     // expected-value preview agrees, selected-record expression carries a stable ID, observer
     // reads the canonical source), so it satisfies every prior contract. It embeds two
@@ -159,23 +195,60 @@ test('fails static validation on a phantom LookUp key, still blind to the dead s
     //      to 0 in App.OnStart and NEVER written from `numMngAdjustAmount`/`drpMngAdjustItem`
     //      (no OnChange, no inline `.Value`/`.Selected` read at mutation time), so every
     //      adjustment computes against 0 instead of the typed amount.
-    // Defect (1) is now statically enforced: the validator no longer accepts the selected-record
-    // expression as a mere substring of the mutation formula (which `... .Selected.ID & " ID"`
-    // satisfies) — it rejects a record-identity key that is concatenated or computed onto
-    // (QAChecks Check 43). So this fixture FAILS validation, once per direction, on the phantom
-    // key. Defect (2) remains invisible to the validator: proving a staging variable is never
-    // written from an input requires whole-app dataflow the acceptance-evidence contract does not
-    // carry, so Check 34 "staging-variable liveness" stays a prose-only responsibility. This test
-    // pins both facts — the phantom-key rejection AND that the failure is *only* the phantom key,
-    // documenting the still-open Check 34 gap. If Check 34 is ever hardened, add its error here.
+    // Both defects are independently machine-enforced, once per direction and operand.
     const workspace = materialize('receive-issue-stale-staging-fail', { sourceDir: staleStagingFixtureDir });
     const { code, stdout, stderr } = runValidator(workspace);
     assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stderr, /receive mutation uses a transformed record-identity key/);
     assert.match(stderr, /issue mutation uses a transformed record-identity key/);
-    // Guard the documented gap: the only failures are the phantom-key errors. If a future change
-    // makes the validator also catch the dead staging variable, this assertion will trip and this
-    // test (and the fixture README) must be updated to reflect the new coverage.
+    assert.match(stderr, /receive old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'varReceiptAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'varReceiptAmount' is a dead staging variable/);
     const errorLines = stderr.split('\n').filter((line) => line.startsWith('ERROR:'));
-    assert.strictEqual(errorLines.length, 2, `expected exactly the two phantom-key errors, got:\n${stderr}`);
+    assert.strictEqual(errorLines.length, 6, `expected two key and four liveness errors, got:\n${stderr}`);
+});
+
+test('rejects dead staging variables when the selected-record key is valid', () => {
+    const workspace = materialize(
+        'receive-issue-dead-staging-only',
+        { sourceDir: staleStagingFixtureDir, repairPhantomKey: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.doesNotMatch(stderr, /transformed record-identity key/);
+    assert.match(stderr, /receive old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'varReceiptAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'varReceiptAmount' is a dead staging variable/);
+    const errorLines = stderr.split('\n').filter((line) => line.startsWith('ERROR:'));
+    assert.strictEqual(errorLines.length, 4, `expected exactly four liveness errors, got:\n${stderr}`);
+});
+
+test('accepts staging variables written from live control OnChange formulas', () => {
+    const workspace = materialize(
+        'receive-issue-live-onchange',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            wireStagingOnChange: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /PASS:/);
+});
+
+test('rejects staging assignments that occur only after Patch', () => {
+    const workspace = materialize(
+        'receive-issue-late-staging',
+        {
+            sourceDir: staleStagingFixtureDir,
+            repairPhantomKey: true,
+            wireStagingAfterPatch: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, `expected FAIL but validator exited 0.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stderr, /receive old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /receive amount operand 'varReceiptAmount' is a dead staging variable/);
+    assert.match(stderr, /issue old operand 'varReceiptOldQuantity' is a dead staging variable/);
+    assert.match(stderr, /issue amount operand 'varReceiptAmount' is a dead staging variable/);
 });

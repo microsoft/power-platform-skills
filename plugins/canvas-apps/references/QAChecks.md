@@ -1371,7 +1371,10 @@ prove that the requested outcome occurred.
     preferred, grep-verifiable form is to read the input directly at the point of mutation
     (`Value(txtAmount.Text)`, `cmbItem.Selected.ID`); when a staging variable is used
     instead, its `Set(...)` from the corresponding input control must be present and
-    reachable in the app, not only its `OnStart` seed.
+    reachable before the mutation consumes it, not only its `OnStart` seed.
+    `validate-canvas-acceptance.cs` enforces this bounded static provenance for directional
+    receipt old/amount operands. The runtime inspection remains necessary because a static
+    formula match cannot prove that `OnChange` fires or that the control is reachable.
 
 **Fix:** Preserve the affected record state, update or refresh the visible binding, and add
 the required in-viewport mutation receipt with write-set/proof-set parity and one labeled

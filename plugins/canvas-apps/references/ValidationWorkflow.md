@@ -285,19 +285,16 @@ stable selected-record ID in both mutations, plus/minus arithmetic, one canonica
 read by the observer, and five receipt bindings including an actual persisted `Patch`
 result.
 
-The directional gate is not exhaustive: it proves the arithmetic *direction* but cannot see
-two runtime-fatal defects, so verify both by inspection (QAChecks Check 34
-"staging-variable liveness" and Check 43 "LookUp key integrity") before you rely on a
-`PASS`. First, any variable that feeds the mutation and is meant to carry user input
-(`varAmount`, `varOldQuantity`, a staging variable) must be written from its input control —
-an `OnChange` `Set(varStaging, Control.Value)`/`Set(varStaging, Control.Selected)`, or an
-inline `Control.Value`/`Control.Selected` read at mutation time — not left at an
-`App.OnStart` seed; a dead staging variable makes every adjustment compute against `0`/`Blank()`
-while still passing the sign check. Second, the `LookUp`/`Filter` that locates the `Patch`
-target must compare the key against the raw selected/context value with no concatenation,
-prefix, suffix, or reshaping (`= Selected.ID & " ID"`) unless the schema documents it; a
-phantom key matches no row, so the `Patch` mutates nothing yet the validator still passes
-because it only checks that the mutation formula *contains* the selected-record expression.
+The directional gate also checks the two static shapes behind QAChecks Check 34
+"staging-variable liveness" and Check 43 "LookUp key integrity." A receipt old/amount
+operand that is a staging variable must be assigned from a live `.Selected`, `.Text`, or
+`.Value` expression before `Patch` in the mutation handler or in a control `OnChange`; an
+`App.OnStart` or `Screen.OnVisible` seed alone fails. The `LookUp`/`Filter` key used by the
+mutation must use the raw selected-record expression with no concatenation or arithmetic
+suffix. These checks prove that the final YAML contains a live-input assignment and an
+untransformed key; they cannot prove that the running app actually fires the event, that
+the control is pointer-reachable, or that the data source accepts the write. Preserve the
+manual QAChecks inspection and live browser evaluation for those runtime properties.
 
 When both directions of that pair act on the same record type, also include `## Compound
 Sequence Evidence` with one row per same-record pair. It records the same-record ID, the

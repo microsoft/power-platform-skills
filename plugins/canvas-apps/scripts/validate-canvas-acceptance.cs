@@ -34,6 +34,7 @@ var yamlLines = Directory
     .EnumerateFiles(workspace, "*.pa.yaml", SearchOption.AllDirectories)
     .SelectMany(File.ReadLines)
     .ToArray();
+var yamlFormulas = IndexYamlFormulas(yamlLines);
 
 if (acceptanceLines.Length == 0 || acceptanceLines[0] != "Runtime evaluation: NOT RUN")
 {
@@ -482,6 +483,22 @@ void ValidateDirectionalMutation(
 
     var oldEscaped = Regex.Escape(NormalizeWhitespace(oldValueOperand));
     var amountEscaped = Regex.Escape(NormalizeWhitespace(amountOperand));
+
+    ValidateOperandLiveness(
+        pair,
+        direction,
+        "old",
+        oldValueOperand,
+        formula,
+        selectedRecordExpression);
+    ValidateOperandLiveness(
+        pair,
+        direction,
+        "amount",
+        amountOperand,
+        formula,
+        selectedRecordExpression);
+
     var arithmetic = operatorCharacter == '+'
         ? $@"(?:{oldEscaped}\s*\+\s*{amountEscaped})|(?:{amountEscaped}\s*\+\s*{oldEscaped})"
         : $@"{oldEscaped}\s*-\s*{amountEscaped}";
@@ -526,6 +543,108 @@ void ValidateDirectionalMutation(
         errors.Add(
             $"Directional mutation pair '{pair}' {direction} mutation Patch write '{patchWriteValue}' must match " +
             $"the receipt expected-value expression '{expectedExpression}'.");
+    }
+}
+
+void ValidateOperandLiveness(
+    string pair,
+    string direction,
+    string operandName,
+    string operand,
+    string mutationFormula,
+    string selectedRecordExpression)
+{
+    if (IsLiveSourceExpression(operand, selectedRecordExpression))
+    {
+        return;
+    }
+
+    // A plain variable is safe only when the current mutation handler assigns it from a
+    // live control/canonical-record expression, or a control's OnChange does so. App.OnStart
+    // and Screen.OnVisible seeds are intentionally excluded: they compile but remain stale
+    // when the user changes the selected record or amount.
+    if (Regex.IsMatch(
+            operand,
+            @"^var[A-Za-z0-9_]*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+    {
+        var hasInlineAssignment = ExtractSetAssignments(ExtractMutationPrelude(mutationFormula)).Any(
+            assignment =>
+                string.Equals(assignment.Variable, operand, StringComparison.OrdinalIgnoreCase) &&
+                IsLiveSourceExpression(assignment.Expression, selectedRecordExpression));
+        var hasInputEventAssignment = yamlFormulas
+            .Where(binding =>
+                string.Equals(binding.Property, "OnChange", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(binding => ExtractSetAssignments(binding.Formula))
+            .Any(
+                assignment =>
+                    string.Equals(assignment.Variable, operand, StringComparison.OrdinalIgnoreCase) &&
+                    IsLiveSourceExpression(assignment.Expression, selectedRecordExpression));
+
+        if (hasInlineAssignment || hasInputEventAssignment)
+        {
+            return;
+        }
+
+        errors.Add(
+            $"Directional mutation pair '{pair}' {direction} {operandName} operand '{operand}' is a dead staging variable: " +
+            "assign it from a live .Selected/.Text/.Value expression before Patch in the mutation handler or in a control OnChange formula.");
+        return;
+    }
+
+    errors.Add(
+        $"Directional mutation pair '{pair}' {direction} {operandName} operand '{operand}' must read a live selected record or input control.");
+}
+
+static string ExtractMutationPrelude(string formula)
+{
+    var patch = Regex.Match(
+        formula,
+        @"\bPatch\s*\(",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    return patch.Success ? formula[..patch.Index] : formula;
+}
+
+bool IsLiveSourceExpression(string expression, string selectedRecordExpression)
+{
+    if (!string.IsNullOrWhiteSpace(selectedRecordExpression) &&
+        expression.Contains(selectedRecordExpression, StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    if (Regex.IsMatch(
+        expression,
+        @"\bThisItem(?:\.[A-Za-z_][A-Za-z0-9_]*)?\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+    {
+        return true;
+    }
+
+    // A `.Selected`/`.Text`/`.Value` shape is evidence of live input only when the name
+    // before it is an actual control in the final YAML. Without this existence check, a
+    // stale record variable such as `varPreviousSelection.Selected.Value` could masquerade
+    // as a control solely because its property names look control-like.
+    return Regex.Matches(
+            expression,
+            @"\b(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?:Selected(?:\.[A-Za-z_][A-Za-z0-9_]*)?|Text|Value)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+        .Cast<Match>()
+        .Any(match => TryGetControlBlock(yamlLines, match.Groups["control"].Value, out _));
+}
+
+static IEnumerable<SetAssignment> ExtractSetAssignments(string formula)
+{
+    foreach (Match match in Regex.Matches(
+        formula,
+        @"\bSet\s*\(\s*(?<variable>var[A-Za-z0-9_]*)\s*,",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+    {
+        var expression = ExtractBalancedGroup(formula, match.Index + match.Length, '(', ')');
+        if (!string.IsNullOrWhiteSpace(expression))
+        {
+            yield return new(match.Groups["variable"].Value, expression.Trim());
+        }
     }
 }
 
@@ -948,6 +1067,55 @@ static string NormalizeWhitespace(string value) =>
         " ",
         value.Split([' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
 
+static List<YamlFormula> IndexYamlFormulas(string[] yamlLines)
+{
+    var formulas = new List<YamlFormula>();
+    string? currentControl = null;
+    var controlIndentation = -1;
+
+    foreach (var line in yamlLines)
+    {
+        var controlMatch = Regex.Match(
+            line,
+            @"^(?<indent>\s*)-\s+(?<control>[A-Za-z_][A-Za-z0-9_]*):\s*$",
+            RegexOptions.CultureInvariant);
+        if (controlMatch.Success)
+        {
+            currentControl = controlMatch.Groups["control"].Value;
+            controlIndentation = controlMatch.Groups["indent"].Value.Length;
+            continue;
+        }
+
+        if (currentControl is null || string.IsNullOrWhiteSpace(line))
+        {
+            continue;
+        }
+
+        var indentation = line.Length - line.TrimStart().Length;
+        if (indentation <= controlIndentation)
+        {
+            currentControl = null;
+            controlIndentation = -1;
+            continue;
+        }
+
+        var propertyMatch = Regex.Match(
+            line,
+            @"^\s+(?<property>[A-Za-z_][A-Za-z0-9_]*):\s*(?<formula>=.+)$",
+            RegexOptions.CultureInvariant);
+        if (propertyMatch.Success)
+        {
+            formulas.Add(
+                new(
+                    currentControl,
+                    propertyMatch.Groups["property"].Value,
+                    propertyMatch.Groups["formula"].Value.Trim()));
+        }
+    }
+
+    return formulas;
+}
+
 static bool TryGetControlBlock(
     string[] yamlLines,
     string control,
@@ -1021,3 +1189,5 @@ static int Fail(IEnumerable<string> failures)
 }
 
 readonly record struct YamlBinding(string Control, string Property, string Formula);
+readonly record struct YamlFormula(string Control, string Property, string Formula);
+readonly record struct SetAssignment(string Variable, string Expression);
