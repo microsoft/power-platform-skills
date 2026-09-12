@@ -196,10 +196,24 @@ Before writing plans:
     ownership. The invalid gate must blank-check the same operation state that an
     event-bearing selector can assign and the mutation branches consume, and the gated
     control must own or route to that mutation. Reject a dead gated control placed beside
-    direct-mutation selectors. Plan
+    direct-mutation selectors. Require that shared operation state be reset to `Blank()`
+    on action-screen entry and/or after a successful Apply; `App.OnStart`-only blanking
+    does not prevent stale direction on a later interaction. Plan
     button, dropdown, and radio selectors as valid alternatives when they commit an
     explicit direction. Do not force this shared-operation pattern onto separate direct
-    actions; they are valid when each owns its mutation and complete eligibility gate.
+    actions; control identity commits direction, so they need no shared operation
+    variable/reset. They remain valid only when each owns its mutation and complete
+    selected-ID and amount eligibility gates.
+    When a classic Dropdown or Combo box with nonempty `Items` supplies operation state,
+    require `AllowEmptySelection: =true` before a blank default/reset can prove no
+    operation; prefer an explicit operation variable if discovery leaves those semantics
+    uncertain.
+    For a required numeric amount, require blank and non-positive states to be representable,
+    visibly invalid, and rejected by the gate. Specify compatible NumberInput `Default`,
+    `Min`, `Value`, `ValidationState`, and reset behavior; do not use `Min: =1` when a
+    scenario must enter or reset to `0`. Permit `Default: =0` when `Min <= 0`, the gate
+    rejects zero, and Reset restores that intentionally invalid default. Apply the same
+    validity contract when `OnChange` stages the amount in a variable.
 14. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
     stable ID, or deletion snapshot. Record the mutation's **write set** and **proof set** in
@@ -238,8 +252,15 @@ Before writing plans:
 18. When Action Contracts contain an opposing directional pair, write the
     `## Directional Mutation Evidence` table from `PlanTemplates.md`. It is a required
     deterministic validation contract: declare the exact selected-record ID expression,
-    blank operation binding, invalid-submit gate, both final mutation formulas, canonical
-    observer binding, and all five final receipt bindings. When both directions act on the
+    the nullable selection state's initialization/reset and row assignment, the operation
+    state's blank-reset event, amount invalid-state binding, invalid-submit gate, both
+    final mutation formulas, canonical observer binding, and all five final receipt
+    bindings. Require one nullable selected ID initialized/reset to `Blank()`, assigned
+    by row selection, and consumed consistently by selected-record display, gate, mutation,
+    receipt, and compound evidence. `Control.Selected` / `.Selected.*` from a Gallery,
+    Dropdown, List box, or Combo box is not proof that a nonempty control has no selection
+    unless empty-selection semantics are explicitly configured and evidenced. When both
+    directions act on the
     same record type, also fill the `## Compound Sequence Evidence` table from
     `PlanTemplates.md`: name the same-record ID, the start->op1->mid->op2->end sequence, and
     the second operation's old-value binding proving it reads the mutated canonical value.
@@ -248,6 +269,8 @@ Before writing plans:
     final acceptance can compare the implemented topology rather than infer it. Do not use
     these tables for narrative or inferred behavior; every formula must be copied from
     final YAML.
+    Require a literal guard for each direction. An `else`, default `Switch` arm, or
+    unguarded fallback is not evidence for the second direction.
 19. For every selector or filter, couple the concrete option source, readable option
     formula, pointer-committed selected value, consumer predicate, active-selection
     indicator, and clear behavior. Apply the short-choice rule to filters as well as form
@@ -306,9 +329,16 @@ For every screen brief, state explicitly:
 - That vertical containers holding text use `LayoutAlignItems: =LayoutAlignItems.Stretch`.
   With `Start`, `Center` or `End`, a heading or a concatenated total is sized to its
   intrinsic width and silently clipped — the text is correct and simply not shown.
-- A `TemplateSize` for every gallery that fits its row template **at each width branch**,
-  counting a `ModernCard`'s image band. A dense desktop branch is the usual place card
-  titles disappear.
+- A `TemplateSize` for every gallery that fits its row template **at each width branch**.
+  Inside a gallery template, a direct child's `Parent.Width` resolves in gallery/template
+  scope and can differ from the outer container width used by the gallery's
+  `TemplateSize`. Require both formulas to use the same deliberate breakpoint source, or
+  budget every reachable cross-branch pair. Record numeric row-height arithmetic for each
+  case: top/bottom padding + inter-child gaps + all stacked child minimum/fixed heights,
+  including required quantity/status text, action controls, badges, and a `ModernCard`
+  image band. For horizontal rows, budget padding plus the tallest child and any wrapped
+  line; for vertical rows, sum child heights and gaps. A required field that exists in
+  YAML but clips outside the template fails.
 - For every GridLayout: the exact `LayoutGridColumns`, `LayoutGridRows`,
   `LayoutGridColumnMinWidth`, `LayoutGridRowMinHeight` and `Height` formulas, plus every
   explicit child row/column position. The row count and height must reuse the same column

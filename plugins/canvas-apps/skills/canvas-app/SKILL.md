@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.10
+version: 3.0.11
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.10`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.11`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -86,7 +86,8 @@ CREATE and complex EDIT workflows return here after the planner finishes.
       selector that calls `Patch`, `SubmitForm`, `Collect`, `Remove`, `RemoveIf`,
       `UpdateIf`, or a connector mutation is invalid. Separate direct-action controls
       remain valid when no distinct shared mutation event exists and each action has its
-      own complete eligibility gate.
+      own selected-ID and amount eligibility gates. Their control identity commits
+      direction, so they need no shared operation variable/reset.
     - Every mutation names an observable bound result, not only a confirmation message.
     - Every mutation declares a write set and receipt proof set. For create/edit, reject the
       plan when any user-entered or user-selected write-set field is absent from the proof set.
@@ -109,9 +110,10 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - EDIT scenarios cover existing behavior touched by changed sources, fields, controls,
       or observer formulas.
 6. When the plan contains an opposing directional pair, require `## Directional Mutation
-   Evidence` before dispatch. It must state a stable selected-record ID expression, a
-   `=Blank()` operation default, a disabled blank/non-positive submission gate, exact final
-   formulas for both directions, a canonical-source observer, and receipt bindings for
+   Evidence` before dispatch. It must state a nullable selected-ID state with blank reset
+   and row assignment, the actual operation state with an entry/success `Blank()` reset
+   event, representable blank/non-positive amount bindings, a disabled invalid submission
+   gate, exact final formulas for both directions, a canonical-source observer, and receipt bindings for
    operation, old value, amount, expected value, and actual persisted value. For a
    shared-operation flow, the plan must also identify each selection-only binding, the
    common guarded mutation event, and their common operation state.
@@ -256,6 +258,12 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   directly. Verify each `+`/`-` expression is inside the branch for its selected operation,
   not merely present elsewhere in the handler. Preserve independently gated direct-action
   implementations when no distinct shared mutation event exists.
+- Verify shared operation state resets to `Blank()` on action-screen entry and/or after a
+  successful Apply. `App.OnStart`-only blanking is stale-state risk, and an amount
+  control's blank `Default` is not operation-reset evidence.
+- When a classic Dropdown or Combo box with nonempty `Items` supplies operation state,
+  require `AllowEmptySelection: =true` before its blank default/reset proves no operation.
+  Prefer explicit operation state when discovered control semantics are uncertain.
 - For every opposing mutation pair, verify both contracts and both concrete scenarios.
   The operation control is visible and pointer-selectable; submission is disabled while
   operation or required amount/value is hidden, clipped, blank, invalid, unset, or
@@ -263,6 +271,21 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   default state. For arithmetic pairs, substitute the scenario values and verify increase
   uses `old + amount`, decrease uses `old - amount`, and the receipt shows operation, old
   value, amount, expected new value, and actual persisted new value.
+- Verify one nullable selected ID is initialized/reset blank, assigned from the row event,
+  and consumed consistently by selected-item display, gate, mutation, receipt, and
+  compound evidence. This is the default incomplete-state proof. Reject
+  `Control.Selected` / `.Selected.*` from a Gallery, Dropdown, List box, or Combo box as
+  no-selection proof when nonempty `Items` may auto/default-select, unless empty-selection
+  semantics are configured and evidenced.
+  Reject acceptance prose that disagrees with final code.
+- For required NumberInput amounts, verify `Default`, `Min`, `Value`, `ValidationState`,
+  and `Reset` together permit both blank and non-positive test states while visibly
+  rejecting them. `Min: =1` cannot support a scenario that enters `0`; `Default: =0`
+  is valid with `Min <= 0`, a rejecting gate, and Reset that restores zero. Apply the same
+  validity checks when `OnChange` stages the amount.
+- Require a separate literal guard for each directional branch. An `else` or default
+  `Switch` arm does not prove a direction because blank or unexpected operation state can
+  fall through to it.
 - Treat global `var*` and screen-context `loc*` operands alike: a reachable event must
   assign them from live input with `Set(...)` or `UpdateContext({...})` before `Patch`, or
   the mutation must read the input inline. `App.OnStart`/`Screen.OnVisible`-only and
@@ -280,6 +303,11 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   field, and remain visible, non-zero-sized, readable, and inside the card or row in the
   normal desktop and phone layouts. Repair missing, hidden, blank, clipped, or displaced
   fields, then compile and repeat this field check before writing acceptance evidence.
+- For every Gallery, confirm row `LayoutDirection` and Gallery `TemplateSize` use the same
+  breakpoint source or evaluate every reachable cross-branch pair. A row child's
+  `Parent.Width` is gallery/template-scoped and may differ from the outer parent used by
+  `TemplateSize`. Require numeric vertical budgets including padding, gaps, all children,
+  required quantity/status fields, badges, and actions; clipped required fields fail.
 - When Approve and Reject/Decline are paired contracts, verify every eligible pending record
   exposes both decisions on the same row or the same immediately reachable detail at phone
   width. Send the owning screen back when either decision is missing; never accept a

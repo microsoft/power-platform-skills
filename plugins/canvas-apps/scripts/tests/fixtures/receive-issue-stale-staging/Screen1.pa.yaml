@@ -1,13 +1,18 @@
 Screens:
     Screen1:
+        Properties:
+            OnVisible: =Reset(drpMngOperation); Reset(drpMngAdjustItem)
         Children:
             - drpMngAdjustItem:
                 Control: Classic/ComboBox
                 Properties:
+                    AllowEmptySelection: =true
+                    DefaultSelectedItems: =[]
                     Items: =colInventory
             - drpMngOperation:
                 Control: Classic/DropDown
                 Properties:
+                    AllowEmptySelection: =true
                     Default: =Blank()
                     Items: =["Receive", "Issue"]
             - numMngAdjustAmount:
@@ -18,12 +23,12 @@ Screens:
             - btnMngReceive:
                 Control: Classic/Button
                 Properties:
-                    DisplayMode: =If(IsBlank(drpMngOperation.Selected.Value) || Not(Value(numMngAdjustAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                    DisplayMode: =If(IsBlank(drpMngOperation.Selected.Value) || IsBlank(drpMngAdjustItem.Selected.ID) || Not(Value(numMngAdjustAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Receive"); Set(varReceiptExpectedQuantity, varReceiptOldQuantity + varReceiptAmount); Set(varLastInventoryMutation, Patch(colInventory, LookUp(colInventory, ID = drpMngAdjustItem.Selected.ID & " ID"), {Quantity: varReceiptOldQuantity + varReceiptAmount}))
             - btnMngIssue:
                 Control: Classic/Button
                 Properties:
-                    DisplayMode: =If(IsBlank(drpMngOperation.Selected.Value) || Not(Value(numMngAdjustAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                    DisplayMode: =If(IsBlank(drpMngOperation.Selected.Value) || IsBlank(drpMngAdjustItem.Selected.ID) || Not(Value(numMngAdjustAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Issue"); Set(varReceiptExpectedQuantity, varReceiptOldQuantity - varReceiptAmount); Set(varLastInventoryMutation, Patch(colInventory, LookUp(colInventory, ID = drpMngAdjustItem.Selected.ID & " ID"), {Quantity: varReceiptOldQuantity - varReceiptAmount}))
             - galInventory:
                 Control: Gallery

@@ -950,11 +950,22 @@ The trap is worst with a `ModernCard` row template, whose image band alone can e
 row height you chose.
 
 **Detect:** For every `Gallery`, evaluate `TemplateSize` at **each** branch of its formula.
-For each branch, add up the stacked heights of the row template's children plus their gaps
-and padding — counting nested fixed-height descendants and a `ModernCard`'s image band.
-When a vertical row contains a `FillPortions: =1` child, calculate the minimum height of
-that child's descendants and include it in the sum; do not treat it as zero. Flag any
-branch where the total exceeds `TemplateSize`.
+First resolve the breakpoint scope. Inside a gallery template, a direct row child's
+`Parent.Width` is gallery/template-scoped and can differ from the outer container width
+that the Gallery's own `TemplateSize` formula sees. Pass only when `LayoutDirection` and
+`TemplateSize` use the same deliberate breakpoint source, or after evaluating every
+reachable cross-branch pair (for example, vertical-row/desktop-template as well as
+vertical-row/phone-template).
+
+For each case, write the numeric height budget. A vertical row needs
+`top/bottom padding + sum(child minimum/fixed heights) + inter-child gaps`; a horizontal
+row needs `top/bottom padding + tallest child minimum/fixed height`, plus any height added
+by wrapping. Count nested fixed-height descendants, required identity and quantity/status
+fields, badges, action controls, and a `ModernCard` image band. When a child has
+`FillPortions: =1`, calculate the minimum height of its descendants and include it; do not
+treat it as zero. Flag any case where the total exceeds `TemplateSize`, or where a required
+field can clip even though its control exists. For example, 24px padding + three child
+heights totaling 136px + two 8px gaps needs 176px; a 132px template fails.
 
 **Fix:** Raise the branch to fit, or reduce what the row renders at that width:
 
@@ -1352,6 +1363,16 @@ prove that the requested outcome occurred.
     commit explicit direction state. Do not apply the shared-handler restriction to
     separate direct actions: they pass when each has its own complete eligibility gate and
     mutation handler, provided no dead shared gate is claimed.
+    Confirm shared operation state is reset to `Blank()` on action-screen entry and/or
+    after successful Apply. An `App.OnStart`-only assignment is insufficient because it
+    does not reset later visits or actions. Blank-operation evidence must name the actual
+    operation state and reset event; an amount control's `Default: =Blank()` does not pass.
+    When a classic Dropdown or Combo box with nonempty `Items` is the operation state,
+    confirm `AllowEmptySelection: =true`; otherwise a blank default/reset does not prove
+    no operation. Prefer explicit operation state when control semantics are uncertain.
+    Independent direct actions do not require shared operation state/reset because each
+    control identifies its direction, but each action still requires selected-ID and
+    amount gates.
 11. Confirm the operation selector and required amount/value input are visible,
     pointer-selectable, inside parent bounds, and reachable in the scenario's Given state.
     Confirm the operation selector is a Dropdown, radio group, or visible button-group that
@@ -1360,6 +1381,14 @@ prove that the requested outcome occurred.
     hidden, clipped, blank, invalid, unset, or unreachable, and confirm the opposite: that
     submit positively becomes enabled and clickable once a valid operation and positive
     amount are set. A gate that can never enable in any state fails this check.
+    Confirm blank and non-positive amount states are representable. For
+    `ModernNumberInput`, inspect `Default`, `Min`, current `Value`, `ValidationState`, and
+    every `Reset(...)`: reject `Min: =1` when the scenario claims the user enters `0`, and
+    reject a reset claim when `Default` restores a valid positive value. `Default: =0`
+    passes when `Min <= 0`, the gate rejects zero, and Reset restores zero as the chosen
+    invalid state. Both blank and `Value <= 0` must disable submission and produce visible
+    validation. When `OnChange` stages the amount, apply these same checks to the source
+    input and confirm the gate rejects its current/staged invalid value.
 12. Trace the current selected operation into the mutation formula. Reject a hard-coded
     default direction, a stale variable from an earlier interaction, or a toggle that
     infers the requested direction from prior state.
@@ -1372,6 +1401,17 @@ prove that the requested outcome occurred.
     (e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`) and confirm the second operation's
     old value is read from the canonical source the first mutation already updated, not a
     stale original value.
+    Require a literal guard for each operation value. An `else` branch or default `Switch`
+    arm does not prove a direction because blank, stale, or unexpected operation values
+    can reach it.
+    Trace one nullable selected-record ID across initialization/reset (`Blank()`), row
+    selection assignment, selected-record display, gate, mutation `LookUp`, receipt, and
+    compound evidence. This is the default incomplete-state proof. Reject
+    `Control.Selected` / `.Selected.*` from a Gallery, Dropdown, List box, or Combo box as
+    proof of no explicit selection when nonempty `Items` can auto/default-select a record,
+    unless empty-selection semantics are explicitly configured and evidenced. Reject any
+    narrative/table that names an explicit ID while final code consumes control selection
+    (or vice versa).
 14. Confirm the receipt binds the selected operation, old value, amount, expected new
     value, and actual persisted new value, and that the destination observer shows the
     same actual value.
@@ -1398,7 +1438,9 @@ prove that the requested outcome occurred.
     `UpdateContext({...})` assignment from the corresponding input control must be present
     and reachable before the mutation consumes it, not only its initialization seed.
     `validate-canvas-acceptance.cs` enforces this bounded static provenance for directional
-    receipt old/amount operands. The runtime inspection remains necessary because a static
+    receipt old/amount operands; that liveness check does not establish that a staged
+    amount is valid, so separately inspect its `Default`, `Min`, current-value gate, and
+    reset behavior. The runtime inspection remains necessary because a static
     formula match cannot prove that `OnChange` fires, that a selector or mutation control
     is pointer-reachable, or that an enabled control can actually be clicked.
 

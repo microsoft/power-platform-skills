@@ -156,19 +156,48 @@ Do not fix unrelated pre-existing issues.
   operation branch so swapping the `+` and `-` branches cannot pass inspection. If the
   brief instead specifies separate direct actions, keep their independently gated mutation
   handlers; do not introduce a shared flow.
+- Reset shared operation state to `Blank()` in the action screen's `OnVisible` and/or on
+  the successful Apply path. An `App.OnStart` assignment alone does not reset a later
+  screen visit or adjustment. Preserve the completed operation separately for the receipt
+  before clearing current operation state.
+- Use the brief's one nullable selected-record ID everywhere: initialize/reset it to
+  `Blank()`, assign it from the row selection event, and consume it in the selected-item
+  display, eligibility gate, mutation `LookUp`, receipt identity, and compound sequence.
+  This is the default incomplete-state proof. Do not mix it with `Control.Selected` /
+  `.Selected.*` from a Gallery, Dropdown, List box, or Combo box; nonempty `Items` may expose an
+  automatic/default record before the user explicitly selects one. Use control selection
+  as blank-selection proof only when its empty-selection semantics are configured and
+  evidenced.
 - Give the operation selector an unambiguous, deterministically committing control: a
   `Dropdown`, radio group, or visible button-group whose selection commits on click. Never
   an autocomplete/searching combobox whose selection state depends on typed filtering or
   keyboard-only commitment, because its selection may not visibly latch and the mutation
   then branches on a blank or stale value.
+- If a classic Dropdown or Combo box with nonempty `Items` is used as operation state,
+  set `AllowEmptySelection: =true` before relying on `Default: =Blank()` or Reset to
+  represent no operation. If the discovered control does not expose reliable
+  empty-selection semantics, use the explicit operation variable from the brief instead.
+- For independent direct actions, do not invent shared operation state: each control's
+  identity commits its direction. Keep a selected-ID gate and amount gate on each action.
 - Disabling submission on invalid input is only half the gate. Also confirm the submit
   control positively **becomes enabled and clickable** the moment a valid operation and a
   positive amount are set. A gate that can never reach `DisplayMode.Edit` in any state
   (blocking every real submission) is a defect, not a passing safety check.
+- Make required amount invalid states reachable. For `ModernNumberInput`, choose `Default`
+  and `Min` so blank and `0` can be entered or restored when scenarios require them, gate
+  the current `Value` with `IsBlank(...) || ... <= 0`, and expose a visible
+  `ValidationState`/message. Do not use `Min: =1` while claiming that entering `0` proves
+  rejection. `Reset(numAmount)` restores `Default`; it does not independently make the
+  value blank. `Default: =0` is valid when `Min <= 0`, zero is rejected, and Reset is
+  intended to restore zero. If `OnChange` stages the amount, validate the input's current
+  value and compatible `Default`/`Min` before accepting or consuming the staged value.
 - For arithmetic pairs, capture the old value before mutation and implement the exact
   direction: increase uses `oldValue + amount`; decrease uses `oldValue - amount`. The
   receipt renders operation, old value, amount, expected new value, and actual persisted
   new value, and the destination surface reads that same persisted value.
+- Give each guarded direction its own literal comparison. Do not use a default/else arm as
+  evidence for Issue/Decrease (or for Receive/Increase); unknown and blank operation
+  values must not fall through to a mutation.
 - Feed the mutation from live input, never a dead staging variable. Any variable carrying a
   user-entered or user-selected value (`varAmount`, `varOldQuantity`, `varReceiptAmount`)
   must be written from its input control at input time — an `OnChange` running
@@ -184,6 +213,14 @@ Do not fix unrelated pre-existing issues.
   first mutation already persisted), never a stale selection snapshot. `Qty 10 -> Receive 3
   -> 13 -> Issue 2 -> 11` must land on 11, proving the second operation reads the mutated
   13, not the original 10.
+- For every gallery row, calculate the template height rather than eyeballing it. A direct
+  row child's `Parent.Width` is gallery/template-scoped and can differ from the outer
+  container width used by the Gallery's `TemplateSize`. Use one deliberate breakpoint
+  source for row `LayoutDirection` and `TemplateSize`, or evaluate all reachable branch
+  combinations. For each vertical case, add top/bottom padding, all gaps, and every child
+  minimum/fixed height; for each horizontal case, add padding to the tallest child and any
+  wrapped line. Include required quantity/status text, badges, and actions. Raise
+  `TemplateSize` or simplify the row until every required field fits.
 - Implement every row in `Functional Test Scenarios`. Use its Given state to verify
   visibility and enablement, mentally execute the exact When interaction, then trace the
   resulting source values through the named observer and evidence. Implement boundary and
@@ -254,6 +291,8 @@ Do not fix unrelated pre-existing issues.
     - A `ModernDropdown` default is an explicit record compatible with `Items`, never
       `First(Self.Items)`.
     - A Gallery height formula uses `Self.TemplateHeight`, not `Self.TemplateSize`.
+    - Gallery row `LayoutDirection` and `TemplateSize` share a breakpoint source, or every
+      reachable cross-branch pair has a numeric height budget that fits all required fields.
     - A chart `ItemColorSet` uses a color-table literal such as `[RGBA(...), RGBA(...)]`,
       not `Table(Color, ...)`.
       These are pre-save checks, not only self-QA checks: invalid whole-screen YAML may make

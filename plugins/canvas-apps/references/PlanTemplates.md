@@ -76,7 +76,9 @@ blank-check it, and the gated control must own or route to the mutation. A dead 
 control beside direct-mutation buttons is invalid. Each arithmetic branch is associated
 with its matching operation. Button, dropdown, and radio selectors are all valid when
 they commit explicit direction state. Separate direct actions remain valid when each
-action is independently gated and no dead shared gate is claimed.]
+action is independently gated and no dead shared gate is claimed; their control identity
+commits direction, so they require no shared operation variable/reset. Every direct action
+still gates selected ID and amount.]
 
 ## Functional Test Matrix
 
@@ -96,13 +98,28 @@ their expected results prove both arithmetic directions.]
 [Include this section when the Action Contracts contain both directions of Receive/Issue,
 Increase/Decrease, Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable/Disable.
 Use one row per pair. Copy the exact final-YAML `Control.Property: =formula` bindings into
-the acceptance artifact. The selected-record expression must be the exact stable-ID target
-used by both mutations. Receipt bindings must be separated with `<br>` and include
+the acceptance artifact. The selected-record state must be the exact stable-ID target used
+by both mutations. Receipt bindings must be separated with `<br>` and include
 `operation`, `old`, `amount`, `expected`, and `actual`. For a shared-operation flow, both
 mutation columns name the same distinct event binding and identify the operation value and
 branch that reaches the corresponding arithmetic; isolated `+` and `-` excerpts are not
 evidence. The invalid-submit gate must blank-check the exact operation state written by
-every selector and consumed by that event. Preserve quoted or block-scalar formulas and
+every selector and consumed by that event. The operation-state reset binding must name
+that state's `Blank()` assignment on screen entry and/or after successful Apply; never put
+an amount input's `Default` in that column. Use one nullable selected-ID expression
+initialized or reset to `Blank()`, assigned by row selection, and consumed by display,
+gate, mutation, receipt, and compound evidence. `Gallery.Selected` is not an explicit
+no-selection contract for a nonempty gallery. Cross-check final YAML for compatible
+NumberInput `Default`, `Min`, current `Value` gate, visible validation, and reset behavior;
+blank and non-positive values must be representable. `Default: =0` is valid with
+`Min <= 0`, a rejecting gate, and Reset that restores zero. An `OnChange`-staged amount is
+subject to the same input validity checks. For classic operation Dropdown/Combo box
+controls with nonempty `Items`, require `AllowEmptySelection: =true` before a blank
+default/reset counts; prefer explicit operation state if control semantics are uncertain.
+Every direction must have its own literal guard; default/else arms do not prove a
+direction. If success resets current operation
+state, the receipt operation binding must use a captured completed-operation value.
+Preserve quoted or block-scalar formulas and
 normalize embedded newlines to `<br>` in the table. A receipt may render readable label
 text, but static evidence must expose one unambiguous underlying value expression for each
 of `operation`, `old`, `amount`, `expected`, and `actual`. Use either a direct value
@@ -114,9 +131,9 @@ the input with `Set(...)` or `UpdateContext({...})` before the mutation, or the 
 reads the input inline. `App.OnStart`/`Screen.OnVisible`-only and after-mutation assignments
 do not establish liveness.]
 
-| Pair | Selected-record expression | Blank operation binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings |
-| ---- | -------------------------- | ----------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- |
-| [Receive/Issue] | [e.g. `cmbAdjustItem.Selected.ID`] | [e.g. `drpOperation.Default: =Blank()`] | [e.g. `btnApply.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \|\| Value(txtAmount.Text) <= 0, DisplayMode.Disabled, DisplayMode.Edit)`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [e.g. `operation=lblReceiptOperation.Text: =varLastOperation<br>old=lblReceiptOld.Text: =varOldQuantity<br>amount=lblReceiptAmount.Text: =varAmount<br>expected=lblReceiptExpected.Text: =varExpectedQuantity<br>actual=lblReceiptActual.Text: =varLastMutation.Quantity`] |
+| Pair | Selected-record expression | Operation-state reset binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings |
+| ---- | -------------------------- | ----------------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- |
+| [Receive/Issue] | [e.g. `varSelectedId`; final YAML must blank-reset, row-assign, and consistently consume it] | [e.g. `Adjust.OnVisible: =Set(varOperation, Blank())` or exact successful-Apply reset] | [e.g. `btnApply.DisplayMode: =If(IsBlank(varSelectedId) \|\| IsBlank(varOperation) \|\| IsBlank(numAmount.Value) \|\| numAmount.Value <= 0, DisplayMode.Disabled, DisplayMode.Edit)`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [e.g. `operation=lblReceiptOperation.Text: =varLastOperation<br>old=lblReceiptOld.Text: =varOldQuantity<br>amount=lblReceiptAmount.Text: =varAmount<br>expected=lblReceiptExpected.Text: =varExpectedQuantity<br>actual=lblReceiptActual.Text: =varLastMutation.Quantity`] |
 
 ## Compound Sequence Evidence
 
@@ -130,7 +147,7 @@ not machine-check this table; it is a required reviewer/authoring proof.]
 
 | Pair | Same-record ID expression | Sequence (start -> op1 amount -> mid -> op2 amount -> end) | Second-op old-value binding (reads mutated canonical source) | Result |
 | ---- | ------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------ |
-| [Receive/Issue] | [e.g. `cmbAdjustItem.Selected.ID`] | [e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`] | [exact `Control.Property: =formula` reading canonical source, e.g. `btnIssue.OnSelect: =Set(varOldQuantity, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity); ...`] | PASS |
+| [Receive/Issue] | [e.g. `varSelectedInventoryId`] | [e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`] | [exact `Control.Property: =formula` reading canonical source, e.g. `btnIssue.OnSelect: =Set(varOldQuantity, LookUp(colInventory, ID = varSelectedInventoryId).Quantity); ...`] | PASS |
 
 ## Working Directory
 

@@ -61,6 +61,10 @@ var acceptedRecordFields = ReadOptionalRows(
     acceptanceLines,
     "## Required Record Field Evidence",
     errors);
+var compoundEvidence = ReadOptionalRows(
+    acceptanceLines,
+    "## Compound Sequence Evidence",
+    errors);
 var directionalPairs = FindDirectionalPairs(plannedActions);
 var sharedFlows = new List<SharedFlowResolution>();
 var directionalEvidence = directionalPairs.Count == 0
@@ -339,18 +343,13 @@ void ValidateDirectionalMutationEvidence(Dictionary<string, List<string>> eviden
         }
 
         if (string.IsNullOrWhiteSpace(selectedRecordExpression) ||
-            !selectedRecordExpression.Contains(".Selected", StringComparison.OrdinalIgnoreCase) ||
-            !Regex.IsMatch(selectedRecordExpression, @"\b(ID|Id)\b", RegexOptions.CultureInvariant))
+            !Regex.IsMatch(
+                selectedRecordExpression,
+                @"(?:\.Selected\.(?:ID|Id)\b|^[A-Za-z_][A-Za-z0-9_]*(?:ID|Id)$)",
+                RegexOptions.CultureInvariant))
         {
             errors.Add(
                 $"Directional mutation pair '{row[0]}' must declare a selected-record expression with a stable ID.");
-        }
-
-        if (blankOperation is not null &&
-            !Regex.IsMatch(blankOperation.Value.Formula, @"^=\s*Blank\(\)\s*$", RegexOptions.CultureInvariant))
-        {
-            errors.Add(
-                $"Directional mutation pair '{row[0]}' operation must start blank with '=Blank()'.");
         }
 
         if (invalidGate is not null)
@@ -362,6 +361,17 @@ void ValidateDirectionalMutationEvidence(Dictionary<string, List<string>> eviden
             {
                 errors.Add(
                     $"Directional mutation pair '{row[0]}' invalid submission gate must disable submission for a blank operation and amount <= 0.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(selectedRecordExpression) &&
+                !ExtractFunctionArguments(gate, "IsBlank").Any(argument =>
+                    string.Equals(
+                        NormalizeWhitespace(argument),
+                        NormalizeWhitespace(selectedRecordExpression),
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                errors.Add(
+                    $"Directional mutation pair '{row[0]}' invalid submission gate must blank-check selected-record source '{selectedRecordExpression}'.");
             }
 
             foreach (Match blankCheck in Regex.Matches(
@@ -459,6 +469,56 @@ void ValidateDirectionalMutationEvidence(Dictionary<string, List<string>> eviden
         var oldValueOperand = ExtractReceiptOperand(receiptBindings, "old");
         var amountOperand = ExtractReceiptOperand(receiptBindings, "amount");
         var operationOperand = ExtractReceiptOperand(receiptBindings, "operation");
+        var receiveAmountSource = ResolveLiveOperandSource(
+            amountOperand,
+            receiveMutation?.Formula);
+        var issueAmountSource = ResolveLiveOperandSource(
+            amountOperand,
+            issueMutation?.Formula);
+        if (!string.IsNullOrWhiteSpace(receiveAmountSource) &&
+            !string.IsNullOrWhiteSpace(issueAmountSource) &&
+            !string.Equals(
+                receiveAmountSource,
+                issueAmountSource,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"Directional mutation pair '{row[0]}' receive and issue mutations must use one live amount source.");
+        }
+        var amountSource = receiveAmountSource ?? issueAmountSource;
+        ValidateAmountState(
+            row[0],
+            amountSource,
+            invalidGate,
+            receiveMutation,
+            issueMutation);
+
+        var operationSource = ResolveOperationSource(
+            pairFlows,
+            invalidGate,
+            operationOperand,
+            selectedRecordExpression);
+        var separateDirectActions =
+            pairFlows.Count == 0 &&
+            receiveMutation is not null &&
+            issueMutation is not null &&
+            !SameBinding(receiveMutation.Value, issueMutation.Value);
+        if (!separateDirectActions)
+        {
+            ValidateOperationReset(
+                row[0],
+                operationSource,
+                blankOperation,
+                receiveMutation,
+                issueMutation);
+        }
+        ValidateSelectedRecordState(
+            row[0],
+            selectedRecordExpression,
+            invalidGate,
+            receiveMutation,
+            issueMutation,
+            compoundEvidence);
 
         // The `expected=` receipt binding names the variable the receipt claims it computed
         // (e.g. `varExpectedQuantity`). We reuse it to locate the expected-value `Set(...)` so
@@ -545,6 +605,499 @@ void ValidateDirectionalMutationEvidence(Dictionary<string, List<string>> eviden
         }
     }
 }
+
+string? ResolveOperationSource(
+    List<SharedFlowResolution> pairFlows,
+    YamlBinding? invalidGate,
+    string? receiptOperand,
+    string selectedRecordExpression)
+{
+    var sharedSource = pairFlows
+        .Select(flow => flow.OperationVariable)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+    if (sharedSource.Count == 1)
+    {
+        return sharedSource[0];
+    }
+
+    var gateSources = invalidGate is null
+        ? []
+        : ExtractFunctionArguments(invalidGate.Value.Formula, "IsBlank")
+            .Select(NormalizeWhitespace)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    if (!string.IsNullOrWhiteSpace(receiptOperand))
+    {
+        var receiptSource = NormalizeWhitespace(receiptOperand);
+        var receiptGateSource = gateSources.FirstOrDefault(source =>
+            string.Equals(source, receiptSource, StringComparison.OrdinalIgnoreCase));
+        if (receiptGateSource is not null)
+        {
+            return receiptGateSource;
+        }
+    }
+
+    var nonSelectionSources = gateSources
+        .Where(source => !string.Equals(
+            source,
+            NormalizeWhitespace(selectedRecordExpression),
+            StringComparison.OrdinalIgnoreCase))
+        .ToList();
+    return nonSelectionSources.Count == 1 ? nonSelectionSources[0] : null;
+}
+
+void ValidateOperationReset(
+    string pair,
+    string? operationSource,
+    YamlBinding? resetBinding,
+    YamlBinding? receiveMutation,
+    YamlBinding? issueMutation)
+{
+    if (string.IsNullOrWhiteSpace(operationSource))
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' cannot resolve one operation source from the shared flow, invalid gate, and receipt.");
+        return;
+    }
+
+    if (resetBinding is null)
+    {
+        return;
+    }
+
+    var isScreenEntry = string.Equals(
+        resetBinding.Value.Property,
+        "OnVisible",
+        StringComparison.OrdinalIgnoreCase);
+    var isMutationEvent = new[] { receiveMutation, issueMutation }
+        .Where(binding => binding is not null)
+        .Any(binding => SameBinding(binding!.Value, resetBinding.Value));
+    var formula = resetBinding.Value.Formula;
+    var resetPoint = isMutationEvent
+        ? Regex.Match(formula, @"\b(?:Patch|UpdateIf)\s*\(", RegexOptions.IgnoreCase).Index
+        : -1;
+    var resetFormula = resetPoint >= 0 ? formula[resetPoint..] : formula;
+
+    var variableSource = Regex.Match(
+        operationSource,
+        @"^[A-Za-z_][A-Za-z0-9_]*$",
+        RegexOptions.CultureInvariant);
+    var resetsSource = variableSource.Success
+        ? ExtractEventAssignments(resetFormula).Any(assignment =>
+            string.Equals(
+                assignment.Variable,
+                operationSource,
+                StringComparison.OrdinalIgnoreCase) &&
+            Regex.IsMatch(
+                assignment.Expression,
+                @"^\s*Blank\s*\(\s*\)\s*$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        : ResetsControlSelection(resetFormula, operationSource);
+
+    if ((!isScreenEntry && !isMutationEvent) || !resetsSource)
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' blank-operation binding must reset actual operation source '{operationSource}' to Blank on screen entry or after a successful mutation.");
+    }
+}
+
+bool ResetsControlSelection(string formula, string operationSource)
+{
+    var controlMatch = Regex.Match(
+        operationSource,
+        @"^(?<control>[A-Za-z_][A-Za-z0-9_]*)\.Selected",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (!controlMatch.Success)
+    {
+        return false;
+    }
+
+    var control = controlMatch.Groups["control"].Value;
+    if (!Regex.IsMatch(
+        formula,
+        $@"\bReset\s*\(\s*{Regex.Escape(control)}\s*\)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+        !TryGetControlBlock(yamlLines, control, out var controlBlock))
+    {
+        return false;
+    }
+
+    var defaultFormula = GetPropertyFormula(controlBlock, "Default");
+    var allowEmptySelection = GetPropertyFormula(controlBlock, "AllowEmptySelection");
+    return defaultFormula is not null &&
+        Regex.IsMatch(
+            defaultFormula,
+            @"^=\s*Blank\s*\(\s*\)\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+        allowEmptySelection is not null &&
+        Regex.IsMatch(
+            allowEmptySelection,
+            @"^=\s*true\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+void ValidateSelectedRecordState(
+    string pair,
+    string selectedRecordExpression,
+    YamlBinding? invalidGate,
+    YamlBinding? receiveMutation,
+    YamlBinding? issueMutation,
+    Dictionary<string, List<string>> compoundRows)
+{
+    if (string.IsNullOrWhiteSpace(selectedRecordExpression))
+    {
+        return;
+    }
+
+    var controlSelection = Regex.Match(
+        selectedRecordExpression,
+        @"^(?<control>[A-Za-z_][A-Za-z0-9_]*)\.Selected\.(?:ID|Id)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (controlSelection.Success &&
+        TryGetControlBlock(yamlLines, controlSelection.Groups["control"].Value, out var selectionBlock))
+    {
+        var control = controlSelection.Groups["control"].Value;
+        var isGallery = Regex.IsMatch(
+            selectionBlock,
+            @"\bControl:\s*(?:[^/\r\n]+/)?Gallery\b",
+            RegexOptions.IgnoreCase);
+        var isSelectionControl = isGallery || Regex.IsMatch(
+            selectionBlock,
+            @"\bControl:\s*(?:[^/\r\n]+/)?(?:DropDown|ComboBox|ListBox)\b",
+            RegexOptions.IgnoreCase);
+        var items = GetPropertyFormula(selectionBlock, "Items");
+        if (isSelectionControl &&
+            !IsProvablyEmptyItems(items) &&
+            (isGallery || !HasNullableResetSelection(control, selectionBlock)))
+        {
+            errors.Add(
+                $"Directional mutation pair '{pair}' cannot use '{selectedRecordExpression}' as no-selection proof: Selected defaults to an item unless final YAML proves an empty/resettable selection; use an explicit selected ID reset to Blank.");
+        }
+    }
+
+    if (Regex.IsMatch(
+        selectedRecordExpression,
+        @"^[A-Za-z_][A-Za-z0-9_]*(?:ID|Id)$",
+        RegexOptions.CultureInvariant))
+    {
+        var hasEntryReset = yamlFormulas
+            .Where(formula => string.Equals(
+                formula.Property,
+                "OnVisible",
+                StringComparison.OrdinalIgnoreCase))
+            .SelectMany(formula => ExtractEventAssignments(formula.Formula))
+            .Any(assignment =>
+                string.Equals(
+                    assignment.Variable,
+                    selectedRecordExpression,
+                    StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(
+                    assignment.Expression,
+                    @"^\s*Blank\s*\(\s*\)\s*$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+        var hasReachableSelection = yamlFormulas
+            .Where(formula =>
+                formula.Property.StartsWith("On", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(formula.Property, "OnStart", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(formula.Property, "OnVisible", StringComparison.OrdinalIgnoreCase))
+            .SelectMany(formula => ExtractEventAssignments(formula.Formula))
+            .Any(assignment =>
+                string.Equals(
+                    assignment.Variable,
+                    selectedRecordExpression,
+                    StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(
+                    assignment.Expression,
+                    @"(?:\bThisItem\.(?:ID|Id)\b|\.Selected\.(?:ID|Id)\b)",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+        if (!hasEntryReset || !hasReachableSelection)
+        {
+            errors.Add(
+                $"Directional mutation pair '{pair}' explicit selected ID '{selectedRecordExpression}' must reset to Blank on screen entry and be assigned by a reachable row-selection event.");
+        }
+    }
+
+    if (compoundRows.TryGetValue(pair, out var compoundRow))
+    {
+        if (compoundRow.Count < 5 ||
+            !string.Equals(
+                NormalizeWhitespace(Clean(compoundRow[1])),
+                NormalizeWhitespace(selectedRecordExpression),
+                StringComparison.OrdinalIgnoreCase) ||
+            !ContainsExpression(Clean(compoundRow[3]), selectedRecordExpression))
+        {
+            errors.Add(
+                $"Directional mutation pair '{pair}' compound evidence must use selected-record source '{selectedRecordExpression}' consistently.");
+        }
+    }
+}
+
+static bool IsProvablyEmptyItems(string? itemsFormula)
+{
+    if (string.IsNullOrWhiteSpace(itemsFormula))
+    {
+        return false;
+    }
+
+    var expression = itemsFormula.TrimStart('=').Trim();
+    return Regex.IsMatch(
+        expression,
+        @"^(?:Blank\s*\(\s*\)|\[\s*\]|Table\s*\(\s*\))$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+bool HasNullableResetSelection(string control, string controlBlock)
+{
+    var allowEmpty = GetPropertyFormula(controlBlock, "AllowEmptySelection");
+    var defaultValue =
+        GetPropertyFormula(controlBlock, "Default") ??
+        GetPropertyFormula(controlBlock, "DefaultSelectedItems");
+    var nullableDefault = defaultValue is not null && Regex.IsMatch(
+        defaultValue,
+        @"^=\s*(?:Blank\s*\(\s*\)|\[\s*\])\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    var resetsOnEntry = yamlFormulas.Any(formula =>
+        string.Equals(formula.Property, "OnVisible", StringComparison.OrdinalIgnoreCase) &&
+        Regex.IsMatch(
+            formula.Formula,
+            $@"\bReset\s*\(\s*{Regex.Escape(control)}\s*\)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+    return allowEmpty is not null &&
+        Regex.IsMatch(
+            allowEmpty,
+            @"^=\s*true\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+        nullableDefault &&
+        resetsOnEntry;
+}
+
+static bool UsesExactSelectedRecordTarget(string formula, string selectedRecordExpression)
+{
+    var normalizedSelected = NormalizeWhitespace(selectedRecordExpression);
+    bool LookupArgumentsMatch(string arguments)
+    {
+        var parts = SplitPowerFxArguments(arguments);
+        if (parts.Count < 2)
+        {
+            return false;
+        }
+
+        var predicate = NormalizeWhitespace(parts[1]);
+        var selected = Regex.Escape(normalizedSelected);
+        // The key may be ID, ItemID, or any other schema field. Additional predicates
+        // and LookUp's optional third result argument do not change record identity.
+        return Regex.IsMatch(
+            predicate,
+            $@"(?:\b[A-Za-z_][A-Za-z0-9_.]*\s*=\s*{selected}(?=\s*(?:&&|\bAnd\b|$))|(?<![A-Za-z0-9_.]){selected}\s*=\s*[A-Za-z_][A-Za-z0-9_.]*(?=\s*(?:&&|\bAnd\b|$)))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    bool LookupMatches(string expression)
+    {
+        return ExtractFunctionArguments(expression, "LookUp").Any(LookupArgumentsMatch);
+    }
+
+    foreach (var parts in ExtractFunctionArguments(formula, "Patch").Select(SplitPowerFxArguments))
+    {
+        if (parts.Count < 2)
+        {
+            continue;
+        }
+
+        var target = NormalizeWhitespace(parts[1]);
+        if (string.Equals(target, normalizedSelected, StringComparison.OrdinalIgnoreCase) ||
+            LookupMatches(target))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(target, @"^[A-Za-z_][A-Za-z0-9_]*$"))
+        {
+            var alias = Regex.Match(
+                formula,
+                $@"\b{Regex.Escape(target)}\s*:\s*LookUp\s*\(",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (alias.Success)
+            {
+                var arguments = ExtractBalancedGroup(
+                    formula,
+                    alias.Index + alias.Length,
+                    '(',
+                    ')');
+                if (arguments is not null && LookupArgumentsMatch(arguments))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+string? ResolveLiveOperandSource(string? operand, params string?[] mutationFormulas)
+{
+    if (string.IsNullOrWhiteSpace(operand))
+    {
+        return null;
+    }
+
+    if (Regex.IsMatch(
+        operand,
+        @"\b[A-Za-z_][A-Za-z0-9_]*\.(?:Text|Value)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+    {
+        return NormalizeWhitespace(operand);
+    }
+
+    foreach (var formula in mutationFormulas)
+    {
+        if (string.IsNullOrWhiteSpace(formula))
+        {
+            continue;
+        }
+
+        var assignment = ExtractEventAssignments(ExtractMutationPrelude(formula))
+            .FirstOrDefault(candidate => string.Equals(
+                candidate.Variable,
+                operand,
+                StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(assignment.Variable))
+        {
+            return NormalizeWhitespace(assignment.Expression);
+        }
+    }
+
+    foreach (var eventFormula in yamlFormulas.Where(formula =>
+        formula.Property.StartsWith("On", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(formula.Property, "OnStart", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(formula.Property, "OnVisible", StringComparison.OrdinalIgnoreCase)))
+    {
+        var eventAssignment = ExtractEventAssignments(eventFormula.Formula)
+            .FirstOrDefault(candidate =>
+                string.Equals(candidate.Variable, operand, StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(
+                    candidate.Expression,
+                    @"\b(?:Self|[A-Za-z_][A-Za-z0-9_]*)\.(?:Text|Value)\b",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+        if (!string.IsNullOrWhiteSpace(eventAssignment.Variable))
+        {
+            return NormalizeWhitespace(Regex.Replace(
+                eventAssignment.Expression,
+                @"\bSelf\.",
+                $"{eventFormula.Control}.",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+        }
+    }
+
+    return null;
+}
+
+void ValidateAmountState(
+    string pair,
+    string? amountSource,
+    YamlBinding? invalidGate,
+    YamlBinding? receiveMutation,
+    YamlBinding? issueMutation)
+{
+    if (string.IsNullOrWhiteSpace(amountSource))
+    {
+        return;
+    }
+
+    var gateRequiresPositive = invalidGate is not null &&
+        Regex.IsMatch(
+            NormalizeWhitespace(invalidGate.Value.Formula),
+            $@"(?:{Regex.Escape(NormalizeWhitespace(amountSource))}\s*>\s*0|0\s*<\s*{Regex.Escape(NormalizeWhitespace(amountSource))})",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (!gateRequiresPositive)
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' invalid submission gate must require live amount source '{amountSource}' to be greater than zero.");
+    }
+
+    var controlMatch = Regex.Match(
+        amountSource,
+        @"\b(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?:Text|Value)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (!controlMatch.Success ||
+        !TryGetControlBlock(yamlLines, controlMatch.Groups["control"].Value, out var controlBlock) ||
+        !Regex.IsMatch(controlBlock, @"\bControl:\s*ModernNumberInput\b", RegexOptions.IgnoreCase))
+    {
+        return;
+    }
+
+    var control = controlMatch.Groups["control"].Value;
+    var minimum = GetPropertyFormula(controlBlock, "Min");
+    var defaultValue = GetPropertyFormula(controlBlock, "Default");
+    var minimumMatch = Regex.Match(
+        minimum ?? "",
+        @"^=\s*(?<value>-?\d+(?:\.\d+)?)\s*$",
+        RegexOptions.CultureInvariant);
+    var hasVisibleInvalidPath = yamlFormulas.Any(formula =>
+        string.Equals(formula.Property, "Visible", StringComparison.OrdinalIgnoreCase) &&
+        ContainsExpression(formula.Formula, $"{control}.Value") &&
+        Regex.IsMatch(
+            formula.Formula,
+            @"(?:<=\s*0|<\s*1|0\s*>=)",
+            RegexOptions.CultureInvariant));
+    if (minimumMatch.Success &&
+        decimal.TryParse(
+            minimumMatch.Groups["value"].Value,
+            System.Globalization.NumberStyles.Number,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var minimumValue) &&
+        minimumValue > 0 &&
+        !hasVisibleInvalidPath)
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' amount control '{control}' has Min={minimumValue}; it cannot represent the required non-positive invalid state without an explicit visible validation path.");
+    }
+
+    var hasBlankOrZeroDefault = defaultValue is not null &&
+        Regex.IsMatch(
+            defaultValue,
+            @"^=\s*(?:Blank\s*\(\s*\)|0(?:\.0+)?)\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (!hasBlankOrZeroDefault)
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' amount control '{control}' must default to Blank or zero.");
+    }
+
+    var resetOnEntry = yamlFormulas.Any(formula =>
+        string.Equals(formula.Property, "OnVisible", StringComparison.OrdinalIgnoreCase) &&
+        Regex.IsMatch(
+            formula.Formula,
+            $@"\bReset\s*\(\s*{Regex.Escape(control)}\s*\)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+    var resetAfterMutation = new[] { receiveMutation, issueMutation }
+        .Where(binding => binding is not null)
+        .Any(binding =>
+        {
+            var formula = binding!.Value.Formula;
+            var mutation = Regex.Match(
+                formula,
+                @"\b(?:Patch|UpdateIf)\s*\(",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            return mutation.Success &&
+                Regex.IsMatch(
+                    formula[mutation.Index..],
+                    $@"\bReset\s*\(\s*{Regex.Escape(control)}\s*\)",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        });
+    if (!resetOnEntry && !resetAfterMutation)
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' amount control '{control}' must reset on screen entry or after mutation.");
+    }
+}
+
+static bool ContainsExpression(string formula, string expression) =>
+    NormalizeWhitespace(formula).Contains(
+        NormalizeWhitespace(expression),
+        StringComparison.OrdinalIgnoreCase);
 
 BranchRequirement? ResolveBranchRequirement(
     string direction,
@@ -973,12 +1526,6 @@ void ValidateDirectionalMutation(
         return;
     }
 
-    if (!formula.Contains(selectedRecordExpression, StringComparison.OrdinalIgnoreCase))
-    {
-        errors.Add(
-            $"Directional mutation pair '{pair}' {direction} mutation must target '{selectedRecordExpression}'.");
-    }
-
     // Phantom LookUp key (QAChecks Check 43). Merely *containing* the selected-record
     // expression is not enough: the record identity that locates the row to Patch must be
     // the selected record verbatim. Concatenating or computing onto it silently changes the
@@ -992,12 +1539,17 @@ void ValidateDirectionalMutation(
     // followed (past whitespace) by a string-concat or arithmetic operator. `selectedRecordExpression`
     // is code-adjacent evidence text but may contain regex metacharacters (dots), so escape it.
     var transformedKey = new Regex(
-        Regex.Escape(selectedRecordExpression) + @"\s*[&+\-*/^]",
+        Regex.Escape(selectedRecordExpression) + @"\s*(?:&(?!&)|[+\-*/^])",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     if (transformedKey.IsMatch(formula))
     {
         errors.Add(
             $"Directional mutation pair '{pair}' {direction} mutation uses a transformed record-identity key: the selected-record expression '{selectedRecordExpression}' is concatenated or computed onto, so LookUp never matches and Patch no-ops (phantom LookUp key).");
+    }
+    else if (!UsesExactSelectedRecordTarget(formula, selectedRecordExpression))
+    {
+        errors.Add(
+            $"Directional mutation pair '{pair}' {direction} mutation must target selected-record source '{selectedRecordExpression}' with an exact equality predicate or direct Patch record.");
     }
 
     if (!string.IsNullOrWhiteSpace(source) &&
@@ -2062,6 +2614,7 @@ static string NormalizeWhitespace(string value) =>
 static List<YamlFormula> IndexYamlFormulas(string[] yamlLines)
 {
     var formulas = new List<YamlFormula>();
+    var screenDeclarations = FindScreenDeclarations(yamlLines);
     string? currentControl = null;
     var controlIndentation = -1;
 
@@ -2072,6 +2625,21 @@ static List<YamlFormula> IndexYamlFormulas(string[] yamlLines)
             line,
             @"^(?<indent>\s*)-\s+(?<control>[A-Za-z_][A-Za-z0-9_]*):\s*$",
             RegexOptions.CultureInvariant);
+        if (!controlMatch.Success && screenDeclarations.TryGetValue(index, out var screen))
+        {
+            currentControl = screen.Name;
+            controlIndentation = screen.Indentation;
+            continue;
+        }
+        if (!controlMatch.Success && index == 0)
+        {
+            // `GetPropertyFormula` re-indexes an isolated control/screen block whose first
+            // declaration no longer has its enclosing `Screens:` marker.
+            controlMatch = Regex.Match(
+                line,
+                @"^(?<indent>\s*)(?<control>[A-Za-z_][A-Za-z0-9_]*):\s*$",
+                RegexOptions.CultureInvariant);
+        }
         if (controlMatch.Success)
         {
             currentControl = controlMatch.Groups["control"].Value;
@@ -2188,10 +2756,14 @@ static bool TryGetControlBlock(
     string control,
     out string controlBlock)
 {
+    var screenDeclarations = FindScreenDeclarations(yamlLines);
     for (var index = 0; index < yamlLines.Length; index++)
     {
         var line = yamlLines[index];
-        if (!line.TrimStart().StartsWith($"- {control}:", StringComparison.Ordinal))
+        var listControl = line.TrimStart().StartsWith($"- {control}:", StringComparison.Ordinal);
+        var screenControl = screenDeclarations.TryGetValue(index, out var screen) &&
+            string.Equals(screen.Name, control, StringComparison.Ordinal);
+        if (!listControl && !screenControl)
         {
             continue;
         }
@@ -2216,6 +2788,56 @@ static bool TryGetControlBlock(
 
     controlBlock = "";
     return false;
+}
+
+static Dictionary<int, YamlDeclaration> FindScreenDeclarations(string[] yamlLines)
+{
+    var declarations = new Dictionary<int, YamlDeclaration>();
+    for (var index = 0; index < yamlLines.Length; index++)
+    {
+        var screensMatch = Regex.Match(
+            yamlLines[index],
+            @"^(?<indent>\s*)Screens:\s*$",
+            RegexOptions.CultureInvariant);
+        if (!screensMatch.Success)
+        {
+            continue;
+        }
+
+        var screensIndentation = screensMatch.Groups["indent"].Value.Length;
+        int? screenIndentation = null;
+        for (var child = index + 1; child < yamlLines.Length; child++)
+        {
+            var line = yamlLines[child];
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var indentation = line.Length - line.TrimStart().Length;
+            if (indentation <= screensIndentation)
+            {
+                break;
+            }
+
+            var screenMatch = Regex.Match(
+                line,
+                @"^\s*(?<name>[A-Za-z_][A-Za-z0-9_]*):\s*$",
+                RegexOptions.CultureInvariant);
+            if (!screenMatch.Success)
+            {
+                continue;
+            }
+
+            screenIndentation ??= indentation;
+            if (indentation == screenIndentation)
+            {
+                declarations[child] = new(screenMatch.Groups["name"].Value, indentation);
+            }
+        }
+    }
+
+    return declarations;
 }
 
 static bool ReferencesSourceField(string formula, string sourceField)
@@ -2257,6 +2879,7 @@ static int Fail(IEnumerable<string> failures)
 
 readonly record struct YamlBinding(string Control, string Property, string Formula);
 readonly record struct YamlFormula(string Control, string Property, string Formula);
+readonly record struct YamlDeclaration(string Name, int Indentation);
 readonly record struct SetAssignment(string Variable, string Expression);
 readonly record struct OperationSelection(
     YamlBinding Binding,

@@ -1,13 +1,18 @@
 Screens:
     Screen1:
+        Properties:
+            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)
         Children:
             - cmbAdjustItem:
                 Control: Classic/ComboBox
                 Properties:
+                    AllowEmptySelection: =true
+                    DefaultSelectedItems: =[]
                     Items: =colInventory
             - drpOperation:
                 Control: Classic/DropDown
                 Properties:
+                    AllowEmptySelection: =true
                     Default: =Blank()
                     Items: =["Receive", "Issue"]
             - txtAmount:
@@ -17,12 +22,12 @@ Screens:
             - btnReceive:
                 Control: Classic/Button
                 Properties:
-                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))
             - btnIssue:
                 Control: Classic/Button
                 Properties:
-                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
                     OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))
             - galInventory:
                 Control: Gallery

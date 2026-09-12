@@ -142,9 +142,24 @@ function materialize(
         mixedTopology = false,
         multiFieldPatch = false,
         ambiguousMultiFieldPatch = false,
-        multiBlankGate = false,
         contextStagingOnChange = false,
         contextStagingAfterPatch = false,
+        q8RuntimeGaps = false,
+        selectedEvidenceMismatch = false,
+        explicitSelectedId = false,
+        modernAmount = false,
+        modernAmountDefaultZero = false,
+        stagedAmountMinOne = false,
+        operationPostSuccessReset = false,
+        compoundSelectionMismatch = false,
+        omitOperationAllowEmpty = false,
+        omitSelectionAllowEmpty = false,
+        listBoxSelection = false,
+        directWithoutOperationState = false,
+        customRecordKey = false,
+        transformedCustomRecordKey = false,
+        wrappedGalleryItems = false,
+        twoSpaceScreenIndent = false,
         sourceDir = fixtureDir,
     } = {}) {
     const workspace = path.join(workRoot, caseName);
@@ -275,7 +290,7 @@ function materialize(
             '            - btnApply:\n' +
             '                Control: Classic/Button\n' +
             '                Properties:\n' +
-            '                    DisplayMode: =If(IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    DisplayMode: =If(IsBlank(varOperation) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
             `                    OnSelect: ${SHARED_APPLY_FORMULA}\n` +
             '            - btnReceive:',
             'shared Apply control');
@@ -290,7 +305,7 @@ function materialize(
         if (!sharedSelectorMutates) {
             screenYaml = replaceOnceRequired(
                 screenYaml,
-                '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+                '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
                 `                    OnSelect: ${RECEIVE_ACTION_FORMULA}`,
                 '                    OnSelect: =Set(varOperation, "Receive")',
                 'Receive selector YAML');
@@ -304,7 +319,7 @@ function materialize(
         }
         screenYaml = replaceOnceRequired(
             screenYaml,
-            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
             `                    OnSelect: ${ISSUE_ACTION_FORMULA}`,
             '                    OnSelect: =Set(varOperation, "Issue")',
             'Issue selector YAML');
@@ -320,12 +335,22 @@ function materialize(
             `| Issue   | btnIssue + btnApply | ${issueSelectorBinding}<br>${SHARED_APPLY_BINDING} |`,
             'Issue shared Action Contract row');
         assert.ok(
-            acceptance.includes('drpOperation.Default: =Blank()'),
+            acceptance.includes('Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)'),
             'shared fixture must retain exact blank operation evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'shared operation reset YAML');
         acceptance = replaceOnceRequired(
             acceptance,
-            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
-            'btnApply.DisplayMode: =If(IsBlank(varOperation) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'shared operation reset evidence');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnApply.DisplayMode: =If(IsBlank(varOperation) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
             'shared Apply gate evidence');
         if (!sharedSelectorMutates) {
             acceptance = replaceOnceRequired(
@@ -385,7 +410,7 @@ function materialize(
                 '            - btnCommitAdjustment:\n' +
                 '                Control: Classic/Button\n' +
                 '                Properties:\n' +
-                '                    DisplayMode: =If(IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+                '                    DisplayMode: =If(IsBlank(varOperation) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
                 `                    OnSelect: ${SHARED_APPLY_FORMULA}\n` +
                 '            - btnReceive:',
                 'second shared mutation owner YAML');
@@ -510,6 +535,16 @@ function materialize(
                     '',
                     `${direction} Set selector removal`);
             }
+            screenYaml = replaceOnceRequired(
+                screenYaml,
+                '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+                '            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+                'dropdown operation reset YAML');
+            acceptance = replaceOnceRequired(
+                acceptance,
+                'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+                'Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+                'dropdown operation reset evidence');
             screenYaml = replaceAllRequired(
                 screenYaml,
                 'varOperation',
@@ -560,19 +595,6 @@ function materialize(
                 ` | ${mixedSharedBinding.slice(1, -1)} | galInventory.Items: =colInventory |`,
                 ` | ${ISSUE_ACTION_BINDING.slice(1, -1)} | galInventory.Items: =colInventory |`,
                 'mixed direct Issue mutation evidence');
-        }
-
-        if (multiBlankGate) {
-            screenYaml = replaceOnceRequired(
-                screenYaml,
-                'IsBlank(varOperation) || Not(Value(txtAmount.Text) > 0)',
-                'IsBlank(varOperation) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0)',
-                'multi-IsBlank gate YAML');
-            acceptance = replaceOnceRequired(
-                acceptance,
-                'IsBlank(varOperation) \\|\\| Not(Value(txtAmount.Text) > 0)',
-                'IsBlank(varOperation) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0)',
-                'multi-IsBlank gate evidence');
         }
 
         if (mutatingSelectorFunction) {
@@ -664,7 +686,7 @@ function materialize(
             'orphan Apply gate YAML');
         acceptance = replaceOnceRequired(
             acceptance,
-            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
             `btnApply.DisplayMode: ${orphanGate.replace('||', '\\|\\|')}`,
             'orphan Apply gate evidence');
     }
@@ -715,14 +737,14 @@ function materialize(
             '            - btnRouteMutation:\n' +
             '                Control: Classic/Button\n' +
             '                Properties:\n' +
-            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
             '                    OnSelect: =Select(btnReceive)\n' +
             '            - btnReceive:',
             'Select gate route YAML');
         acceptance = replaceOnceRequired(
             acceptance,
-            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
-            'btnRouteMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnRouteMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
             'Select gate route evidence');
     }
 
@@ -733,14 +755,14 @@ function materialize(
             '            - btnUnrelatedMutation:\n' +
             '                Control: Classic/Button\n' +
             '                Properties:\n' +
-            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
+            '                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)\n' +
             '                    OnSelect: =Clear(colScratch)\n' +
             '            - btnReceive:',
             'unrelated gated mutation YAML');
         acceptance = replaceOnceRequired(
             acceptance,
-            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
-            'btnUnrelatedMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnReceive.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
+            'btnUnrelatedMutation.DisplayMode: =If(IsBlank(drpOperation.Selected.Value) \\|\\| IsBlank(cmbAdjustItem.Selected.ID) \\|\\| Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)',
             'unrelated gated mutation evidence');
     }
 
@@ -790,6 +812,255 @@ function materialize(
         }
     }
 
+    if (explicitSelectedId) {
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'cmbAdjustItem.Selected.Quantity',
+            'LookUp(colInventory, ID = varSelectedInventoryId).Quantity',
+            'selected quantity lookup');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'cmbAdjustItem.Selected.Quantity',
+            'LookUp(colInventory, ID = varSelectedInventoryId).Quantity',
+            'selected quantity lookup evidence');
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'cmbAdjustItem.Selected.ID',
+            'varSelectedInventoryId',
+            'selected ID YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'cmbAdjustItem.Selected.ID',
+            'varSelectedInventoryId',
+            'selected ID evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            '            OnVisible: =Set(varOperation, Blank()); Set(varSelectedInventoryId, Blank())',
+            'selected ID entry reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Set(varSelectedInventoryId, Blank())',
+            'selected ID reset evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - drpOperation:',
+            '            - btnSelectInventory:\n' +
+            '                Control: Classic/Button\n' +
+            '                Properties:\n' +
+            '                    OnSelect: =Set(varSelectedInventoryId, ThisItem.ID)\n' +
+            '            - drpOperation:',
+            'reachable selected ID event');
+    }
+
+    if (modernAmount || modernAmountDefaultZero || stagedAmountMinOne || q8RuntimeGaps) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - txtAmount:\n' +
+            '                Control: Classic/TextInput\n' +
+            '                Properties:\n' +
+            '                    Format: =TextFormat.Number',
+            '            - numAdjustAmount:\n' +
+            '                Control: ModernNumberInput\n' +
+            '                Properties:\n' +
+            '                    Default: =Blank()\n' +
+            `                    Min: =${q8RuntimeGaps || stagedAmountMinOne ? '1' : '0'}`,
+            'modern amount control');
+        screenYaml = replaceAllRequired(
+            screenYaml, 'Value(txtAmount.Text)', 'numAdjustAmount.Value', 'modern amount YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'Value(txtAmount.Text)', 'numAdjustAmount.Value', 'modern amount evidence');
+    }
+
+    if (modernAmount || modernAmountDefaultZero || stagedAmountMinOne) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem); Reset(numAdjustAmount)',
+            'modern amount entry reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem); Reset(numAdjustAmount)',
+            'modern amount reset evidence');
+    }
+
+    if (modernAmountDefaultZero) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - numAdjustAmount:\n' +
+            '                Control: ModernNumberInput\n' +
+            '                Properties:\n' +
+            '                    Default: =Blank()',
+            '            - numAdjustAmount:\n' +
+            '                Control: ModernNumberInput\n' +
+            '                Properties:\n' +
+            '                    Default: =0',
+            'zero amount default');
+    }
+
+    if (stagedAmountMinOne) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    Min: =1',
+            '                    Min: =1\n' +
+            '                    OnChange: =Set(varAmount, Self.Value)',
+            'staged amount event');
+        screenYaml = replaceAllRequired(
+            screenYaml, 'Set(varAmount, numAdjustAmount.Value); ', '', 'inline amount staging YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'Set(varAmount, numAdjustAmount.Value); ', '', 'inline amount staging evidence');
+    }
+
+    if (operationPostSuccessReset) {
+        const resetFormula = SHARED_APPLY_FORMULA + '; Set(varOperation, Blank())';
+        screenYaml = replaceAllRequired(
+            screenYaml, SHARED_APPLY_FORMULA, resetFormula, 'post-success operation reset YAML');
+        acceptance = replaceAllRequired(
+            acceptance, SHARED_APPLY_FORMULA, resetFormula, 'post-success operation reset evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)\n',
+            '            OnVisible: =Reset(cmbAdjustItem)\n',
+            'screen operation reset removal');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(cmbAdjustItem)',
+            `btnApply.OnSelect: ${resetFormula}`,
+            'post-success blank-operation binding');
+    }
+
+    if (q8RuntimeGaps) {
+        appYaml = replaceOnceRequired(
+            appYaml,
+            '        StartScreen: =Screen1',
+            '        StartScreen: =Screen1\n' +
+            '        OnStart: =ClearCollect(colInventory, {ID: "INV-001", Quantity: 10}); ' +
+            'Set(varOperation, Blank()); Set(varSelectedInventoryId, "INV-001")',
+            'Q8 App.OnStart state');
+        screenYaml = replaceAllRequired(
+            screenYaml, 'cmbAdjustItem', 'galAdjustItems', 'Q8 gallery selection YAML');
+        acceptance = replaceAllRequired(
+            acceptance, 'cmbAdjustItem', 'galAdjustItems', 'Q8 gallery selection evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            'Control: Classic/ComboBox',
+            'Control: Gallery',
+            'Q8 gallery control');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Set(varOperation, Blank()); Reset(galAdjustItems)\n',
+            '',
+            'Q8 missing screen reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Set(varOperation, Blank()); Reset(galAdjustItems)',
+            'numAdjustAmount.Default: =Blank()',
+            'Q8 unrelated blank-operation evidence');
+    }
+
+    if (selectedEvidenceMismatch) {
+        acceptance = replaceOnceRequired(
+            acceptance,
+            '| Receive/Issue | galAdjustItems.Selected.ID |',
+            '| Receive/Issue | varSelectedInventoryId |',
+            'mismatched selected-record declaration');
+    }
+
+    if (compoundSelectionMismatch) {
+        acceptance = replaceOnceRequired(
+            acceptance,
+            '| Receive/Issue | cmbAdjustItem.Selected.ID | Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11 |',
+            '| Receive/Issue | varOtherSelectedId | Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11 |',
+            'mismatched compound selected-record source');
+    }
+
+    if (omitOperationAllowEmpty) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            - drpOperation:\n' +
+            '                Control: Classic/DropDown\n' +
+            '                Properties:\n' +
+            '                    AllowEmptySelection: =true\n',
+            '            - drpOperation:\n' +
+            '                Control: Classic/DropDown\n' +
+            '                Properties:\n',
+            'operation AllowEmptySelection');
+    }
+
+    if (omitSelectionAllowEmpty) {
+        const first = screenYaml.indexOf('                    AllowEmptySelection: =true\n');
+        assert.notStrictEqual(first, -1, 'missing selection AllowEmptySelection');
+        screenYaml =
+            screenYaml.slice(0, first) +
+            screenYaml.slice(first + '                    AllowEmptySelection: =true\n'.length);
+    }
+
+    if (listBoxSelection) {
+        screenYaml = replaceOnceRequired(
+            screenYaml, 'Control: Classic/ComboBox', 'Control: Classic/ListBox',
+            'ListBox selected-record control');
+    }
+
+    if (directWithoutOperationState) {
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'IsBlank(drpOperation.Selected.Value) || ',
+            '',
+            'direct operation gate YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'IsBlank(drpOperation.Selected.Value) \\|\\| ',
+            '',
+            'direct operation gate evidence');
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            '            OnVisible: =Reset(cmbAdjustItem)',
+            'direct selection-only reset');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            'Screen1.OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)',
+            'drpOperation.Default: =Blank()',
+            'direct unused operation evidence');
+    }
+
+    if (customRecordKey || transformedCustomRecordKey) {
+        const selected = transformedCustomRecordKey
+            ? 'cmbAdjustItem.Selected.ID & "-copy"'
+            : 'cmbAdjustItem.Selected.ID && Active = true';
+        const replacement = `LookUp(colInventory, ItemID = ${selected}, ThisRecord)`;
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'LookUp(colInventory, ID = cmbAdjustItem.Selected.ID)',
+            replacement,
+            'custom-key target YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'LookUp(colInventory, ID = cmbAdjustItem.Selected.ID)',
+            replacement,
+            'custom-key target evidence');
+    }
+
+    if (wrappedGalleryItems) {
+        screenYaml = replaceFirstRequired(
+            screenYaml,
+            '                    Items: =colInventory',
+            '                    Items: =SortByColumns(Filter(colInventory, Quantity >= 0), "ID")',
+            'wrapped gallery Items');
+    }
+
+    if (twoSpaceScreenIndent) {
+        screenYaml = screenYaml
+            .split('\n')
+            .map((line) => {
+                const indentation = line.match(/^ */)[0].length;
+                return ' '.repeat(Math.floor(indentation / 2)) + line.slice(indentation);
+            })
+            .join('\n');
+    }
+
     writeFixture(path.join(workspace, 'App.pa.yaml'), { ...appFixture, text: appYaml });
     writeFixture(path.join(workspace, 'Screen1.pa.yaml'), { ...screenFixture, text: screenYaml });
     writeFixture(path.join(workspace, 'canvas-app-plan.md'), { ...planFixture, text: plan });
@@ -813,11 +1084,52 @@ function runValidator(workspace) {
 
 test.after(() => fs.rmSync(workRoot, { recursive: true, force: true }));
 
-test('accepts a correctly-signed Receive/Issue workspace', () => {
+test('accepts a correctly-signed Receive/Issue workspace with a four-space screen key', () => {
     const workspace = materialize('receive-issue-pass');
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('indexes a two-space exported screen key for exact OnVisible reset evidence', () => {
+    const workspace = materialize(
+        'receive-two-space-screen',
+        { twoSpaceScreenIndent: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects operation-control reset without AllowEmptySelection true', () => {
+    const workspace = materialize(
+        'receive-operation-not-empty',
+        {
+            sharedApplyFlow: true,
+            dropdownDirectShared: true,
+            omitOperationAllowEmpty: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-nullable operation control to fail');
+    assert.match(
+        stderr,
+        /blank-operation binding must reset actual operation source 'drpOperation\.Selected\.Value'/);
+});
+
+test('rejects selected ComboBox proof without nullable reset configuration', () => {
+    const workspace = materialize(
+        'receive-selection-not-empty',
+        { omitSelectionAllowEmpty: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-nullable selected control to fail');
+    assert.match(stderr, /cannot use 'cmbAdjustItem\.Selected\.ID' as no-selection proof/);
+});
+
+test('rejects selected ListBox proof without nullable reset configuration', () => {
+    const workspace = materialize(
+        'receive-listbox-not-empty',
+        { listBoxSelection: true, omitSelectionAllowEmpty: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected non-nullable ListBox selection to fail');
+    assert.match(stderr, /cannot use 'cmbAdjustItem\.Selected\.ID' as no-selection proof/);
 });
 
 test('rejects an orphan operation variable on a non-mutating Apply gate', () => {
@@ -868,6 +1180,121 @@ test('accepts selectors that set a shared operation consumed by the mutating App
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('preserves separate direct actions with selection and amount blank gates', () => {
+    const workspace = materialize(
+        'receive-direct-without-operation-state',
+        { directWithoutOperationState: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects the exported Q8 incomplete-state gaps without disputing directional arithmetic', () => {
+    const workspace = materialize(
+        'receive-q8-runtime-gaps',
+        { sharedApplyFlow: true, q8RuntimeGaps: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected runtime-derived Q8 gaps to fail static acceptance');
+    assert.match(
+        stderr,
+        /blank-operation binding must reset actual operation source 'varOperation'/);
+    assert.match(
+        stderr,
+        /cannot use 'galAdjustItems\.Selected\.ID' as no-selection proof/);
+    assert.match(
+        stderr,
+        /amount control 'numAdjustAmount' has Min=1/);
+    assert.doesNotMatch(stderr, /mutation must apply '[+-]'/);
+});
+
+test('rejects selected-ID evidence when the mutation still uses Gallery.Selected.ID', () => {
+    const workspace = materialize(
+        'receive-q8-selection-mismatch',
+        {
+            sharedApplyFlow: true,
+            q8RuntimeGaps: true,
+            selectedEvidenceMismatch: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected contradictory selected-record evidence to fail');
+    assert.match(
+        stderr,
+        /receive mutation must target selected-record source 'varSelectedInventoryId'/);
+    assert.match(
+        stderr,
+        /explicit selected ID 'varSelectedInventoryId' must reset to Blank on screen entry/);
+});
+
+test('accepts one explicit selected ID reset and assigned by a reachable row event', () => {
+    const workspace = materialize(
+        'receive-explicit-selected-id',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a blank Min=0 modern amount with gate and screen-entry reset', () => {
+    const workspace = materialize(
+        'receive-modern-amount',
+        { sharedApplyFlow: true, modernAmount: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a zero-default Min=0 modern amount when the gate requires greater than zero', () => {
+    const workspace = materialize(
+        'receive-modern-amount-zero-default',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('resolves a staged amount from reachable OnChange and rejects its Min=1', () => {
+    const workspace = materialize(
+        'receive-staged-modern-amount-min-one',
+        { sharedApplyFlow: true, stagedAmountMinOne: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected staged Min=1 amount source to fail');
+    assert.match(stderr, /amount control 'numAdjustAmount' has Min=1/);
+});
+
+test('accepts resetting the actual operation state after a successful mutation', () => {
+    const workspace = materialize(
+        'receive-operation-post-success-reset',
+        { sharedApplyFlow: true, operationPostSuccessReset: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a custom record key, additional predicate, and three-argument LookUp', () => {
+    const workspace = materialize(
+        'receive-custom-record-key',
+        { customRecordKey: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a transformed custom record key', () => {
+    const workspace = materialize(
+        'receive-transformed-custom-record-key',
+        { transformedCustomRecordKey: true });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected transformed custom key to fail');
+    assert.match(stderr, /transformed record-identity key/);
+});
+
+test('rejects wrapped Gallery Items as nullable selected-record proof', () => {
+    const workspace = materialize(
+        'receive-wrapped-gallery-selection',
+        {
+            sharedApplyFlow: true,
+            q8RuntimeGaps: true,
+            wrappedGalleryItems: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrapped nonempty Gallery.Selected proof to fail');
+    assert.match(stderr, /cannot use 'galAdjustItems\.Selected\.ID' as no-selection proof/);
 });
 
 test('accepts correct shared branches when Action Contract contains only the handler', () => {
@@ -950,7 +1377,7 @@ test('accepts operation selectors assigned through UpdateContext for gate livene
 test('resolves operation source from receipt when a gate has multiple IsBlank operands', () => {
     const workspace = materialize(
         'receive-multi-blank-gate-pass',
-        { sharedApplyFlow: true, sharedActionHandlerOnly: true, multiBlankGate: true });
+        { sharedApplyFlow: true, sharedActionHandlerOnly: true });
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 });
@@ -961,7 +1388,6 @@ test('rejects reversed branches with a multi-IsBlank gate', () => {
         {
             sharedApplyFlow: true,
             sharedActionHandlerOnly: true,
-            multiBlankGate: true,
             reverseSharedBranches: true,
         });
     const { code, stderr } = runValidator(workspace);
@@ -1227,6 +1653,20 @@ test('accepts a same-record compound-sequence Receive/Issue workspace', () => {
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('rejects compound evidence that names a different selected-record source', () => {
+    const workspace = materialize(
+        'receive-issue-compound-selection-mismatch',
+        {
+            sourceDir: compoundFixtureDir,
+            compoundSelectionMismatch: true,
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected compound selected-record mismatch to fail');
+    assert.match(
+        stderr,
+        /compound evidence must use selected-record source 'cmbAdjustItem\.Selected\.ID' consistently/);
 });
 
 test('rejects both a phantom LookUp key and dead staging variables', () => {

@@ -234,9 +234,9 @@ Source revision: [git revision, package version, or "unavailable"]
 
 ## Directional Mutation Evidence
 
-| Pair | Selected-record expression | Blank operation binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings | Result |
-| ---- | -------------------------- | ----------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- | ------ |
-| [Receive/Issue] | [exact selected ID expression] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [five `<br>`-separated bindings: `operation`, `old`, `amount`, `expected`, `actual`] | PASS |
+| Pair | Selected-record expression | Operation-state reset binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings | Result |
+| ---- | -------------------------- | ----------------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- | ------ |
+| [Receive/Issue] | [nullable selected ID; final YAML must blank-reset, row-assign, and consistently consume it] | [operation state plus exact entry/success `Blank()` reset event] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [five `<br>`-separated bindings: `operation`, `old`, `amount`, `expected`, `actual`] | PASS |
 
 ## Compound Sequence Evidence
 
@@ -262,6 +262,10 @@ revision `unavailable`; never substitute the app workspace revision.
 The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN` is
 required because symbolic inspection is not browser execution. Replace it only when a
 fresh runtime evaluator returns a recorded result for this generated app.
+Even a recorded runtime success for directional arithmetic (for example,
+`10 + 3 = 13`, then `13 - 2 = 11`) proves only those executed transitions. It does not
+prove blank-selection, blank-operation, zero/non-positive amount, reset, cross-branch
+layout, or downstream visibility scenarios that were not executed and evidenced.
 
 The first line of the file must be exactly `Runtime evaluation: NOT RUN`; do not place a
 heading before it. The Action Contract table has exactly one row per Action Contract. When
@@ -273,6 +277,13 @@ Missing, hidden, blank, clipped, displaced, tooltip-only, accessible-label-only,
 time-only substitutes fail. The scenario table separately records every Functional Test
 Matrix row. The Screen QA table has one row per dispatch screen and preserves each
 worker's coverage, repairs, and N/A results. Copy formulas verbatim from final YAML. In
+every Gallery, compare the breakpoint scope used by `TemplateSize` with the direct row
+child's `LayoutDirection`: the row child's `Parent.Width` is gallery/template-scoped and
+can differ from the outer parent used by the Gallery. Require the same deliberate
+breakpoint source or evaluate every reachable cross-branch pair. Preserve a numeric height
+budget for every case covering padding, gaps, every child, required quantity/status
+fields, badges, actions, and wrapping. A required field that can clip fails even when its
+control and formula exist. In
 tables, preserve quoted and block-scalar formula content, normalize formula newlines to
 `<br>`, and escape `|` as `\|`; do not assume a one-line plain scalar or paraphrase an
 exact formula into an action summary. A phrase such as “Action uses Patch” is not an event
@@ -288,15 +299,24 @@ An event-bearing selector must assign it, the invalid gate must blank-check it, 
 gated control must own or route to the mutation. A dead gated control beside
 direct-mutation buttons fails. When direct actions own their mutations instead,
 independently gated handlers remain valid and each row records its own exact event binding.
+Those independent action controls commit direction by identity and require no shared
+operation variable/reset, but each still needs selected-ID and amount gates.
+When a classic Dropdown or Combo box with nonempty `Items` supplies operation state,
+`AllowEmptySelection: =true` is required before its blank default/reset proves no
+operation; otherwise use explicit operation state. For record selection, one nullable
+selected ID is the default incomplete-state proof. `Control.Selected` / `.Selected.*` on a
+Gallery, Dropdown, List box, or Combo box with nonempty `Items` does not prove no selection
+unless empty-selection semantics are explicitly configured and evidenced.
 Omit
 `## Required Record Field Evidence` only when the plan omits
 `## Required Record Fields`.
 
 When the plan contains an opposing directional pair, include `## Directional Mutation
 Evidence` with exactly one row per pair. This is an executable gate, not a self-reported
-trace: copy final-YAML formulas exactly. The validator independently requires a blank
-initial operation, a gate that disables blank-operation and non-positive amount states, a
-stable selected-record ID in both mutations, plus/minus arithmetic, one canonical source
+trace: copy final-YAML formulas exactly. The validator independently requires one nullable
+selected ID initialized/reset blank and assigned by row selection, consistent consumers,
+an actual operation-state reset event, representable blank/non-positive amount states, a
+gate that rejects them, plus/minus arithmetic, one canonical source
 read by the observer, and five receipt bindings including an actual persisted `Patch`
 result.
 
@@ -316,7 +336,8 @@ invalid gate blank-checks it, the gated control owns or routes to the mutation, 
 mutation consumes it. Reject a dead gated control beside direct-mutation buttons. For
 arithmetic pairs, associate the operation values with their
 specific branches and prove increase reaches `old + amount` while decrease reaches
-`old - amount`; the mere presence of both expressions is insufficient. Perform these
+`old - amount`; the mere presence of both expressions is insufficient. Require a literal
+guard for each direction; an `else` or default arm is not directional proof. Perform these
 comparisons on normalized formula content so quoted and block-scalar YAML forms are
 equivalent after newlines are represented as `<br>`. Static text/formula checks establish
 conformance, not runtime pointer reachability or event execution: a live browser
@@ -335,6 +356,9 @@ suffix. These checks prove that the final YAML contains a live-input assignment 
 untransformed key; they cannot prove that the running app actually fires the event, that
 the control is pointer-reachable, or that the data source accepts the write. Preserve the
 manual QAChecks inspection and live browser evaluation for those runtime properties.
+For an `OnChange`-staged amount, liveness proves only that the variable receives an input
+value. Separately verify compatible `Default`/`Min`, current-value rejection, visible
+validation, and Reset restoring the chosen invalid default (`Blank()` or `0`).
 
 When both directions of that pair act on the same record type, also include `## Compound
 Sequence Evidence` with one row per same-record pair. It records the same-record ID, the

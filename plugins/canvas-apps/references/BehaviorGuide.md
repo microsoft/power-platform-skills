@@ -55,7 +55,19 @@ Every action must form one traceable loop:
 - Name the precondition and eligibility predicate. The control's `Visible` and `DisplayMode` formulas must permit that state.
 - Mutate the same source and field that the observer reads. A status button that patches `ReviewState` while the badge renders `Status` is broken even when both formulas compile.
 - Identify records by an immutable stable ID. Capture `ThisItem.ID` or the selected ID before mutation and look up the target from the source; do not infer identity from a display name. The `LookUp`/`Filter` that locates the target must compare the key field against the raw selected/context value with no concatenation, prefix, suffix, casing, or reshaping (`= Selected.ID & " ID"`, `"ITEM-" & Selected.ID`, `Left(...)`, `Trim(...)`) unless the documented schema stores the key that way. A reshaped key is a **phantom LookUp key**: it matches nothing, so `LookUp` returns `Blank()` and the `Patch` silently mutates no row even though the formula compiles.
+- Use one nullable selected-record ID as the selection source of truth. Initialize or reset
+  it to `Blank()`, assign it from the row's selection event, and use that same ID for the
+  selected-record display, eligibility gate, mutation `LookUp`, receipt, and compound
+  sequence evidence. This is the default pattern for proving an incomplete state.
+  `Control.Selected` / `.Selected.*` on a Gallery, Dropdown, List box, or Combo box is not
+  an empty-selection contract: a control with nonempty `Items` can expose an
+  automatic/default selection before the user chooses one. Use it as incomplete-state
+  evidence only when the control's empty-selection semantics are explicitly configured and
+  evidenced.
 - Feed mutations from live input, not dead state. Any variable that is meant to carry a user-entered or user-selected value (`varAmount`, `varOldQuantity`, a staging variable) must be written from its input control at the moment of input — an `OnChange` that runs `Set(varStaging, Control.Value)`/`Set(varStaging, Control.Selected)`, or an inline `Control.Value`/`Control.Selected` read inside the handler. A staging variable initialized only in `App.OnStart` or `Screen.OnVisible` and never re-written from an input is **dead**: it stays at its seed (`0`, `Blank()`), so the mutation silently computes against the seed while still compiling and still passing sign/direction checks. Prefer reading the input directly at mutation time (`Value(txtAmount.Text)`, `cmbItem.Selected.ID`).
+  An amount staged by `OnChange` is live, but not automatically valid: the input's
+  `Default`, `Min`, and current `Value` must still make invalid states representable, and
+  the submission gate must reject the staged/current blank or non-positive value.
 - Use the mutation result or a fresh lookup by ID for the receipt. Do not read a potentially stale gallery `ThisItem` after `Patch` and assume it contains the new value.
 - Make success contingent on the operation. Reset inputs, exit edit mode, navigate, and reveal success evidence only on the success path.
 - Bind every downstream list, filter, metric, export, and decision surface to the same updated source or refresh the external source before observing it.
@@ -73,6 +85,28 @@ Given/When/Then scenarios.
 - Disable submission whenever the operation or required amount/value is hidden, clipped,
   blank, invalid, unset, or unreachable. Never fall through to a default direction or use
   stale operation state from an earlier interaction.
+- Make blank and non-positive amount states representable so the invalid paths can actually
+  be exercised. For `ModernNumberInput`, define compatible `Default`, `Min`, and
+  `ValidationState` formulas: do not set `Min: =1` when acceptance must enter or reset to
+  `0`. Gate on the current `Value` (`IsBlank(Control.Value) || Control.Value <= 0`), show
+  visible validation, and use `Reset(Control)` only when its `Default` restores the chosen
+  invalid state. `Default: =Blank()` and `Default: =0` are both valid when `Min` permits
+  that value and the gate rejects it.
+- Reset shared operation state to `Blank()` on entry to the action screen and/or after a
+  successful Apply. `App.OnStart` runs for the app session, not for each visit or
+  adjustment, so an OnStart-only blank assignment permits a stale direction to carry into
+  the next action. Blank-operation acceptance names the actual operation variable and its
+  reset event; an amount input's `Default: =Blank()` is not operation-state evidence. If
+  Apply clears the current operation, capture it first and bind the receipt to that
+  completed-operation state rather than to the newly blank current state.
+- A classic Dropdown or Combo box with nonempty `Items` needs
+  `AllowEmptySelection: =true` when its blank default/reset is used to prove that no
+  operation is selected. Without that property, the control can select an item
+  automatically. Prefer an explicit operation variable when the discovered control's
+  empty-selection semantics are absent or uncertain.
+- Independent direct actions need no shared operation variable or reset: the identity of
+  each action control commits its direction. Each handler still needs its own selected-ID
+  and valid-amount gates and its own complete mutation/receipt path.
 - For arithmetic pairs, capture the old value before mutation and encode the direction
   explicitly: increase is `newValue = oldValue + amount`; decrease is
   `newValue = oldValue - amount`. State pairs must likewise assign explicit opposing
@@ -80,6 +114,9 @@ Given/When/Then scenarios.
   mutation time — the old value from the canonical source and the amount from the input
   control (`Value(txtAmount.Text)` or an `OnChange`-populated staging variable), never from a
   staging variable left at its `App.OnStart` seed.
+- Prove each guarded direction with its own literal comparison, such as
+  `varOperation = "Receive"` and `varOperation = "Issue"`. A default or `else` arm is not
+  directional proof because an unknown or blank value can fall through to it.
 - The receipt shows the chosen operation, old value/state, amount when applicable,
   expected new value/state, and actual persisted new value/state. The destination observer
   must agree with that receipt.
