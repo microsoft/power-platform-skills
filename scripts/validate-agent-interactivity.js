@@ -37,6 +37,9 @@ const ROOT = path.resolve(__dirname, '..');
 // Add a plugin here only once its agents are scrubbed (see SCOPE above).
 const SCAN_PATHS = [path.join('plugins', 'model-apps', 'agents')];
 
+// Skills whose main loop owns the interaction, checked for the mirror-image defect below.
+const SKILL_SCAN_PATHS = [path.join('plugins', 'model-apps', 'skills')];
+
 // Tools that require a human on the other end of the conversation.
 const INTERACTIVE_TOOLS = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'];
 
@@ -78,6 +81,33 @@ function agentFiles(dir) {
     .map((e) => path.join(dir, e.name));
 }
 
+// The mirror-image defect, and the one that makes the fix for the first incomplete: moving
+// interaction OUT of an agent and INTO the skill's main loop only works if the skill is allowed to
+// interact. `/genpage` was rewritten to call `EnterPlanMode`/`ExitPlanMode` in the main loop while
+// its `allowed-tools` still listed neither — the flow was moved to a context that also could not
+// perform it. Nothing catches that either: a skill body is prose.
+//
+// The rule: a SKILL.md whose body tells the reader to use an interactive tool must DECLARE it.
+// A body that merely quotes the tool name (the `workflow-log.md` line format is
+// `AskUserQuestion: <q> → <a>`) also trips this, and that is fine — a skill documenting that format
+// is a skill that asks questions, so the declaration is correct anyway.
+function skillFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => path.join(dir, e.name, 'SKILL.md'))
+    .filter((f) => fs.existsSync(f));
+}
+
+// Returns the interactive tools a skill USES in its body but does not DECLARE in its frontmatter.
+function undeclaredSkillTools(text) {
+  const fm = frontmatterOf(text);
+  const body = fm ? text.slice(text.indexOf(fm) + fm.length) : text;
+  const declared = new Set(interactiveToolsIn(fm));
+  return INTERACTIVE_TOOLS.filter((t) => new RegExp(`\\b${t}\\b`).test(body) && !declared.has(t));
+}
+
 function main() {
   const errors = [];
   let checked = 0;
@@ -96,17 +126,31 @@ function main() {
     }
   }
 
+  for (const rel of SKILL_SCAN_PATHS) {
+    for (const filePath of skillFiles(path.join(ROOT, rel))) {
+      checked += 1;
+      const missing = undeclaredSkillTools(fs.readFileSync(filePath, 'utf8'));
+      if (missing.length) {
+        errors.push(
+          `${path.relative(ROOT, filePath).replace(/\\/g, '/')}: uses ${missing.join(', ')} in its body ` +
+            'but does not declare it in allowed-tools — the flow would be moved to a loop that cannot ' +
+            'perform it. Add the tool to the frontmatter.'
+        );
+      }
+    }
+  }
+
   if (errors.length > 0) {
     console.log('Agent interactivity validation failed:');
     for (const error of errors) console.log(`- ${error}`);
     process.exit(1);
   }
 
-  console.log(`All ${checked} scanned agent(s) are headless (no ${INTERACTIVE_TOOLS.join('/')}).`);
+  console.log(`Checked ${checked} agent/skill file(s): agents are headless, and every skill declares the interactive tools it uses.`);
 }
 
 if (require.main === module) {
   main();
 }
 
-module.exports = { frontmatterOf, interactiveToolsIn, agentFiles, INTERACTIVE_TOOLS, SCAN_PATHS };
+module.exports = { frontmatterOf, interactiveToolsIn, undeclaredSkillTools, agentFiles, skillFiles, INTERACTIVE_TOOLS, SCAN_PATHS, SKILL_SCAN_PATHS };

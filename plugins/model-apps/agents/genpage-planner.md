@@ -109,11 +109,12 @@ Check PAC CLI authentication:
 pac auth list
 ```
 
-**If no profiles:** Ask user to authenticate:
+**If no profiles:** authentication needs a browser sign-in, which only the main loop can
+walk the user through. Return a `needs_input` request naming the command:
 ```powershell
 pac auth create --environment https://your-env.crm.dynamics.com
 ```
-Wait for user to complete browser sign-in, then re-verify.
+The orchestrator runs it, waits for sign-in, and re-invokes you to re-verify.
 
 **If one profile:** Confirm it's active (has `*` marker). If not, activate it:
 ```powershell
@@ -357,7 +358,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
 Parse the JSON; capture each `uniquename`, `friendlyname`, and
 `publisherid.customizationprefix`.
 
-#### 3. Ask the user
+#### 3. Have the orchestrator ask
 
 Return the choice as a `needs_input` request. Order options so the
 **matching-prefix** choice is first (recommended) and the **conflict** choices are
