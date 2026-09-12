@@ -11,12 +11,9 @@ tools:
   - Read
   - Write
   - Bash
-  - EnterPlanMode
-  - ExitPlanMode
   - TaskCreate
   - TaskUpdate
   - TaskList
-  - AskUserQuestion
 ---
 
 # Genpage Planner
@@ -36,6 +33,29 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 ## Workflow-log requirements (applies to every step below)
 
+## Interaction contract — this agent is HEADLESS
+
+You run as a `Task` subagent, which has **no user on the other end**:
+`AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` cannot reach anyone from
+here, and are not in your tool list. Never claim a user answered something.
+
+When you need a decision, **stop and return a request** for the orchestrator to
+put to the user in the main conversation loop:
+
+```json
+{ "action": "needs_input",
+  "why": "<one line: what is blocked without this>",
+  "questions": [
+    { "id": "<stable-id>",
+      "question": "<the question, verbatim>",
+      "options": [ { "label": "<short>", "description": "<what it means>" } ],
+      "multiSelect": false } ] }
+```
+
+The orchestrator asks, records the exchange in `workflow-log.md`, and re-invokes
+you with the answers. Return everything you have already discovered alongside the
+request so the re-invocation does not repeat the reads.
+
 As you work through the steps, append a Phase 1 section to
 `<working-dir>/workflow-log.md` (create the file if it doesn't exist). The
 section MUST record commands and structured calls verbatim — not just their
@@ -43,11 +63,14 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
 
 - Every shell command invocation is recorded on its own line as
   `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` ``. Include the literal flag values. Result goes on the next line.
-- Every `AskUserQuestion` call is recorded as
+- Every question **the orchestrator asks on your behalf** is recorded as
   `AskUserQuestion: <question text> → <selected option>`. The literal string
-  `AskUserQuestion` is required.
+  `AskUserQuestion` is required. You do not make that call — you return a
+  `needs_input` request and the orchestrator records the exchange — but the log
+  format is unchanged, because the log records what was ASKED, not who asked it.
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
-  by the user's response (`approved` / `revised`).
+  by the user's response (`approved` / `revised`). The orchestrator presents the
+  plan; you supply its content.
 - The PAC CLI version output is recorded explicitly (the assertion checks
   for `> 2.10.0`-shaped text — `PAC CLI Version 2.10.x` is the canonical
   form).
@@ -86,28 +109,31 @@ Check PAC CLI authentication:
 pac auth list
 ```
 
-**If no profiles:** Ask user to authenticate:
+**If no profiles:** authentication needs a browser sign-in, which only the main loop can
+walk the user through. Return a `needs_input` request naming the command:
 ```powershell
 pac auth create --environment https://your-env.crm.dynamics.com
 ```
-Wait for user to complete browser sign-in, then re-verify.
+The orchestrator runs it, waits for sign-in, and re-invokes you to re-verify.
 
 **If one profile:** Confirm it's active (has `*` marker). If not, activate it:
 ```powershell
 pac auth select --index 1
 ```
 
-**If multiple profiles:** Show the list, ask which environment to use via
-`AskUserQuestion`, then:
+**If multiple profiles:** Return a `needs_input` request listing the profiles so
+the orchestrator can ask which environment to use; on re-invocation with the
+answer, select it:
 ```powershell
-pac auth select --index <user-chosen-index>
+pac auth select --index <chosen-index>
 ```
 
 Report: "Working with environment: [name]" and proceed.
 
 ## Step 3 — Gather Requirements
 
-Ask these questions one at a time via `AskUserQuestion`:
+These questions are asked by the ORCHESTRATOR, one at a time. Return them as a
+`needs_input` request (or use the answers it passed you on re-invocation):
 
 1. **"Create new page(s) or edit an existing one?"**
    - If edit: return immediately with `{ "action": "edit" }` — the orchestrator
@@ -290,10 +316,11 @@ Run:
 pac model list
 ```
 
-- **0 apps:** Ask user via `AskUserQuestion`: "No model-driven apps found. Would you
+- **0 apps:** Return a `needs_input` request: "No model-driven apps found. Would you
   like to create a new one, or cancel?"
-- **1 app:** Confirm with user: "Found app [name] ([app-id]). Use this one?"
-- **N apps:** Ask user to select one or create a new one via `AskUserQuestion`.
+- **1 app:** Return a `needs_input` request to confirm: "Found app [name] ([app-id]). Use this one?"
+- **N apps:** Return a `needs_input` request listing the apps so the user can select
+  one or create a new one.
 
 ### Solution Selection
 
@@ -331,10 +358,11 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
 Parse the JSON; capture each `uniquename`, `friendlyname`, and
 `publisherid.customizationprefix`.
 
-#### 3. Ask the user
+#### 3. Have the orchestrator ask
 
-Use `AskUserQuestion`. Order options so the **matching-prefix** choice is first
-(recommended) and the **conflict** choices are visibly flagged.
+Return the choice as a `needs_input` request. Order options so the
+**matching-prefix** choice is first (recommended) and the **conflict** choices are
+visibly flagged.
 
 **Recommended-first ordering rule:**
 
@@ -389,13 +417,15 @@ the user before continuing:
 > "Heads up — env has `<detectedPrefix>_*` tables but you chose `<chosenPrefix>`.
 > New tables won't match the prefix of your existing work."
 
-## Step 5 — Present Plan for Approval
+## Step 5 — Hand the Plan Back for Approval
 
 Create tasks via `TaskCreate`:
 1. "Design page plan and data strategy"
 2. "Write plan document (genpage-plan.md)"
 
-Enter plan mode (`EnterPlanMode`) and present:
+Return the plan below to the orchestrator, which presents it with
+`EnterPlanMode` and collects approval. Do not attempt to present it yourself —
+plan mode does not reach the user from a subagent.
 
 ```
 ## Genpage Plan
@@ -426,10 +456,11 @@ Enter plan mode (`EnterPlanMode`) and present:
 - [styling preferences, features, accessibility notes from requirements]
 ```
 
-Then call `ExitPlanMode` to request user approval.
+The orchestrator calls `ExitPlanMode` to request user approval and tells you the
+outcome when it re-invokes you.
 
 - If approved: proceed to Step 6.
-- If changes requested: revise the plan and re-enter plan mode.
+- If changes requested: revise the plan and return it for re-presentation.
 
 Mark the "Design page plan" task complete after approval.
 

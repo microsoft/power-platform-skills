@@ -234,6 +234,43 @@ function relationshipFor(spec, parentEntity, childEntity) {
   );
 }
 
+// Resolve WHICH 1:N relationship a sample-data `$parent` / `$parents` bind goes through.
+//
+// `relationshipFor` returns the FIRST OneToMany declared for the pair, which is right when there is
+// only one. A pair can legitimately have TWO — a hierarchy table with both a "parent org" and a
+// "group ancestor" self-lookup is the common shape, and self-referencing sample data (#544) makes
+// that shape reachable for the first time. Silently binding the first one links the rows through a
+// relationship the author did not mean, which asserts something false about the data and is
+// invisible in the build output. So an ambiguous bind is an error, and `$parent.lookup` (the
+// lookup's schemaName) is how an author resolves it.
+//
+// Returns { rel, error } and never throws: validateAppSpec pushes `error` at LINT time (the issue's
+// point — halting mid-build, after other data is written, is the worst outcome), and the runtime in
+// entity-provision.js throws it as a backstop for a build that skipped validation. One function so
+// the two cannot drift.
+function resolveParentRelationship(spec, parentEntity, childEntity, wanted) {
+  const p = String(parentEntity || '').toLowerCase();
+  const c = String(childEntity || '').toLowerCase();
+  const all = ((spec && spec.relationships) || []).filter(
+    (r) => r && r.type === 'OneToMany' &&
+      String(r.referenced || '').toLowerCase() === p &&
+      String(r.referencing || '').toLowerCase() === c
+  );
+  const nameOf = (r) => (r.lookup && r.lookup.schemaName) || '';
+  const listed = all.map(nameOf).filter(Boolean).map((n) => `'${n}'`).join(', ');
+  if (wanted !== undefined && wanted !== null && String(wanted).trim()) {
+    const want = String(wanted).trim().toLowerCase();
+    const hit = all.find((r) => nameOf(r).toLowerCase() === want);
+    if (hit) return { rel: hit, error: null };
+    // Name the valid options: the author already knows the name they typed, not the ones that exist.
+    return { rel: null, error: `binds parent '${parentEntity}' through lookup '${wanted}', which no OneToMany between them declares — valid: ${listed || '(none)'}` };
+  }
+  if (all.length > 1) {
+    return { rel: null, error: `declares a parent on '${parentEntity}', but ${all.length} OneToMany relationships connect them (${listed}) — the bind is ambiguous. Add "lookup": "<schemaName>" to say which one.` };
+  }
+  return { rel: all[0] || null, error: null };
+}
+
 // The 1:N lookup columns a relationship places ON `entityLogical` (the referencing/child side).
 // These lookups are NOT part of entities[].columns — they come from relationships[] — so form
 // auto-layout and default-view enrichment call this to surface the parent links (otherwise the
@@ -2391,6 +2428,13 @@ function validateAppSpec(spec, opts = {}) {
               errors.push(`sampleData['${k}']: no OneToMany relationship from ${key} '${p.entity}' to '${k}'`);
               continue;
             }
+            // Which relationship — an ambiguous pair, or a `lookup` naming none, is a build failure
+            // partway through the sample-data phase. Catch it here instead. #544.
+            const { error: relErr } = resolveParentRelationship(spec, p.entity, k, p.lookup);
+            if (relErr) {
+              errors.push(`sampleData['${k}']: ${key} ${relErr}`);
+              continue;
+            }
             // The match must resolve to EXACTLY ONE parent sample record.
             const pKey = Object.keys(spec.sampleData).find((kk) => kk.toLowerCase() === String(p.entity).toLowerCase());
             const parentRecs = (pKey && Array.isArray(spec.sampleData[pKey])) ? spec.sampleData[pKey] : [];
@@ -2403,6 +2447,35 @@ function validateAppSpec(spec, opts = {}) {
             } else if (matchCount > 1) {
               errors.push(`sampleData['${k}']: ${key}.match ${JSON.stringify(p.match)} is ambiguous — it matches ${matchCount} '${String(p.entity).toLowerCase()}' sample records; tighten the match to select exactly one`);
             }
+          }
+        }
+        // A SELF-reference cycle among this entity's own rows. The seeder creates self-referencing
+        // rows in waves (#544), so a row can point at an earlier one — but a cycle (including a row
+        // that is its own parent) can never be created in any order. Detecting it here keeps the
+        // build from halting partway through sample-data, after other data has already been written.
+        const selfIdx = v.map((rec) => {
+          if (!rec || typeof rec !== 'object') return [];
+          const binds = [].concat(rec.$parent !== undefined ? [rec.$parent] : [], Array.isArray(rec.$parents) ? rec.$parents : []);
+          return binds
+            .filter((p) => p && typeof p === 'object' && p.match && typeof p.match === 'object' && String(p.entity || '').toLowerCase() === k.toLowerCase())
+            .map((p) => v.findIndex((pr) => pr && typeof pr === 'object' && Object.entries(p.match).every(([mk, mv]) => {
+              const rk = Object.keys(pr).find((x) => x.toLowerCase() === mk.toLowerCase());
+              return rk !== undefined && pr[rk] === mv;
+            })))
+            .filter((i) => i >= 0);
+        });
+        if (selfIdx.some((s) => s.length)) {
+          const settled = new Array(v.length).fill(false);
+          let remaining = v.map((_, i) => i);
+          for (;;) {
+            const ready = remaining.filter((i) => selfIdx[i].every((p) => settled[p]));
+            if (!ready.length) break;
+            for (const i of ready) settled[i] = true;
+            const readySet = new Set(ready);
+            remaining = remaining.filter((i) => !readySet.has(i));
+          }
+          if (remaining.length) {
+            errors.push(`sampleData['${k}']: $parent cycle among its own rows (record index ${remaining.join(', ')}) — a row cannot be created before its parent. Break the cycle, or set the lookup after the build.`);
           }
         }
       }
@@ -2853,6 +2926,7 @@ module.exports = {
   sampleRecordsFor,
   resolveSampleRecords,
   relationshipFor,
+  resolveParentRelationship,
   lookupColumnsFor,
   childRelationshipsFor,
   relationshipSchemaName,

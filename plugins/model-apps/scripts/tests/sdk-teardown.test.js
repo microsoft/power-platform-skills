@@ -228,6 +228,65 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   assert.deepStrictEqual(kinds, ['app', 'genpage', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
 });
 
+// Regression (found by LIVE teardown of a self-referencing hierarchy): a 1:N whose referenced and
+// referencing tables are the SAME table is removed by the table delete. Deleting it on its own first
+// fails — its lookup sits on the same table that hosts the form still referencing it — so teardown
+// printed `✗ relationship … referenced by 2 other components` and exited NON-ZERO on a run that then
+// deleted the table and left the environment completely clean. Self-referencing hierarchies became a
+// mainstream shape once sample data could seed them (#544), so this cry-wolf is now routine.
+test('#544 a SELF-referencing relationship is deleted AFTER its table, not before', () => {
+  const spec = {
+    solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
+    app: { name: 'Hier App' },
+    entities: [{ schemaName: 'new_org', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_org' }] }] }] },
+  };
+  const steps = planTeardown(spec);
+  const kinds = steps.map((s) => s.kind);
+  const relIdx = kinds.indexOf('relationship');
+  const tblIdx = kinds.indexOf('table');
+  assert.ok(relIdx !== -1, 'it is still planned — deferring, not skipping, is what keeps it safe');
+  assert.ok(tblIdx !== -1 && tblIdx < relIdx, 'the table delete (which cascades it) comes first');
+});
+
+// If the table is RETAINED, the deferred delete is what stops the relationship leaking. The spec
+// cannot tell a retained table from a deleted one (live discovery also skips non-custom tables),
+// which is why this is an ordering change rather than a skip.
+test('#544 a self-referencing relationship on an EXISTING (retained) table is still planned', () => {
+  const spec = {
+    solution: { uniqueName: 'HierSln', publisherPrefix: 'new' },
+    app: { name: 'Hier App' },
+    entities: [{ schemaName: 'new_org', primaryAttribute: { schemaName: 'new_name' }, columns: [], existing: true }],
+    relationships: [{ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_org' }] }] }] },
+  };
+  assert.strictEqual(planTeardown(spec).filter((s) => s.kind === 'relationship').length, 1);
+});
+
+// The `relationship` kind already tolerates not-found, which is what makes the deferral safe when
+// the table delete cascaded it away. Asserting it here so a future change to that flag is caught.
+test('#544 the relationship kind tolerates not-found (what makes the deferral safe)', () => {
+  assert.strictEqual(KIND_HANDLERS.relationship.tolerateNotFound, true);
+});
+
+// And a normal two-table relationship is untouched by the narrowing — still BEFORE the tables.
+test('#544 a relationship between two DIFFERENT tables is still planned before the tables', () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [
+      { schemaName: 'new_parent', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+      { schemaName: 'new_child', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [{ type: 'OneToMany', referenced: 'new_parent', referencing: 'new_child', lookup: { schemaName: 'new_ParentId' } }],
+    appShell: { areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [{ entity: 'new_parent' }] }] }] },
+  };
+  const kinds = planTeardown(spec).map((s) => s.kind);
+  assert.strictEqual(kinds.filter((k) => k === 'relationship').length, 1);
+  assert.ok(kinds.indexOf('relationship') < kinds.indexOf('table'), 'unchanged ordering for a two-table relationship');
+});
+
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so
 // it must be planned AFTER the table; and the build's generated default app icon web resource must
 // be cleaned up or it leaks as an orphan the spec never declared.

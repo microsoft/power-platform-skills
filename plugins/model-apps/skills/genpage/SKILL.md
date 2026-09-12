@@ -6,7 +6,7 @@ author: Microsoft Corporation
 argument-hint: "<page description> | edit"
 user-invocable: true
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
@@ -103,44 +103,61 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 
 ### Phase 1: Plan
 
-> **⚠️ CRITICAL — you MUST invoke `genpage-planner` via the `Task` tool. You MUST
-> NOT inline the planner's questions yourself with `AskUserQuestion`.**
+> **⚠️ CRITICAL — the interactive steps run HERE, in the main conversation loop.
+> You MUST NOT dispatch them to a `Task` subagent.**
 >
-> The planner is not optional or skippable. It runs:
+> A `Task` subagent is **headless**: `AskUserQuestion`, `EnterPlanMode` and
+> `ExitPlanMode` never reach the user from inside one. A flow that specifies them
+> there cannot complete — the question is never answered and the approval never
+> given. This is the same rule `/app-builder` follows, and the reason its
+> subagents are headless workers only.
+>
+> `genpage-planner` is therefore a **headless discovery agent**. It runs the
+> read-only work and returns what it found; **you** ask the questions and present
+> the plan.
+>
+> Run in the main loop (never delegated):
 > 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
-> 3. The structured "Create new / Edit existing" question (via `AskUserQuestion`
->    inside the planner subagent, not here)
+> 3. The structured "Create new / Edit existing" question (`AskUserQuestion`)
 > 4. Language detection (`pac model list-languages`) — only on new-page path
 > 5. Entity existence detection (`pac model list-tables --search`)
 > 6. App detection (`pac model list`) with proper selection prompts
-> 7. Plan-mode presentation and approval
-> 8. Writes `genpage-plan.md` to the working directory
+> 7. Plan-mode presentation and approval (`EnterPlanMode` / `ExitPlanMode`)
+> 8. Writing `genpage-plan.md` to the working directory
 >
-> Reasons to **NEVER** ask "new or edit?" yourself before invoking the planner:
-> - You would skip prereq + auth (the planner is the only thing that runs them)
-> - The structured question gives the user labeled options; an inline free-text
->   prompt forces them to guess
-> - The planner returns `{ "action": "edit" }` as a contract — your inline
->   question can't produce that signal cleanly
+> Steps 1, 2, 4, 5, 6 are read-only discovery and **may** be delegated to
+> `genpage-planner`; steps 3 and 7 never can. Delegating the discovery is an
+> optimisation, not a requirement — running it inline is equally correct.
 >
-> Even if `$ARGUMENTS` looks like it tells you the intent, **still invoke the
-> planner**. Pass the intent in the prompt — the planner uses it to skip its
-> own Question 1 if appropriate, but the prereq/auth/env steps still run.
+> **Never skip the prereq/auth steps**, even when `$ARGUMENTS` already states the
+> intent. A stated intent lets you skip *question 3*; it does not establish that
+> the CLI is present, authenticated, or pointed at the right environment.
+>
+> **Whoever runs a step records it in `workflow-log.md`** in the documented
+> format — `AskUserQuestion: <question> → <answer>`, `EnterPlanMode called`
+> followed by the response. The log is the contract the eval harness reads, and
+> it does not care which loop made the call.
 
 #### Steps
 
-1. Invoke `genpage-planner` via `Task` with the prompt below. Connector discovery
-   has **not** run yet, so tell the planner the contract is the literal
-   `No connector bindings.` and that discovery is available on request (see 1a).
-2. Wait for it to finish (it returns a summary).
-3. If the return includes `{ "action": "connector_discovery_required" }`, invoke
-   `genpage-connector-builder` with the returned intent — **Mode: `create`** for a
-   new page, **Mode: `edit`** if the planner also reported an edit — using the
-   environment URL the planner resolved, then invoke `genpage-planner` again with
-   the builder's `## Connector Bindings` contract and `connectors.json` status.
-4. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
-5. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+1. Run the prerequisite, auth and discovery steps (inline, or via
+   `genpage-planner` as a headless worker). Connector discovery has **not** run
+   yet, so the contract is the literal `No connector bindings.`, with discovery
+   available on request (see 1a).
+2. Ask question 3 (**create new / edit existing**) with `AskUserQuestion`, unless
+   `$ARGUMENTS` already settles it. On **edit**, jump to the **Edit Flow** section.
+3. If discovery reports `{ "action": "connector_discovery_required" }`, invoke
+   `genpage-connector-builder` with the intent — **Mode: `create`** for a new
+   page, **Mode: `edit`** for an edit — using the resolved environment URL, then
+   re-run discovery with the builder's `## Connector Bindings` contract and
+   `connectors.json` status.
+4. If any agent returns `{ "action": "needs_input", … }`, ask its questions here
+   with `AskUserQuestion`, record them in `workflow-log.md`, and re-invoke that
+   agent with the answers. Agents never prompt; they request.
+5. Present the plan with `EnterPlanMode` and get approval via `ExitPlanMode`.
+   On a revision request, revise and re-present.
+6. Write `genpage-plan.md`, then proceed to Phase 2.
 
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
@@ -210,10 +227,13 @@ Example:
 > instead of trying to discover connectors yourself. `resolvedAction` and `envUrl`
 > are required — discovery is dispatched against exactly those.
 >
-> Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
-> the new/edit question via AskUserQuestion, then proceed accordingly. Write
-> genpage-plan.md to the working directory if creating. Return the page list,
-> entity status, app selection, and any `{ "action": "edit" }` signal when complete.
+> Follow the instructions in your agent file. Validate prereqs and confirm auth.
+> The create/edit decision and the resolved environment are supplied to you by the
+> orchestrator (it asks; you are headless) — use them rather than prompting. If you
+> need any further decision, return `{ "action": "needs_input", … }`. Write
+> genpage-plan.md to the working directory once the orchestrator reports the plan
+> approved. Return the page list, entity status, app selection, and any
+> `{ "action": "edit" }` signal when complete.
 
 ### Phase 2: Create Entities (Conditional)
 

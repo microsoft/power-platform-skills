@@ -32,6 +32,17 @@ jobs:
             - name: validate-telemetry-ikeys
               run: node scripts/validate-telemetry-ikeys.js
 
+            # An agent that declares AskUserQuestion / EnterPlanMode / ExitPlanMode specifies a
+            # flow that CANNOT complete — a Task subagent is headless, so the question never
+            # reaches the user and the approval is never given. Agent frontmatter is prose to
+            # every other test in the repo, which is how one such contradiction survived ~2.5
+            # months without anything failing.
+            - name: test-agent-interactivity-validator
+              run: node --test scripts/tests/validate-agent-interactivity.test.js
+
+            - name: validate-agent-interactivity
+              run: node scripts/validate-agent-interactivity.js
+
             - name: test-secure-process-execution-validator
               run: node --test scripts/tests/validate-secure-process-execution.test.js
 

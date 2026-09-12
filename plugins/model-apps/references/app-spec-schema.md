@@ -1062,6 +1062,24 @@ set a custom status with `statusReason`. All are topologically inserted and boun
 ```
 - **`$parents`** is the array form of `$parent` — each entry binds one lookup, so a junction/intersect
   row links to every parent it points at (the engine sets each `<lookup>@odata.bind`).
+- **Self-referencing parents work.** A row may point at another row of the **same** entity — an org
+  hierarchy, a "reports to" chain — as long as the references form no cycle:
+  ```jsonc
+  "new_org": [ { "new_name": "Head Office" },
+               { "new_name": "North Region", "$parent": { "entity": "new_org", "match": { "new_name": "Head Office" } } } ]
+  ```
+  Order in the array does not matter; the engine seeds such rows in dependency waves, creating each
+  row only after the row it points at. A **cycle** (including a row that is its own parent) is
+  rejected by the lint, because no creation order can satisfy it.
+- **`lookup`** (optional) names *which* relationship a parent bind goes through, by the lookup's
+  `schemaName`:
+  ```jsonc
+  "$parent": { "entity": "new_org", "lookup": "new_GroupAncestorId", "match": { "new_name": "Head Office" } }
+  ```
+  It is only needed when **two or more** `OneToMany` relationships connect the same pair — common for
+  a hierarchy table with both a "parent org" and a "group ancestor" self-lookup. Without it the bind
+  would be ambiguous, so the lint **rejects** it rather than silently picking the first declared
+  relationship and asserting something false about the data.
 - **`statusReason`** must match a declared `statusReasons[]` label on the entity; the engine resolves
   it to the right `statecode` + `statuscode` (so "Completed orders with Passed/Pending QA" just work).
   The status option value is captured during the **data-model** phase — if you set `statusReason` on

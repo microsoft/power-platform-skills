@@ -78,7 +78,12 @@ A second skill (`/app-builder`) builds a whole **model-driven app** (tables, col
 relationships, adaptive forms with sub-grids, views, Choice-column charts, app module +
 sitemap) from a natural-language intent — distinct from `/genpage`, which builds generative
 *pages*. The **whole flow runs in the main conversation loop, never a `Task` subagent** — subagents
-are headless, so `AskUserQuestion` and plan mode cannot reach the user. For the end-to-end flow,
+are headless, so `AskUserQuestion` and plan mode cannot reach the user. **This applies to `/genpage`
+too**: its agents are headless discovery/generation workers, and an agent that needs a decision
+returns a `needs_input` request for the main loop to ask (`references/agent-interaction-contract.md`).
+`scripts/validate-agent-interactivity.js` fails the build if any `plugins/model-apps/agents/*.md`
+declares an interactive tool — the frontmatter is prose to every other test, which is how `/genpage`
+Phase 1 specified an unreachable interactive flow for ~2.5 months. For the end-to-end flow,
 stage→phase mapping and page-identity model, see
 [`docs/architecture.md`](docs/architecture.md) → `## /app-builder — build pipeline`; that doc owns
 the pipeline and delegates each script's **behavioral spec** to the entries below.
@@ -500,7 +505,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
 - The build log is **phase-grouped with per-step status** (`▶ phase` / `[n/total] ✓ created` /
-  `⊘ skipped` / `✗ failed`) + a closing summary; dry-run lists the same plan with a `▢` marker.
+  `⊘ skipped` / `✗ failed`) + a closing summary. A **dry run resolves each item against the live
+  environment** (#559) and marks it `+ create`, `= reuse`, or `? unknown` when the read failed —
+  never guessing, because a wrong confident answer is worse than none. Items with no live identity
+  (sample data, publish, generated icons) stay `▢` unprobed and are counted separately in the
+  summary. The probe reuses the build's OWN discovery helpers (`findExistingTable`,
+  `findExistingColumns`, `relationshipExists`, `artifactIdentityQuery`) rather than a parallel
+  implementation, so the plan cannot disagree with what the apply then does; it is read-only, and
+  `--no-live-plan` restores the offline, spec-only listing.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an

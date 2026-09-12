@@ -420,7 +420,57 @@ test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids]
   assert.deepStrictEqual(result.createdIds.new_widget, ['wid-0', 'wid-1'], 'createdIds[<entity>] lists the new row ids in order');
 });
 
-// --- SDK backlog capability fills (re-vendored from cds-maker-sdk hardening-3) -------------------
+// #544 relies on two properties of the REAL bundle, neither of which a mock can prove. If a
+// re-vendor changed either, the wave seeding in entity-provision.js would silently link sample rows
+// to the wrong parents (or start failing again), so they are pinned here against the shipped bundle.
+test('CONTRACT: seedRecordGraph resolves a bind against options.createdIds BY INDEX, and cannot resolve one into its own group', async () => {
+  const posts = [];
+  const client = {
+    get: async (url) => {
+      const meta = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (meta) return { status: 200, headers: {}, body: { EntitySetName: `${meta[1]}s`, LogicalName: meta[1] } };
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
+    post: async (url, body) => {
+      if (/CreateMultiple/.test(url)) {
+        posts.push(body);
+        const n = ((body && body.Targets) || []).length;
+        return { status: 200, headers: {}, body: { Ids: Array.from({ length: n }, (_, i) => `oid-${posts.length}-${i}`) } };
+      }
+      return { status: 204, headers: {}, body: {} };
+    },
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = sdkWith(client);
+  const selfBind = { navProperty: 'new_ParentOrgId', parentEntity: 'new_org', parentIndex: 0 };
+
+  // (1) A self-bind whose parent is in the SAME group cannot resolve — the ids are published only
+  // after the group completes. This is the #544 failure, and it is a property of the SDK, not a bug
+  // in the plugin: it is why the plugin must split the rows into waves itself.
+  await assert.rejects(
+    sdk.seedRecordGraph([{ entityLogical: 'new_org', records: [{ body: { new_name: 'Root' }, binds: [] }, { body: { new_name: 'Child' }, binds: [selfBind] }] }], { createdIds: {} }),
+    /has no created id/,
+    'a same-group self-bind must still fail — the wave split is what makes it work'
+  );
+
+  // (2) The same bind DOES resolve when the parent id is supplied via options.createdIds, indexed
+  // by the parent's ORIGINAL position. A SPARSE array is what the plugin passes between waves
+  // (index 0 filled, later indices still empty), so the lookup must be positional, not dense.
+  const sparse = [];
+  sparse[0] = '11111111-1111-1111-1111-111111111111';
+  const res = await sdk.seedRecordGraph(
+    [{ entityLogical: 'new_org', records: [{ body: { new_name: 'Child' }, binds: [selfBind] }] }],
+    { createdIds: { new_org: sparse } }
+  );
+  const target = posts[posts.length - 1].Targets[0];
+  assert.strictEqual(target['new_ParentOrgId@odata.bind'], `/new_orgs(${sparse[0]})`,
+    'the bind resolves to the id at options.createdIds[entity][parentIndex]');
+  assert.strictEqual(res.createdIds.new_org.length, 1, 'the returned ids cover only the rows in THIS call');
+});
+
+
 // These lock the four NEW behaviors the skill now wires: quick-create table flag, OData pagination,
 // idempotent global choice, and authored-column full width. Each drives the real vendored bundle so a
 // future re-vendor that regresses the behavior fails HERE (the mock-based engine tests can't catch it).

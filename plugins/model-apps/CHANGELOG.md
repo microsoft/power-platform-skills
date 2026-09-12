@@ -5,6 +5,52 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
+## [Unreleased] — 2.8.0
+
+A dry run that says what an apply would actually do, and sample data that can express a hierarchy.
+
+### Added
+
+- **The dry run resolves create-vs-reuse against the live environment** ([#559]). `build-model-app.js`
+  without `--apply` used to print a static, spec-derived listing and exit before any discovery, so
+  the identical plan appeared for a spec whose every artifact already exists and for one that would
+  create everything from nothing — the one question a dry run exists to answer. Each table, column,
+  relationship, view, chart, form and the app module is now marked `+ create` or `= reuse`, with a
+  summary line (`2 to create, 6 already present`). A read that fails is reported as `? unknown` and
+  never collapsed into either decision. The probe reuses the **build's own** discovery, so the plan
+  cannot drift from what the apply then does; it is read-only, and `--no-live-plan` restores the
+  offline listing.
+- **Sample data can express a hierarchy on one table** ([#544]). A `$parent` may target the row's
+  **own** entity — an org tree, a "reports to" chain. Rows are seeded in dependency waves, so
+  declaration order does not matter; a cycle is rejected by the lint rather than failing the build
+  partway through. Previously any self-reference halted the whole `sample-data` phase.
+- **`$parent.lookup` disambiguates which relationship a bind uses** ([#544]). Needed only when two or
+  more `OneToMany` relationships connect the same pair — common for a hierarchy table with both a
+  "parent org" and a "group ancestor" self-lookup. Without it the bind is now **rejected** rather
+  than silently taking the first declared relationship and asserting something false about the data.
+
+### Fixed
+
+- **`/genpage` Phase 1 is reachable again** ([#541]). It was specified to run its whole interactive
+  flow — prerequisites, auth, the "create new / edit existing" question and plan-mode approval —
+  **inside** the `genpage-planner` `Task` subagent, while the plugin's own `AGENTS.md` documented
+  that subagents are headless and `/app-builder` enforced the opposite. There was no compliant path
+  through Phase 1, so create flows could not complete. Interaction now runs in the main conversation
+  loop; the agents are headless discovery/generation workers and return a `needs_input` request when
+  they need a decision (`references/agent-interaction-contract.md`). The `workflow-log.md` format is
+  unchanged — it records what was asked, not who asked it.
+- **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]). It is
+  removed by the table delete, but teardown also tried to delete it first and got
+  `referenced by 2 other components` — so a run that left the environment completely clean printed
+  `✗` and exited non-zero. Live-measured; now exits 0.
+- **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.** The runner's
+  discovery was a flat `readdir`, so a nested suite would be committed, reviewed, reported green and
+  never execute. Every suite is top-level today, which is exactly why this needed a test.
+
+[#541]: https://github.com/microsoft/power-platform-skills/issues/541
+[#544]: https://github.com/microsoft/power-platform-skills/issues/544
+[#559]: https://github.com/microsoft/power-platform-skills/issues/559
+
 ## [Unreleased] — 2.7.0
 
 Multi-language Dataverse labels, granting access on roles this spec does not own, and the

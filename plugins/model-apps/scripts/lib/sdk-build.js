@@ -52,6 +52,9 @@ const {
   provisionSampleData,
   BuildHalt: _BuildHalt,
   SDK_COLUMN_TYPE: _SDK_COLUMN_TYPE,
+  findExistingTable,
+  findExistingColumns,
+  relationshipExists,
 } = require('./entity-provision.js');
 // Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
 const {
@@ -338,6 +341,12 @@ function planFor(spec, opts) {
   const sol = spec.solution;
   if (has('solution')) items.push({ phase: 'solution', label: `solution ${sol.uniqueName} (publisher ${sol.publisherPrefix})` });
   if (has('data-model')) {
+    // The relationship probe identity must match the one the APPLY path uses, or an existing
+    // relationship reads as `create`. `provisionDataModel` queries the REFERENCED (parent) entity's
+    // OneToManyRelationships — the child's collection does not contain it — and builds the schema
+    // name WITH the publisher prefix. Getting either wrong is invisible for a self-referencing
+    // relationship (referenced === referencing), which is exactly the shape this was first tested on.
+    const relPrefix = spec.solution && spec.solution.publisherPrefix;
     for (const gc of spec.globalChoices || []) items.push({ phase: 'data-model', label: `global choice ${gc.name}` });
     for (const e of spec.entities) {
       // `labelText` returns "" for an absent displayName, or for a localized map with nothing usable
@@ -345,17 +354,17 @@ function planFor(spec, opts) {
       // has to decode. Fall back to the schema name, which is what the CREATE itself falls back to
       // (`displayName || schemaName`), so the plan says what the build will actually do.
       const shown = labelText(e.displayName, spec && spec.languageCode) || e.schemaName;
-      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${shown}")` });
+      items.push({ phase: 'data-model', label: `table ${e.schemaName} ("${shown}")`, key: { kind: 'table', entity: e.schemaName } });
       if (quickCreateEnabledFor(spec, e)) items.push({ phase: 'data-model', label: `enable quick create on ${e.schemaName.toLowerCase()}` });
       for (const c of e.columns || []) {
-        if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})` });
+        if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`, key: { kind: 'column', entity: e.schemaName, name: c.schemaName } });
       }
       for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
       for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
     }
     for (const r of spec.relationships || []) {
-      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}` });
-      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}` });
+      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}`, key: { kind: 'relationship', entity: r.referenced, name: relationshipSchemaName(r, relPrefix), relType: 'OneToMany' } });
+      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}`, key: { kind: 'relationship', entity: r.entity1, name: manyToManySchemaName(r, relPrefix), relType: 'ManyToMany' } });
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -363,13 +372,22 @@ function planFor(spec, opts) {
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
   if (has('web-resources')) for (const e of spec.entities || []) if (e.icon || e.vectorIcon) items.push({ phase: 'web-resources', label: `table icon for ${e.schemaName.toLowerCase()}` });
-  if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}` });
+  if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}`, key: { kind: 'view', entity: v.entity, name: v.name } });
   if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
-  if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}` });
+  if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}`, key: { kind: 'chart', entity: c.entity, name: c.name } });
   if (has('forms')) for (const f of spec.forms || []) {
     const ft = f.formType || 'Main';
     const subs = (f.subgrids || []).map((s) => s.childEntity).join(', ');
-    items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}` });
+    // The form's Dataverse NAME is whatever compileFormIntent derives (the author may omit `name`),
+    // and that is the name the reuse lookup keys on — so derive it the same way rather than guessing.
+    // Wrapped because planFor must stay total: a spec shape compileFormIntent rejects should still
+    // produce a plan LINE (it just cannot be probed live), never crash the dry run.
+    let formKey;
+    try {
+      const def = compileFormIntent(spec, f, { notesClassId: NOTES_CLASS_ID });
+      formKey = { kind: 'form', entity: def.entityLogicalName, name: def.name, formType: ft, formId: f.formId };
+    } catch { formKey = undefined; }
+    items.push({ phase: 'forms', label: `${ft === 'Main' ? 'form' : `${ft} form`} for ${f.entity}${subs ? ` (sub-grids: ${subs})` : ''}`, ...(formKey ? { key: formKey } : {}) });
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
@@ -380,7 +398,7 @@ function planFor(spec, opts) {
   }
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
-  if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
+  if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap`, key: { kind: 'app', uniqueName: appUniqueName(spec) } });
   if (has('app-shell') && !(spec.app && spec.app.icon)) items.push({ phase: 'app-shell', label: `app icon (generated) ${appUniqueName(spec)}_icon` });
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
   if (has('pages') && (spec.pages || []).length && appHasCrossPageNav(spec)) items.push({ phase: 'pages', label: 'resolve cross-page navigation' });
@@ -1184,6 +1202,138 @@ async function resolveRoleGrantTarget(provision, grant, buCache) {
 }
 
 
+// Decide, against the LIVE environment, whether each planned item would be created or reused. #559.
+//
+// The dry run used to print `planFor`'s static, spec-derived listing and exit before any discovery,
+// so the identical plan appeared for a spec whose every artifact already exists and for one that
+// would create everything from nothing. A caller could not tell CREATE from REUSE — which is the one
+// question a dry run exists to answer before a production apply.
+//
+// This deliberately reuses the BUILD'S OWN discovery — `findExistingTable`, `findExistingColumns`,
+// `relationshipExists` and the shared `artifactIdentityQuery` — rather than re-implementing a
+// parallel "does it exist?" pass. A second implementation would drift from the one that actually
+// decides at apply time, and a dry run that confidently disagrees with the apply is worse than one
+// that says nothing.
+//
+// Read-only: every call here is a GET/query. Nothing is created, updated or published.
+//
+// Three states, because two would have to lie:
+//   create   — probed, not present: the apply will create it.
+//   reuse    — probed, present: the apply will discover and skip/reconcile it.
+//   unknown  — probed and the read FAILED. Never collapsed into create or reuse: guessing "create"
+//              overstates the work and guessing "reuse" understates it, and both read as certainty.
+// An item with no `key` is left unprobed (`state` absent) — the plan line still prints.
+async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
+  const hasLocalizedLabels = typeof localizedLabelLcidsInSpec === 'function'
+    ? localizedLabelLcidsInSpec(spec).length > 0
+    : false;
+  const tableCache = new Map();   // entity logical -> { found: bool|null }
+  const columnCache = new Map();  // entity logical -> Set<logicalName> | null
+
+  // `findExistingColumns` is written for the APPLY path, where a failed read is safe to treat as
+  // "assume every column is new" — the create's own already-exists handling absorbs the duplicates.
+  // A dry run has no create to absorb anything, so the same `[]` would print `+ create` for columns
+  // that exist. The helper calls `warn` exactly when it is returning that fallback, so the warning
+  // is the signal that the answer was not conclusive.
+  const columnsOf = async (logical) => {
+    if (!columnCache.has(logical)) {
+      let readFailed = false;
+      try {
+        const cols = await findExistingColumns(provision, logical, (msg) => {
+          readFailed = true;
+          if (typeof warn === 'function') warn(msg);
+        });
+        columnCache.set(logical, readFailed ? null : new Set((cols || []).map((c) => String(c.logicalName || '').toLowerCase())));
+      } catch { columnCache.set(logical, null); }
+    }
+    return columnCache.get(logical);
+  };
+
+  // `relationshipExists` falls back to the BROAD `fetchEntityMetadata` read when the narrow one is
+  // inconclusive. Two reasons not to take that fallback here: the vendored implementation WRITES the
+  // fetched metadata into the on-disk workspace, which a read-only dry run must not do (it would
+  // change cached state a later apply reads); and the apply path deliberately treats its `null` as
+  // "absent" because the create absorbs the race, which a dry run must not copy. Handing it a
+  // reader with no `fetchEntityMetadata` makes an inconclusive probe return `null`, which becomes
+  // `unknown` below.
+  const relReader = { dataverse: provision && provision.dataverse };
+
+  const tableState = async (logical) => {
+    if (!tableCache.has(logical)) {
+      try {
+        const hit = await findExistingTable(provision, logical, { hasLocalizedLabels });
+        tableCache.set(logical, { found: !!hit });
+      } catch (err) {
+        // Includes the BuildHalt findExistingTable raises for a LOCALIZED spec whose probe is
+        // inconclusive — which is precisely an "unknown", not an absence.
+        tableCache.set(logical, { found: null, why: String((err && err.message) || err) });
+      }
+    }
+    return tableCache.get(logical);
+  };
+
+  // Resolve view/chart/form/app the way the BUILD resolves them, so the plan cannot claim a state
+  // the apply then contradicts:
+  //   - forms go through `resolveExistingFormId`, which validates a pinned `formId` (a stale or
+  //     foreign pin makes the apply HALT — reporting that as create/reuse would hide it) and throws
+  //     on two same-(entity,type,name) forms;
+  //   - views/charts go through `provision.findArtifact`, which raises on an ambiguous identity;
+  //   - the app is keyed by its deterministic unique name.
+  // Anything thrown becomes `unknown` with the resolver's own message, which is the actionable one.
+  const artifactPresent = async (kind, def) => {
+    if (kind === 'form') return !!(await resolveExistingFormId(provision, def));
+    if ((kind === 'view' || kind === 'chart') && typeof provision.findArtifact === 'function') {
+      return !!(await provision.findArtifact(kind, { name: def.name, entity: def.entityLogicalName }));
+    }
+    const q = artifactIdentityQuery(kind, def);
+    if (!q) return null;
+    const rows = await provision.queryRecords(q.set, { select: [q.idField], filter: q.filter, top: 1 });
+    return !!(rows && rows.length);
+  };
+
+  for (const item of plan) {
+    const k = item.key;
+    if (!k) continue;
+    try {
+      if (k.kind === 'table') {
+        const t = await tableState(String(k.entity).toLowerCase());
+        item.state = t.found === null ? 'unknown' : (t.found ? 'reuse' : 'create');
+        if (t.found === null) item.stateWhy = t.why;
+      } else if (k.kind === 'column') {
+        const logical = String(k.entity).toLowerCase();
+        const t = await tableState(logical);
+        // A column on a table that does not exist is unambiguously a create — and asking Dataverse
+        // for the attributes of a non-existent table only produces a metadata-cache error.
+        if (t.found === false) { item.state = 'create'; continue; }
+        if (t.found === null) { item.state = 'unknown'; item.stateWhy = t.why; continue; }
+        const cols = await columnsOf(logical);
+        if (!cols) { item.state = 'unknown'; item.stateWhy = 'the table\'s attributes could not be read'; continue; }
+        item.state = cols.has(String(k.name).toLowerCase()) ? 'reuse' : 'create';
+      } else if (k.kind === 'relationship') {
+        // Tri-state: `null` means the probe could not tell. The apply path treats that as absent
+        // (its create absorbs the race); a plan has nothing to absorb it, so it must say so.
+        const present = await relationshipExists(relReader, String(k.entity).toLowerCase(), k.name, k.relType, { hasLocalizedLabels });
+        item.state = present === null || present === undefined ? 'unknown' : (present ? 'reuse' : 'create');
+        if (item.state === 'unknown') item.stateWhy = 'the relationship metadata read was inconclusive';
+      } else if (k.kind === 'app') {
+        const present = await artifactPresent('app', { uniqueName: k.uniqueName });
+        item.state = present ? 'reuse' : 'create';
+      } else if (k.kind === 'view' || k.kind === 'chart' || k.kind === 'form') {
+        // A form/view/chart on a table that does not exist yet cannot exist either, and the filter
+        // would 400 on the metadata cache — so answer from the table, as the build's own lookup does.
+        const t = await tableState(String(k.entity).toLowerCase());
+        if (t.found === false) { item.state = 'create'; continue; }
+        const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
+        item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
+      }
+    } catch (err) {
+      item.state = 'unknown';
+      item.stateWhy = String((err && err.message) || err);
+    }
+  }
+  return plan;
+}
+
 // --- orchestrator ----------------------------------------------------------------------
 async function runSdkBuild(spec, opts = {}) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
@@ -1199,8 +1349,27 @@ async function runSdkBuild(spec, opts = {}) {
   const plan = planFor(spec, { sampleData, publish, phases });
 
   if (!apply) {
-    plan.forEach((p, i) => emit({ phase: p.phase, status: 'skip', label: p.label, n: i + 1, total: plan.length }));
-    return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
+    // #559: resolve create-vs-reuse against the live environment before printing the plan. Opt out
+    // with `livePlan: false` for an offline/spec-only listing (the old behaviour). Probing is
+    // skipped silently when the caller supplied no reader — a dry run must still work without one.
+    const canProbe = opts.livePlan !== false && provision && typeof provision.queryRecords === 'function';
+    if (canProbe) {
+      try {
+        await annotateLivePlan(plan, { spec, provision, warn: opts.warn });
+      } catch (err) {
+        // The plan itself is still worth printing; say the states are missing rather than implying
+        // every item is a create.
+        emit({ phase: 'plan', status: 'warn', label: `live plan unavailable (${(err && err.message) || err}) — showing the spec-derived plan only`, n: 0, total: plan.length });
+      }
+    }
+    plan.forEach((p, i) => emit({ phase: p.phase, status: p.state === 'reuse' ? 'skip' : 'skip', label: p.label, state: p.state, stateWhy: p.stateWhy, n: i + 1, total: plan.length }));
+    return {
+      ok: true,
+      dryRun: true,
+      livePlan: canProbe,
+      plan: plan.map((p) => (p.state ? `${p.label} [${p.state}]` : p.label)),
+      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}) })),
+    };
   }
 
   const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
@@ -3478,4 +3647,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
