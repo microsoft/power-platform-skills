@@ -6,7 +6,7 @@ author: Microsoft Corporation
 argument-hint: "<page description> | edit"
 user-invocable: true
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
@@ -227,10 +227,13 @@ Example:
 > instead of trying to discover connectors yourself. `resolvedAction` and `envUrl`
 > are required — discovery is dispatched against exactly those.
 >
-> Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
-> the new/edit question via AskUserQuestion, then proceed accordingly. Write
-> genpage-plan.md to the working directory if creating. Return the page list,
-> entity status, app selection, and any `{ "action": "edit" }` signal when complete.
+> Follow the instructions in your agent file. Validate prereqs and confirm auth.
+> The create/edit decision and the resolved environment are supplied to you by the
+> orchestrator (it asks; you are headless) — use them rather than prompting. If you
+> need any further decision, return `{ "action": "needs_input", … }`. Write
+> genpage-plan.md to the working directory once the orchestrator reports the plan
+> approved. Return the page list, entity status, app selection, and any
+> `{ "action": "edit" }` signal when complete.
 
 ### Phase 2: Create Entities (Conditional)
 

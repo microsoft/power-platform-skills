@@ -12,9 +12,12 @@ const path = require('node:path');
 const {
   frontmatterOf,
   interactiveToolsIn,
+  undeclaredSkillTools,
   agentFiles,
+  skillFiles,
   INTERACTIVE_TOOLS,
   SCAN_PATHS,
+  SKILL_SCAN_PATHS,
 } = require('../validate-agent-interactivity.js');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -84,4 +87,56 @@ test('every scanned agent in the repo is headless', () => {
 // means widening the scan is a conscious edit with a test change, not an accident.
 test('the scan scope is explicit', () => {
   assert.deepEqual(SCAN_PATHS, [path.join('plugins', 'model-apps', 'agents')]);
+});
+
+// The mirror-image defect. Moving interaction OUT of an agent and INTO the skill's main loop only
+// works if the skill is ALLOWED to interact — /genpage was rewritten to call plan mode in the main
+// loop while its allowed-tools declared neither tool, moving the flow to a second context that
+// could not perform it either.
+test('a skill that uses an interactive tool but does not declare it is flagged', () => {
+  const doc = [
+    '---',
+    'name: x',
+    'allowed-tools: Read, Write, Task',
+    '---',
+    '',
+    'Present the plan with `EnterPlanMode` and approve via `ExitPlanMode`.',
+  ].join('\n');
+  assert.deepEqual(undeclaredSkillTools(doc).sort(), ['EnterPlanMode', 'ExitPlanMode']);
+});
+
+test('a skill that declares what it uses passes', () => {
+  const doc = [
+    '---',
+    'name: x',
+    'allowed-tools: Read, Write, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode',
+    '---',
+    '',
+    'Ask with `AskUserQuestion`, present with `EnterPlanMode`, approve with `ExitPlanMode`.',
+  ].join('\n');
+  assert.deepEqual(undeclaredSkillTools(doc), []);
+});
+
+test('a skill that mentions no interactive tool needs no declaration', () => {
+  const doc = ['---', 'name: x', 'allowed-tools: Read, Bash', '---', '', 'Run the script.'].join('\n');
+  assert.deepEqual(undeclaredSkillTools(doc), []);
+});
+
+// The frontmatter's own declaration must not be mistaken for body usage, or every correctly
+// declared skill would report itself.
+test('the declaration in the frontmatter is not counted as body usage', () => {
+  const doc = ['---', 'allowed-tools: Read, AskUserQuestion', '---', '', 'No tool mentioned here.'].join('\n');
+  assert.deepEqual(undeclaredSkillTools(doc), []);
+});
+
+// Every real skill in the scanned plugin must satisfy it — this is what fails the PR.
+test('every scanned skill declares the interactive tools it uses', () => {
+  for (const rel of SKILL_SCAN_PATHS) {
+    const files = skillFiles(path.join(ROOT, rel));
+    assert.ok(files.length > 0, `expected skills under ${rel}`);
+    for (const f of files) {
+      const missing = undeclaredSkillTools(fs.readFileSync(f, 'utf8'));
+      assert.deepEqual(missing, [], `${path.relative(ROOT, f)} uses but does not declare ${missing.join(', ')}`);
+    }
+  }
 });

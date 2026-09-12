@@ -166,9 +166,25 @@ contract, and upload-file status (`<working-dir>/connectors.json`). Skipping thi
 ships connector code with no deployed binding, because upload would still omit
 `--connectors`.
 
-The planner reads `page.tsx`, `config.json`, and `prompt.txt` for context, gathers
-any clarification from the user, presents the edit plan via plan mode, and writes
-`<working-dir>/genpage-edit-plan.md` on approval. Wait for it to finish.
+The planner reads `page.tsx`, `config.json`, and `prompt.txt` for context and
+proposes the edit plan. It is a **headless** agent: it cannot ask the user anything
+and cannot present plan mode. Drive the loop from here until it completes:
+
+- **`{ "action": "needs_input", "questions": [...] }`** — ask each question with
+  `AskUserQuestion` in this loop, record every exchange in `workflow-log.md` as
+  `AskUserQuestion: <question> → <answer>`, then re-invoke the planner with the
+  answers plus everything it already returned. Repeat as needed; each round must
+  carry the previous answers forward so the planner never re-asks the same thing.
+- **`{ "action": "connector_discovery_required", … }`** — handled above.
+- **A proposed plan** — present it with `EnterPlanMode`, record `EnterPlanMode
+  called` and the response in `workflow-log.md`, and call `ExitPlanMode` to get
+  approval. On **approval**, re-invoke the planner with the outcome so it writes
+  `<working-dir>/genpage-edit-plan.md`. On **changes requested**, re-invoke it with
+  the requested revisions and present the revised plan again.
+
+Only continue to Phase 5 once `<working-dir>/genpage-edit-plan.md` exists — that
+file is the approved contract Phase 5 reads, and reaching Phase 5 without it means
+applying an edit nobody approved.
 
 ## Edit Phase 5: Apply the Edit
 
