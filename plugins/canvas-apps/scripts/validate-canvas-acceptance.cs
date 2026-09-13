@@ -226,6 +226,10 @@ foreach (var row in acceptedScreens.Values)
 }
 
 ValidateDirectionalMutationEvidence(directionalEvidence);
+ValidateLayoutReachability(CollectLayoutRequiredControls(
+    acceptedActions,
+    acceptedRecordFields,
+    directionalEvidence));
 
 if (errors.Count > 0)
 {
@@ -237,6 +241,622 @@ Console.WriteLine(
     $"{plannedRecordFields.Count} required record fields, {plannedScreens.Count} screens; " +
     "runtime evaluation NOT RUN.");
 return 0;
+
+HashSet<string> CollectLayoutRequiredControls(
+    Dictionary<string, List<string>> actions,
+    Dictionary<string, List<string>> recordFields,
+    Dictionary<string, List<string>> directionalRows)
+{
+    var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var row in recordFields.Values.Where(row => row.Count > 1))
+    {
+        required.Add(Clean(row[1]));
+    }
+
+    foreach (var row in actions.Values.Where(row => row.Count > 2))
+    {
+        foreach (Match binding in Regex.Matches(
+            row[2],
+            @"`(?<control>[A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\s*:\s*(?<formula>=[^`]*)`",
+            RegexOptions.CultureInvariant))
+        {
+            if (ContainsMutation(binding.Groups["formula"].Value))
+            {
+                required.Add(binding.Groups["control"].Value);
+            }
+        }
+    }
+
+    foreach (var row in directionalRows.Values.Where(row => row.Count == 9))
+    {
+        foreach (var column in row.Skip(3).Take(5))
+        {
+            foreach (Match control in Regex.Matches(
+                column,
+                @"(?:^|<br>|=)(?<control>[A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\s*:",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                required.Add(control.Groups["control"].Value);
+            }
+
+            foreach (Match input in Regex.Matches(
+                column,
+                @"\b(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?:Text|Value)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                required.Add(input.Groups["control"].Value);
+            }
+        }
+    }
+
+    return required;
+}
+
+void ValidateLayoutReachability(HashSet<string> requiredControls)
+{
+    var nodes = BuildYamlNodes(yamlLines);
+    var byName = nodes
+        .GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+    var relevantContainers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var required in requiredControls)
+    {
+        if (!byName.TryGetValue(required, out var node))
+        {
+            continue;
+        }
+
+        for (var parent = node.Parent; parent is not null && byName.TryGetValue(parent, out var ancestor); parent = ancestor.Parent)
+        {
+            relevantContainers.Add(ancestor.Name);
+        }
+    }
+
+    foreach (var containerName in relevantContainers)
+    {
+        if (!byName.TryGetValue(containerName, out var container) ||
+            !TryGetControlBlock(yamlLines, container.Name, out var block) ||
+            !Regex.IsMatch(
+                block,
+                @"\bVariant:\s*AutoLayout\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            continue;
+        }
+
+        // Gallery descendants describe one repeated template, not viewport siblings.
+        // TemplateWidth/TemplateHeight govern that layout, so ordinary container sums
+        // would incorrectly multiply template constraints into a viewport overflow.
+        var insideGallery = false;
+        for (var parentName = container.Parent;
+            parentName is not null && byName.TryGetValue(parentName, out var parent);
+            parentName = parent.Parent)
+        {
+            if (!parent.IsScreen &&
+                TryGetControlBlock(yamlLines, parent.Name, out var parentBlock) &&
+                IsOwnControlType(parentBlock, "Gallery"))
+            {
+                insideGallery = true;
+                break;
+            }
+        }
+        if (insideGallery)
+        {
+            continue;
+        }
+
+        var children = nodes
+            .Where(node => string.Equals(
+                node.Parent,
+                container.Name,
+                StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (children.Count == 0)
+        {
+            continue;
+        }
+
+        var direction = ParseLayoutDirection(
+            GetOwnPropertyFormula(container.Name, block, "LayoutDirection"));
+        if (direction.Count == 0)
+        {
+            continue;
+        }
+
+        if (direction.Any(branch => branch.Value == "Horizontal") &&
+            !AllowsHorizontalEscape(container.Name, block))
+        {
+            ValidateHorizontalBudget(container, block, children, direction, byName, requiredControls);
+        }
+
+        if (direction.Any(branch => branch.Value == "Vertical"))
+        {
+            ValidateVerticalBudget(container, block, children, direction, byName, requiredControls);
+        }
+    }
+}
+
+static bool IsOwnControlType(string controlBlock, string expectedType)
+{
+    var lines = controlBlock.Replace("\r", "", StringComparison.Ordinal).Split('\n');
+    if (lines.Length == 0)
+    {
+        return false;
+    }
+
+    var declarationIndent = lines[0].TakeWhile(char.IsWhiteSpace).Count();
+    var ownPropertyIndent = lines
+        .Skip(1)
+        .Where(line => !string.IsNullOrWhiteSpace(line))
+        .Select(line => line.TakeWhile(char.IsWhiteSpace).Count())
+        .Where(indent => indent > declarationIndent)
+        .DefaultIfEmpty(-1)
+        .Min();
+    if (ownPropertyIndent < 0)
+    {
+        return false;
+    }
+
+    var ownControl = lines
+        .Select(line => (
+            Line: line,
+            Indent: line.TakeWhile(char.IsWhiteSpace).Count()))
+        .Where(entry =>
+            entry.Indent == ownPropertyIndent &&
+            Regex.IsMatch(entry.Line, @"^\s*Control\s*:", RegexOptions.IgnoreCase))
+        .FirstOrDefault();
+    return ownControl.Line is not null && Regex.IsMatch(
+        ownControl.Line,
+        $@"^\s*Control\s*:\s*(?:[^/\r\n]+/)?{Regex.Escape(expectedType)}(?:@[A-Za-z0-9][A-Za-z0-9._-]*)?\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+void ValidateHorizontalBudget(
+    YamlNode container,
+    string block,
+    List<YamlNode> children,
+    List<ConditionalBranch> direction,
+    Dictionary<string, YamlNode> byName,
+    HashSet<string> requiredControls)
+{
+    var padding =
+        ReadNumericProperty(container.Name, block, "PaddingLeft") +
+        ReadNumericProperty(container.Name, block, "PaddingRight");
+    var gap = ReadNumericProperty(container.Name, block, "LayoutGap");
+    var widths = children.Select(child =>
+    {
+        TryGetControlBlock(yamlLines, child.Name, out var childBlock);
+        return (
+            Child: child.Name,
+            Layout: ResolveChildLayoutBudget(
+                child.Name,
+                childBlock,
+                "LayoutMinWidth",
+                "Width"));
+    }).ToList();
+    var unresolvedChildren = widths
+        .Where(width => width.Layout is null)
+        .Select(width => width.Child)
+        .ToList();
+    foreach (var child in unresolvedChildren)
+    {
+        errors.Add(
+            $"Layout reachability: horizontal container '{container.Name}' child '{child}' has an unresolved width; set numeric Width for a non-fill child or numeric LayoutMinWidth for FillPortions > 0.");
+    }
+    if (unresolvedChildren.Count > 0)
+    {
+        return;
+    }
+
+    var fixedCost = padding + gap * Math.Max(0, children.Count - 1);
+
+    foreach (var branch in direction.Where(branch => branch.Value == "Horizontal"))
+    {
+        double? available = branch.Threshold;
+        if (available is null)
+        {
+            var containerWidth = ParseNumericLayout(
+                GetOwnPropertyFormula(container.Name, block, "Width"));
+            available = containerWidth?.Minimum;
+        }
+
+        var required = fixedCost;
+        foreach (var width in widths)
+        {
+            required += SelectBranchValue(width.Layout, branch)!.Value;
+        }
+
+        var relevant = RequiredDescendants(container.Name, byName, requiredControls);
+        if (available is null)
+        {
+            errors.Add(
+                $"Layout reachability: horizontal container '{container.Name}' has an unresolved width; set a numeric Width or use an App.Width-aligned numeric breakpoint for required descendants {relevant}.");
+            continue;
+        }
+
+        if (required > available.Value)
+        {
+            errors.Add(
+                $"Layout reachability: horizontal container '{container.Name}' requires {required:0.##}px but its reachable branch provides at most {available.Value:0.##}px; required descendants {relevant} may be clipped.");
+        }
+    }
+}
+
+void ValidateVerticalBudget(
+    YamlNode container,
+    string block,
+    List<YamlNode> children,
+    List<ConditionalBranch> direction,
+    Dictionary<string, YamlNode> byName,
+    HashSet<string> requiredControls)
+{
+    var verticalScroll = HasExactScroll(container.Name, block, "LayoutOverflowY");
+    var fillChildren = children
+        .Where(child =>
+        {
+            TryGetControlBlock(yamlLines, child.Name, out var childBlock);
+            return ReadNumericProperty(child.Name, childBlock, "FillPortions") > 0;
+        })
+        .Select(child => child.Name)
+        .ToList();
+    if (verticalScroll && fillChildren.Count == 0)
+    {
+        return;
+    }
+    foreach (var child in fillChildren)
+    {
+        if (verticalScroll)
+        {
+            errors.Add(
+                $"Layout reachability: vertical scroll container '{container.Name}' has direct child '{child}' with FillPortions > 0, which prevents content overflow from scrolling; set FillPortions to 0 and provide a numeric Height/LayoutMinHeight budget.");
+        }
+    }
+
+    var heightFormula = GetOwnPropertyFormula(container.Name, block, "Height");
+    var isScreenRoot =
+        container.Parent is not null &&
+        byName.TryGetValue(container.Parent, out var parent) &&
+        parent.IsScreen &&
+        byName.Values.Count(node => string.Equals(
+            node.Parent,
+            parent.Name,
+            StringComparison.OrdinalIgnoreCase)) == 1;
+    if (isScreenRoot &&
+        string.Equals(
+            NormalizeWhitespace(heightFormula ?? ""),
+            "=Parent.Height",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        return;
+    }
+
+    var heights = ParseNumericLayout(heightFormula);
+    if (heights is null)
+    {
+        errors.Add(
+            $"Layout reachability: vertical container '{container.Name}' has an unresolved Height; set a numeric Height or an App.Width-aligned conditional with numeric Height branches.");
+        return;
+    }
+
+    var childHeights = children.Select(child =>
+    {
+        TryGetControlBlock(yamlLines, child.Name, out var childBlock);
+        return (
+            Child: child.Name,
+            Layout: ResolveChildLayoutBudget(
+                child.Name,
+                childBlock,
+                "LayoutMinHeight",
+                "Height"));
+    }).ToList();
+    var unresolvedChildren = childHeights
+        .Where(height => height.Layout is null)
+        .Select(height => height.Child)
+        .ToList();
+    foreach (var child in unresolvedChildren)
+    {
+        errors.Add(
+            $"Layout reachability: vertical container '{container.Name}' child '{child}' has an unresolved height; set numeric Height for a non-fill child or numeric LayoutMinHeight for FillPortions > 0. AutoHeight text inside a fixed-height panel still needs that numeric budget, or must move into an intentionally scrolling/viewport-root layout.");
+    }
+    if (unresolvedChildren.Count > 0)
+    {
+        return;
+    }
+
+    var padding =
+        ReadNumericProperty(container.Name, block, "PaddingTop") +
+        ReadNumericProperty(container.Name, block, "PaddingBottom");
+    var gap = ReadNumericProperty(container.Name, block, "LayoutGap");
+    foreach (var branch in direction.Where(branch => branch.Value == "Vertical"))
+    {
+        var reachableHeights =
+            heights.Value.Source is not null &&
+            branch.Source is not null &&
+            string.Equals(
+                heights.Value.Source,
+                branch.Source,
+                StringComparison.OrdinalIgnoreCase) &&
+            heights.Value.Threshold == branch.Threshold
+                ? [branch.IsLess == true ? heights.Value.Less : heights.Value.Else]
+                : heights.Value.Values;
+        foreach (var containerHeight in reachableHeights)
+        {
+            var required = padding + gap * Math.Max(0, children.Count - 1);
+            foreach (var childHeight in childHeights)
+            {
+                required += SelectCorrelatedOrMaximum(
+                    childHeight.Layout!.Value,
+                    heights.Value,
+                    containerHeight);
+            }
+
+            if (required > containerHeight)
+            {
+                errors.Add(
+                    $"Layout reachability: vertical container '{container.Name}' requires {required:0.##}px but its reachable Height branch is {containerHeight:0.##}px; required descendants {RequiredDescendants(container.Name, byName, requiredControls)} may be clipped.");
+            }
+        }
+    }
+}
+
+static List<ConditionalBranch> ParseLayoutDirection(string? formula)
+{
+    if (string.IsNullOrWhiteSpace(formula))
+    {
+        return [];
+    }
+
+    if (Regex.IsMatch(formula, @"^=\s*LayoutDirection\.Horizontal\s*$", RegexOptions.IgnoreCase))
+    {
+        return [new("Horizontal", null, null, null)];
+    }
+    if (Regex.IsMatch(formula, @"^=\s*LayoutDirection\.Vertical\s*$", RegexOptions.IgnoreCase))
+    {
+        return [new("Vertical", null, null, null)];
+    }
+
+    var condition = ParseConditional(formula);
+    return condition is null
+        ? []
+        :
+        [
+            new(CleanDirection(condition.Value.LessValue), condition.Value.Source, condition.Value.Threshold, true),
+            new(CleanDirection(condition.Value.ElseValue), condition.Value.Source, condition.Value.Threshold, false),
+        ];
+}
+
+static NumericLayout? ParseNumericLayout(string? formula)
+{
+    if (string.IsNullOrWhiteSpace(formula))
+    {
+        return null;
+    }
+
+    if (TryParseNumber(formula, out var number))
+    {
+        return new(null, null, number, number);
+    }
+
+    var condition = ParseConditional(formula);
+    if (condition is null ||
+        !TryParseNumber(condition.Value.LessValue, out var less) ||
+        !TryParseNumber(condition.Value.ElseValue, out var otherwise))
+    {
+        return null;
+    }
+
+    return new(condition.Value.Source, condition.Value.Threshold, less, otherwise);
+}
+
+static ParsedConditional? ParseConditional(string formula)
+{
+    var arguments = ExtractFunctionArguments(formula, "If").FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(arguments))
+    {
+        return null;
+    }
+
+    var parts = SplitPowerFxArguments(arguments);
+    if (parts.Count != 3)
+    {
+        return null;
+    }
+
+    var condition = Regex.Match(
+        NormalizeWhitespace(parts[0]),
+        @"^(?<source>(?:App|Parent)\.Width)\s*<\s*(?<threshold>\d+(?:\.\d+)?)$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    return condition.Success &&
+        double.TryParse(
+            condition.Groups["threshold"].Value,
+            System.Globalization.NumberStyles.Number,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var threshold)
+        ? new(condition.Groups["source"].Value, threshold, parts[1], parts[2])
+        : null;
+}
+
+static double? SelectBranchValue(NumericLayout? layout, ConditionalBranch branch)
+{
+    if (layout is null)
+    {
+        return null;
+    }
+    if (layout.Value.Source is null)
+    {
+        return layout.Value.Less;
+    }
+    if (branch.Source is not null &&
+        string.Equals(layout.Value.Source, "App.Width", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(layout.Value.Source, branch.Source, StringComparison.OrdinalIgnoreCase) &&
+        layout.Value.Threshold == branch.Threshold)
+    {
+        return branch.IsLess == true ? layout.Value.Less : layout.Value.Else;
+    }
+    return layout.Value.Maximum;
+}
+
+static NumericLayout? ResolveChildLayoutBudget(
+    string control,
+    string block,
+    string minimumProperty,
+    string sizeProperty)
+{
+    var minimumFormula = GetOwnPropertyFormula(control, block, minimumProperty);
+    var hasNumericMinimum = TryParseNumber(minimumFormula, out var minimum);
+    var fill = ReadNumericProperty(control, block, "FillPortions");
+    if (fill > 0)
+    {
+        if (hasNumericMinimum)
+        {
+            return new(null, null, minimum, minimum);
+        }
+        if (string.IsNullOrWhiteSpace(minimumFormula))
+        {
+            // Fill children consume only their explicit minimum from the fixed budget. With
+            // no minimum, AutoLayout distributes the remaining space, so Width is irrelevant.
+            return new(null, null, 0, 0);
+        }
+        return null;
+    }
+
+    var size = ParseNumericLayout(GetOwnPropertyFormula(control, block, sizeProperty));
+    if (size is null || (!hasNumericMinimum && !string.IsNullOrWhiteSpace(minimumFormula)))
+    {
+        // LayoutMin* is a lower bound, not an upper bound. A positive minimum therefore
+        // cannot prove that an otherwise symbolic non-fill Width/Height fits.
+        return null;
+    }
+
+    var floor = hasNumericMinimum ? minimum : 0;
+    return new(
+        size.Value.Source,
+        size.Value.Threshold,
+        Math.Max(size.Value.Less, floor),
+        Math.Max(size.Value.Else, floor));
+}
+
+static double SelectCorrelatedOrMaximum(
+    NumericLayout layout,
+    NumericLayout container,
+    double containerValue)
+{
+    if (layout.Source is not null &&
+        string.Equals(layout.Source, "App.Width", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(container.Source, layout.Source, StringComparison.OrdinalIgnoreCase) &&
+        container.Threshold == layout.Threshold)
+    {
+        return containerValue == container.Less ? layout.Less : layout.Else;
+    }
+    return layout.Maximum;
+}
+
+static double ReadNumericProperty(string control, string block, string property) =>
+    TryParseNumber(GetOwnPropertyFormula(control, block, property), out var value) ? value : 0;
+
+static bool TryParseNumber(string? formula, out double value) =>
+    double.TryParse(
+        formula?.Trim().TrimStart('='),
+        System.Globalization.NumberStyles.Number,
+        System.Globalization.CultureInfo.InvariantCulture,
+        out value);
+
+static string CleanDirection(string value) =>
+    value.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) ? "Horizontal" :
+    value.Contains("Vertical", StringComparison.OrdinalIgnoreCase) ? "Vertical" : "";
+
+static bool AllowsHorizontalEscape(string control, string block)
+{
+    var wrap = GetOwnPropertyFormula(control, block, "LayoutWrap");
+    return string.Equals(NormalizeWhitespace(wrap ?? ""), "=true", StringComparison.OrdinalIgnoreCase) ||
+        HasExactScroll(control, block, "LayoutOverflowX");
+}
+
+static bool HasExactScroll(string control, string block, string property)
+{
+    var overflow = GetOwnPropertyFormula(control, block, property);
+    return Regex.IsMatch(
+        NormalizeWhitespace(overflow ?? ""),
+        @"^=(?:LayoutOverflow\.)?Scroll$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+static string? GetOwnPropertyFormula(string control, string controlBlock, string property) =>
+    IndexYamlFormulas(controlBlock.Replace("\r", "", StringComparison.Ordinal).Split('\n'))
+        .FirstOrDefault(formula =>
+            string.Equals(formula.Control, control, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(formula.Property, property, StringComparison.OrdinalIgnoreCase))
+        .Formula;
+
+static string RequiredDescendants(
+    string container,
+    Dictionary<string, YamlNode> byName,
+    HashSet<string> requiredControls)
+{
+    var found = requiredControls
+        .Where(required =>
+        {
+            var current = required;
+            while (byName.TryGetValue(current, out var node) && node.Parent is not null)
+            {
+                if (string.Equals(node.Parent, container, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+                current = node.Parent;
+            }
+            return false;
+        })
+        .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
+    return $"[{string.Join(", ", found)}]";
+}
+
+static List<YamlNode> BuildYamlNodes(string[] yamlLines)
+{
+    var screens = FindScreenDeclarations(yamlLines);
+    var declarations = new List<(int Line, string Name, int Indentation, bool IsScreen)>();
+    for (var index = 0; index < yamlLines.Length; index++)
+    {
+        if (screens.TryGetValue(index, out var screen))
+        {
+            declarations.Add((index, screen.Name, screen.Indentation, true));
+            continue;
+        }
+
+        var control = Regex.Match(
+            yamlLines[index],
+            @"^(?<indent>\s*)-\s+(?<name>[A-Za-z_][A-Za-z0-9_]*):\s*$",
+            RegexOptions.CultureInvariant);
+        if (control.Success)
+        {
+            declarations.Add((
+                index,
+                control.Groups["name"].Value,
+                control.Groups["indent"].Value.Length,
+                false));
+        }
+    }
+
+    var nodes = new List<YamlNode>();
+    var stack = new Stack<YamlNode>();
+    foreach (var declaration in declarations.OrderBy(value => value.Line))
+    {
+        while (stack.Count > 0 && declaration.Indentation <= stack.Peek().Indentation)
+        {
+            stack.Pop();
+        }
+
+        var parent = stack.Count > 0 ? stack.Peek().Name : null;
+        var node = new YamlNode(
+            declaration.Name,
+            parent,
+            declaration.Indentation,
+            declaration.IsScreen);
+        nodes.Add(node);
+        stack.Push(node);
+    }
+    return nodes;
+}
 
 void RequireFile(string path, string label)
 {
@@ -357,7 +977,10 @@ void ValidateDirectionalMutationEvidence(Dictionary<string, List<string>> eviden
             var gate = invalidGate.Value.Formula;
             if (!gate.Contains("DisplayMode.Disabled", StringComparison.OrdinalIgnoreCase) ||
                 !Regex.IsMatch(gate, @"IsBlank\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
-                !Regex.IsMatch(gate, @"(?:>\s*0|0\s*<)", RegexOptions.CultureInvariant))
+                !Regex.IsMatch(
+                    gate,
+                    @"(?:>\s*0|0\s*<|<=\s*0|<\s*1|0\s*>=|1\s*>)",
+                    RegexOptions.CultureInvariant))
             {
                 errors.Add(
                     $"Directional mutation pair '{row[0]}' invalid submission gate must disable submission for a blank operation and amount <= 0.");
@@ -723,18 +1346,7 @@ bool ResetsControlSelection(string formula, string operationSource)
         return false;
     }
 
-    var defaultFormula = GetPropertyFormula(controlBlock, "Default");
-    var allowEmptySelection = GetPropertyFormula(controlBlock, "AllowEmptySelection");
-    return defaultFormula is not null &&
-        Regex.IsMatch(
-            defaultFormula,
-            @"^=\s*Blank\s*\(\s*\)\s*$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
-        allowEmptySelection is not null &&
-        Regex.IsMatch(
-            allowEmptySelection,
-            @"^=\s*true\s*$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    return HasNullableSelectionDefaults(controlBlock);
 }
 
 void ValidateSelectedRecordState(
@@ -849,27 +1461,44 @@ static bool IsProvablyEmptyItems(string? itemsFormula)
 
 bool HasNullableResetSelection(string control, string controlBlock)
 {
-    var allowEmpty = GetPropertyFormula(controlBlock, "AllowEmptySelection");
-    var defaultValue =
-        GetPropertyFormula(controlBlock, "Default") ??
-        GetPropertyFormula(controlBlock, "DefaultSelectedItems");
-    var nullableDefault = defaultValue is not null && Regex.IsMatch(
-        defaultValue,
-        @"^=\s*(?:Blank\s*\(\s*\)|\[\s*\])\s*$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     var resetsOnEntry = yamlFormulas.Any(formula =>
         string.Equals(formula.Property, "OnVisible", StringComparison.OrdinalIgnoreCase) &&
         Regex.IsMatch(
             formula.Formula,
             $@"\bReset\s*\(\s*{Regex.Escape(control)}\s*\)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
-    return allowEmpty is not null &&
-        Regex.IsMatch(
-            allowEmpty,
-            @"^=\s*true\s*$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
-        nullableDefault &&
-        resetsOnEntry;
+    return HasNullableSelectionDefaults(controlBlock) && resetsOnEntry;
+}
+
+static bool HasNullableSelectionDefaults(string controlBlock)
+{
+    if (IsOwnControlType(controlBlock, "ComboBox"))
+    {
+        var selectedItems = GetPropertyFormula(controlBlock, "DefaultSelectedItems");
+        return selectedItems is not null &&
+            Regex.IsMatch(
+                selectedItems,
+                @"^=\s*\[\s*\]\s*$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    if (IsOwnControlType(controlBlock, "DropDown"))
+    {
+        var defaultFormula = GetPropertyFormula(controlBlock, "Default");
+        var allowEmptySelection = GetPropertyFormula(controlBlock, "AllowEmptySelection");
+        return defaultFormula is not null &&
+            Regex.IsMatch(
+                defaultFormula,
+                @"^=\s*Blank\s*\(\s*\)\s*$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+            allowEmptySelection is not null &&
+            Regex.IsMatch(
+                allowEmptySelection,
+                @"^=\s*true\s*$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    return false;
 }
 
 static bool UsesExactSelectedRecordTarget(string formula, string selectedRecordExpression)
@@ -1006,10 +1635,11 @@ void ValidateAmountState(
         return;
     }
 
+    var normalizedAmount = Regex.Escape(NormalizeWhitespace(amountSource));
     var gateRequiresPositive = invalidGate is not null &&
         Regex.IsMatch(
             NormalizeWhitespace(invalidGate.Value.Formula),
-            $@"(?:{Regex.Escape(NormalizeWhitespace(amountSource))}\s*>\s*0|0\s*<\s*{Regex.Escape(NormalizeWhitespace(amountSource))})",
+            $@"(?:{normalizedAmount}\s*>\s*0|0\s*<\s*{normalizedAmount}|{normalizedAmount}\s*<=\s*0|{normalizedAmount}\s*<\s*1|0\s*>=\s*{normalizedAmount}|1\s*>\s*{normalizedAmount})",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     if (!gateRequiresPositive)
     {
@@ -2880,6 +3510,32 @@ static int Fail(IEnumerable<string> failures)
 readonly record struct YamlBinding(string Control, string Property, string Formula);
 readonly record struct YamlFormula(string Control, string Property, string Formula);
 readonly record struct YamlDeclaration(string Name, int Indentation);
+readonly record struct YamlNode(
+    string Name,
+    string? Parent,
+    int Indentation,
+    bool IsScreen);
+readonly record struct ParsedConditional(
+    string Source,
+    double Threshold,
+    string LessValue,
+    string ElseValue);
+readonly record struct ConditionalBranch(
+    string Value,
+    string? Source,
+    double? Threshold,
+    bool? IsLess);
+readonly record struct NumericLayout(
+    string? Source,
+    double? Threshold,
+    double Less,
+    double Else)
+{
+    public IEnumerable<double> Values =>
+        Source is null || Less == Else ? [Less] : [Less, Else];
+    public double Minimum => Math.Min(Less, Else);
+    public double Maximum => Math.Max(Less, Else);
+}
 readonly record struct SetAssignment(string Variable, string Expression);
 readonly record struct OperationSelection(
     YamlBinding Binding,

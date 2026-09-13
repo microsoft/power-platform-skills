@@ -1,7 +1,7 @@
 Runtime evaluation: NOT RUN
 
 Plugin root: {{PLUGIN_ROOT}}
-Skill contract version: 3.0.11
+Skill contract version: 3.0.12
 Source revision: test-fixture
 
 ## Action Contract Acceptance

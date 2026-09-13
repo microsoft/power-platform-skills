@@ -108,17 +108,20 @@ every selector and consumed by that event. The operation-state reset binding mus
 that state's `Blank()` assignment on screen entry and/or after successful Apply; never put
 an amount input's `Default` in that column. Use one nullable selected-ID expression
 initialized or reset to `Blank()`, assigned by row selection, and consumed by display,
-gate, mutation, receipt, and compound evidence. `Gallery.Selected` is not an explicit
-no-selection contract for a nonempty gallery. Cross-check final YAML for compatible
+gate, mutation, receipt, and compound evidence. `Control.Selected` / `.Selected.*` is not
+an explicit no-selection contract for a nonempty Gallery, Dropdown, List box, or Combo box
+unless its empty-selection semantics are configured and evidenced. Cross-check final YAML for compatible
 NumberInput `Default`, `Min`, current `Value` gate, visible validation, and reset behavior;
 blank and non-positive values must be representable. `Default: =0` is valid with
 `Min <= 0`, a rejecting gate, and Reset that restores zero. An `OnChange`-staged amount is
-subject to the same input validity checks. For classic operation Dropdown/Combo box
-controls with nonempty `Items`, require `AllowEmptySelection: =true` before a blank
-default/reset counts; prefer explicit operation state if control semantics are uncertain.
+subject to the same input validity checks. Accept either `value <= 0` or
+`Not(value > 0)` for the non-positive gate. For a classic operation Dropdown with
+nonempty `Items`, require `AllowEmptySelection: =true`; for a Combo box require
+`DefaultSelectedItems: =[]`. Do not prescribe an unsupported empty-selection property for
+a List box, and prefer explicit operation state when control semantics are uncertain.
 Every direction must have its own literal guard; default/else arms do not prove a
-direction. If success resets current operation
-state, the receipt operation binding must use a captured completed-operation value.
+direction. If success resets current operation state, the receipt operation binding must
+use a captured completed-operation value.
 Preserve quoted or block-scalar formulas and
 normalize embedded newlines to `<br>` in the table. A receipt may render readable label
 text, but static evidence must expose one unambiguous underlying value expression for each
@@ -148,6 +151,17 @@ not machine-check this table; it is a required reviewer/authoring proof.]
 | Pair | Same-record ID expression | Sequence (start -> op1 amount -> mid -> op2 amount -> end) | Second-op old-value binding (reads mutated canonical source) | Result |
 | ---- | ------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------ |
 | [Receive/Issue] | [e.g. `varSelectedInventoryId`] | [e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`] | [exact `Control.Property: =formula` reading canonical source, e.g. `btnIssue.OnSelect: =Set(varOldQuantity, LookUp(colInventory, ID = varSelectedInventoryId).Quantity); ...`] | PASS |
+
+## Layout Budget Contracts
+
+| Screen / container | Branch / screen-width source | Horizontal content-width arithmetic | Vertical height arithmetic | Protected controls |
+| ------------------ | ---------------------------- | ----------------------------------- | -------------------------- | ------------------ |
+| [screen / container] | [e.g. `App.Width < 640`; list every reachable cross-branch pair if sources differ] | [container width - padding versus child fixed/min widths + gaps, or N/A] | [Height versus child fixed/min heights + gaps + padding, or N/A] | [amount, Save/Apply, receipt operation/old/amount/expected/actual] |
+
+[Include every nested AutoLayout container participating in a coordinated breakpoint,
+every horizontal AutoLayout branch, and every fixed-height vertical AutoLayout branch.
+Over-budget rows must wrap, scroll with a visible affordance, stack, or switch at a higher
+threshold.]
 
 ## Working Directory
 
@@ -224,6 +238,12 @@ Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable/Disable into one c
 controls, or observer are touched by this edit. This is the regression contract. When an
 opposing pair is affected, include one concrete scenario per direction and verify explicit
 before/amount/after semantics.]
+
+## Layout Budget Contracts
+
+| Screen / container | Branch / screen-width source | Horizontal content-width arithmetic | Vertical height arithmetic | Protected controls |
+| ------------------ | ---------------------------- | ----------------------------------- | -------------------------- | ------------------ |
+| [changed container] | [one screen-level source or all cross-branch pairs] | [available content width versus children + gaps, or N/A] | [available Height versus children + gaps + padding, or N/A] | [amount, Save/Apply, complete receipt, or N/A] |
 
 ## Working Directory
 
@@ -339,6 +359,13 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
   Avatar initials do not satisfy identity. When review requires both Approve and
   Reject/Decline, keep both decisions on the same eligible row or same immediately reachable
   detail; do not drop one to fit the layout.]
+- Breakpoint source: [one screen-level width expression used by coordinated parent Height,
+  nested child LayoutDirection, and related formulas; if sources differ, enumerate every
+  reachable cross-branch combination]
+- Numeric layout budgets: [for each horizontal branch: content width after padding versus
+  child fixed/`LayoutMinWidth` sum plus gaps; for each fixed-height vertical branch:
+  child fixed/minimum heights plus gaps and padding versus Height. Include amount inputs,
+  Save/primary actions, and the complete labeled receipt.]
 - Text fit: [single-line or wrapping behavior and longest-value width/height budget for
   each text-bearing control]
 - Visual hierarchy: [title, section, body, caption, primary action, and focal content
@@ -445,6 +472,11 @@ then fails to compile.]
 ## Layout and Visual Impact
 
 - Responsive bounds: [desktop, tablet, and phone width/height budgets for changed regions]
+- Breakpoint source: [one screen-level width expression for coordinated nested branches,
+  or every reachable cross-branch combination]
+- Numeric layout budgets: [horizontal content width versus children + gaps; vertical
+  Height versus children + gaps + padding; include amount, Save/primary action, and all
+  receipt fields]
 - Text fit: [longest-value budget for changed text-bearing controls]
 - Visual contract: [shared type, spacing, surface, and action roles that changed controls
   must preserve]

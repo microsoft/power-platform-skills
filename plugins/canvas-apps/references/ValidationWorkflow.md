@@ -251,6 +251,12 @@ Source revision: [git revision, package version, or "unavailable"]
 | Screen   | Coverage      | Repairs                        | N/A                    |
 | -------- | ------------- | ------------------------------ | ---------------------- |
 | [screen] | 1-44 COMPLETE | [defined QACHK identifier followed by FIXED(n), or none] | [QACHK names, or none] |
+
+## Layout Budget Evidence
+
+| Screen / container | QACHK | Branch / width source | Available size | Required-size arithmetic | Protected controls | Result |
+| ------------------ | ------ | --------------------- | -------------- | ------------------------ | ------------------ | ------ |
+| [screen / control] | [QACHK-NO-HEIGHT-TRAP / QACHK-GALLERY-ROW-FITS-CONTENT / QACHK-HORIZONTAL-BUDGET / QACHK-PRIMARY-ACTION-REACHABILITY] | [screen-level expression and branch] | [numeric content width or height] | [numeric child widths/heights + gaps + padding] | [amount, Save/Apply, receipt fields, etc.] | PASS |
 ```
 
 
@@ -283,8 +289,23 @@ can differ from the outer parent used by the Gallery. Require the same deliberat
 breakpoint source or evaluate every reachable cross-branch pair. Preserve a numeric height
 budget for every case covering padding, gaps, every child, required quantity/status
 fields, badges, actions, and wrapping. A required field that can clip fails even when its
-control and formula exist. In
-tables, preserve quoted and block-scalar formula content, normalize formula newlines to
+control and formula exist. For horizontal budgets, a `FillPortions > 0` child contributes
+its explicit numeric `LayoutMinWidth`; absent or zero contributes zero without requiring
+`Width`. Non-fill children need numeric `Width`; use the greater of it and numeric
+`LayoutMinWidth`, because a positive minimum cannot upper-bound a symbolic width. For
+fixed-height, non-scrolling vertical budgets, unresolved container or child heights fail
+until numeric container/child `Height` evidence is present, with numeric
+`LayoutMinHeight` as a floor. Exempt the canonical `Height: =Parent.Height` screen root
+and deliberate vertical-scroll containers only when no direct child has
+`FillPortions > 0`; a direct fill child is the documented scroll trap. `AutoHeight` text
+inside a fixed-height panel still needs numeric `Height`/`LayoutMinHeight` evidence or
+relocation into an intentionally scrolling/viewport-root layout. Accept horizontal scroll
+escape only for exact `Scroll`/`LayoutOverflow.Scroll`, never a conditional formula that
+contains a scroll branch. Never correlate `Parent.Width` conditions across nesting
+scopes; evaluate their cross-branch maximums, while matching `App.Width` conditions may
+correlate.
+In tables, preserve quoted and block-scalar formula content,
+normalize formula newlines to
 `<br>`, and escape `|` as `\|`; do not assume a one-line plain scalar or paraphrase an
 exact formula into an action summary. A phrase such as “Action uses Patch” is not an event
 formula. Record the exact final-YAML event binding for every event-bearing control involved
@@ -301,15 +322,28 @@ direct-mutation buttons fails. When direct actions own their mutations instead,
 independently gated handlers remain valid and each row records its own exact event binding.
 Those independent action controls commit direction by identity and require no shared
 operation variable/reset, but each still needs selected-ID and amount gates.
-When a classic Dropdown or Combo box with nonempty `Items` supplies operation state,
+When a classic Dropdown with nonempty `Items` supplies operation state,
 `AllowEmptySelection: =true` is required before its blank default/reset proves no
-operation; otherwise use explicit operation state. For record selection, one nullable
+operation. For a Combo box use `DefaultSelectedItems: =[]`; do not assign
+`AllowEmptySelection`, and do not prescribe unsupported empty-selection properties for a
+List box. Otherwise use explicit operation state. For record selection, one nullable
 selected ID is the default incomplete-state proof. `Control.Selected` / `.Selected.*` on a
 Gallery, Dropdown, List box, or Combo box with nonempty `Items` does not prove no selection
 unless empty-selection semantics are explicitly configured and evidenced.
 Omit
 `## Required Record Field Evidence` only when the plan omits
 `## Required Record Fields`.
+
+Require `## Layout Budget Evidence` with numeric rows for every applicable
+`QACHK-NO-HEIGHT-TRAP`, `QACHK-GALLERY-ROW-FITS-CONTENT`,
+`QACHK-HORIZONTAL-BUDGET`, and `QACHK-PRIMARY-ACTION-REACHABILITY` PASS. For horizontal
+branches, record container content width after padding and child fixed/minimum widths plus
+gaps. For fixed-height vertical branches, record child fixed/minimum heights, wrapped text,
+gaps, and padding against `Height`. Use one screen-level width source for coordinated
+nested parent/child branches, or enumerate every reachable cross-branch combination.
+Evidence must show amount controls and Save/primary mutation actions remain reachable and
+all five labeled receipt fields fit together. These calculations are static evidence only;
+a browser evaluation remains necessary to prove rendered reachability.
 
 When the plan contains an opposing directional pair, include `## Directional Mutation
 Evidence` with exactly one row per pair. This is an executable gate, not a self-reported
@@ -319,6 +353,9 @@ an actual operation-state reset event, representable blank/non-positive amount s
 gate that rejects them, plus/minus arithmetic, one canonical source
 read by the observer, and five receipt bindings including an actual persisted `Patch`
 result.
+For the amount rejection, accept either supported equivalent spelling in final YAML:
+`value <= 0` or `Not(value > 0)`; do not prescribe a third form unsupported by the
+validator.
 
 Receipt controls may include visible label text. Static evidence still has to expose one
 unambiguous underlying value expression for each required receipt field. A direct value

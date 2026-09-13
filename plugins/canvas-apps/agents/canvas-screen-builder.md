@@ -173,10 +173,12 @@ Do not fix unrelated pre-existing issues.
   an autocomplete/searching combobox whose selection state depends on typed filtering or
   keyboard-only commitment, because its selection may not visibly latch and the mutation
   then branches on a blank or stale value.
-- If a classic Dropdown or Combo box with nonempty `Items` is used as operation state,
-  set `AllowEmptySelection: =true` before relying on `Default: =Blank()` or Reset to
-  represent no operation. If the discovered control does not expose reliable
-  empty-selection semantics, use the explicit operation variable from the brief instead.
+- If a classic Dropdown with nonempty `Items` is used as operation state, set
+  `AllowEmptySelection: =true` before relying on `Default: =Blank()` or Reset to represent
+  no operation. For a Combo box use `DefaultSelectedItems: =[]`; do not assign
+  `AllowEmptySelection`. Do not invent an empty-selection property for a List box. If the
+  discovered control does not expose reliable semantics, use the explicit operation
+  variable from the brief instead.
 - For independent direct actions, do not invent shared operation state: each control's
   identity commits its direction. Keep a selected-ID gate and amount gate on each action.
 - Disabling submission on invalid input is only half the gate. Also confirm the submit
@@ -191,6 +193,7 @@ Do not fix unrelated pre-existing issues.
   value blank. `Default: =0` is valid when `Min <= 0`, zero is rejected, and Reset is
   intended to restore zero. If `OnChange` stages the amount, validate the input's current
   value and compatible `Default`/`Min` before accepting or consuming the staged value.
+  Use either supported non-positive spelling: `value <= 0` or `Not(value > 0)`.
 - For arithmetic pairs, capture the old value before mutation and implement the exact
   direction: increase uses `oldValue + amount`; decrease uses `oldValue - amount`. The
   receipt renders operation, old value, amount, expected new value, and actual persisted
@@ -221,6 +224,35 @@ Do not fix unrelated pre-existing issues.
   minimum/fixed height; for each horizontal case, add padding to the tallest child and any
   wrapped line. Include required quantity/status text, badges, and actions. Raise
   `TemplateSize` or simplify the row until every required field fits.
+- Across nested AutoLayout containers, use the screen brief's single screen-level width
+  source for every coordinated parent `Height`, child `LayoutDirection`, and related
+  breakpoint formula. Do not independently branch each level on `Parent.Width`; padding
+  changes that value by nesting level. If the brief explicitly permits different sources,
+  evaluate every reachable cross-branch combination before writing.
+- Numerically budget every horizontal AutoLayout branch: subtract left/right padding from
+  container width, then compare that content width with child fixed widths or
+  `LayoutMinWidth` values plus all gaps. For a child with `FillPortions > 0`, count its
+  explicit numeric `LayoutMinWidth`; absent or zero means zero and does not require a
+  `Width`. Every non-fill child needs a numeric `Width`; use the greater of that size and
+  its numeric `LayoutMinWidth`. A positive minimum cannot safely bound a symbolic width.
+  If content does not fit, wrap, add deliberate horizontal scrolling with a visible
+  affordance, stack vertically, or raise the breakpoint. The amount input and primary
+  mutation action must remain visible and reachable. Only exact `Scroll` or
+  `LayoutOverflow.Scroll` is an overflow escape; a conditional expression containing
+  `Scroll` does not exempt its non-scroll branches.
+- Numerically budget every fixed-height vertical AutoLayout branch: sum top/bottom
+  padding, child fixed/minimum heights, wrapped-text height, and gaps, and keep the total
+  within `Height`. In fixed-height non-scrolling sections, unresolved container or child
+  heights fail; add numeric child `Height` evidence and treat numeric `LayoutMinHeight` as
+  a floor. Do not apply this fixed budget to the canonical `Height: =Parent.Height` screen
+  root or deliberate `LayoutOverflowY: =LayoutOverflow.Scroll` containers unless a direct
+  child has `FillPortions > 0`, which is a scroll trap and still fails. `AutoHeight` does
+  not make a fixed parent measurable: give such text a numeric
+  `Height`/`LayoutMinHeight` budget or move it into an intentionally
+  scrolling/viewport-root layout. Protect Save and every required action. Keep all five
+  directional receipt fields—operation, old, amount, expected, and actual—together,
+  visibly labeled, and budgeted; an undersized region showing only the receipt heading
+  fails.
 - Implement every row in `Functional Test Scenarios`. Use its Given state to verify
   visibility and enablement, mentally execute the exact When interaction, then trace the
   resulting source values through the named observer and evidence. Implement boundary and
@@ -293,6 +325,8 @@ Do not fix unrelated pre-existing issues.
     - A Gallery height formula uses `Self.TemplateHeight`, not `Self.TemplateSize`.
     - Gallery row `LayoutDirection` and `TemplateSize` share a breakpoint source, or every
       reachable cross-branch pair has a numeric height budget that fits all required fields.
+    - Nested coordinated breakpoints use one screen-level width source, or every reachable
+      parent/child branch combination has explicit numeric width and height evidence.
     - A chart `ItemColorSet` uses a color-table literal such as `[RGBA(...), RGBA(...)]`,
       not `Table(Color, ...)`.
       These are pre-save checks, not only self-QA checks: invalid whole-screen YAML may make
@@ -343,13 +377,16 @@ File: [absolute target file]
 QA coverage: 1-44 COMPLETE
 QA repairs: [defined QACHK identifier followed by FIXED(n), for example QACHK-MISSING-FORMULA-PREFIX FIXED(7), or "none"]
 QA N/A: [QACHK identifiers, or "none"]
+QA layout evidence: [numeric `QACHK-NO-HEIGHT-TRAP`, `QACHK-GALLERY-ROW-FITS-CONTENT`,
+`QACHK-HORIZONTAL-BUDGET`, and `QACHK-PRIMARY-ACTION-REACHABILITY` calculations, or
+`N/A` only where the check is genuinely inapplicable]
 Functional:
 
 - [Action]: PASS — [precondition] -> [control.event] -> [source and stable ID operation] -> [postcondition] -> [observer and visible evidence]
   Status: Done
 ```
 
-The QA coverage, repairs, and N/A lines are required. Coverage means the persisted YAML
+The QA coverage, repairs, N/A, and layout-evidence lines are required. Coverage means the persisted YAML
 was inspected; it is not evidence that a functional transition works. Do not append the
 legacy numbered `QA:` checklist or claim complete coverage when the supplied guide does
 not define all 44 checks.

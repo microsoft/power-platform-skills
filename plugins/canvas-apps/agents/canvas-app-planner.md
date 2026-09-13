@@ -204,16 +204,18 @@ Before writing plans:
     actions; control identity commits direction, so they need no shared operation
     variable/reset. They remain valid only when each owns its mutation and complete
     selected-ID and amount eligibility gates.
-    When a classic Dropdown or Combo box with nonempty `Items` supplies operation state,
-    require `AllowEmptySelection: =true` before a blank default/reset can prove no
-    operation; prefer an explicit operation variable if discovery leaves those semantics
-    uncertain.
+    When a classic Dropdown with nonempty `Items` supplies operation state, require
+    `AllowEmptySelection: =true` before a blank default/reset can prove no operation. For
+    a Combo box require `DefaultSelectedItems: =[]`; do not assign
+    `AllowEmptySelection`. Do not invent an empty-selection property for a List box.
+    Prefer an explicit operation variable if discovery leaves semantics uncertain.
     For a required numeric amount, require blank and non-positive states to be representable,
     visibly invalid, and rejected by the gate. Specify compatible NumberInput `Default`,
     `Min`, `Value`, `ValidationState`, and reset behavior; do not use `Min: =1` when a
     scenario must enter or reset to `0`. Permit `Default: =0` when `Min <= 0`, the gate
     rejects zero, and Reset restores that intentionally invalid default. Apply the same
-    validity contract when `OnChange` stages the amount in a variable.
+    validity contract when `OnChange` stages the amount in a variable. Accept either
+    `value <= 0` or `Not(value > 0)` as the explicit non-positive gate.
 14. For every mutation, name the target source, exact data operation, refresh or collection
     update, and a mandatory in-viewport mutation receipt bound to the returned record, changed
     stable ID, or deletion snapshot. Record the mutation's **write set** and **proof set** in
@@ -312,11 +314,16 @@ observed defect in finished apps, and no compile diagnostic reports it.
 For every screen brief, state explicitly:
 
 - Which horizontal rows wrap (`LayoutWrap: =true`) and which stack below a width
-  breakpoint (`LayoutDirection: =If(Parent.Width < 640, ...)`). Use the approved app's
-  breakpoint consistently; when none is specified, use 640 for phone and 1024 for tablet.
-- That responsive layout properties derive directly from `App.Width`, `Parent.Width` or
-  `Self.Width`. Do not initialize layout variables such as `varIsMobile` or `varColumns`
-  in `OnVisible`; they can be unset in Studio and become stale after resize.
+  breakpoint. For coordinated branches across nested AutoLayout containers, use one
+  screen-level width source such as `App.Width` for the parent `Height`, child
+  `LayoutDirection`, and related sizing formulas. Do not let every nesting level branch on
+  its own `Parent.Width`: padding and sibling allocation change that scope, so parent and
+  child can take incompatible branches. If a single source cannot be used, enumerate and
+  budget every reachable parent/child branch combination. Use the approved app's
+  breakpoints consistently; when none are specified, use 640 for phone and 1024 for tablet.
+- That responsive layout properties derive from the declared screen-level width source.
+  Do not initialize layout variables such as `varIsMobile` or `varColumns` in `OnVisible`;
+  they can be unset in Studio and become stale after resize.
 - That the root container scrolls (`LayoutOverflowY: =LayoutOverflow.Scroll`).
 - That the sole responsive root uses exact `Width: =Parent.Width`,
   `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`.
@@ -346,6 +353,32 @@ For every screen brief, state explicitly:
 - For every fixed-height section and every horizontal row with four or more substantive
   children, include a per-breakpoint layout budget: child groups, minimum widths/heights,
   gaps, padding and the resulting section size. Presence of a breakpoint is not enough.
+- For **every** horizontal AutoLayout container, record numeric evidence at each branch
+  threshold: content width (container width minus left/right padding) versus the sum of
+  visible child fixed widths/`LayoutMinWidth` values plus gaps. If the sum exceeds content
+  width, require wrapping, deliberate horizontal scrolling with a visible affordance,
+  vertical layout, or a higher branch threshold. Never allow the required amount input or
+  primary mutation action to be the clipped child. A child with `FillPortions > 0`
+  contributes its explicit numeric `LayoutMinWidth`; an absent or zero minimum contributes
+  zero and does not require `Width`. Every non-fill child needs a numeric `Width`; add its
+  numeric `LayoutMinWidth` as a floor by using the greater value. A positive minimum alone
+  cannot upper-bound a symbolic width.
+  Treat horizontal overflow as an escape only when `LayoutOverflowX` is exactly `Scroll`
+  or `LayoutOverflow.Scroll`; a conditional formula containing `Scroll` still requires
+  every non-scroll branch to fit.
+- For every fixed-height vertical AutoLayout container, record numeric evidence at each
+  branch: top/bottom padding + visible child fixed/minimum heights + gaps (including
+  wrapped-text height) must be at most container `Height`. Keep Save and other required
+  actions within that budget. A mutation receipt must keep operation, old, amount,
+  expected, and actual together as visibly labeled fields; include the complete receipt,
+  not merely its heading, in the containing vertical budget. For fixed-height,
+  non-scrolling sections, do not accept unresolved container or child heights as evidence;
+  require numeric `Height` and child `Height` bounds, with numeric `LayoutMinHeight` as a
+  floor. The canonical screen root (`Height: =Parent.Height`) and containers with deliberate
+  `LayoutOverflowY: =LayoutOverflow.Scroll` are not fixed-height clipping budgets only
+  when no direct child has `FillPortions > 0`. `AutoHeight` text inside a fixed-height
+  panel still needs a numeric `Height`/`LayoutMinHeight` budget, or must move into that
+  intentionally scrolling/viewport-root layout.
 - Group each visible label with its corresponding input in one field container before
   the row stacks.
 - For galleries with record actions, define the phone row as an action-first composition:

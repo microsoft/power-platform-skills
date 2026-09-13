@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.11
+version: 3.0.12
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.11`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.12`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -223,6 +223,9 @@ After all builders finish:
     AutoLayout lacks `Width: =Parent.Width`;
     `PASS` is valid after a complete inspection finds no defect; never reject it solely
     because the screen has many controls.
+    For `QACHK-NO-HEIGHT-TRAP`, `QACHK-GALLERY-ROW-FITS-CONTENT`,
+    `QACHK-HORIZONTAL-BUDGET`, and `QACHK-PRIMARY-ACTION-REACHABILITY`, reject bare PASS
+    claims without numeric branch evidence.
     This costs one cheap turn. The defects these checks catch — clipped headings, invisible
     buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
     app ships broken while reporting clean.
@@ -261,9 +264,11 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - Verify shared operation state resets to `Blank()` on action-screen entry and/or after a
   successful Apply. `App.OnStart`-only blanking is stale-state risk, and an amount
   control's blank `Default` is not operation-reset evidence.
-- When a classic Dropdown or Combo box with nonempty `Items` supplies operation state,
-  require `AllowEmptySelection: =true` before its blank default/reset proves no operation.
-  Prefer explicit operation state when discovered control semantics are uncertain.
+- When a classic Dropdown with nonempty `Items` supplies operation state, require
+  `AllowEmptySelection: =true` before its blank default/reset proves no operation. For a
+  Combo box require `DefaultSelectedItems: =[]`; do not assign `AllowEmptySelection`, and
+  do not prescribe unsupported empty-selection properties for a List box. Prefer explicit
+  operation state when discovered control semantics are uncertain.
 - For every opposing mutation pair, verify both contracts and both concrete scenarios.
   The operation control is visible and pointer-selectable; submission is disabled while
   operation or required amount/value is hidden, clipped, blank, invalid, unset, or
@@ -283,6 +288,9 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   rejecting them. `Min: =1` cannot support a scenario that enters `0`; `Default: =0`
   is valid with `Min <= 0`, a rejecting gate, and Reset that restores zero. Apply the same
   validity checks when `OnChange` stages the amount.
+- Accept either supported non-positive gate spelling, `value <= 0` or
+  `Not(value > 0)`; do not rewrite it into a form the acceptance validator does not
+  recognize.
 - Require a separate literal guard for each directional branch. An `else` or default
   `Switch` arm does not prove a direction because blank or unexpected operation state can
   fall through to it.
@@ -308,6 +316,31 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   `Parent.Width` is gallery/template-scoped and may differ from the outer parent used by
   `TemplateSize`. Require numeric vertical budgets including padding, gaps, all children,
   required quantity/status fields, badges, and actions; clipped required fields fail.
+- For all nested AutoLayout containers, use one screen-level width source for coordinated
+  parent `Height`, child `LayoutDirection`, and related branches. Do not independently use
+  each nesting level's `Parent.Width`, because padding changes scope. Otherwise enumerate
+  and numerically budget every reachable cross-branch combination.
+- Numerically verify every horizontal branch: container content width after padding must
+  fit child fixed/`LayoutMinWidth` totals plus gaps. A `FillPortions > 0` child contributes
+  its explicit numeric `LayoutMinWidth`, with absent/zero contributing zero; do not require
+  `Width` for that child. Require every non-fill child to have numeric `Width`, and use the
+  greater of it and numeric `LayoutMinWidth`; a positive minimum does not bound a symbolic
+  width. Require wrapping, visible horizontal scrolling, vertical layout, or a higher
+  threshold when the total does not fit. Protect the amount control and primary mutation
+  action. Only exact `Scroll` or `LayoutOverflow.Scroll` escapes the horizontal budget;
+  a conditional formula containing `Scroll` does not exempt non-scroll branches.
+- Numerically verify every fixed-height vertical branch: child fixed/minimum heights,
+  wrapped text, gaps, and padding must fit `Height`. In non-scrolling fixed sections, an
+  unresolved container or child height fails until numeric container/child `Height`
+  evidence is present; apply numeric `LayoutMinHeight` as a floor. Exempt the canonical
+  `Height: =Parent.Height` screen root and deliberate vertical-scroll containers only when
+  no direct child has `FillPortions > 0`. `AutoHeight` text in a fixed-height panel still
+  needs a numeric `Height`/`LayoutMinHeight` budget or relocation into an intentionally
+  scrolling/viewport-root layout. Protect Save/actions and keep all five visibly labeled
+  receipt fields—operation, old, amount, expected, actual—together.
+- Treat every layout budget as static formula/bounds evidence, never as proof that the
+  running browser rendered, scrolled, or exposed the control. Runtime reachability still
+  requires browser evidence.
 - When Approve and Reject/Decline are paired contracts, verify every eligible pending record
   exposes both decisions on the same row or the same immediately reachable detail at phone
   width. Send the owning screen back when either decision is missing; never accept a

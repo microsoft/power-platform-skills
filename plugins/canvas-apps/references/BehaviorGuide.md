@@ -88,8 +88,9 @@ Given/When/Then scenarios.
 - Make blank and non-positive amount states representable so the invalid paths can actually
   be exercised. For `ModernNumberInput`, define compatible `Default`, `Min`, and
   `ValidationState` formulas: do not set `Min: =1` when acceptance must enter or reset to
-  `0`. Gate on the current `Value` (`IsBlank(Control.Value) || Control.Value <= 0`), show
-  visible validation, and use `Reset(Control)` only when its `Default` restores the chosen
+  `0`. Gate on the current `Value`; both `Control.Value <= 0` and
+  `Not(Control.Value > 0)` are valid non-positive checks. Show visible validation, and use
+  `Reset(Control)` only when its `Default` restores the chosen
   invalid state. `Default: =Blank()` and `Default: =0` are both valid when `Min` permits
   that value and the gate rejects it.
 - Reset shared operation state to `Blank()` on entry to the action screen and/or after a
@@ -99,11 +100,12 @@ Given/When/Then scenarios.
   reset event; an amount input's `Default: =Blank()` is not operation-state evidence. If
   Apply clears the current operation, capture it first and bind the receipt to that
   completed-operation state rather than to the newly blank current state.
-- A classic Dropdown or Combo box with nonempty `Items` needs
-  `AllowEmptySelection: =true` when its blank default/reset is used to prove that no
-  operation is selected. Without that property, the control can select an item
-  automatically. Prefer an explicit operation variable when the discovered control's
-  empty-selection semantics are absent or uncertain.
+- A classic Dropdown with nonempty `Items` needs `AllowEmptySelection: =true` when its
+  blank default/reset is used to prove that no operation is selected. For a Combo box,
+  use `DefaultSelectedItems: =[]` and verify its empty selection; do not assign
+  `AllowEmptySelection` to it. Do not prescribe unsupported empty-selection properties for
+  a List box. Prefer an explicit operation variable whenever control semantics are absent
+  or uncertain.
 - Independent direct actions need no shared operation variable or reset: the identity of
   each action control commits its direction. Each handler still needs its own selected-ID
   and valid-amount gates and its own complete mutation/receipt path.
@@ -127,6 +129,10 @@ Given/When/Then scenarios.
 - In the mutation handler or form success event, capture the returned record, stable ID, or a deletion snapshot before resetting inputs or navigating. Bind the result surface to that captured state.
 - Define a **write set** for each mutation: every field and status value the handler creates or changes. Define a **proof set** in the Action Contract: the identity plus the write-set values that must be visible after success. For create and edit, the proof set must include every user-entered or user-selected field written by the handler; do not reduce it to fields already convenient to display in a list. For approve, reject, or another transition, include the identity and resulting status. For delete, include the removed identity and action from the captured snapshot.
 - Render every proof-set field as labeled, readable content bound to the captured state. A field is not proven by the input before submission, by an agent's remembered value, by hidden state, or by an unlabeled/truncated list cell.
+- Keep a directional receipt's operation, old value, amount, expected value, and actual
+  value together in one sufficiently sized visible region. Budget the container's height
+  from all five labeled rows, gaps, and padding; a visible heading above clipped receipt
+  fields is not evidence.
 - Keep the result visible until the user dismisses it or begins another mutation. A transient `Notify()` may supplement this surface but cannot replace it.
 - Also refresh or update the shared source so lists, filters, metrics, and later screens reflect the mutation. The receipt proves the immediate outcome; it does not replace source-of-truth consistency.
 - Treat write-set/proof-set parity as a generation invariant. If the handler writes a user-supplied field that the receipt does not render, the mutation is incomplete even when persistence and navigation work.

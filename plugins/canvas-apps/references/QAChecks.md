@@ -33,6 +33,7 @@ are not part of the identifier.
 - Check 9 — `QACHK-SCROLL-TRAP` — `FillPortions: =1` inside a scroll container
 - Check 10 — `QACHK-WRAP-MISSING` — single-line label without `Wrap: =false`
 - Check 11 — `QACHK-NO-HEIGHT-TRAP` — `FillPortions: =0` without an explicit `Height`
+  or fixed-height vertical content exceeds its numeric height budget
 - Check 12 — `QACHK-TEXT-PADDING` — `ModernText` / `Label` padding defaults to 5
 - Check 13 — `QACHK-FILLPORTIONS-HEIGHT-CONFLICT` — `FillPortions` and `Height` both set
 - Check 14 — `QACHK-FILLPORTIONS-WIDTH-CONFLICT` — `FillPortions` and `Width` both set
@@ -129,6 +130,8 @@ Report `Status: Provenance Blocked` instead of fabricating outcomes for missing 
   by Check 35.
 - `QACHK-HORIZONTAL-BUDGET` is `N/A` when the changed scope has no horizontal AutoLayout
   container.
+- `QACHK-NO-HEIGHT-TRAP` requires numeric vertical-budget evidence for every fixed-height
+  vertical AutoLayout container; the presence of `Height` alone is not a PASS.
 - `QACHK-MANUAL-BOUNDS` is `N/A` when the changed scope has no ManualLayout container.
 - `QACHK-TEXT-CONTENT-FIT` is `N/A` only when the changed scope has no visible text.
 - `QACHK-VISUAL-CONTRACT` applies to every created screen and every visually changed
@@ -146,6 +149,11 @@ Report `Status: Provenance Blocked` instead of fabricating outcomes for missing 
 
 `PASS` is valid when every applicable control was inspected and no defect was found.
 Never infer that a check was skipped solely from the number of controls on the screen.
+For `QACHK-NO-HEIGHT-TRAP`, `QACHK-GALLERY-ROW-FITS-CONTENT`,
+`QACHK-HORIZONTAL-BUDGET`, and `QACHK-PRIMARY-ACTION-REACHABILITY`, PASS also requires the
+numeric branch calculations in `QA layout evidence`; unsupported PASS text fails review.
+These calculations are static evidence. Browser execution remains necessary to prove the
+rendered controls are visible, scrollable, and pointer-reachable.
 
 ---
 
@@ -503,7 +511,7 @@ comment text. These should keep the default wrapping behavior.
 
 ---
 
-## Check 11 — `QACHK-NO-HEIGHT-TRAP` (`FillPortions: =0` without explicit `Height`)
+## Check 11 — `QACHK-NO-HEIGHT-TRAP` (missing `Height` or vertical budget overflow)
 
 **Problem:** When an AutoLayout child has `FillPortions: =0` (or `FillPortions`
 is absent, which defaults to 0) and no explicit `Height`, Power Apps defaults
@@ -550,7 +558,10 @@ After confirming a fixed size exists, verify that it fits. For every fixed-heigh
 vertical section, evaluate each responsive branch and sum direct child heights, nested
 minimum content heights, gaps and padding. Include wrapped or `AutoHeight` text at its
 expected narrow-width line count. Flag any branch where the section height is smaller
-than that budget. Do not mark this check `PASS` merely because `Height` is present.
+than that budget. Protect Save and every required action from falling below the available
+height. For a directional mutation receipt, include the labeled operation, old, amount,
+expected, and actual fields together in the sum; a container that fits only a receipt
+heading fails. Do not mark this check `PASS` merely because `Height` is present.
 
 Avoid parent-height formulas that depend on descendant control `.Height` values when
 those descendants also size from their parent. Use collection counts and literal content
@@ -966,6 +977,7 @@ fields, badges, action controls, and a `ModernCard` image band. When a child has
 treat it as zero. Flag any case where the total exceeds `TemplateSize`, or where a required
 field can clip even though its control exists. For example, 24px padding + three child
 heights totaling 136px + two 8px gaps needs 176px; a 132px template fails.
+Record those numbers in QA evidence; unsupported `PASS` text is not sufficient.
 
 **Fix:** Raise the branch to fit, or reduce what the row renders at that width:
 
@@ -1367,9 +1379,11 @@ prove that the requested outcome occurred.
     after successful Apply. An `App.OnStart`-only assignment is insufficient because it
     does not reset later visits or actions. Blank-operation evidence must name the actual
     operation state and reset event; an amount control's `Default: =Blank()` does not pass.
-    When a classic Dropdown or Combo box with nonempty `Items` is the operation state,
-    confirm `AllowEmptySelection: =true`; otherwise a blank default/reset does not prove
-    no operation. Prefer explicit operation state when control semantics are uncertain.
+    When a classic Dropdown with nonempty `Items` is the operation state, confirm
+    `AllowEmptySelection: =true`; otherwise a blank default/reset does not prove no
+    operation. For a Combo box, confirm `DefaultSelectedItems: =[]`; do not require
+    `AllowEmptySelection`. Do not prescribe unsupported empty-selection properties for a
+    List box. Prefer explicit operation state when control semantics are uncertain.
     Independent direct actions do not require shared operation state/reset because each
     control identifies its direction, but each action still requires selected-ID and
     amount gates.
@@ -1389,6 +1403,9 @@ prove that the requested outcome occurred.
     invalid state. Both blank and `Value <= 0` must disable submission and produce visible
     validation. When `OnChange` stages the amount, apply these same checks to the source
     input and confirm the gate rejects its current/staged invalid value.
+    Accept either explicit non-positive form supported by the acceptance contract:
+    `value <= 0` or `Not(value > 0)`. Do not require a syntactic spelling the validator
+    rejects.
 12. Trace the current selected operation into the mutation formula. Reject a hard-coded
     default direction, a stale variable from an earlier interaction, or a toggle that
     infers the requested direction from prior state.
@@ -1503,20 +1520,33 @@ off-canvas.
 **Detect:** For every horizontal AutoLayout container at each desktop, tablet, and phone
 branch:
 
-1. Add the minimum or fixed widths of all visible children.
-2. Add `LayoutGap` for every gap and left/right padding.
-3. Compare the total with the parent width available in that branch.
+0. For nested coordinated branches, confirm the parent `Height`, child
+   `LayoutDirection`, and related formulas use one screen-level source such as `App.Width`.
+   If each level uses its own `Parent.Width`, padding can select incompatible branches;
+   enumerate every reachable cross-branch combination instead of assuming they agree.
+1. Calculate content width as container width minus left/right padding.
+2. Add the minimum or fixed widths of all visible children plus `LayoutGap` for every gap.
+3. Compare the child total with content width at each exact branch threshold and record
+   the numbers in QA evidence.
 4. If flexible children use `FillPortions`, confirm their `LayoutMinWidth` values still
-   fit before remaining width is distributed.
+   fit before remaining width is distributed. A `FillPortions > 0` child contributes its
+   explicit numeric `LayoutMinWidth`; an absent or zero minimum contributes zero, and
+   `Width` is not required. Every non-fill child needs numeric `Width`; use the greater of
+   that value and numeric `LayoutMinWidth`. A positive minimum alone does not safely bound
+   a symbolic width.
 5. If the total does not fit, require a wrap or vertical-stack branch and repeat the
    calculation for each resulting row.
 6. For a record row, confirm its phone branch keeps identity, status, and required
    lifecycle actions visible or uses an immediately visible overflow/detail entry.
 
-**Fix:** Stack or wrap the row, reduce justified minimum widths, group related fields, or
-move secondary actions to another reachable region. Keep required lifecycle actions in the
-visible phone composition. Do not shrink interactive controls below 44px or hide required
-actions.
+An overflow escape must be exactly `Scroll` or `LayoutOverflow.Scroll`. A conditional
+formula that merely contains `Scroll` does not prove its other branches are reachable.
+
+**Fix:** Stack or wrap the row, reduce justified minimum widths, group related fields, add
+a deliberate horizontal scroll region with a visible affordance, or move to a higher
+breakpoint/vertical layout. Keep the primary mutation action, amount control, and required
+lifecycle actions in the visible composition. Do not shrink interactive controls below
+44px or hide required actions.
 
 **Exception:** A deliberately horizontally scrolling region with an obvious visible
 scroll affordance and a brief that explicitly requires it.
@@ -1665,6 +1695,9 @@ Confirm its ancestor chain is visible, its enabled precondition is satisfiable, 
 is at least 44px by 44px, and its bounds do not intersect another visible control at
 desktop, tablet, or phone widths. An action below the initial viewport needs an obvious
 working scroll or menu affordance that passes the same checks.
+For an action inside AutoLayout, include the ancestor horizontal and vertical arithmetic
+that places it inside bounds; "visible in YAML" or an unsupported `PASS` is insufficient.
+Explicitly verify Save, the amount input, and the primary mutation action.
 
 **Fix:** Move the action into the initial task path, repair the containing layout, enlarge
 its target, or expose it through an immediately visible menu.

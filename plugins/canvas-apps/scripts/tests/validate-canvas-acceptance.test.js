@@ -153,13 +153,14 @@ function materialize(
         operationPostSuccessReset = false,
         compoundSelectionMismatch = false,
         omitOperationAllowEmpty = false,
-        omitSelectionAllowEmpty = false,
+        omitSelectionDefault = false,
         listBoxSelection = false,
         directWithoutOperationState = false,
         customRecordKey = false,
         transformedCustomRecordKey = false,
         wrappedGalleryItems = false,
         twoSpaceScreenIndent = false,
+        amountInvalidPolarity = false,
         sourceDir = fixtureDir,
     } = {}) {
     const workspace = path.join(workRoot, caseName);
@@ -179,6 +180,12 @@ function materialize(
 
     plan = plan.split('{{WORKSPACE}}').join(workspace);
     acceptance = acceptance.split('{{PLUGIN_ROOT}}').join(pluginRoot);
+    screenYaml = replaceFirstRequired(
+        screenYaml,
+        '                    AllowEmptySelection: =true\n' +
+        '                    DefaultSelectedItems: =[]',
+        '                    DefaultSelectedItems: =[]',
+        'docs-compliant ComboBox empty-selection properties');
 
     if (reverseIssue) {
         // Reverse the sign in BOTH the YAML (so the binding still matches the app exactly
@@ -989,12 +996,12 @@ function materialize(
             'operation AllowEmptySelection');
     }
 
-    if (omitSelectionAllowEmpty) {
-        const first = screenYaml.indexOf('                    AllowEmptySelection: =true\n');
-        assert.notStrictEqual(first, -1, 'missing selection AllowEmptySelection');
-        screenYaml =
-            screenYaml.slice(0, first) +
-            screenYaml.slice(first + '                    AllowEmptySelection: =true\n'.length);
+    if (omitSelectionDefault) {
+        screenYaml = replaceOnceRequired(
+            screenYaml,
+            '                    DefaultSelectedItems: =[]\n',
+            '',
+            'selection DefaultSelectedItems');
     }
 
     if (listBoxSelection) {
@@ -1051,6 +1058,19 @@ function materialize(
             'wrapped gallery Items');
     }
 
+    if (amountInvalidPolarity) {
+        screenYaml = replaceAllRequired(
+            screenYaml,
+            'Not(Value(txtAmount.Text) > 0)',
+            'Value(txtAmount.Text) <= 0',
+            'invalid amount polarity YAML');
+        acceptance = replaceAllRequired(
+            acceptance,
+            'Not(Value(txtAmount.Text) > 0)',
+            'Value(txtAmount.Text) <= 0',
+            'invalid amount polarity evidence');
+    }
+
     if (twoSpaceScreenIndent) {
         screenYaml = screenYaml
             .split('\n')
@@ -1070,6 +1090,128 @@ function materialize(
     return workspace;
 }
 
+function materializeLayout(caseName, { responsive = false } = {}) {
+    const workspace = materialize(caseName);
+    const widthSource = responsive ? 'App.Width' : 'Parent.Width';
+    const adjustEscape = responsive ? '\n                            LayoutWrap: =true' : '';
+    const yaml = `Screens:
+    Screen1:
+        Properties:
+            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)
+        Children:
+            - conAdjustPanel:
+                Control: GroupContainer
+                Variant: AutoLayout
+                Properties:
+                    Height: =${responsive ? 400 : 'If(Parent.Width<640,318,126)'}
+                    LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)
+                    LayoutGap: =12
+                    PaddingTop: =16
+                    PaddingBottom: =16
+                    PaddingLeft: =16
+                    PaddingRight: =16${adjustEscape}
+                Children:
+                    - cmbAdjustItem:
+                        Control: Classic/ComboBox
+                        Properties:
+                            DefaultSelectedItems: =[]
+                            Items: =colInventory
+                            Height: =48
+                            Width: =180
+                            LayoutMinWidth: =180
+                    - drpOperation:
+                        Control: Classic/DropDown
+                        Properties:
+                            AllowEmptySelection: =true
+                            Default: =Blank()
+                            Items: =["Receive", "Issue"]
+                            Height: =48
+                            Width: =140
+                            LayoutMinWidth: =140
+                    - txtAmount:
+                        Control: Classic/TextInput
+                        Properties:
+                            Format: =TextFormat.Number
+                            Height: =86
+                            Width: =180
+                            LayoutMinWidth: =180
+                    - btnReceive:
+                        Control: Classic/Button
+                        Properties:
+                            DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                            OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount}))
+                            Height: =48
+                            Width: =140
+                            LayoutMinWidth: =140
+                    - btnIssue:
+                        Control: Classic/Button
+                        Properties:
+                            DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                            OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount}))
+                            Height: =48
+                            Width: =140
+                            LayoutMinWidth: =140
+            - conManageFormPanel:
+                Control: GroupContainer
+                Variant: AutoLayout
+                Properties:
+                    Height: =If(${widthSource}<768,620,250)
+                    LayoutDirection: =LayoutDirection.Vertical
+                    PaddingTop: =16
+                    PaddingBottom: =16
+                Children:
+                    - conManageFields:
+                        Control: GroupContainer
+                        Properties:
+                            Height: =If(${widthSource}<768,430,110)
+                        Children:
+                            - galInventory:
+                                Control: Gallery
+                                Properties:
+                                    Items: =colInventory
+                                    Height: =100
+                    - conManageActions:
+                        Control: GroupContainer
+                        Properties:
+                            Height: =96
+            - conAdjustHeading:
+                Control: GroupContainer
+                Variant: AutoLayout
+                Properties:
+                    Height: =${responsive ? 180 : 76}
+                    LayoutDirection: =LayoutDirection.Vertical
+                    LayoutGap: =2
+                Children:
+                    - lblReceiptOperation:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varLastOperation
+                            Height: =40
+                    - lblReceiptOld:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varOldQuantity
+                            Height: =26
+                    - lblReceiptAmount:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varAmount
+                            Height: =26
+                    - lblReceiptExpected:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varExpectedQuantity
+                            Height: =26
+                    - lblReceiptActual:
+                        Control: Classic/Label
+                        Properties:
+                            Text: =varLastMutation.Quantity
+                            Height: =28
+`;
+    fs.writeFileSync(path.join(workspace, 'Screen1.pa.yaml'), yaml);
+    return workspace;
+}
+
 function runValidator(workspace) {
     const result = spawnSync(
         'dotnet',
@@ -1082,6 +1224,11 @@ function runValidator(workspace) {
     return { code: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
+function rewriteScreen(workspace, transform) {
+    const screenPath = path.join(workspace, 'Screen1.pa.yaml');
+    fs.writeFileSync(screenPath, transform(fs.readFileSync(screenPath, 'utf8')));
+}
+
 test.after(() => fs.rmSync(workRoot, { recursive: true, force: true }));
 
 test('accepts a correctly-signed Receive/Issue workspace with a four-space screen key', () => {
@@ -1089,6 +1236,285 @@ test('accepts a correctly-signed Receive/Issue workspace with a four-space scree
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('rejects exported-shape horizontal, nested-breakpoint, and receipt layout clipping', () => {
+    const workspace = materializeLayout('receive-layout-clipped');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected required controls in clipped containers to fail');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+    assert.match(stderr, /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+    assert.match(stderr, /vertical container 'conAdjustHeading' requires 154px.*Height branch is 76px/);
+});
+
+test('does not classify a screen as its first versioned Gallery child', () => {
+    const workspace = materializeLayout('receive-layout-screen-gallery-first');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '        Children:\n',
+        '        Children:\n' +
+        '            - galUnrelated:\n' +
+        '                Control: Gallery@2.15.0\n' +
+        '                Properties:\n' +
+        '                    Items: =[]\n'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected clipped containers to remain in scope');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+    assert.match(stderr, /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+    assert.match(stderr, /vertical container 'conAdjustHeading' requires 154px.*Height branch is 76px/);
+});
+
+test('retains explicit non-fill sizes when LayoutMinWidth and LayoutMinHeight are zero', () => {
+    const workspace = materializeLayout('receive-layout-zero-minimums');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace(
+            /^(\s*)LayoutMinWidth: =(\d+)$/gm,
+            '$1LayoutMinWidth: =0')
+        .replace(
+            /^(\s*)Height: =(.+)$/gm,
+            '$1Height: =$2\n$1LayoutMinHeight: =0'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected explicit non-fill sizes to retain their budget');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+    assert.match(stderr, /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+});
+
+test('accepts wrapped horizontal content and App.Width-correlated sufficient vertical budgets', () => {
+    const workspace = materializeLayout('receive-layout-responsive', { responsive: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected responsive layout to pass but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts bounded non-fill sizes with zero layout minimums', () => {
+    const workspace = materializeLayout('receive-layout-bounded-non-fill', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900')
+        .replace(
+            /^(\s*)LayoutMinWidth: =(\d+)$/gm,
+            '$1LayoutMinWidth: =0')
+        .replace(
+            /^(\s*)Height: =(.+)$/gm,
+            '$1Height: =$2\n$1LayoutMinHeight: =0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected bounded non-fill layout to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a numeric horizontal budget without LayoutWrap', () => {
+    const workspace = materializeLayout('receive-layout-arithmetic', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected bounded horizontal arithmetic to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts FillPortions children without Width or LayoutMinWidth', () => {
+    const workspace = materializeLayout('receive-layout-fill-portions', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(/^(\s*)Width: =\d+\n/gm, '')
+        .replaceAll(/LayoutMinWidth: =\d+/g, 'FillPortions: =1'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected FillPortions layout to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects each unresolved horizontal child with an actionable diagnostic', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-width');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('Width: =180', 'Width: =Parent.Width / 2')
+        .replace('LayoutMinWidth: =180', 'LayoutMinWidth: =0')
+        .replace('Width: =140', 'Width: =Parent.Width / 3'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved child width to fail');
+    assert.match(
+        stderr,
+        /horizontal container 'conAdjustPanel' child 'cmbAdjustItem'.*numeric Width.*numeric LayoutMinWidth/);
+    assert.match(
+        stderr,
+        /horizontal container 'conAdjustPanel' child 'drpOperation'.*numeric Width.*numeric LayoutMinWidth/);
+});
+
+test('rejects an unresolved vertical container Height with numeric guidance', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-container', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Height: =If(App.Width<768,620,250)',
+        'Height: =Parent.Height'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved vertical container Height to fail');
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' has an unresolved Height.*numeric Height/);
+});
+
+test('rejects each unresolved vertical child height with numeric guidance', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-child', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Height: =If(App.Width<768,430,110)',
+        'AutoHeight: =true\n' +
+        '                            Height: =Parent.Height'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved vertical child height to fail');
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' child 'conManageFields'.*numeric Height.*numeric LayoutMinHeight/);
+    assert.match(stderr, /AutoHeight text inside a fixed-height panel/);
+});
+
+test('does not correlate Parent.Width conditions across nested layout scopes', () => {
+    const workspace = materializeLayout('receive-layout-parent-width-scopes', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('If(App.Width<768,620,250)', 'If(Parent.Width<768,620,250)')
+        .replace('If(App.Width<768,430,110)', 'If(Parent.Width<768,430,110)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected independently scoped Parent.Width branches to fail');
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+});
+
+test('exempts a canonical scrolling screen root but still rejects its nested fixed panel', () => {
+    const workspace = materializeLayout('receive-layout-screen-root', { responsive: true });
+    rewriteScreen(workspace, (yaml) => {
+        const marker = '        Children:\n';
+        const markerIndex = yaml.indexOf(marker);
+        assert.notStrictEqual(markerIndex, -1, 'missing screen Children marker');
+        const prefix = yaml.slice(0, markerIndex + marker.length);
+        const children = yaml.slice(markerIndex + marker.length)
+            .split('\n')
+            .map((line) => line.length > 0 ? `        ${line}` : line)
+            .join('\n')
+            .replace(
+                'Height: =If(App.Width<768,620,250)',
+                'Height: =250')
+            .replace(
+                'Height: =If(App.Width<768,430,110)',
+                'Height: =430');
+        return prefix +
+            '            - conRoot:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Width: =Parent.Width\n' +
+            '                    Height: =Parent.Height\n' +
+            '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+            '                    LayoutOverflowY: =LayoutOverflow.Scroll\n' +
+            '                Children:\n' +
+            children;
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected nested fixed panel clipping to fail');
+    assert.doesNotMatch(stderr, /vertical container 'conRoot'/);
+    assert.match(
+        stderr,
+        /vertical container 'conManageFormPanel' requires 558px.*Height branch is 250px/);
+});
+
+test('accepts a fixed-height vertical container with deliberate scrolling overflow', () => {
+    const workspace = materializeLayout('receive-layout-scroll-overflow', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Height: =180\n                    LayoutDirection: =LayoutDirection.Vertical',
+        'Height: =76\n' +
+        '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+        '                    LayoutOverflowY: =LayoutOverflow.Scroll'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected scrolling fixed-height container to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a vertical scroll container with a direct FillPortions child', () => {
+    const workspace = materializeLayout('receive-layout-scroll-fill-trap', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Text: =varLastOperation\n                            Height: =40',
+        'Text: =varLastOperation\n' +
+        '                            Height: =40\n' +
+        '                            FillPortions: =1').replace(
+        'LayoutDirection: =LayoutDirection.Vertical\n                    LayoutGap: =2',
+        'LayoutDirection: =LayoutDirection.Vertical\n' +
+        '                    LayoutOverflowY: =LayoutOverflow.Scroll\n' +
+        '                    LayoutGap: =2'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected a direct fill child to defeat scroll escape');
+    assert.match(
+        stderr,
+        /vertical scroll container 'conAdjustHeading'.*'lblReceiptOperation'.*FillPortions > 0/);
+});
+
+test('does not treat conditional horizontal Scroll as an all-branch escape', () => {
+    const workspace = materializeLayout('receive-layout-conditional-horizontal-scroll');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'PaddingRight: =16',
+        'PaddingRight: =16\n' +
+        '                    LayoutOverflowX: =If(App.Width<640,LayoutOverflow.Scroll,LayoutOverflow.Hide)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected overflowing non-scroll branch to fail');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px/);
+});
+
+test('accepts exact horizontal Scroll as an overflow escape', () => {
+    const workspace = materializeLayout('receive-layout-horizontal-scroll', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'PaddingRight: =16',
+            'PaddingRight: =16\n' +
+            '                    LayoutOverflowX: =LayoutOverflow.Scroll'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected exact horizontal scroll escape to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('ignores AutoLayout template budgets beneath a versioned Gallery', () => {
+    const workspace = materializeLayout('receive-layout-versioned-gallery', { responsive: true });
+    rewriteScreen(workspace, (yaml) => {
+        const marker = '            - conAdjustHeading:';
+        const markerIndex = yaml.indexOf(marker);
+        assert.notStrictEqual(markerIndex, -1, 'missing receipt container');
+        const prefix = yaml.slice(0, markerIndex);
+        const receipt = yaml.slice(markerIndex)
+            .split('\n')
+            .map((line) => line.length > 0 ? `        ${line}` : line)
+            .join('\n')
+            .replace('Height: =180', 'Height: =76');
+        return prefix +
+            '            - galReceipt:\n' +
+            '                Control: Gallery@2.15.0\n' +
+            '                Properties:\n' +
+            '                    Items: =[1]\n' +
+            '                Children:\n' +
+            receipt;
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected versioned Gallery template to be scoped out.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts an equivalent amount <= 0 invalid-submit gate', () => {
+    const workspace = materialize(
+        'receive-invalid-amount-polarity',
+        { amountInvalidPolarity: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected equivalent invalid-polarity gate to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 });
 
 test('indexes a two-space exported screen key for exact OnVisible reset evidence', () => {
@@ -1114,10 +1540,46 @@ test('rejects operation-control reset without AllowEmptySelection true', () => {
         /blank-operation binding must reset actual operation source 'drpOperation\.Selected\.Value'/);
 });
 
-test('rejects selected ComboBox proof without nullable reset configuration', () => {
+test('accepts docs-compliant ComboBox DefaultSelectedItems reset without AllowEmptySelection', () => {
+    const workspace = materialize('receive-selection-empty-combobox');
+    const screen = fs.readFileSync(path.join(workspace, 'Screen1.pa.yaml'), 'utf8');
+    assert.doesNotMatch(
+        screen,
+        /Control: Classic\/ComboBox\n\s+Properties:\n\s+AllowEmptySelection/);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected docs-compliant ComboBox to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a versioned ComboBox with docs-compliant nullable reset configuration', () => {
+    const workspace = materialize('receive-selection-versioned-combobox');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Control: Classic/ComboBox',
+        'Control: Classic/ComboBox@2.4.0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected versioned ComboBox to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts docs-compliant DropDown blank default and AllowEmptySelection', () => {
+    const workspace = materialize(
+        'receive-operation-empty-dropdown',
+        { sharedApplyFlow: true, dropdownDirectShared: true });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected docs-compliant DropDown to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects selected ComboBox proof without DefaultSelectedItems empty', () => {
     const workspace = materialize(
         'receive-selection-not-empty',
-        { omitSelectionAllowEmpty: true });
+        { omitSelectionDefault: true });
     const { code, stderr } = runValidator(workspace);
     assert.notStrictEqual(code, 0, 'expected non-nullable selected control to fail');
     assert.match(stderr, /cannot use 'cmbAdjustItem\.Selected\.ID' as no-selection proof/);
@@ -1126,7 +1588,7 @@ test('rejects selected ComboBox proof without nullable reset configuration', () 
 test('rejects selected ListBox proof without nullable reset configuration', () => {
     const workspace = materialize(
         'receive-listbox-not-empty',
-        { listBoxSelection: true, omitSelectionAllowEmpty: true });
+        { listBoxSelection: true, omitSelectionDefault: true });
     const { code, stderr } = runValidator(workspace);
     assert.notStrictEqual(code, 0, 'expected non-nullable ListBox selection to fail');
     assert.match(stderr, /cannot use 'cmbAdjustItem\.Selected\.ID' as no-selection proof/);
