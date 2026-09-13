@@ -65,6 +65,10 @@ var compoundEvidence = ReadOptionalRows(
     acceptanceLines,
     "## Compound Sequence Evidence",
     errors);
+var layoutBudgetEvidence = ReadOptionalRowsAllowDuplicates(
+    acceptanceLines,
+    "## Layout Budget Evidence",
+    errors);
 var directionalPairs = FindDirectionalPairs(plannedActions);
 var sharedFlows = new List<SharedFlowResolution>();
 var directionalEvidence = directionalPairs.Count == 0
@@ -226,6 +230,7 @@ foreach (var row in acceptedScreens.Values)
 }
 
 ValidateDirectionalMutationEvidence(directionalEvidence);
+ValidateGalleryRenderingContracts();
 ValidateLayoutReachability(CollectLayoutRequiredControls(
     acceptedActions,
     acceptedRecordFields,
@@ -260,10 +265,9 @@ HashSet<string> CollectLayoutRequiredControls(
             @"`(?<control>[A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\s*:\s*(?<formula>=[^`]*)`",
             RegexOptions.CultureInvariant))
         {
-            if (ContainsMutation(binding.Groups["formula"].Value))
-            {
-                required.Add(binding.Groups["control"].Value);
-            }
+            // Navigation and selection entry points need the same clipping analysis as
+            // mutation owners; a required action is unreachable regardless of side effect.
+            required.Add(binding.Groups["control"].Value);
         }
     }
 
@@ -287,6 +291,16 @@ HashSet<string> CollectLayoutRequiredControls(
                 required.Add(input.Groups["control"].Value);
             }
         }
+    }
+
+    foreach (var navigation in yamlFormulas.Where(formula =>
+        string.Equals(formula.Property, "OnSelect", StringComparison.OrdinalIgnoreCase) &&
+        Regex.IsMatch(
+            formula.Formula,
+            @"\bNavigate\s*\(",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))
+    {
+        required.Add(navigation.Control);
     }
 
     return required;
@@ -434,43 +448,67 @@ void ValidateHorizontalBudget(
                 "LayoutMinWidth",
                 "Width"));
     }).ToList();
-    var unresolvedChildren = widths
-        .Where(width => width.Layout is null)
-        .Select(width => width.Child)
-        .ToList();
-    foreach (var child in unresolvedChildren)
-    {
-        errors.Add(
-            $"Layout reachability: horizontal container '{container.Name}' child '{child}' has an unresolved width; set numeric Width for a non-fill child or numeric LayoutMinWidth for FillPortions > 0.");
-    }
-    if (unresolvedChildren.Count > 0)
-    {
-        return;
-    }
 
     var fixedCost = padding + gap * Math.Max(0, children.Count - 1);
 
     foreach (var branch in direction.Where(branch => branch.Value == "Horizontal"))
     {
-        double? available = branch.Threshold;
-        if (available is null)
+        var branchWidths = widths.Select(width =>
+        {
+            TryGetControlBlock(yamlLines, width.Child, out var childBlock);
+            return (
+                width.Child,
+                Value: SelectBranchValue(width.Layout, branch) ??
+                    ResolveDirectChildBranchSize(
+                        width.Child,
+                        childBlock,
+                        "LayoutMinWidth",
+                        "Width",
+                        branch));
+        }).ToList();
+        var unresolvedChildren = branchWidths
+            .Where(width => width.Value is null)
+            .Select(width => width.Child)
+            .ToList();
+        foreach (var child in unresolvedChildren)
+        {
+            errors.Add(
+                $"Layout reachability: horizontal container '{container.Name}' child '{child}' has an unresolved width; set numeric Width for a non-fill child or numeric LayoutMinWidth for FillPortions > 0.");
+        }
+        if (unresolvedChildren.Count > 0)
+        {
+            continue;
+        }
+
+        double? available;
+        if (string.Equals(branch.Source, "App.Width", StringComparison.OrdinalIgnoreCase))
+        {
+            available = ReadNarrowestLocalWidth(container.Name);
+            if (available is null)
+            {
+                errors.Add(
+                    $"Layout reachability: horizontal container '{container.Name}' uses App.Width for responsive composition, but no matching Layout Budget Evidence row provides its narrowest local/root available width; App.Width can differ from the rendered viewport in embedded or letterboxed hosts.");
+                continue;
+            }
+        }
+        else
         {
             var containerWidth = ParseNumericLayout(
                 GetOwnPropertyFormula(container.Name, block, "Width"));
-            available = containerWidth?.Minimum;
+            available = branch.Threshold ?? containerWidth?.Minimum;
         }
 
         var required = fixedCost;
-        foreach (var width in widths)
+        foreach (var width in branchWidths)
         {
-            required += SelectBranchValue(width.Layout, branch)!.Value;
+            required += width.Value!.Value;
         }
 
         var relevant = RequiredDescendants(container.Name, byName, requiredControls);
         if (available is null)
         {
             errors.Add(
-                $"Layout reachability: horizontal container '{container.Name}' has an unresolved width; set a numeric Width or use an App.Width-aligned numeric breakpoint for required descendants {relevant}.");
+                $"Layout reachability: horizontal container '{container.Name}' has an unresolved width; set numeric Width, enable LayoutWrap, or use exact Scroll/LayoutOverflow.Scroll for deliberate horizontal overflow; required descendants {relevant}.");
             continue;
         }
 
@@ -686,6 +724,9 @@ static double? SelectBranchValue(NumericLayout? layout, ConditionalBranch branch
     {
         return layout.Value.Less;
     }
+    // App.Width branches are globally correlated with each other, but not with the local
+    // viewport's available pixels; callers separately require local/root width evidence.
+    // Parent.Width remains scope-relative and therefore cannot be correlated across nodes.
     if (branch.Source is not null &&
         string.Equals(layout.Value.Source, "App.Width", StringComparison.OrdinalIgnoreCase) &&
         string.Equals(layout.Value.Source, branch.Source, StringComparison.OrdinalIgnoreCase) &&
@@ -694,6 +735,73 @@ static double? SelectBranchValue(NumericLayout? layout, ConditionalBranch branch
         return branch.IsLess == true ? layout.Value.Less : layout.Value.Else;
     }
     return layout.Value.Maximum;
+}
+
+static double? ResolveDirectChildBranchSize(
+    string control,
+    string block,
+    string minimumProperty,
+    string sizeProperty,
+    ConditionalBranch branch)
+{
+    var fill = ReadNumericProperty(control, block, "FillPortions");
+    if (fill > 0)
+    {
+        return ResolveChildLayoutBudget(control, block, minimumProperty, sizeProperty)?.Minimum;
+    }
+
+    var conditional = ParseConditional(GetOwnPropertyFormula(control, block, sizeProperty) ?? "");
+    if (conditional is null ||
+        !string.Equals(conditional.Value.Source, "App.Width", StringComparison.OrdinalIgnoreCase) ||
+        !string.Equals(conditional.Value.Source, branch.Source, StringComparison.OrdinalIgnoreCase) ||
+        conditional.Value.Threshold != branch.Threshold)
+    {
+        return null;
+    }
+
+    var selected = branch.IsLess == true
+        ? conditional.Value.LessValue
+        : conditional.Value.ElseValue;
+    if (!TryParseNumber(selected, out var size))
+    {
+        return null;
+    }
+
+    var minimumFormula = GetOwnPropertyFormula(control, block, minimumProperty);
+    if (!string.IsNullOrWhiteSpace(minimumFormula) &&
+        !TryParseNumber(minimumFormula, out var minimum))
+    {
+        return null;
+    }
+    return Math.Max(size, TryParseNumber(minimumFormula, out var floor) ? floor : 0);
+}
+
+double? ReadNarrowestLocalWidth(string container)
+{
+    var rows = layoutBudgetEvidence.Where(candidate =>
+        candidate.Count > 3 &&
+        Regex.IsMatch(
+            Clean(candidate[0]),
+            $@"(?:^|/)\s*{Regex.Escape(container)}\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+        string.Equals(
+            Clean(candidate[1]),
+            "QACHK-HORIZONTAL-BUDGET",
+            StringComparison.OrdinalIgnoreCase) &&
+        Regex.IsMatch(
+            Clean(candidate[2]),
+            @"(?:\blocal\b|\broot\b|Parent\.Width|Self\.Width)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+    var widths = rows
+        .SelectMany(row => Regex.Matches(
+            Clean(row[3]),
+            @"(?<value>\d+(?:\.\d+)?)\s*px\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        .Select(match => double.Parse(
+            match.Groups["value"].Value,
+            System.Globalization.CultureInfo.InvariantCulture))
+        .ToList();
+    return widths.Count == 0 ? null : widths.Min();
 }
 
 static NumericLayout? ResolveChildLayoutBudget(
@@ -1142,6 +1250,12 @@ void ValidateDirectionalMutationEvidence(Dictionary<string, List<string>> eviden
             receiveMutation,
             issueMutation,
             compoundEvidence);
+        ValidateNegativeStateVisibility(
+            row[0],
+            selectedRecordExpression,
+            operationSource,
+            amountSource,
+            invalidGate);
 
         // The `expected=` receipt binding names the variable the receipt claims it computed
         // (e.g. `varExpectedQuantity`). We reuse it to locate the expected-value `Set(...)` so
@@ -1408,13 +1522,13 @@ void ValidateSelectedRecordState(
                     assignment.Expression,
                     @"^\s*Blank\s*\(\s*\)\s*$",
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
-        var hasReachableSelection = yamlFormulas
+        var selectionEvents = yamlFormulas
             .Where(formula =>
                 formula.Property.StartsWith("On", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(formula.Property, "OnStart", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(formula.Property, "OnVisible", StringComparison.OrdinalIgnoreCase))
-            .SelectMany(formula => ExtractEventAssignments(formula.Formula))
-            .Any(assignment =>
+            .SelectMany(formula => ExtractEventAssignments(formula.Formula)
+                .Where(assignment =>
                 string.Equals(
                     assignment.Variable,
                     selectedRecordExpression,
@@ -1422,11 +1536,17 @@ void ValidateSelectedRecordState(
                 Regex.IsMatch(
                     assignment.Expression,
                     @"(?:\bThisItem\.(?:ID|Id)\b|\.Selected\.(?:ID|Id)\b)",
-                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                .Select(assignment => (formula.Control, Assignment: assignment)))
+            .ToList();
+        var hasReachableSelection = selectionEvents.Any(selection =>
+            IsSelectionEventReachable(
+                selection.Control,
+                selection.Assignment.Expression));
         if (!hasEntryReset || !hasReachableSelection)
         {
             errors.Add(
-                $"Directional mutation pair '{pair}' explicit selected ID '{selectedRecordExpression}' must reset to Blank on screen entry and be assigned by a reachable row-selection event.");
+                $"Directional mutation pair '{pair}' explicit selected ID '{selectedRecordExpression}' must reset to Blank on screen entry and be assigned by a non-gallery event or by a row-selection event in a render-safe gallery with bounded Height, explicit positive TemplateSize, TemplatePadding, Items, and row controls.");
         }
     }
 
@@ -1444,6 +1564,246 @@ void ValidateSelectedRecordState(
         }
     }
 }
+
+    bool IsSelectionEventReachable(string control, string assignmentExpression)
+    {
+        var nodes = BuildYamlNodes(yamlLines);
+        var byName = nodes
+            .GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var current = control;
+        var insideGallery = false;
+        while (byName.TryGetValue(current, out var node))
+        {
+            if (!node.IsScreen &&
+                TryGetControlBlock(yamlLines, node.Name, out var block) &&
+                IsOwnControlType(block, "Gallery"))
+            {
+                insideGallery = true;
+                if (!IsRenderSafeGallery(node, block, nodes))
+                {
+                    return false;
+                }
+            }
+
+            if (node.Parent is null)
+            {
+                break;
+            }
+            current = node.Parent;
+        }
+        // ThisItem is meaningful only in a record scope such as a Gallery template.
+        // A non-gallery path must read an actual selector's Selected.ID instead.
+        return insideGallery ||
+            !Regex.IsMatch(
+                assignmentExpression,
+                @"\bThisItem\.(?:ID|Id)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    void ValidateGalleryRenderingContracts()
+    {
+        var nodes = BuildYamlNodes(yamlLines);
+        foreach (var gallery in nodes.Where(node => !node.IsScreen))
+        {
+            if (!TryGetControlBlock(yamlLines, gallery.Name, out var block) ||
+                !IsOwnControlType(block, "Gallery"))
+            {
+                continue;
+            }
+
+            var height = NormalizeWhitespace(
+                GetOwnPropertyFormula(gallery.Name, block, "Height") ?? "");
+            if (Regex.IsMatch(
+                height,
+                @"\bCountRows\s*\(.*\).*\bSelf\.Template(?:Height|Size|Padding)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                errors.Add(
+                    $"Gallery rendering: gallery '{gallery.Name}' uses collection-count/Self.Template self-sizing for Height, which is not a deterministic render-safe viewport contract; use a bounded numeric Height with explicit positive TemplateSize, numeric TemplatePadding, Items, and row controls.");
+            }
+        }
+    }
+
+    bool IsRenderSafeGallery(YamlNode gallery, string block, List<YamlNode> nodes)
+    {
+        var heightFormula = GetOwnPropertyFormula(gallery.Name, block, "Height");
+        var templateFormula = GetOwnPropertyFormula(gallery.Name, block, "TemplateSize");
+        var paddingFormula = GetOwnPropertyFormula(gallery.Name, block, "TemplatePadding");
+        var items = GetOwnPropertyFormula(gallery.Name, block, "Items");
+        var height = ParseNumericLayout(heightFormula);
+        var templateSize = ParseNumericLayout(templateFormula);
+        return height is not null &&
+            height.Value.Minimum > 0 &&
+            templateSize is not null &&
+            templateSize.Value.Minimum > 0 &&
+            TryParseNumber(paddingFormula, out var padding) &&
+            padding >= 0 &&
+            !IsProvablyEmptyItems(items) &&
+            !string.IsNullOrWhiteSpace(items) &&
+            nodes.Any(node => string.Equals(
+                node.Parent,
+                gallery.Name,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    void ValidateNegativeStateVisibility(
+        string pair,
+        string selectedRecordExpression,
+        string? operationSource,
+        string? amountSource,
+        YamlBinding? invalidGate)
+    {
+        var nodes = BuildYamlNodes(yamlLines);
+        var byName = nodes
+            .GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var protectedControls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (invalidGate is not null)
+        {
+            protectedControls.Add(invalidGate.Value.Control);
+        }
+
+        AddExpressionControl(amountSource);
+        AddExpressionControl(operationSource);
+        if (!string.IsNullOrWhiteSpace(operationSource) &&
+            Regex.IsMatch(operationSource, @"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant))
+        {
+            foreach (var formula in yamlFormulas.Where(formula =>
+                formula.Property.StartsWith("On", StringComparison.OrdinalIgnoreCase) &&
+                ExtractEventAssignments(formula.Formula).Any(assignment =>
+                    string.Equals(assignment.Variable, operationSource, StringComparison.OrdinalIgnoreCase))))
+            {
+                protectedControls.Add(formula.Control);
+            }
+        }
+
+        var predicates = new[] { selectedRecordExpression, operationSource, amountSource }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Cast<string>()
+            .ToList();
+        foreach (var formula in yamlFormulas.Where(formula =>
+            string.Equals(formula.Property, "Visible", StringComparison.OrdinalIgnoreCase) &&
+            predicates.Any(predicate =>
+                IsInvalidStateVisibility(formula.Formula, predicate))))
+        {
+            // Invalid-state messages are part of the recovery path, so their ancestors
+            // must stay visible even when their own Visible formula intentionally selects
+            // only the corresponding blank/non-positive state.
+            protectedControls.Add(formula.Control);
+        }
+        var reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var required in protectedControls)
+        {
+            var current = required;
+            while (byName.TryGetValue(current, out var node))
+            {
+                if (TryGetControlBlock(yamlLines, node.Name, out var block))
+                {
+                    var visible = GetOwnPropertyFormula(node.Name, block, "Visible");
+                    var predicate = predicates.FirstOrDefault(value =>
+                        IsValidStateVisibilityGate(visible, value));
+                    if (predicate is not null && reported.Add($"{required}:{node.Name}"))
+                    {
+                        errors.Add(
+                            $"Directional mutation pair '{pair}' required negative-state control '{required}' is hidden by valid-state visibility on '{node.Name}' ({predicate}); keep the operation, amount, submit, and validation/status surface visible and disable submission instead.");
+                    }
+                }
+                if (node.Parent is null)
+                {
+                    break;
+                }
+                current = node.Parent;
+            }
+        }
+
+        void AddExpressionControl(string? expression)
+        {
+            if (string.IsNullOrWhiteSpace(expression))
+            {
+                return;
+            }
+            var match = Regex.Match(
+                expression,
+                @"\b(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?:Selected|Text|Value)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (match.Success)
+            {
+                protectedControls.Add(match.Groups["control"].Value);
+            }
+        }
+    }
+
+    static bool IsValidStateVisibilityGate(string? formula, string expression)
+    {
+        if (string.IsNullOrWhiteSpace(formula))
+        {
+            return false;
+        }
+
+        var value = Regex.Escape(RemovePowerFxWhitespaceOutsideLiterals(expression));
+        var normalized = RemovePowerFxWhitespaceOutsideLiterals(formula);
+        normalized = Regex.Replace(
+            normalized,
+            $@"(?:Not\({value}>0\)|If\((?:{value}>0|0<{value}),false,true\))",
+            "",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return Regex.IsMatch(
+            normalized,
+            $@"(?:Not\(IsBlank\({value}\)\)|!IsBlank\({value}\)|IsBlank\({value}\)=false|{value}(?:<>|!=)Blank\(\)|If\(IsBlank\({value}\),false,true\)|{value}>0|0<{value}|Not\({value}<=0\)|If\((?:{value}<=0|{value}<1|0>={value}),false,true\)|If\((?:{value}>0|0<{value}),true,false\))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    static bool IsInvalidStateVisibility(string formula, string expression)
+    {
+        var value = Regex.Escape(RemovePowerFxWhitespaceOutsideLiterals(expression));
+        var normalized = RemovePowerFxWhitespaceOutsideLiterals(formula);
+        var withoutNonBlank = Regex.Replace(
+            normalized,
+            $@"Not\(IsBlank\({value}\)\)",
+            "",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return Regex.IsMatch(
+            withoutNonBlank,
+            $@"(?:IsBlank\({value}\)|{value}(?:=|==)Blank\(\)|If\(IsBlank\({value}\),true,false\)|{value}<=0|{value}<1|0>={value}|Not\({value}>0\)|If\((?:{value}<=0|{value}<1|0>={value}),true,false\)|If\((?:{value}>0|0<{value}),false,true\))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    static string RemovePowerFxWhitespaceOutsideLiterals(string value)
+    {
+        var result = new StringBuilder(value.Length);
+        char? quote = null;
+        for (var index = 0; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (quote is not null)
+            {
+                result.Append(character);
+                if (character == quote &&
+                    index + 1 < value.Length &&
+                    value[index + 1] == quote)
+                {
+                    result.Append(value[++index]);
+                }
+                else if (character == quote)
+                {
+                    quote = null;
+                }
+                continue;
+            }
+
+            if (character is '"' or '\'')
+            {
+                quote = character;
+                result.Append(character);
+            }
+            else if (!char.IsWhiteSpace(character))
+            {
+                result.Append(character);
+            }
+        }
+        return result.ToString();
+    }
 
 static bool IsProvablyEmptyItems(string? itemsFormula)
 {
@@ -1652,15 +2012,25 @@ void ValidateAmountState(
         @"\b(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?:Text|Value)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     if (!controlMatch.Success ||
-        !TryGetControlBlock(yamlLines, controlMatch.Groups["control"].Value, out var controlBlock) ||
-        !Regex.IsMatch(controlBlock, @"\bControl:\s*ModernNumberInput\b", RegexOptions.IgnoreCase))
+        !TryGetControlBlock(yamlLines, controlMatch.Groups["control"].Value, out var controlBlock))
     {
         return;
     }
 
     var control = controlMatch.Groups["control"].Value;
+    if (!IsOwnControlType(controlBlock, "NumberInput") &&
+        !IsOwnControlType(controlBlock, "ModernNumberInput"))
+    {
+        return;
+    }
+
     var minimum = GetPropertyFormula(controlBlock, "Min");
-    var defaultValue = GetPropertyFormula(controlBlock, "Default");
+    // Studio exports the modern number input as either ModernNumberInput with Default
+    // or NumberInput with Value, depending on the control generation. Both properties
+    // represent the initial state that must exercise the non-positive validation path.
+    var defaultValue =
+        GetPropertyFormula(controlBlock, "Default") ??
+        GetPropertyFormula(controlBlock, "Value");
     var minimumMatch = Regex.Match(
         minimum ?? "",
         @"^=\s*(?<value>-?\d+(?:\.\d+)?)\s*$",
@@ -3161,6 +3531,50 @@ static Dictionary<string, List<string>> ReadOptionalRows(
     return Array.Exists(lines, line => line.Trim() == heading)
         ? ReadRows(lines, heading, errors, keyColumn)
         : new(StringComparer.OrdinalIgnoreCase);
+}
+
+static List<List<string>> ReadOptionalRowsAllowDuplicates(
+    string[] lines,
+    string heading,
+    List<string> errors)
+{
+    var headingIndex = Array.FindIndex(lines, line => line.Trim() == heading);
+    if (headingIndex < 0)
+    {
+        return [];
+    }
+
+    var tableStart = Array.FindIndex(
+        lines,
+        headingIndex + 1,
+        line => line.TrimStart().StartsWith('|'));
+    if (tableStart < 0 || tableStart + 2 >= lines.Length)
+    {
+        errors.Add($"Missing table under '{heading}'.");
+        return [];
+    }
+
+    var rows = new List<List<string>>();
+    for (var index = tableStart + 2; index < lines.Length; index++)
+    {
+        if (!lines[index].TrimStart().StartsWith('|'))
+        {
+            break;
+        }
+
+        var cells = SplitRow(lines[index]);
+        if (cells.Count == 0)
+        {
+            continue;
+        }
+        if (string.IsNullOrWhiteSpace(Clean(cells[0])) || Clean(cells[0]).StartsWith('['))
+        {
+            errors.Add($"Invalid row key under '{heading}': '{Clean(cells[0])}'.");
+            continue;
+        }
+        rows.Add(cells);
+    }
+    return rows;
 }
 
 static HashSet<string> ReadColumn(

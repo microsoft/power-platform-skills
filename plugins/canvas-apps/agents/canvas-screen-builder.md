@@ -144,6 +144,11 @@ Do not fix unrelated pre-existing issues.
   mutation formula on the current explicit selection, and never reuse stale or implicit
   direction state. Disable submission when the operation or required amount/value is
   hidden, clipped, blank, invalid, unset, or unreachable.
+- Keep the operation selector, amount input, Apply/submit control, and validation/status
+  prompt visible in the no-selection, no-operation, and non-positive-amount states.
+  Selection may disable Apply, but neither Apply nor a required ancestor may use
+  `Not(IsBlank(selectedId))` or another valid-state `Visible` gate that hides the action
+  and explanation users need to recover.
 - In a shared-operation flow, selector events may only commit the declared operation state
   and update selection, receipt, or display UI state; they must not call `Patch`,
   `SubmitForm`, `Collect`, `Remove`, `RemoveIf`, `UpdateIf`, or connector mutations. The
@@ -185,8 +190,9 @@ Do not fix unrelated pre-existing issues.
   control positively **becomes enabled and clickable** the moment a valid operation and a
   positive amount are set. A gate that can never reach `DisplayMode.Edit` in any state
   (blocking every real submission) is a defect, not a passing safety check.
-- Make required amount invalid states reachable. For `ModernNumberInput`, choose `Default`
-  and `Min` so blank and `0` can be entered or restored when scenarios require them, gate
+- Make required amount invalid states reachable. For exported `NumberInput` and
+  `ModernNumberInput`, choose `Value`/`Default` and `Min` so blank and `0` can be entered
+  or restored when scenarios require them, gate
   the current `Value` with `IsBlank(...) || ... <= 0`, and expose a visible
   `ValidationState`/message. Do not use `Min: =1` while claiming that entering `0` proves
   rejection. `Reset(numAmount)` restores `Default`; it does not independently make the
@@ -229,9 +235,9 @@ Do not fix unrelated pre-existing issues.
   breakpoint formula. Do not independently branch each level on `Parent.Width`; padding
   changes that value by nesting level. If the brief explicitly permits different sources,
   evaluate every reachable cross-branch combination before writing.
-- Numerically budget every horizontal AutoLayout branch: subtract left/right padding from
-  container width, then compare that content width with child fixed widths or
-  `LayoutMinWidth` values plus all gaps. For a child with `FillPortions > 0`, count its
+- Numerically budget every horizontal AutoLayout branch: compare total available container
+  width with left/right padding + child fixed widths or `LayoutMinWidth` values + all
+  gaps. For a child with `FillPortions > 0`, count its
   explicit numeric `LayoutMinWidth`; absent or zero means zero and does not require a
   `Width`. Every non-fill child needs a numeric `Width`; use the greater of that size and
   its numeric `LayoutMinWidth`. A positive minimum cannot safely bound a symbolic width.
@@ -291,9 +297,11 @@ Do not fix unrelated pre-existing issues.
   overflow/detail entry so full identity text, status, and required Edit/review/remove
   actions remain reachable. Do not implement required actions only in right-side desktop
   columns.
-- For bounded dynamic galleries, derive height from
-  `CountRows(<the same source/filter used by Items>)`. Never use `Self.AllItemsCount` or
-  another rendered-item count to determine the gallery's own height.
+- Give a list-driven Gallery a conservative viewport-bounded numeric `Height`, explicit
+  positive `TemplateSize`, numeric `TemplatePadding`, `Items`, and concrete row controls.
+  Do not self-size `Height` from `CountRows(...)` and `Self.TemplateHeight` or
+  `Self.TemplatePadding`; this exported shape can render zero rows. If row selection is
+  the only path that sets a required selected ID, this render-safe contract is mandatory.
 - The sole responsive root uses exact `Width: =Parent.Width`,
   `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`; put
   breakpoint sizing on descendants.
@@ -322,7 +330,8 @@ Do not fix unrelated pre-existing issues.
       starts with `=`.
     - A `ModernDropdown` default is an explicit record compatible with `Items`, never
       `First(Self.Items)`.
-    - A Gallery height formula uses `Self.TemplateHeight`, not `Self.TemplateSize`.
+    - A Gallery uses a bounded numeric `Height`, not collection-count/Self.Template
+      self-sizing, and explicitly sets `TemplateSize` and `TemplatePadding`.
     - Gallery row `LayoutDirection` and `TemplateSize` share a breakpoint source, or every
       reachable cross-branch pair has a numeric height budget that fits all required fields.
     - Nested coordinated breakpoints use one screen-level width source, or every reachable

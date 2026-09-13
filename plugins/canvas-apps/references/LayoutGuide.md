@@ -73,8 +73,8 @@ For flexible, responsive designs:
             FillPortions: =1    # Proportional share of the remaining space
 ```
 
-1. **Dynamic gallery height:**
-   `Height: =With({rowCount: CountRows(<same source/filter used by Items>)}, rowCount * Self.TemplateHeight + ((rowCount + 1) * Self.TemplatePadding))`
+1. **Bounded gallery viewport:** explicit numeric `Height`, positive `TemplateSize`,
+   numeric `TemplatePadding`, `Items`, and row controls
 2. **Container scrolling:** `LayoutOverflowY: =LayoutOverflow.Scroll`
 3. **AutoLayout child properties:** `AlignInContainer`, `FillPortions`,
    `LayoutMinWidth/Height`, `LayoutMaxWidth/Height`
@@ -95,8 +95,11 @@ LayoutDirection: =If(Parent.Width < 640, LayoutDirection.Vertical, LayoutDirecti
 Do not set `varIsMobile`, `varColumns`, `varPageWidth` or similar values in `OnVisible`
 and then read them from `Width`, `Height`, grid, visibility or direction properties.
 Studio can render before `OnVisible` runs, and resizing does not re-run the event. Use
-`App.Width` for app-level breakpoints and `Parent.Width` or `Self.Width` for nested
-layout scopes.
+Prefer the responsive root or local container width. `App.Width` may describe a wider
+configured canvas than the viewport an embedded or letterboxed host actually renders.
+When `App.Width` is unavoidable, record the narrowest supported local/root rendered width
+in acceptance evidence and budget every horizontal branch to it; never use the breakpoint
+threshold itself as proof of available width.
 
 ## Grid layout
 
@@ -205,18 +208,20 @@ parent grow. Avoid parent `Height` formulas that read descendant `.Height` value
 those descendants also size from the parent; use collection counts and constants
 directly.
 
-Small bounded lists should not create a second hidden scroll region. For a local roster
-of roughly ten or fewer rows inside a scrollable root, include every row and its template
-padding in the gallery height, then let the root scroll. Count the gallery's source
-expression, not `Self.AllItemsCount`: rendered-item counts depend on the gallery having a
-non-zero height and can create a zero-height cycle.
+Give list-driven galleries a conservative viewport-bounded height and let the Gallery
+scroll when its source has more rows. Always set explicit positive `TemplateSize`, numeric
+`TemplatePadding`, `Items`, and concrete row controls. Do not derive the Gallery's own
+height from `CountRows(...)` and `Self.TemplateHeight`/`Self.TemplatePadding`: exported
+apps have rendered zero rows with that shape despite populated collections.
 
 ```yaml
-Height: =With({rowCount: CountRows(<same source/filter used by Items>)}, rowCount * Self.TemplateHeight + ((rowCount + 1) * Self.TemplatePadding))
+Height: =320
+TemplateSize: =64
+TemplatePadding: =8
 ```
 
-Use that same source count for empty-state visibility. Do not derive either property from
-`Self.AllItems`, `Self.AllItemsCount`, or another rendered gallery property.
+Drive empty-state visibility from the source/filter count, never `Self.AllItems`,
+`Self.AllItemsCount`, or another rendered gallery property.
 
 ## Give labelled controls room for their longest value
 

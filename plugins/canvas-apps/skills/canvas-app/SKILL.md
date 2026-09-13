@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.12
+version: 3.0.13
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.12`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.13`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -270,9 +270,10 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   do not prescribe unsupported empty-selection properties for a List box. Prefer explicit
   operation state when discovered control semantics are uncertain.
 - For every opposing mutation pair, verify both contracts and both concrete scenarios.
-  The operation control is visible and pointer-selectable; submission is disabled while
+  The operation control, amount input, submit control, and validation/status prompt remain
+  visible in no-selection, no-operation, and non-positive states; submission is disabled while
   operation or required amount/value is hidden, clipped, blank, invalid, unset, or
-  unreachable; and the handler reads the current explicit selection rather than stale or
+  unreachable, never hidden behind a valid-state `Visible` gate; and the handler reads the current explicit selection rather than stale or
   default state. For arithmetic pairs, substitute the scenario values and verify increase
   uses `old + amount`, decrease uses `old - amount`, and the receipt shows operation, old
   value, amount, expected new value, and actual persisted new value.
@@ -282,6 +283,10 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   `Control.Selected` / `.Selected.*` from a Gallery, Dropdown, List box, or Combo box as
   no-selection proof when nonempty `Items` may auto/default-select, unless empty-selection
   semantics are configured and evidenced.
+  If a Gallery row is the only assignment path, require bounded numeric Gallery `Height`,
+  explicit positive `TemplateSize`, numeric `TemplatePadding`, `Items`, and row controls.
+  A non-gallery selector event is the alternative. Reject collection-count/Self.Template
+  self-sizing as deterministic render evidence.
   Reject acceptance prose that disagrees with final code.
 - For required NumberInput amounts, verify `Default`, `Min`, `Value`, `ValidationState`,
   and `Reset` together permit both blank and non-positive test states while visibly
@@ -316,12 +321,16 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   `Parent.Width` is gallery/template-scoped and may differ from the outer parent used by
   `TemplateSize`. Require numeric vertical budgets including padding, gaps, all children,
   required quantity/status fields, badges, and actions; clipped required fields fail.
-- For all nested AutoLayout containers, use one screen-level width source for coordinated
-  parent `Height`, child `LayoutDirection`, and related branches. Do not independently use
-  each nesting level's `Parent.Width`, because padding changes scope. Otherwise enumerate
-  and numerically budget every reachable cross-branch combination.
-- Numerically verify every horizontal branch: container content width after padding must
-  fit child fixed/`LayoutMinWidth` totals plus gaps. A `FillPortions > 0` child contributes
+- For every list-driven runtime requirement, require post-export proof showing at least
+  one real rendered row and its required row action. An interactive-descendant count of
+  four on an expected list/action screen is runtime hard-fail evidence, never static PASS.
+- Prefer local/root width for responsive AutoLayout. Do not correlate `Parent.Width`
+  across nesting levels, because padding changes scope, and do not treat `App.Width` as
+  the rendered viewport in embedded or letterboxed hosts. An `App.Width`-driven horizontal
+  container needs matching Layout Budget Evidence with its narrowest supported local/root
+  rendered width. Otherwise enumerate and numerically budget every reachable combination.
+- Numerically verify every horizontal branch: total available container/root width must
+  fit left/right padding + child fixed/`LayoutMinWidth` totals + gaps. A `FillPortions > 0` child contributes
   its explicit numeric `LayoutMinWidth`, with absent/zero contributing zero; do not require
   `Width` for that child. Require every non-fill child to have numeric `Width`, and use the
   greater of it and numeric `LayoutMinWidth`; a positive minimum does not bound a symbolic

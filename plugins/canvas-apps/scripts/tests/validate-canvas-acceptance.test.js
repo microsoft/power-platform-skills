@@ -856,7 +856,7 @@ function materialize(
             '            - btnSelectInventory:\n' +
             '                Control: Classic/Button\n' +
             '                Properties:\n' +
-            '                    OnSelect: =Set(varSelectedInventoryId, ThisItem.ID)\n' +
+            '                    OnSelect: =Set(varSelectedInventoryId, cmbAdjustItem.Selected.ID)\n' +
             '            - drpOperation:',
             'reachable selected ID event');
     }
@@ -1209,6 +1209,13 @@ function materializeLayout(caseName, { responsive = false } = {}) {
                             Height: =28
 `;
     fs.writeFileSync(path.join(workspace, 'Screen1.pa.yaml'), yaml);
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.appendFileSync(
+        acceptancePath,
+        '\n## Layout Budget Evidence\n\n' +
+        '| Screen / container | QACHK | Branch / width source | Available size | Required-size arithmetic | Protected controls | Result |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        `| Stock Adjustment / conAdjustPanel | QACHK-HORIZONTAL-BUDGET | local/root contract | ${responsive ? 900 : 640}px | explicit child widths + gap + padding | adjustment controls | PASS |\n`);
     return workspace;
 }
 
@@ -1227,6 +1234,47 @@ function runValidator(workspace) {
 function rewriteScreen(workspace, transform) {
     const screenPath = path.join(workspace, 'Screen1.pa.yaml');
     fs.writeFileSync(screenPath, transform(fs.readFileSync(screenPath, 'utf8')));
+}
+
+function nestExplicitSelectorInGallery(workspace, { safe = true } = {}) {
+    rewriteScreen(workspace, (yaml) => {
+        const selector = /            - btnSelectInventory:\r?\n                Control: Classic\/Button\r?\n                Properties:\r?\n                    OnSelect: =Set\(varSelectedInventoryId, cmbAdjustItem\.Selected\.ID\)\r?\n/;
+        assert.match(yaml, selector, 'expected explicit selector for gallery nesting');
+        return yaml.replace(
+        selector,
+        '            - galAdjustInventory:\n' +
+        '                Control: Gallery@2.15.0\n' +
+        '                Properties:\n' +
+        '                    Items: =colInventory\n' +
+        `                    Height: =${safe ? '320' : 'CountRows(colInventory) * Self.TemplateHeight + ((CountRows(colInventory) + 1) * Self.TemplatePadding)'}\n` +
+        '                    TemplateSize: =64\n' +
+        '                    TemplatePadding: =8\n' +
+        '                Children:\n' +
+        '                    - btnSelectInventory:\n' +
+        '                        Control: Classic/Button\n' +
+        '                        Properties:\n' +
+        '                            OnSelect: =Set(varSelectedInventoryId, ThisItem.ID)\n');
+    });
+}
+
+function nestSharedApplyInVisibleContainer(workspace, formula) {
+    rewriteScreen(workspace, (yaml) => {
+        const start = yaml.indexOf('            - btnApply:');
+        const end = yaml.indexOf('            - galInventory:', start);
+        assert.ok(start >= 0 && end > start, 'expected shared Apply block');
+        const apply = yaml.slice(start, end)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        return yaml.slice(0, start) +
+            '            - conAdjustAction:\n' +
+            '                Control: GroupContainer\n' +
+            '                Properties:\n' +
+            `                    Visible: ${formula}\n` +
+            '                Children:\n' +
+            apply +
+            yaml.slice(end);
+    });
 }
 
 test.after(() => fs.rmSync(workRoot, { recursive: true, force: true }));
@@ -1317,6 +1365,121 @@ test('accepts a numeric horizontal budget without LayoutWrap', () => {
         `expected bounded horizontal arithmetic to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 });
 
+test('rejects an App.Width horizontal branch that exceeds its local rendered-width contract', () => {
+    const workspace = materializeLayout('receive-layout-app-width-letterbox', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace('If(App.Width<640', 'If(App.Width<1000'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        fs.readFileSync(acceptancePath, 'utf8').replace(
+            '| local/root contract | 900px |',
+            '| App.Width branch; local/root runtime contract | 500px |'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected letterboxed App.Width composition to fail');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 500px/);
+});
+
+test('rejects the canonical conAdjustNav 680px wide branch against a 500px local viewport', () => {
+    const workspace = materialize('receive-layout-adjust-nav-letterbox');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - cmbAdjustItem:',
+        '            - conAdjustNav:\n' +
+        '                Control: GroupContainer\n' +
+        '                Variant: AutoLayout\n' +
+        '                Properties:\n' +
+        '                    Height: =If(App.Width < 640, 196, 52)\n' +
+        '                    LayoutDirection: =If(App.Width < 640, LayoutDirection.Vertical, LayoutDirection.Horizontal)\n' +
+        '                    LayoutGap: =8\n' +
+        '                    PaddingLeft: =8\n' +
+        '                    PaddingRight: =8\n' +
+        '                    Width: =Parent.Width\n' +
+        '                Children:\n' +
+        '                    - txtAdjustBrand:\n' +
+        '                        Control: Text\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 220)\n' +
+        '                    - btnAdjustDashboard:\n' +
+        '                        Control: Button\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            LayoutMinWidth: =140\n' +
+        '                            OnSelect: =Navigate(Screen1)\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 140)\n' +
+        '                    - btnAdjustManageItems:\n' +
+        '                        Control: Button\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            LayoutMinWidth: =140\n' +
+        '                            OnSelect: =Navigate(Screen1)\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 140)\n' +
+        '                    - btnAdjustStock:\n' +
+        '                        Control: Button\n' +
+        '                        Properties:\n' +
+        '                            Height: =44\n' +
+        '                            LayoutMinWidth: =140\n' +
+        '                            Width: =If(App.Width < 640, Parent.Width, 140)\n' +
+        '            - cmbAdjustItem:'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.appendFileSync(
+        acceptancePath,
+        '\n## Layout Budget Evidence\n\n' +
+        '| Screen / container | QACHK | Branch / width source | Available size | Required-size arithmetic | Protected controls | Result |\n' +
+        '| --- | --- | --- | --- | --- | --- | --- |\n' +
+        '| Stock Adjustment / conAdjustNav | QACHK-HORIZONTAL-BUDGET | App.Width branch; local/root runtime contract | 500px | 16 padding + 640 children + 24 gaps = 680px | navigation | PASS |\n');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected exported navigation budget to fail');
+    assert.match(stderr, /horizontal container 'conAdjustNav' requires 680px.*at most 500px/);
+});
+
+test('allows duplicate per-axis and per-branch layout evidence rows without reading height as width', () => {
+    const workspace = materializeLayout('receive-layout-duplicate-evidence', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.appendFileSync(
+        acceptancePath,
+        '| Stock Adjustment / conAdjustPanel | QACHK-NO-HEIGHT-TRAP | local/root vertical | 100px height | 5px incidental note | controls | PASS |\n' +
+        '| Stock Adjustment / conAdjustPanel | QACHK-HORIZONTAL-BUDGET | local/root desktop branch | 1000px | 860px required; 12px gap | controls | PASS |\n');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected duplicate per-axis evidence to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('uses the narrowest matching horizontal layout evidence row', () => {
+    const workspace = materializeLayout('receive-layout-multiple-horizontal-evidence', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replaceAll('App.Width<640', 'App.Width<900'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.appendFileSync(
+        acceptancePath,
+        '| Stock Adjustment / conAdjustPanel | QACHK-HORIZONTAL-BUDGET | local/root narrow branch | 700px | 860px required | controls | PASS |\n');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected narrowest horizontal evidence to govern');
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 700px/);
+});
+
+test('accepts a stacked local Parent.Width composition with a sufficient wide branch', () => {
+    const workspace = materializeLayout('receive-layout-local-width', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'Width: =900\n' +
+            '                    LayoutDirection: =If(Parent.Width<900,LayoutDirection.Vertical,LayoutDirection.Horizontal)')
+        .replace('\n                            LayoutWrap: =true', ''));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected local-width responsive composition to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
 test('accepts FillPortions children without Width or LayoutMinWidth', () => {
     const workspace = materializeLayout('receive-layout-fill-portions', { responsive: true });
     rewriteScreen(workspace, (yaml) => yaml
@@ -1344,6 +1507,21 @@ test('rejects each unresolved horizontal child with an actionable diagnostic', (
     assert.match(
         stderr,
         /horizontal container 'conAdjustPanel' child 'drpOperation'.*numeric Width.*numeric LayoutMinWidth/);
+});
+
+test('gives implemented remedies for a non-App.Width unresolved horizontal container', () => {
+    const workspace = materializeLayout('receive-layout-unresolved-horizontal-container', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =LayoutDirection.Horizontal'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved horizontal container width to fail');
+    assert.match(
+        stderr,
+        /horizontal container 'conAdjustPanel'.*set numeric Width, enable LayoutWrap, or use exact Scroll\/LayoutOverflow\.Scroll/);
+    assert.doesNotMatch(stderr, /record its narrowest local\/root width in Layout Budget Evidence/);
 });
 
 test('rejects an unresolved vertical container Height with numeric guidance', () => {
@@ -1696,12 +1874,228 @@ test('accepts one explicit selected ID reset and assigned by a reachable row eve
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 });
 
+test('accepts an explicit selected ID assigned by a non-gallery OnChange path', () => {
+    const workspace = materialize(
+        'receive-non-gallery-selection',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    rewriteScreen(workspace, (yaml) => {
+        const selector = /            - btnSelectInventory:\r?\n                Control: Classic\/Button\r?\n                Properties:\r?\n                    OnSelect: =Set\(varSelectedInventoryId, cmbAdjustItem\.Selected\.ID\)\r?\n/;
+        assert.match(yaml, selector, 'expected explicit non-gallery selector');
+        return yaml.replace(
+        selector,
+        '            - cmbSelectInventory:\r\n' +
+        '                Control: Classic/ComboBox\r\n' +
+        '                Properties:\r\n' +
+        '                    Items: =colInventory\r\n' +
+        '                    OnChange: =Set(varSelectedInventoryId, Self.Selected.ID)\r\n');
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected non-gallery OnChange selection to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts an explicit selected ID event in a bounded versioned Gallery', () => {
+    const workspace = materialize(
+        'receive-bounded-gallery-selection',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestExplicitSelectorInGallery(workspace);
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected bounded gallery selection to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a gallery-only selected ID path with exported self-sizing Height', () => {
+    const workspace = materialize(
+        'receive-self-sized-gallery-selection',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestExplicitSelectorInGallery(workspace, { safe: false });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected self-sized gallery selection to fail');
+    assert.match(stderr, /explicit selected ID.*render-safe gallery/);
+    assert.match(stderr, /gallery 'galAdjustInventory'.*collection-count\/Self\.Template self-sizing/);
+});
+
+test('rejects all three exported collection-count gallery Height patterns', () => {
+    const workspace = materialize('receive-three-self-sized-galleries');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - galInventory:',
+        ['galDashInventory', 'galManageInventory', 'galAdjustInventory']
+            .map((name) =>
+                `            - ${name}:\n` +
+                '                Control: Gallery\n' +
+                '                Properties:\n' +
+                '                    Items: =colInventory\n' +
+                '                    Height: =CountRows(colInventory) * Self.TemplateHeight + ((CountRows(colInventory) + 1) * Self.TemplatePadding)\n' +
+                '                    TemplateSize: =64\n' +
+                '                    TemplatePadding: =8\n' +
+                '                Children:\n' +
+                `                    - lbl${name}Row:\n` +
+                '                        Control: Classic/Label\n' +
+                '                        Properties:\n' +
+                '                            Text: =ThisItem.Name\n')
+            .join('') +
+        '            - galInventory:'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected each exported self-sizing gallery to fail');
+    for (const gallery of ['galDashInventory', 'galManageInventory', 'galAdjustInventory']) {
+        assert.match(stderr, new RegExp(`gallery '${gallery}'.*collection-count/Self[.]Template`));
+    }
+});
+
+test('rejects a required action surface hidden by selected valid-state visibility', () => {
+    const workspace = materialize(
+        'receive-hidden-negative-state-surface',
+        {
+            sharedApplyFlow: true,
+            explicitSelectedId: true,
+        });
+    nestSharedApplyInVisibleContainer(
+        workspace,
+        '=Not(IsBlank(varSelectedInventoryId))');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected hidden negative-state action surface to fail');
+    assert.match(
+        stderr,
+        /required negative-state control 'btnApply'.*visibility on 'conAdjustAction'/);
+});
+
+test('rejects spaced nonblank visibility gates', () => {
+    const workspace = materialize(
+        'receive-spaced-hidden-negative-state',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestSharedApplyInVisibleContainer(
+        workspace,
+        '= Not ( IsBlank ( varSelectedInventoryId ) )');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected spaced nonblank visibility gate to fail');
+    assert.match(stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+});
+
+test('rejects If-form nonblank visibility gates with correct polarity', () => {
+    const workspace = materialize(
+        'receive-if-hidden-negative-state',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    nestSharedApplyInVisibleContainer(
+        workspace,
+        '=If(IsBlank(varSelectedInventoryId), false, true)');
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected If-form valid-state visibility gate to fail');
+    assert.match(stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+});
+
+test('rejects bang-IsBlank and Blank inequality visibility equivalents', () => {
+    for (const [name, formula] of [
+        ['bang', '= ! IsBlank ( varSelectedInventoryId )'],
+        ['inequality', '= varSelectedInventoryId <> Blank ( )'],
+    ]) {
+        const workspace = materialize(
+            `receive-${name}-hidden-negative-state`,
+            { sharedApplyFlow: true, explicitSelectedId: true });
+        nestSharedApplyInVisibleContainer(workspace, formula);
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected ${name} valid-state visibility gate to fail`);
+        assert.match(stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+    }
+});
+
+test('does not invert an If-form blank-state validation visibility predicate', () => {
+    const workspace = materialize(
+        'receive-if-visible-invalid-state',
+        { sharedApplyFlow: true, explicitSelectedId: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - galInventory:',
+        '            - lblSelectValidation:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="Select an inventory row."\n' +
+        '                    Visible: = If ( IsBlank ( varSelectedInventoryId ) , true , false )\n' +
+        '            - galInventory:'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected blank-state validation visibility to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects If-form positive amount visibility but accepts its invalid-state inverse', () => {
+    const hiddenWorkspace = materialize(
+        'receive-if-positive-amount-hidden',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    nestSharedApplyInVisibleContainer(
+        hiddenWorkspace,
+        '=If(numAdjustAmount.Value <= 0, false, true)');
+    const hidden = runValidator(hiddenWorkspace);
+    assert.notStrictEqual(hidden.code, 0, 'expected positive amount visibility gate to fail');
+    assert.match(hidden.stderr, /required negative-state control 'btnApply'.*conAdjustAction/);
+
+    const visibleWorkspace = materialize(
+        'receive-if-invalid-amount-visible',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(visibleWorkspace, (yaml) => yaml.replace(
+        '            - galInventory:',
+        '            - lblAmountValidation:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="Enter a positive amount."\n' +
+        '                    Visible: = If ( numAdjustAmount.Value > 0, false, true )\n' +
+        '            - galInventory:'));
+    const visible = runValidator(visibleWorkspace);
+    assert.strictEqual(
+        visible.code,
+        0,
+        `expected invalid amount visibility to preserve polarity.\nstdout:\n${visible.stdout}\nstderr:\n${visible.stderr}`);
+});
+
+test('accepts an always-visible action surface whose Apply button is disabled', () => {
+    const workspace = materialize(
+        'receive-visible-disabled-action-surface',
+        {
+            sharedApplyFlow: true,
+            explicitSelectedId: true,
+        });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected visible disabled action surface to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
 test('accepts a blank Min=0 modern amount with gate and screen-entry reset', () => {
     const workspace = materialize(
         'receive-modern-amount',
         { sharedApplyFlow: true, modernAmount: true });
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('validates exported versioned NumberInput Value state', () => {
+    const workspace = materialize(
+        'receive-exported-number-input',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('Control: ModernNumberInput', 'Control: NumberInput@2.1.0')
+        .replace('Default: =0', 'Value: =0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected exported NumberInput state to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects exported NumberInput with a positive initial Value', () => {
+    const workspace = materialize(
+        'receive-exported-number-input-positive',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('Control: ModernNumberInput', 'Control: NumberInput')
+        .replace('Default: =0', 'Value: =1'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected positive NumberInput initial value to fail');
+    assert.match(stderr, /amount control 'numAdjustAmount' must default to Blank or zero/);
 });
 
 test('accepts a zero-default Min=0 modern amount when the gate requires greater than zero', () => {

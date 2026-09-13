@@ -1167,18 +1167,16 @@ Set `DisplayMode` only on the individual action when it genuinely needs to be di
 
 ## Check 30 — `QACHK-HIDDEN-BOUNDED-LIST` (small bounded gallery hidden in nested scrolling)
 
-**Problem:** A short, known roster is placed in a fixed-height Gallery inside an already
-scrollable screen. The Gallery creates a second scroll region and silently hides rows;
-Studio may not render a visible scrollbar even when `ShowScrollbar: =true`. Users see
-four of six people and have no cue that more exist.
+**Problem:** A Gallery may compile with populated `Items` but render zero rows when its
+own height is derived from collection count and `Self.TemplateHeight`/`Self.TemplatePadding`.
+A hidden nested scroll region can also make additional rows undiscoverable.
 
 **Detect:** For every Gallery inside a root scroll container:
 
-1. If its Items source is a bounded local collection with roughly ten or fewer rows,
-   compare `Height` with the count of the same source/filter used by `Items`, multiplied
-   by `TemplateHeight` with template padding included.
-2. Flag it when the fixed height is smaller than the full list, regardless of
-   `ShowScrollbar`.
+1. Require a conservative viewport-bounded numeric `Height`, explicit positive
+   `TemplateSize`, numeric `TemplatePadding`, a nonempty `Items` formula, and row controls.
+2. Flag `Height` formulas combining `CountRows(...)` with `Self.TemplateHeight`,
+   `Self.TemplateSize`, or `Self.TemplatePadding`.
 3. Flag a list that can open at a non-zero internal scroll position without an explicit
    reset-to-top behavior.
 4. Flag `Height` or empty-state `Visible` formulas that read `Self.AllItems`,
@@ -1186,16 +1184,18 @@ four of six people and have no cue that more exist.
    on materialized rows; when height begins at zero, the formula can keep the gallery at
    zero height even though its `Items` source contains records.
 
-**Fix:** Let small bounded lists grow and rely on the root scroll:
+**Fix:** Use a deterministic Gallery viewport:
 
 ```yaml
-Height: =With({rowCount: CountRows(<same source/filter used by Items>)}, rowCount * Self.TemplateHeight + ((rowCount + 1) * Self.TemplatePadding))
-ShowScrollbar: =false
+Height: =320
+TemplateSize: =64
+TemplatePadding: =8
+ShowScrollbar: =true
 ```
 
-Drive the empty-state control from that same source/filter count. For genuinely large or
-unbounded data, keep the internal scroll region but provide a visible affordance and reset
-it to the first row on screen entry.
+Drive empty-state visibility from the source/filter count. When row selection is the only
+path that assigns a required selected ID, the Gallery must satisfy this contract; a
+non-gallery selector event is the alternative.
 
 **Exception:** Large/unbounded datasets where virtualization and internal scrolling are
 intentional and visibly discoverable.
@@ -1521,13 +1521,17 @@ off-canvas.
 branch:
 
 0. For nested coordinated branches, confirm the parent `Height`, child
-   `LayoutDirection`, and related formulas use one screen-level source such as `App.Width`.
-   If each level uses its own `Parent.Width`, padding can select incompatible branches;
-   enumerate every reachable cross-branch combination instead of assuming they agree.
-1. Calculate content width as container width minus left/right padding.
-2. Add the minimum or fixed widths of all visible children plus `LayoutGap` for every gap.
-3. Compare the child total with content width at each exact branch threshold and record
-   the numbers in QA evidence.
+   `LayoutDirection`, and related formulas use a deliberately scoped source. Never
+   correlate `Parent.Width` across nesting levels. Do not treat `App.Width` as proof of
+   local rendered width: embedded or letterboxed hosts can provide a smaller viewport.
+   For an `App.Width` branch, require the narrowest supported local/root rendered width in
+   Layout Budget Evidence and budget to that number.
+1. Record total available container/root width for the branch.
+2. Add left/right padding, the minimum or fixed widths of all visible children, and
+   `LayoutGap` for every gap.
+3. Compare that required total with total available width at each exact branch threshold
+   and record both numbers in QA evidence. Do not subtract padding from available width
+   and also add it to required width.
 4. If flexible children use `FillPortions`, confirm their `LayoutMinWidth` values still
    fit before remaining width is distributed. A `FillPortions > 0` child contributes its
    explicit numeric `LayoutMinWidth`; an absent or zero minimum contributes zero, and
@@ -1698,6 +1702,11 @@ working scroll or menu affordance that passes the same checks.
 For an action inside AutoLayout, include the ancestor horizontal and vertical arithmetic
 that places it inside bounds; "visible in YAML" or an unsupported `PASS` is insufficient.
 Explicitly verify Save, the amount input, and the primary mutation action.
+For directional flows, the operation selector, amount input, submit control, and
+validation/status prompt must remain visible in no-selection, no-operation, and
+non-positive states. Disable submit while invalid; do not hide that surface or a required
+ancestor behind `Not(IsBlank(selectedId))`, a positive-amount condition, or another
+valid-state visibility gate.
 
 **Fix:** Move the action into the initial task path, repair the containing layout, enlarge
 its target, or expose it through an immediately visible menu.

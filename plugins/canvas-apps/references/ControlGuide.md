@@ -164,14 +164,18 @@ Default: '=First([{Value:"All"},{Value:"Open"},{Value:"Closed"}])'
 ```
 
 `TemplateSize` is an input property used in authored YAML to configure each Gallery
-item's size. It cannot be referenced in formulas as `Self.TemplateSize`. To size a
-vertical Gallery to its rendered rows, use the output property `Self.TemplateHeight`:
+item's size. Give the Gallery a conservative viewport/fixed `Height` and set
+`TemplateSize` and `TemplatePadding` explicitly:
 
 ```yaml
-Height: =CountRows(Self.AllItems) * Self.TemplateHeight
+Height: =320
+TemplateSize: =64
+TemplatePadding: =8
 ```
 
-For a horizontal Gallery, use the output property `Self.TemplateWidth`.
+Do not self-size a Gallery from `CountRows(...)` and `Self.TemplateHeight`,
+`Self.TemplateWidth`, or `Self.TemplatePadding`. That circular exported shape can render
+zero rows even when `Items` is populated.
 
 For charts, `ItemColorSet` expects a single-column table of color values. Supply the
 colors directly instead of wrapping them in records with custom field names:

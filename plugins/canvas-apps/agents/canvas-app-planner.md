@@ -314,12 +314,13 @@ observed defect in finished apps, and no compile diagnostic reports it.
 For every screen brief, state explicitly:
 
 - Which horizontal rows wrap (`LayoutWrap: =true`) and which stack below a width
-  breakpoint. For coordinated branches across nested AutoLayout containers, use one
-  screen-level width source such as `App.Width` for the parent `Height`, child
-  `LayoutDirection`, and related sizing formulas. Do not let every nesting level branch on
-  its own `Parent.Width`: padding and sibling allocation change that scope, so parent and
-  child can take incompatible branches. If a single source cannot be used, enumerate and
-  budget every reachable parent/child branch combination. Use the approved app's
+  breakpoint. Prefer the responsive root or local container width, because `App.Width`
+  can exceed the rendered viewport in an embedded or letterboxed host. `Parent.Width`
+  is scope-relative, so never correlate it across nesting levels. If `App.Width` is used
+  for coordinated branches, record the narrowest supported local/root rendered width in
+  the layout budget and size every horizontal branch to that contract; do not treat the
+  `App.Width` threshold itself as available space. Otherwise enumerate and budget every
+  reachable parent/child branch combination. Use the approved app's
   breakpoints consistently; when none are specified, use 640 for phone and 1024 for tablet.
 - That responsive layout properties derive from the declared screen-level width source.
   Do not initialize layout variables such as `varIsMobile` or `varColumns` in `OnVisible`;
@@ -354,8 +355,8 @@ For every screen brief, state explicitly:
   children, include a per-breakpoint layout budget: child groups, minimum widths/heights,
   gaps, padding and the resulting section size. Presence of a breakpoint is not enough.
 - For **every** horizontal AutoLayout container, record numeric evidence at each branch
-  threshold: content width (container width minus left/right padding) versus the sum of
-  visible child fixed widths/`LayoutMinWidth` values plus gaps. If the sum exceeds content
+  threshold: total available container width versus left/right padding + visible child
+  fixed widths/`LayoutMinWidth` values + gaps. If the required total exceeds available
   width, require wrapping, deliberate horizontal scrolling with a visible affordance,
   vertical layout, or a higher branch threshold. Never allow the required amount input or
   primary mutation action to be the clipped child. A child with `FillPortions > 0`
@@ -388,10 +389,13 @@ For every screen brief, state explicitly:
   keep both on the same eligible row or in the same immediately reachable detail. Do not
   preserve a desktop column layout that moves Edit, approve, reject, or remove beyond the
   canvas width, and do not drop an action to make the row fit.
-- For bounded local galleries of about ten rows or fewer, size the gallery to all rows
-  and rely on the root scroll; do not plan a hidden nested scroll region. Dynamic gallery
-  height is valid, but derive it from `CountRows(<the same source/filter used by Items>)`,
-  never from rendered-item state such as `Self.AllItemsCount`.
+- Give every list-driven Gallery a conservative viewport-bounded numeric `Height`,
+  explicit positive `TemplateSize`, numeric `TemplatePadding`, nonempty `Items` source,
+  and concrete row controls. Do not self-size `Height` from `CountRows(...)` and
+  `Self.TemplateHeight`/`Self.TemplatePadding`; exported apps have rendered zero rows with
+  that shape despite populated collections. A required selected ID must also have either
+  a non-gallery event that assigns it or a row-selection event inside this render-safe
+  Gallery contract.
 
 
 ## 6. Assign the Control Name Space

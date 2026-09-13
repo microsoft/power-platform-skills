@@ -256,7 +256,7 @@ Source revision: [git revision, package version, or "unavailable"]
 
 | Screen / container | QACHK | Branch / width source | Available size | Required-size arithmetic | Protected controls | Result |
 | ------------------ | ------ | --------------------- | -------------- | ------------------------ | ------------------ | ------ |
-| [screen / control] | [QACHK-NO-HEIGHT-TRAP / QACHK-GALLERY-ROW-FITS-CONTENT / QACHK-HORIZONTAL-BUDGET / QACHK-PRIMARY-ACTION-REACHABILITY] | [screen-level expression and branch] | [numeric content width or height] | [numeric child widths/heights + gaps + padding] | [amount, Save/Apply, receipt fields, etc.] | PASS |
+| [screen / control] | [QACHK-NO-HEIGHT-TRAP / QACHK-GALLERY-ROW-FITS-CONTENT / QACHK-HORIZONTAL-BUDGET / QACHK-PRIMARY-ACTION-REACHABILITY] | [screen-level expression and branch] | [total numeric container/root width or height] | [numeric child widths/heights + gaps + padding] | [amount, Save/Apply, receipt fields, etc.] | PASS |
 ```
 
 
@@ -337,13 +337,27 @@ Omit
 Require `## Layout Budget Evidence` with numeric rows for every applicable
 `QACHK-NO-HEIGHT-TRAP`, `QACHK-GALLERY-ROW-FITS-CONTENT`,
 `QACHK-HORIZONTAL-BUDGET`, and `QACHK-PRIMARY-ACTION-REACHABILITY` PASS. For horizontal
-branches, record container content width after padding and child fixed/minimum widths plus
-gaps. For fixed-height vertical branches, record child fixed/minimum heights, wrapped text,
+branches, record total available container/root width and compare it with left/right
+padding + child fixed/minimum widths + gaps. For fixed-height vertical branches, record child fixed/minimum heights, wrapped text,
 gaps, and padding against `Height`. Use one screen-level width source for coordinated
-nested parent/child branches, or enumerate every reachable cross-branch combination.
+nested parent/child branches only when its local rendered-width contract is also known,
+or enumerate every reachable cross-branch combination. `App.Width` alone is not local
+viewport evidence in an embedded or letterboxed host. Record a matching row for each
+`App.Width`-driven horizontal container, with its narrowest supported local/root width in
+`Available size`.
+Repeat a container in separate rows for each axis or responsive branch as needed; identify
+the applicable `QACHK` and branch in each row. `Available size` is the total width/height
+for that row, not a post-padding value.
 Evidence must show amount controls and Save/primary mutation actions remain reachable and
 all five labeled receipt fields fit together. These calculations are static evidence only;
 a browser evaluation remains necessary to prove rendered reachability.
+
+For list-driven requirements, post-export/runtime proof must include a screenshot with at
+least one real data row visibly rendered and its required row action reachable. A runtime
+probe reporting only four interactive descendants is hard-fail evidence for an expected
+multi-control/list screen, not support for static success. Keep these claims labeled
+runtime/post-export: the local static validator can reject risky Gallery shapes but cannot
+prove that a host rendered rows.
 
 When the plan contains an opposing directional pair, include `## Directional Mutation
 Evidence` with exactly one row per pair. This is an executable gate, not a self-reported
@@ -352,7 +366,11 @@ selected ID initialized/reset blank and assigned by row selection, consistent co
 an actual operation-state reset event, representable blank/non-positive amount states, a
 gate that rejects them, plus/minus arithmetic, one canonical source
 read by the observer, and five receipt bindings including an actual persisted `Patch`
-result.
+result. The operation selector, amount, submit, and validation/status surface must remain
+visible in invalid states; the submit may be disabled but neither it nor a required
+ancestor may be gated to the selected/valid state. A gallery-only selected-ID event also
+requires bounded Gallery `Height`, explicit positive `TemplateSize`, numeric
+`TemplatePadding`, `Items`, and row controls.
 For the amount rejection, accept either supported equivalent spelling in final YAML:
 `value <= 0` or `Not(value > 0)`; do not prescribe a third form unsupported by the
 validator.

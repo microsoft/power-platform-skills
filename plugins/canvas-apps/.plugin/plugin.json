@@ -1,6 +1,6 @@
 {
   "name": "canvas-apps",
-  "version": "3.0.12",
+  "version": "3.0.13",
   "description": "Build Power Apps Canvas Apps using the Canvas Authoring MCP server.",
   "author": {
     "name": "Microsoft",

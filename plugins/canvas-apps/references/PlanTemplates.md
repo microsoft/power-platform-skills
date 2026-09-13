@@ -154,12 +154,13 @@ not machine-check this table; it is a required reviewer/authoring proof.]
 
 ## Layout Budget Contracts
 
-| Screen / container | Branch / screen-width source | Horizontal content-width arithmetic | Vertical height arithmetic | Protected controls |
+| Screen / container | Branch / screen-width source | Horizontal total-width arithmetic | Vertical height arithmetic | Protected controls |
 | ------------------ | ---------------------------- | ----------------------------------- | -------------------------- | ------------------ |
-| [screen / container] | [e.g. `App.Width < 640`; list every reachable cross-branch pair if sources differ] | [container width - padding versus child fixed/min widths + gaps, or N/A] | [Height versus child fixed/min heights + gaps + padding, or N/A] | [amount, Save/Apply, receipt operation/old/amount/expected/actual] |
+| [screen / container] | [prefer local/root width; if `App.Width` is used, include the narrowest supported local/root rendered width; list every reachable cross-branch pair if scopes differ] | [total available local/root width versus padding + child fixed/min widths + gaps, or N/A] | [Height versus child fixed/min heights + gaps + padding, or N/A] | [amount, Save/Apply, receipt operation/old/amount/expected/actual] |
 
 [Include every nested AutoLayout container participating in a coordinated breakpoint,
 every horizontal AutoLayout branch, and every fixed-height vertical AutoLayout branch.
+Repeat the same container in separate rows for each axis/branch when necessary.
 Over-budget rows must wrap, scroll with a visible affordance, stack, or switch at a higher
 threshold.]
 
@@ -241,9 +242,9 @@ before/amount/after semantics.]
 
 ## Layout Budget Contracts
 
-| Screen / container | Branch / screen-width source | Horizontal content-width arithmetic | Vertical height arithmetic | Protected controls |
+| Screen / container | Branch / screen-width source | Horizontal total-width arithmetic | Vertical height arithmetic | Protected controls |
 | ------------------ | ---------------------------- | ----------------------------------- | -------------------------- | ------------------ |
-| [changed container] | [one screen-level source or all cross-branch pairs] | [available content width versus children + gaps, or N/A] | [available Height versus children + gaps + padding, or N/A] | [amount, Save/Apply, complete receipt, or N/A] |
+| [changed container] | [local/root source and narrowest supported rendered width, or all cross-branch pairs] | [total available local width versus padding + children + gaps, or N/A] | [available Height versus children + gaps + padding, or N/A] | [amount, Save/Apply, complete receipt, or N/A] |
 
 ## Working Directory
 
@@ -302,9 +303,10 @@ seed data — or "None"]
 
 ## Layout Strategy
 
-[Shared layout rules and target-device rationale. Record the breakpoint formulas and the
-rule that responsive properties derive from current width rather than `OnVisible`
-variables.]
+[Shared layout rules and target-device rationale. Record the breakpoint formulas, the
+narrowest supported local/root rendered width, and the rule that responsive properties
+derive from current width rather than `OnVisible` variables. Do not equate `App.Width`
+with an embedded or letterboxed viewport.]
 
 
 ## Named State
@@ -362,8 +364,8 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
 - Breakpoint source: [one screen-level width expression used by coordinated parent Height,
   nested child LayoutDirection, and related formulas; if sources differ, enumerate every
   reachable cross-branch combination]
-- Numeric layout budgets: [for each horizontal branch: content width after padding versus
-  child fixed/`LayoutMinWidth` sum plus gaps; for each fixed-height vertical branch:
+- Numeric layout budgets: [for each horizontal branch: total available width versus
+  padding + child fixed/`LayoutMinWidth` sum + gaps; for each fixed-height vertical branch:
   child fixed/minimum heights plus gaps and padding versus Height. Include amount inputs,
   Save/primary actions, and the complete labeled receipt.]
 - Text fit: [single-line or wrapping behavior and longest-value width/height budget for
@@ -474,7 +476,7 @@ then fails to compile.]
 - Responsive bounds: [desktop, tablet, and phone width/height budgets for changed regions]
 - Breakpoint source: [one screen-level width expression for coordinated nested branches,
   or every reachable cross-branch combination]
-- Numeric layout budgets: [horizontal content width versus children + gaps; vertical
+- Numeric layout budgets: [total horizontal width versus padding + children + gaps; vertical
   Height versus children + gaps + padding; include amount, Save/primary action, and all
   receipt fields]
 - Text fit: [longest-value budget for changed text-bearing controls]
