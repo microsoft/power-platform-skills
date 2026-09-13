@@ -3,18 +3,30 @@ Screens:
         Properties:
             OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)
         Children:
+            - lblAdjustItem:
+                Control: Classic/Label
+                Properties:
+                    Text: ="Inventory item"
             - cmbAdjustItem:
                 Control: Classic/ComboBox
                 Properties:
                     AllowEmptySelection: =true
                     DefaultSelectedItems: =[]
                     Items: =colInventory
+            - lblOperation:
+                Control: Classic/Label
+                Properties:
+                    Text: ="Operation"
             - drpOperation:
                 Control: Classic/DropDown
                 Properties:
                     AllowEmptySelection: =true
                     Default: =Blank()
                     Items: =["Receive", "Issue"]
+            - lblAmount:
+                Control: Classic/Label
+                Properties:
+                    Text: ="Amount"
             - txtAmount:
                 Control: Classic/TextInput
                 Properties:

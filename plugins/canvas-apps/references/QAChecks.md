@@ -764,6 +764,14 @@ AccessibleLabel: ="Quantity on hand for " & ThisItem.Name
 **Exception:** Purely decorative controls — spacer containers, background rectangles,
 divider lines. Do not label those.
 
+Accessibility naming is separate from visible field labeling. For every required classic
+or modern TextInput, NumberInput, Radio, DropDown, and ComboBox—including
+`ModernTextInput`, `ModernNumberInput`, `ModernRadio`, `ModernDropdown`, and
+`ModernCombobox`—also require a persistent human-readable visible label under the same
+immediate field-region parent. `AccessibleLabel` and `HintText` alone fail this usability
+contract. Static acceptance recognizes a native visible `Label` only for
+`ModernNumberInput`; every other type needs a sibling Text/Label control.
+
 ---
 
 ## Check 19 — `QACHK-NO-REFLOW` (horizontal row with no narrow-width strategy)
@@ -1521,11 +1529,13 @@ off-canvas.
 branch:
 
 0. For nested coordinated branches, confirm the parent `Height`, child
-   `LayoutDirection`, and related formulas use a deliberately scoped source. Never
-   correlate `Parent.Width` across nesting levels. Do not treat `App.Width` as proof of
-   local rendered width: embedded or letterboxed hosts can provide a smaller viewport.
-   For an `App.Width` branch, require the narrowest supported local/root rendered width in
-   Layout Budget Evidence and budget to that number.
+   `LayoutDirection`, and related formulas remain safe if a logical-width narrow branch
+   never activates. `App.Width`, named root width, and root `Parent.Width` may stay at
+   logical design width in embedded or scale-to-fit hosts. Because `.pa.yaml` does not
+   expose a proven display-setting contract, fail required horizontal field/action groups
+   unless the wide/default composition itself fits a static bound, wraps, deliberately
+   scrolls, or is replaced by an always-stacked composition. Layout Budget Evidence
+   cannot prove host viewport sensitivity.
 1. Record total available container/root width for the branch.
 2. Add left/right padding, the minimum or fixed widths of all visible children, and
    `LayoutGap` for every gap.

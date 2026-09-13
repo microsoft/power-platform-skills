@@ -314,13 +314,14 @@ observed defect in finished apps, and no compile diagnostic reports it.
 For every screen brief, state explicitly:
 
 - Which horizontal rows wrap (`LayoutWrap: =true`) and which stack below a width
-  breakpoint. Prefer the responsive root or local container width, because `App.Width`
-  can exceed the rendered viewport in an embedded or letterboxed host. `Parent.Width`
-  is scope-relative, so never correlate it across nesting levels. If `App.Width` is used
-  for coordinated branches, record the narrowest supported local/root rendered width in
-  the layout budget and size every horizontal branch to that contract; do not treat the
-  `App.Width` threshold itself as available space. Otherwise enumerate and budget every
-  reachable parent/child branch combination. Use the approved app's
+  breakpoint. Logical canvas sources such as `App.Width`, a root container's `Width`, and
+  root-level `Parent.Width` can remain at design width when an embedded or scale-to-fit
+  host is physically narrower. Because display settings are not available in `.pa.yaml`,
+  never rely on those sources alone to activate the narrow branch. Make required field and
+  action groups safe even when the wide/default branch remains active: wrap, stack
+  unconditionally, use deliberate scrolling, or fit the entire wide branch within a
+  statically proven bound. Layout Budget Evidence is arithmetic documentation, not proof
+  that the runtime host changes a logical width value. Use the approved app's
   breakpoints consistently; when none are specified, use 640 for phone and 1024 for tablet.
 - That responsive layout properties derive from the declared screen-level width source.
   Do not initialize layout variables such as `varIsMobile` or `varColumns` in `OnVisible`;
@@ -382,6 +383,14 @@ For every screen brief, state explicitly:
   intentionally scrolling/viewport-root layout.
 - Group each visible label with its corresponding input in one field container before
   the row stacks.
+- Give every required classic or modern TextInput, NumberInput, Radio, DropDown, or
+  ComboBox a persistent human-readable visible label under the same immediate
+  field-region parent. Include `ModernTextInput`, `ModernNumberInput`, `ModernRadio`,
+  `ModernDropdown`, and `ModernCombobox`, and record the exact label binding
+  in Data Entry Label Evidence. `AccessibleLabel` and `HintText` are still required where
+  applicable, but neither replaces a visible field name. Static acceptance recognizes a
+  control-native visible `Label` only for `ModernNumberInput`; every other type needs a
+  sibling Text/Label control.
 - For galleries with record actions, define the phone row as an action-first composition:
   render the canonical identity's full text, status, and required lifecycle actions by
   stacking them or placing the actions in an immediately visible overflow/detail entry.

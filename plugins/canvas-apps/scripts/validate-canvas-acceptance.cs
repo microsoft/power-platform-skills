@@ -69,6 +69,10 @@ var layoutBudgetEvidence = ReadOptionalRowsAllowDuplicates(
     acceptanceLines,
     "## Layout Budget Evidence",
     errors);
+var dataEntryLabelEvidence = ReadOptionalRows(
+    acceptanceLines,
+    "## Data Entry Label Evidence",
+    errors);
 var directionalPairs = FindDirectionalPairs(plannedActions);
 var sharedFlows = new List<SharedFlowResolution>();
 var directionalEvidence = directionalPairs.Count == 0
@@ -230,6 +234,7 @@ foreach (var row in acceptedScreens.Values)
 }
 
 ValidateDirectionalMutationEvidence(directionalEvidence);
+ValidateDataEntryLabels(dataEntryLabelEvidence);
 ValidateGalleryRenderingContracts();
 ValidateLayoutReachability(CollectLayoutRequiredControls(
     acceptedActions,
@@ -306,6 +311,144 @@ HashSet<string> CollectLayoutRequiredControls(
     return required;
 }
 
+void ValidateDataEntryLabels(Dictionary<string, List<string>> evidence)
+{
+    var nodes = BuildYamlNodes(yamlLines);
+    var byName = nodes
+        .GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+    var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var evidenceText = acceptedActions.Values
+        .SelectMany(row => row)
+        .Concat(directionalEvidence.Values.SelectMany(row => row));
+    foreach (var value in evidenceText)
+    {
+        foreach (Match reference in Regex.Matches(
+            value,
+            @"\b(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?:Text|Value|Selected(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            var control = reference.Groups["control"].Value;
+            if (TryGetControlBlock(yamlLines, control, out var block) &&
+                IsDataEntryControl(block))
+            {
+                required.Add(control);
+            }
+        }
+    }
+
+    foreach (var control in required)
+    {
+        if (!TryGetControlBlock(yamlLines, control, out var block))
+        {
+            continue;
+        }
+
+        var nativeLabel = GetOwnPropertyFormula(control, block, "Label");
+        if (SupportsNativeVisibleLabel(block) &&
+            IsPersistentHumanReadableLabel(nativeLabel) &&
+            IsPersistentlyVisible(control, byName))
+        {
+            continue;
+        }
+
+        if (!evidence.TryGetValue(control, out var row) || row.Count != 3)
+        {
+            errors.Add(
+                $"Data entry label: required control '{control}' must have a persistent visible human-readable label; AccessibleLabel and HintText do not count. Add a three-column Data Entry Label Evidence row or a supported native Label property.");
+            continue;
+        }
+
+        var binding = Regex.Match(
+            Clean(row[1]),
+            @"^(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?<property>Text|Label)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!binding.Success ||
+            !TryGetControlBlock(yamlLines, binding.Groups["control"].Value, out var labelBlock) ||
+            !IsPersistentHumanReadableLabel(GetPropertyFormula(
+                labelBlock,
+                binding.Groups["property"].Value)) ||
+            !IsPersistentlyVisible(binding.Groups["control"].Value, byName))
+        {
+            errors.Add(
+                $"Data entry label: evidence for required control '{control}' must name a persistent visible label binding such as lblField.Text with human-readable text.");
+            continue;
+        }
+
+        var labelControl = binding.Groups["control"].Value;
+        if (!byName.TryGetValue(control, out var inputNode) ||
+            !byName.TryGetValue(labelControl, out var labelNode) ||
+            !string.Equals(inputNode.Parent, labelNode.Parent, StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"Data entry label: control '{control}' and label '{labelControl}' must share the same reachable field layout region.");
+        }
+    }
+}
+
+static bool IsDataEntryControl(string block) =>
+    new[]
+    {
+        "TextInput",
+        "ModernTextInput",
+        "NumberInput",
+        "ModernNumberInput",
+        "Radio",
+        "ModernRadio",
+        "DropDown",
+        "ModernDropdown",
+        "ComboBox",
+        "ModernCombobox",
+    }
+        .Any(type => IsOwnControlType(block, type));
+
+// ModernNumberInput is the only input type for which this contract currently has
+// an exported, rendered native Label shape. Classic controls and the other modern
+// inputs need a sibling label so a fabricated property cannot satisfy acceptance.
+static bool SupportsNativeVisibleLabel(string block) =>
+    IsOwnControlType(block, "ModernNumberInput");
+
+static bool IsPersistentHumanReadableLabel(string? formula)
+{
+    if (string.IsNullOrWhiteSpace(formula))
+    {
+        return false;
+    }
+    var normalized = formula.TrimStart('=').Trim();
+    var literal = Regex.Match(
+        normalized,
+        @"^(?<quote>[""'])(?<text>.+)\k<quote>$",
+        RegexOptions.CultureInvariant);
+    return literal.Success &&
+        Regex.IsMatch(literal.Groups["text"].Value, @"[A-Za-z]", RegexOptions.CultureInvariant);
+}
+
+bool IsPersistentlyVisible(string control, Dictionary<string, YamlNode> byName)
+{
+    var current = control;
+    while (byName.TryGetValue(current, out var node))
+    {
+        if (TryGetControlBlock(yamlLines, node.Name, out var block))
+        {
+            var visible = GetOwnPropertyFormula(node.Name, block, "Visible");
+            if (!string.IsNullOrWhiteSpace(visible) &&
+                !Regex.IsMatch(
+                    RemovePowerFxWhitespaceOutsideLiterals(visible),
+                    @"^=true$",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                return false;
+            }
+        }
+        if (node.Parent is null)
+        {
+            break;
+        }
+        current = node.Parent;
+    }
+    return true;
+}
+
 void ValidateLayoutReachability(HashSet<string> requiredControls)
 {
     var nodes = BuildYamlNodes(yamlLines);
@@ -370,11 +513,33 @@ void ValidateLayoutReachability(HashSet<string> requiredControls)
             continue;
         }
 
-        var direction = ParseLayoutDirection(
-            GetOwnPropertyFormula(container.Name, block, "LayoutDirection"));
+        var directionFormula =
+            GetOwnPropertyFormula(container.Name, block, "LayoutDirection") ?? "";
+        var direction = ParseLayoutDirection(directionFormula);
         if (direction.Count == 0)
         {
-            continue;
+            var mayBeHorizontal = Regex.IsMatch(
+                directionFormula,
+                @"\bLayoutDirection\.Horizontal\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (mayBeHorizontal && !AllowsHorizontalEscape(container.Name, block))
+            {
+                errors.Add(
+                    $"Layout reachability: horizontal-capable container '{container.Name}' has an unresolved conditional LayoutDirection; use a numeric width comparison, an always-stacked direction, LayoutWrap, or exact horizontal Scroll.");
+            }
+
+            // Wrapping/scrolling can make an unparsed horizontal arm safe, but it does
+            // not make a reachable vertical arm exempt from fixed-height budgeting.
+            direction = Regex.IsMatch(
+                directionFormula,
+                @"\bLayoutDirection\.Vertical\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                ? [new("Vertical", null, null, null, null)]
+                : [];
+            if (direction.Count == 0)
+            {
+                continue;
+            }
         }
 
         if (direction.Any(branch => branch.Value == "Horizontal") &&
@@ -480,14 +645,24 @@ void ValidateHorizontalBudget(
             continue;
         }
 
+        var logicalWidthBranch = IsHostInsensitiveWidthSource(
+            branch.Source,
+            container,
+            byName);
+        if (logicalWidthBranch)
+        {
+            errors.Add(
+                $"Layout reachability: horizontal container '{container.Name}' relies on logical width source '{branch.Source}' to activate its narrow branch, but an embedded or scale-to-fit host may render narrower without changing that value; make the default/wide composition safe with LayoutWrap, exact horizontal Scroll, or an always-stacked layout.");
+        }
+
         double? available;
-        if (string.Equals(branch.Source, "App.Width", StringComparison.OrdinalIgnoreCase))
+        if (logicalWidthBranch)
         {
             available = ReadNarrowestLocalWidth(container.Name);
             if (available is null)
             {
                 errors.Add(
-                    $"Layout reachability: horizontal container '{container.Name}' uses App.Width for responsive composition, but no matching Layout Budget Evidence row provides its narrowest local/root available width; App.Width can differ from the rendered viewport in embedded or letterboxed hosts.");
+                    $"Layout reachability: horizontal container '{container.Name}' uses logical canvas width for responsive composition, but no matching Layout Budget Evidence row records the narrowest rendered host width for arithmetic diagnostics.");
                 continue;
             }
         }
@@ -614,7 +789,8 @@ void ValidateVerticalBudget(
                 heights.Value.Source,
                 branch.Source,
                 StringComparison.OrdinalIgnoreCase) &&
-            heights.Value.Threshold == branch.Threshold
+            heights.Value.Threshold == branch.Threshold &&
+            heights.Value.LowerIncludesThreshold == branch.LowerIncludesThreshold
                 ? [branch.IsLess == true ? heights.Value.Less : heights.Value.Else]
                 : heights.Value.Values;
         foreach (var containerHeight in reachableHeights)
@@ -646,11 +822,11 @@ static List<ConditionalBranch> ParseLayoutDirection(string? formula)
 
     if (Regex.IsMatch(formula, @"^=\s*LayoutDirection\.Horizontal\s*$", RegexOptions.IgnoreCase))
     {
-        return [new("Horizontal", null, null, null)];
+        return [new("Horizontal", null, null, null, null)];
     }
     if (Regex.IsMatch(formula, @"^=\s*LayoutDirection\.Vertical\s*$", RegexOptions.IgnoreCase))
     {
-        return [new("Vertical", null, null, null)];
+        return [new("Vertical", null, null, null, null)];
     }
 
     var condition = ParseConditional(formula);
@@ -658,8 +834,8 @@ static List<ConditionalBranch> ParseLayoutDirection(string? formula)
         ? []
         :
         [
-            new(CleanDirection(condition.Value.LessValue), condition.Value.Source, condition.Value.Threshold, true),
-            new(CleanDirection(condition.Value.ElseValue), condition.Value.Source, condition.Value.Threshold, false),
+            new(CleanDirection(condition.Value.LessValue), condition.Value.Source, condition.Value.Threshold, true, condition.Value.LowerIncludesThreshold),
+            new(CleanDirection(condition.Value.ElseValue), condition.Value.Source, condition.Value.Threshold, false, condition.Value.LowerIncludesThreshold),
         ];
 }
 
@@ -672,7 +848,7 @@ static NumericLayout? ParseNumericLayout(string? formula)
 
     if (TryParseNumber(formula, out var number))
     {
-        return new(null, null, number, number);
+        return new(null, null, number, number, null);
     }
 
     var condition = ParseConditional(formula);
@@ -683,7 +859,12 @@ static NumericLayout? ParseNumericLayout(string? formula)
         return null;
     }
 
-    return new(condition.Value.Source, condition.Value.Threshold, less, otherwise);
+    return new(
+        condition.Value.Source,
+        condition.Value.Threshold,
+        less,
+        otherwise,
+        condition.Value.LowerIncludesThreshold);
 }
 
 static ParsedConditional? ParseConditional(string formula)
@@ -702,16 +883,39 @@ static ParsedConditional? ParseConditional(string formula)
 
     var condition = Regex.Match(
         NormalizeWhitespace(parts[0]),
-        @"^(?<source>(?:App|Parent)\.Width)\s*<\s*(?<threshold>\d+(?:\.\d+)?)$",
+        @"^(?<source>(?:App|Parent|Self|[A-Za-z_][A-Za-z0-9_]*)\.Width)\s*(?<operator><=|>=|<|>)\s*(?<threshold>\d+(?:\.\d+)?)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    return condition.Success &&
-        double.TryParse(
+    if (!condition.Success ||
+        !double.TryParse(
             condition.Groups["threshold"].Value,
             System.Globalization.NumberStyles.Number,
             System.Globalization.CultureInfo.InvariantCulture,
-            out var threshold)
-        ? new(condition.Groups["source"].Value, threshold, parts[1], parts[2])
-        : null;
+            out var threshold))
+    {
+        return null;
+    }
+
+    // Canonicalize every comparison to lower-width and higher-width arms. For
+    // `>`/`>=`, the false arm is the lower-width arm. Treating the equality point
+    // conservatively at the threshold does not weaken either branch's budget.
+    var lowerIsTrue = condition.Groups["operator"].Value.StartsWith(
+        "<",
+        StringComparison.Ordinal);
+    var lowerIncludesThreshold =
+        condition.Groups["operator"].Value is "<=" or ">";
+    return lowerIsTrue
+        ? new(
+            condition.Groups["source"].Value,
+            threshold,
+            parts[1],
+            parts[2],
+            lowerIncludesThreshold)
+        : new(
+            condition.Groups["source"].Value,
+            threshold,
+            parts[2],
+            parts[1],
+            lowerIncludesThreshold);
 }
 
 static double? SelectBranchValue(NumericLayout? layout, ConditionalBranch branch)
@@ -724,13 +928,14 @@ static double? SelectBranchValue(NumericLayout? layout, ConditionalBranch branch
     {
         return layout.Value.Less;
     }
-    // App.Width branches are globally correlated with each other, but not with the local
+    // Named logical canvas/root width branches are globally correlated with each other, but not with the local
     // viewport's available pixels; callers separately require local/root width evidence.
     // Parent.Width remains scope-relative and therefore cannot be correlated across nodes.
     if (branch.Source is not null &&
-        string.Equals(layout.Value.Source, "App.Width", StringComparison.OrdinalIgnoreCase) &&
+        CanCorrelateLogicalWidthSource(layout.Value.Source) &&
         string.Equals(layout.Value.Source, branch.Source, StringComparison.OrdinalIgnoreCase) &&
-        layout.Value.Threshold == branch.Threshold)
+        layout.Value.Threshold == branch.Threshold &&
+        layout.Value.LowerIncludesThreshold == branch.LowerIncludesThreshold)
     {
         return branch.IsLess == true ? layout.Value.Less : layout.Value.Else;
     }
@@ -752,9 +957,10 @@ static double? ResolveDirectChildBranchSize(
 
     var conditional = ParseConditional(GetOwnPropertyFormula(control, block, sizeProperty) ?? "");
     if (conditional is null ||
-        !string.Equals(conditional.Value.Source, "App.Width", StringComparison.OrdinalIgnoreCase) ||
+        !CanCorrelateLogicalWidthSource(conditional.Value.Source) ||
         !string.Equals(conditional.Value.Source, branch.Source, StringComparison.OrdinalIgnoreCase) ||
-        conditional.Value.Threshold != branch.Threshold)
+        conditional.Value.Threshold != branch.Threshold ||
+        conditional.Value.LowerIncludesThreshold != branch.LowerIncludesThreshold)
     {
         return null;
     }
@@ -775,6 +981,46 @@ static double? ResolveDirectChildBranchSize(
     }
     return Math.Max(size, TryParseNumber(minimumFormula, out var floor) ? floor : 0);
 }
+
+static bool IsHostInsensitiveWidthSource(
+    string? source,
+    YamlNode container,
+    Dictionary<string, YamlNode> byName)
+{
+    if (string.IsNullOrWhiteSpace(source))
+    {
+        return false;
+    }
+    if (string.Equals(source, "App.Width", StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    var owner = source[..source.LastIndexOf('.')];
+    if (string.Equals(owner, "Parent", StringComparison.OrdinalIgnoreCase))
+    {
+        return container.Parent is not null &&
+            byName.TryGetValue(container.Parent, out var parent) &&
+            parent.IsScreen;
+    }
+    if (string.Equals(owner, "Self", StringComparison.OrdinalIgnoreCase))
+    {
+        return container.Parent is not null &&
+            byName.TryGetValue(container.Parent, out var parent) &&
+            parent.IsScreen;
+    }
+
+    return byName.TryGetValue(owner, out var sourceNode) &&
+        (sourceNode.IsScreen ||
+            (sourceNode.Parent is not null &&
+                byName.TryGetValue(sourceNode.Parent, out var sourceParent) &&
+                sourceParent.IsScreen));
+}
+
+static bool CanCorrelateLogicalWidthSource(string? source) =>
+    !string.IsNullOrWhiteSpace(source) &&
+    !string.Equals(source, "Parent.Width", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(source, "Self.Width", StringComparison.OrdinalIgnoreCase);
 
 double? ReadNarrowestLocalWidth(string container)
 {
@@ -817,13 +1063,13 @@ static NumericLayout? ResolveChildLayoutBudget(
     {
         if (hasNumericMinimum)
         {
-            return new(null, null, minimum, minimum);
+            return new(null, null, minimum, minimum, null);
         }
         if (string.IsNullOrWhiteSpace(minimumFormula))
         {
             // Fill children consume only their explicit minimum from the fixed budget. With
             // no minimum, AutoLayout distributes the remaining space, so Width is irrelevant.
-            return new(null, null, 0, 0);
+            return new(null, null, 0, 0, null);
         }
         return null;
     }
@@ -841,7 +1087,8 @@ static NumericLayout? ResolveChildLayoutBudget(
         size.Value.Source,
         size.Value.Threshold,
         Math.Max(size.Value.Less, floor),
-        Math.Max(size.Value.Else, floor));
+        Math.Max(size.Value.Else, floor),
+        size.Value.LowerIncludesThreshold);
 }
 
 static double SelectCorrelatedOrMaximum(
@@ -852,7 +1099,8 @@ static double SelectCorrelatedOrMaximum(
     if (layout.Source is not null &&
         string.Equals(layout.Source, "App.Width", StringComparison.OrdinalIgnoreCase) &&
         string.Equals(container.Source, layout.Source, StringComparison.OrdinalIgnoreCase) &&
-        container.Threshold == layout.Threshold)
+        container.Threshold == layout.Threshold &&
+        container.LowerIncludesThreshold == layout.LowerIncludesThreshold)
     {
         return containerValue == container.Less ? layout.Less : layout.Else;
     }
@@ -3933,17 +4181,20 @@ readonly record struct ParsedConditional(
     string Source,
     double Threshold,
     string LessValue,
-    string ElseValue);
+    string ElseValue,
+    bool LowerIncludesThreshold);
 readonly record struct ConditionalBranch(
     string Value,
     string? Source,
     double? Threshold,
-    bool? IsLess);
+    bool? IsLess,
+    bool? LowerIncludesThreshold);
 readonly record struct NumericLayout(
     string? Source,
     double? Threshold,
     double Less,
-    double Else)
+    double Else,
+    bool? LowerIncludesThreshold)
 {
     public IEnumerable<double> Values =>
         Source is null || Less == Else ? [Less] : [Less, Else];

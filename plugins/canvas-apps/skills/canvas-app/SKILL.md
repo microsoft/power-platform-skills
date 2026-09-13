@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.13
+version: 3.0.14
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.13`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.14`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -324,11 +324,12 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - For every list-driven runtime requirement, require post-export proof showing at least
   one real rendered row and its required row action. An interactive-descendant count of
   four on an expected list/action screen is runtime hard-fail evidence, never static PASS.
-- Prefer local/root width for responsive AutoLayout. Do not correlate `Parent.Width`
-  across nesting levels, because padding changes scope, and do not treat `App.Width` as
-  the rendered viewport in embedded or letterboxed hosts. An `App.Width`-driven horizontal
-  container needs matching Layout Budget Evidence with its narrowest supported local/root
-  rendered width. Otherwise enumerate and numerically budget every reachable combination.
+- Do not correlate `Parent.Width` across nesting levels, because padding changes scope.
+  `App.Width`, named root width, and root `Parent.Width` may remain at logical design
+  width in embedded or scale-to-fit hosts. Because `.pa.yaml` exposes no proven display
+  settings contract, self-reported Layout Budget Evidence cannot prove a narrow branch
+  activates. Required field/action groups must wrap, stack, deliberately scroll, or fit
+  a static wide/default bound independently of branch activation.
 - Numerically verify every horizontal branch: total available container/root width must
   fit left/right padding + child fixed/`LayoutMinWidth` totals + gaps. A `FillPortions > 0` child contributes
   its explicit numeric `LayoutMinWidth`, with absent/zero contributing zero; do not require
@@ -350,6 +351,13 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
 - Treat every layout budget as static formula/bounds evidence, never as proof that the
   running browser rendered, scrolled, or exposed the control. Runtime reachability still
   requires browser evidence.
+- Require every accepted action's classic or modern TextInput, NumberInput, Radio,
+  DropDown, and ComboBox to have a persistent human-readable visible label under the same
+  immediate field-region parent. This includes `ModernTextInput`, `ModernNumberInput`,
+  `ModernRadio`, `ModernDropdown`, and `ModernCombobox`, with optional versions. Record
+  Data Entry Label Evidence unless the control is a `ModernNumberInput` with a native
+  visible `Label`; all other types need a sibling Text/Label control. `AccessibleLabel`
+  and `HintText` do not count as the field's visible name.
 - When Approve and Reject/Decline are paired contracts, verify every eligible pending record
   exposes both decisions on the same row or the same immediately reachable detail at phone
   width. Send the owning screen back when either decision is missing; never accept a

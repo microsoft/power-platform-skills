@@ -152,6 +152,16 @@ not machine-check this table; it is a required reviewer/authoring proof.]
 | ---- | ------------------------- | --------------------------------------------------------- | ------------------------------------------------------------ | ------ |
 | [Receive/Issue] | [e.g. `varSelectedInventoryId`] | [e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`] | [exact `Control.Property: =formula` reading canonical source, e.g. `btnIssue.OnSelect: =Set(varOldQuantity, LookUp(colInventory, ID = varSelectedInventoryId).Quantity); ...`] | PASS |
 
+## Data Entry Label Contracts
+
+| Required input | Persistent visible label | Shared field region |
+| -------------- | ------------------------ | ------------------- |
+| [classic/modern TextInput, NumberInput, Radio, DropDown, or ComboBox] | [exact sibling label binding; native visible Label only for ModernNumberInput] | [immediate parent field row/group containing both] |
+
+[Include every data-entry control consumed by an accepted action. AccessibleLabel and
+HintText do not replace a persistent visible field name. Modern variants and optional
+versions are in scope.]
+
 ## Layout Budget Contracts
 
 | Screen / container | Branch / screen-width source | Horizontal total-width arithmetic | Vertical height arithmetic | Protected controls |
@@ -160,9 +170,10 @@ not machine-check this table; it is a required reviewer/authoring proof.]
 
 [Include every nested AutoLayout container participating in a coordinated breakpoint,
 every horizontal AutoLayout branch, and every fixed-height vertical AutoLayout branch.
-Repeat the same container in separate rows for each axis/branch when necessary.
-Over-budget rows must wrap, scroll with a visible affordance, stack, or switch at a higher
-threshold.]
+Repeat the same container in separate rows for each axis/branch when necessary. Logical
+canvas/root width may remain at design width in a scale-to-fit host, so the wide/default
+field and action composition must fit a static bound, wrap, deliberately scroll, or stack
+without relying on narrow-branch activation.]
 
 ## Working Directory
 
@@ -239,6 +250,12 @@ Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable/Disable into one c
 controls, or observer are touched by this edit. This is the regression contract. When an
 opposing pair is affected, include one concrete scenario per direction and verify explicit
 before/amount/after semantics.]
+
+## Data Entry Label Contracts
+
+| Required input | Persistent visible label | Shared field region |
+| -------------- | ------------------------ | ------------------- |
+| [changed/affected classic or modern data-entry control] | [exact sibling label binding; native visible Label only for ModernNumberInput] | [immediate parent field row/group] |
 
 ## Layout Budget Contracts
 

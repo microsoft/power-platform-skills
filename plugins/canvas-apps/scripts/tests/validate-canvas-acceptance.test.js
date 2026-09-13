@@ -878,6 +878,11 @@ function materialize(
             screenYaml, 'Value(txtAmount.Text)', 'numAdjustAmount.Value', 'modern amount YAML');
         acceptance = replaceAllRequired(
             acceptance, 'Value(txtAmount.Text)', 'numAdjustAmount.Value', 'modern amount evidence');
+        acceptance = replaceOnceRequired(
+            acceptance,
+            '| txtAmount | lblAmount.Text | Screen1 |',
+            '| numAdjustAmount | lblAmount.Text | Screen1 |',
+            'modern amount label evidence');
     }
 
     if (modernAmount || modernAmountDefaultZero || stagedAmountMinOne) {
@@ -1111,30 +1116,63 @@ function materializeLayout(caseName, { responsive = false } = {}) {
                     PaddingLeft: =16
                     PaddingRight: =16${adjustEscape}
                 Children:
-                    - cmbAdjustItem:
-                        Control: Classic/ComboBox
+                    - fldAdjustItem:
+                        Control: GroupContainer
                         Properties:
-                            DefaultSelectedItems: =[]
-                            Items: =colInventory
                             Height: =48
                             Width: =180
                             LayoutMinWidth: =180
-                    - drpOperation:
-                        Control: Classic/DropDown
+                        Children:
+                            - lblAdjustItem:
+                                Control: Text
+                                Properties:
+                                    Text: ="Inventory item"
+                            - cmbAdjustItem:
+                                Control: Classic/ComboBox
+                                Properties:
+                                    DefaultSelectedItems: =[]
+                                    Items: =colInventory
+                                    Height: =48
+                                    Width: =180
+                                    LayoutMinWidth: =180
+                    - fldOperation:
+                        Control: GroupContainer
                         Properties:
-                            AllowEmptySelection: =true
-                            Default: =Blank()
-                            Items: =["Receive", "Issue"]
                             Height: =48
                             Width: =140
                             LayoutMinWidth: =140
-                    - txtAmount:
-                        Control: Classic/TextInput
+                        Children:
+                            - lblOperation:
+                                Control: Text
+                                Properties:
+                                    Text: ="Operation"
+                            - drpOperation:
+                                Control: Classic/DropDown
+                                Properties:
+                                    AllowEmptySelection: =true
+                                    Default: =Blank()
+                                    Items: =["Receive", "Issue"]
+                                    Height: =48
+                                    Width: =140
+                                    LayoutMinWidth: =140
+                    - fldAmount:
+                        Control: GroupContainer
                         Properties:
-                            Format: =TextFormat.Number
                             Height: =86
                             Width: =180
                             LayoutMinWidth: =180
+                        Children:
+                            - lblAmount:
+                                Control: Text
+                                Properties:
+                                    Text: ="Amount"
+                            - txtAmount:
+                                Control: Classic/TextInput
+                                Properties:
+                                    Format: =TextFormat.Number
+                                    Height: =86
+                                    Width: =180
+                                    LayoutMinWidth: =180
                     - btnReceive:
                         Control: Classic/Button
                         Properties:
@@ -1277,6 +1315,12 @@ function nestSharedApplyInVisibleContainer(workspace, formula) {
     });
 }
 
+function removeDataEntryLabelEvidence(acceptance, control) {
+    return acceptance.replace(
+        new RegExp(`^\\| ${control} \\|[^\\r\\n]*\\r?\\n`, 'm'),
+        '');
+}
+
 test.after(() => fs.rmSync(workRoot, { recursive: true, force: true }));
 
 test('accepts a correctly-signed Receive/Issue workspace with a four-space screen key', () => {
@@ -1284,6 +1328,203 @@ test('accepts a correctly-signed Receive/Issue workspace with a four-space scree
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.match(stdout, /PASS:/);
+});
+
+test('rejects three mutation inputs that expose only AccessibleLabel or HintText', () => {
+    const workspace = materialize('receive-unlabeled-input-strip');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace(/            - lblAdjustItem:[\s\S]*?                    Text: ="Inventory item"\r?\n/, '')
+        .replace(/            - lblOperation:[\s\S]*?                    Text: ="Operation"\r?\n/, '')
+        .replace(/            - lblAmount:[\s\S]*?                    Text: ="Amount"\r?\n/, '')
+        .replace(
+            '                    Items: =colInventory',
+            '                    AccessibleLabel: ="Inventory item"\n                    Items: =colInventory')
+        .replace(
+            '                    Items: =["Receive", "Issue"]',
+            '                    AccessibleLabel: ="Operation"\n                    Items: =["Receive", "Issue"]')
+        .replace(
+            '                    Format: =TextFormat.Number',
+            '                    AccessibleLabel: ="Amount"\n                    HintText: ="Quantity"\n                    Format: =TextFormat.Number'));
+    rewriteScreen(workspace, (yaml) => {
+        const start = yaml.indexOf('            - cmbAdjustItem:');
+        const end = yaml.indexOf('            - btnReceive:', start);
+        assert.ok(start >= 0 && end > start, 'expected three-input strip');
+        const inputs = yaml.slice(start, end)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        return yaml.slice(0, start) +
+            '            - conAddFields:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Height: =48\n' +
+            '                    Width: =513\n' +
+            '                    LayoutDirection: =LayoutDirection.Horizontal\n' +
+            '                Children:\n' +
+            inputs +
+            yaml.slice(end);
+    });
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    let acceptance = fs.readFileSync(acceptancePath, 'utf8');
+    for (const control of ['cmbAdjustItem', 'drpOperation', 'txtAmount']) {
+        acceptance = removeDataEntryLabelEvidence(acceptance, control);
+    }
+    fs.writeFileSync(acceptancePath, acceptance);
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unlabeled input strip to fail');
+    for (const control of ['cmbAdjustItem', 'drpOperation', 'txtAmount']) {
+        assert.match(stderr, new RegExp(`required control '${control}'.*persistent visible human-readable label`));
+    }
+});
+
+test('accepts separate visible label and input evidence in one field region', () => {
+    const workspace = materialize('receive-visible-field-labels');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected visible field labels to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects label evidence whose visible field name is hidden', () => {
+    const workspace = materialize('receive-hidden-field-label');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Text: ="Amount"',
+        '                    Text: ="Amount"\n                    Visible: =false'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected hidden field label to fail');
+    assert.match(stderr, /evidence for required control 'txtAmount'.*persistent visible label binding/);
+});
+
+test('accepts a compact field group with a visible sibling label', () => {
+    const workspace = materialize('receive-compact-field-group');
+    rewriteScreen(workspace, (yaml) => {
+        const labelStart = yaml.indexOf('            - lblAmount:');
+        const inputEnd = yaml.indexOf('            - btnReceive:', labelStart);
+        assert.ok(labelStart >= 0 && inputEnd > labelStart, 'expected amount label/input block');
+        const fieldChildren = yaml.slice(labelStart, inputEnd)
+            .replace('                    Text: ="Amount"', '                    Text: ="Amount"\n                    Height: =24')
+            .replace('                    Format: =TextFormat.Number', '                    Format: =TextFormat.Number\n                    Height: =48')
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        return yaml.slice(0, labelStart) +
+            '            - conAmountField:\n' +
+            '                Control: GroupContainer\n' +
+            '                Variant: AutoLayout\n' +
+            '                Properties:\n' +
+            '                    Height: =80\n' +
+            '                    LayoutDirection: =LayoutDirection.Vertical\n' +
+            '                Children:\n' +
+            fieldChildren +
+            yaml.slice(inputEnd);
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected compact labeled field group to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a supported native visible Label property without duplicate label evidence', () => {
+    const workspace = materialize(
+        'receive-native-number-label',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Default: =0',
+        '                    Label: ="Amount"\n                    Default: =0'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        removeDataEntryLabelEvidence(
+            fs.readFileSync(acceptancePath, 'utf8'),
+            'numAdjustAmount'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected native visible label to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+for (const modernType of [
+    'ModernTextInput@1.0.0',
+    'ModernDropdown@1.0.0',
+    'ModernCombobox@1.0.0',
+    'ModernRadio@1.0.0',
+]) {
+    test(`rejects an unlabeled required ${modernType}`, () => {
+        const workspace = materialize(`receive-unlabeled-${modernType.split('@')[0].toLowerCase()}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            'Control: Classic/TextInput',
+            `Control: ${modernType}`));
+        const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+        fs.writeFileSync(
+            acceptancePath,
+            removeDataEntryLabelEvidence(
+                fs.readFileSync(acceptancePath, 'utf8'),
+                'txtAmount'));
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected unlabeled ${modernType} to fail`);
+        assert.match(stderr, /required control 'txtAmount'.*persistent visible human-readable label/);
+    });
+
+    test(`accepts a visible sibling label for required ${modernType}`, () => {
+        const workspace = materialize(`receive-labeled-${modernType.split('@')[0].toLowerCase()}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            'Control: Classic/TextInput',
+            `Control: ${modernType}`));
+        const { code, stdout, stderr } = runValidator(workspace);
+        assert.strictEqual(
+            code,
+            0,
+            `expected labeled ${modernType} to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    });
+}
+
+test('rejects an unlabeled required ModernNumberInput', () => {
+    const workspace = materialize(
+        'receive-unlabeled-modern-number',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        removeDataEntryLabelEvidence(
+            fs.readFileSync(acceptancePath, 'utf8'),
+            'numAdjustAmount'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unlabeled ModernNumberInput to fail');
+    assert.match(stderr, /required control 'numAdjustAmount'.*persistent visible human-readable label/);
+});
+
+test('accepts a visible sibling label for required versioned ModernNumberInput', () => {
+    const workspace = materialize(
+        'receive-labeled-modern-number',
+        { sharedApplyFlow: true, modernAmountDefaultZero: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Control: ModernNumberInput',
+        'Control: ModernNumberInput@1.0.0'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected labeled versioned ModernNumberInput to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not accept a fabricated native Label property on Classic/TextInput', () => {
+    const workspace = materialize('receive-fabricated-classic-label');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Format: =TextFormat.Number',
+        '                    Label: ="Amount"\n                    Format: =TextFormat.Number'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        removeDataEntryLabelEvidence(
+            fs.readFileSync(acceptancePath, 'utf8'),
+            'txtAmount'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected fabricated classic Label to fail');
+    assert.match(stderr, /required control 'txtAmount'.*persistent visible human-readable label/);
 });
 
 test('rejects exported-shape horizontal, nested-breakpoint, and receipt layout clipping', () => {
@@ -1341,6 +1582,9 @@ test('accepts bounded non-fill sizes with zero layout minimums', () => {
         .replace('\n                            LayoutWrap: =true', '')
         .replaceAll('App.Width<640', 'App.Width<900')
         .replace(
+            'LayoutDirection: =If(App.Width<900,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'Width: =900\n                    LayoutDirection: =LayoutDirection.Horizontal')
+        .replace(
             /^(\s*)LayoutMinWidth: =(\d+)$/gm,
             '$1LayoutMinWidth: =0')
         .replace(
@@ -1357,7 +1601,10 @@ test('accepts a numeric horizontal budget without LayoutWrap', () => {
     const workspace = materializeLayout('receive-layout-arithmetic', { responsive: true });
     rewriteScreen(workspace, (yaml) => yaml
         .replace('\n                            LayoutWrap: =true', '')
-        .replaceAll('App.Width<640', 'App.Width<900'));
+        .replaceAll('App.Width<640', 'App.Width<900')
+        .replace(
+            'LayoutDirection: =If(App.Width<900,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'Width: =900\n                    LayoutDirection: =LayoutDirection.Horizontal'));
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(
         code,
@@ -1379,6 +1626,25 @@ test('rejects an App.Width horizontal branch that exceeds its local rendered-wid
     const { code, stderr } = runValidator(workspace);
     assert.notStrictEqual(code, 0, 'expected letterboxed App.Width composition to fail');
     assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 500px/);
+});
+
+test('rejects a logical root.Width branch that can stay wide in a 513px host viewport', () => {
+    const workspace = materializeLayout('receive-layout-root-width-scale-fit', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =If(Screen1.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)'));
+    const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    fs.writeFileSync(
+        acceptancePath,
+        fs.readFileSync(acceptancePath, 'utf8').replace(
+            '| local/root contract | 900px |',
+            '| logical root branch; local/root host contract | 513px |'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected logical root width in a narrow host to fail closed');
+    assert.match(stderr, /relies on logical width source 'Screen1.Width'/);
+    assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 513px/);
 });
 
 test('rejects the canonical conAdjustNav 680px wide branch against a 500px local viewport', () => {
@@ -1434,7 +1700,7 @@ test('rejects the canonical conAdjustNav 680px wide branch against a 500px local
     assert.match(stderr, /horizontal container 'conAdjustNav' requires 680px.*at most 500px/);
 });
 
-test('allows duplicate per-axis and per-branch layout evidence rows without reading height as width', () => {
+test('allows duplicate per-axis evidence rows without reading height as width', () => {
     const workspace = materializeLayout('receive-layout-duplicate-evidence', { responsive: true });
     rewriteScreen(workspace, (yaml) => yaml
         .replace('\n                            LayoutWrap: =true', '')
@@ -1444,11 +1710,11 @@ test('allows duplicate per-axis and per-branch layout evidence rows without read
         acceptancePath,
         '| Stock Adjustment / conAdjustPanel | QACHK-NO-HEIGHT-TRAP | local/root vertical | 100px height | 5px incidental note | controls | PASS |\n' +
         '| Stock Adjustment / conAdjustPanel | QACHK-HORIZONTAL-BUDGET | local/root desktop branch | 1000px | 860px required; 12px gap | controls | PASS |\n');
-    const { code, stdout, stderr } = runValidator(workspace);
-    assert.strictEqual(
-        code,
-        0,
-        `expected duplicate per-axis evidence to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'logical-width responsive composition must still fail closed');
+    assert.match(stderr, /relies on logical width source 'App.Width'/);
+    assert.doesNotMatch(stderr, /requires 860px.*at most 100px/);
+    assert.doesNotMatch(stderr, /Duplicate row 'Stock Adjustment \/ conAdjustPanel'/);
 });
 
 test('uses the narrowest matching horizontal layout evidence row', () => {
@@ -1465,13 +1731,12 @@ test('uses the narrowest matching horizontal layout evidence row', () => {
     assert.match(stderr, /horizontal container 'conAdjustPanel' requires 860px.*at most 700px/);
 });
 
-test('accepts a stacked local Parent.Width composition with a sufficient wide branch', () => {
+test('accepts an always-stacked local composition', () => {
     const workspace = materializeLayout('receive-layout-local-width', { responsive: true });
     rewriteScreen(workspace, (yaml) => yaml
         .replace(
             'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
-            'Width: =900\n' +
-            '                    LayoutDirection: =If(Parent.Width<900,LayoutDirection.Vertical,LayoutDirection.Horizontal)')
+            'LayoutDirection: =LayoutDirection.Vertical')
         .replace('\n                            LayoutWrap: =true', ''));
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(
@@ -1480,12 +1745,93 @@ test('accepts a stacked local Parent.Width composition with a sufficient wide br
         `expected local-width responsive composition to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
 });
 
+for (const [slug, operator, trueDirection, falseDirection] of [
+    ['lt', '<', 'Vertical', 'Horizontal'],
+    ['lte', '<=', 'Vertical', 'Horizontal'],
+    ['gt', '>', 'Horizontal', 'Vertical'],
+    ['gte', '>=', 'Horizontal', 'Vertical'],
+]) {
+    test(`parses responsive LayoutDirection with ${operator}`, () => {
+        const workspace = materializeLayout(`receive-layout-operator-${slug}`, { responsive: true });
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            `LayoutDirection: =If(App.Width ${operator} 640, LayoutDirection.${trueDirection}, LayoutDirection.${falseDirection})`));
+        const { code, stdout, stderr } = runValidator(workspace);
+        assert.strictEqual(
+            code,
+            0,
+            `expected ${operator} conditional to parse.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    });
+}
+
+test('rejects an unresolved state-based horizontal-capable LayoutDirection', () => {
+    const workspace = materializeLayout('receive-layout-unparsed-state-direction', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('\n                            LayoutWrap: =true', '')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =If(varIsMobile,LayoutDirection.Vertical,LayoutDirection.Horizontal)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unresolved conditional direction to fail closed');
+    assert.match(
+        stderr,
+        /horizontal-capable container 'conAdjustPanel' has an unresolved conditional LayoutDirection/);
+});
+
+test('allows an unresolved horizontal-capable direction when wrapping guarantees escape', () => {
+    const workspace = materializeLayout('receive-layout-unparsed-wrapped', { responsive: true });
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+        'LayoutDirection: =If(varIsMobile,LayoutDirection.Vertical,LayoutDirection.Horizontal)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected wrapped conditional direction to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not describe nested local Parent.Width as host-insensitive logical width', () => {
+    const workspace = materializeLayout('receive-layout-nested-parent-width', { responsive: true });
+    rewriteScreen(workspace, (yaml) => {
+        let nested = yaml
+            .replace('\n                            LayoutWrap: =true', '')
+            .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'LayoutDirection: =If(Parent.Width<1000,LayoutDirection.Vertical,LayoutDirection.Horizontal)');
+        const start = nested.indexOf('            - conAdjustPanel:');
+        const end = nested.indexOf('            - conManageFormPanel:', start);
+        assert.ok(start >= 0 && end > start, 'expected adjustment panel block');
+        const panel = nested.slice(start, end)
+            .split('\n')
+            .map((line) => line ? `    ${line}` : line)
+            .join('\n');
+        nested = nested.slice(0, start) +
+            '            - conOuter:\n' +
+            '                Control: GroupContainer\n' +
+            '                Properties:\n' +
+            '                    Width: =1000\n' +
+            '                Children:\n' +
+            panel +
+            nested.slice(end);
+        return nested;
+    });
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected nested local Parent.Width budget to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.doesNotMatch(stderr, /relies on logical width source 'Parent.Width'/);
+});
+
 test('accepts FillPortions children without Width or LayoutMinWidth', () => {
     const workspace = materializeLayout('receive-layout-fill-portions', { responsive: true });
     rewriteScreen(workspace, (yaml) => yaml
         .replace('\n                            LayoutWrap: =true', '')
         .replace(/^(\s*)Width: =\d+\n/gm, '')
-        .replaceAll(/LayoutMinWidth: =\d+/g, 'FillPortions: =1'));
+        .replaceAll(/LayoutMinWidth: =\d+/g, 'FillPortions: =1')
+        .replace(
+            'LayoutDirection: =If(App.Width<640,LayoutDirection.Vertical,LayoutDirection.Horizontal)',
+            'Width: =900\n                    LayoutDirection: =LayoutDirection.Horizontal'));
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(
         code,
@@ -1503,10 +1849,10 @@ test('rejects each unresolved horizontal child with an actionable diagnostic', (
     assert.notStrictEqual(code, 0, 'expected unresolved child width to fail');
     assert.match(
         stderr,
-        /horizontal container 'conAdjustPanel' child 'cmbAdjustItem'.*numeric Width.*numeric LayoutMinWidth/);
+        /horizontal container 'conAdjustPanel' child 'fldAdjustItem'.*numeric Width.*numeric LayoutMinWidth/);
     assert.match(
         stderr,
-        /horizontal container 'conAdjustPanel' child 'drpOperation'.*numeric Width.*numeric LayoutMinWidth/);
+        /horizontal container 'conAdjustPanel' child 'fldOperation'.*numeric Width.*numeric LayoutMinWidth/);
 });
 
 test('gives implemented remedies for a non-App.Width unresolved horizontal container', () => {

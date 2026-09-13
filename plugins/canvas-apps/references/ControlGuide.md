@@ -153,6 +153,15 @@ ItemDisplayText: =ThisItem.Value
 A dropdown whose options all appear empty is almost always this mistake. When `Items` is
 already a single-column table you can omit `ItemDisplayText` entirely.
 
+Every required data-entry control needs a persistent visible human-readable field label.
+Keep a Text/Label control beside the input under the same immediate field-group parent.
+`AccessibleLabel` and `HintText` remain useful for accessibility and entry guidance, but
+they do not replace the persistent field name. This applies to classic and modern
+TextInput, NumberInput, Radio, DropDown, and ComboBox controls, including versioned
+exports (`ModernTextInput`, `ModernNumberInput`, `ModernRadio`, `ModernDropdown`, and
+`ModernCombobox`). The static contract recognizes a native visible `Label` only for
+`ModernNumberInput`; all other types need a real sibling Text/Label control.
+
 For Dropdown, ComboBox, and other controls with a `Default` property, `Items` is not an
 output property and cannot be referenced as `Self.Items` from the default formula. Use an
 explicit value or record compatible with `Items`, or derive it directly from the same

@@ -1,8 +1,16 @@
 Runtime evaluation: NOT RUN
 
 Plugin root: {{PLUGIN_ROOT}}
-Skill contract version: 3.0.13
+Skill contract version: 3.0.14
 Source revision: test-fixture
+
+## Data Entry Label Evidence
+
+| Control | Visible label binding | Shared layout region |
+| --- | --- | --- |
+| drpMngAdjustItem | lblAdjustItem.Text | Screen1 |
+| drpMngOperation | lblOperation.Text | Screen1 |
+| numMngAdjustAmount | lblAmount.Text | Screen1 |
 
 ## Action Contract Acceptance
 

@@ -226,6 +226,12 @@ Source revision: [git revision, package version, or "unavailable"]
 | --------- | ------------- | ------------- | ---------------- | ------------------------------ | ------ |
 | [key]     | [control]     | [formula]     | [card/row/detail path] | [normal-state bounds and text fit] | PASS |
 
+## Data Entry Label Evidence
+
+| Control | Visible label binding | Shared layout region |
+| ------- | --------------------- | -------------------- |
+| [required input] | [exact `lblField.Text` binding, unless a supported native visible Label is used] | [field row/group shared by label and input] |
+
 ## Functional Test Matrix Results
 
 | Scenario   | Static trace result | Evidence                       |
@@ -265,8 +271,9 @@ short Git revision. If the installed plugin is not in a Git worktree, record sou
 revision `unavailable`; never substitute the app workspace revision.
 
 
-The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN` is
-required because symbolic inspection is not browser execution. Replace it only when a
+The artifact is authoritative over builder summaries. `Runtime evaluation: NOT RUN`
+means this static acceptance validation ran, but browser/runtime evaluation did not.
+It does not mean acceptance was skipped. Replace it only when a
 fresh runtime evaluator returns a recorded result for this generated app.
 Even a recorded runtime success for directional arithmetic (for example,
 `10 + 3 = 13`, then `13 - 2 = 11`) proves only those executed transitions. It does not
@@ -339,18 +346,26 @@ Require `## Layout Budget Evidence` with numeric rows for every applicable
 `QACHK-HORIZONTAL-BUDGET`, and `QACHK-PRIMARY-ACTION-REACHABILITY` PASS. For horizontal
 branches, record total available container/root width and compare it with left/right
 padding + child fixed/minimum widths + gaps. For fixed-height vertical branches, record child fixed/minimum heights, wrapped text,
-gaps, and padding against `Height`. Use one screen-level width source for coordinated
-nested parent/child branches only when its local rendered-width contract is also known,
-or enumerate every reachable cross-branch combination. `App.Width` alone is not local
-viewport evidence in an embedded or letterboxed host. Record a matching row for each
-`App.Width`-driven horizontal container, with its narrowest supported local/root width in
-`Available size`.
+gaps, and padding against `Height`. Enumerate every reachable cross-branch combination.
+Logical `App.Width`, named-root width, and root `Parent.Width` are not rendered-host
+viewport evidence in embedded or scale-to-fit hosts. Record narrowest-host arithmetic
+when known, but never use that self-reported row to prove the narrow branch activates.
 Repeat a container in separate rows for each axis or responsive branch as needed; identify
 the applicable `QACHK` and branch in each row. `Available size` is the total width/height
 for that row, not a post-padding value.
 Evidence must show amount controls and Save/primary mutation actions remain reachable and
 all five labeled receipt fields fit together. These calculations are static evidence only;
 a browser evaluation remains necessary to prove rendered reachability.
+
+Include `## Data Entry Label Evidence` for every required classic or modern TextInput,
+NumberInput, Radio, DropDown, and ComboBox consumed by accepted action formulas,
+including `ModernTextInput`, `ModernNumberInput`, `ModernRadio`, `ModernDropdown`, and
+`ModernCombobox`. Name the exact visible label binding and immediate shared parent/field
+region. `AccessibleLabel` and `HintText` do not count. Only a `ModernNumberInput` with a
+native visible `Label` may omit the row; every other type needs a sibling label.
+Logical canvas width evidence is never proof that a narrow branch activates in an
+embedded or scale-to-fit host; without settings exposed in `.pa.yaml`, require wrapping,
+always-stacked fields, deliberate scrolling, or a statically bounded wide/default branch.
 
 For list-driven requirements, post-export/runtime proof must include a screenshot with at
 least one real data row visibly rendered and its required row action reachable. A runtime

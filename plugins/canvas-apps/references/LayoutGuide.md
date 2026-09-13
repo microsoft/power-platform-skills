@@ -86,7 +86,8 @@ For flexible, responsive designs:
 ## Keep responsive layout out of state
 
 Layout must react to the current size, not to a variable captured during navigation.
-Write breakpoints directly in layout properties:
+Write breakpoints directly in layout properties. Use `Parent.Width` this way only when
+`Parent` is a proven nested local layout region whose width follows the rendered space:
 
 ```yaml
 LayoutDirection: =If(Parent.Width < 640, LayoutDirection.Vertical, LayoutDirection.Horizontal)
@@ -94,12 +95,25 @@ LayoutDirection: =If(Parent.Width < 640, LayoutDirection.Vertical, LayoutDirecti
 
 Do not set `varIsMobile`, `varColumns`, `varPageWidth` or similar values in `OnVisible`
 and then read them from `Width`, `Height`, grid, visibility or direction properties.
-Studio can render before `OnVisible` runs, and resizing does not re-run the event. Use
-Prefer the responsive root or local container width. `App.Width` may describe a wider
-configured canvas than the viewport an embedded or letterboxed host actually renders.
-When `App.Width` is unavoidable, record the narrowest supported local/root rendered width
-in acceptance evidence and budget every horizontal branch to it; never use the breakpoint
-threshold itself as proof of available width.
+Studio can render before `OnVisible` runs, and resizing does not re-run the event.
+`App.Width`, a named root's `Width`, and root-level `Parent.Width` can describe the
+logical design canvas while an embedded or scale-to-fit host renders into a narrower
+physical viewport. Display settings are not available in `.pa.yaml`, so static acceptance
+cannot prove those values track the host. Required fields and actions must remain safe if
+the wide/default branch stays active: wrap, stack unconditionally, use deliberate
+scrolling, or fit the complete wide branch within a static numeric bound.
+
+## Keep persistent visible labels with inputs
+
+Every required classic or modern TextInput, NumberInput, Radio, DropDown, and ComboBox
+needs a persistent human-readable visible label in the same reachable field region.
+For static acceptance, a separate label and input must have the same immediate parent;
+put both in a dedicated field group rather than pointing to a label elsewhere on the
+screen. `AccessibleLabel` is for assistive technology, while `HintText` disappears
+during entry; neither tells every user what a populated field means. The current contract
+recognizes a native visible `Label` only on `ModernNumberInput`; all other input types
+need a real sibling label. Prefer separate stacked label/input rows or compact vertical
+field groups over an overlapping horizontal input strip.
 
 ## Grid layout
 
@@ -167,11 +181,12 @@ reflow strategy. Pick one:
 LayoutDirection: =LayoutDirection.Horizontal
 LayoutWrap: =true
 
-# 2. Stack: the row becomes a column below a breakpoint.
+# 2. Stack in a proven nested local region: the row becomes a column below a breakpoint.
 LayoutDirection: =If(Parent.Width < 640, LayoutDirection.Vertical, LayoutDirection.Horizontal)
 ```
 
-Every property is a formula, so a breakpoint can drive sizing and visibility too:
+Within that same proven nested local region, a breakpoint can drive sizing and visibility
+too:
 
 ```yaml
 Width: =If(Parent.Width < 640, Parent.Width, 320)

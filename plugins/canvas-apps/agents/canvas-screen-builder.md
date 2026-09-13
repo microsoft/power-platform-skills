@@ -230,11 +230,12 @@ Do not fix unrelated pre-existing issues.
   minimum/fixed height; for each horizontal case, add padding to the tallest child and any
   wrapped line. Include required quantity/status text, badges, and actions. Raise
   `TemplateSize` or simplify the row until every required field fits.
-- Across nested AutoLayout containers, use the screen brief's single screen-level width
-  source for every coordinated parent `Height`, child `LayoutDirection`, and related
-  breakpoint formula. Do not independently branch each level on `Parent.Width`; padding
-  changes that value by nesting level. If the brief explicitly permits different sources,
-  evaluate every reachable cross-branch combination before writing.
+- Do not rely on `App.Width`, root `Parent.Width`, or a named root's `Width` to activate a
+  narrow branch: embedded and scale-to-fit hosts may remain at logical design width while
+  rendering into a narrower physical viewport. Display settings are unavailable in
+  `.pa.yaml`, so required field/action groups must wrap, stack, deliberately scroll, or
+  fit safely even when the wide/default branch remains active. Self-reported layout
+  evidence cannot prove host viewport sensitivity.
 - Numerically budget every horizontal AutoLayout branch: compare total available container
   width with left/right padding + child fixed widths or `LayoutMinWidth` values + all
   gaps. For a child with `FillPortions > 0`, count its
@@ -268,6 +269,14 @@ Do not fix unrelated pre-existing issues.
   item text, and give required fields a valid default when the business rule permits one.
   Do not substitute an autocomplete combobox or any control that requires typed filtering
   or keyboard-only commitment.
+- Pair every required classic or modern TextInput, NumberInput, Radio, DropDown, and
+  ComboBox with a persistent human-readable label under the same immediate field-group
+  parent. This includes `ModernTextInput`, `ModernNumberInput`, `ModernRadio`,
+  `ModernDropdown`, and `ModernCombobox`. Static acceptance recognizes a native visible
+  `Label` only for `ModernNumberInput`; all other types need a sibling Text/Label control.
+  `AccessibleLabel` supports assistive technology and `HintText` disappears during entry;
+  neither is a persistent visible field label. Prefer stacked label/input field rows and
+  full-width buttons over a cramped horizontal radio/number strip.
 - A manageable primary-record row needs a visible Edit action. Its handler stores the
   stable record ID and prepopulates every editable input; Save updates that ID, preserves
   unchanged fields, exits edit mode, and reveals the changed values. Cancel clears edit
