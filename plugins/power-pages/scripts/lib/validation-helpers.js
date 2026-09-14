@@ -344,10 +344,30 @@ function parseEnvironmentUrl(whoOutput) {
   }
 }
 
+function parseActiveAuthListEnvironmentUrl(authListOutput) {
+  for (const line of String(authListOutput || '').split(/\r?\n/)) {
+    if (!/^\s*\[\d+\]\s+\*/.test(line)) continue;
+    const urls = line.match(/https:\/\/[^\s]+/gi) || [];
+    const environmentUrl = urls[urls.length - 1];
+    if (!environmentUrl) continue;
+    try {
+      return validateDataverseEnvironmentUrl(environmentUrl);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function getEnvironmentUrl() {
   try {
     const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
-    return parseEnvironmentUrl(output);
+    const envUrl = parseEnvironmentUrl(output);
+    if (envUrl) return envUrl;
+  } catch {}
+
+  try {
+    return parseActiveAuthListEnvironmentUrl(execSync('pac auth list', { encoding: 'utf8', timeout: 15000 }));
   } catch {
     return null;
   }
@@ -519,6 +539,7 @@ module.exports = {
   odataGetAll,
   getEnvironmentUrl,
   parseEnvironmentUrl,
+  parseActiveAuthListEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,
   CLOUD_TO_SITE_DOMAIN,

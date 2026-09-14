@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Browse Power Pages templates</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root{
+      --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
+      --text:#323130; --text-dim:#605e5c; --text-bright:#201f1e; --accent:#0078d4; --accent-bg:#0078d40a; --accent-border:#0078d425;
+      --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820; --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
+      --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
+      --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
+    }
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+    .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
+    .topbar-left{display:flex;align-items:center;gap:14px;}
+    .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
+    .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+    .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
+    .pill{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:600;letter-spacing:0.2px;border:1px solid var(--accent-border);background:var(--accent-bg);color:var(--accent);}
+    .layout{display:flex;min-height:calc(100vh - 65px);}
+    .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
+    .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
+    .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;font-family:var(--sans);text-align:left;}
+    .nav-btn.active{color:var(--accent);font-weight:600;border-left-color:var(--accent);background:var(--accent-bg);}
+    .nav-icon{font-size:15px;opacity:0.7;width:18px;text-align:center;}
+    .content{flex:1;padding:32px 40px 72px;max-width:1180px;}
+    h2{font-size:21px;font-weight:800;color:var(--text-bright);letter-spacing:-0.3px;margin-bottom:5px;}
+    h3{font-size:18px;font-weight:800;color:var(--text-bright);letter-spacing:-0.2px;margin-bottom:6px;}
+    .section-desc{font-size:13px;color:var(--text-dim);margin-bottom:20px;max-width:760px;}
+    .summary-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;margin-bottom:22px;font-size:14px;color:var(--text);line-height:1.75;}
+    .template-section{display:none;}
+    .template-section.active{display:block;animation:fadeIn 0.24s ease;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+    .template-hero{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:16px;}
+    .template-desc{font-size:14px;color:var(--text);margin:14px 0 24px;max-width:900px;}
+    .template-framework{font-size:11px;padding:4px 10px;border-radius:999px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;background:var(--pass-bg);border:1px solid var(--pass-border);color:var(--pass);white-space:nowrap;}
+    .template-meta{margin-bottom:12px;}
+    .field-label{font-size:11px;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:7px;}
+    .previews-label{margin-top:4px;}
+    .chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+    .chip{font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;background:var(--surface2);border:1px solid var(--border);color:var(--text);}
+    .muted{font-size:12px;color:var(--text-dim);}
+    .empty-note{font-size:13px;color:var(--text-dim);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;}
+    .preview-stack{display:grid;gap:28px;}
+    .preview-boundary{border:1px solid var(--border);background:var(--surface);box-shadow:var(--shadow-4);}
+    .preview-boundary figcaption{font-size:11px;color:var(--text-dim);font-family:var(--mono);padding:8px 12px;border-bottom:1px solid var(--border);background:var(--surface2);}
+    .preview-image{display:block;width:100%;height:auto;}
+    @media(max-width:900px){
+      .layout{flex-direction:column;}
+      .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);padding:8px;}
+      .nav-group-label{padding:8px 14px 4px;}
+      .nav-btn{border-left:none;border-bottom:2px solid transparent;width:auto;padding:10px 14px;}
+      .nav-btn.active{border-bottom-color:var(--accent);}
+      .content{padding:20px 16px 72px;}
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-left">
+      <img class="logo" src="./power-pages-icon.png" alt="Power Pages" />
+      <div>
+        <div class="topbar-title">Browse Power Pages templates</div>
+        <div class="topbar-sub">Review capabilities here, then return to the terminal for the actual choice.</div>
+      </div>
+    </div>
+    <span class="pill">__TEMPLATE_COUNT__ templates</span>
+  </div>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="nav-group-label">Templates</div>
+      __RAW_TEMPLATE_TABS_HTML__
+    </aside>
+    <main class="content">
+      __RAW_TEMPLATE_SECTIONS_HTML__
+    </main>
+  </div>
+  <script>
+    document.querySelectorAll('[data-tab]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-tab]').forEach((item) => item.classList.remove('active'));
+        document.querySelectorAll('.template-section').forEach((section) => section.classList.remove('active'));
+        button.classList.add('active');
+        document.getElementById(button.dataset.tab)?.classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>

@@ -468,15 +468,32 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (5 calls)
+### 6.13 `create-site` (20 calls: 13 gates + 7 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
+| `create-site:1.purpose` | gate | plan | 1 | Site name, purpose, or audience unclear — path-agnostic discovery prompt | nothing |
+| `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
+| `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
+| `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
+| `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
+| `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading website code | attachment-block-modified |
+| `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
+| `create-site:1.5.template-import` | gate | consent | 1.5 | Discovered solutions and website code downloaded and target env resolved — confirm importing required supporting artifacts and creating the code site | template-cache |
+| `create-site:1.5.update-installed` | gate | consent | 1.5 | One discovered solution is installed but the downloaded source is newer — confirm unmanaged update import; fires per matching solution iteration | template-cache |
+| `create-site:1.5.clone-existing` | gate | consent | 1.5 | Every supporting solution is same/newer — confirm skipping all imports and creating a new site from website code | template-cache |
+| `create-site:1.5.pack-failed` | gate | progress | 1.5 | Local validation or `pac solution pack` failed for one discovered solution before its Dataverse import attempt — retry, fall back, or stop; fires per failed solution iteration | template-cache |
+| `create-site:1.5.template-clone-location` | not-a-gate | — | 1.5 | Local destination selection before cloning the template; no directory or environment state changes until the later provisioning step | — |
+| `create-site:1.5.customize-template` | not-a-gate | — | 1.5 | Optional post-live choice to continue editing the local clone used to create the site | — |
+| `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone, identity inspection, dependency installation, build/output validation, or code-site upload failed - choose retry, from-scratch fallback, or stop | partial-template-clone |
+| `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
+| `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
 | `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
+
+Template-path note: when Phase 1.5 selects and installs a template, the workflow stops after activation/live preview and does **not** enter the from-scratch Phase 4 plan approval or Phase 8 deploy prompt. Those gates fire only on the from-scratch branch.
 
 ---
 

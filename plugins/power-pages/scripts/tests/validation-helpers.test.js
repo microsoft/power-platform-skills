@@ -261,6 +261,16 @@ test('parseEnvironmentUrl returns null when no URL label is present (and on empt
   assert.equal(parseEnvironmentUrl(null), null);
 });
 
+test('parseActiveAuthListEnvironmentUrl extracts the active auth profile Environment Url', () => {
+  const { parseActiveAuthListEnvironmentUrl } = require(helpersPath);
+  const output = [
+    'Index Active Kind      Name User                  Cloud  Type            Environment      Environment Url',
+    '[1]   *      UNIVERSAL      user@contoso.com      Public OperatingSystem PowerPagesProDev https://powerpagesprodev.crm.dynamics.com/',
+    '[2]          UNIVERSAL      user@contoso.com      Public OperatingSystem OtherEnv https://other.crm.dynamics.com/',
+  ].join('\n');
+  assert.equal(parseActiveAuthListEnvironmentUrl(output), 'https://powerpagesprodev.crm.dynamics.com');
+});
+
 test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync', (t) => {
   const originalExecSync = childProcess.execSync;
   childProcess.execSync = () => '  Org URL:   https://orgABC.crm.dynamics.com/\n';
@@ -269,5 +279,26 @@ test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync',
   delete require.cache[require.resolve(helpersPath)];
   const { getEnvironmentUrl } = require(helpersPath);
   assert.equal(getEnvironmentUrl(), 'https://orgabc.crm.dynamics.com');
+  delete require.cache[require.resolve(helpersPath)];
+});
+
+test('getEnvironmentUrl falls back to active pac auth list Environment Url when pac env who has no URL', (t) => {
+  const originalExecSync = childProcess.execSync;
+  childProcess.execSync = (command) => {
+    if (command === 'pac env who') return 'No organization selected\n';
+    if (command === 'pac auth list') {
+      return [
+        'Index Active Kind      Name User                  Cloud  Type            Environment      Environment Url',
+        '[1]   *      UNIVERSAL      user@contoso.com      Public OperatingSystem PowerPagesProDev https://powerpagesprodev.crm.dynamics.com/',
+      ].join('\n');
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+  t.after(() => { childProcess.execSync = originalExecSync; });
+  delete require.cache[require.resolve(helpersPath)];
+
+  const { getEnvironmentUrl } = require(helpersPath);
+
+  assert.equal(getEnvironmentUrl(), 'https://powerpagesprodev.crm.dynamics.com');
   delete require.cache[require.resolve(helpersPath)];
 });
