@@ -28,7 +28,7 @@ test('a clean spec reports ok with no errors', () => {
   assert.strictEqual(r.profile, 'plan', 'the default profile is plan, not deploy');
 });
 
-// Review finding. validateAppSpec defaults to the DEPLOY profile, which requires every generative
+// Regression contract. validateAppSpec defaults to the DEPLOY profile, which requires every generative
 // page to be implemented and every persona job to carry privileges. Both are deliberately absent
 // while a spec is being authored — which is exactly when the documented gates run this CLI — so a
 // deploy default rejected normal work-in-progress specs and would have broken the authoring flow.
@@ -51,7 +51,7 @@ test('an unknown profile is rejected by name rather than silently falling back',
   assert.ok(r.errors.some((e) => /unknown profile 'nope'/.test(e)), JSON.stringify(r.errors));
 });
 
-// Review finding (#562). `|| 'plan'` treated the EMPTY STRING as "not supplied". A supplied-but-empty
+// Regression contract. `|| 'plan'` treated the EMPTY STRING as "not supplied". A supplied-but-empty
 // profile is a caller who asked for a profile and gave none — most plausibly a CI wrapper whose
 // `--profile=$PROFILE` expanded empty — and folding it into the default silently ran the weaker plan
 // gate while the job believed it had requested `deploy`. Only `undefined` may take the default.
@@ -66,7 +66,7 @@ test('an EMPTY profile is rejected rather than silently defaulting to plan', () 
   assert.strictEqual(lintSpec(good(), {}).profile, 'plan');
 });
 
-// Review finding. validateAppSpec emits non-blocking advisories of its own, which the build narrates.
+// Regression contract. validateAppSpec emits non-blocking advisories of its own, which the build narrates.
 // Reporting only lint warnings made this CLI quieter than the build it stands in for.
 test('warnings from BOTH gates are reported, each tagged with its source', () => {
   const s = good();
@@ -156,7 +156,7 @@ test('CLI --profile deploy is available for gating a final, deployable spec', ()
   assert.match(deploy.stdout, /FAIL \[profile: deploy\]/);
 });
 
-// Review finding. The JSON payload's `ok` must describe the COMMAND's outcome. A warnings-only
+// Regression contract. The JSON payload's `ok` must describe the COMMAND's outcome. A warnings-only
 // --strict run exits 1, so emitting ok:true there would let a machine consumer read a failure as
 // a success.
 test('CLI --strict --json reports ok:false and exits 1 on warnings alone', () => {
@@ -214,7 +214,7 @@ test('CLI with no --spec prints usage', () => {
   assert.match(out.stderr, /Usage: node lint-app-spec\.js/);
 });
 
-// Review finding. parseArgs turns a bare `--flag` into `true`. For a VALUE-taking flag that is a
+// Regression contract. parseArgs turns a bare `--flag` into `true`. For a VALUE-taking flag that is a
 // usage error, not a default: a bare `--profile` silently falling back to `plan` would skip a
 // `deploy` gate a CI job believed it had requested, and a bare `--spec` would reach readJsonArg and
 // report "spec is not an object" — a gate verdict about a file the caller never named.
@@ -243,7 +243,7 @@ test('CLI rejects a value-taking flag given with no value', () => {
   }
 });
 
-// Review finding (#562). parseArgs preserves `--profile=` as the EMPTY STRING, which passed the
+// Regression contract. parseArgs preserves `--profile=` as the EMPTY STRING, which passed the
 // bare-flag guard (it is a string) and was then folded into the default by `|| 'plan'`. A CI wrapper
 // whose `--profile=$PROFILE` expanded empty therefore ran the weaker plan gate and exited 0 while
 // believing it had requested `deploy`.
@@ -273,7 +273,7 @@ test('CLI rejects an EMPTY value-taking flag instead of silently taking the defa
   }
 });
 
-// Review finding (#562). parseArgs accepts any `--name`, so a typo was silently dropped and the
+// Regression contract. parseArgs accepts any `--name`, so a typo was silently dropped and the
 // command ran the DEFAULT plan profile — a CI job reporting success for a gate it never applied.
 test('CLI rejects an unknown flag rather than silently running the default gate', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-app-spec-'));
@@ -305,7 +305,7 @@ test('CLI rejects an unknown flag rather than silently running the default gate'
   }
 });
 
-// Review finding (#562). The positional guard fired BEFORE --spec was inspected, so the most common
+// Regression contract. The positional guard fired BEFORE --spec was inspected, so the most common
 // Windows failure — an unquoted absolute path containing spaces, which the documented flow invites —
 // lost its diagnostic. The old message named the truncated file; the new one must too, or it points
 // the reader away from the cause by asserting they should have used --spec, which they did.
@@ -322,7 +322,7 @@ test('CLI names the truncated --spec value when an unquoted path with spaces spl
   assert.match(out.stderr, /quote it/);
 });
 
-// Review finding (#562). The documented invocation is `--spec @<path> --json` and the caller parses
+// Regression contract. The documented invocation is `--spec @<path> --json` and the caller parses
 // stdout. A usage error that writes only to stderr leaves stdout empty, and JSON.parse('') throws —
 // so an agent following the documented flow crashes instead of reporting the usage message.
 test('CLI --json emits a parseable payload for usage errors too, never empty stdout', () => {
@@ -346,14 +346,14 @@ test('CLI --json emits a parseable payload for usage errors too, never empty std
   }
 });
 
-// Review finding (#562). --help is a request this tool can answer, not an unknown flag. The sibling
+// Regression contract. --help is a request this tool can answer, not an unknown flag. The sibling
 // CLIs in this directory honour it, and rejecting it reads as though the tool is broken.
 test('CLI --help prints usage and exits 0', () => {
   const out = execFileSync(process.execPath, [CLI, '--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   assert.match(out, /Usage: node lint-app-spec\.js/);
 });
 
-// Review finding (#562). authoring-flow.md tells the agent to triage on the schema:/lint: prefix,
+// Regression contract. authoring-flow.md tells the agent to triage on the schema:/lint: prefix,
 // so an untagged error has no bucket. Nothing pinned the invariant on the errors side.
 test('EVERY error is source-tagged, including a rejected profile', () => {
   const bad = lintSpec(good(), { profile: 'DEPLOY' });
@@ -368,7 +368,7 @@ test('EVERY error is source-tagged, including a rejected profile', () => {
   assert.ok(r.errors.every((e) => /^(schema|lint): /.test(e)), JSON.stringify(r.errors));
 });
 
-// Review finding (#562). parseArgs accumulates into a plain `{}`, so assigning `flags['__proto__']`
+// Regression contract. parseArgs accumulates into a plain `{}`, so assigning `flags['__proto__']`
 // goes through the inherited setter and never becomes an own property: an allow-list built on
 // Object.keys(flags) would miss `--__proto__` entirely AND silently swallow the token after it.
 // The allow-list therefore reads the flag NAMES from argv, which cannot be fooled this way.

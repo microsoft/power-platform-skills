@@ -391,13 +391,18 @@ function lintAppSpec(spec) {
         // which ERRORS on the same shape. That is a different engine: a business rule is compiled
         // client-side, where the stray value is not harmless.
         //
+        // The operator set spans several unrelated semantics (`null`/`not-null` test presence,
+        // `eq-userlanguage` matches the user's language, the relative-date ones match a period), so
+        // the message deliberately says only that the value has no effect — asserting a particular
+        // match semantics would be wrong for most of the set.
+        //
         // `value` and `values` are called out separately because they are dropped at different
         // points, and a message that named the wrong one would send the author to the wrong place:
         // `value` is forwarded into the condition and discarded by Dataverse (sdk-build.js emits it
         // for any non-in/not-in operator), whereas `values` is only ever read by the in/not-in
         // branch, so it never reaches the platform at all.
         if (f.value !== undefined) {
-          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — it is sent to Dataverse and ignored there, so the filter matches the current user/business-unit/period regardless. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — it is sent to Dataverse and ignored there, so it has no effect on what the filter matches. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
         }
         if (f.values !== undefined) {
           W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries values[] — values[] is only read by the 'in'/'not-in' operators, so it is dropped when the view is built. Drop it, or use 'in' if you meant to match a list.`);

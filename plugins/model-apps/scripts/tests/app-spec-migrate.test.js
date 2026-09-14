@@ -122,7 +122,7 @@ test('#545: a malformed authored key is preserved so validation can name it', ()
   assert.ok(r.errors.some((e) => e.includes('Not A Slug') && e.includes('invalid key grammar')), JSON.stringify(r.errors));
 });
 
-// Review finding on the #545 fix. Once authored keys survive migration, a reference can legitimately
+// Regression contract for the #545 fix. Once authored keys survive migration, a reference can legitimately
 // already BE a key — and a spec may hold a page whose authored key equals a DIFFERENT page's name.
 // Rewriting name-first silently retargets the reference to the other page AND still validates,
 // because the substituted value is itself a valid key. An exact key match must win.
@@ -140,7 +140,7 @@ test('#545: an authored key that equals another page\'s name is not retargeted b
   assert.strictEqual(m.appShell.areas[0].groups[0].subAreas[0].page, 'orders');
 });
 
-// Review finding. The key-first rewrite must key off AUTHORED keys, not every final key. A MINTED
+// Regression contract. The key-first rewrite must key off AUTHORED keys, not every final key. A MINTED
 // key is derived from a name, so it collides with a different page's name by construction: pages
 // "All Orders" and "all-orders" mint 'all-orders' and 'all-orders-2'. Treating a minted key as
 // authoritative left a legacy name-ref to the SECOND page pointing at the first.
@@ -158,7 +158,7 @@ test('#545: a legacy name-ref is still resolved by name when the match is a MINT
     'the name-ref names the SECOND page; a minted key must not capture it');
 });
 
-// Review finding. A key the author WROTE but got wrong must reach validation unchanged. Minting
+// Regression contract. A key the author WROTE but got wrong must reach validation unchanged. Minting
 // over it silently repairs a typo the author needs to see — and contradicts the preservation this
 // pass documents. Only a page with no `key` property at all gets one minted.
 test('#545: a present-but-malformed key is preserved verbatim for validation to name', () => {

@@ -59,7 +59,7 @@ test('#546 view filters: a value-taking operator with no value is still an error
   assert.ok(r.errors.some((e) => /needs a value/.test(e)), JSON.stringify(r.errors));
 });
 
-// Review finding (#562): the #546 test above only exercised a handful of operators, and a test that
+// Regression contract: the #546 test above only exercised a handful of operators, and a test that
 // ITERATES NO_VALUE_OPS to check NO_VALUE_OPS cannot catch a typo inside it — a misspelled entry
 // would simply not be tested, and would reintroduce the same build-blocking false positive.
 //
@@ -67,7 +67,7 @@ test('#546 view filters: a value-taking operator with no value is still an error
 // grouping, precisely so the transcription is verifiable against
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
 // rather than being a reflow of the thing it is meant to check. (A first pass at this test copied
-// the source's grouping, which a reviewer correctly called out as not independent.)
+// the source's grouping, which is not independent of the thing it checks at all.)
 // Note the near-misses deliberately EXCLUDED because they take a value: last-x-days, next-x-days,
 // in-fiscal-period, in-fiscal-year, olderthan-x-*, on, on-or-before, between.
 const DOCUMENTED_NO_VALUE_OPS = [
@@ -109,9 +109,9 @@ test('the exported operator sets are frozen copies, not the live Sets', () => {
   assert.throws(() => { NO_VALUE_OPS.push('eq'); });
 });
 
-// Review finding (#562), and the severity was settled by MEASUREMENT, not assumption. The claim
-// under review was that a value on a value-less operator is rejected by the platform. Probed live
-// against the Dataverse Web API:
+// The SEVERITY here was settled by measurement, not assumption. The obvious reading is that a
+// value on a value-less operator is rejected by the platform. Probed live against the Dataverse
+// Web API:
 //   eq-businessid value="00000000-0000-0000-0000-000000000000" -> HTTP 200, 1 row  (same as no value)
 //   this-year     value="1999"                                 -> HTTP 200, 1 row  (same as no value)
 // The platform neither rejects the condition nor honours the value: it IGNORES it. An error would
@@ -128,7 +128,7 @@ test('a value on a value-less operator WARNS (the platform ignores it) and does 
   );
 });
 
-// Review finding (#562). `value` and `values` are dropped at DIFFERENT points, so one message for
+// Regression contract. `value` and `values` are dropped at DIFFERENT points, so one message for
 // both sent the author to the wrong place: sdk-build.js forwards `value` into the condition (the
 // platform then ignores it), but reads `values` ONLY in the in/not-in branch — so on a value-less
 // operator it never reaches Dataverse at all.
@@ -143,7 +143,7 @@ test('values[] on a value-less operator warns about the BUILD dropping it, not D
   assert.doesNotMatch(w, /sent to Dataverse/, 'values[] never reaches the platform — saying so would misdirect the author');
 });
 
-// Review finding (#562). Without a known-operator set, a typo'd operator fell through to the
+// Regression contract. Without a known-operator set, a typo'd operator fell through to the
 // missing-value check and was reported as `needs a value` — advice that is WRONG. Acting on it
 // produces a spec that lints clean and is then rejected by Dataverse at build time. This is the
 // same shape as the #546 false positive with an extra step.
