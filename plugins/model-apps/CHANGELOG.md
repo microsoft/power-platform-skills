@@ -46,6 +46,23 @@ A dry run that says what an apply would actually do, and sample data that can ex
 - **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.** The runner's
   discovery was a flat `readdir`, so a nested suite would be committed, reviewed, reported green and
   never execute. Every suite is top-level today, which is exactly why this needed a test.
+- **A mistyped flag now fails instead of quietly changing what the command does.** `parseArgs`
+  accepts any `--name`, so an unrecognised flag was dropped *and* swallowed the token after it:
+  `--stage ui` planned 3 steps, but the one-letter typo `--stagee ui` planned all 9 and still exited
+  0 — with `--apply`, a UI-only apply the caller thought they had scoped became a full data-model
+  apply against a live environment. Every CLI now declares the flags it accepts and rejects anything
+  else with a "did you mean" suggestion, and rejects a value-bearing flag passed bare or empty. This
+  also covers the destructive tools, where a mistyped `--allow-destructiv` previously meant the
+  safety flag the operator believed they had passed simply did not exist.
+
+### Changed
+
+- **The CLI flag contract is shared rather than per-script.** The check above previously existed only
+  in `lint-app-spec.js`; the other ~20 entry points each hand-rolled part of it, and a new CLI could
+  forget it entirely. It now lives once in `scripts/lib/dataverse-auth.js` (`validateFlags`), with
+  the "did you mean" matcher shared with the FetchXML operator lint
+  (`scripts/lib/nearest-name.js`) — removing three copies of the value-less-flag idiom and two
+  hand-maintained flag lists along the way. No supported invocation changed.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544

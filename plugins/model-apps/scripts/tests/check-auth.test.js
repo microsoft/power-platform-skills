@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
 
 const scriptPath = path.join(__dirname, '..', 'check-auth.js');
 const scriptSrc = fs.readFileSync(scriptPath, 'utf8');
@@ -50,6 +51,36 @@ test('parseEnvUrl never mistakes the literal "--env" for the URL (the prior posi
 test('parseEnvUrl returns null when no url is given', () => {
   assert.equal(parseEnvUrl([]), null);
   assert.equal(parseEnvUrl(['--apply']), null);
+});
+
+test('a positional url survives a preceding boolean --require-pac', () => {
+  // parseArgs has no flag contract, so it treats the token after the boolean `--require-pac` as its
+  // value. Reading the fallback from parseArgs' `positional` array therefore LOST the URL and fell
+  // back to `pac org who` — silently probing a different environment than the caller named. The
+  // header documents both orderings and callers do not control argument order.
+  assert.equal(parseEnvUrl(['--require-pac', 'https://contoso.crm.dynamics.com']), 'https://contoso.crm.dynamics.com');
+  assert.equal(parseEnvUrl(['https://contoso.crm.dynamics.com', '--require-pac']), 'https://contoso.crm.dynamics.com');
+});
+
+test('a mistyped flag is a structured blocker, not a silently weaker check', () => {
+  // `--requir-pac` used to be dropped in silence, which quietly downgraded genpage's HARD pac
+  // requirement to a warning. It must be reported — but still on exit 0, because every caller of
+  // this tool gates on the parsed stdout rather than the exit code.
+  const out = execFileSync(process.execPath, [scriptPath, '--env', 'https://contoso.crm.dynamics.com', '--requir-pac'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const payload = JSON.parse(out);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.blocker, 'usage');
+  assert.match(payload.message, /did you mean --require-pac\?/);
+});
+
+test('a bare --env is reported rather than treated as "no environment given"', () => {
+  const out = execFileSync(process.execPath, [scriptPath, '--env'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const payload = JSON.parse(out);
+  assert.equal(payload.blocker, 'usage');
+  assert.match(payload.message, /--env requires a value/);
 });
 
 test('check-auth.js exits 0 even on failure (output drives gating)', () => {

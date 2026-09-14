@@ -7,7 +7,7 @@
 //
 // Usage: node ai-preflight.js --env <orgUrl> [--app <uniqueName>]
 
-const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { AI_APP_SETTING, AI_SETTING_CODEC, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
 const fs = require('node:fs');
@@ -104,12 +104,19 @@ function runPreflight(readiness, effective = {}) {
 }
 
 async function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const app = typeof flags.app === 'string' ? flags.app : null;
+  const argv = process.argv.slice(2);
+  const { flags } = parseArgs(argv);
+  const USAGE = 'Usage: node scripts/ai-preflight.js --env <orgUrl> [--app <uniqueName>]';
+  const flagError = validateFlags(argv, { known: ['env', 'app'], needValue: ['env', 'app'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const env = flags.env;
+  const app = flags.app || null;
 
-  if (!env || flags.app === true) {
-    process.stderr.write('Usage: node scripts/ai-preflight.js --env <orgUrl> [--app <uniqueName>]\n');
+  if (!env) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 

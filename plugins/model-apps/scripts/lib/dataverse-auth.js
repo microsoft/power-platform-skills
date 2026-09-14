@@ -8,6 +8,7 @@ const { execFileSync } = require('child_process');
 // Shared with the App Spec + CLI so the provisioned-language probe and the validator cannot disagree
 // about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
 const { normalizeLanguageCode } = require('./app-spec.js');
+const { nearestName } = require('./nearest-name.js');
 
 /**
  * Gets an Azure CLI access token for the given Dataverse environment URL.
@@ -527,6 +528,74 @@ function parseArgs(argv) {
 }
 
 /**
+ * Validates a CLI's raw argv against its declared flag contract.
+ * Returns a usage-error message, or null when the argv is acceptable.
+ *
+ * WHY this is shared rather than per-CLI: parseArgs accepts ANY `--name`, and an unrecognised flag
+ * both (a) disappears silently and (b) swallows the following token. On a phase-selecting build
+ * that combination is dangerous rather than merely untidy — measured on build-model-app.js,
+ * `--stage ui` plans 3 steps while the one-letter typo `--stagee ui` plans all 9 and still exits 0,
+ * so a caller who believed they had scoped an apply to the UI phases gets a full data-model apply
+ * against a live environment with no diagnostic. Every CLI in this directory had that hole; only
+ * lint-app-spec.js had grown its own guard, and a per-CLI guard is one each new CLI can forget.
+ *
+ * @param {string[]} argv          process.argv.slice(2)
+ * @param {object}   contract
+ * @param {Iterable<string>} contract.known      every flag this CLI accepts, without the leading --
+ * @param {Iterable<string>} contract.needValue  the subset that must carry a value
+ * @param {Object<string,string>} [contract.hints]  per-flag text appended to a missing-value error,
+ *        for flags whose accepted values are a closed set worth naming ("one of: design, plan, …").
+ *        A generic "requires a value" is correct but strictly less useful than one that says what
+ *        the value may be, and that detail should not be lost when a CLI adopts this helper.
+ * @returns {string|null}
+ */
+function validateFlags(argv, { known, needValue = [], hints = {} } = {}) {
+  const knownSet = known instanceof Set ? known : new Set(known);
+  const needValueSet = needValue instanceof Set ? needValue : new Set(needValue);
+  // A value-bearing flag that is not also accepted is a contradiction in the CLI's own declaration,
+  // and the likeliest cause is a rename applied to one list but not the other. Fail loudly at the
+  // call site rather than silently never enforcing the value requirement.
+  for (const n of needValueSet) {
+    if (!knownSet.has(n)) throw new Error(`validateFlags: '${n}' is in needValue but not in known`);
+  }
+
+  // Read names from argv rather than Object.keys(parseArgs(argv).flags): assigning to
+  // flags['__proto__'] goes through the inherited setter and never becomes an own property, so
+  // `--__proto__ deploy` would escape an own-keys allow-list AND swallow the next token.
+  const passed = [];
+  for (const a of argv) {
+    if (typeof a !== 'string' || !a.startsWith('--')) continue;
+    passed.push(a.slice(2).split('=')[0]);
+  }
+
+  // Unknown flags are reported BEFORE missing values, because an unknown flag consumes the next
+  // token: `--stagee ui --workspace` leaves --workspace looking value-less, and reporting that
+  // instead would name a symptom and hide the typo that caused it.
+  const unknown = [...new Set(passed.filter((k) => !knownSet.has(k)))];
+  if (unknown.length > 0) {
+    const parts = unknown.map((k) => {
+      const near = nearestName(k, knownSet);
+      return near && near !== k ? `--${k} (did you mean --${near}?)` : `--${k}`;
+    });
+    return `unknown flag(s): ${parts.join(', ')}`;
+  }
+
+  // parseArgs yields boolean `true` for a bare `--flag`, and '' for `--flag=` or `--flag ""`. For a
+  // value-taking flag all three are a caller who asked for something and did not say what; none may
+  // fall through to a default, which is how a bare `--only` became "select every phase".
+  const { flags } = parseArgs(argv);
+  for (const name of needValueSet) {
+    const v = flags[name];
+    if (v === undefined) continue; // absent is fine — whether it is REQUIRED is the caller's call
+    if (v === true || (typeof v === 'string' && !v.trim())) {
+      const hint = hints[name];
+      return `--${name} requires a value${hint ? ` — ${hint}` : ''}`;
+    }
+  }
+  return null;
+}
+
+/**
  * Read a flag that has both kebab-case and camelCase spellings, rejecting a conflicting pair.
  *
  * `flags[kebab] ?? flags[camel]` silently prefers one and discards the other, which is the wrong
@@ -616,6 +685,7 @@ module.exports = {
   readProvisionedLanguages,
   readOrgLanguageCode,
   parseArgs,
+  validateFlags,
   readAliasedFlag,
   readJsonArg,
   emitResult,

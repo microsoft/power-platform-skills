@@ -604,7 +604,8 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
     provision-input.js         ← Input validation for entity provisioning
-    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`), plus the CLI arg contract (parseArgs/validateFlags)
+    nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + connector script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
@@ -881,6 +882,43 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
+
+## CLI argument contract
+
+**Every `scripts/*.js` entry point declares its flags and validates them up front.** `parseArgs`
+accepts any `--name`, and an unrecognised flag is both dropped silently *and* swallows the token
+after it — so a typo does not fail, it quietly changes what the command does. Measured on
+`build-model-app.js` before this was enforced: `--stage ui` planned 3 steps, while `--stagee ui`
+planned all 9 and still exited 0, turning a scoped UI apply into a full data-model apply.
+
+So a `main()` starts with:
+
+```js
+const argv = process.argv.slice(2);
+const { positional, flags } = parseArgs(argv);
+const flagError = validateFlags(argv, {
+  known: ['env', 'spec', 'stage', 'apply'],   // every flag this CLI accepts
+  needValue: ['env', 'spec', 'stage'],        // those that must carry a value
+  hints: { stage: 'one of: data, ui, app, publish' }, // optional, for closed value sets
+});
+if (flagError) { process.stderr.write(`✗ ${flagError}\n${USAGE}\n`); process.exit(1); }
+```
+
+`validateFlags` (`scripts/lib/dataverse-auth.js`) rejects unknown flags with a single-edit "did you
+mean" (via `scripts/lib/nearest-name.js`, shared with the FetchXML operator lint), and rejects a
+value-bearing flag passed bare or empty. It reads flag names from `argv` rather than the parsed
+object, because `--__proto__` goes through the inherited setter and never becomes an own property.
+
+Two consequences worth knowing:
+
+- Because `validateFlags` guarantees a `needValue` flag is either absent or a non-empty string,
+  `typeof flags.x === 'string' ? flags.x : undefined` is redundant afterwards — read `flags.x`.
+- `needValue` must be a subset of `known`; `validateFlags` throws if it is not, which catches a
+  rename applied to one list and not the other.
+
+When a CLI test harness cans `parseArgs` to a fixed result, use
+`scripts/tests/helpers/fake-auth.js` → `validateFlagsFromParsed` so the harness exercises the **real**
+validator instead of a hand-written copy that can drift from it.
 
 ## Dataverse Access From Scripts
 

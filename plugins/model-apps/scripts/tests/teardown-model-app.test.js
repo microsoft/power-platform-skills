@@ -8,6 +8,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { teardownModelApp, cliEmit } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
+const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -248,6 +249,7 @@ function loadTeardownCli({
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,
+        validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         readJsonArg: (arg) => {
           events.push({ type: 'readJsonArg', arg });
           return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };

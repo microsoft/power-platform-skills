@@ -21,6 +21,7 @@ const {
   dataverseRequest,
   ensureOk,
   parseArgs,
+  validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
 const { isConnectorsEnabled, exitIfConnectorsDisabled } = require('./lib/feature-flags');
@@ -71,11 +72,21 @@ async function addComponent(envUrl, solutionUniqueName, componentId, componentTy
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId> [--page-ids <id1,id2>] [--connection-refs <logicalName1,logicalName2>]';
+  // Both flags are comma-joined id lists. A bare one would become boolean `true`, and `true.split`
+  // is a TypeError mid-way through packaging rather than a usage error before it.
+  const flagError = validateFlags(argv, {
+    known: ['page-ids', 'connection-refs'],
+    needValue: ['page-ids', 'connection-refs'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
   if (positional.length < 3) {
-    process.stderr.write(
-      'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId> [--page-ids <id1,id2>] [--connection-refs <logicalName1,logicalName2>]\n'
-    );
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const [envUrl, solutionUniqueName, appId] = positional;

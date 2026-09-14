@@ -5,6 +5,7 @@
 const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
+const { nearestName } = require('./nearest-name.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -67,23 +68,12 @@ const KNOWN_FILTER_OPS = new Set([
 // Cheap near-match for the "did you mean" hint, in the same spirit as the business-rule operator
 // check. Catches the two mistakes that actually happen: wrong case (`EQ-USERID`) and a single
 // dropped/extra/substituted character (`eq-useroruserteam`, `eq-businesid`).
+//
+// Shares the matcher with the CLI unknown-flag check (dataverse-auth.js): both answer the same
+// question against a closed vocabulary, and a second copy would be free to drift into disagreeing
+// about what counts as a near miss.
 function nearestFilterOp(op) {
-  const lower = String(op).toLowerCase();
-  for (const known of KNOWN_FILTER_OPS) if (known === lower) return known;
-  for (const known of KNOWN_FILTER_OPS) {
-    if (Math.abs(known.length - lower.length) > 1) continue;
-    // Walk both strings once, allowing a single edit. Full Levenshtein is not worth it here.
-    let i = 0, j = 0, edits = 0;
-    while (i < known.length && j < lower.length) {
-      if (known[i] === lower[j]) { i++; j++; continue; }
-      if (++edits > 1) break;
-      if (known.length > lower.length) i++;
-      else if (known.length < lower.length) j++;
-      else { i++; j++; }
-    }
-    if (edits + (known.length - i) + (lower.length - j) <= 1) return known;
-  }
-  return null;
+  return nearestName(op, KNOWN_FILTER_OPS);
 }
 
 function lintAppSpec(spec) {

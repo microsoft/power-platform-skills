@@ -10,7 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
@@ -230,15 +230,24 @@ function readerFor(sdk, appUnique, opts) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs sets a value-less flag to boolean `true`; treat those as missing so a bare
-  // `--env`/`--spec`/`--workspace` fails with the usage message instead of crashing later in
-  // createAzHttpClient / path.resolve / fs.mkdirSync when a boolean value reaches them.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
-  const workspaceArg = typeof flags.workspace === 'string' ? flags.workspace : undefined;
-  if (!env || !specArg || flags.workspace === true) {
-    process.stderr.write('Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]\n');
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]';
+  // Reject an unknown or value-less flag before any network work: an unrecognised flag is dropped
+  // by parseArgs AND swallows the token after it, so `--workspce x` would silently verify against
+  // the default workspace and report drift the caller cannot explain.
+  const flagError = validateFlags(argv, { known: ['env', 'spec', 'workspace'], needValue: ['env', 'spec', 'workspace'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  // Each is now either absent or a non-empty string, so a boolean can no longer reach
+  // createAzHttpClient / path.resolve / fs.mkdirSync.
+  const env = flags.env;
+  const specArg = flags.spec || positional[0];
+  const workspaceArg = flags.workspace;
+  if (!env || !specArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);

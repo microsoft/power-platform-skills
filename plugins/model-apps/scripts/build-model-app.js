@@ -20,7 +20,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
@@ -468,26 +468,37 @@ function parseLanguageCode(value) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs sets a value-less flag to boolean `true`. Coerce required-VALUE flags to missing so a
-  // bare flag fails with the usage message instead of (a) crashing later, or (b) — critically for the
-  // phase selectors — being read as `undefined` and SILENTLY SELECTING ALL PHASES. e.g. `--apply --only`
-  // with no value must NOT become a full apply on this destructive tool. Boolean switches
-  // (--apply/--publish/--verify/…) legitimately stay `true`.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
-  if (!env || !specArg) {
-    process.stderr.write(
-      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
-    );
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE =
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]';
+  // The declared flag contract, enforced before anything else runs.
+  //
+  // `needValue` lists every flag whose MISSING value would be read as a default rather than an
+  // error — critically the phase selectors, where a bare `--only` is dropped by
+  // list()/stagePhasesOrResolve and silently resolves to the full phase set. `--apply --only` must
+  // not become a full apply on this destructive tool.
+  //
+  // validateFlags additionally rejects an unrecognised flag, which parseArgs would otherwise drop
+  // while swallowing the token after it. Measured before this guard: `--stage ui` planned 3 steps
+  // but the one-letter typo `--stagee ui` planned all 9 and still exited 0 — a caller who believed
+  // they had scoped an apply to the UI phases got a full data-model apply with no diagnostic.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan',
+      'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
+      'allow-destructive', 'workspace'],
+    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'workspace'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  // A value-less phase selector (or --workspace) is a USAGE ERROR — never a silent all-phases select
-  // or default workspace. `--only`/`--skip`/`--from`/`--to`/`--stage` with no value would otherwise be
-  // dropped by list()/stagePhasesOrResolve and resolve to the full phase set.
-  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace', 'language-code', 'languageCode'].find((k) => flags[k] === true);
-  if (valuelessFlag) {
-    process.stderr.write(`✗ --${valuelessFlag} requires a value.\n`);
+  // validateFlags has already rejected a bare or empty --env/--spec, so each is now either absent
+  // or a non-empty string; the typeof dance these lines used to carry is subsumed by it.
+  const env = flags.env;
+  const specArg = flags.spec || positional[0];
+  if (!env || !specArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   // #changed-only (Preview): a SAFE partial apply. Incompatible with manual phase selection — the flow

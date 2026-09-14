@@ -224,8 +224,8 @@ test('CLI rejects a value-taking flag given with no value', () => {
   fs.writeFileSync(file, JSON.stringify(good()));
   try {
     for (const [args, expected] of [
-      [[CLI, '--spec'], /--spec needs a path/],
-      [[CLI, '--spec', '@' + file, '--profile'], /--profile needs one of: design, plan, deploy, structural/],
+      [[CLI, '--spec'], /--spec requires a value — a path/],
+      [[CLI, '--spec', '@' + file, '--profile'], /--profile requires a value — one of: design, plan, deploy, structural/],
     ]) {
       let out;
       try {
@@ -253,9 +253,9 @@ test('CLI rejects an EMPTY value-taking flag instead of silently taking the defa
   fs.writeFileSync(file, JSON.stringify(good()));
   try {
     for (const [args, expected] of [
-      [[CLI, '--spec', '@' + file, '--profile='], /--profile needs one of: design, plan, deploy, structural/],
-      [[CLI, '--spec', '@' + file, '--profile', ''], /--profile needs one of: design, plan, deploy, structural/],
-      [[CLI, '--spec='], /--spec needs a path/],
+      [[CLI, '--spec', '@' + file, '--profile='], /--profile requires a value — one of: design, plan, deploy, structural/],
+      [[CLI, '--spec', '@' + file, '--profile', ''], /--profile requires a value — one of: design, plan, deploy, structural/],
+      [[CLI, '--spec='], /--spec requires a value — a path/],
     ]) {
       let out;
       try {

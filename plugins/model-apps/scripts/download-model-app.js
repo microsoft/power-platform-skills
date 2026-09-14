@@ -9,7 +9,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, emitResult, preflightAuth } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, emitResult, preflightAuth } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
@@ -1433,16 +1433,25 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs returns boolean true for a value-less flag. For value-bearing flags, treat that as
-  // missing so `--env --app x` or `--out` reaches the usage guard instead of passing true into URL,
-  // app-id, or path handling. `--allow-lossy-download` is a real boolean switch and stays true.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const appArg = (typeof flags.app === 'string' ? flags.app : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  const outArg = typeof flags.out === 'string' ? flags.out : (typeof flags.output === 'string' ? flags.output : undefined);
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]';
+  // `--allow-lossy-download` is a real boolean switch, so it stays out of needValue; everything else
+  // feeds a URL, an app id, or a path and must not receive `true`.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'app', 'out', 'output', 'allow-lossy-download'],
+    needValue: ['env', 'app', 'out', 'output'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const env = flags.env;
+  const appArg = flags.app || positional[0];
+  const outArg = flags.out || flags.output;
   const allowLossyDownload = flags['allow-lossy-download'] === true;
-  if (!env || !appArg || flags.app === true || flags.out === true || flags.output === true) {
-    process.stderr.write('Usage: node download-model-app.js --env <url> --app <appId|uniqueName|displayName> --out <dir> [--allow-lossy-download]\n');
+  if (!env || !appArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const outDir = path.resolve(outArg || '.');
