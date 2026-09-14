@@ -17,8 +17,9 @@ Three defects an author hits before reaching an environment, and a session-start
   `node -e`. The CLI runs migrate → validate → lint, tags each finding `schema:` or `lint:`, and
   exits non-zero on errors. `--profile` defaults to `plan` (pages may still be intents), so gate a
   final, deployable spec with `--profile deploy`. `--strict` also fails on warnings; `--json`
-  emits the report. Argument handling is deliberately strict — an unknown, empty or value-less flag
-  is a usage error, never a silent fall back to the default profile a CI job did not ask for.
+  emits the report. Argument handling is deliberately strict — an unknown flag, or `--spec`/
+  `--profile` given without a value, is a usage error, never a silent fall back to the default
+  profile a CI job did not ask for.
 
 ### Fixed
 
@@ -40,7 +41,9 @@ Three defects an author hits before reaching an environment, and a session-start
   demanded a value they must not carry. The operator list is now the documented value-less set,
   which also adds `eq-userlanguage`, the user-hierarchy operators, and the relative fiscal-period
   ones. The reverse case now warns: a value-less operator that *carries* a value is not rejected by
-  Dataverse, it is ignored — so the filter silently does not do what the value says.
+  Dataverse, it is ignored — so the filter silently does not do what the value says. An operator
+  outside the documented set also warns, with a "did you mean" hint, instead of being reported as
+  needing a value it cannot take.
 - **No more `hooks.json: unknown key "_comment" ignored` at every session start** ([#555], [#558],
   affects `model-apps` and `mobile-apps`). The hooks manifest is validated against a closed schema,
   so the documentation key it carried was reported as a misconfiguration on every launch. The prose

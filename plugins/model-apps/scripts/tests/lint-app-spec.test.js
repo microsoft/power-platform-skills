@@ -304,3 +304,88 @@ test('CLI rejects an unknown flag rather than silently running the default gate'
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Review finding (#562). The positional guard fired BEFORE --spec was inspected, so the most common
+// Windows failure — an unquoted absolute path containing spaces, which the documented flow invites —
+// lost its diagnostic. The old message named the truncated file; the new one must too, or it points
+// the reader away from the cause by asserting they should have used --spec, which they did.
+test('CLI names the truncated --spec value when an unquoted path with spaces splits', () => {
+  let out;
+  try {
+    execFileSync(process.execPath, [CLI, '--spec', '@C:\\Users\\x\\OneDrive', '-', 'Contoso\\app-spec.json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = { code: 0, stderr: '' };
+  } catch (err) {
+    out = { code: err.status, stderr: String(err.stderr || '') };
+  }
+  assert.strictEqual(out.code, 1);
+  assert.match(out.stderr, /--spec was parsed as '@C:\\Users\\x\\OneDrive'/);
+  assert.match(out.stderr, /quote it/);
+});
+
+// Review finding (#562). The documented invocation is `--spec @<path> --json` and the caller parses
+// stdout. A usage error that writes only to stderr leaves stdout empty, and JSON.parse('') throws —
+// so an agent following the documented flow crashes instead of reporting the usage message.
+test('CLI --json emits a parseable payload for usage errors too, never empty stdout', () => {
+  for (const args of [
+    [CLI, '--json', '--profle', 'deploy', '--spec', '@x.json'],
+    [CLI, '--json', '--spec', '@does-not-exist.json'],
+    [CLI, '--json'],
+  ]) {
+    let out;
+    try {
+      execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      out = { code: 0, stdout: '', stderr: '' };
+    } catch (err) {
+      out = { code: err.status, stdout: String(err.stdout || ''), stderr: String(err.stderr || '') };
+    }
+    assert.strictEqual(out.code, 1, args.join(' '));
+    const payload = JSON.parse(out.stdout);
+    assert.strictEqual(payload.ok, false);
+    assert.ok(Array.isArray(payload.errors) && payload.errors.length > 0, out.stdout);
+    assert.ok(payload.errors.every((e) => e.startsWith('usage: ')), `usage errors are tagged so an agent can bucket them: ${out.stdout}`);
+  }
+});
+
+// Review finding (#562). --help is a request this tool can answer, not an unknown flag. The sibling
+// CLIs in this directory honour it, and rejecting it reads as though the tool is broken.
+test('CLI --help prints usage and exits 0', () => {
+  const out = execFileSync(process.execPath, [CLI, '--help'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.match(out, /Usage: node lint-app-spec\.js/);
+});
+
+// Review finding (#562). authoring-flow.md tells the agent to triage on the schema:/lint: prefix,
+// so an untagged error has no bucket. Nothing pinned the invariant on the errors side.
+test('EVERY error is source-tagged, including a rejected profile', () => {
+  const bad = lintSpec(good(), { profile: 'DEPLOY' });
+  assert.strictEqual(bad.ok, false);
+  assert.ok(bad.errors.every((e) => /^(schema|lint): /.test(e)), JSON.stringify(bad.errors));
+
+  const s = good();
+  delete s.solution;
+  s.views = [{ entity: 'c_order', name: 'Mine', columns: ['c_name'], filters: [{ attr: 'c_name', op: 'eq' }] }];
+  const r = lintSpec(s);
+  assert.ok(r.errors.length > 1);
+  assert.ok(r.errors.every((e) => /^(schema|lint): /.test(e)), JSON.stringify(r.errors));
+});
+
+// Review finding (#562). parseArgs accumulates into a plain `{}`, so assigning `flags['__proto__']`
+// goes through the inherited setter and never becomes an own property: an allow-list built on
+// Object.keys(flags) would miss `--__proto__` entirely AND silently swallow the token after it.
+// The allow-list therefore reads the flag NAMES from argv, which cannot be fooled this way.
+test('CLI rejects prototype-named flags that never become own properties', () => {
+  for (const args of [
+    [CLI, '--__proto__', 'deploy', '--spec', '@x.json'],
+    [CLI, '--__proto__=deploy', '--spec', '@x.json'],
+    [CLI, '--constructor', '--spec', '@x.json'],
+  ]) {
+    let out;
+    try {
+      execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      out = { code: 0, stderr: '' };
+    } catch (err) {
+      out = { code: err.status, stderr: String(err.stderr || '') };
+    }
+    assert.strictEqual(out.code, 1, `expected a usage failure for ${args.slice(1).join(' ')}`);
+    assert.match(out.stderr, /unknown flag\(s\): --(__proto__|constructor)/);
+  }
+});

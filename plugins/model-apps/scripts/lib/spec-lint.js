@@ -32,6 +32,60 @@ const NO_VALUE_OPS = new Set(['null', 'not-null',
   'this-fiscal-year', 'last-fiscal-year', 'next-fiscal-year',
   'this-fiscal-period', 'last-fiscal-period', 'next-fiscal-period']);
 
+// Every operator the condition table documents, value-less ones included. Transcribed in the doc
+// table's own alphabetical order so it can be diffed against the source by eye.
+//
+// WHY this exists: without it, a typo'd operator fell through to the missing-value check and was
+// reported as `needs a value` — advice that is not merely unhelpful but WRONG. The author adds a
+// value, the lint goes green, and Dataverse rejects the operator at build time. That is the same
+// shape as the #546 false positive, with an extra step. Mirrors how business-rule operators are
+// already validated (see BUSINESS_RULE_OPERATORS in app-spec.js, which also offers a near match).
+//
+// An unknown operator is a WARNING, not an error, and that is the direct lesson of #546: an
+// INCOMPLETE list here would reject a correct spec, which is worse than letting a rare unknown
+// operator through to a build-time failure that at least names it. `--strict` still fails on it.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const KNOWN_FILTER_OPS = new Set([
+  'above', 'begins-with', 'between', 'contain-values', 'ends-with', 'eq', 'eq-businessid',
+  'eq-or-above', 'eq-or-under', 'eq-userid', 'eq-userlanguage', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-useroruserteams', 'eq-userteams', 'ge', 'gt', 'in',
+  'in-fiscal-period', 'in-fiscal-period-and-year', 'in-fiscal-year',
+  'in-or-after-fiscal-period-and-year', 'in-or-before-fiscal-period-and-year', 'last-fiscal-period',
+  'last-fiscal-year', 'last-month', 'last-seven-days', 'last-week', 'last-x-days',
+  'last-x-fiscal-periods', 'last-x-fiscal-years', 'last-x-hours', 'last-x-months', 'last-x-weeks',
+  'last-x-years', 'last-year', 'le', 'like', 'lt', 'ne', 'ne-businessid', 'ne-userid', 'neq',
+  'next-fiscal-period', 'next-fiscal-year', 'next-month', 'next-seven-days', 'next-week',
+  'next-x-days', 'next-x-fiscal-periods', 'next-x-fiscal-years', 'next-x-hours', 'next-x-months',
+  'next-x-weeks', 'next-x-years', 'next-year', 'not-begin-with', 'not-between',
+  'not-contain-values', 'not-end-with', 'not-in', 'not-like', 'not-null', 'not-under', 'null',
+  'olderthan-x-days', 'olderthan-x-hours', 'olderthan-x-minutes', 'olderthan-x-months',
+  'olderthan-x-weeks', 'olderthan-x-years', 'on', 'on-or-after', 'on-or-before',
+  'this-fiscal-period', 'this-fiscal-year', 'this-month', 'this-week', 'this-year', 'today',
+  'tomorrow', 'under', 'yesterday',
+]);
+
+// Cheap near-match for the "did you mean" hint, in the same spirit as the business-rule operator
+// check. Catches the two mistakes that actually happen: wrong case (`EQ-USERID`) and a single
+// dropped/extra/substituted character (`eq-useroruserteam`, `eq-businesid`).
+function nearestFilterOp(op) {
+  const lower = String(op).toLowerCase();
+  for (const known of KNOWN_FILTER_OPS) if (known === lower) return known;
+  for (const known of KNOWN_FILTER_OPS) {
+    if (Math.abs(known.length - lower.length) > 1) continue;
+    // Walk both strings once, allowing a single edit. Full Levenshtein is not worth it here.
+    let i = 0, j = 0, edits = 0;
+    while (i < known.length && j < lower.length) {
+      if (known[i] === lower[j]) { i++; j++; continue; }
+      if (++edits > 1) break;
+      if (known.length > lower.length) i++;
+      else if (known.length < lower.length) j++;
+      else { i++; j++; }
+    }
+    if (edits + (known.length - i) + (lower.length - j) <= 1) return known;
+  }
+  return null;
+}
+
 function lintAppSpec(spec) {
   const errors = [];
   const warnings = [];
@@ -313,7 +367,13 @@ function lintAppSpec(spec) {
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';
-      if (op === 'in' || op === 'not-in') {
+      if (!KNOWN_FILTER_OPS.has(op)) {
+        // Reported INSTEAD of the missing-value check below, never alongside it: `needs a value` is
+        // wrong advice for an operator that does not exist, and acting on it produces a spec that
+        // lints clean and then fails at the platform.
+        const near = nearestFilterOp(op);
+        W(`View '${v.name}' filter on '${f.attr}' uses '${op}', which is not a documented FetchXML condition operator${near ? ` — did you mean '${near}'?` : ''}. Dataverse will reject it when the view is built.`);
+      } else if (op === 'in' || op === 'not-in') {
         if (!(Array.isArray(f.values) && f.values.length)) E(`View '${v.name}' filter on '${f.attr}' uses ${op} but has no values[]`);
       } else if (NO_VALUE_OPS.has(op)) {
         // A value on a value-less operator is a WARNING, not an error, and the distinction was
@@ -326,8 +386,21 @@ function lintAppSpec(spec) {
         // erroring would block specs that build and run correctly today, while staying silent
         // leaves a filter that does not do what its `value` says. The author almost always meant
         // a value-TAKING operator (`eq` against a specific business unit) — hence the advice.
-        if (f.value !== undefined || f.values !== undefined) {
-          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — Dataverse ignores it, so the filter matches the current user/business-unit/period regardless. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
+        //
+        // Note this deliberately differs from the business-rule operator check in app-spec.js,
+        // which ERRORS on the same shape. That is a different engine: a business rule is compiled
+        // client-side, where the stray value is not harmless.
+        //
+        // `value` and `values` are called out separately because they are dropped at different
+        // points, and a message that named the wrong one would send the author to the wrong place:
+        // `value` is forwarded into the condition and discarded by Dataverse (sdk-build.js emits it
+        // for any non-in/not-in operator), whereas `values` is only ever read by the in/not-in
+        // branch, so it never reaches the platform at all.
+        if (f.value !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — it is sent to Dataverse and ignored there, so the filter matches the current user/business-unit/period regardless. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
+        }
+        if (f.values !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries values[] — values[] is only read by the 'in'/'not-in' operators, so it is dropped when the view is built. Drop it, or use 'in' if you meant to match a list.`);
         }
       } else if (f.value === undefined) {
         E(`View '${v.name}' filter on '${f.attr}' (${op}) needs a value`);
@@ -454,7 +527,14 @@ function dupWarn(names, kind, W) {
   }
 }
 
-// NO_VALUE_OPS is exported so the regression test can compare the set against an independent,
-// doc-derived literal list in BOTH directions — a missing/typo'd entry reintroduces the #546 false
-// positive, and an extra (value-taking) entry silently disables the missing-value check.
-module.exports = { lintAppSpec, NO_VALUE_OPS };
+// The operator sets are exported FROZEN — as arrays, not the live Sets. The module-level Set is
+// shared by every in-process consumer through the require cache, so handing out the instance would
+// let one caller's `.add()`/`.delete()` silently change lint behaviour for everything else.
+// Exported so the regression test can compare them against an independent, doc-derived literal list
+// in BOTH directions — a missing/typo'd entry reintroduces the #546 false positive, and an extra
+// (value-taking) entry silently disables the missing-value check.
+module.exports = {
+  lintAppSpec,
+  NO_VALUE_OPS: Object.freeze([...NO_VALUE_OPS]),
+  KNOWN_FILTER_OPS: Object.freeze([...KNOWN_FILTER_OPS]),
+};

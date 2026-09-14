@@ -58,7 +58,10 @@ function lintSpec(rawSpec, opts) {
   const profile = opts && opts.profile !== undefined ? opts.profile : 'plan';
   if (!VALIDATION_PROFILES.includes(profile)) {
     const named = typeof profile === 'string' && profile.trim() ? `unknown profile '${profile}'` : `empty profile value`;
-    return { ok: false, profile, errors: [`${named} (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings: [] };
+    // Tagged `schema:` like every other error from this function. authoring-flow.md tells the agent
+    // to triage on that prefix ("fix the `schema:` ones first"), so an untagged error has no bucket.
+    // A bad profile IS a rejection of the validate gate's own argument, so `schema:` is its home.
+    return { ok: false, profile, errors: [`schema: ${named} (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings: [] };
   }
   const spec = migrateAppSpec(rawSpec);
 
@@ -97,20 +100,60 @@ function lintSpec(rawSpec, opts) {
 function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
 
+  // Every usage error below must still be readable by the DOCUMENTED caller, which invokes this
+  // with `--json` and parses stdout (authoring-flow.md, app-builder/SKILL.md). emitResult writes a
+  // bare Error to stderr only, leaving stdout empty — and `JSON.parse('')` throws, so an agent
+  // following the documented flow gets a crash instead of the usage message. Emit the same shape
+  // the success path does when --json was asked for.
+  const wantsJson = flags.json === true || flags.json === 'true';
+  const usageError = (message) => {
+    if (wantsJson) {
+      process.stdout.write(JSON.stringify({ ok: false, profile: null, errors: [`usage: ${message}`], warnings: [] }) + '\n');
+      process.stderr.write(message + '\n');
+      process.exitCode = 1;
+      return undefined;
+    }
+    return emitResult(false, new Error(message));
+  };
+
+  // `--help` is not "unknown" — it is a request this tool simply answers with its usage. Rejecting
+  // it reads as though the tool is broken, and the sibling CLIs in this directory (capture-fixture,
+  // generate-page-manifest) both honour it.
+  if (flags.help === true || flags.h === true) {
+    process.stdout.write(USAGE + '\n');
+    process.exitCode = 0;
+    return;
+  }
+
   // Unknown flags are a USAGE ERROR, not something to ignore. parseArgs accepts any `--name`, so a
   // typo (`--profle deploy`) would otherwise be dropped and the command would run the DEFAULT plan
   // profile while exiting 0 — a CI job reporting success for a gate it never applied. This CLI ships
   // in this change, so no caller can be relying on a flag outside this set.
-  const KNOWN_FLAGS = new Set(['spec', 'profile', 'strict', 'json']);
-  const unknown = Object.keys(flags).filter((k) => !KNOWN_FLAGS.has(k));
+  //
+  // Read from argv rather than Object.keys(flags): assigning to `flags['__proto__']` goes through
+  // the inherited setter and never becomes an own property, so `--__proto__ deploy` would slip the
+  // allow-list AND swallow the next token. Same hazard modelapps-hook-utils.js guards with
+  // Object.create(null).
+  const KNOWN_FLAGS = new Set(['spec', 'profile', 'strict', 'json', 'help', 'h']);
+  const passedFlagNames = process.argv.slice(2)
+    .filter((a) => a.startsWith('--'))
+    .map((a) => a.slice(2).split('=')[0]);
+  const unknown = [...new Set(passedFlagNames.filter((k) => !KNOWN_FLAGS.has(k)))];
   if (unknown.length > 0) {
-    return emitResult(false, new Error(`unknown flag(s): ${unknown.map((k) => '--' + k).join(', ')}\n${USAGE}`));
+    return usageError(`unknown flag(s): ${unknown.map((k) => '--' + k).join(', ')}\n${USAGE}`);
   }
-  // A positional argument is equally suspect: `--spec` is the only way to name the file, so a bare
-  // path is a caller who believes they passed a spec and would otherwise get the usage error for a
-  // missing `--spec` — or, worse, silently lint a DIFFERENT file they also passed correctly.
+  // A positional argument is equally suspect: `--spec` is the only way to name the file. But the
+  // overwhelmingly likely cause on Windows is an UNQUOTED path containing spaces — the documented
+  // flow passes an absolute path, and `C:\Users\x\OneDrive - Contoso\app-spec.json` splits into a
+  // truncated `--spec` plus stray tokens. Naming what `--spec` actually parsed to points straight
+  // at the cause; a bare "the spec is named with --spec" points away from it, because the caller
+  // did exactly that.
   if (positional.length > 0) {
-    return emitResult(false, new Error(`unexpected argument(s): ${positional.join(', ')} — the spec is named with --spec\n${USAGE}`));
+    const parsed = typeof flags.spec === 'string' ? ` --spec was parsed as '${flags.spec}'` : '';
+    const hint = parsed
+      ? `${parsed} — if the path contains spaces, quote it: --spec "@C:\\path with spaces\\app-spec.json"`
+      : ' — the spec is named with --spec';
+    return usageError(`unexpected argument(s): ${positional.join(', ')}${hint}\n${USAGE}`);
   }
 
   // parseArgs yields `true` for a bare `--flag` and a string for `--flag=value` / `--flag value`.
@@ -120,13 +163,13 @@ function main() {
   // "spec is not an object" — a gate report about a file the caller never named.
   const isOn = (v) => v === true || v === 'true';
   const specArg = flags.spec;
-  if (specArg === undefined) return emitResult(false, new Error(USAGE));
-  if (typeof specArg !== 'string' || !specArg.trim()) return emitResult(false, new Error(`--spec needs a path\n${USAGE}`));
+  if (specArg === undefined) return usageError(USAGE);
+  if (typeof specArg !== 'string' || !specArg.trim()) return usageError(`--spec needs a path\n${USAGE}`);
   if (flags.profile !== undefined && (typeof flags.profile !== 'string' || !flags.profile.trim())) {
     // Covers both the bare `--profile` (boolean true) and `--profile=` / `--profile ''` (empty
     // string). Both are a caller who asked for a profile and did not supply one; neither may fall
     // through to the default.
-    return emitResult(false, new Error(`--profile needs one of: ${VALIDATION_PROFILES.join(', ')}\n${USAGE}`));
+    return usageError(`--profile needs one of: ${VALIDATION_PROFILES.join(', ')}\n${USAGE}`);
   }
 
   let rawSpec;
@@ -135,7 +178,9 @@ function main() {
   } catch (err) {
     // A spec that is not readable/parseable is the single most common "why did nothing happen"
     // failure, so name the file and the parser's own message rather than a generic gate error.
-    return emitResult(false, new Error(`could not read spec ${specArg}: ${err.message}`));
+    // Routed through usageError for the same reason as the flag checks: the documented caller reads
+    // stdout as JSON, and an empty stdout throws in JSON.parse instead of reporting this message.
+    return usageError(`could not read spec ${specArg}: ${err.message}`);
   }
 
   const report = lintSpec(rawSpec, { profile: flags.profile });
@@ -160,6 +205,8 @@ function main() {
     // interactive Windows run of a large report could lose its tail. MEASURED: a 5 MB write over a
     // PIPE survives process.exit() intact on Windows, so a `--json | jq` CI consumer was never at
     // risk; this is the interactive case and the idiomatic pattern, not a fix for a reproduced bug.
+    // The non-JSON usage-error paths still exit through emitResult's process.exit() — deliberately
+    // out of scope here, since that is shared behaviour across every CLI in this directory.
     // https://nodejs.org/api/process.html#a-note-on-process-io
     process.exitCode = failed ? 1 : 0;
     return;
