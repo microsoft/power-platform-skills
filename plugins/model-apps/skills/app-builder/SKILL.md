@@ -264,6 +264,7 @@ After plan-mode approval (before the full build):
    > - Plan document: [absolute path to the app-builder-page-plan.md written in step 3]
    > - Data mode: **[dataMode from step 3 — `dataverse` or `mock`]**
    > - Connectors: **none**
+   > - Telemetry: **disabled**
    > - RuntimeTypes: [absolute path to RuntimeTypes.ts]   ← omit this line when Data mode is `mock`
    > - Working directory: [absolute working-dir path]
    > - Plugin root: ${PLUGIN_ROOT}
@@ -273,8 +274,11 @@ After plan-mode approval (before the full build):
    The plan's `## Environment` carries `Mode: app-builder` and every page row carries a **Key**, so
    the worker emits `"PAGEREF_<key>"` for cross-page navigation (never a file-derived token — a
    downloaded page's `codeFile` is a path, not its identity). Custom nav ids go in `data:` — never
-   `recordId`. `Connectors: none` is a constant here: the App Spec has no connector-binding
-   concept, so the projected plan always says `No connector bindings.`
+   `recordId`. `Connectors: none` and `Telemetry: disabled` are constants here: the App Spec has no
+   connector-binding concept (so the projected plan always says `No connector bindings.`), and
+   `/app-builder` never runs the Phase 4.7 `custom-telemetry` probe. Both are stated explicitly
+   rather than omitted — the page-builder treats a missing line as the same fail-closed value, but
+   an explicit line is what makes the dispatch contract checkable.
 
 5. **Validate + commit the transition (transactional)** — never flip `source` by hand, and never
    flip pages one at a time as workers return. Run:

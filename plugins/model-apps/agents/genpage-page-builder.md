@@ -40,6 +40,11 @@ You will be invoked with a prompt that includes:
   missing line means `none` (fail closed) — emitting a call to a binding that was never created
   produces a page that fails at runtime, whereas omitting one produces a page that merely lacks
   the feature.
+- **Telemetry** — `enabled` or `disabled`, the orchestrator's Phase 4.7 `custom-telemetry` probe
+  result. A missing line means `disabled` (fail closed), which is why the `/app-builder` dispatch
+  can state it as a constant. `enabled` is **permission, not instruction**: it only makes
+  instrumentation possible — you still emit `props.appInsights` calls solely when the maker's own
+  request asks to measure, track, monitor or diagnose something.
 - **Working directory** — where to write the `.tsx` file
 - **Plugin root** — `${PLUGIN_ROOT}` for reading references and samples
 
