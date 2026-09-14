@@ -16,7 +16,7 @@
     "vite",
     "dataverse",
     "connectors",
-    "pac-cli",
+    "power-apps-cli",
     "power-platform"
   ]
 }
