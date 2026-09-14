@@ -482,6 +482,29 @@
         "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
         "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing"
       ]
+    },
+    {
+      "id": 19,
+      "tier": "full",
+      "prompt": "Edit the Seattle Weather page in my Operations Hub app — pull the current conditions from the real MSN Weather connector instead of the hard-coded numbers. Leave the five-day forecast alone.",
+      "data": {
+        "question_answers": {
+          "new_or_edit": "Edit existing",
+          "app_and_page": "user selects Operations Hub, then the Seattle Weather page, from pac model list / pac model genpage list",
+          "changes": "Bind current conditions to the MSN Weather connector; preserve the five-day forecast"
+        }
+      },
+      "expectations": [
+        "Phase 1 (Planner): User indicates 'edit existing'; planner returns { action: 'edit' }, skipping Phases 2-8 of the create flow",
+        "Edit Phase 1a: pac model list is run to discover available apps — orchestrator does NOT guess or invent app names",
+        "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names",
+        "Edit Phase 4: genpage-edit-planner agent is invoked via Task tool",
+        "Edit Phase 4: genpage-edit-plan.md is written to the working directory root (not inside <page-id>/)",
+        "Edit Phase 3.5 (connector edit): genpage-connector-builder is dispatched with Mode: edit and the existing bindings, runs list-connections.js, and writes connectors.json as a bare JSON array",
+        "Edit Phase 5 (REST connector): the page calls executeConnectorOperation for an operation-based connector — never queryConnectorTable — presence-checks the method, and checks response.ok before reading response.body",
+        "Edit Phase 5 (preservation): content the connector cannot supply is preserved per the edit plan's Preservation Constraints rather than dropped",
+        "Edit Phase 6 (connector edit): the upload passes --page-id and --connectors, omits --add-to-sitemap, and --prompt carries only the edit delta"
+      ]
     }
   ]
 }
