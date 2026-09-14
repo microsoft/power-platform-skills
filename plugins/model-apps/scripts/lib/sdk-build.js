@@ -3340,7 +3340,7 @@ async function runSdkBuild(spec, opts = {}) {
     // ADDITIVE, never converging. `addEntityPrivilegesToRole` compiles to `AddPrivilegesRole`, so a
     // privilege the role already holds is re-asserted and every privilege the spec does NOT mention is
     // left alone. That is what makes it safe to point at a role somebody else owns — and it is also why
-    // this surface cannot REVOKE (documented in references/app-spec-schema.md).
+    // this surface cannot REVOKE (documented in references/app-spec-schema-advanced.md).
     //
     // Idempotency comes from Dataverse, not from a read-compare here: re-POSTing a grant the role already
     // holds at the same depth succeeds and changes nothing. Re-POSTing at a HIGHER depth raises it. We do

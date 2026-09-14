@@ -147,6 +147,38 @@ test('a failing AddSolutionComponent surfaces as a failure, not a silent partial
   assert.equal(emitted[0].ok, false, 'a mid-sequence failure must not report ok:true');
 });
 
+test('--connection-refs while the rollback switch is off exits 3 before any mutation', () => {
+  // The gate's whole purpose: refuse BEFORE the first AddSolutionComponent, so a refused run
+  // leaves the solution untouched rather than half-packaged (app + pages added, refs missing).
+  // Dropping the refs while still reporting ok:true is what made this silently lossy before —
+  // the solution then imports with unbound connectors.
+  const res = spawnSync(
+    process.execPath,
+    [scriptPath, 'https://contoso.crm.dynamics.com', 'sol', 'app-1', '--connection-refs', 'new_a'],
+    { encoding: 'utf8', env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' } }
+  );
+  assert.equal(res.status, 3, 'exit 3 = feature off (distinct from 1 = usage/runtime error)');
+  assert.match(res.stderr, /Connector support is disabled/);
+  assert.doesNotMatch(res.stdout || '', /"ok":\s*true/, 'must not report success');
+});
+
+test('packaging WITHOUT --connection-refs is not gated by the rollback switch', () => {
+  // Only an explicit connector request is refused; ordinary page packaging must still work.
+  // Reaching a Dataverse/auth failure (not exit 3) proves the gate did not fire.
+  const res = spawnSync(
+    process.execPath,
+    [scriptPath, 'https://example.invalid', 'sol', 'app-1', '--page-ids', 'p1'],
+    { encoding: 'utf8', env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' } }
+  );
+  assert.notEqual(res.status, 3, 'the gate must not fire without --connection-refs');
+});
+
+test('connectionRefsToAdd drops refs only when the switch is off', () => {
+  const { connectionRefsToAdd } = require(scriptPath);
+  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], true), ['new_a', 'new_b']);
+  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], false), []);
+});
+
 test('the live-verified component type codes are pinned', () => {
   const {
     APPMODULE_COMPONENT_TYPE,

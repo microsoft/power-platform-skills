@@ -68,23 +68,73 @@ test('the orchestrator emits the exact token the page-builder triggers on', () =
   }
 });
 
-test('the connectors feature flag is not referenced by any skill or agent prose', () => {
-  // The flag is retired. A lingering "probe the gate" step would send an agent to a CLI flag that
-  // no longer exists, and `feature-flags.js connectors` now prints `disabled` (unknown flags are
-  // fail-closed) — silently turning connector authoring back off for that run.
-  const offenders = [];
-  for (const f of mdFiles()) {
-    const lines = fs.readFileSync(f, 'utf8').split(/\r?\n/);
-    lines.forEach((line, i) => {
-      if (/feature-flags(?:\.js)?["'\s]*\s+connectors\b/.test(line) || /GENPAGE_ENABLE_CONNECTORS/.test(line)) {
-        offenders.push(`${rel(f)}:${i + 1}  ${line.trim()}`);
-      }
-    });
-  }
-  assert.deepEqual(offenders, [], `connectors flag references remain:\n${offenders.join('\n')}`);
+test('the connectors rollback gate is documented where the scripts enforce it', () => {
+  // connectors is GA and ships ON, but the gate was kept for one release as a rollback switch.
+  // The scripts fail closed with exit 3 when it is off, so the prose has to tell an agent that
+  // path exists — otherwise a run that hits exit 3 looks like a crash rather than a switch.
+  //
+  // This assertion is the inverse of the one that stood here while the flag was being retired.
+  // When the follow-up change removes the gate, invert it again: assert NO prose references the
+  // flag, because a probe of a removed flag prints `disabled` (unknown flags are fail-closed) and
+  // would silently turn connector authoring back off.
+  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const probe = /feature-flags\.js"?\s+connectors\b/;
+  assert.match(builder, probe, 'the connector-builder owns the gate and must probe it');
+  assert.match(skill, probe, 'Phase 4.5 must re-probe the gate before deploying bindings');
+  // Both must describe the OFF outcome, or an agent has no defined behaviour for it.
+  assert.match(builder, /\bdisabled\b/, 'connector-builder must define the disabled path');
+  assert.match(skill, /\bdisabled\b/, 'Phase 4.5 must define the disabled path');
 });
 
-// --- The whole page-builder dispatch contract, not just Connectors ----------
+// --- App Spec schema split -------------------------------------------------
+//
+// app-spec-schema.md is read IN FULL at the start of every /app-builder run, so the conditional
+// feature sections were moved to app-spec-schema-advanced.md and replaced by a pointer table.
+//
+// The pointer table is the ONLY thing that tells an agent those capabilities exist. If a section
+// is added to the advanced doc without a matching row — or a row survives a section being renamed
+// — the agent silently stops offering that capability, which shows up as under-building (an app
+// missing a business process flow nobody realised it could have) rather than as an error.
+
+test('every advanced schema section is named in the pointer table, and vice versa', () => {
+  const core = fs.readFileSync(path.join(PLUGIN, 'references', 'app-spec-schema.md'), 'utf8');
+  const adv = fs.readFileSync(path.join(PLUGIN, 'references', 'app-spec-schema-advanced.md'), 'utf8');
+
+  // Sections in the advanced doc: "## globalChoices[] (optional — …)" → "globalChoices[]"
+  const sections = [...adv.matchAll(/^## (\S+)/gm)].map((m) => m[1]);
+  assert.ok(sections.length >= 8, `expected the advanced doc to carry its sections, found ${sections.length}`);
+
+  // Rows in the core doc's pointer table: "| `globalChoices[]` | shared option sets |"
+  const tableBlock = core.split(/^## Conditional features[^\n]*$/m)[1] || '';
+  const rows = [...tableBlock.split(/^## /m)[0].matchAll(/^\|\s*`([^`]+)`\s*\|/gm)].map((m) => m[1]);
+  assert.ok(rows.length >= 8, `expected a pointer row per advanced section, found ${rows.length}`);
+
+  assert.deepEqual(
+    [...sections].sort(),
+    [...rows].sort(),
+    'the pointer table in app-spec-schema.md and the sections in app-spec-schema-advanced.md have drifted'
+  );
+});
+
+test('the core schema no longer carries the moved sections', () => {
+  // A section left in BOTH docs is worse than in neither: the two copies drift and an author
+  // follows whichever they happened to read.
+  const core = fs.readFileSync(path.join(PLUGIN, 'references', 'app-spec-schema.md'), 'utf8');
+  const coreSections = [...core.matchAll(/^## (\S+)/gm)].map((m) => m[1]);
+  for (const moved of ['globalChoices[]', 'webResources[]', 'commands[]', 'businessRules[]', 'dashboards[]', 'roleGrants[]']) {
+    assert.ok(!coreSections.includes(moved), `${moved} must live only in app-spec-schema-advanced.md`);
+  }
+});
+
+test('the skill tells the agent when to read the advanced schema', () => {
+  // The split only stays safe while the skill body routes the reader to it. Without this line an
+  // agent reads the core doc, never opens the advanced one, and quietly cannot author half the
+  // conditional features.
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'app-builder', 'SKILL.md'), 'utf8');
+  assert.match(skill, /app-spec-schema-advanced\.md/, '/app-builder must point at the advanced schema');
+  assert.match(skill, /conditional feature/i, 'and say when to read it');
+});
 //
 // Every field below is produced by a SKILL.md dispatch template and consumed by
 // genpage-page-builder. `Connectors` drifted because nothing executed that contract; the same

@@ -803,7 +803,7 @@ function planTeardown(spec) {
   //     access that predates us, which is precisely the outcome the bug asks to avoid, and is worse
   //     than leaving a stale grant (extra access on a role its owner still administers in Maker).
   //
-  // Consequence, stated in references/app-spec-schema.md: a roleGrant is one-way. Revoke in Maker.
+  // Consequence, stated in references/app-spec-schema-advanced.md: a roleGrant is one-way. Revoke in Maker.
   for (const c of spec.charts || []) {
     steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });
   }

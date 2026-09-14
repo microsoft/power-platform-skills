@@ -10,13 +10,15 @@
 // ahead of GA and flip it on in a one-line follow-up PR (or per-run via env var)
 // once the dependencies are released — instead of carrying an un-merged branch.
 //
-// A flag is REMOVED once its feature is GA, rather than left committed as `true`: a
-// permanently-on gate is dead weight that still has to be read, probed and reasoned
-// about at every call site. `connectors` was retired this way.
+// A GA flag is flipped to `true` FIRST and removed in a later change, not both at once.
+// Flipping is reversible in one line if the rollout turns out to be incomplete in some
+// tenant; deleting the gate in the same change that enables the feature leaves no way
+// back except a revert. `connectors` is in that window now: GA, shipping `true`, gate
+// retained as a rollback switch.
 //
 // Precedence (highest first), mirroring the telemetry opt-out convention in
 // AGENTS.md where an env var overrides committed config:
-//   1. env var  GENPAGE_ENABLE_<FLAG>   (e.g. GENPAGE_ENABLE_CUSTOM_API)
+//   1. env var  GENPAGE_ENABLE_<FLAG>   (e.g. GENPAGE_ENABLE_CONNECTORS)
 //   2. committed feature-flags.json at the plugin root
 //   3. default: false  (fail-closed — unknown/unset flags are OFF)
 //
@@ -44,7 +46,7 @@ function parseBool(value) {
   return null;
 }
 
-// 'custom-api' -> GENPAGE_ENABLE_CUSTOM_API. Non-alphanumeric runs in a flag name
+// 'connectors' -> GENPAGE_ENABLE_CONNECTORS. Non-alphanumeric runs in a flag name
 // collapse to a single '_' so multi-word flags still map to a legal env var name.
 function envVarName(flag) {
   return 'GENPAGE_ENABLE_' + String(flag).toUpperCase().replace(/[^A-Z0-9]+/g, '_');
@@ -82,6 +84,10 @@ function isEnabled(flag, opts = {}) {
   return flags[flag] === true;
 }
 
+function isConnectorsEnabled(opts) {
+  return isEnabled('connectors', opts);
+}
+
 function isCustomApiEnabled(opts) {
   return isEnabled('custom-api', opts);
 }
@@ -92,6 +98,16 @@ function isCustomApiEnabled(opts) {
 // feature-flags.json only carries the on/off value; this catalog carries the
 // metadata (what it enables, what it depends on, how to turn it on).
 const FLAGS = {
+  connectors: {
+    status: 'ga',
+    summary:
+      'GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) ' +
+      'and ALM packaging of connection references.',
+    dependencies:
+      'pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring ' +
+      'control (power-platform-ux), and the maker/admin ECS setting — all live in PROD.',
+    enableEnv: 'GENPAGE_ENABLE_CONNECTORS=1',
+  },
   'custom-api': {
     status: 'in-progress',
     summary:
@@ -123,6 +139,26 @@ const FLAGS = {
 // committed file (catch typo'd keys that would silently stay OFF — or, after a flip
 // to true, an unintended key) and to enumerate state via `describe()`.
 const KNOWN_FLAGS = Object.keys(FLAGS);
+
+// Fail-closed gate shared by every connector script entry point. Centralizing it
+// (instead of each script inlining the same `if (!isConnectorsEnabled()) exit 3`)
+// keeps the disabled message and exit code (3 = "feature off", distinct from
+// 1 = runtime/usage error) consistent and prevents drift. `exit`/`write` are
+// injectable for unit testing.
+//
+// connectors is GA and ships ON, so this normally does nothing. It is retained for one
+// release as the rollback path: if the cross-repo dependencies turn out to be incomplete
+// in some tenant, `"connectors": false` restores the previous behaviour in one line
+// rather than requiring a revert.
+function exitIfConnectorsDisabled(opts = {}) {
+  const exit = opts.exit || process.exit;
+  const write = opts.write || ((s) => process.stderr.write(s));
+  if (!isConnectorsEnabled(opts)) {
+    write(connectorsDisabledMessage() + '\n');
+    return exit(3);
+  }
+  return undefined;
+}
 
 // Fail-closed gate shared by every Custom API (Dataverse Action/Function) script entry
 // point: exit 3 = "feature off", distinct from 1 = runtime/usage error, so a caller can tell
@@ -173,6 +209,18 @@ function validateFlags(flags) {
   return warnings;
 }
 
+// Standard operator-facing message printed when a connector entrypoint is invoked
+// while the flag is OFF. Centralized so every connector script speaks with one voice.
+function connectorsDisabledMessage() {
+  return (
+    'Connector support is disabled (feature flag "connectors" is OFF). ' +
+    'It is GA and ships ON, so this means it was explicitly turned off — either ' +
+    'GENPAGE_ENABLE_CONNECTORS=0 in this environment, or "connectors": false in ' +
+    'plugins/model-apps/feature-flags.json. Set it back to true (or unset the env var) ' +
+    'to re-enable connector authoring.'
+  );
+}
+
 // Standard operator-facing message printed when a Custom API entrypoint is invoked while
 // the flag is OFF. Centralized so every Custom API script speaks with one voice about why it
 // stopped and how to turn the feature on.
@@ -189,8 +237,11 @@ function customApiDisabledMessage() {
 
 module.exports = {
   isEnabled,
+  isConnectorsEnabled,
   isCustomApiEnabled,
+  connectorsDisabledMessage,
   customApiDisabledMessage,
+  exitIfConnectorsDisabled,
   exitIfCustomApiDisabled,
   describe,
   validateFlags,

@@ -143,7 +143,7 @@ at a time (you are headless — see the interaction contract below):
 
 > **Connector data changes** (SharePoint, weather, Office 365, SQL, custom REST):
 > Do **not** run connector discovery here — the orchestrator delegates that to the
-> `genpage-connector-builder` agent (which owns connector discovery).
+> `genpage-connector-builder` agent (which owns connector discovery and its rollback gate).
 >
 > - **Preserving or clearing** existing connectors needs no discovery: capture it
 >   in the plan's `### Connector Changes` and continue.

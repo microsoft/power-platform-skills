@@ -37,11 +37,13 @@ status) in `scripts/lib/feature-flags.js`; their on/off value lives in
 
 | Flag | Status | Enables | Depends on |
 |---|---|---|---|
+| `connectors` | **ga (on by default)** | GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) + ALM packaging of connection references | pac CLI connector verbs, the GenUX authoring control, and the maker/admin ECS setting — all live in PROD |
 | `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb, and the `GenUxPluginActionAllowList` setting — all live in PROD |
 | `custom-telemetry` | in-progress | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
 
-Connector authoring (SharePoint, weather, Office 365, SQL, custom REST) is **GA and
-always on** — it is no longer flagged.
+Connector authoring is **GA and on by default**. Its flag is kept for one release as a
+rollback switch: set `GENPAGE_ENABLE_CONNECTORS=0` (or `"connectors": false`) if your
+environment turns out to be missing one of the dependencies above.
 
 **See the current state** (status, whether each flag is on, and why):
 

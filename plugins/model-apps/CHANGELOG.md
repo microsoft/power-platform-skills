@@ -57,14 +57,24 @@ A dry run that says what an apply would actually do, and sample data that can ex
 
 ### Changed
 
-- **Connector authoring is GA — the `connectors` feature flag is gone.** SharePoint / weather /
-  Office 365 / SQL / custom-REST connector binding, and ALM packaging of connection references, are
-  now simply part of `/genpage`. The flag was **removed** rather than flipped to `true`: a
-  permanently-on gate still has to be probed and branched on at every call site, and it keeps an
-  unreachable "what if it's off" path alive in the skill prose. `list-connections.js`,
-  `create-connection-reference.js` and `add-page-to-solution.js` no longer exit 3, and the Phase 4.5
-  dispatch value is derived from the plan's binding table (`Connectors: none` / `<n> binding(s)`)
-  instead of from a flag probe. `custom-api` and `custom-telemetry` are unaffected.
+- **Connector authoring is GA and on by default.** SharePoint / weather / Office 365 / SQL /
+  custom-REST connector binding, and ALM packaging of connection references, now work without
+  opting in. The `connectors` flag is **flipped to `true` and kept for one release as a rollback
+  switch** rather than deleted — if a tenant turns out to be missing one of the cross-repo
+  dependencies, `GENPAGE_ENABLE_CONNECTORS=0` (or `"connectors": false`) restores the previous
+  behaviour in one line instead of needing a revert. It is scheduled for removal in the next
+  release. `custom-api` and `custom-telemetry` are unaffected and still default-OFF.
+- **The Phase 4.5 dispatch value is now the binding count, not the flag state.** The page-builder
+  receives `Connectors: none` or `<n> binding(s)`; a disabled gate and an empty binding table both
+  yield `none`, because the generator only needs to know how many bindings it may call. This keeps
+  the dispatch stable when the flag is eventually removed.
+- **The App Spec schema is split so the always-read half is smaller.** `app-spec-schema.md` is read
+  in full at the start of every authoring run, and ~24% of it described features most apps never
+  use. `globalChoices`, `webResources`, `commands`, `businessRules`, `businessProcessFlows`,
+  `dashboards` and `roleGrants` moved to `app-spec-schema-advanced.md`, leaving a pointer table in
+  their place: 105 KB → 82 KB eagerly read. The pointer table is deliberately in the document you
+  always read, so no capability is hidden — and a test fails if the table and the advanced
+  document ever drift apart, since that is what would quietly cause under-building.
 - **The CLI flag contract is shared rather than per-script.** The check above previously existed only
   in `lint-app-spec.js`; the other ~20 entry points each hand-rolled part of it, and a new CLI could
   forget it entirely. It now lives once in `scripts/lib/dataverse-auth.js` (`validateFlags`), with

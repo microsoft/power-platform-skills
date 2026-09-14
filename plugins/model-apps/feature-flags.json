@@ -1,5 +1,6 @@
 {
-  "_comment": "Feature flags for the /genpage skill. Unreleased features ship OFF so the skill behaves identically to production until the full cross-repo stack is live in PROD. A flag is REMOVED (not flipped to true) once its feature is GA — connectors went GA and its gate is gone.",
+  "_comment": "Feature flags for the /genpage skill. Unreleased features ship OFF so the skill behaves identically to production until the full cross-repo stack is live in PROD. connectors is GA and ships ON; its gate is kept for one release as a rollback switch and is scheduled for removal.",
+  "connectors": true,
   "custom-api": false,
   "custom-telemetry": false
 }

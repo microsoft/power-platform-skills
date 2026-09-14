@@ -39,7 +39,7 @@ This skill orchestrates specialist agents across the create and edit flows:
 
 5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
    replaces, discovers, or clears connector bindings; preserves unchanged bindings
-   when the edit does not touch them
+   when the edit does not touch them, or when the `connectors` rollback gate is off
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
    requirements, presents an edit plan, writes `genpage-edit-plan.md`
 
@@ -188,8 +188,8 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
 `genpage-connector-builder` is dispatched only by this top-level orchestrator,
-not by `genpage-planner`. This keeps connector discovery in one agent
-while avoiding nested `Task` calls from the planner.
+not by `genpage-planner`. This keeps connector discovery and its rollback gate in one
+agent while avoiding nested `Task` calls from the planner.
 
 **Never run discovery before the planner returns** — not even when `$ARGUMENTS`
 obviously mentions SharePoint, Teams, Office 365 or a custom REST source.
@@ -212,9 +212,10 @@ So the sequence is always: plan first, then discover, then re-plan.
   `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
   is a bare JSON array, then re-run the planner with the refreshed contract.
 
-The builder remains the single owner of connector discovery: it assesses the data
-source first, writes `No connector bindings.` + `[]` when the page needs no
-connector, and performs all connection discovery only when one is required.
+The builder remains the single owner of connector discovery and of the `connectors`
+rollback gate: it probes first, writes `No connector bindings.` + `[]` when the gate
+is off or the page needs no connector, and performs all connection discovery only
+when one is required.
 
 #### Invocation prompt
 
@@ -383,17 +384,32 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 ### Phase 4.5: Connector Bindings (Conditional)
 
-Read the plan's `## Connector Bindings` section and treat it as bindings **only when
-it contains an actual binding table** (a `| Logical Name | …` header with at least
-one data row). If the section is `No connector bindings.`, empty, missing, or
-malformed, the page has no connectors: skip this phase entirely — do not create or
-pass `connectors.json`, and do not add `--connectors` on upload.
+**Re-probe the rollback gate here — do not rely on the plan content alone.** Connectors
+are GA and the flag ships ON, so this normally passes; it exists so a plan authored
+while the feature was on cannot deploy connectors after it has been turned off:
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
+```
+
+**If it prints `disabled`:** the outcome is `Connectors: none` **regardless of what the
+plan's `## Connector Bindings` section says**. Skip the rest of this phase — do not
+create or pass `connectors.json`, and do not add `--connectors` on upload. (Backstop:
+`list-connections.js` / `create-connection-reference.js` also fail closed with exit 3.)
+
+**If it prints `enabled`:** read the plan's `## Connector Bindings` section and treat it
+as bindings **only when it contains an actual binding table** (a `| Logical Name | …`
+header with at least one data row). If the section is `No connector bindings.`, empty,
+missing, or malformed, the page has no connectors: skip this phase entirely — do not
+create or pass `connectors.json`, and do not add `--connectors` on upload.
 
 **Carry this decision into code generation.** The outcome is `Connectors: <n>
 binding(s)` or `Connectors: none` for the rest of the run, and Phase 5 **must** pass
 it verbatim in every page-builder dispatch — otherwise the generated page could call
 a connector this run never binds, and the page fails at runtime instead of simply
-omitting the feature.
+omitting the feature. Note the dispatch value is the **binding count**, not the flag
+state: a disabled gate and an empty binding table both produce `none`, because the
+page-builder only ever needs to know how many bindings it may call.
 
 When there are real bindings, the `genpage-connector-builder` agent already wrote
 `<working-dir>/connectors.json` during planning — verify it exists and matches the

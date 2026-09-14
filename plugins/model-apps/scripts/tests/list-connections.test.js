@@ -27,6 +27,18 @@ test('missing args exits 1 with usage', () => {
   assert.match(res.stderr, /Usage:/);
 });
 
+test('the rollback switch still works end to end (exit 3, distinct from a usage error)', () => {
+  // connectors ships ON, so this is the path that only runs if someone turns it off. Exercise it
+  // for real: a gate that has quietly stopped working is worthless as a rollback, and nothing else
+  // would notice until it was needed.
+  const res = spawnSync(process.execPath, [scriptPath, 'https://contoso.crm.dynamics.com'], {
+    encoding: 'utf8',
+    env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' },
+  });
+  assert.equal(res.status, 3, 'exit 3 = feature off, distinct from 1 = usage/runtime error');
+  assert.match(res.stderr, /disabled/i);
+});
+
 // --- Unit tests for the pure helpers (require.main guard keeps main() from running) ---
 const { sortReadyToBindFirst, pacFailureMessage } = require(scriptPath);
 

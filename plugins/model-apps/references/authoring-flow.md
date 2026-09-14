@@ -252,7 +252,8 @@ page-intents + design**, and **(c) access**. The author never emits `.tsx`; page
 until generate-pages.
 
 > **Read the spec format once, up front** — don't reverse-engineer it from scripts:
-> [`references/app-spec-schema.md`](./app-spec-schema.md) (every field) and the worked sample
+> [`references/app-spec-schema.md`](./app-spec-schema.md) (every always-present field; conditional
+> ones are in [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)) and the worked sample
 > [`samples/app-spec.support-desk.json`](../samples/app-spec.support-desk.json). Author to that
 > shape. **Do not pre-create tables/columns/solution** during authoring — the build is
 > idempotent and creates only what's missing.
@@ -315,7 +316,10 @@ Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Custome
 column needs `options[]` **or** a `globalChoice` reference. Lookups are **not** a column type —
 declare a `OneToMany` relationship instead.
 
-> **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the single source.**
+> **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the source for
+> everything an app always has; [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)
+> carries the conditional fields it points at (business rules, BPFs, commands, web resources,
+> global choices, dashboards, `roleGrants[]`).**
 > Its **modeling cheatsheet** answers the recurring questions without reading the SDK/lint/engine:
 > auto-number identity → `autoNumberFormat` on `primaryAttribute`; **N:N with attributes** (e.g.
 > Technician↔Work-Order with a Role) → a **junction entity** + two `OneToMany` (sample rows bind

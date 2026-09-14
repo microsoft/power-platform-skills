@@ -64,7 +64,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   nothing: a command handler is handed the record (`function doThing(primaryControl)`) — the build
   supplies the parameter, so write that signature; and **never hardcode Choice values** like
   `100000003`, because they are assigned per publisher. Resolve by label via `getOptions()`
-  (see `references/app-spec-schema.md` → webResources). Note also that command and web-resource
+  (see `references/app-spec-schema-advanced.md` → webResources). Note also that command and web-resource
   **edits do not redeploy on rebuild** — the phases reuse what exists, so changing a button or a
   script means deleting it first.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
@@ -162,7 +162,14 @@ every prompt yourself via `AskUserQuestion`. In short:
 4. **Levelled authoring** — **first read the App Spec format** so you author to the exact
    shape (do this once; don't go spelunking through scripts):
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
-   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). Phase 1 is
+   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). That document
+   covers everything an app always has. **Additionally read
+   [`references/app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md) once your
+   design calls for a conditional feature** — business rules, a business process flow, command-bar
+   buttons, web resources, global choices, classic dashboards, or `roleGrants[]`. Its pointer table
+   is in the main schema, and the toolbox above tells you when to reach for each; read the detail
+   only for the ones you are actually using, and never skip a capability just to avoid the read.
+   Phase 1 is
    **design-only**: never emit page `.tsx` here. Each level is confirmed via `AskUserQuestion` before
    the next begins, and `app-spec.json` is persisted after each — full prompts in the playbook.
    - **Level (a0) — personas & jobs-to-be-done** (`personas[]`): **before proposing any tables**, ask
@@ -611,5 +618,7 @@ child view id. Each step emits `[n/total]`.
   **custom grid rendering** (`entities[].columns[].visualization` — radial dial / line chart /
   heat map / star rating, preview); web resources + form JS event handlers; sample data with
   **multi-parent `$parents`** + **`statusReason`**. See [`docs/app-builder-capabilities.md`](../../docs/app-builder-capabilities.md) and
-  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
-  doc; you should not need to read the SDK, lint, or engine to write a spec.
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) (plus
+  [`app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md) for the conditional
+  fields it points at) — author from those docs; you should not need to read the SDK, lint, or
+  engine to write a spec.

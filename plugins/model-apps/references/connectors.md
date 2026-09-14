@@ -5,6 +5,10 @@ name. The `connectorLogicalName` string in TSX **MUST** equal a
 `connectorBindings[].logicalName` value in the page `config.json`, and that
 logical name must exist as a connection reference in the target environment.
 
+> **GA.** Connector authoring is on by default. A `connectors` flag is retained for one
+> release as a rollback switch — when it is off, pages are Dataverse / mock-data only and
+> no connector code is emitted. See the Feature Flags section in the plugin `AGENTS.md`.
+
 ## Binding shape: `connectors.json` (array) vs page `config.json` (object)
 
 The skill writes a **bare JSON array** of bindings to working-dir

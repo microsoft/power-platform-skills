@@ -24,6 +24,23 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
+const { isConnectorsEnabled, exitIfConnectorsDisabled } = require('./lib/feature-flags');
+
+// Connection references are connector state. When the connectors flag is OFF (the GA rollback
+// switch), ALM must not add them. Two distinct cases, and conflating them is what made this
+// silently lossy:
+//   1. The caller passed NO --connection-refs → nothing to gate; non-connector page packaging
+//      (appmodule + uxagentproject) proceeds normally whether the flag is on or off.
+//   2. The caller EXPLICITLY passed --connection-refs while the flag is OFF → this is the
+//      documented fail-closed backstop: exit 3, BEFORE any AddSolutionComponent call. Previously
+//      the refs were dropped and the script still reported `ok: true`, so an out-of-band/stale-plan
+//      call packaged a solution WITHOUT the connection references the caller asked for and looked
+//      like it succeeded — the resulting solution imports with unbound connectors.
+// The gate runs before the first mutation so a refused run leaves the solution untouched rather
+// than half-populated (app + pages added, refs missing).
+function connectionRefsToAdd(refs, connectorsEnabled) {
+  return connectorsEnabled ? refs : [];
+}
 
 const APPMODULE_COMPONENT_TYPE = 80;
 // Solution component type for the GenPage itself. uxagentproject IS a registered
@@ -75,12 +92,18 @@ async function main() {
   const [envUrl, solutionUniqueName, appId] = positional;
   const added = [];
 
-  // Parsed BEFORE the first mutation so a malformed list fails the run outright rather than
-  // leaving a half-packaged solution (app + pages added, refs missing).
+  // Parsed BEFORE the first mutation so the fail-closed gate can refuse the whole run rather
+  // than leaving a half-packaged solution (app + pages added, refs missing).
   const refs = (flags['connection-refs'] || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const connectorsOn = isConnectorsEnabled();
+  // Explicitly-requested refs while the feature is OFF = the documented exit-3 backstop.
+  if (refs.length && !connectorsOn) {
+    exitIfConnectorsDisabled();
+    return; // exitIfConnectorsDisabled() exits; `return` keeps the flow explicit for tests.
+  }
 
   try {
     // The appmodule (type 80) with AddRequiredComponents=true pulls the sitemap and
@@ -100,7 +123,9 @@ async function main() {
       added.push({ type: 'uxagentproject', id: pageId });
     }
 
-    for (const logicalName of refs) {
+    const refsToAdd = connectionRefsToAdd(refs, connectorsOn);
+    const skippedConnectionRefs = connectorsOn ? [] : refs;
+    for (const logicalName of refsToAdd) {
       const query =
         `connectionreferences?$filter=connectionreferencelogicalname eq '${escapeODataString(logicalName)}'` +
         '&$select=connectionreferenceid&$top=1';
@@ -113,7 +138,7 @@ async function main() {
       added.push({ type: 'connectionreference', logicalName, id });
     }
 
-    emitResult(true, { ok: true, added });
+    emitResult(true, { ok: true, added, skippedConnectionRefs });
   } catch (e) {
     emitResult(false, e);
   }
@@ -131,6 +156,7 @@ if (require.main === module) {
 // "entity ... not found in MetadataCache"), so they are pinned by test rather than left to
 // a future edit to silently change.
 module.exports = {
+  connectionRefsToAdd,
   escapeODataString,
   APPMODULE_COMPONENT_TYPE,
   UXAGENTPROJECT_COMPONENT_TYPE,

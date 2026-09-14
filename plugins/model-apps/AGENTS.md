@@ -47,7 +47,8 @@ able to tell what moved from the docs alone):
 | [`docs/app-builder-capabilities.md`](docs/app-builder-capabilities.md) | `/app-builder` **capabilities** — what ships today, with the evidence for each | You ship an app-builder capability |
 | [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
-| [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
+| [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract (always-present fields) | You change the App Spec shape or validation |
+| [`references/app-spec-schema-advanced.md`](references/app-spec-schema-advanced.md) | The conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants) — split out so the always-read contract stays small | You change one of those features |
 
 Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
 tree and teardown order both did before).
@@ -550,7 +551,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
-feature-flags.json             ← Default-OFF feature flags (custom-api, custom-telemetry)
+feature-flags.json             ← Feature flags (connectors=ga/on, custom-api, custom-telemetry)
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
@@ -713,20 +714,22 @@ is about runtime/deploy output, not that every authoring artifact is byte-for-by
 unchanged. The mechanism lives in `scripts/lib/feature-flags.js` with the committed
 values in `feature-flags.json` at the plugin root.
 
-**A flag is REMOVED once its feature is GA, not left committed as `true`.** A
-permanently-on gate is dead weight that still has to be probed, branched on and
-reasoned about at every call site, and it keeps a "what if it's off" path alive in
-the skill prose that can no longer happen. `connectors` was retired this way: the
-flag, its helpers (`isConnectorsEnabled` / `exitIfConnectorsDisabled` /
-`connectorsDisabledMessage`), the script gates and every disabled-path branch in the
-skill and agent markdown are gone, and connector authoring is simply part of
-`/genpage`.
+**A GA flag is flipped to `true` FIRST and removed in a LATER change, not both at once.**
+Flipping is reversible in one line if the rollout turns out to be incomplete in some tenant;
+deleting the gate in the same change that enables the feature leaves no way back except a
+revert. Once a release has shipped with the flag on and no rollback was needed, remove it —
+a permanently-on gate is dead weight that still has to be probed, branched on and reasoned
+about at every call site.
+
+`connectors` is in that window now: **GA, shipping `true`, gate retained as a rollback
+switch, scheduled for removal in the next release.**
 
 - **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": false }`). Flip a
   flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
-  it in the follow-up that deletes its gates.
+  it in a follow-up that deletes its gates.
 - **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
-  `GENPAGE_ENABLE_CUSTOM_API=1`) → committed `feature-flags.json` → default `false`
+  `GENPAGE_ENABLE_CONNECTORS=0` to roll connectors back) → committed
+  `feature-flags.json` → default `false`
   (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
 - **LLM gate:** skill/agent markdown probes a flag with
   `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" <flag>` (prints `enabled`/`disabled`,
@@ -735,9 +738,11 @@ skill and agent markdown are gone, and connector authoring is simply part of
   source (env/file/default), summary, how to enable, plus config-validation warnings.
   Flags are catalogued with that metadata in the `FLAGS` map in `feature-flags.js`
   (the committed `feature-flags.json` carries only the on/off value).
-- **Script backstop:** Custom API entrypoints call the shared
-  `exitIfCustomApiDisabled()` helper (DRY — no inlined gate) and fail closed with
-  exit 3 when OFF: `list-custom-apis.js`.
+- **Script backstop:** connector entrypoints call the shared
+  `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
+  exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
+  `--connection-refs` branch of `add-page-to-solution.js`. Custom API entrypoints call
+  the parallel `exitIfCustomApiDisabled()` helper the same way: `list-custom-apis.js`.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
@@ -756,19 +761,21 @@ once here and only the per-feature specifics are tabled below:
 5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
-| | `custom-api` | `custom-telemetry` |
-|---|---|---|
-| **Owner agent** | `genpage-customapi-builder` | none — codegen-only |
-| **Plan section** | `## Custom API Bindings` | none — driven by the maker request, not the plan |
-| **Gated scripts** | `list-custom-apis.js` | none |
-| **Deploy phase** | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
-| **ALM** | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
-| **Emits** | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
+| | `connectors` | `custom-api` | `custom-telemetry` |
+|---|---|---|---|
+| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
+| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
+| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
+| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
+| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
+| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
 
 At Phase 4.7 the `/genpage` orchestrator probes and passes the verbatim result as
 `Telemetry: enabled|disabled` in every page-builder dispatch — **that dispatch value wins over
-the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, derived now
-from the plan's binding table rather than from a flag.
+the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
+difference: that value is the **binding count**, not the flag state. A disabled gate and an empty
+binding table both yield `none`, because the page-builder only needs to know how many bindings it
+may call — which keeps the dispatch stable when the flag is eventually removed.
 
 `custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
 section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
