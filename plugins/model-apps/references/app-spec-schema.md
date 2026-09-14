@@ -1070,7 +1070,8 @@ set a custom status with `statusReason`. All are topologically inserted and boun
   ```
   Order in the array does not matter; the engine seeds such rows in dependency waves, creating each
   row only after the row it points at. A **cycle** (including a row that is its own parent) is
-  rejected by the lint, because no creation order can satisfy it.
+  rejected by `validateAppSpec` — so by the build on load, and by
+  `scripts/lint-app-spec.js`, which runs it — because no creation order can satisfy it.
 - **`lookup`** (optional) names *which* relationship a parent bind goes through, by the lookup's
   `schemaName`:
   ```jsonc
@@ -1078,8 +1079,8 @@ set a custom status with `statusReason`. All are topologically inserted and boun
   ```
   It is only needed when **two or more** `OneToMany` relationships connect the same pair — common for
   a hierarchy table with both a "parent org" and a "group ancestor" self-lookup. Without it the bind
-  would be ambiguous, so the lint **rejects** it rather than silently picking the first declared
-  relationship and asserting something false about the data.
+  would be ambiguous, so `validateAppSpec` **rejects** it rather than silently picking the first
+  declared relationship and asserting something false about the data.
 - **`statusReason`** must match a declared `statusReasons[]` label on the entity; the engine resolves
   it to the right `statecode` + `statuscode` (so "Completed orders with Passed/Pending QA" just work).
   The status option value is captured during the **data-model** phase — if you set `statusReason` on

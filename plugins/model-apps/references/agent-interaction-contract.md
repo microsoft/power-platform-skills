@@ -21,6 +21,20 @@ because nothing checked: agent frontmatter is prose to every test in the repo.
 decision returns a structured request; the orchestrator asks, records it, and
 re-invokes the agent with the answer.
 
+This applies to **every phase that dispatches an agent**, not just the first one.
+Each dispatch site is its own loop: a phase that waits for an agent and then
+proceeds on a `needs_input` return silently discards the decision, and the agent
+never runs the step that depended on it. The rule is easy to satisfy in the phase
+where interaction is obviously expected and easy to forget in the ones where the
+agent is "just doing work" — `/genpage` Phase 2b dispatched the entity-builder,
+which asks about sample data this way, and simply waited for it. Treat it as part
+of the dispatch, like passing the working directory.
+
+The same holds for plan approval: a headless agent cannot see an `ExitPlanMode`
+result, so an agent whose final step is gated on approval must be **re-invoked
+with the outcome**. Check for the artifact it was supposed to write before moving
+on; its absence is the only signal you get that the loop did not close.
+
 ## The `needs_input` request
 
 ```json

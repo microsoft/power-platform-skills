@@ -55,6 +55,7 @@ const {
   findExistingTable,
   findExistingColumns,
   relationshipExists,
+  localizedLabelLcidsInSpec,
 } = require('./entity-provision.js');
 // Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
 const {
@@ -1224,9 +1225,23 @@ async function resolveRoleGrantTarget(provision, grant, buCache) {
 //              overstates the work and guessing "reuse" understates it, and both read as certainty.
 // An item with no `key` is left unprobed (`state` absent) — the plan line still prints.
 async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
-  const hasLocalizedLabels = typeof localizedLabelLcidsInSpec === 'function'
-    ? localizedLabelLcidsInSpec(spec).length > 0
-    : false;
+  // Localization is decided PER ITEM, because that is how the apply path decides it (per entity in
+  // entity-provision.js, per relationship lookup label). A spec-wide flag would push a plain-label
+  // table down the fail-closed path because some unrelated table is localized, and the plan would
+  // then contradict the apply it exists to predict.
+  //
+  // The entity map is built here rather than carried on the key so it cannot depend on probe ORDER:
+  // `tableCache` is keyed by table alone, and a form/view item naming the same table must not be
+  // able to seed the cache with a different localization answer than the table item would.
+  //
+  // The previous spec-wide read also called `localizedLabelLcidsInSpec` without importing it. It
+  // lives in entity-provision.js, not app-spec.js, so the identifier was undeclared and the
+  // `typeof … === 'function'` guard silently evaluated to false on every run — the flag was never
+  // once true.
+  const localizedByEntity = new Map();
+  for (const e of (spec && spec.entities) || []) {
+    localizedByEntity.set(String(e.schemaName || '').toLowerCase(), localizedLabelLcidsInSpec({ entities: [e] }).length > 0);
+  }
   const tableCache = new Map();   // entity logical -> { found: bool|null }
   const columnCache = new Map();  // entity logical -> Set<logicalName> | null
 
@@ -1261,7 +1276,7 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
   const tableState = async (logical) => {
     if (!tableCache.has(logical)) {
       try {
-        const hit = await findExistingTable(provision, logical, { hasLocalizedLabels });
+        const hit = await findExistingTable(provision, logical, { hasLocalizedLabels: localizedByEntity.get(logical) === true });
         tableCache.set(logical, { found: !!hit });
       } catch (err) {
         // Includes the BuildHalt findExistingTable raises for a LOCALIZED spec whose probe is
@@ -1312,7 +1327,12 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
       } else if (k.kind === 'relationship') {
         // Tri-state: `null` means the probe could not tell. The apply path treats that as absent
         // (its create absorbs the race); a plan has nothing to absorb it, so it must say so.
-        const present = await relationshipExists(relReader, String(k.entity).toLowerCase(), k.name, k.relType, { hasLocalizedLabels });
+        // The localized-label flag is deliberately NOT threaded here. Its only effect inside
+        // `relationshipExists` is to suppress the `fetchEntityMetadata` fallback — and `relReader`
+        // has no `fetchEntityMetadata` at all (see above), so an inconclusive probe already returns
+        // `null` either way. Passing it would be inert code that reads as though it decides
+        // something.
+        const present = await relationshipExists(relReader, String(k.entity).toLowerCase(), k.name, k.relType);
         item.state = present === null || present === undefined ? 'unknown' : (present ? 'reuse' : 'create');
         if (item.state === 'unknown') item.stateWhy = 'the relationship metadata read was inconclusive';
       } else if (k.kind === 'app') {

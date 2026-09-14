@@ -156,8 +156,17 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
    with `AskUserQuestion`, record them in `workflow-log.md`, and re-invoke that
    agent with the answers. Agents never prompt; they request.
 5. Present the plan with `EnterPlanMode` and get approval via `ExitPlanMode`.
-   On a revision request, revise and re-present.
-6. Write `genpage-plan.md`, then proceed to Phase 2.
+   On a revision request, re-invoke the planner with the requested revisions and
+   present the revised plan again.
+6. **On approval, re-invoke `genpage-planner` with the approval outcome.** The
+   planner writes `genpage-plan.md` in its own final step, and it only reaches
+   that step when it is told the plan was approved — a `Task` subagent is
+   headless, so it cannot see the `ExitPlanMode` result any other way. Do not
+   write the file yourself: its section headings are a machine-readable contract
+   that every downstream phase parses by name.
+7. Confirm `<working-dir>/genpage-plan.md` exists before starting Phase 2.
+   Reaching Phase 2 without it means building from a plan nobody approved, and
+   Phase 2 reads that file as its first action.
 
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
@@ -296,6 +305,19 @@ plan's `## Environment` — no need to re-thread them here.
 
 Wait for completion. The builder writes a transactional log at
 `<working-dir>/genpage-entity-creation-log.md` for recovery on failure.
+
+**The builder is headless and will ask for the sample-data decision by returning
+`{ "action": "needs_input", … }`** (it has no way to prompt). Handle it here, in
+this loop, exactly as Phase 1 step 4 does:
+
+- Ask each question with `AskUserQuestion`.
+- Record every exchange in `workflow-log.md` as `AskUserQuestion: <question> → <answer>`.
+- Re-invoke the builder with the answers plus everything it already returned, so
+  it can carry out the step that depended on them (sample data is created by a
+  second pass of its own CLI, not by anything here).
+
+Repeat until it returns a completion rather than a request. Proceeding to Phase 3
+on a `needs_input` return silently drops the decision the user was asked to make.
 
 ### Phase 3: App Creation/Selection
 

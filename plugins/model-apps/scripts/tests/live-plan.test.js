@@ -297,3 +297,55 @@ test('#559 planFor attaches keys to the probeable artifact classes', () => {
   assert.strictEqual(kindOf('form for new_t').kind, 'form');
   assert.strictEqual(kindOf('app module').kind, 'app');
 });
+
+// The dry run must decide localization the way the APPLY path decides it: per entity. Two defects
+// are pinned here at once.
+//
+// 1) The flag was read via `typeof localizedLabelLcidsInSpec === 'function'` on an identifier that
+//    was never imported (it lives in entity-provision.js, not app-spec.js). `typeof` on an
+//    undeclared name is legal and yields 'undefined', so the guard silently evaluated to false on
+//    every run and the fail-closed path was unreachable.
+// 2) It was computed once for the WHOLE spec. A single localized table anywhere would then force
+//    every plain-label table down the fail-closed path, and the plan would contradict the apply.
+//
+// Localizing a label changes what an INCONCLUSIVE narrow read may do: for a plain-label table the
+// broad `findTables` read may resolve it (the apply reuses the table, nothing is poisoned), but for
+// a localized one that read is what makes Dataverse keep only the base-language label, so it is
+// refused and the answer stays unknown.
+test('#559 localization is per ENTITY, not per spec, when an existence probe is inconclusive', async () => {
+  const spec = {
+    entities: [
+      { schemaName: 'new_loc', displayName: { 1033: 'Localized', 3082: 'Localizada' }, columns: [] },
+      { schemaName: 'new_plain', displayName: 'Plain', columns: [] },
+    ],
+  };
+  // Both narrow reads are inconclusive (500). Both tables DO exist, so findTables can prove it.
+  const provision = {
+    dataverse: { get: async () => ({ status: 500, body: {} }) },
+    findTables: async (q) => [{ logicalName: String(q).toLowerCase(), entitySetName: `${String(q).toLowerCase()}s` }],
+    queryRecords: async () => [],
+  };
+  const plan = [
+    { phase: 'data-model', label: 'table new_loc', key: { kind: 'table', entity: 'new_loc' } },
+    { phase: 'data-model', label: 'table new_plain', key: { kind: 'table', entity: 'new_plain' } },
+  ];
+  await annotateLivePlan(plan, { spec, provision });
+
+  assert.strictEqual(stateOf(plan, 'new_plain'), 'reuse',
+    'a plain-label table may be resolved by the broad read, exactly as the apply path resolves it');
+  assert.strictEqual(stateOf(plan, 'new_loc'), 'unknown',
+    'a localized table must NOT be resolved by the broad read — that read is what drops the translations');
+});
+
+// The complement: with NO localized labels anywhere, nothing is forced into unknown.
+test('#559 a spec with no localized labels resolves inconclusive probes through the broad read', async () => {
+  const spec = { entities: [{ schemaName: 'new_plain', displayName: 'Plain', columns: [] }] };
+  const provision = {
+    dataverse: { get: async () => ({ status: 500, body: {} }) },
+    findTables: async (q) => [{ logicalName: String(q).toLowerCase(), entitySetName: `${String(q).toLowerCase()}s` }],
+    queryRecords: async () => [],
+  };
+  const plan = [{ phase: 'data-model', label: 'table new_plain', key: { kind: 'table', entity: 'new_plain' } }];
+  await annotateLivePlan(plan, { spec, provision });
+  assert.strictEqual(stateOf(plan, 'new_plain'), 'reuse');
+});
