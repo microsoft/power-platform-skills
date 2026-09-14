@@ -7,7 +7,7 @@ description: >-
   wants to create, build, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
 model: opus
 ---
 
@@ -107,7 +107,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
    - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
    - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
-6. Summarize understanding and confirm with user before proceeding
+6. Summarize understanding and confirm with user before proceeding.
 
 **Audience influences site generation:**
 
@@ -539,9 +539,43 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 
 Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
 
+### 5.7 Offer and Add Localization
+
+Ask whether localization should be added now:
+
+> **Would you like to add localization support to this site now?**
+> This localizes only the SPA user interface; it does not add languages to your Dataverse environment.
+
+<!-- not-a-gate: this selects whether to enter the child workflow, whose Phase 3 gate approves every localization write -->
+
+Use `AskUserQuestion` with this exact wording and these exact options:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Would you like to add localization support to this site now?<br><br>This localizes only the SPA user interface; it does not add languages to your Dataverse environment. | Localization | Yes — configure localization now, No — keep this site single-language |
+
+Record the answer as `LOCALIZATION_REQUESTED=true|false`. Ask at this point even
+when `$ARGUMENTS` mentioned localization, so the maker's answer immediately
+determines whether the child workflow starts.
+
+When `LOCALIZATION_REQUESTED=true`, invoke:
+
+```text
+/power-pages:add-localization <PROJECT_ROOT> [FROM_CREATE_SITE]
+```
+
+Wait for the skill to complete before accessibility verification. The child
+skill owns locale/package questions, translation generation, selector wiring,
+its implementation review, build, and localization checks. The
+`[FROM_CREATE_SITE]` context prevents a duplicate deployment prompt; control
+returns here so create-site can run accessibility verification, final review,
+and its existing deployment prompt.
+
+When `LOCALIZATION_REQUESTED=false`, skip the child workflow.
+
 > **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, and all requested pages/features before moving to accessibility verification.
 
-**Output**: All pages, components, and design elements implemented and verified
+**Output**: All pages, components, design elements, and requested localization implemented and verified
 
 ---
 
@@ -689,6 +723,8 @@ Present a summary table to the user:
    - Total file count and git commit count
 6. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
+   - `/add-localization` — Add or extend SPA languages (suggest only when
+     `LOCALIZATION_REQUESTED=false`)
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
@@ -726,7 +762,7 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Scaffold and launch dev server | Scaffolding project | Copy template, replace placeholders with defaults, git init, npm install, start dev server, share URL |
 | Plan site components | Planning components | Determine pages, components, design direction, and routes while user previews scaffold |
 | Approve implementation plan | Getting plan approval | Present implementation plan covering design and pages, get user approval |
-| Implement pages and components | Building site | Apply chosen design tokens, create all pages, components, routing, navigation |
+| Implement pages and components | Building site | Apply design tokens, create pages/components/routing/navigation, then ask whether to configure localization immediately |
 | Verify accessibility with axe-core | Verifying accessibility | Run axe-core on every page, fix all critical/serious violations, re-verify until passing |
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |

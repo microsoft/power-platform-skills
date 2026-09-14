@@ -1,6 +1,6 @@
 # Framework Conventions
 
-Shared reference for skills that need to detect the frontend framework and locate key files in a Power Pages code site. Used by `create-site`, `add-seo`, and any future skills that interact with the site project structure.
+Shared reference for skills that need to detect the frontend framework and locate key files in a Power Pages code site. Used by `create-site`, `add-seo`, `add-localization`, and any future skills that interact with the site project structure.
 
 ---
 
@@ -25,6 +25,12 @@ Read `package.json` to determine the framework by checking dependencies:
 - **Vue**: `vue` in dependencies
 - **Angular**: `@angular/core` in dependencies
 - **Astro**: `astro` in dependencies
+
+When a workflow must reject ambiguous multi-framework evidence rather than
+perform a simple lookup, use
+`${PLUGIN_ROOT}/scripts/lib/localization-config.js inspect --projectRoot
+"<PROJECT_ROOT>"`. It returns all primary evidence and does not guess when
+multiple supported framework dependencies are present.
 
 ## Route Discovery
 
