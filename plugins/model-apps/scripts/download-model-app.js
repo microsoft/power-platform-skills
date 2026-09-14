@@ -437,10 +437,30 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
     // failure beyond the catch's reach, so a metadata 403 was indistinguishable from an environment
     // with no global choices — and now that the report consumes this list, that reads as a positive
     // claim rather than an absence of information.
-    const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description');
+    //
+    // Only UNMANAGED option sets are inventoried. A managed one ships with its solution and exists in
+    // any environment that has that solution installed, so naming it as "not round-tripped" is false:
+    // there is nothing for a rebuild to recreate. Measured live on a stock environment: 149 global
+    // option sets total, of which exactly 1 was unmanaged — so reporting all of them buried the two
+    // real findings (a form and a view) under 148 lines the maker can neither act on nor recognise.
+    //
+    // The filter is CLIENT-side because `GlobalOptionSetDefinitions` rejects `$filter` outright —
+    // `?$filter=IsManaged eq false` answers HTTP 405 `0x80060888 "The query parameter $filter is not
+    // supported on GlobalOptionSetDefinitions"`. `IsCustomOptionSet` is deliberately NOT the
+    // discriminator: 59 of those 149 were "custom", nearly all of them first-party managed-solution
+    // choices (msdyn_*, mspp_*), so it reproduces most of the noise.
+    //
+    // An ABSENT `IsManaged` keeps the row. This inventory's whole purpose is to avoid asserting an
+    // absence it cannot substantiate, so an unreadable flag degrades to "report it" rather than to a
+    // silent drop.
+    const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description,IsManaged');
     if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
     if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
-    inventory.globalChoices.push(...res.body.value.map((r) => withDescription({ name: r.Name }, r.Description)));
+    inventory.globalChoices.push(
+      ...res.body.value
+        .filter((r) => r && r.IsManaged !== true)
+        .map((r) => withDescription({ name: r.Name }, r.Description))
+    );
   } catch (err) {
     fail('globalChoices', err);
   }

@@ -571,8 +571,48 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
   assert.ok(calls.some((c) => c.set === 'savedqueryvisualization' && c.opts.select.includes('description')), 'chart read selects description');
   assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('description')), 'form read selects description');
   assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('description')), 'business-rule read selects description');
-  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description'),
-    `global choices must be read through the RAW client (queryRecords cannot take a metadata path); calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
+  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description,IsManaged'),
+    `global choices must be read through the RAW client (queryRecords cannot take a metadata path), selecting IsManaged so managed sets can be excluded; calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
+});
+
+test('the global-choice inventory excludes MANAGED option sets but keeps an unknown flag', async () => {
+  // A managed global choice ships with its solution and exists in any environment that has that
+  // solution, so naming it as "not round-tripped" is false — there is nothing for a rebuild to
+  // recreate. Measured live on a stock environment: 149 option sets, exactly 1 unmanaged, so
+  // reporting all of them buried the real findings under 148 unactionable lines.
+  //
+  // `$filter` cannot do this server-side: GlobalOptionSetDefinitions answers HTTP 405
+  // (0x80060888) for `?$filter=IsManaged eq false`, which is why the filter is client-side.
+  const sdk = {
+    queryRecords: async () => [],
+    dataverse: {
+      get: async (url) => {
+        if (/^\/GlobalOptionSetDefinitions\?/.test(url)) {
+          return {
+            status: 200,
+            headers: {},
+            body: {
+              value: [
+                { Name: 'new_priority', IsManaged: false },
+                { Name: 'msdyn_solutionhealthruleseverity', IsManaged: true },
+                { Name: 'legacy_noflag' }, // IsManaged absent — must be KEPT, not silently dropped
+              ],
+            },
+          };
+        }
+        return { status: 404, headers: {}, body: {} };
+      },
+    },
+  };
+
+  const inv = await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution');
+  const names = (inv.globalChoices || []).map((c) => c.name);
+  assert.ok(names.includes('new_priority'), 'an unmanaged choice is genuinely not round-tripped');
+  assert.ok(!names.includes('msdyn_solutionhealthruleseverity'), 'a managed choice must not be reported');
+  assert.ok(
+    names.includes('legacy_noflag'),
+    'an ABSENT IsManaged must keep the row — this inventory must not assert an absence it cannot substantiate'
+  );
 });
 
 test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
