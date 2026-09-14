@@ -320,9 +320,10 @@ test('#559 localization is per ENTITY, not per spec, when an existence probe is 
     ],
   };
   // Both narrow reads are inconclusive (500). Both tables DO exist, so findTables can prove it.
+  const reads = [];
   const provision = {
     dataverse: { get: async () => ({ status: 500, body: {} }) },
-    findTables: async (q) => [{ logicalName: String(q).toLowerCase(), entitySetName: `${String(q).toLowerCase()}s` }],
+    findTables: async (q) => { reads.push(`findTables:${q}`); return [{ logicalName: String(q).toLowerCase(), entitySetName: `${String(q).toLowerCase()}s` }]; },
     queryRecords: async () => [],
   };
   const plan = [
@@ -335,6 +336,14 @@ test('#559 localization is per ENTITY, not per spec, when an existence probe is 
     'a plain-label table may be resolved by the broad read, exactly as the apply path resolves it');
   assert.strictEqual(stateOf(plan, 'new_loc'), 'unknown',
     'a localized table must NOT be resolved by the broad read — that read is what drops the translations');
+
+  // The state is the symptom; the SAFETY property is that the poisoning read never goes on the
+  // wire. Asserting only the state would pass a change that takes the broad read and then reports
+  // unknown anyway — by which point Dataverse has already been told to keep one language.
+  assert.ok(!reads.includes('findTables:new_loc'),
+    `the broad read must never be issued for a localized table: ${JSON.stringify(reads)}`);
+  assert.ok(reads.includes('findTables:new_plain'),
+    'the plain-label table SHOULD still use the fallback — otherwise this test would pass by doing nothing');
 });
 
 // The complement: with NO localized labels anywhere, nothing is forced into unknown.
@@ -348,4 +357,81 @@ test('#559 a spec with no localized labels resolves inconclusive probes through 
   const plan = [{ phase: 'data-model', label: 'table new_plain', key: { kind: 'table', entity: 'new_plain' } }];
   await annotateLivePlan(plan, { spec, provision });
   assert.strictEqual(stateOf(plan, 'new_plain'), 'reuse');
+});
+
+// An inconclusive TABLE probe makes everything on that table unknowable too. Without this, the plan
+// contradicts itself in adjacent lines — `? unknown` for the table and a confident `+ create` for
+// every view and form on it — and the apply never reaches them: findExistingTable raises BuildHalt
+// for exactly this state, outside any runner.run, so the build aborts in `data-model`.
+//
+// The form arm is the one that hides best: resolveExistingFormId deliberately swallows the
+// MetadataCache 400 and returns null, and `!!null` is a confident "absent".
+test('#559 a view/chart/form on a table whose probe was INCONCLUSIVE is unknown, not create', async () => {
+  const spec = { entities: [{ schemaName: 'new_loc', displayName: { 1033: 'Localized', 3082: 'Localizada' }, columns: [] }] };
+  const artifactReads = [];
+  const provision = {
+    dataverse: { get: async () => ({ status: 500, body: {} }) },
+    findTables: async () => [{ logicalName: 'new_loc', entitySetName: 'new_locs' }],
+    // Deliberately answer ABSENT rather than throwing. A throw is caught by annotateLivePlan's own
+    // handler and also produces 'unknown', so a throwing double would make this test pass with or
+    // without the guard under test — it has to be able to produce the WRONG answer ('create').
+    queryRecords: async (set, o) => { artifactReads.push(`${set}:${(o && o.filter) || ''}`); return []; },
+    findArtifact: async (kind, q) => { artifactReads.push(`findArtifact:${kind}:${q && q.name}`); return null; },
+  };
+  const plan = [
+    { phase: 'data-model', label: 'table new_loc', key: { kind: 'table', entity: 'new_loc' } },
+    { phase: 'views', label: 'view "V" for new_loc', key: { kind: 'view', entity: 'new_loc', name: 'V' } },
+    { phase: 'forms', label: 'form for new_loc', key: { kind: 'form', entity: 'new_loc', name: 'F', formType: 'Main' } },
+  ];
+  await annotateLivePlan(plan, { spec, provision });
+
+  assert.strictEqual(stateOf(plan, 'table new_loc'), 'unknown');
+  assert.strictEqual(stateOf(plan, 'view "V"'), 'unknown', 'a view on an unknown table cannot be a confident create');
+  assert.strictEqual(stateOf(plan, 'form for new_loc'), 'unknown', 'a form on an unknown table cannot be a confident create');
+  assert.deepStrictEqual(artifactReads, [],
+    `no artifact read should be issued for a table whose own probe was inconclusive: ${JSON.stringify(artifactReads)}`);
+});
+
+// The same arm must keep answering from the table when the table is genuinely ABSENT — that is a
+// real create, and the fix above must not turn it into unknown.
+test('#559 a view/form on a table that is genuinely absent stays create', async () => {
+  const spec = { entities: [{ schemaName: 'new_gone', displayName: 'Gone', columns: [] }] };
+  const provision = {
+    dataverse: { get: async () => ({ status: 404, body: {} }) },
+    findTables: async () => [],
+    queryRecords: async () => { throw new Error('must not query artifacts for a missing table'); },
+  };
+  const plan = [
+    { phase: 'data-model', label: 'table new_gone', key: { kind: 'table', entity: 'new_gone' } },
+    { phase: 'views', label: 'view "V" for new_gone', key: { kind: 'view', entity: 'new_gone', name: 'V' } },
+    { phase: 'forms', label: 'form for new_gone', key: { kind: 'form', entity: 'new_gone', name: 'F', formType: 'Main' } },
+  ];
+  await annotateLivePlan(plan, { spec, provision });
+  assert.strictEqual(stateOf(plan, 'table new_gone'), 'create');
+  assert.strictEqual(stateOf(plan, 'view "V"'), 'create');
+  assert.strictEqual(stateOf(plan, 'form for new_gone'), 'create');
+});
+
+// The halt text is a ~390-character remediation paragraph. It belongs on the table's own line, once
+// — not copied onto every column/view/form of that table, which for a 20-column table would emit
+// kilobytes of identical prose into the plan output.
+test('#559 the long halt reason is printed on the table line only; dependents get a short one', async () => {
+  const spec = { entities: [{ schemaName: 'new_loc', displayName: { 1033: 'Localized', 3082: 'Localizada' }, columns: [] }] };
+  const provision = {
+    dataverse: { get: async () => ({ status: 500, body: {} }) },
+    findTables: async () => [{ logicalName: 'new_loc', entitySetName: 'new_locs' }],
+    queryRecords: async () => [],
+  };
+  const plan = [
+    { phase: 'data-model', label: 'table new_loc', key: { kind: 'table', entity: 'new_loc' } },
+    { phase: 'data-model', label: 'column new_loc.new_a', key: { kind: 'column', entity: 'new_loc', name: 'new_a' } },
+    { phase: 'views', label: 'view "V" for new_loc', key: { kind: 'view', entity: 'new_loc', name: 'V' } },
+  ];
+  await annotateLivePlan(plan, { spec, provision });
+
+  const why = (frag) => (plan.find((p) => p.label.includes(frag)) || {}).stateWhy || '';
+  assert.ok(why('table new_loc').length > 100, 'the table line keeps the actionable halt text');
+  assert.ok(why('column new_loc.new_a').length < 100, `a column must not repeat it: ${why('column new_loc.new_a')}`);
+  assert.ok(why('view "V"').length < 100, `a view must not repeat it: ${why('view "V"')}`);
+  assert.ok(why('column new_loc.new_a').length > 0 && why('view "V"').length > 0, 'but they still say WHY they are unknown');
 });

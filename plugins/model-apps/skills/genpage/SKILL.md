@@ -23,7 +23,8 @@ This skill orchestrates specialist agents across the create and edit flows:
 
 **Create flow:**
 1. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
-   entities and apps exist, presents a plan for approval, writes `genpage-plan.md`.
+   entities and apps exist, and returns a proposed plan for the orchestrator to present.
+   Writes `genpage-plan.md` once the orchestrator re-invokes it with the approval outcome.
    May pause and return `connector_discovery_required` (see 2).
 2. **`genpage-connector-builder`** — top-level orchestrator dispatch for connector
    feature-gating and discovery; writes `connector-bindings.md` + `connectors.json`.
@@ -124,11 +125,17 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 > 5. Entity existence detection (`pac model list-tables --search`)
 > 6. App detection (`pac model list`) with proper selection prompts
 > 7. Plan-mode presentation and approval (`EnterPlanMode` / `ExitPlanMode`)
-> 8. Writing `genpage-plan.md` to the working directory
+> 8. Telling `genpage-planner` the approval outcome — it writes `genpage-plan.md`
+>    itself — and confirming the file exists before Phase 2
 >
 > Steps 1, 2, 4, 5, 6 are read-only discovery and **may** be delegated to
-> `genpage-planner`; steps 3 and 7 never can. Delegating the discovery is an
-> optimisation, not a requirement — running it inline is equally correct.
+> `genpage-planner`; steps 3, 7 and 8 never can. Delegating the discovery is an
+> optimisation, not a requirement — running it inline is equally correct, but
+> `genpage-plan.md` is still written by the planner either way (see step 6 of the
+> Steps list): its section headings are a machine-readable contract every
+> downstream phase parses by name, so it has exactly one author. If you ran the
+> discovery inline, dispatch the planner once with what you found, so it has the
+> context to produce the plan without repeating your reads.
 >
 > **Never skip the prereq/auth steps**, even when `$ARGUMENTS` already states the
 > intent. A stated intent lets you skip *question 3*; it does not establish that
@@ -158,15 +165,25 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 5. Present the plan with `EnterPlanMode` and get approval via `ExitPlanMode`.
    On a revision request, re-invoke the planner with the requested revisions and
    present the revised plan again.
-6. **On approval, re-invoke `genpage-planner` with the approval outcome.** The
-   planner writes `genpage-plan.md` in its own final step, and it only reaches
-   that step when it is told the plan was approved — a `Task` subagent is
-   headless, so it cannot see the `ExitPlanMode` result any other way. Do not
-   write the file yourself: its section headings are a machine-readable contract
-   that every downstream phase parses by name.
+6. **On approval, re-invoke `genpage-planner` with the approval outcome _plus
+   the plan body it returned and everything it already discovered_.** The planner
+   writes `genpage-plan.md` in its own final step, and it only reaches that step
+   when it is told the plan was approved — a `Task` subagent is headless, so it
+   cannot see the `ExitPlanMode` result any other way. A re-invocation is a fresh
+   run with no memory of the last one: carry the state forward or it will re-ask
+   questions the user has already answered, or re-derive a plan that is not the
+   one they approved. Same rule as Phase 2b. Do not write the file yourself — its
+   section headings are a machine-readable contract that every downstream phase
+   parses by name.
 7. Confirm `<working-dir>/genpage-plan.md` exists before starting Phase 2.
    Reaching Phase 2 without it means building from a plan nobody approved, and
    Phase 2 reads that file as its first action.
+
+   **If it is missing, do not proceed and do not write it yourself.** Re-invoke
+   the planner once more with the approval outcome and the plan body. If it is
+   still missing, stop and tell the user what was approved and what failed to be
+   written — a hand-written substitute is a plan with no provenance, and every
+   later phase will treat it as approved.
 
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
@@ -314,7 +331,11 @@ this loop, exactly as Phase 1 step 4 does:
 - Record every exchange in `workflow-log.md` as `AskUserQuestion: <question> → <answer>`.
 - Re-invoke the builder with the answers plus everything it already returned, so
   it can carry out the step that depended on them (sample data is created by a
-  second pass of its own CLI, not by anything here).
+  second pass of its own CLI, not by anything here). A re-invocation restarts the
+  agent at its first step, which is safe — `provision-entities.js` is idempotent
+  and re-reports the existing tables rather than recreating them — but say which
+  decision has now been answered so it goes on to the sample-data step instead of
+  asking again.
 
 Repeat until it returns a completion rather than a request. Proceeding to Phase 3
 on a `needs_input` return silently drops the decision the user was asked to make.

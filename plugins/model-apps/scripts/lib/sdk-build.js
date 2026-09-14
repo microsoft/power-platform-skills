@@ -1281,7 +1281,13 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
       } catch (err) {
         // Includes the BuildHalt findExistingTable raises for a LOCALIZED spec whose probe is
         // inconclusive — which is precisely an "unknown", not an absence.
-        tableCache.set(logical, { found: null, why: String((err && err.message) || err) });
+        //
+        // `why` is kept SHORT because it is printed once per plan line, and every column, view and
+        // form on the table inherits it: the BuildHalt text is a ~390-character remediation
+        // paragraph, so a 20-column table would emit ~8 KB of the same prose. The full text is kept
+        // on `whyLong` for the table's own line, where it is worth reading once.
+        const full = String((err && err.message) || err);
+        tableCache.set(logical, { found: null, why: 'the table existence probe was inconclusive', whyLong: full });
       }
     }
     return tableCache.get(logical);
@@ -1313,7 +1319,9 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
       if (k.kind === 'table') {
         const t = await tableState(String(k.entity).toLowerCase());
         item.state = t.found === null ? 'unknown' : (t.found ? 'reuse' : 'create');
-        if (t.found === null) item.stateWhy = t.why;
+        // The table's own line carries the FULL reason (the halt text names the remediation); every
+        // other item on the same table gets the short form, so the paragraph is printed once.
+        if (t.found === null) item.stateWhy = t.whyLong || t.why;
       } else if (k.kind === 'column') {
         const logical = String(k.entity).toLowerCase();
         const t = await tableState(logical);
@@ -1343,6 +1351,14 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         // would 400 on the metadata cache — so answer from the table, as the build's own lookup does.
         const t = await tableState(String(k.entity).toLowerCase());
         if (t.found === false) { item.state = 'create'; continue; }
+        // …and if the TABLE probe was inconclusive, nothing about its artifacts is knowable either.
+        // Without this the plan contradicts itself in adjacent lines — `? unknown` for the table and
+        // a confident `+ create` for every view and form on it — and the apply never gets that far:
+        // findExistingTable raises BuildHalt for exactly this state, outside any runner.run, so the
+        // build aborts in `data-model`. The form arm is the worst of the three, because
+        // resolveExistingFormId deliberately swallows the MetadataCache 400 and returns null, which
+        // `!!` then flattens into a confident "absent".
+        if (t.found === null) { item.state = 'unknown'; item.stateWhy = t.why; continue; }
         const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
         item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
       }

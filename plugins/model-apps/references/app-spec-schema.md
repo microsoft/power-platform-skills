@@ -442,7 +442,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```
 - `referenced` = the "one" (parent); `referencing` = the "many" (child, gets the lookup column).
 - The relationship's schema name defaults to `<referenced>_<referencing>` and **must differ**
-  from `lookup.schemaName` (Dataverse rejects a collision — the lint enforces this).
+  from `lookup.schemaName` (Dataverse rejects a collision — `lintAppSpec` flags this, so
+`scripts/lint-app-spec.js` catches it before you deploy; note the build itself does **not**
+run the lint, so an unlinted spec hits the failure at build time instead).
 - **Relationships to a standard/system table** (e.g. `systemuser`, `account` — a common
   "bridge to a real user / owner" pattern) are handled automatically: because a system table has
   no publisher prefix, the naive default name wouldn't start with your prefix and Dataverse would
@@ -1046,7 +1048,7 @@ works through.
 ## sampleData (optional)
 Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline
 `options[]` columns **and** `globalChoice`-backed columns (write `"Platinum"`, not `100000000`; the
-engine resolves it, and the lint flags any label that isn't a declared option). Raw option ints still
+engine resolves it, and `lintAppSpec` flags any label that isn't a declared option). Raw option ints still
 work. Relate records to parents with `$parent` (one) or `$parents` (several — for a junction row), and
 set a custom status with `statusReason`. All are topologically inserted and bound via the lookup nav-property.
 ```jsonc
@@ -1173,6 +1175,15 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - State an **explicit output shape**: a short paragraph is the recommended default.
 
 **Validation rules** (`validateAppSpec` / `lintAppSpec`):
+
+> **The two gates are not the same, and only one of them runs on every build.**
+> `validateAppSpec` is the hard schema gate: `build-model-app.js` runs it on load, so
+> `--apply` refuses on its errors. `lintAppSpec` is the authoring guardrail, and the build
+> does **not** run it — its findings only reach you through `scripts/lint-app-spec.js`
+> (which runs migrate → `validateAppSpec` → `lintAppSpec`) or the skill's plan gate. So a
+> rule described below as enforced by the *lint* is one an unlinted spec will carry into a
+> build and fail at the platform. Where it matters, the rule names its gate.
+
 - `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: the **form-fill family** (`formFill` and its siblings) writes `2` for `true` and **`1` for `false`**, where `1` means *disabled* and `0` means *platform default*; `nlSearch`/`nlChart`/`m365` write `1`/`0`. Use an explicit integer for a platform value like "on for everyone".
 - **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To inherit the environment's setting, omit `ai.appFeatures` entirely.
 - Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on and `m365` off, and `--verify` reconciles that whole resolved set.
