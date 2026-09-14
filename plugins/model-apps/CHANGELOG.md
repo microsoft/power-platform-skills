@@ -9,6 +9,12 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 Three defects an author hits before reaching an environment, and a session-start warning.
 
+### Changed
+- `/genpage` now treats user-provided screenshots, website/brand references, and
+  text styling descriptions as design acceptance criteria across create and edit
+  flows. Fluent UI remains the accessible component foundation, but no longer
+  implies resetting explicit visual direction to default model-driven app styling.
+
 ### Added
 
 - **`scripts/lint-app-spec.js` — lint and validate a spec without touching an environment** ([#560]).
