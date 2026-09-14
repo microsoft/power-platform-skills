@@ -1,7 +1,7 @@
 // plugins/model-apps/scripts/tests/spec-lint.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { lintAppSpec } = require('../lib/spec-lint.js');
+const { lintAppSpec, NO_VALUE_OPS } = require('../lib/spec-lint.js');
 const { migrateAppSpec } = require('../lib/app-spec.js');
 
 const base = () => ({
@@ -57,6 +57,74 @@ test('#546 view filters: a value-taking operator with no value is still an error
   const r = lintAppSpec(s);
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /needs a value/.test(e)), JSON.stringify(r.errors));
+});
+
+// Review finding (#562): the #546 test above only exercised a handful of operators, and a test that
+// ITERATES NO_VALUE_OPS to check NO_VALUE_OPS cannot catch a typo inside it — a misspelled entry
+// would simply not be tested, and would reintroduce the same build-blocking false positive.
+//
+// So this list is INDEPENDENT: transcribed from the documented condition-operator table, not from
+// the source set. Verified against
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+// Note the near-misses deliberately EXCLUDED because they take a value: last-x-days, next-x-days,
+// in-fiscal-period, in-fiscal-year, olderthan-x-*, on, on-or-before, between.
+const DOCUMENTED_NO_VALUE_OPS = [
+  'null', 'not-null',
+  'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-businessid', 'ne-businessid', 'eq-userlanguage',
+  'today', 'yesterday', 'tomorrow', 'this-week', 'last-week', 'next-week', 'this-month', 'last-month',
+  'next-month', 'this-year', 'last-year', 'next-year', 'last-seven-days', 'next-seven-days',
+  'this-fiscal-year', 'last-fiscal-year', 'next-fiscal-year',
+  'this-fiscal-period', 'last-fiscal-period', 'next-fiscal-period',
+];
+
+test('#546 every documented value-less operator is accepted without a value', () => {
+  for (const op of DOCUMENTED_NO_VALUE_OPS) {
+    const s = base();
+    s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'owningbusinessunit', op }] }];
+    const r = lintAppSpec(s);
+    assert.strictEqual(r.ok, true, `'${op}' must not require a value: ${JSON.stringify(r.errors)}`);
+  }
+});
+
+// Both directions. A MISSING/typo'd entry reintroduces #546; an EXTRA entry is worse — adding a
+// value-TAKING operator here silently disables the missing-value check for it and pushes the
+// failure to the platform at build time.
+test('#546 NO_VALUE_OPS matches the documented operator list exactly, in both directions', () => {
+  const actual = [...NO_VALUE_OPS].sort();
+  const expected = [...DOCUMENTED_NO_VALUE_OPS].sort();
+  assert.deepStrictEqual(actual, expected);
+});
+
+// Review finding (#562), and the severity was settled by MEASUREMENT, not assumption. The claim
+// under review was that a value on a value-less operator is rejected by the platform. Probed live
+// against the Dataverse Web API:
+//   eq-businessid value="00000000-0000-0000-0000-000000000000" -> HTTP 200, 1 row  (same as no value)
+//   this-year     value="1999"                                 -> HTTP 200, 1 row  (same as no value)
+// The platform neither rejects the condition nor honours the value: it IGNORES it. An error would
+// therefore block specs that build and run correctly today, so this is a warning — but a silent
+// accept would leave a filter that does not do what its `value` plainly says it does.
+test('a value on a value-less operator WARNS (the platform ignores it) and does not fail the lint', () => {
+  for (const filter of [
+    { attr: 'owningbusinessunit', op: 'eq-businessid', value: '00000000-0000-0000-0000-000000000000' },
+    { attr: 'createdon', op: 'this-year', values: ['1999'] },
+  ]) {
+    const s = base();
+    s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [filter] }];
+    const r = lintAppSpec(s);
+    assert.strictEqual(r.ok, true, `must not be an error: ${JSON.stringify(r.errors)}`);
+    assert.ok(
+      r.warnings.some((w) => new RegExp(`value-less operator '${filter.op}'`).test(w) && /Dataverse ignores it/.test(w)),
+      JSON.stringify(r.warnings)
+    );
+  }
+});
+
+test('a value-less operator WITHOUT a value produces no warning (the advice is not noise)', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Mine', columns: ['new_name'], filters: [{ attr: 'owningbusinessunit', op: 'eq-businessid' }] }];
+  const r = lintAppSpec(s);
+  assert.ok(!r.warnings.some((w) => /value-less operator/.test(w)), JSON.stringify(r.warnings));
 });
 
 test('a view named like the stock default ("Active <Plural>") WARNS about the merge-onto-default collision', () => {

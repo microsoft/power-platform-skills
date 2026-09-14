@@ -16,6 +16,10 @@ const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
 // `ne-userid`, which are the natural way to express "rows owned by my business unit"). The reverse
 // error matters too, so do not add a value-TAKING operator here: that would silently stop the lint
 // catching a missing value and push the failure to the platform at build time.
+//
+// Every name below is copied verbatim from the documented operator table, and the test pins them
+// against an INDEPENDENT literal list — iterating this set to test itself cannot catch a typo in it,
+// and a typo reintroduces exactly the #546 false positive.
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
 const NO_VALUE_OPS = new Set(['null', 'not-null',
   // current-user / current-business-unit context
@@ -311,7 +315,21 @@ function lintAppSpec(spec) {
       const op = f.op || 'eq';
       if (op === 'in' || op === 'not-in') {
         if (!(Array.isArray(f.values) && f.values.length)) E(`View '${v.name}' filter on '${f.attr}' uses ${op} but has no values[]`);
-      } else if (!NO_VALUE_OPS.has(op) && f.value === undefined) {
+      } else if (NO_VALUE_OPS.has(op)) {
+        // A value on a value-less operator is a WARNING, not an error, and the distinction was
+        // settled by measurement rather than assumption. Probed live against Dataverse Web API:
+        //   eq-businessid value="00000000-0000-0000-0000-000000000000"  -> HTTP 200, 1 row
+        //   eq-businessid (no value)                                    -> HTTP 200, 1 row
+        //   this-year     value="1999"                                  -> HTTP 200, 1 row
+        //   this-year     (no value)                                    -> HTTP 200, 1 row
+        // The platform neither rejects the condition nor honours the value — it IGNORES it. So
+        // erroring would block specs that build and run correctly today, while staying silent
+        // leaves a filter that does not do what its `value` says. The author almost always meant
+        // a value-TAKING operator (`eq` against a specific business unit) — hence the advice.
+        if (f.value !== undefined || f.values !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — Dataverse ignores it, so the filter matches the current user/business-unit/period regardless. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
+        }
+      } else if (f.value === undefined) {
         E(`View '${v.name}' filter on '${f.attr}' (${op}) needs a value`);
       }
     }
@@ -436,4 +454,7 @@ function dupWarn(names, kind, W) {
   }
 }
 
-module.exports = { lintAppSpec };
+// NO_VALUE_OPS is exported so the regression test can compare the set against an independent,
+// doc-derived literal list in BOTH directions — a missing/typo'd entry reintroduces the #546 false
+// positive, and an extra (value-taking) entry silently disables the missing-value check.
+module.exports = { lintAppSpec, NO_VALUE_OPS };

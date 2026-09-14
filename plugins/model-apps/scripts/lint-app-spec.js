@@ -51,9 +51,14 @@ const USAGE = 'Usage: node lint-app-spec.js --spec @<path-to-app-spec.json> [--p
 // checking a FINAL, deployable spec
 // (a CI gate before `--apply`) should pass `--profile deploy` explicitly.
 function lintSpec(rawSpec, opts) {
-  const profile = (opts && opts.profile) || 'plan';
+  // `undefined` means "not supplied" and takes the default. Anything else — including the EMPTY
+  // STRING — is a supplied value and must face the allow-list. `|| 'plan'` folded `''` into the
+  // default, so a CI wrapper whose `--profile=$PROFILE` expanded to empty silently ran the weaker
+  // plan gate while believing it had requested `deploy`.
+  const profile = opts && opts.profile !== undefined ? opts.profile : 'plan';
   if (!VALIDATION_PROFILES.includes(profile)) {
-    return { ok: false, profile, errors: [`unknown profile '${profile}' (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings: [] };
+    const named = typeof profile === 'string' && profile.trim() ? `unknown profile '${profile}'` : `empty profile value`;
+    return { ok: false, profile, errors: [`${named} (valid: ${VALIDATION_PROFILES.join(', ')})`], warnings: [] };
   }
   const spec = migrateAppSpec(rawSpec);
 
@@ -90,7 +95,23 @@ function lintSpec(rawSpec, opts) {
 }
 
 function main() {
-  const { flags } = parseArgs(process.argv.slice(2));
+  const { positional, flags } = parseArgs(process.argv.slice(2));
+
+  // Unknown flags are a USAGE ERROR, not something to ignore. parseArgs accepts any `--name`, so a
+  // typo (`--profle deploy`) would otherwise be dropped and the command would run the DEFAULT plan
+  // profile while exiting 0 — a CI job reporting success for a gate it never applied. This CLI ships
+  // in this change, so no caller can be relying on a flag outside this set.
+  const KNOWN_FLAGS = new Set(['spec', 'profile', 'strict', 'json']);
+  const unknown = Object.keys(flags).filter((k) => !KNOWN_FLAGS.has(k));
+  if (unknown.length > 0) {
+    return emitResult(false, new Error(`unknown flag(s): ${unknown.map((k) => '--' + k).join(', ')}\n${USAGE}`));
+  }
+  // A positional argument is equally suspect: `--spec` is the only way to name the file, so a bare
+  // path is a caller who believes they passed a spec and would otherwise get the usage error for a
+  // missing `--spec` — or, worse, silently lint a DIFFERENT file they also passed correctly.
+  if (positional.length > 0) {
+    return emitResult(false, new Error(`unexpected argument(s): ${positional.join(', ')} — the spec is named with --spec\n${USAGE}`));
+  }
 
   // parseArgs yields `true` for a bare `--flag` and a string for `--flag=value` / `--flag value`.
   // For a VALUE-taking flag, that bare `true` is a usage error and must be rejected rather than
@@ -100,8 +121,11 @@ function main() {
   const isOn = (v) => v === true || v === 'true';
   const specArg = flags.spec;
   if (specArg === undefined) return emitResult(false, new Error(USAGE));
-  if (typeof specArg !== 'string') return emitResult(false, new Error(`--spec needs a path\n${USAGE}`));
-  if (flags.profile !== undefined && typeof flags.profile !== 'string') {
+  if (typeof specArg !== 'string' || !specArg.trim()) return emitResult(false, new Error(`--spec needs a path\n${USAGE}`));
+  if (flags.profile !== undefined && (typeof flags.profile !== 'string' || !flags.profile.trim())) {
+    // Covers both the bare `--profile` (boolean true) and `--profile=` / `--profile ''` (empty
+    // string). Both are a caller who asked for a profile and did not supply one; neither may fall
+    // through to the default.
     return emitResult(false, new Error(`--profile needs one of: ${VALIDATION_PROFILES.join(', ')}\n${USAGE}`));
   }
 
@@ -131,7 +155,14 @@ function main() {
           : `app spec has ${report.warnings.length} warning(s) and --strict was set; see stdout JSON\n`
       );
     }
-    process.exit(failed ? 1 : 0);
+    // Set the code and RETURN rather than process.exit(). Node's stdout is asynchronous when it is a
+    // TTY on Windows, and process.exit() tears the process down without draining it — so an
+    // interactive Windows run of a large report could lose its tail. MEASURED: a 5 MB write over a
+    // PIPE survives process.exit() intact on Windows, so a `--json | jq` CI consumer was never at
+    // risk; this is the interactive case and the idiomatic pattern, not a fix for a reproduced bug.
+    // https://nodejs.org/api/process.html#a-note-on-process-io
+    process.exitCode = failed ? 1 : 0;
+    return;
   }
 
   for (const e of report.errors) process.stderr.write(`ERROR  ${e}\n`);
@@ -140,7 +171,8 @@ function main() {
     `${failed ? 'FAIL' : 'OK'} [profile: ${report.profile}] — ${report.errors.length} error(s), ${report.warnings.length} warning(s)` +
       `${strict && report.errors.length === 0 && report.warnings.length > 0 ? ' (failed by --strict)' : ''}\n`
   );
-  process.exit(failed ? 1 : 0);
+  // Same reason as the --json branch: the report goes out before the process is allowed to end.
+  process.exitCode = failed ? 1 : 0;
 }
 
 if (require.main === module) {

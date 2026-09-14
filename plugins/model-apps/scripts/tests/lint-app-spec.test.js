@@ -51,6 +51,21 @@ test('an unknown profile is rejected by name rather than silently falling back',
   assert.ok(r.errors.some((e) => /unknown profile 'nope'/.test(e)), JSON.stringify(r.errors));
 });
 
+// Review finding (#562). `|| 'plan'` treated the EMPTY STRING as "not supplied". A supplied-but-empty
+// profile is a caller who asked for a profile and gave none — most plausibly a CI wrapper whose
+// `--profile=$PROFILE` expanded empty — and folding it into the default silently ran the weaker plan
+// gate while the job believed it had requested `deploy`. Only `undefined` may take the default.
+test('an EMPTY profile is rejected rather than silently defaulting to plan', () => {
+  for (const profile of ['', '   ']) {
+    const r = lintSpec(good(), { profile });
+    assert.strictEqual(r.ok, false, `profile ${JSON.stringify(profile)} must not be accepted`);
+    assert.ok(r.errors.some((e) => /empty profile value|unknown profile/.test(e)), JSON.stringify(r.errors));
+    assert.notStrictEqual(r.profile, 'plan', 'must not report the default it did not run');
+  }
+  assert.strictEqual(lintSpec(good(), { profile: undefined }).profile, 'plan', 'omitted still takes the default');
+  assert.strictEqual(lintSpec(good(), {}).profile, 'plan');
+});
+
 // Review finding. validateAppSpec emits non-blocking advisories of its own, which the build narrates.
 // Reporting only lint warnings made this CLI quieter than the build it stands in for.
 test('warnings from BOTH gates are reported, each tagged with its source', () => {
@@ -223,6 +238,68 @@ test('CLI rejects a value-taking flag given with no value', () => {
       assert.match(out.stderr, expected);
       assert.doesNotMatch(out.stderr, /spec is not an object/, 'a usage error must not surface as a gate verdict');
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Review finding (#562). parseArgs preserves `--profile=` as the EMPTY STRING, which passed the
+// bare-flag guard (it is a string) and was then folded into the default by `|| 'plan'`. A CI wrapper
+// whose `--profile=$PROFILE` expanded empty therefore ran the weaker plan gate and exited 0 while
+// believing it had requested `deploy`.
+test('CLI rejects an EMPTY value-taking flag instead of silently taking the default', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-app-spec-'));
+  const file = path.join(dir, 'app-spec.json');
+  fs.writeFileSync(file, JSON.stringify(good()));
+  try {
+    for (const [args, expected] of [
+      [[CLI, '--spec', '@' + file, '--profile='], /--profile needs one of: design, plan, deploy, structural/],
+      [[CLI, '--spec', '@' + file, '--profile', ''], /--profile needs one of: design, plan, deploy, structural/],
+      [[CLI, '--spec='], /--spec needs a path/],
+    ]) {
+      let out;
+      try {
+        execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        out = { code: 0, stdout: '', stderr: '' };
+      } catch (err) {
+        out = { code: err.status, stdout: String(err.stdout || ''), stderr: String(err.stderr || '') };
+      }
+      assert.strictEqual(out.code, 1, `expected a usage failure for ${args.slice(1).join(' ')}`);
+      assert.match(out.stderr, expected);
+      assert.doesNotMatch(out.stdout, /OK \[profile: plan\]/, 'must not run the default gate it was not asked for');
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Review finding (#562). parseArgs accepts any `--name`, so a typo was silently dropped and the
+// command ran the DEFAULT plan profile — a CI job reporting success for a gate it never applied.
+test('CLI rejects an unknown flag rather than silently running the default gate', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-app-spec-'));
+  const file = path.join(dir, 'app-spec.json');
+  fs.writeFileSync(file, JSON.stringify(good()));
+  try {
+    for (const [args, expected] of [
+      [[CLI, '--spec', '@' + file, '--profle', 'deploy'], /unknown flag\(s\): --profle/],
+      [[CLI, '--spec', '@' + file, '--strictt'], /unknown flag\(s\): --strictt/],
+      [[CLI, '@' + file], /unexpected argument\(s\)/],
+    ]) {
+      let out;
+      try {
+        execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        out = { code: 0, stdout: '', stderr: '' };
+      } catch (err) {
+        out = { code: err.status, stdout: String(err.stdout || ''), stderr: String(err.stderr || '') };
+      }
+      assert.strictEqual(out.code, 1, `expected a usage failure for ${args.slice(1).join(' ')}`);
+      assert.match(out.stderr, expected);
+      assert.doesNotMatch(out.stdout, /OK \[profile: plan\]/, 'a typo must not report a passing gate');
+    }
+    // The complement: every KNOWN flag combination still runs. (No --strict here: the fixture emits
+    // warnings, which --strict correctly turns into a non-zero exit — that is tested separately.)
+    const ok = execFileSync(process.execPath, [CLI, '--spec', '@' + file, '--profile', 'plan', '--json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert.strictEqual(JSON.parse(ok).ok, true, ok);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
