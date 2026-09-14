@@ -61,3 +61,15 @@ test('create-site validator blocks a direction mismatch', (t) => {
   assert.equal(result.status, 2);
   assert.match(result.stderr, /resolves to "rtl"/);
 });
+
+test('create-site validator blocks direction-sensitive physical CSS', (t) => {
+  const projectRoot = createProject(
+    t,
+    '<html lang="en-US" dir="ltr"><body><div id="root"></div></body></html>'
+  );
+  writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Bidirectional readiness.*directional-physical-css/);
+});
