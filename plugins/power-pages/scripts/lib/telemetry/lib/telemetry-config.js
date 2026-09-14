@@ -14,7 +14,10 @@ function dataDisclosure(plugin) {
         "   eventInfo.aadObjectId when PAC exposes it, and the SPA framework of the\n" +
         "   Power Pages code site being worked in as eventInfo.framework when detected.\n" +
         "   The framework is one of react, vue, angular, or astro and describes the\n" +
-        "   scaffold only — it is never a site name or path.\n"
+        "   scaffold only — it is never a site name or path.\n" +
+        "   Telemetry records usage fields for approved create-site/localization\n" +
+        "   choices, canonical locales, public package names/versions, stable\n" +
+        "   validation outcomes, and localization completion.\n"
       : plugin === "model-apps"
         ? "   Model Apps excludes the signed-in user's Entra object ID.\n"
         : "";
@@ -27,7 +30,8 @@ function dataDisclosure(plugin) {
     "   fields even when transmission is off. A plugin whose committed telemetry\n" +
     "   config has disabled: true is hard-disabled and writes no log.\n" +
     "   Events do not include file paths, prompts, tool inputs, site names,\n" +
-    "   Dataverse URLs, credentials, usernames, or hostnames."
+    "   free-text requirements, Dataverse URLs, credentials, usernames,\n" +
+    "   hostnames, private-use locale subtags, evidence URLs, or raw errors."
   );
 }
 
