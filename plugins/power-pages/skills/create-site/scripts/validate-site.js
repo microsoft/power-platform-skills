@@ -6,6 +6,10 @@
 const fs = require('fs');
 const path = require('path');
 const { approve, block, runValidation, findPath } = require('../../../scripts/lib/validation-helpers');
+const {
+  detectFramework,
+  detectSiteLanguage,
+} = require('../../../scripts/lib/localization-config');
 
 runValidation((cwd) => {
   const configPath = findPath(cwd, 'powerpages.config.json');
@@ -65,6 +69,19 @@ runValidation((cwd) => {
   // 6. Source directory exists with content
   if (!fs.existsSync(path.join(projectRoot, 'src'))) {
     errors.push('Missing src/ directory');
+  }
+
+  // 7. The root document is the persisted source of truth for single-site language.
+  const framework = detectFramework(projectRoot);
+  if (!framework.framework || framework.ambiguous) {
+    errors.push('Unable to determine one supported framework for language validation');
+  } else {
+    const siteLanguage = detectSiteLanguage(projectRoot, framework.framework);
+    if (!siteLanguage.detected) {
+      errors.push('Document language is missing: add static lang and dir attributes to <html>');
+    } else if (!siteLanguage.valid) {
+      errors.push(`Document language is invalid:\n  ${siteLanguage.conflicts.join('\n  ')}`);
+    }
   }
 
   if (errors.length > 0) {
