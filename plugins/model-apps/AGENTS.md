@@ -99,6 +99,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
+- **`scripts/lint-app-spec.js`** — the CLI surface for both gates, for a headless author or a CI
+  job (#560). Runs `migrateAppSpec` → `validateAppSpec` (what the build runs on load) → `lintAppSpec`
+  (guardrails the builder does **not** run), and exits non-zero on errors (`--strict` also fails on
+  warnings). Prefer it over calling the library through `node -e`: linting the file **as written**
+  rather than the migrated shape is what let a spec pass the lint and then fail the build (#545).
+  `--profile` defaults to **`plan`**, not `deploy`, because the authoring flow runs this while pages
+  are still intents — a deploy default rejects a normal work-in-progress spec. `plan` relaxes only
+  that rule. Gate a final, deployable spec with `--profile deploy`.
 - **`scripts/build-model-app.js` → `scripts/lib/sdk-build.js`** — the deterministic, **idempotent**
   build engine, run after approval. Runs in two engine invocations (staged flow): (1) `--stage data
   --apply` materializes tables + columns + relationships (solution·data-model only; sample-data

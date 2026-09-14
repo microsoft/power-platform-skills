@@ -32,6 +32,15 @@ jobs:
             - name: validate-telemetry-ikeys
               run: node scripts/validate-telemetry-ikeys.js
 
+            # A hooks.json key the host does not recognise fails nothing — it just
+            # prints "unknown key ... ignored" in every user's terminal at every
+            # session start, so no test and no reviewer catches it.
+            - name: test-hooks-manifests-validator
+              run: node --test scripts/tests/validate-hooks-manifests.test.js
+
+            - name: validate-hooks-manifests
+              run: node scripts/validate-hooks-manifests.js
+
             - name: test-secure-process-execution-validator
               run: node --test scripts/tests/validate-secure-process-execution.test.js
 
