@@ -3,8 +3,9 @@ name: genpage-edit-planner
 description: >-
   Plans edits to an existing generative page. Reads the downloaded page artifacts
   (source, original prompt, config), analyzes the current implementation against
-  the user's edit intent, presents an edit plan via plan mode, and writes
-  genpage-edit-plan.md for the orchestrator to execute. Called by the genpage
+  the user's edit intent, and returns a proposed edit plan for the orchestrator to
+  present for approval. Writes genpage-edit-plan.md, for the orchestrator to
+  execute, once it is re-invoked with the approval outcome. Called by the genpage
   skill — not invoked directly by users.
 color: cyan
 tools:
@@ -206,7 +207,10 @@ Return this plan to the orchestrator, which presents it with `EnterPlanMode`:
 The orchestrator calls `ExitPlanMode` to request approval and reports the outcome.
 
 - If approved: proceed to Step 4.
-- If changes requested: revise and re-enter plan mode.
+- If changes requested: revise the plan and **return it** for the orchestrator to
+  re-present. You are headless and have no `EnterPlanMode`/`ExitPlanMode`, so you
+  cannot re-enter plan mode yourself — the orchestrator owns every presentation
+  round (see `edit-flow.md`, "Edit Phase 4").
 
 Mark "Design edit plan" task complete.
 
@@ -288,5 +292,6 @@ Plan document: <working-dir>/genpage-edit-plan.md
 - **Do NOT deploy.** Deployment is handled by the orchestrating skill.
 - **Do NOT regenerate the entire file.** The orchestrator makes targeted edits.
   Your plan should describe changes, not rewrite the code.
-- **One user interaction point:** The plan mode approval in Step 3 (plus
-  requirements questions in Step 2).
+- **One user interaction point:** the plan approval in Step 3 (plus requirements
+  questions in Step 2). You never make those calls — you return a request and the
+  orchestrator asks.

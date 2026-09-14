@@ -12,6 +12,7 @@ const path = require('node:path');
 const {
   frontmatterOf,
   interactiveToolsIn,
+  selfInteractionProseIn,
   undeclaredSkillTools,
   agentFiles,
   skillFiles,
@@ -137,6 +138,56 @@ test('every scanned skill declares the interactive tools it uses', () => {
     for (const f of files) {
       const missing = undeclaredSkillTools(fs.readFileSync(f, 'utf8'));
       assert.deepEqual(missing, [], `${path.relative(ROOT, f)} uses but does not declare ${missing.join(', ')}`);
+    }
+  }
+});
+
+// The tool-name check cannot see prose. Both planner agents described themselves as presenting
+// "a plan for user approval via plan mode" while their own bodies correctly said the orchestrator
+// does it — and `description` is the sentence the dispatching model reads, so it is the one most
+// likely to be acted on. Scoped to frontmatter, which carries only name/description/color/tools.
+test('frontmatter prose claiming the agent itself interacts is rejected', () => {
+  const doc = [
+    '---',
+    'name: some-planner',
+    'description: >-',
+    '  Gathers requirements and presents a plan for user approval via plan mode.',
+    'tools: Read, Write',
+    '---',
+    '# Body',
+  ].join('\n');
+  assert.deepEqual(selfInteractionProseIn(frontmatterOf(doc)), ['/\\bplan mode\\b/i']);
+});
+
+test('a frontmatter that describes what the agent RETURNS is accepted', () => {
+  const doc = [
+    '---',
+    'name: some-planner',
+    'description: >-',
+    '  Gathers requirements and returns a proposed plan for the orchestrator to present.',
+    'tools: Read, Write',
+    '---',
+    '# Body: the orchestrator presents it with EnterPlanMode and reports the outcome.',
+  ].join('\n');
+  assert.deepEqual(selfInteractionProseIn(frontmatterOf(doc)), []);
+});
+
+// A BODY may freely say the orchestrator uses plan mode — that is the correct statement, and
+// flagging it would push authors to stop documenting the contract.
+test('body prose about plan mode is not flagged', () => {
+  const doc = ['---', 'name: a', 'description: Returns a plan.', 'tools: Read', '---',
+    'The orchestrator presents this in plan mode and asks the user to approve.'].join('\n');
+  assert.deepEqual(selfInteractionProseIn(frontmatterOf(doc)), []);
+});
+
+// Every real agent in the scanned plugin must satisfy it — this is what fails the PR.
+test('no scanned agent claims in its frontmatter that it interacts', () => {
+  for (const rel of SCAN_PATHS) {
+    const files = agentFiles(path.join(ROOT, rel));
+    assert.ok(files.length > 0, `expected agents under ${rel}`);
+    for (const f of files) {
+      const prose = selfInteractionProseIn(frontmatterOf(fs.readFileSync(f, 'utf8')));
+      assert.deepEqual(prose, [], `${path.relative(ROOT, f)} frontmatter matched ${prose.join(', ')}`);
     }
   }
 });

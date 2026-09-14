@@ -3,8 +3,9 @@ name: genpage-planner
 description: >-
   Plans generative page creation for model-driven apps. Validates prerequisites,
   authenticates with PAC CLI, gathers requirements, detects which Dataverse entities
-  and model-driven apps exist, presents a plan for user approval via plan mode,
-  and writes genpage-plan.md for downstream agents to consume.
+  and model-driven apps exist, and returns a proposed plan for the orchestrator to
+  present for approval. Writes genpage-plan.md, for downstream agents to consume,
+  once the orchestrator re-invokes it with the approval outcome.
   Called by the genpage skill — not invoked directly by users.
 color: cyan
 tools:
@@ -561,6 +562,7 @@ Plan document: [working directory]/genpage-plan.md
 - **Do NOT create entities.** Entity creation is handled by `genpage-entity-builder`.
 - **Do NOT deploy.** Deployment is handled by the orchestrating skill.
 - **Do NOT generate RuntimeTypes.** The orchestrating skill handles this.
-- **One user interaction point:** The plan mode approval in Step 5 (plus requirements
-  questions in Step 3 and app selection in Step 4).
+- **One user interaction point:** the plan approval in Step 5 (plus requirements
+  questions in Step 3 and app selection in Step 4). You never make those calls —
+  you return a request and the orchestrator asks.
 - **If the user says "edit":** Return immediately. The orchestrator handles edits inline.

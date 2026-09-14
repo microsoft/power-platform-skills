@@ -73,6 +73,21 @@ function interactiveToolsIn(frontmatter) {
   return INTERACTIVE_TOOLS.filter((t) => new RegExp(`\\b${t}\\b`).test(frontmatter));
 }
 
+// Prose that claims the agent itself interacts, written WITHOUT naming a tool — so the
+// tool-name check above cannot see it. Both planner agents described themselves as presenting
+// "a plan for user approval via plan mode" while their own bodies correctly said the orchestrator
+// does it; the `description` is what the dispatching model reads, so it is the sentence most
+// likely to be acted on.
+//
+// Scoped to frontmatter, which carries only name/description/color/tools — there is no legitimate
+// reason for any of those to mention plan mode or asking the user. A body may freely say
+// "the orchestrator presents it with EnterPlanMode", and that is correct, so bodies are not scanned.
+const SELF_INTERACTION_PROSE = [/\bplan mode\b/i, /\basks? the user\b/i, /\bprompts? the user\b/i];
+
+function selfInteractionProseIn(frontmatter) {
+  return SELF_INTERACTION_PROSE.filter((re) => re.test(frontmatter)).map((re) => String(re));
+}
+
 function agentFiles(dir) {
   if (!fs.existsSync(dir)) return [];
   return fs
@@ -115,12 +130,22 @@ function main() {
   for (const rel of SCAN_PATHS) {
     for (const filePath of agentFiles(path.join(ROOT, rel))) {
       checked += 1;
-      const found = interactiveToolsIn(frontmatterOf(fs.readFileSync(filePath, 'utf8')));
+      const fm = frontmatterOf(fs.readFileSync(filePath, 'utf8'));
+      const found = interactiveToolsIn(fm);
       if (found.length) {
         errors.push(
           `${path.relative(ROOT, filePath).replace(/\\/g, '/')}: declares ${found.join(', ')} — ` +
             'an agent runs as a headless Task subagent, so these never reach the user. ' +
             'Ask in the main conversation loop and have the agent return a structured request instead.'
+        );
+      }
+      const prose = selfInteractionProseIn(fm);
+      if (prose.length) {
+        errors.push(
+          `${path.relative(ROOT, filePath).replace(/\\/g, '/')}: frontmatter claims the agent itself ` +
+            `interacts (matched ${prose.join(', ')}) — the description is what the dispatching model reads, ` +
+            'and a headless subagent cannot present plan mode or ask the user. Describe what it RETURNS ' +
+            'and say the orchestrator presents it.'
         );
       }
     }
@@ -153,4 +178,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { frontmatterOf, interactiveToolsIn, undeclaredSkillTools, agentFiles, skillFiles, INTERACTIVE_TOOLS, SCAN_PATHS, SKILL_SCAN_PATHS };
+module.exports = { frontmatterOf, interactiveToolsIn, selfInteractionProseIn, undeclaredSkillTools, agentFiles, skillFiles, INTERACTIVE_TOOLS, SCAN_PATHS, SKILL_SCAN_PATHS };
