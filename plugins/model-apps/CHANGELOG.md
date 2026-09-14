@@ -57,12 +57,26 @@ A dry run that says what an apply would actually do, and sample data that can ex
 
 ### Changed
 
+- **Connector authoring is GA — the `connectors` feature flag is gone.** SharePoint / weather /
+  Office 365 / SQL / custom-REST connector binding, and ALM packaging of connection references, are
+  now simply part of `/genpage`. The flag was **removed** rather than flipped to `true`: a
+  permanently-on gate still has to be probed and branched on at every call site, and it keeps an
+  unreachable "what if it's off" path alive in the skill prose. `list-connections.js`,
+  `create-connection-reference.js` and `add-page-to-solution.js` no longer exit 3, and the Phase 4.5
+  dispatch value is derived from the plan's binding table (`Connectors: none` / `<n> binding(s)`)
+  instead of from a flag probe. `custom-api` and `custom-telemetry` are unaffected.
 - **The CLI flag contract is shared rather than per-script.** The check above previously existed only
   in `lint-app-spec.js`; the other ~20 entry points each hand-rolled part of it, and a new CLI could
   forget it entirely. It now lives once in `scripts/lib/dataverse-auth.js` (`validateFlags`), with
   the "did you mean" matcher shared with the FetchXML operator lint
   (`scripts/lib/nearest-name.js`) — removing three copies of the value-less-flag idiom and two
   hand-maintained flag lists along the way. No supported invocation changed.
+- **Deeper tests on the paths connectors GA just made live.** `check-auth.js` (45% → 99% of lines),
+  `list-connections.js` (48% → 90%), `add-page-to-solution.js` (80% → 98%, and its branch coverage
+  54% → 82%) and `create-connection-reference.js` (75% → 97%) are now covered by wire-level tests
+  that assert the actual Dataverse calls and `pac` output parsing rather than matching source text —
+  including the three `pac connection list` output shapes, the live-verified solution component type
+  codes, and the throwaway-workspace cleanup that must survive an SDK constructor failure.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544

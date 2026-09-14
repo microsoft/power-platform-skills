@@ -39,7 +39,7 @@ This skill orchestrates specialist agents across the create and edit flows:
 
 5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
    replaces, discovers, or clears connector bindings; preserves unchanged bindings
-   when the feature gate is OFF
+   when the edit does not touch them
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
    requirements, presents an edit plan, writes `genpage-edit-plan.md`
 
@@ -188,7 +188,7 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
 `genpage-connector-builder` is dispatched only by this top-level orchestrator,
-not by `genpage-planner`. This keeps the connectors feature gate in one agent
+not by `genpage-planner`. This keeps connector discovery in one agent
 while avoiding nested `Task` calls from the planner.
 
 **Never run discovery before the planner returns** — not even when `$ARGUMENTS`
@@ -212,9 +212,9 @@ So the sequence is always: plan first, then discover, then re-plan.
   `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
   is a bare JSON array, then re-run the planner with the refreshed contract.
 
-The builder remains the single owner of the connectors flag: it probes first,
-writes `No connector bindings.` + `[]` when the flag is OFF, and performs all
-connection discovery only when the flag is ON.
+The builder remains the single owner of connector discovery: it assesses the data
+source first, writes `No connector bindings.` + `[]` when the page needs no
+connector, and performs all connection discovery only when one is required.
 
 #### Invocation prompt
 
@@ -224,8 +224,7 @@ Pass a prompt that includes:
 - The working directory (absolute path from Phase 0)
 - The plugin root path: `${PLUGIN_ROOT}`
 - The connector contract: the full body of `<working-dir>/connector-bindings.md`,
-  or the literal `No connector bindings.` when discovery was not needed or the
-  feature gate was OFF
+  or the literal `No connector bindings.` when discovery was not needed
 - The connector upload file status: `<working-dir>/connectors.json` exists and is
   a bare JSON array, or `no connectors.json; omit --connectors`
 
@@ -384,32 +383,17 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 ### Phase 4.5: Connector Bindings (Conditional)
 
-**Re-probe the feature gate here — do not rely on the plan content alone.** A plan
-authored while the flag was ON must not deploy connectors after it is turned OFF:
+Read the plan's `## Connector Bindings` section and treat it as bindings **only when
+it contains an actual binding table** (a `| Logical Name | …` header with at least
+one data row). If the section is `No connector bindings.`, empty, missing, or
+malformed, the page has no connectors: skip this phase entirely — do not create or
+pass `connectors.json`, and do not add `--connectors` on upload.
 
-```powershell
-node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
-```
-
-**If it prints `disabled`:** connectors are OFF. Skip this phase entirely — do not
-create or pass `connectors.json`, and never add `--connectors` on upload —
-**regardless of what the plan's `## Connector Bindings` section says**. (Backstop:
-`list-connections.js` / `create-connection-reference.js` also fail closed with
-exit 3 if invoked while OFF.)
-
-**Carry this decision into code generation.** The probe result is `Connectors:
-disabled` / `Connectors: enabled` for the rest of the run, and Phase 5 **must** pass
-it verbatim in every page-builder dispatch. When it is `disabled`, every downstream
-step treats the plan's `## Connector Bindings` section as if it read
-`No connector bindings.` — otherwise the generated page would call a connector that
-this run deliberately never binds, and the page fails at runtime instead of simply
+**Carry this decision into code generation.** The outcome is `Connectors: <n>
+binding(s)` or `Connectors: none` for the rest of the run, and Phase 5 **must** pass
+it verbatim in every page-builder dispatch — otherwise the generated page could call
+a connector this run never binds, and the page fails at runtime instead of simply
 omitting the feature.
-
-**If it prints `enabled`:** read the plan's `## Connector Bindings` section and
-treat it as bindings **only when it contains an actual binding table** (a
-`| Logical Name | …` header with at least one data row). If the section is
-`No connector bindings.`, empty, missing, or malformed, treat the page as having
-no connectors and skip this phase.
 
 When there are real bindings, the `genpage-connector-builder` agent already wrote
 `<working-dir>/connectors.json` during planning — verify it exists and matches the
@@ -551,7 +535,7 @@ For each page, pass a prompt that includes:
 - Target file name (e.g., "candidate-tracker.tsx")
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
-- **Connectors: `enabled` or `disabled`** — the Phase 4.5 probe result, verbatim
+- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 outcome, verbatim
 - **Telemetry: `enabled` or `disabled`** — the Phase 4.7 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
@@ -563,7 +547,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
-> - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Connectors: **[none|<n> binding(s) from Phase 4.5]**
 > - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
 > - Working directory: [absolute path from Phase 0]
@@ -579,7 +563,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
-> - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Connectors: **[none|<n> binding(s) from Phase 4.5]**
 > - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}

@@ -106,3 +106,180 @@ test('check-auth.js compares identities case-insensitively', () => {
 test('check-auth.js: 403 hint mentions az login --username when identities differ', () => {
   assert.match(scriptSrc, /az login --username \$\{pacUser\}/);
 });
+
+// --- Decision tree: blocker classification ----------------------------------
+//
+// check-auth is the FIRST thing both skills run, and every downstream failure is interpreted
+// through its verdict. Each branch below produces a different operator instruction, so a wrong
+// classification sends the user to fix the wrong thing (e.g. "run az login" when the real problem
+// is that their identity has no access to the environment).
+
+const { loadCli } = require('./helpers/cli-harness.js');
+
+const ENVURL = 'https://contoso.crm.dynamics.com';
+
+// runQuiet() shells out via execFileSync and treats a throw as "absent". These stubs therefore
+// model each CLI as either returning stdout or throwing, exactly as a missing binary would.
+function makeExec({ azVersion = 'azure-cli 2.60.0', azUser = 'maker@contoso.com', pacOrg = null }) {
+  return (cmd, args) => {
+    const argv = (args || []).join(' ');
+    if (cmd === 'az' && argv.includes('--version')) {
+      if (azVersion === null) throw new Error('spawn az ENOENT');
+      return azVersion;
+    }
+    if (cmd === 'az' && argv.includes('account show')) {
+      if (azUser === null) throw new Error('Please run az login');
+      return azUser;
+    }
+    if (cmd === 'pac' && argv.includes('org who')) {
+      if (pacOrg === null) throw new Error('spawn pac ENOENT');
+      return pacOrg;
+    }
+    throw new Error(`unexpected command: ${cmd} ${argv}`);
+  };
+}
+
+async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows }) {
+  const cli = loadCli(scriptPath, {
+    argv,
+    requires: {
+      'child_process': { execFileSync: makeExec(exec) },
+      './lib/dataverse-auth': {
+        parseArgs: require('../lib/dataverse-auth.js').parseArgs,
+        validateFlags: require('../lib/dataverse-auth.js').validateFlags,
+        dataverseRequest: async () => {
+          if (whoAmIThrows) throw new Error(whoAmIThrows);
+          return whoAmI || { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
+        },
+      },
+    },
+  });
+  // emit() always exits 0 so callers can parse stdout; the harness turns that into a throw.
+  try {
+    await cli.main();
+  } catch (e) {
+    if (e.exitCode === undefined) throw e;
+  }
+  return JSON.parse(cli.stdoutText());
+}
+
+test('a missing az CLI blocks with az_missing before anything else is probed', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { azVersion: null } });
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'az_missing');
+  assert.match(r.message, /aka\.ms\/azure-cli/);
+});
+
+test('az installed but logged out blocks with az_not_logged_in', async () => {
+  const r = await run({ argv: ['--env', ENVURL], exec: { azUser: null } });
+  assert.equal(r.blocker, 'az_not_logged_in');
+  assert.match(r.message, /az login/);
+});
+
+test('a missing pac login is a WARNING for the app-builder path, not a blocker', async () => {
+  // The build/verify/teardown flow authenticates with the az token; only the genpage pages phase
+  // shells out to pac. Blocking here would stop a build that would have worked.
+  const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: null } });
+  assert.equal(r.ok, true);
+  assert.equal(r.blocker, null);
+  assert.equal(r.pacUser, null);
+  assert.equal(r.warnings.length, 1);
+  assert.match(r.warnings[0], /genpage/i);
+});
+
+test('--require-pac turns the same missing pac login into a hard block', async () => {
+  const r = await run({ argv: ['--env', ENVURL, '--require-pac'], exec: { pacOrg: null } });
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'pac_not_logged_in');
+  assert.match(r.message, /pac auth create/);
+});
+
+test('the env URL is recovered from `pac org who` when --env is omitted', async () => {
+  // Parses the pac banner:  Connected as maker@contoso.com  /  Org URL: https://contoso.crm.dynamics.com/
+  const r = await run({
+    exec: { pacOrg: `Connected as maker@contoso.com\nOrg URL: ${ENVURL}/\n` },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.envUrl, ENVURL, 'the trailing slash is stripped');
+  assert.equal(r.pacUser, 'maker@contoso.com');
+  assert.equal(r.identitiesMatch, true);
+});
+
+test('no --env and no pac Org URL blocks with no_env_url', async () => {
+  const r = await run({ exec: { pacOrg: 'Connected as maker@contoso.com\n' } });
+  assert.equal(r.blocker, 'no_env_url');
+  assert.match(r.message, /--env/);
+});
+
+test('a WhoAmI transport failure is whoami_error, not a 401', async () => {
+  // Distinct because the operator action differs: a transport failure is a network/URL problem,
+  // a 401 is a stale token.
+  const r = await run({ argv: ['--env', ENVURL], whoAmIThrows: 'getaddrinfo ENOTFOUND' });
+  assert.equal(r.blocker, 'whoami_error');
+  assert.match(r.message, /ENOTFOUND/);
+});
+
+test('WhoAmI 401 says refresh the token; 403 says fix access', async () => {
+  const r401 = await run({ argv: ['--env', ENVURL], whoAmI: { status: 401, data: {} } });
+  assert.equal(r401.blocker, 'whoami_401');
+  assert.match(r401.message, /az login/);
+
+  const r403 = await run({ argv: ['--env', ENVURL], whoAmI: { status: 403, data: {} } });
+  assert.equal(r403.blocker, 'whoami_403');
+});
+
+test('the 403 hint names the identity mismatch when az and pac differ', async () => {
+  // This is the single most common real cause, and the hint must name BOTH identities and the
+  // exact command to align them — a generic "access denied" sends the user to an admin instead.
+  const r = await run({
+    argv: ['--env', ENVURL],
+    exec: { azUser: 'dev@contoso.com', pacOrg: 'Connected as maker@contoso.com\n' },
+    whoAmI: { status: 403, data: {} },
+  });
+  assert.equal(r.identitiesMatch, false);
+  assert.match(r.message, /dev@contoso\.com/);
+  assert.match(r.message, /az login --username maker@contoso\.com/);
+});
+
+test('a 403 with MATCHING identities points at environment access, not at re-login', async () => {
+  const r = await run({
+    argv: ['--env', ENVURL],
+    exec: { azUser: 'maker@contoso.com', pacOrg: 'Connected as maker@contoso.com\n' },
+    whoAmI: { status: 403, data: {} },
+  });
+  assert.equal(r.identitiesMatch, true);
+  assert.match(r.message, /added to the env/i);
+  assert.doesNotMatch(r.message, /az login --username/);
+});
+
+test('an unexpected non-2xx status is reported with its status code', async () => {
+  const r = await run({ argv: ['--env', ENVURL], whoAmI: { status: 500, data: {} } });
+  assert.equal(r.blocker, 'whoami_error');
+  assert.match(r.message, /500/);
+  assert.equal(r.whoAmI.ok, false);
+});
+
+test('a clean run reports ok with the WhoAmI identity ids', async () => {
+  const r = await run({
+    argv: ['--env', ENVURL],
+    exec: { pacOrg: 'Connected as maker@contoso.com\n' },
+    whoAmI: { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.blocker, null);
+  assert.deepEqual(r.whoAmI, { ok: true, userId: 'u-1', organizationId: 'o-1' });
+  assert.match(r.message, /Ready \(az \+ pac both signed in/);
+});
+
+test('a mismatched-but-working identity is reported as ready WITH the caveat', async () => {
+  // WhoAmI passed, so this is not a blocker — but entity creation can still 403 later, and the
+  // message has to carry that forward or the user has no way to connect the two events.
+  const r = await run({
+    argv: ['--env', ENVURL],
+    exec: { azUser: 'dev@contoso.com', pacOrg: 'Connected as maker@contoso.com\n' },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.identitiesMatch, false);
+  assert.match(r.message, /different identities/);
+  assert.match(r.message, /403/);
+});

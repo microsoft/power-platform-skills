@@ -18,7 +18,6 @@ const {
   parseArgs,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -182,10 +181,6 @@ function pacFailureMessage(pac) {
 }
 
 async function main() {
-  // Feature gate first (fail closed) — see lib/feature-flags.js. Exit 3 = "feature
-  // off", distinct from 1 = runtime/usage error, so callers can tell them apart.
-  exitIfConnectorsDisabled();
-
   const { positional } = parseArgs(process.argv.slice(2));
   if (positional.length < 1) {
     process.stderr.write('Usage: node list-connections.js <envUrl>\n');
@@ -242,4 +237,14 @@ module.exports = {
   refsForConnection,
   sortReadyToBindFirst,
   pacFailureMessage,
+  // The `pac connection list` parsers are exported for unit tests. They consume loosely
+  // structured CLI output whose shape varies across PAC builds (JSON, fixed-width table,
+  // whitespace table), which is exactly the code most likely to break silently on a CLI
+  // upgrade — a mis-parse yields "no connections found" rather than an error.
+  parsePacConnectionList,
+  parseJsonConnections,
+  parseFixedWidthTable,
+  parseWhitespaceTable,
+  mapConnectionRow,
+  extractConnectorId,
 };

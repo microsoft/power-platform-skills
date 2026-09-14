@@ -34,10 +34,12 @@ You will be invoked with a prompt that includes:
   `mock + connectors` — a **connector-only page is `mock` data mode with connector
   bindings**.
 - **RuntimeTypes path** — absolute path to `RuntimeTypes.ts` (present only when Data mode is `dataverse`)
-- **Connectors** — `enabled` or `disabled`, the orchestrator's feature-flag probe taken
-  immediately before code generation. **`disabled` overrides the plan**: treat the page as
-  having no connector bindings no matter what `## Connector Bindings` says. A missing line
-  means `disabled` (fail closed).
+- **Connectors** — `none` or `<n> binding(s)`, derived by the orchestrator from the plan's
+  `## Connector Bindings` table immediately before code generation. **`none` overrides the plan
+  body**: treat the page as having no connector bindings no matter what the section text says. A
+  missing line means `none` (fail closed) — emitting a call to a binding that was never created
+  produces a page that fails at runtime, whereas omitting one produces a page that merely lacks
+  the feature.
 - **Working directory** — where to write the `.tsx` file
 - **Plugin root** — `${PLUGIN_ROOT}` for reading references and samples
 
@@ -125,7 +127,7 @@ Read the code generation rules reference:
 ${PLUGIN_ROOT}/references/rules.md
 ```
 
-Only when your dispatch says **`Connectors: enabled`** *and* the plan's
+Only when your dispatch says **`Connectors: <n> binding(s)`** *and* the plan's
 `## Connector Bindings` section contains an actual binding table (a
 `| Logical Name | …` header with at least one data row) do you treat the page as
 connector-backed and also read:
@@ -134,13 +136,12 @@ connector-backed and also read:
 ${PLUGIN_ROOT}/references/connectors.md
 ```
 
-If your dispatch says `Connectors: disabled` (or omits the line), or the
+If your dispatch says `Connectors: none` (or omits the line), or the
 `## Connector Bindings` section is the literal `No connector bindings.`, is empty,
 is missing entirely, or contains no binding row, the page has **no connectors** —
 do not read connectors.md and do not emit any connector code. The dispatch wins
-over the plan: the orchestrator re-probes the connectors feature flag right before
-code generation, so a plan authored while the flag was ON must not produce connector
-calls that this run will never bind.
+over the plan: a page whose data source is Dataverse or mock has no bindings to
+call, so emitting connector code would produce a page that cannot bind at runtime.
 
 Only when the plan's `## Custom API Bindings` section contains an actual binding table
 (a `| Name | Kind | …` header with at least one data row) do you treat the page as

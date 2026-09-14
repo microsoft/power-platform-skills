@@ -37,7 +37,11 @@ status) in `scripts/lib/feature-flags.js`; their on/off value lives in
 
 | Flag | Status | Enables | Depends on |
 |---|---|---|---|
-| `connectors` | in-progress | GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) + ALM packaging of connection references | pac CLI connector verbs, the GenUX authoring control, and the maker/admin ECS setting — all live in PROD |
+| `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb, and the `GenUxPluginActionAllowList` setting — all live in PROD |
+| `custom-telemetry` | in-progress | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
+
+Connector authoring (SharePoint, weather, Office 365, SQL, custom REST) is **GA and
+always on** — it is no longer flagged.
 
 **See the current state** (status, whether each flag is on, and why):
 
@@ -49,18 +53,18 @@ node scripts/lib/feature-flags.js --list
 
 ```powershell
 # Windows (PowerShell)
-$env:GENPAGE_ENABLE_CONNECTORS = "1"
+$env:GENPAGE_ENABLE_CUSTOM_API = "1"
 ```
 
 ```bash
 # macOS / Linux (bash)
-export GENPAGE_ENABLE_CONNECTORS=1
+export GENPAGE_ENABLE_CUSTOM_API=1
 ```
 
 **Enable it persistently** by flipping the value in `feature-flags.json`:
 
 ```json
-{ "connectors": true }
+{ "custom-api": true }
 ```
 
 Precedence is **env var → `feature-flags.json` → default OFF** (fail-closed). Only

@@ -120,8 +120,7 @@ Also read `config.json.connectorBindings`.
 > - **Add / replace / discover connector data:** invoke `genpage-connector-builder`
 >   via `Task` with **Mode: `edit`**, the working directory, `${PLUGIN_ROOT}`, the
 >   `envUrl` from Edit Phase 1, the existing bindings, and the edit intent. The
->   builder owns the feature gate: when connectors are OFF it preserves existing
->   bindings and adds none; when ON it discovers and returns the updated set. It
+>   builder discovers the updated set and returns it. It
 >   writes `<working-dir>/connectors.json` (bare array) and
 >   `<working-dir>/connector-bindings.md`.
 > - **Preserve connectors unchanged:** do not invoke the builder and do not create

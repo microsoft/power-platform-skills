@@ -1,4 +1,4 @@
-# Workflow Log — Eval 17: Seattle Weather Dashboard (connectors feature flag OFF)
+# Workflow Log — Eval 17: Seattle Weather Dashboard (mock data)
 
 ## Phase 0 — Working directory setup
 - Working directory created: `seattle-weather-dashboard/` (kebab-case derived from "current weather for Seattle")
@@ -23,8 +23,8 @@
 
 ### Connector Detection (delegated to genpage-connector-builder)
 - Request implies external weather data (MSN Weather connector) → planner delegates all connector work to the `genpage-connector-builder` agent (mode: create) via the Task tool
-- genpage-connector-builder probes the gate FIRST: `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` → `disabled` (exit 1)
-- Connectors feature flag OFF: connector discovery SKIPPED; list-connections.js NOT run
+- genpage-connector-builder assesses the data source FIRST: the maker answered "Mock data", so there is no connector data source to discover
+- Connector discovery SKIPPED; list-connections.js NOT run
 - Agent wrote `connector-bindings.md` = `No connector bindings.` and `connectors.json` = `[]`
 - Page falls back to inline mock weather data for Seattle
 
@@ -68,4 +68,4 @@
 ## Phase 8 — Summary
 - 1 page deployed: weather-dashboard.tsx → "Seattle Weather" in Operations Hub app
 - No entities created
-- No connector bindings (connectors flag OFF — mock data used)
+- No connector bindings (maker chose mock data)

@@ -261,8 +261,8 @@ Two cases:
    environment or the wrong mode cannot be undone. Return this only after your
    auth/environment steps have run, so both values are real.
 
-`genpage-connector-builder` remains the single owner of the connectors feature gate,
-connection / connection-ref discovery, connection-reference creation, and the binding
+`genpage-connector-builder` remains the single owner of connection / connection-ref
+discovery, connection-reference creation, and the binding
 contract. When no connectors are involved, write the exact sentinel
 `No connector bindings.` into the plan.
 

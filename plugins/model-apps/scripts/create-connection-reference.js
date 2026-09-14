@@ -24,13 +24,8 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 async function main() {
-  // Feature gate first (fail closed) — see lib/feature-flags.js. Exit 3 = "feature
-  // off", distinct from 1 = runtime/usage error, so callers can tell them apart.
-  exitIfConnectorsDisabled();
-
   const argv = process.argv.slice(2);
   const { positional, flags } = parseArgs(argv);
   const USAGE = 'Usage: node create-connection-reference.js <envUrl> <logicalName> <connectorId> [--connection-id <id>] [--display-name <name>]';
