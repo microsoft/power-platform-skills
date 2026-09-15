@@ -10,6 +10,18 @@ to `genpage-edit-planner`, then applies the edit inline.
 > sample app names, or anywhere else. Always run the commands first, then
 > present what the commands returned to the user.
 
+> **⚠️ Unattended runs cannot select a target.** This flow **overwrites an
+> existing page**, and every selection step below is an `AskUserQuestion`. Under
+> Copilot autopilot or Claude auto-accept there is nobody to answer, and the one
+> thing an unattended run must never do is guess which page to overwrite.
+>
+> Resolve the mode as described in SKILL.md ("Unattended runs") before Phase 1.
+> When `interactive` is `false`, the app **and** the page must both be named
+> explicitly in `$ARGUMENTS`. Never substitute a search result, and never fall
+> back to "the only match" — a single match is still a guess when nobody asked
+> for it. If either is missing or ambiguous, **halt** and report what was needed.
+> Suppressing a prompt never authorizes an overwrite.
+
 ## Edit Phase 1: Discover and Select Target App + Page
 
 The planner has already validated prereqs and confirmed auth.

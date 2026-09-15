@@ -150,6 +150,51 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 > followed by the response. The log is the contract the eval harness reads, and
 > it does not care which loop made the call.
 
+#### Unattended runs (Copilot autopilot / Claude auto-accept)
+
+Copilot CLI autopilot and Claude Code auto-accept drive this skill with **no user
+watching**. Every gate below is written as "ask the user", and in those modes
+there is nobody to answer: the run either stalls on a question no one sees or,
+worse, records an answer nobody gave. Resolve the mode **once, at the start of
+Phase 1**, and carry it through every gate:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-interaction-mode.js"
+```
+
+One JSON line, always exit 0 — "there is no user" is a fact about the run, not a
+failure of it:
+
+```json
+{ "ok": true, "interactive": false, "reason": "POWER_PLATFORM_SKILLS_NONINTERACTIVE is set" }
+```
+
+A run is unattended when `--non-interactive` is passed or
+`POWER_PLATFORM_SKILLS_NONINTERACTIVE` is `1`/`true` — the same switch
+`/app-builder` already uses, so one setting covers both skills.
+
+When `interactive` is `false`, do not call `AskUserQuestion`, `EnterPlanMode` or
+`ExitPlanMode` at all. Take the documented default and record it in
+`workflow-log.md` as `Unattended default: <question> → <answer> (<reason>)`, so
+the log still shows what decided the run:
+
+| Gate | Attended | Unattended |
+| --- | --- | --- |
+| Create new / edit existing (step 2) | `AskUserQuestion` | Whatever `$ARGUMENTS` states. With nothing stated, **create new** — the only additive choice. |
+| An agent returns `needs_input` (step 4) | Ask, then re-invoke | Re-invoke with the option the agent marked `"default": true`. If it marked none, **halt**. |
+| Plan approval (step 5) | `EnterPlanMode` / `ExitPlanMode` | Treat the plan as approved and continue to step 6, which still writes `genpage-plan.md` through the planner. The plan is recorded, just not presented. |
+| Browser verification (Phase 7) | Offer it | Skip it. |
+
+**Suppressing a prompt never authorizes destructive work.** Editing an existing
+page overwrites source nobody reviewed, so on the **edit** path an unattended run
+requires the page to be named explicitly in `$ARGUMENTS`. Do not infer the target
+from a search result and do not fall back to "the only page that matched". If the
+target is ambiguous, **halt and say so** — an unattended run that guesses which
+page to overwrite is the one failure this table exists to prevent.
+
+Halting is a normal outcome here, not an error to route around: report what was
+missing and stop, so the run can be re-driven with the decision supplied.
+
 #### Steps
 
 1. Run the prerequisite, auth and discovery steps (inline, or via

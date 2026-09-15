@@ -27,6 +27,10 @@ const { annotateContentHashes } = require('./lib/content-hash.js');
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
+// Unattended-mode detection lives in one module so /app-builder and /genpage cannot drift apart
+// on what "unattended" means. Re-exported from here because callers and tests already import it
+// from this file.
+const { envTruthy } = require('./lib/interaction-mode.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
@@ -436,16 +440,6 @@ function isTransientHalt(err) {
 // Exponential backoff with jitter: ~3s, 6s, 12s (capped at 30s).
 function backoffMs(attempt) {
   return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
-}
-
-// Env var truthiness for the unattended opt-in: '1' or 'true' (case-insensitive) count as set; a
-// missing/other value is false. Matches the dotnet-style boolean env convention used elsewhere in this
-// repo (see AGENTS.md "Shared Telemetry"). This gates PROMPT SUPPRESSION ONLY — it never grants
-// destructive authority (only --allow-destructive does).
-function envTruthy(v) {
-  if (v == null) return false;
-  const s = String(v).trim().toLowerCase();
-  return s === '1' || s === 'true';
 }
 
 function list(v) {
