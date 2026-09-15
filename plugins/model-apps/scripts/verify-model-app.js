@@ -52,6 +52,45 @@ async function appIdFor(sdk, appUnique) {
   return rows && rows[0] && rows[0].appmoduleid;
 }
 
+// The app's TABLE components (appmodulecomponent componenttype 1), resolved to logical names.
+//
+// Returns `{ ok: true, logicalNames }`, or `{ ok: false, reason }` when the app, the component read
+// or a metadata resolution fails — the caller fails the check rather than passing, because "we could
+// not look" and "the app is fine" must never be the same answer here.
+//
+// Each type-1 row's `objectid` is a table's **MetadataId**, not a row id, so it is resolved through
+// `EntityDefinitions(<MetadataId>)`. LIVE-MEASURED on a healthy app: the rows carry the REAL table
+// MetadataIds (a 3-table app returned three distinct ids resolving to its three tables). A row that
+// resolves to the logical name `entity` is the known corruption — the `entity` METADATA table
+// pinned as though it were the intended table — and it is returned as-is so the caller can name it.
+async function appEntityComponentsFor(sdk, appUnique) {
+  try {
+    const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
+    const app = apps && apps[0];
+    if (!app || !app.appmoduleidunique) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
+    const rows = await sdk.queryRecords('appmodulecomponent', {
+      select: ['objectid', 'componenttype'],
+      filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 1`,
+      top: 1000,
+    });
+    const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((s) => String(s).toLowerCase()))];
+    const logicalNames = [];
+    for (const id of ids) {
+      // `fetchEntityMetadata` resolves by LOGICAL NAME, not MetadataId, so this read goes through the
+      // SDK's generic Dataverse client against the metadata endpoint. A single unresolvable id fails
+      // the whole answer: a partial list would silently read as "that table is not in the app".
+      const res = await sdk.dataverse.get(`/EntityDefinitions(${id})?$select=LogicalName`);
+      if (!res || res.status < 200 || res.status >= 300 || !res.body || !res.body.LogicalName) {
+        return { ok: false, reason: `component ${id} could not be resolved to a table (HTTP ${res && res.status})` };
+      }
+      logicalNames.push(String(res.body.LogicalName));
+    }
+    return { ok: true, logicalNames };
+  } catch (err) {
+    return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
+  }
+}
+
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
   const genpageCli = opts.genpageCli;
@@ -66,6 +105,8 @@ function readerFor(sdk, appUnique, opts) {
   // Memoize fetchSitemap: both sitemapXml and sitemapPageIds share one live query (Imp7 — one snapshot).
   let sitemapP;
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
+  // Memoized app TABLE components — one live read per verify run.
+  let appComponentsP;
 
   // Per-id page code cache. Downloads by specific id on demand rather than pulling all pages at once
   // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
@@ -137,6 +178,9 @@ function readerFor(sdk, appUnique, opts) {
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
+    // The app's TABLE components, so verify can tell "the sitemap shows this table" from
+    // "the app module actually contains it". Memoized — one live read per verify run.
+    appEntityComponents: () => (appComponentsP || (appComponentsP = appEntityComponentsFor(sdk, appUnique))),
   };
 
   // entityPrivileges(logical): the privilege set a table exposes, as [{ PrivilegeId, PrivilegeType, ... }].

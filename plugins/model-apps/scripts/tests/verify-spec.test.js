@@ -807,3 +807,83 @@ test('verifySpec: a failing context read cannot flip a proven feature to FAIL', 
     assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
   });
 });
+
+// ---------------------------------------------------------------------------
+// App-module TABLE (type-1) membership.
+// ---------------------------------------------------------------------------
+
+// A spec whose sitemap shows two tables.
+function membershipSpec() {
+  return {
+    entities: [{ schemaName: 'new_order', columns: [] }, { schemaName: 'new_line', columns: [] }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'R', subAreas: [
+      { entity: 'new_order', title: 'Orders' },
+      { entity: 'new_line', title: 'Lines' },
+    ] }] }] },
+  };
+}
+function membershipRead(appEntityComponents) {
+  return {
+    findTable: async (l) => ({ logicalName: l }),
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Entity="new_order"/><SubArea Entity="new_line"/></Group></Area></SiteMap>',
+    ...(appEntityComponents ? { appEntityComponents } : {}),
+  };
+}
+const checkFor = (res, name) => res.checks.find((c) => c.kind === 'app-table-component' && c.name === name);
+
+test('app table membership: verify FAILS when a sitemap-visible table is absent from the app module components', async () => {
+  // The reported failure was invisible precisely because verify passed: it confirmed the table
+  // EXISTS and that the sitemap names it, but never that the app module actually CONTAINS it. An app
+  // can show a table in navigation while omitting it from its Tables list, which is an internally
+  // inconsistent definition and breaks consumers that read app-module membership.
+  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, logicalNames: ['new_order'] })));
+  assert.strictEqual(checkFor(res, 'new_order').present, true);
+  const missing = checkFor(res, 'new_line');
+  assert.ok(missing && missing.present === false, 'the absent table must be reported by name');
+  assert.strictEqual(res.ok, false, 'verify must NOT pass while a sitemap table is missing from the app');
+});
+
+test('app table membership: verify passes when every sitemap table is a real app component', async () => {
+  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, logicalNames: ['new_order', 'NEW_LINE'] })));
+  // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
+  assert.strictEqual(checkFor(res, 'new_line').present, true);
+  assert.ok(res.checks.filter((c) => c.kind === 'app-table-component').every((c) => c.present));
+});
+
+test('app table membership: an invalid `entity` placeholder component is reported', async () => {
+  // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` metadata table
+  // itself, so the component resolves to the logical name `entity` rather than to a real table.
+  // Those rows are junk and accumulate, so name them even when every declared table is present.
+  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, logicalNames: ['new_order', 'new_line', 'entity'] })));
+  const bad = res.checks.find((c) => c.kind === 'app-table-component' && /placeholder/i.test(c.name));
+  assert.ok(bad && bad.present === false, 'the `entity` placeholder must be reported');
+  assert.strictEqual(res.ok, false);
+});
+
+test('app table membership: an unreadable component list FAILS CLOSED rather than passing silently', async () => {
+  // "We could not look" must never read as "the app is fine" — that is the exact shape of the bug.
+  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: false, reason: 'HTTP 403' })));
+  const c = res.checks.find((x) => x.kind === 'app-table-component');
+  assert.ok(c && c.present === false && /403/.test(c.detail), 'the reason must travel with the failure');
+  assert.strictEqual(res.ok, false);
+});
+
+test('app table membership: a reader without the capability is skipped, not crashed', async () => {
+  // verify-spec is also used with minimal readers; an optional capability must never become a
+  // TypeError for them (the established rule for columnVisualization).
+  const res = await verifySpec(membershipSpec(), membershipRead(null));
+  assert.deepStrictEqual(res.checks.filter((c) => c.kind === 'app-table-component'), []);
+  assert.strictEqual(res.ok, true);
+});
+
+test('app table membership: only SITEMAP-visible tables are required to be components', async () => {
+  // A spec entity with no subarea is a legitimate data-model-only table (the build does not pin it),
+  // so requiring it would fail every app that declares a supporting table.
+  const spec = membershipSpec();
+  spec.entities.push({ schemaName: 'new_audit', columns: [] });
+  const res = await verifySpec(spec, membershipRead(async () => ({ ok: true, logicalNames: ['new_order', 'new_line'] })));
+  assert.strictEqual(checkFor(res, 'new_audit'), undefined, 'a table with no subarea must not be required');
+  assert.ok(res.checks.filter((c) => c.kind === 'app-table-component').every((c) => c.present));
+});

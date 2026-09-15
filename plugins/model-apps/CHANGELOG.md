@@ -31,6 +31,18 @@ A dry run that says what an apply would actually do, and sample data that can ex
 
 ### Fixed
 
+- **`--verify` now checks that a sitemap-visible table is really a member of the app**
+  The sitemap and the app module's table-component list are separate facts and can
+  disagree: an app can show a table in navigation while omitting it from its Tables list, which is
+  an internally inconsistent definition and breaks consumers that read app-module membership. Every
+  existing check still passed on such an app — the table exists, and the sitemap does name it — so
+  `verify` reported **PASS** and the divergence was invisible. It now resolves the app's type-1
+  components and fails, by table name, when one is missing; an unreadable component list fails
+  closed rather than passing; and leftover `entity` **placeholder** components — the known defect where a table pinned
+  as an `entity` *instance* pins the `entity` metadata table itself — are reported even when every declared table is present. Only sitemap-visible tables
+  are required — a supporting table with no subarea is not pinned by the build and must not fail.
+  *The build paths themselves were re-measured live and do pin correctly (create, and a full
+  rebuild adding either a new or a pre-existing table); this closes the detection gap.*
 - **A multi-line page prompt is no longer flattened on upload** ([#565]). `pac model genpage upload`
   was given the prompt and agent message **inline**, and both then hit the newline-collapsing guard
   that stops a stray newline truncating the Windows command line. A downloaded prompt is a

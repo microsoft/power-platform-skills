@@ -166,16 +166,22 @@ function collectSitemap(app) {
 // the sitemap alone silently dropped those (ADO 6603388), so the download→edit→rebuild round trip
 // lost hidden app dependencies.
 //
-// The entity is derived from the app's VIEW / CHART / FORM components, NOT from its
-// `componenttype eq 1` (Entities) rows. That looks like the obvious source but is unusable:
-// LIVE-verified that every componenttype-1 row carries the SAME `objectid` — the MetadataId of the
-// `entity` metadata table itself — so it identifies the component *kind*, not which table. (On a
-// 2-table app both rows read `9d0f025b-…`, which resolves to the logical name `entity`.)
-// `RetrieveAppComponents` returned 0 rows on the same app, so it is not an alternative here.
+// The entity is derived from the app's VIEW / CHART / FORM components rather than from its
+// `componenttype eq 1` (Entities) rows.
 //
-// View/chart/form components DO carry usable ids: each `objectid` is a real row id whose record
-// names its owning table. An app includes its tables' views and forms, so unioning their owners
-// recovers the hidden membership.
+// CORRECTED (re-measured live): an earlier note here claimed the type-1 rows were
+// UNUSABLE because "every row carries the same objectid — the MetadataId of the `entity` metadata
+// table". That observation was real, but it was made against an app corrupted by the defect where every
+// table had been pinned as an `entity` INSTANCE, pinning the `entity` metadata table itself. On a
+// HEALTHY app the rows carry the REAL table
+// MetadataIds — re-measured on a 3-table app, which returned three distinct ids resolving to its
+// three tables — and `RetrieveAppComponents` answers 200, not the 0 rows previously recorded.
+// `verify-spec` now relies on exactly that, so the old claim must not be left standing.
+//
+// The view/chart/form derivation is KEPT regardless, because it is not merely a workaround for that
+// stale claim: it is the source that recovers tables reachable only through a lookup, sub-grid or
+// related view, which is the gap this function exists to close. Type-1 rows are a
+// legitimate additional source for a future change; they are simply not needed here.
 //   componenttype 26 → savedquery.returnedtypecode
 //   componenttype 59 → savedqueryvisualization.primaryentitytypecode
 //   componenttype 60 → systemform.objecttypecode
