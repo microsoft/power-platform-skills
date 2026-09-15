@@ -288,6 +288,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
   component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
   Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
+  `--verify` now asserts the same membership INDEPENDENTLY of the write path: it resolves the app's
+  `componenttype: 1` rows and fails, by table name, when a sitemap-visible table is not among them,
+  fails closed when that list cannot be read, and reports any leftover `entity` placeholder row. The
+  SDK's read-back only covers what a build intended to pin, so an app that drifted afterwards (or was
+  edited elsewhere) still verified clean — the sitemap named the table and the table existed, which
+  was all verify checked.
   The same rule binds **tests and evals**, with a distinction that is easy to get backwards:
   an EXPECTATION must come from the CONTRACT, independent of the code under test, while the FIXTURE
   that stands in for the environment should be generated from the builder's real output so it cannot

@@ -7,158 +7,78 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [Unreleased] — 2.8.0
 
-A dry run that says what an apply would actually do, and sample data that can express a hierarchy.
+A dry run that says what an apply would really do, sample data that can express a hierarchy, and
+downloads that round-trip Choice columns.
 
 ### Added
 
-- **The dry run resolves create-vs-reuse against the live environment** ([#559]). `build-model-app.js`
-  without `--apply` used to print a static, spec-derived listing and exit before any discovery, so
-  the identical plan appeared for a spec whose every artifact already exists and for one that would
-  create everything from nothing — the one question a dry run exists to answer. Each table, column,
-  relationship, view, chart, form and the app module is now marked `+ create` or `= reuse`, with a
-  summary line (`2 to create, 6 already present`). A read that fails is reported as `? unknown` and
-  never collapsed into either decision. The probe reuses the **build's own** discovery, so the plan
-  cannot drift from what the apply then does; it is read-only, and `--no-live-plan` restores the
-  offline listing.
+- **The dry run resolves create-vs-reuse against the live environment** ([#559]). Without `--apply`
+  the plan was a static echo of the spec, identical whether every artifact already existed or none
+  did — the one question a dry run exists to answer. Each item is now `+ create` or `= reuse`, with
+  a summary (`2 to create, 6 already present`); an unreadable item is `? unknown`, never guessed.
+  The probe reuses the build's own discovery, so the plan cannot drift from the apply.
+  `--no-live-plan` restores the offline listing.
 - **Sample data can express a hierarchy on one table** ([#544]). A `$parent` may target the row's
-  **own** entity — an org tree, a "reports to" chain. Rows are seeded in dependency waves, so
-  declaration order does not matter; a cycle is rejected by the lint rather than failing the build
-  partway through. Previously any self-reference halted the whole `sample-data` phase.
-- **`$parent.lookup` disambiguates which relationship a bind uses** ([#544]). Needed only when two or
-  more `OneToMany` relationships connect the same pair — common for a hierarchy table with both a
-  "parent org" and a "group ancestor" self-lookup. Without it the bind is now **rejected** rather
-  than silently taking the first declared relationship and asserting something false about the data.
+  own entity (an org tree, a "reports to" chain). Rows are seeded in dependency waves, so
+  declaration order does not matter, and a cycle is rejected by the lint rather than failing the
+  build partway through. Add `$parent.lookup` to say which relationship a bind uses — required only
+  when two or more relationships connect the same pair, and now **rejected** rather than silently
+  taking the first declared one.
 
 ### Fixed
 
-- **`--verify` now checks that a sitemap-visible table is really a member of the app**
-  The sitemap and the app module's table-component list are separate facts and can
-  disagree: an app can show a table in navigation while omitting it from its Tables list, which is
-  an internally inconsistent definition and breaks consumers that read app-module membership. Every
-  existing check still passed on such an app — the table exists, and the sitemap does name it — so
-  `verify` reported **PASS** and the divergence was invisible. It now resolves the app's type-1
-  components and fails, by table name, when one is missing; an unreadable component list fails
-  closed rather than passing; and leftover `entity` **placeholder** components — the known defect where a table pinned
-  as an `entity` *instance* pins the `entity` metadata table itself — are reported even when every declared table is present. Only sitemap-visible tables
-  are required — a supporting table with no subarea is not pinned by the build and must not fail.
-  *The build paths themselves were re-measured live and do pin correctly (create, and a full
-  rebuild adding either a new or a pre-existing table); this closes the detection gap.*
-- **A multi-line page prompt is no longer flattened on upload** ([#565]). `pac model genpage upload`
-  was given the prompt and agent message **inline**, and both then hit the newline-collapsing guard
-  that stops a stray newline truncating the Windows command line. A downloaded prompt is a
-  multi-line conversation transcript (`Conversation with N prompts:` …), so every line break was
-  silently replaced with a space on an **edit-rebuild** — the round trip degraded the text a little
-  more each time. They now go through `--prompt-file` / `--agent-message-file`, which pac provides
-  for exactly this; the temp files are written once per upload and removed on every exit path,
-  including the retry-exhaustion and mid-loop throws. The collapsing guard stays for the remaining
-  inline args (a page `--name` can still truncate a command line). `upload()` also accepts an
-  optional `compiledCodeFile` (`--compiled-code-file`); omitted, pac auto-transpiles as before.
-  Live-verified against a real environment: a prompt carrying `\r\n`, a bare `\n`, quotes, `%` and
-  non-ASCII round-tripped byte-for-byte through upload → download.
-- **Choice and MultiChoice columns keep their type through a download** ([#564]). The download
-  emitted them with **no `type`**, because a `Choice` declaration needs a companion `options[]` or
-  `globalChoice` that nothing read. Rebuilding into the *original* environment reused the real
-  column and hid it; rebuilding into a **fresh** one created single-line **Text**, while Memo, Money
-  and DateTime round-tripped — an asymmetry much harder to notice than an outright failure. Option
-  sets are now read per table: a **local** set becomes inline `options[]` (localizations preserved),
-  a **shared** one becomes a `globalChoice` reference plus a `globalChoices[]` declaration so a
-  fresh-environment rebuild can create it. A read that fails still leaves the column untyped — the
-  spec would otherwise fail its own validation — but now names the table and the reason. Note the
-  App Spec cannot express option *values*: labels and order round-trip, and a fresh rebuild re-bases
-  the underlying integers to `100000000 + index`.
-- **A lookup's synthetic name column is no longer downloaded as a real Text column** (found while
-  live-verifying [#564]). Creating a lookup also creates a formatted-name attribute
-  (`<lookup>name`) which reports `AttributeType: "String"` **and** `IsCustomAttribute: true`, so
-  neither the type map nor the custom-only filter excluded it — a downloaded spec declared a real
-  Text column named after a lookup's shadow. Measured: rebuilding that spec into a fresh
-  environment **succeeded** and silently created the invented column, which also collides with the
-  name the real lookup's own shadow needs. `IsLogical` now excludes them. The rule requires
-  positive type evidence before dropping — an attribute is removed only when it is logical **and**
-  nothing proves it is a real choice column — so a genuine logical Choice survives an option-set
-  read that failed. An unreadable flag keeps the column, as for `IsCustomAttribute`.
-- **A Choice column is no longer lost when its option-set read fails, returns empty, or has an
-  unreadable label** ([#564], from adversarial review). The type came from *membership in the
-  option-set read*, so anything that made that read incomplete deleted the column outright — a
-  MultiChoice reports `AttributeType: "Virtual"`, so nothing else kept it — while the warning said
-  it had merely lost its type. `AttributeTypeName` now identifies a choice column independently of
-  that read, the two metadata casts no longer discard each other's results when one fails, and an
-  affected column is kept, left untyped, and **named**.
-- **A legal multi-language option set no longer aborts the whole download** ([#564], from
-  adversarial review). Dataverse does not require option labels to be unique across options or
-  languages, so a set where one label names two options is legal — but the spec validator rejects
-  it as an error when either side is localized, and the download validates before writing. One such
-  pair anywhere therefore failed the **entire app's** download, with no `--allow-lossy-download`
-  escape. That column is now left untyped, exactly as for an unreadable label.
-- **`globalChoices[]` declares only sets a downloaded column actually references** ([#564], from
-  adversarial review). Declarations were gathered from raw metadata, before system attributes were
-  filtered and before tables without a primary name were dropped, so an orphan could appear — and
-  the rebuild writes every declaration into the target environment. References are also
-  canonicalized to one casing, because the build resolves them case-sensitively and a second casing
-  left that column bound to nothing.
-- **A MultiChoice column is no longer dropped from a download entirely** (found while fixing
-  [#564]). Dataverse reports a MultiSelectPicklist attribute as `AttributeType: "Virtual"` — only
-  `AttributeTypeName` says `MultiSelectPicklistType` — and the SDK projection carries just
-  `attributeType`. So the column looked like platform plumbing, exactly like the synthetic
-  `<column>name` shadows it sits beside, and was filtered out of `columns[]`: the spec did not
-  merely lose the type, it lost the **column**, and a rebuild never created it. Membership in the
-  multi-select metadata cast is now the discriminator, so the real column survives and the shadows
-  stay filtered.
-- **`/genpage` Phase 1 is reachable again** ([#541]). It was specified to run its whole interactive
-  flow — prerequisites, auth, the "create new / edit existing" question and plan-mode approval —
-  **inside** the `genpage-planner` `Task` subagent, while the plugin's own `AGENTS.md` documented
-  that subagents are headless and `/app-builder` enforced the opposite. There was no compliant path
-  through Phase 1, so create flows could not complete. Interaction now runs in the main conversation
-  loop; the agents are headless discovery/generation workers and return a `needs_input` request when
-  they need a decision (`references/agent-interaction-contract.md`). The `workflow-log.md` format is
-  unchanged — it records what was asked, not who asked it.
-- **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]). It is
-  removed by the table delete, but teardown also tried to delete it first and got
-  `referenced by 2 other components` — so a run that left the environment completely clean printed
-  `✗` and exited non-zero. Live-measured; now exits 0.
-- **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.** The runner's
-  discovery was a flat `readdir`, so a nested suite would be committed, reviewed, reported green and
-  never execute. Every suite is top-level today, which is exactly why this needed a test.
-- **A mistyped flag now fails instead of quietly changing what the command does.** `parseArgs`
-  accepts any `--name`, so an unrecognised flag was dropped *and* swallowed the token after it:
-  `--stage ui` planned 3 steps, but the one-letter typo `--stagee ui` planned all 9 and still exited
-  0 — with `--apply`, a UI-only apply the caller thought they had scoped became a full data-model
-  apply against a live environment. Every CLI now declares the flags it accepts and rejects anything
-  else with a "did you mean" suggestion, and rejects a value-bearing flag passed bare or empty. This
-  also covers the destructive tools, where a mistyped `--allow-destructiv` previously meant the
-  safety flag the operator believed they had passed simply did not exist.
+- **A download round-trips Choice and MultiChoice columns** ([#564]). They were emitted with no
+  `type`, so rebuilding into a **fresh** environment created single-line Text while Memo, Money and
+  DateTime survived — an asymmetry harder to notice than an outright failure. Option sets are now
+  read per table: a local set becomes inline `options[]` (localizations preserved), a shared one a
+  `globalChoice` reference plus a `globalChoices[]` declaration. Four related defects went with it:
+  a **MultiChoice column was dropped from the spec entirely** (Dataverse types it `Virtual`); a
+  lookup's synthetic `<lookup>name` column was emitted as a real Text column, which a fresh rebuild
+  then created; a legal multi-language option set could abort the **whole** download; and
+  `globalChoices[]` could declare sets nothing referenced. A column whose option set cannot be read
+  is still left untyped — but now named, with the reason. Note the App Spec cannot express option
+  *values*: labels and order round-trip, and a fresh rebuild re-bases them to `100000000 + index`.
+- **`--verify` checks that a sitemap-visible table really belongs to the app.** The sitemap and the
+  app module's table list are separate facts and can disagree, so an app could show a table in
+  navigation while omitting it from its Tables list — and verify still said PASS, because the table
+  existed and the sitemap named it. It now fails by table name, fails **closed** when the component
+  list cannot be read, and reports leftover `entity` placeholder components.
+- **A multi-line page prompt is no longer flattened on upload** ([#565]). Prompts went to `pac`
+  inline, where a newline guard collapsed every line break — so a downloaded conversation transcript
+  degraded a little more on each edit-rebuild. They now go through `--prompt-file` /
+  `--agent-message-file`. `upload()` also accepts an optional `compiledCodeFile`.
+- **`/genpage` Phase 1 is reachable again** ([#541]). Its interactive flow was specified to run
+  inside a headless `Task` subagent, so create flows could not complete. Interaction now runs in the
+  main loop; the agents are headless workers that return a `needs_input` request when they need a
+  decision (`references/agent-interaction-contract.md`).
+- **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]). The
+  table delete already removes it, so deleting it first returned `referenced by 2 other components`
+  and a completely clean run still exited non-zero.
+- **A mistyped flag now fails instead of quietly changing what the command does.** An unrecognised
+  flag was dropped *and* swallowed the token after it: `--stagee ui` planned all 9 phases instead of
+  3 and exited 0 — with `--apply`, a scoped apply became a full one. Every CLI now declares the
+  flags it accepts, rejects anything else with a "did you mean", and rejects a value-bearing flag
+  passed bare. This also covers `--allow-destructiv` and friends on the destructive tools.
+- **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.** Discovery was a
+  flat `readdir`, so a nested suite would be committed, reviewed, reported green and never run.
 
 ### Changed
 
 - **Connector authoring is GA and on by default.** SharePoint / weather / Office 365 / SQL /
-  custom-REST connector binding, and ALM packaging of connection references, now work without
-  opting in. The `connectors` flag is **flipped to `true` and kept for one release as a rollback
-  switch** rather than deleted — if a tenant turns out to be missing one of the cross-repo
-  dependencies, `GENPAGE_ENABLE_CONNECTORS=0` (or `"connectors": false`) restores the previous
-  behaviour in one line instead of needing a revert. It is scheduled for removal in the next
+  custom-REST binding and ALM packaging of connection references work without opting in. The
+  `connectors` flag is **flipped to `true` and kept for one release as a rollback switch** —
+  `GENPAGE_ENABLE_CONNECTORS=0` restores the old behaviour — and is scheduled for removal next
   release. `custom-api` and `custom-telemetry` are unaffected and still default-OFF.
-- **The Phase 4.5 dispatch value is now the binding count, not the flag state.** The page-builder
-  receives `Connectors: none` or `<n> binding(s)`; a disabled gate and an empty binding table both
-  yield `none`, because the generator only needs to know how many bindings it may call. This keeps
-  the dispatch stable when the flag is eventually removed.
-- **The App Spec schema is split so the always-read half is smaller.** `app-spec-schema.md` is read
-  in full at the start of every authoring run, and ~24% of it described features most apps never
-  use. `globalChoices`, `webResources`, `commands`, `businessRules`, `businessProcessFlows`,
-  `dashboards` and `roleGrants` moved to `app-spec-schema-advanced.md`, leaving a pointer table in
-  their place: 105 KB → 82 KB eagerly read. The pointer table is deliberately in the document you
-  always read, so no capability is hidden — and a test fails if the table and the advanced
-  document ever drift apart, since that is what would quietly cause under-building.
-- **The CLI flag contract is shared rather than per-script.** The check above previously existed only
-  in `lint-app-spec.js`; the other ~20 entry points each hand-rolled part of it, and a new CLI could
-  forget it entirely. It now lives once in `scripts/lib/dataverse-auth.js` (`validateFlags`), with
-  the "did you mean" matcher shared with the FetchXML operator lint
-  (`scripts/lib/nearest-name.js`) — removing three copies of the value-less-flag idiom and two
-  hand-maintained flag lists along the way. No supported invocation changed.
-- **Deeper tests on the paths connectors GA just made live.** `check-auth.js` (45% → 99% of lines),
-  `list-connections.js` (48% → 90%), `add-page-to-solution.js` (80% → 98%, and its branch coverage
-  54% → 82%) and `create-connection-reference.js` (75% → 97%) are now covered by wire-level tests
-  that assert the actual Dataverse calls and `pac` output parsing rather than matching source text —
-  including the three `pac connection list` output shapes, the live-verified solution component type
-  codes, and the throwaway-workspace cleanup that must survive an SDK constructor failure.
+- **The Phase 4.5 dispatch value is the binding count, not the flag state.** The page-builder gets
+  `Connectors: none` or `<n> binding(s)`; a disabled gate and an empty binding table both yield
+  `none`, so the dispatch stays stable when the flag is removed.
+- **The App Spec schema is split so the always-read half is smaller.** `globalChoices`,
+  `webResources`, `commands`, `businessRules`, `businessProcessFlows`, `dashboards` and `roleGrants`
+  moved to `app-spec-schema-advanced.md`, leaving a pointer table: 105 KB → 82 KB eagerly read.
+- **The CLI flag contract is shared rather than per-script**, so the flag rules and the "did you
+  mean" suggestion cannot drift between commands.
+- **Deeper tests on the paths connectors GA just made live**, including a connector *edit* eval and
+  a contract test pinning the dispatch fields the skills hand to the page-builder.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544
