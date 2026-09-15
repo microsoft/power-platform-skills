@@ -60,11 +60,29 @@ A dry run that says what an apply would actually do, and sample data that can ex
   neither the type map nor the custom-only filter excluded it — a downloaded spec declared a real
   Text column named after a lookup's shadow. Measured: rebuilding that spec into a fresh
   environment **succeeded** and silently created the invented column, which also collides with the
-  name the real lookup's own shadow needs. `IsLogical` now excludes them. The rule is deliberately
-  *logical **and** carrying no option set*, because six genuine `account` choice columns
-  (`address1_addresstypecode` and friends) are themselves logical — dropping every logical
-  attribute would delete real columns. An unreadable flag keeps the column, as for
-  `IsCustomAttribute`.
+  name the real lookup's own shadow needs. `IsLogical` now excludes them. The rule requires
+  positive type evidence before dropping — an attribute is removed only when it is logical **and**
+  nothing proves it is a real choice column — so a genuine logical Choice survives an option-set
+  read that failed. An unreadable flag keeps the column, as for `IsCustomAttribute`.
+- **A Choice column is no longer lost when its option-set read fails, returns empty, or has an
+  unreadable label** ([#564], from adversarial review). The type came from *membership in the
+  option-set read*, so anything that made that read incomplete deleted the column outright — a
+  MultiChoice reports `AttributeType: "Virtual"`, so nothing else kept it — while the warning said
+  it had merely lost its type. `AttributeTypeName` now identifies a choice column independently of
+  that read, the two metadata casts no longer discard each other's results when one fails, and an
+  affected column is kept, left untyped, and **named**.
+- **A legal multi-language option set no longer aborts the whole download** ([#564], from
+  adversarial review). Dataverse does not require option labels to be unique across options or
+  languages, so a set where one label names two options is legal — but the spec validator rejects
+  it as an error when either side is localized, and the download validates before writing. One such
+  pair anywhere therefore failed the **entire app's** download, with no `--allow-lossy-download`
+  escape. That column is now left untyped, exactly as for an unreadable label.
+- **`globalChoices[]` declares only sets a downloaded column actually references** ([#564], from
+  adversarial review). Declarations were gathered from raw metadata, before system attributes were
+  filtered and before tables without a primary name were dropped, so an orphan could appear — and
+  the rebuild writes every declaration into the target environment. References are also
+  canonicalized to one casing, because the build resolves them case-sensitively and a second casing
+  left that column bound to nothing.
 - **A MultiChoice column is no longer dropped from a download entirely** (found while fixing
   [#564]). Dataverse reports a MultiSelectPicklist attribute as `AttributeType: "Virtual"` — only
   `AttributeTypeName` says `MultiSelectPicklistType` — and the SDK projection carries just

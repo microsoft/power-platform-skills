@@ -2932,6 +2932,7 @@ module.exports = {
   normalizePageSource,
   normalizeLanguageCode,
   validateChoiceOptionLabels,
+  ambiguousChoiceAliases,
   labelText,
   labelAliases,
   isLocalizedLabelMap,

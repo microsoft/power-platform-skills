@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -610,6 +610,25 @@ const OPTION_SET_CASTS = [
   { cast: 'Microsoft.Dynamics.CRM.MultiSelectPicklistAttributeMetadata', type: 'MultiChoice' },
 ];
 
+// Dataverse `AttributeTypeName` -> App Spec type, for the choice types ONLY. This is POSITIVE type
+// evidence that does not depend on the option-set read succeeding, and it is why a Choice column now
+// survives a failed or empty cast read instead of disappearing.
+//
+// It exists because `AttributeType` LIES for a multi-select: LIVE-MEASURED, a MultiSelectPicklist
+// reports `AttributeType: "Virtual"` — indistinguishable from the synthetic `<column>name` shadows —
+// and only `AttributeTypeName: "MultiSelectPicklistType"` identifies it. Relying on cast membership
+// instead meant an unusable option label, a 503, or even a 200 with an empty `value[]` silently
+// DELETED a real MultiChoice column from the spec, which is the loss this whole change exists to end.
+// `AttributeTypeName` is a base `AttributeMetadata` property, so selecting it is safe on every
+// supported Web API version.
+const SPEC_TYPE_FROM_ATTRIBUTE_TYPE_NAME = { PicklistType: 'Choice', MultiSelectPicklistType: 'MultiChoice' };
+
+// The App Spec type an attribute can be proven to have WITHOUT a successful option-set read.
+function choiceTypeFromTypeName(a) {
+  const name = a && a.AttributeTypeName && a.AttributeTypeName.Value;
+  return name ? SPEC_TYPE_FROM_ATTRIBUTE_TYPE_NAME[name] : undefined;
+}
+
 // One downloaded option set, or null when it carries nothing this spec can declare. Shape:
 //   { name: 'new_ticket_new_status', isGlobal: false, options: [<Dataverse Label>, ...] }
 //
@@ -651,27 +670,33 @@ function choiceOptionLabel(label) {
 // emitting a spec whose Choice columns degraded to Text.
 async function readOptionSets(sdk, logical) {
   const byLogical = new Map();
+  let failed = null;
   for (const { cast, type } of OPTION_SET_CASTS) {
     const url = `/${metadataEntityPath(logical)}/Attributes/${cast}?$select=LogicalName&$expand=OptionSet($select=Name,IsGlobal,Options)`;
-    const res = await sdk.dataverse.get(url);
-    // `dataverse.get` RESOLVES on a non-2xx rather than throwing, so the status must be checked
-    // explicitly — the same trap documented on the description reads above.
-    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
-    if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
-    for (const row of res.body.value) {
-      const key = String((row && row.LogicalName) || '').toLowerCase();
-      const parsed = optionSetFromRow(row);
-      // The CAST that returned the row is the authoritative spec type. It has to be, for
-      // MultiChoice: LIVE-MEASURED, a MultiSelectPicklist attribute reports
-      // `AttributeType: "Virtual"` and only `AttributeTypeName: "MultiSelectPicklistType"`
-      // distinguishes it from the synthetic `<column>name` formatted-value shadows, which report
-      // `VirtualType`. The SDK projection carries only `attributeType`, so both looked identical and
-      // the real column was filtered out of `columns[]` entirely. Only a genuine multi-select comes
-      // back from the multi-select cast, so membership in that response IS the discriminator.
-      if (key && parsed) byLogical.set(key, { ...parsed, type });
+    try {
+      const res = await sdk.dataverse.get(url);
+      // `dataverse.get` RESOLVES on a non-2xx rather than throwing, so the status must be checked
+      // explicitly — the same trap documented on the description reads above.
+      if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+      if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
+      for (const row of res.body.value) {
+        const key = String((row && row.LogicalName) || '').toLowerCase();
+        if (!key) continue;
+        // The CAST that returned the row is authoritative for the TYPE, and it is recorded even when
+        // the OPTIONS could not be parsed (`optionSetFromRow` -> null). Conflating the two DELETED
+        // the column: a MultiChoice reports `AttributeType: "Virtual"`, so discarding this entry
+        // discarded the only evidence it was an authorable column at all, and it vanished from the
+        // spec while the warning claimed it had merely lost its type.
+        byLogical.set(key, { ...(optionSetFromRow(row) || {}), type });
+      }
+    } catch (err) {
+      // Per-cast, NOT fatal. The two casts are independent reads; throwing here discarded an
+      // already-valid Picklist map whenever the multi-select cast failed, so a single transient 503
+      // stripped the type off every Choice column on the table. Keep what was read, report the rest.
+      if (!failed) failed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
     }
   }
-  return byLogical;
+  return { byLogical, failed };
 }
 
 // Gather the SHARED option sets a downloaded table binds to, into `into` (name-keyed, so one set
@@ -691,6 +716,37 @@ function collectGlobalChoices(meta, into) {
     into.set(key, { name: os.name, options: os.options.map((l) => descriptionFromDataverse(l)) });
   }
   return into;
+}
+
+// Reduce the collected global-choice CANDIDATES to the ones an EMITTED column actually references,
+// and canonicalize every reference to the declaration's own casing.
+//
+// Both halves close real defects. `collectGlobalChoices` scans RAW metadata, which runs before
+// `entityFromMetadata` filters attributes and before an entity with no primary name is dropped — so
+// a set bound only by a system attribute, or by a table that never made it into the spec, produced
+// an ORPHAN declaration. That is not cosmetic: `provisionDataModel` calls `createGlobalOptionSet`
+// for every declaration, so the rebuild wrote an option set into the target environment that nothing
+// in the app uses.
+//
+// The casing half: declarations are de-duplicated on a lower-cased key, but each column kept the raw
+// `OptionSet.Name` casing Dataverse happened to return for it. `entity-provision` then looks up
+// `globalChoiceIds[c.globalChoice]` CASE-SENSITIVELY, so a second casing of the same set left that
+// column unbound and it silently fell back to an EMPTY inline option list. Rewriting the references
+// here keeps that fix in one place rather than relying on every consumer to normalize.
+function finalizeGlobalChoices(entities, candidates) {
+  const byKey = candidates instanceof Map ? candidates : new Map();
+  const referenced = new Map(); // lower-cased name -> declaration
+  for (const e of entities || []) {
+    for (const c of (e && e.columns) || []) {
+      if (!c || !c.globalChoice) continue;
+      const key = String(c.globalChoice).toLowerCase();
+      const decl = byKey.get(key);
+      if (!decl) continue;
+      c.globalChoice = decl.name;
+      if (!referenced.has(key)) referenced.set(key, decl);
+    }
+  }
+  return [...referenced.values()];
 }
 
 // Does this form's `formxml` restrict it to particular security roles?
@@ -899,23 +955,34 @@ function entityFromMetadata(meta, logical) {
     // column that also collides with the name the real lookup's own shadow needs. `IsLogical` (the
     // value is not stored on this table) is the distinguishing fact.
     //
-    // Gated on "logical AND no option set", NOT on plain "logical". On `account`, 6 REAL choice
-    // columns (address1_addresstypecode, address1_freighttermscode, address1_shippingmethodcode and
-    // their address2_ twins) are themselves IsLogical because they surface from the address entity —
-    // dropping every logical attribute would delete real Choice columns from the spec, which is the
-    // same silent column-loss this change exists to end.
+    // Gated on positive TYPE EVIDENCE, not on "logical" alone: an attribute is dropped only when it
+    // is logical AND nothing proves it is a real choice column (no parsed option set, and no
+    // `AttributeTypeName` saying Picklist/MultiSelectPicklist). Keying only off `optionSet ===
+    // undefined` dropped a genuine logical Choice whenever its option-set read failed, and the
+    // untyped warning then promised a Text column that a rebuild would never create.
+    //
+    // HONESTY NOTE on the example this rule is often justified with: every logical choice attribute
+    // found on stock tables — `address1_addresstypecode` and its five `address1_`/`address2_` twins
+    // on account, plus the equivalents on contact/systemuser/businessunit, 23 in total — is
+    // `IsCustomAttribute: false`, so the custom-only check above already drops them and they never
+    // reach this rule. No CUSTOM logical choice column was found on a live org, so the exemption is
+    // DEFENSIVE rather than demonstrated load-bearing. It is kept because dropping on "logical"
+    // alone becomes a silent column deletion the moment such a column does exist, which is the exact
+    // failure class this change exists to end.
     //
     // An ABSENT flag KEEPS the attribute, matching the `isCustom === false` rule above: "we could not
-    // look" must not be turned into a deletion.
+    // look" must not be turned into a deletion. The direction matters — `IsLogical` is absent for
+    // EVERY attribute when the read fails, so dropping on absent would empty the table's `columns[]`
+    // entirely. The residual cost is that a failed read re-enables the shadow leak, which is why the
+    // label-read warning now names that consequence explicitly.
     const isLogical = a.IsLogical !== undefined ? a.IsLogical : a.isLogical;
-    if (isLogical === true && a.optionSet === undefined) return false;
+    if (isLogical === true && a.optionSet === undefined && choiceTypeFromTypeName(a) === undefined) return false;
     // Keep only attribute types the App Spec can declare (see the map above), PLUS any attribute the
-    // option-set read matched. That second clause is what keeps MultiChoice columns: Dataverse types
-    // a MultiSelectPicklist as `Virtual`, which is not in the map, so the column used to be dropped
-    // from the spec outright. Gating on companion DATA rather than on the type name keeps every
-    // other platform `Virtual` attribute (including the `<column>name` shadows) filtered out.
+    // option-set read matched, PLUS any attribute `AttributeTypeName` proves is a choice. That last
+    // clause is what keeps a MultiChoice when the cast read failed or came back empty: its
+    // `AttributeType` is `Virtual`, so nothing else would admit it.
     const at = a.attributeType || a.AttributeType;
-    return at === undefined || SPEC_TYPE_FROM_ATTRIBUTE_TYPE[at] !== undefined || a.optionSet !== undefined;
+    return at === undefined || SPEC_TYPE_FROM_ATTRIBUTE_TYPE[at] !== undefined || a.optionSet !== undefined || choiceTypeFromTypeName(a) !== undefined;
   }).map((a) => {
     const schemaName = (a && (a.schemaName || a.SchemaName || a.logicalName || a.LogicalName)) || '';
     // The SDK projects `attributeType`, NOT `type`. Reading `a.type` yielded `undefined` on every
@@ -923,22 +990,53 @@ function entityFromMetadata(meta, logical) {
     // skips Memo/File/Image; `SDK_COLUMN_TYPE` decides what an auto form layout places).
     const at = a && (a.attributeType || a.AttributeType);
     // The option set's own type WINS over the attributeType map, because for a MultiChoice the map
-    // is wrong: Dataverse reports `Virtual` (see the cast comment in readOptionSets).
+    // is wrong: Dataverse reports `Virtual`. `readOptionSets` always stamps `type` from the CAST
+    // that returned the row — even when the options themselves were unparseable — so this covers
+    // every attribute either cast saw.
+    //
+    // `choiceTypeFromTypeName` is deliberately NOT consulted here. It is load-bearing in the two
+    // FILTER decisions below (keeping a column the casts never returned, and not mistaking a real
+    // logical Choice for a shadow), but for the TYPE it would be redundant: whenever it could speak,
+    // either `os.type` already said the same thing, or there is no option set and the column is left
+    // untyped regardless. A mutation removing it from this expression was not detectable by any
+    // test, which is the signal that it was decoration rather than logic.
     const os = (a && a.optionSet) || null;
     const mapped = (a && a.type) || (os && os.type) || SPEC_TYPE_FROM_ATTRIBUTE_TYPE[at];
     // Companion data for a Choice/MultiChoice (see TYPES_NEEDING_COMPANION_DATA). Present -> the
     // column carries its REAL type plus the `options[]`/`globalChoice` its declaration requires.
     // Absent -> it stays untyped and is named in the untyped-column warning, because emitting
     // `type: "Choice"` with neither companion produces a spec that fails its own validation.
-    const optionSet = TYPES_NEEDING_COMPANION_DATA.has(mapped) ? os : null;
-    const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) && !optionSet ? undefined : mapped;
+    //
+    // `os.options` can be absent even when `os` exists: the cast identified the column but its
+    // labels were unreadable. That is deliberately treated as "no companion data" — the column is
+    // kept (it IS a real column) but left untyped.
+    const optionSet = TYPES_NEEDING_COMPANION_DATA.has(mapped) && os && Array.isArray(os.options) ? os : null;
     // A shared set is REFERENCED, not inlined, so a rebuild binds all its columns to one option set
     // instead of minting a private copy per column. An unnamed global set (no `Name` came back) has
     // nothing to reference, so it degrades to inline options rather than emitting a dangling ref.
-    const choice = !optionSet ? {}
-      : (optionSet.isGlobal && optionSet.name
-        ? { globalChoice: optionSet.name }
-        : { options: optionSet.options.map(choiceOptionLabel) });
+    //
+    // INLINE labels are additionally screened for an AMBIGUOUS alias, and that screen is the
+    // difference between one bad column and no download at all. Option labels need not be unique
+    // across options OR languages in Dataverse, so `["Open", {1033:"Closed", 3082:"Open"}]` is legal
+    // — but "Open" then names two options, which `validateAppSpec` treats as an ERROR whenever
+    // either side is localized (the collision is invisible on the page, so it cannot be a warning).
+    // `runDownload` validates before writing and returns on failure, so emitting such a set aborted
+    // the ENTIRE app's download, and `--allow-lossy-download` does not bypass that gate. Refusing to
+    // type just this column falls back to the untyped warning that already exists for an unreadable
+    // label, which is what the download did before types were carried at all.
+    //
+    // The shared `ambiguousChoiceAliases` is reused rather than reimplemented, so this screen and
+    // the validator can never disagree about what "ambiguous" means.
+    const inlineOptions = optionSet && !(optionSet.isGlobal && optionSet.name)
+      ? optionSet.options.map(choiceOptionLabel)
+      : null;
+    const inlineIsAmbiguous = inlineOptions ? ambiguousChoiceAliases(inlineOptions).some((c) => c.hidden) : false;
+    const usableOptionSet = inlineIsAmbiguous ? null : optionSet;
+    const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) && !usableOptionSet ? undefined : mapped;
+    const choice = !usableOptionSet ? {}
+      : (usableOptionSet.isGlobal && usableOptionSet.name
+        ? { globalChoice: usableOptionSet.name }
+        : { options: inlineOptions });
     return withDescription({
       schemaName,
       // A column labelled in several languages round-trips as an LCID map; one language stays a
@@ -1052,7 +1150,7 @@ async function readEntityWithDescriptions(sdk, logical) {
     // `IsLogical` rides along for the synthetic-shadow filter in entityFromMetadata: a lookup's
     // formatted-name attribute (`<lookup>name`) reports IsCustomAttribute TRUE and AttributeType
     // String, so nothing else distinguishes it from a real Text column the author wrote.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical`);
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeTypeName`);
     if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
     if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
     const rows = res.body.value;
@@ -1060,7 +1158,7 @@ async function readEntityWithDescriptions(sdk, logical) {
     meta.attributes = (meta.attributes || []).map((a) => {
       const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
       const row = byLogical.get(key);
-      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical } : a;
+      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeTypeName: row.AttributeTypeName } : a;
     });
   } catch (err) {
     // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded
@@ -1077,13 +1175,15 @@ async function readEntityWithDescriptions(sdk, logical) {
     // downloads WITHOUT a type, and a rebuild into a FRESH environment creates it as single-line
     // Text while a rebuild into the ORIGINAL environment silently reuses the real column — an
     // asymmetry that is much harder to notice than an outright failure.
-    const byLogical = await readOptionSets(sdk, logical);
+    const { byLogical, failed } = await readOptionSets(sdk, logical);
     // Merged onto the attribute list, never replacing it: the SDK's own projection supplies
     // `attributeType`/`targets`, and the cast read returns ONLY picklist attributes.
     meta.attributes = (meta.attributes || []).map((a) => {
       const os = byLogical.get(String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase());
       return os ? { ...a, optionSet: os } : a;
     });
+    // A cast that failed is recorded WITHOUT discarding what the other one returned.
+    if (failed) meta.optionSetReadFailed = failed;
   } catch (err) {
     // Recorded, not swallowed. "This table has no Choice columns" and "the option-set read returned
     // 403" are indistinguishable from the emitted spec — both yield untyped columns — so the reason
@@ -1518,7 +1618,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // English-only spec is still a usable spec, and failing a read-only command over it would be worse.
   if (labelReadFailures.size) {
     const detail = [...labelReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
-    process.stderr.write(`WARNING: a label read failed for ${labelReadFailures.size} table(s) (${detail}). The table AND COLUMN labels for those tables fall back to ONE language, so anything labelled in several languages downloads as single-language and a rebuild would recreate it that way. Re-run the download to recover the other languages before rebuilding into a different environment.\n`);
+    process.stderr.write(`WARNING: a label read failed for ${labelReadFailures.size} table(s) (${detail}). The table AND COLUMN labels for those tables fall back to ONE language, so anything labelled in several languages downloads as single-language and a rebuild would recreate it that way. That read also carries the flags that identify a lookup's synthetic '<lookup>name' column, so those tables may additionally have captured one as a real Text column — delete any you see before a cross-environment rebuild. Re-run the download to recover both.\n`);
   }
   // #564: the option-set read is the ONLY source of a Choice/MultiChoice column's type. When it
   // fails the table is still recovered and the spec still looks complete, but every choice column on
@@ -1621,10 +1721,13 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     dashboards: async () => dashboards,
     solution: async () => solution,
     design: async () => (manifest ? manifest.design : undefined),
-    // #564: the shared option sets the downloaded columns bind to. Declared so a rebuild into a
-    // FRESH environment can create them — `createGlobalOptionSet` probes by Name and reuses, so
-    // declaring one that the target org already has is a no-op rather than a duplicate.
-    globalChoices: async () => [...globalChoiceDecls.values()],
+    // #564: the shared option sets the downloaded columns bind to. Reduced to the sets an EMITTED
+    // column actually references (and canonicalized to one casing) — `globalChoiceDecls` is gathered
+    // from RAW metadata, which includes attributes later filtered out and tables later dropped, and
+    // every declaration here becomes a `createGlobalOptionSet` write in the target environment.
+    // Declared so a rebuild into a FRESH environment can create them — `createGlobalOptionSet` probes
+    // by Name and reuses, so declaring one the target org already has is a no-op, not a duplicate.
+    globalChoices: async () => finalizeGlobalChoices(entities, globalChoiceDecls),
     // Captured on the way past so the role-restriction warning below can read it. The accessor stays
     // a function (hydrateSpec's contract) and is still called exactly once, so this adds no query.
     descriptionInventory: async () => {
@@ -1790,4 +1893,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, collectGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
