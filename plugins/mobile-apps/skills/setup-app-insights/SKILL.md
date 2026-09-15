@@ -2,7 +2,7 @@
 name: setup-app-insights
 description: Configure optional customer-owned Application Insights telemetry for a Power Apps mobile app — enable it against an existing Azure resource, change the resource, or disable it. Standalone, and invoked by /edit-app.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Skill
 model: opus
 ---
 

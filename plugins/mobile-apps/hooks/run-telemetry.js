@@ -126,12 +126,14 @@ const HANDLERS = {
   'app-insights-selection': {
     stdin: false,
     handle({ args: [selection, source, invocationCwd] }) {
-      const context = telemetry.createTelemetryContext({});
+      const context = telemetry.createTelemetryContext({}, { cwd: invocationCwd });
       if (!context) return;
       const opts = { cwd: invocationCwd };
-      // Only forward a recognized invocation source; anything else (including
-      // an absent arg) falls back to the `prompt` default in emitAppInsightsSelection.
-      if (source === 'prompt' || source === 'pretool' || source === 'checkpoint') {
+      // Only forward a source valid for this event — the /setup-app-insights
+      // skill emits app_insights_selection with `prompt` or `pretool` only.
+      // Anything else (including `checkpoint` or an absent arg) falls back to
+      // the `prompt` default in emitAppInsightsSelection.
+      if (source === 'prompt' || source === 'pretool') {
         opts.source = source;
       }
       telemetry.emitAppInsightsSelection(context, selection, opts);
