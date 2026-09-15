@@ -440,6 +440,71 @@ test('deleteStep does NOT swallow a dependency block ("referenced by N component
   );
 });
 
+// A blocked relationship delete must name what is holding it. Dataverse returns only a COUNT, which
+// is a dead end on the retained-table path (`existing: true`), where the blocker is typically a form
+// the build authored but the CURRENT spec no longer declares — so teardown cannot plan its deletion.
+function dependencyBlockSdk({ dataverse } = {}) {
+  return {
+    deleteRelationship: async () => {
+      const e = new Error('The EntityRelationship(cc5fe264-1fb1-f111-aaad-70a8a59c16bf) component cannot be deleted because it is referenced by 2 other components. For a list of referenced components, use the RetrieveDependenciesForDeleteRequest.');
+      e.statusCode = 400;
+      throw e;
+    },
+    ...(dataverse ? { dataverse } : {}),
+  };
+}
+
+test('a dependency-blocked relationship names the blocking components instead of just a count', async () => {
+  // Mirrors the live shapes: RelationshipDefinitions resolves the MetadataId, the dependency read
+  // returns componenttype 60 (SystemForm), and the form's name comes from `systemforms`.
+  const seen = [];
+  const dataverse = {
+    get: async (p) => {
+      seen.push(p);
+      if (p.startsWith('/RelationshipDefinitions')) return { status: 200, body: { value: [{ MetadataId: 'cc5fe264-1fb1-f111-aaad-70a8a59c16bf' }] } };
+      if (p.startsWith('/RetrieveDependenciesForDelete')) return { status: 200, body: { value: [{ dependentcomponenttype: 60, dependentcomponentobjectid: '5bebe418-1cbd-47c9-91b3-c5a3a31edcb2' }] } };
+      if (p.startsWith('/systemforms(')) return { status: 200, body: { name: 'Self Ref Acct Form' } };
+      return { status: 404, body: null };
+    },
+  };
+  await assert.rejects(
+    () => deleteStep(dependencyBlockSdk({ dataverse }), KIND_HANDLERS.relationship, [{ id: 'pp668_account_account', schemaName: 'pp668_account_account' }]),
+    (err) => {
+      assert.match(err.message, /referenced by 2 other components/, 'keeps the platform text so isDependencyBlocked still matches');
+      assert.match(err.message, /Still referenced by: form "Self Ref Acct Form" \(5bebe418-1cbd-47c9-91b3-c5a3a31edcb2\)/);
+      assert.match(err.message, /re-run teardown/, 'tells the operator what to do next');
+      return true;
+    }
+  );
+  assert.ok(seen.some((p) => p.includes("SchemaName eq 'pp668_account_account'")), 'resolves the relationship by schema name');
+  assert.ok(seen.some((p) => p.includes('ComponentType=10')), 'asks for EntityRelationship dependencies');
+});
+
+test('the dependency diagnostic is fail-quiet: without a raw client the platform error is unchanged', async () => {
+  // Diagnostics layered on an already-failing delete must never replace a real error with a worse
+  // one, so an SDK with no `dataverse` (older callers, unit-test doubles) rethrows verbatim.
+  await assert.rejects(
+    () => deleteStep(dependencyBlockSdk(), KIND_HANDLERS.relationship, [{ id: 'r1', schemaName: 'r1' }]),
+    (err) => {
+      assert.match(err.message, /referenced by 2 other components/);
+      assert.ok(!/Still referenced by/.test(err.message), 'no half-built diagnostic is appended');
+      return true;
+    }
+  );
+});
+
+test('the dependency diagnostic falls back to the raw error when the dependency read fails', async () => {
+  const dataverse = { get: async () => { throw new Error('metadata read unavailable'); } };
+  await assert.rejects(
+    () => deleteStep(dependencyBlockSdk({ dataverse }), KIND_HANDLERS.relationship, [{ id: 'r1', schemaName: 'r1' }]),
+    (err) => {
+      assert.match(err.message, /referenced by 2 other components/);
+      assert.ok(!/metadata read unavailable/.test(err.message), 'the diagnostic failure never masks the real one');
+      return true;
+    }
+  );
+});
+
 test('KIND_HANDLERS.form resolve is type-scoped so teardown never deletes a same-named sibling of another type', async () => {
   const queries = [];
   const sdk = {

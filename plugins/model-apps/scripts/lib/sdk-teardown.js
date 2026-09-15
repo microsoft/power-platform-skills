@@ -108,6 +108,57 @@ function isUndeletable(err) {
   return /system-defined|system managed|system-managed/.test(msg);
 }
 
+// Solution component type codes used when reporting what still references a relationship.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/dependency
+const DEPENDENT_COMPONENT_LABELS = { 1: 'table', 2: 'column', 10: 'relationship', 26: 'view', 59: 'chart', 60: 'form' };
+
+// Turn a blocked relationship delete into something an operator can act on.
+//
+// Dataverse refuses with a COUNT and no identities, e.g.:
+//   "The EntityRelationship(cc5fe264-…) component cannot be deleted because it is referenced by 2
+//    other components. For a list of referenced components, use the RetrieveDependenciesForDeleteRequest."
+// That is a dead end for anyone who now has to find those components by hand, so take the platform's
+// own advice and resolve them. LIVE-MEASURED on a self-referencing 1:N left on a RETAINED
+// (`existing: true`) table: the blocker was a single componenttype 60 (SystemForm) row — the main
+// form the build authored, which this teardown could not plan because the spec no longer declares it.
+//
+// Best-effort and fail-quiet by design: this is diagnostics layered on top of a failure that is
+// already being reported, so any problem here returns null and the caller rethrows the platform's
+// original error unchanged. A diagnostic must never replace a real error with a worse one.
+async function describeBlockingDependencies(sdk, schemaName) {
+  const raw = sdk && sdk.dataverse;
+  if (!raw || typeof raw.get !== 'function') return null;
+  try {
+    const lit = String(schemaName).replace(/'/g, "''");
+    const rel = await raw.get(`/RelationshipDefinitions?$select=MetadataId&$filter=SchemaName eq '${lit}'`);
+    const metadataId = rel && rel.body && Array.isArray(rel.body.value) && rel.body.value[0] && rel.body.value[0].MetadataId;
+    if (!metadataId) return null;
+    // ComponentType 10 = EntityRelationship, matching the component named in the platform's message.
+    const deps = await raw.get(`/RetrieveDependenciesForDelete(ObjectId=${metadataId},ComponentType=10)`);
+    const rows = (deps && deps.body && Array.isArray(deps.body.value)) ? deps.body.value : [];
+    const parts = [];
+    for (const r of rows) {
+      const type = Number(r && r.dependentcomponenttype);
+      const id = r && r.dependentcomponentobjectid;
+      if (!id) continue;
+      const label = DEPENDENT_COMPONENT_LABELS[type] || `component type ${type}`;
+      // Only forms are name-resolved: they are the blocker this path actually hits, and a name is
+      // what makes the message actionable ("Self Ref Acct Form", not a bare GUID).
+      let name = null;
+      if (type === 60) {
+        try {
+          const f = await raw.get(`/systemforms(${id})?$select=name`);
+          name = (f && f.body && f.body.name) || null;
+        } catch { /* a name is a nicety — fall back to the id */ }
+      }
+      parts.push(name ? `${label} "${name}" (${id})` : `${label} ${id}`);
+    }
+    return parts.length ? parts.join(', ') : null;
+  } catch {
+    return null;
+  }
+}
+
 // Before deleting a MAIN form the build promoted to the entity default (Gap 2), restore a stock
 // main form as the active default — Dataverse refuses to delete the default form and refuses to
 // leave a table with zero active main forms. Reactivates any deactivated stock forms and re-defaults
@@ -585,7 +636,26 @@ const KIND_HANDLERS = {
     async resolve(sdk, target) {
       return [{ id: target.schemaName, schemaName: target.schemaName }];
     },
-    del: (sdk, item) => sdk.deleteRelationship(item.schemaName),
+    async del(sdk, item) {
+      try {
+        await sdk.deleteRelationship(item.schemaName);
+      } catch (err) {
+        // A dependency block here is a genuine leftover (this handler does NOT opt into
+        // tolerateDependencyBlock), so it still fails the step — but it fails with the identities
+        // of whatever is holding the relationship instead of just a count. The enriched message
+        // keeps the platform's original text as its prefix so isDependencyBlocked still matches it.
+        if (!isDependencyBlocked(err)) throw err;
+        const blockers = await describeBlockingDependencies(sdk, item.schemaName);
+        if (!blockers) throw err;
+        const e = new Error(
+          `${err.message} Still referenced by: ${blockers}. `
+          + 'Delete those components (or remove the lookup from them) and re-run teardown — this relationship '
+          + 'and its lookup column are still in the environment.'
+        );
+        e.cause = err;
+        throw e;
+      }
+    },
     tolerateNotFound: true, // a relationship already removed (e.g. by a prior table delete) is "gone"
   },
   // Gap 6: the build adds parent lookups to the built-in Active/Inactive default views, which can't be
@@ -834,11 +904,22 @@ function planTeardown(spec) {
     // completely clean — a cry-wolf failure on the one operation whose report must be trustworthy.
     // Self-referencing hierarchies became a mainstream shape once sample data could seed them (#544).
     //
-    // DEFERRING rather than skipping is what keeps it safe. If the table was deleted, the delete
-    // already cascaded this away and the step resolves to "not found", which this kind already
-    // tolerates (`tolerateNotFound: true`). If the table was RETAINED — `existing: true`, or one
-    // live discovery finds is not custom — the delete still runs, so nothing leaks. The spec alone
-    // cannot tell those two cases apart, which is why this is an ordering change, not a skip.
+    // DEFERRING rather than skipping is what keeps it safe for the table this build CREATED. If the
+    // table was deleted, the delete already cascaded this away and the step resolves to "not found",
+    // which this kind already tolerates (`tolerateNotFound: true`).
+    //
+    // If the table is RETAINED — `existing: true`, or one live discovery finds is not custom — the
+    // delete still RUNS, but it is not guaranteed to SUCCEED, and the spec alone cannot tell the two
+    // cases apart, which is why this is an ordering change and not a skip. Gap 6 above clears the
+    // lookup from the default views, but a form is a separate dependency and teardown only plans the
+    // forms the spec declares. LIVE-MEASURED: a retained `account` whose self-lookup was still on a
+    // main form the build authored but the CURRENT spec no longer lists produced
+    //   ✗ relationship pp668_account_account — HTTP 400 … referenced by 2 other components
+    // and left the relationship and its lookup behind. That failure is now reported with the
+    // identity of each blocking component (see describeBlockingDependencies) rather than a bare
+    // count, because the remaining cleanup is the operator's: teardown deliberately does NOT delete
+    // forms it cannot prove it authored — stripping a lookup out of somebody's main form is a worse
+    // outcome than leaving a lookup on a table they already own.
     if (r.type === 'OneToMany' && String(r.referenced || '').toLowerCase() === String(r.referencing || '').toLowerCase()) {
       selfRefRelSteps.push(step);
       continue;
