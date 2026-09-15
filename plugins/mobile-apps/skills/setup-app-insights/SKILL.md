@@ -111,7 +111,19 @@ az resource list \
 
 Branch on the result:
 
-- **One or more resources returned:** use `AskUserQuestion` to let the user select one. Retrieve its connection string without printing it:
+- **One or more resources returned:** use `AskUserQuestion` to let the user select one. Before configuring it, confirm the selected component is **workspace-based** — `az resource list` returns every `Microsoft.Insights/components`, including classic components, which are not compliant with this skill's contract. Read `properties.WorkspaceResourceId` from the selected resource:
+
+  ```bash
+  WORKSPACE_RESOURCE_ID=$(
+    az resource show \
+      --ids "<selected-resource-id>" \
+      --api-version 2020-02-02 \
+      --query properties.WorkspaceResourceId \
+      -o tsv
+  )
+  ```
+
+  If `WORKSPACE_RESOURCE_ID` is empty, the resource is a classic (non-workspace-based) component: do **not** configure it. Explain that only a workspace-based Application Insights resource is supported, and let the user select a different resource or use the admin handoff below. Otherwise retrieve its connection string without printing it:
 
   ```bash
   APP_INSIGHTS_CONNECTION_STRING=$(
