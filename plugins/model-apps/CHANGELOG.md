@@ -27,6 +27,22 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A download reconstructs `relationships[]`** ([#567]). The block was absent entirely, and — unlike
+  forms, views, charts, business rules and global choices — nothing said so, so a downloaded spec
+  looked complete while a rebuild into a fresh environment produced tables with no lookups and no
+  hierarchy, reporting success. 1:N and N:N relationships are now read from live metadata, carrying
+  the lookup's deployed casing and label. Relationships that App Spec **cannot** express are named
+  with a reason instead of vanishing: a **polymorphic** lookup (one column targeting several tables
+  — `relationships[]` declares exactly one parent per lookup), a parent that is a custom table the
+  app does not include, and an N:N whose partner table is outside the app. A bridge to a standard
+  table (`systemuser`, `account`) is kept, since a rebuild target always has one.
+- **A downloaded spec no longer fails its own lint** ([#572]). A downloaded dashboard carries
+  *ID-passthrough* tiles — the deployed view/chart ids rather than names, because those artifacts
+  already exist. `validateAppSpec` and the build both accept that form; the lint did not, so
+  `lint-app-spec.js` rejected a freshly downloaded spec with six errors reporting a chart literally
+  named `'undefined'`. The lint now understands id-passthrough tiles, still validates name-based
+  ones, and reports a missing reference as missing instead of interpolating `undefined` into the
+  message.
 - **A download round-trips Choice and MultiChoice columns** ([#564]). They were emitted with no
   `type`, so rebuilding into a **fresh** environment created single-line Text while Memo, Money and
   DateTime survived — an asymmetry harder to notice than an outright failure. Option sets are now
@@ -90,6 +106,8 @@ downloads that round-trip Choice columns.
 [#559]: https://github.com/microsoft/power-platform-skills/issues/559
 [#564]: https://github.com/microsoft/power-platform-skills/issues/564
 [#565]: https://github.com/microsoft/power-platform-skills/issues/565
+[#567]: https://github.com/microsoft/power-platform-skills/issues/567
+[#572]: https://github.com/microsoft/power-platform-skills/issues/572
 
 ## [2.7.1]
 

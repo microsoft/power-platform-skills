@@ -480,6 +480,19 @@ run the lint, so an unlinted spec hits the failure at build time instead).
   the junction. Sample rows then bind **both** parents via `$parents` (see sampleData). This is the
   recommended pattern for "Technician ↔ Work Order with a Role".
 
+**What a download reconstructs.** `download-model-app.js` rebuilds `relationships[]` from live
+metadata, keeping the lookup's deployed casing (`new_CustomerId`, not `new_customerid`) and its
+label. It emits an explicit `schemaName` only when the deployed name differs from the generated
+default, so a rebuild into the **same** environment matches the existing relationship instead of
+creating a second one beside it. Three cases it **cannot** express are reported by name and reason
+rather than silently dropped:
+- a **polymorphic** lookup — one column targeting several tables (Dataverse surfaces it as several
+  relationships sharing one lookup attribute), where `relationships[]` declares exactly one
+  `referenced` table per lookup;
+- a parent that is a **custom table the app does not include**, which a rebuild target would not
+  have (a bridge to a *standard* table like `systemuser`/`account` is kept — every org has one);
+- an **N:N whose partner table is outside the app**.
+
 ## views[]
 ```jsonc
 { "entity": "new_ticket", "name": "Active Tickets", "columns": ["new_subject","new_priority"],
