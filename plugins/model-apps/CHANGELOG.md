@@ -31,6 +31,18 @@ A dry run that says what an apply would actually do, and sample data that can ex
 
 ### Fixed
 
+- **A multi-line page prompt is no longer flattened on upload** ([#565]). `pac model genpage upload`
+  was given the prompt and agent message **inline**, and both then hit the newline-collapsing guard
+  that stops a stray newline truncating the Windows command line. A downloaded prompt is a
+  multi-line conversation transcript (`Conversation with N prompts:` …), so every line break was
+  silently replaced with a space on an **edit-rebuild** — the round trip degraded the text a little
+  more each time. They now go through `--prompt-file` / `--agent-message-file`, which pac provides
+  for exactly this; the temp files are written once per upload and removed on every exit path,
+  including the retry-exhaustion and mid-loop throws. The collapsing guard stays for the remaining
+  inline args (a page `--name` can still truncate a command line). `upload()` also accepts an
+  optional `compiledCodeFile` (`--compiled-code-file`); omitted, pac auto-transpiles as before.
+  Live-verified against a real environment: a prompt carrying `\r\n`, a bare `\n`, quotes, `%` and
+  non-ASCII round-tripped byte-for-byte through upload → download.
 - **Choice and MultiChoice columns keep their type through a download** ([#564]). The download
   emitted them with **no `type`**, because a `Choice` declaration needs a companion `options[]` or
   `globalChoice` that nothing read. Rebuilding into the *original* environment reused the real
@@ -111,6 +123,7 @@ A dry run that says what an apply would actually do, and sample data that can ex
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544
 [#559]: https://github.com/microsoft/power-platform-skills/issues/559
 [#564]: https://github.com/microsoft/power-platform-skills/issues/564
+[#565]: https://github.com/microsoft/power-platform-skills/issues/565
 
 ## [2.7.1]
 
