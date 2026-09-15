@@ -249,7 +249,7 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
   // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
   // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
   assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
   assert.strictEqual(status.description, 'State shown to dispatchers.');
@@ -1893,4 +1893,65 @@ test('#564 the CAST type outranks the attributeType map (defensive precedence)',
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_item'), 'pp_item');
   assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_odd').type, 'MultiChoice',
     'the map said Choice and the multi-select cast said MultiChoice — the cast must win');
+});
+test('#564 a lookup name SHADOW is filtered out, but a logical CHOICE column is kept', async () => {
+  // LIVE-MEASURED. Creating a lookup `pp_parentorgid` also creates a synthetic formatted-name
+  // attribute `pp_parentorgidname`:
+  //   { AttributeType: "String", AttributeTypeName: "StringType", IsCustomAttribute: true, IsLogical: true }
+  // It reports IsCustomAttribute TRUE, so the custom-only filter let it through, and its String type
+  // maps cleanly to Text — so a downloaded spec declared a REAL Text column named after a lookup's
+  // shadow. Measured consequence on a fresh-environment rebuild: the build happily created
+  // `pp563_org2.pp563_parentorgidname (Text)`, an invented column that also collides with the name
+  // the real lookup's shadow needs. It is IsLogical (not stored on this table), which is what makes
+  // it distinguishable.
+  //
+  // The rule is deliberately "logical AND no option set", NOT plain "logical": on `account`, 6 REAL
+  // choice columns (address1_addresstypecode, address1_freighttermscode, address1_shippingmethodcode
+  // and their address2_ twins) are themselves IsLogical, because they live on the address entity and
+  // surface logically here. Dropping every logical attribute would delete real Choice columns from
+  // the spec — reintroducing exactly the silent column-loss this change exists to end.
+  const sdk = {
+    fetchEntityMetadata: async () => ({
+      logicalName: 'pp_org', schemaName: 'pp_org', displayName: 'Org', primaryNameAttribute: 'pp_name',
+      attributes: [
+        { logicalName: 'pp_parentorgidname', displayName: 'Parent Org Name', attributeType: 'String', isCustomAttribute: true },
+        { logicalName: 'pp_real', displayName: 'Real', attributeType: 'String', isCustomAttribute: true },
+        { logicalName: 'pp_addrtype', displayName: 'Address Type', attributeType: 'Picklist', isCustomAttribute: true },
+      ],
+    }),
+    dataverse: {
+      get: async (url) => {
+        if (/MultiSelectPicklistAttributeMetadata/.test(url)) return { status: 200, headers: {}, body: { value: [] } };
+        if (/PicklistAttributeMetadata/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [picklistRow('pp_addrtype', { name: 'pp_addrtype_set', isGlobal: false, options: [[1, 'Bill To'], [2, 'Ship To']] })] } };
+        }
+        if (/\/Attributes\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'pp_parentorgidname', IsLogical: true },
+            { LogicalName: 'pp_real', IsLogical: false },
+            // A REAL choice column that is nonetheless logical — must survive.
+            { LogicalName: 'pp_addrtype', IsLogical: true },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_org'), 'pp_org');
+  const names = e.columns.map((c) => c.schemaName);
+  assert.ok(!names.includes('pp_parentorgidname'), 'the lookup name shadow must not be emitted as a real Text column');
+  assert.ok(names.includes('pp_real'), 'a normal custom column must survive');
+  assert.ok(names.includes('pp_addrtype'), 'a LOGICAL column that carries an option set is a real Choice and must survive');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_addrtype').type, 'Choice');
+});
+
+test('#564 an attribute whose IsLogical could not be read is KEPT, not dropped', async () => {
+  // Fail-safe: an absent flag means "we could not look", and dropping a real column on that basis is
+  // the more destructive error. Same reasoning as the existing isCustomAttribute handling, which
+  // drops only on an explicit `false`.
+  const sdk = sdkWithOptionSets({
+    attributes: [{ logicalName: 'pp_real', displayName: 'Real', attributeType: 'String', isCustomAttribute: true }],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_org'), 'pp_org');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['pp_real']);
 });

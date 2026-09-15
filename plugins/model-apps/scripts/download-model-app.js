@@ -891,6 +891,24 @@ function entityFromMetadata(meta, logical) {
     // sdk-build.js `defaultViewColumns`: the set only ever contains DECLARED spec columns.
     const isCustom = a.isCustomAttribute !== undefined ? a.isCustomAttribute : a.IsCustomAttribute;
     if (isCustom === false) return false;
+    // SYNTHETIC SHADOW attributes. Creating a lookup also creates a formatted-name attribute
+    // (`<lookup>name`) which LIVE-MEASURED reports `AttributeType: "String"` AND
+    // `IsCustomAttribute: true` — so neither the type map nor the custom-only filter above excludes
+    // it, and a downloaded spec declared a REAL Text column named after a lookup's shadow. Measured
+    // consequence: a fresh-environment rebuild created `<table>.<lookup>name (Text)`, an invented
+    // column that also collides with the name the real lookup's own shadow needs. `IsLogical` (the
+    // value is not stored on this table) is the distinguishing fact.
+    //
+    // Gated on "logical AND no option set", NOT on plain "logical". On `account`, 6 REAL choice
+    // columns (address1_addresstypecode, address1_freighttermscode, address1_shippingmethodcode and
+    // their address2_ twins) are themselves IsLogical because they surface from the address entity —
+    // dropping every logical attribute would delete real Choice columns from the spec, which is the
+    // same silent column-loss this change exists to end.
+    //
+    // An ABSENT flag KEEPS the attribute, matching the `isCustom === false` rule above: "we could not
+    // look" must not be turned into a deletion.
+    const isLogical = a.IsLogical !== undefined ? a.IsLogical : a.isLogical;
+    if (isLogical === true && a.optionSet === undefined) return false;
     // Keep only attribute types the App Spec can declare (see the map above), PLUS any attribute the
     // option-set read matched. That second clause is what keeps MultiChoice columns: Dataverse types
     // a MultiSelectPicklist as `Virtual`, which is not in the map, so the column used to be dropped
@@ -1031,7 +1049,10 @@ async function readEntityWithDescriptions(sdk, logical) {
     // as "column descriptions are best-effort" was right when descriptions were all it fetched, and
     // became wrong the moment labels rode along — a 403 here returns a spec whose columns are
     // single-language, with nothing saying so. Same recording, same reason.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName`);
+    // `IsLogical` rides along for the synthetic-shadow filter in entityFromMetadata: a lookup's
+    // formatted-name attribute (`<lookup>name`) reports IsCustomAttribute TRUE and AttributeType
+    // String, so nothing else distinguishes it from a real Text column the author wrote.
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical`);
     if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
     if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
     const rows = res.body.value;
@@ -1039,7 +1060,7 @@ async function readEntityWithDescriptions(sdk, logical) {
     meta.attributes = (meta.attributes || []).map((a) => {
       const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
       const row = byLogical.get(key);
-      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName } : a;
+      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical } : a;
     });
   } catch (err) {
     // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded

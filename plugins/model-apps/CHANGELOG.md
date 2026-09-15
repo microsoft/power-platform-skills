@@ -54,6 +54,17 @@ A dry run that says what an apply would actually do, and sample data that can ex
   spec would otherwise fail its own validation — but now names the table and the reason. Note the
   App Spec cannot express option *values*: labels and order round-trip, and a fresh rebuild re-bases
   the underlying integers to `100000000 + index`.
+- **A lookup's synthetic name column is no longer downloaded as a real Text column** (found while
+  live-verifying [#564]). Creating a lookup also creates a formatted-name attribute
+  (`<lookup>name`) which reports `AttributeType: "String"` **and** `IsCustomAttribute: true`, so
+  neither the type map nor the custom-only filter excluded it — a downloaded spec declared a real
+  Text column named after a lookup's shadow. Measured: rebuilding that spec into a fresh
+  environment **succeeded** and silently created the invented column, which also collides with the
+  name the real lookup's own shadow needs. `IsLogical` now excludes them. The rule is deliberately
+  *logical **and** carrying no option set*, because six genuine `account` choice columns
+  (`address1_addresstypecode` and friends) are themselves logical — dropping every logical
+  attribute would delete real columns. An unreadable flag keeps the column, as for
+  `IsCustomAttribute`.
 - **A MultiChoice column is no longer dropped from a download entirely** (found while fixing
   [#564]). Dataverse reports a MultiSelectPicklist attribute as `AttributeType: "Virtual"` — only
   `AttributeTypeName` says `MultiSelectPicklistType` — and the SDK projection carries just
