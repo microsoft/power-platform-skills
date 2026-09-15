@@ -31,6 +31,25 @@ A dry run that says what an apply would actually do, and sample data that can ex
 
 ### Fixed
 
+- **Choice and MultiChoice columns keep their type through a download** ([#564]). The download
+  emitted them with **no `type`**, because a `Choice` declaration needs a companion `options[]` or
+  `globalChoice` that nothing read. Rebuilding into the *original* environment reused the real
+  column and hid it; rebuilding into a **fresh** one created single-line **Text**, while Memo, Money
+  and DateTime round-tripped — an asymmetry much harder to notice than an outright failure. Option
+  sets are now read per table: a **local** set becomes inline `options[]` (localizations preserved),
+  a **shared** one becomes a `globalChoice` reference plus a `globalChoices[]` declaration so a
+  fresh-environment rebuild can create it. A read that fails still leaves the column untyped — the
+  spec would otherwise fail its own validation — but now names the table and the reason. Note the
+  App Spec cannot express option *values*: labels and order round-trip, and a fresh rebuild re-bases
+  the underlying integers to `100000000 + index`.
+- **A MultiChoice column is no longer dropped from a download entirely** (found while fixing
+  [#564]). Dataverse reports a MultiSelectPicklist attribute as `AttributeType: "Virtual"` — only
+  `AttributeTypeName` says `MultiSelectPicklistType` — and the SDK projection carries just
+  `attributeType`. So the column looked like platform plumbing, exactly like the synthetic
+  `<column>name` shadows it sits beside, and was filtered out of `columns[]`: the spec did not
+  merely lose the type, it lost the **column**, and a rebuild never created it. Membership in the
+  multi-select metadata cast is now the discriminator, so the real column survives and the shadows
+  stay filtered.
 - **`/genpage` Phase 1 is reachable again** ([#541]). It was specified to run its whole interactive
   flow — prerequisites, auth, the "create new / edit existing" question and plan-mode approval —
   **inside** the `genpage-planner` `Task` subagent, while the plugin's own `AGENTS.md` documented
@@ -91,6 +110,7 @@ A dry run that says what an apply would actually do, and sample data that can ex
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544
 [#559]: https://github.com/microsoft/power-platform-skills/issues/559
+[#564]: https://github.com/microsoft/power-platform-skills/issues/564
 
 ## [2.7.1]
 

@@ -120,6 +120,10 @@ async function hydrateSpec(read) {
   void prefixResolved;
   // `design` is threaded through from the page manifest (§7.3) when present; undefined for legacy apps.
   const design = read.design ? await read.design() : undefined;
+  // #564: shared option sets bound by a downloaded Choice/MultiChoice column. Emitted only when the
+  // app actually binds one — an empty `globalChoices: []` on every other download would read as a
+  // positive claim that the app uses no shared choices, which this download cannot substantiate.
+  const globalChoices = read.globalChoices ? ((await read.globalChoices()) || []) : [];
   const descriptionInventory = read.descriptionInventory ? sanitizeDescriptionInventory(await read.descriptionInventory()) : undefined;
   // When downloaded pages carry stable keys (assigned by assignPageKeys), emit the v2 shape;
   // legacy callers without keys fall back to the name-based shape for back-compat.
@@ -206,6 +210,7 @@ async function hydrateSpec(read) {
       ...(typeof app.headerNavigationRefresh === 'boolean' ? { headerNavigationRefresh: app.headerNavigationRefresh } : {}),
     },
     entities,
+    ...(globalChoices.length ? { globalChoices } : {}),
     webResources,
     views: [],
     // NOT reconstructed (documented limitation): views, charts, forms, and commands. VIEWS were
