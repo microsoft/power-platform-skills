@@ -64,6 +64,11 @@ downloads that round-trip Choice columns.
 
 ### Changed
 
+- **`/app-builder` is GA.** The preview notice is gone: the App Spec shape, the CLI flags and the
+  build phases are now treated as a stable contract rather than one that may change between
+  versions. The guidance that outlived the notice stays — review the dry-run plan before approving,
+  and use `teardown-model-app.js --apply` to clean up probes. `--changed-only` (partial apply) is
+  the one piece still experimental, and remains off by default.
 - **Connector authoring is GA and on by default.** SharePoint / weather / Office 365 / SQL /
   custom-REST binding and ALM packaging of connection references work without opting in. The
   `connectors` flag is **flipped to `true` and kept for one release as a rollback switch** —

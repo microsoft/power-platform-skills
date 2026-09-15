@@ -147,6 +147,69 @@ is actually bound to that connection (its `connectionId` matches) — prefer tho
 Offer ready-to-bind choices first in a `needs_input` request, showing the
 connectionreference logical name, connector id, and connection display name.
 
+After selecting any existing connection — before branching into tabular versus
+REST/action discovery — derive `connectorName` from the final path segment of
+its full `connectorId`. PAC metadata commands use `connectorName`; binding files
+retain the full `connectorId`.
+
+### No suitable connection exists — set one up
+
+When the requested connector has no usable connection, do not stop at "none
+found" and do not substitute an unrelated connector silently. Once the exact
+connector id is known from discovery or an orchestrator-approved choice, derive
+its **connector name** from the final path segment (`shared_office365users` from
+`/providers/Microsoft.PowerApps/apis/shared_office365users`) and attempt setup:
+
+```powershell
+# Read Environment ID and the active PAC username; do not infer either.
+pac org who
+pac auth list
+node --version
+
+npx --yes --package @microsoft/power-apps-cli@0.15.3 power-apps auth-status `
+  --cloud "<POWER_APPS_CLOUD>" --environment-id "<ENVIRONMENT_ID>" --json
+npx --yes --package @microsoft/power-apps-cli@0.15.3 power-apps auth-switch `
+  --cloud "<POWER_APPS_CLOUD>" --account "<HOME_ACCOUNT_ID>" `
+  --environment-id "<ENVIRONMENT_ID>" --non-interactive --json
+npx --yes --package @microsoft/power-apps-cli@0.15.3 power-apps create-connection `
+  --cloud "<POWER_APPS_CLOUD>" --api-id "<connectorName>" `
+  --environment-id "<ENVIRONMENT_ID>" --non-interactive --json
+```
+
+Connection creation is allowed here because mode and environment were resolved
+before this agent was dispatched. Before running `auth-switch` or `create-connection`,
+normalize the `pac org who` **Org URL** and `<ENV_URL>` (lowercase, remove one
+trailing slash) and require an exact match. Derive `<ENVIRONMENT_ID>` and
+`<PAC_USER>` only from that verified active profile. If the URLs mismatch,
+return `needs_input` describing both URLs; do not mutate either environment.
+Map the verified PAC profile's cloud explicitly:
+`Public → public`, `UsGov → usgov`, `UsGovHigh → usgovhigh`,
+`UsGovDod → usgovdod`, and `China → china`. Use the mapped value as
+`<POWER_APPS_CLOUD>` on every Power Apps CLI command. An unknown or ambiguous
+cloud (including an internal/test cloud with no documented mapping) must return
+`needs_input` rather than defaulting to public.
+The optional `@microsoft/power-apps-cli@0.15.3` setup path requires **Node 22+**;
+parse the `node --version` major and return `needs_input` with the Maker URL
+instead of invoking it on an older runtime.
+
+Inspect `auth-status --json` and find case-insensitive username matches for
+`<PAC_USER>`. Require **exactly one** cached match; zero or multiple matches are
+missing/ambiguous and must return `needs_input`. Use that row's tenant-specific
+`homeAccountId` as `<HOME_ACCOUNT_ID>` for `auth-switch`, then verify the
+command's returned active account has the same `homeAccountId` before creating
+the connection. A headless worker must **never run `power-apps login`** and must never set
+`POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true`; both can launch a browser. It is
+otherwise still fail-closed:
+
+- If the SSO-capable connection succeeds, capture the returned `connectionId`,
+  rerun `list-connections.js`, then continue with connection-reference setup.
+- If `create-connection` reports that login, consent, or browser interaction is
+  required, return a `needs_input` request with the exact Maker connections
+  URL (`https://make.powerapps.com/environments/<ENVIRONMENT_ID>/connections`)
+  and the connector name. Do not claim setup succeeded.
+- Never invent a connector API id. If discovery and the supplied intent do not
+  establish one exactly, return `needs_input` before running `create-connection`.
+
 If the maker chooses a connection that has **no** connection reference, do not
 invent a logical name — create one:
 
@@ -168,15 +231,18 @@ node "${PLUGIN_ROOT}/scripts/create-connection-reference.js" "<ENV_URL>" "<logic
 
 - Pre-flight that `pac model genpage --help` lists `list-connector-operations`
   and `get-connector-schema`.
+- PAC metadata commands require the already-derived **connector name**, even
+  though the flag is named `--connector-id`. Keep the full connectorId value
+  (`/providers/Microsoft.PowerApps/apis/...`) for `connectors.json`.
 - Enumerate operations:
   ```powershell
-  pac model genpage list-connector-operations --connector-id <apiId> --connection-id <connId>
+  pac model genpage list-connector-operations --connector-id <connectorName> --connection-id <connId>
   ```
 - Let the maker pick via a `needs_input` request when the requirement doesn't imply
   exactly one operation.
 - Discover the operation schema:
   ```powershell
-  pac model genpage get-connector-schema --connector-id <apiId> --connection-id <connId> --operation <op>
+  pac model genpage get-connector-schema --connector-id <connectorName> --connection-id <connId> --operation <op>
   ```
 - Parse `{ operation, parameters:[{ name, required }], response:{...} }` and
   record `Operations`, `Parameters`, and `Response`.
@@ -190,7 +256,7 @@ The binding tells the runtime *where* to fetch; `Fields` tells the page-builder
 connection id, dataset, and table:
 
 ```powershell
-pac model genpage get-connector-schema --connector-id <apiId> --connection-id <connId> --dataset <ds> --table <tableId>
+pac model genpage get-connector-schema --connector-id <connectorName> --connection-id <connId> --dataset <ds> --table <tableId>
 ```
 
 Parse `{ table, columns:[{ name, type, required }] }` and record each column in

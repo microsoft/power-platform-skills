@@ -182,7 +182,7 @@ the log still shows what decided the run:
 | --- | --- | --- |
 | Create new / edit existing (step 2) | `AskUserQuestion` | Whatever `$ARGUMENTS` states. With nothing stated, **create new** — the only additive choice. |
 | An agent returns `needs_input` (step 4) | Ask, then re-invoke | Re-invoke with the option the agent marked `"default": true`. If it marked none, **halt**. |
-| Plan approval (step 5) | `EnterPlanMode` / `ExitPlanMode` | Treat the plan as approved and continue to step 6, which still writes `genpage-plan.md` through the planner. The plan is recorded, just not presented. |
+| Plan approval (step 5) | `EnterPlanMode` / `ExitPlanMode` | Treat the plan as approved and continue to step 6, which still writes `genpage-plan.md` through the planner. The plan is recorded, just not presented. Log this gate as `Unattended default: plan approval → approved (<reason>)` — the evaluator looks for the plan/approval wording and `approved` on that one line, so a paraphrase such as `→ auto-approve` is read as a missing approval record. |
 | Browser verification (Phase 7) | Offer it | Skip it. |
 
 **Suppressing a prompt never authorizes destructive work.** Editing an existing
@@ -214,6 +214,13 @@ missing and stop, so the run can be re-driven with the decision supplied.
    the same way (same mode, resolved environment URL, plus the returned `pageTables`),
    then re-run the planner with the builder's `## Custom API Bindings` contract and
    `actions.json` status (see 1b).
+   If `genpage-connector-builder` or `genpage-customapi-builder` instead reports
+   that its declared file or process-execution tools are unavailable, do **not**
+   retry the same worker. Record the worker failure, read that worker's agent
+   file, and run the discovery-builder workflow inline in this orchestrator
+   using the same resolved mode, environment, intent, and safety gates. This
+   inline fallback is recovery from task-runtime tool exposure only; it does not
+   bypass connector/custom-API feature gates or user decisions.
 4. If any agent returns `{ "action": "needs_input", … }`, ask its questions here
    with `AskUserQuestion`, record them in `workflow-log.md`, and re-invoke that
    agent with the answers. Agents never prompt; they request.
@@ -230,6 +237,11 @@ missing and stop, so the run can be re-driven with the decision supplied.
    one they approved. Same rule as Phase 2b. Do not write the file yourself — its
    section headings are a machine-readable contract that every downstream phase
    parses by name.
+
+   If `genpage-planner` reports that the file tools needed to write the approved
+   `genpage-plan.md` are unavailable, do not retry it and do not write the plan
+   inline. **Halt** with the approved plan body and failure recorded. Planner
+   authorship is the provenance gate for every downstream phase.
 7. Confirm `<working-dir>/genpage-plan.md` exists before starting Phase 2.
    Reaching Phase 2 without it means building from a plan nobody approved, and
    Phase 2 reads that file as its first action.
@@ -323,12 +335,19 @@ Example:
 > Plugin root: ${PLUGIN_ROOT}
 >
 > Connector discovery is orchestrator-owned. Do **not** invoke
-> `genpage-connector-builder` from inside the planner. Use this as the entire
-> `## Connector Bindings` section of the plan:
+> `genpage-connector-builder` from inside the planner. The `----- BEGIN/END
+> CONNECTOR BINDINGS -----` lines below are delimiters for **this prompt only**:
+> they mark where the contract starts and ends. Do **not** copy them into
+> `genpage-plan.md`. The `## Connector Bindings` section of the plan is exactly
+> the text between them:
 >
+> ----- BEGIN CONNECTOR BINDINGS -----
 > [paste connector-bindings.md body, or `No connector bindings.`]
+> ----- END CONNECTOR BINDINGS -----
 >
-> Connector upload file: [absolute path to connectors.json, or `none — omit --connectors`]
+> Connector upload file (orchestration metadata; not part of the
+> `## Connector Bindings` section): [absolute path to connectors.json, or
+> `none — omit --connectors`]
 >
 > If your clarification questions reveal connector-backed data that is not covered
 > by the connector contract above, stop and return
@@ -338,12 +357,19 @@ Example:
 > are required — discovery is dispatched against exactly those.
 >
 > Custom API discovery is orchestrator-owned too. Do **not** invoke
-> `genpage-customapi-builder` from inside the planner. Use this as the entire
-> `## Custom API Bindings` section of the plan:
+> `genpage-customapi-builder` from inside the planner. The `----- BEGIN/END
+> CUSTOM API BINDINGS -----` lines below are delimiters for **this prompt only**:
+> they mark where the contract starts and ends. Do **not** copy them into
+> `genpage-plan.md`. The `## Custom API Bindings` section of the plan is exactly
+> the text between them:
 >
+> ----- BEGIN CUSTOM API BINDINGS -----
 > [paste custom-api-bindings.md body, or `No custom API bindings.`]
+> ----- END CUSTOM API BINDINGS -----
 >
-> Custom API upload file: [absolute path to actions.json, or `none — omit --actions`]
+> Custom API upload file (orchestration metadata; not part of the
+> `## Custom API Bindings` section): [absolute path to actions.json, or
+> `none — omit --actions`]
 >
 > If your clarification questions reveal a server-side Custom API (Action/Function)
 > not covered by the Custom API contract above, stop and return
@@ -632,7 +658,11 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
-9. Proceed to Phase 6
+9. Grep the generated file with `['"]?borderWidth['"]?\s*:`. Griffel rejects
+   that shorthand only at runtime; the regex catches unquoted, quoted, and
+   whitespace-separated property syntax. Replace every match with the four
+   explicit border-side widths before deployment.
+10. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.
@@ -686,6 +716,13 @@ For each page, pass a prompt that includes:
 > result when done.
 
 Wait for all page-builder tasks to complete before proceeding.
+
+After the parallel workers return, confirm every target file exists. If a worker
+reported missing declared file/process tools or produced no file, do not
+re-dispatch that worker. Run the Phase 5b page-builder workflow inline for only
+the failed page, preserving the same plan and dispatch inputs. Then Grep every
+generated page with `['"]?borderWidth['"]?\s*:` and replace the unsupported
+Griffel shorthand before Phase 6.
 
 ### Phase 6: Deploy
 

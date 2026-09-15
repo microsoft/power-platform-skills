@@ -87,6 +87,95 @@ test('the connectors rollback gate is documented where the scripts enforce it', 
   assert.match(skill, /\bdisabled\b/, 'Phase 4.5 must define the disabled path');
 });
 
+test('connector metadata discovery uses the PAC connector name, not the full API resource path', () => {
+  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'), 'utf8');
+  assert.match(
+    builder,
+    /terminal segment|final path segment/i,
+    'connector-builder must explain how to derive the short PAC connector name from connectorId',
+  );
+  assert.match(
+    builder,
+    /--connector-id <connectorName>/,
+    'PAC metadata commands must receive the short connector name',
+  );
+  assert.match(
+    builder,
+    /connectors\.json[\s\S]*full.*connectorId|full.*connectorId[\s\S]*connectors\.json/i,
+    'the persisted binding must retain the full connector resource path',
+  );
+});
+
+test('connector-builder defines setup when no suitable connection exists', () => {
+  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'), 'utf8');
+  assert.match(builder, /power-apps\s+create-connection/, 'connector-builder must document the connection-creation command');
+  assert.match(builder, /POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION/, 'interactive connector setup gate must be explicit');
+  // Bare /needs_input/ is the agent's universal return shape and was already present, so it
+  // asserted nothing. Anchor to the connection-setup path that must hand back to the orchestrator.
+  // Spans use `\s+`/bounded `[\s\S]` rather than literal spaces and `[^\n]*`: these phrases sit on
+  // hard-wrapped ~76-col prose lines, so a pure re-wrap (identical words, different line breaks)
+  // would otherwise break the build for no safety gain. Word order is still required.
+  assert.match(
+    builder,
+    /create-connection[\s\S]{0,120}reports\s+that\s+login[\s\S]{0,200}needs_input/i,
+    'connection setup that requires interaction must return to the orchestrator',
+  );
+  assert.match(builder, /Org URL[\s\S]*<ENV_URL>|<ENV_URL>[\s\S]*Org URL/i, 'connection setup must compare the active profile with the resolved environment');
+  assert.match(builder, /mismatch[\s\S]*needs_input|needs_input[\s\S]*mismatch/i, 'an environment mismatch must stop before mutation');
+  assert.match(builder, /auth-status/, 'headless setup must inspect cached Power Apps CLI accounts');
+  assert.match(builder, /auth-switch/, 'headless setup may switch only to an already-cached account');
+  assert.match(builder, /never.*login|do not.*login/i, 'the headless worker must not launch browser login');
+  assert.match(builder, /homeAccountId/, 'cached account selection must be tenant-specific');
+  // "exactly one" and "ambiguous" both occur in unrelated prose; anchor to the cached-match rule.
+  assert.match(builder, /exactly\s+one\*{0,2}\s+cached\s+match/i, 'duplicate cached usernames must fail closed');
+  assert.match(builder, /Node 22|major.*22|22\+/i, 'the optional Power Apps CLI path must guard its Node requirement');
+  assert.match(builder, /UsGovHigh[\s\S]*usgovhigh/, 'sovereign cloud mapping must be explicit');
+  assert.match(builder, /unknown[\s\S]*cloud[\s\S]*needs_input|needs_input[\s\S]*unknown[\s\S]*cloud/i, 'unknown clouds must fail closed');
+});
+
+test('genpage orchestrator defines inline recovery for a worker missing declared tools', () => {
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const editFlow = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'), 'utf8');
+  // No `s` flag and no unbounded `[\s\S]*`: with them, `.*` spans the whole document and any doc
+  // containing "missing" … "file" … "tool" anywhere passes. Anchor to the new sentence instead.
+  assert.match(skill, /declared\s+file\s+or\s+process-execution\s+tools\s+are\s+unavailable/i);
+  assert.match(skill, /inline fallback|run the worker workflow inline/i);
+  assert.match(skill, /do\s+(?:\*\*)?not(?:\*\*)?\s+(?:re-dispatch|retry the same worker)/i);
+  assert.match(skill, /genpage-planner[\s\S]*file tools[\s\S]*halt/i, 'create planner file-tool failure must preserve plan provenance');
+  // `genpage-edit-planner` is deliberately absent from this loop: it already passed against the
+  // pre-change doc, so including it advertised coverage the loop did not provide — the same trap
+  // that made the earlier assertions vacuous. The anchored assertion below owns that worker.
+  for (const worker of ['genpage-connector-builder', 'genpage-customapi-builder']) {
+    assert.match(editFlow, new RegExp(`${worker}[\\s\\S]{0,1200}(?:tool|unavailable|halt|inline)`, 'i'), `edit flow must define a missing-tool outcome for ${worker}`);
+  }
+  // Anchored to the edit-planner's own halt rule. A loose /edit-planner[\s\S]*halt/ matched
+  // unrelated prose elsewhere in the file and passed before this rule was written.
+  assert.match(
+    editFlow,
+    /genpage-edit-planner[\s\S]{0,160}declared\s+file\s+tools\s+are\s+unavailable[\s\S]{0,400}Halt\s+the\s+edit\s+flow/i,
+    'edit planner failure must preserve plan provenance by halting',
+  );
+});
+
+test('page generation rejects Griffel borderWidth shorthand before deploy', () => {
+  const rules = fs.readFileSync(path.join(PLUGIN, 'references', 'rules.md'), 'utf8');
+  const builder = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+  const editFlow = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'), 'utf8');
+  assert.match(rules, /borderWidth/i, 'rules must name the runtime-only Griffel failure');
+  assert.match(builder, /borderWidth/i, 'page-builder must scan its output for the shorthand');
+  assert.match(skill, /borderWidth/i, 'inline page generation must run the same scan');
+  assert.match(editFlow, /borderWidth/i, 'edited pages must run the same scan before upload');
+  const documentedPattern = `['"]?borderWidth['"]?\\s*:`;
+  for (const [name, text] of [['rules', rules], ['page-builder', builder], ['create flow', skill], ['edit flow', editFlow]]) {
+    assert.ok(text.includes(documentedPattern), `${name} must carry the complete Griffel key regex`);
+  }
+  const regex = /['"]?borderWidth['"]?\s*:/;
+  for (const source of ['borderWidth: 0', 'borderWidth : 0', '"borderWidth": 0', "'borderWidth' : 0"]) {
+    assert.match(source, regex, `guard must detect ${source}`);
+  }
+});
+
 // --- App Spec schema split -------------------------------------------------
 //
 // app-spec-schema.md is read IN FULL at the start of every /app-builder run, so the conditional

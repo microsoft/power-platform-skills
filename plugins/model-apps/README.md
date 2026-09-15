@@ -82,7 +82,7 @@ use either on its own, and neither requires the other.**
 
 | Skill | Status | Use it when |
 |---|---|---|
-| [`/app-builder`](#app-builder) | **Preview** | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
+| [`/app-builder`](#app-builder) | Stable | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
 | [`/genpage`](#genpage) | Stable | You want one or more generative pages added to an app that already exists |
 
 Already have an app and just want to add a page? Use `/genpage` — you never need to run
@@ -91,10 +91,9 @@ of the build, so you don't need to run `/genpage` afterwards.
 
 ### `/app-builder`
 
-> **Preview.** This skill is under active development: its App Spec schema and CLI flags may change
-> between releases, and `--changed-only` (partial apply) is Preview within it. Prefer a scratch/dev
-> environment, review the dry-run plan before approving, and use `teardown-model-app.js --apply` to
-> clean up probes. Report issues with `/report-issue`.
+> Review the dry-run plan before approving, and use `teardown-model-app.js --apply` to clean up
+> probes. `--changed-only` (partial apply) is still experimental and off by default. Report issues
+> with `/report-issue`.
 
 Builds and edits a whole model-driven Power App from a natural-language intent, via the headless
 vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and a narrated build:

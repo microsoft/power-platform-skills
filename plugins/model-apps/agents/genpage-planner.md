@@ -84,6 +84,12 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
   by the user's response (`approved` / `revised`). The orchestrator presents the
   plan; you supply its content.
+- **Unattended exception:** when the orchestrator says interaction mode is
+  unattended, never write the literal attended markers `AskUserQuestion:`,
+  `EnterPlanMode called`, or `ExitPlanMode called` — not even in explanatory
+  prose such as "was not called". Record only
+  `Unattended default: <question> → <answer> (<reason>)`. The evaluator treats
+  those attended markers as real invocations.
 - The PAC CLI version output is recorded explicitly (the assertion checks
   for `> 2.10.0`-shaped text — `PAC CLI Version 2.10.x` is the canonical
   form).
@@ -259,7 +265,11 @@ Two cases:
    re-invoked after discovery, so your prompt carries a `## Connector Bindings`
    block (or the sentinel `No connector bindings.`) and/or a `connectors.json`
    path. Consume it as-is: copy the block verbatim into the plan's
-   `## Connector Bindings` section. Never re-derive or edit it.
+   `## Connector Bindings` section. Never re-derive or edit it. If the prompt
+   wraps the block in `----- BEGIN/END CONNECTOR BINDINGS -----` lines, those are
+   prompt delimiters, not content: copy only what is between them. The section
+   body must be exactly `No connector bindings.` when there are none — a stray
+   delimiter line makes the plan fail schema validation.
 2. **A connector need is present or surfaces during clarification** — do NOT
    attempt discovery. Stop and return
 
@@ -309,7 +319,11 @@ Two cases:
 1. **The orchestrator already forwarded Custom API results** — you are being re-invoked after
    discovery, so your prompt carries a `## Custom API Bindings` block (or the sentinel
    `No custom API bindings.`) and/or an `actions.json` path. Consume it as-is: copy the block
-   verbatim into the plan's `## Custom API Bindings` section. Never re-derive or edit it.
+   verbatim into the plan's `## Custom API Bindings` section. Never re-derive or edit it. If the
+   prompt wraps the block in `----- BEGIN/END CUSTOM API BINDINGS -----` lines, those are prompt
+   delimiters, not content: copy only what is between them. The section body must be exactly
+   `No custom API bindings.` when there are none — a stray delimiter line makes the plan fail
+   schema validation.
 2. **A Custom API need is present or surfaces during clarification** — do NOT attempt
    discovery. Stop and return
 

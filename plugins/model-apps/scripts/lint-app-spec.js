@@ -33,9 +33,11 @@
 //   node lint-app-spec.js --spec @<app-folder>/app-spec.json
 //                         [--profile design|plan|deploy|structural] [--strict] [--json]
 
+const path = require('node:path');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { validateAppSpec, migrateAppSpec, VALIDATION_PROFILES } = require('./lib/app-spec.js');
 const { lintAppSpec } = require('./lib/spec-lint.js');
+const { pageSourceFileErrors } = require('./lib/content-hash.js');
 
 const USAGE = 'Usage: node lint-app-spec.js --spec @<path-to-app-spec.json> [--profile design|plan|deploy|structural] [--strict] [--json]';
 
@@ -85,8 +87,10 @@ function lintSpec(rawSpec, opts) {
     lint = { ok: false, errors: [`lint could not run on this spec: ${err.message}`], warnings: [] };
   }
 
+  const fileErrors = opts && opts.appDir ? pageSourceFileErrors(spec, opts.appDir) : [];
   const errors = [
     ...validationErrors.map((e) => `schema: ${e}`),
+    ...fileErrors.map((e) => `schema: ${e}`),
     ...((lint.errors || []).map((e) => `lint: ${e}`)),
   ];
   const warnings = [
@@ -174,7 +178,7 @@ function main() {
     return usageError(`could not read spec ${specArg}: ${err.message}`);
   }
 
-  const report = lintSpec(rawSpec, { profile: flags.profile });
+  const report = lintSpec(rawSpec, { profile: flags.profile, appDir: path.dirname(path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg)) });
   const strict = isOn(flags.strict);
   const failed = !report.ok || (strict && report.warnings.length > 0);
 

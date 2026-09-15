@@ -33,6 +33,36 @@ function logHas(log, pattern) {
   return Boolean(log) && new RegExp(pattern, 'mi').test(log);
 }
 
+function isUnattendedLog(log) {
+  return Boolean(log) && (
+    /Unattended default:/i.test(log) ||
+    // The mode probe, in prose (`interactive: false`) or as the raw resolve-interaction-mode.js
+    // line (`{"ok":true,"interactive":false,...}`) — hence the optional quotes.
+    // The lookbehind is load-bearing: without it `non-interactive: false`, which describes an
+    // ATTENDED run, matches on the tail of the word and flips the log to the unattended branch.
+    /(?<![\w-])"?interactive"?\s*[:=]\s*"?false"?/i.test(log) ||
+    // The two `reason` strings resolveInteractionMode() emits, and only ever for interactive:false.
+    // Anchored to the `reason` field rather than matched as bare phrases: an ATTENDED log
+    // legitimately *negates* them ("attended (no --non-interactive flag, TTY present)",
+    // "POWER_PLATFORM_SKILLS_NONINTERACTIVE is set -> no"), and an unanchored match would
+    // grade that correct attended run down the unattended branch and fail it for lacking an
+    // `Unattended default:` marker. Shape emitted by scripts/resolve-interaction-mode.js:
+    //   {"ok":true,"interactive":false,"reason":"--non-interactive flag"}
+    /"?reason"?\s*[:=]\s*"?(?:--non-interactive flag|POWER_PLATFORM_SKILLS_NONINTERACTIVE\s+is set)/i.test(log) ||
+    // A log that records the mode only as prose ("Interaction mode: unattended (...)") would
+    // otherwise be graded ATTENDED, so an unattended run that wrongly prompted would score clean
+    // — a false PASS, which is worse than a false fail because it hides the violation.
+    // Matching a bare `unattended` is not safe: it also matches inside "not unattended" and
+    // "whether unattended". Anchoring on a mode DECLARATION is what excludes those — the filler
+    // forbids `:`/`=` so it cannot hop over the colon in "mode: not unattended" to find a later one.
+    // Matches:     "Interaction mode: unattended", "Mode: unattended because ...",
+    //              "Interaction mode resolved: unattended", "Interaction mode: **unattended**"
+    // Not matched: "Interaction mode: attended (no --non-interactive flag)",
+    //              "Not unattended: ...", "Interaction mode: not unattended"
+    /\bmode\b[^\n:=]{0,15}[:=]\s*\**unattended\b/i.test(log)
+  );
+}
+
 function planSection(plan, heading) {
   // Returns text under "## <heading>" up to the next "## " heading or end-of-file.
   // Implemented as line scan to avoid JS regex \Z limitation.
@@ -295,6 +325,21 @@ function validateGenpagePlanSchema(plan) {
     }
   }
 
+  // `## Custom API Bindings` is opt-in (plan-schema.md: "opt-in, unlike the always-present
+  // `## Connector Bindings`"), so this is conditional and stays a no-op for plans that omit it —
+  // it is deliberately NOT added to REQUIRED_PLAN_SECTIONS, which would reject every valid plan
+  // that uses no Custom API. Without this, the Custom API half of the bindings contract had no
+  // enforcement at all: the sentinel at plan-schema.md:143 was stated but never checked, so a
+  // prompt regression that leaked a `----- BEGIN/END ... -----` delimiter into this section
+  // would score green, while the identical regression in the connector half fails loudly.
+  const customApiSection = byTitle.get('Custom API Bindings');
+  if (customApiSection) {
+    const body = customApiSection.content.trim();
+    if (body !== 'No custom API bindings.' && !findMarkdownTable(body, ['Name', 'Kind', 'Bound Entity'])) {
+      errors.push(schemaError('missing-customapi-table', '## Custom API Bindings must be the exact no-bindings sentinel or the Custom API binding table', { section: 'Custom API Bindings' }));
+    }
+  }
+
   const samplesSection = byTitle.get('Relevant Samples');
   if (samplesSection && !findMarkdownTable(samplesSection.content, ['Page', 'Sample', 'Reason'])) {
     errors.push(schemaError('missing-samples-table', '## Relevant Samples must contain a table with Page, Sample, and Reason columns', { section: 'Relevant Samples' }));
@@ -404,7 +449,9 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/AskUserQuestion/.test(log)) return fail('workflow-log does not record any AskUserQuestion call');
+    const unattended = isUnattendedLog(log);
+    if (!unattended && !/AskUserQuestion/.test(log)) return fail('workflow-log does not record any AskUserQuestion call');
+    if (unattended && !/Unattended default:/i.test(log)) return fail('unattended workflow-log does not record its default decision');
     // The planner spec allows the "new vs edit" question to be inferred
     // from $ARGUMENTS when the prompt clearly states a new page. Accept any of:
     //  - explicit question recorded
@@ -449,6 +496,13 @@ WORKFLOW_ASSERTIONS.set(
     if (!plan) return fail('no genpage-plan.md');
     const needsMetadata = entitiesNeedCreating(plan) || newAppNeeded(plan);
     const asked = solutionQuestionAsked(log);
+    if (isUnattendedLog(log)) {
+      if (asked) return fail('unattended flow recorded an interactive solution question');
+      if (needsMetadata && !/Unattended default:[^\n]*solution/i.test(log)) {
+        return fail('metadata work required in unattended mode but no solution default/decision was recorded');
+      }
+      return pass();
+    }
     if (needsMetadata && !asked) return fail('metadata work required but solution question not asked');
     if (!needsMetadata && asked) return fail('code-only flow asked solution question (should be skipped)');
     return pass();
@@ -479,6 +533,19 @@ WORKFLOW_ASSERTIONS.set(
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
     if (isEditFlowFixture(fixture)) return skip('edit flow — approval is presented from genpage-edit-plan.md');
+    if (isUnattendedLog(log)) {
+      if (/EnterPlanMode called|ExitPlanMode called|AskUserQuestion:/i.test(log)) {
+        return fail('unattended workflow-log contains an attended interaction marker');
+      }
+      // Alternative B (`Unattended default:[^\n]*approved`) strictly subsumed this, making the
+      // plan/approval context dead code: any `Unattended default:` line containing "approved" —
+      // e.g. a solution-selection default — satisfied an assertion that claims to check PLAN
+      // approval. The documented marker is `Unattended default: plan approval → approved (...)`.
+      if (!/Unattended default:[^\n]*(plan|approval)[^\n]*approved/i.test(log)) {
+        return fail('unattended workflow-log does not record plan approval');
+      }
+      return pass();
+    }
     if (!/EnterPlanMode/.test(log)) return fail('workflow-log does not record EnterPlanMode');
     return pass();
   }

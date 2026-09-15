@@ -66,7 +66,7 @@ Create and deploy Power Pages sites using modern development approaches.
 
 Build model-driven Power Apps end to end, and the generative pages that go in them.
 
-**Skills**: `/app-builder` (**Preview**) builds and edits a whole app — tables, relationships, forms,
+**Skills**: `/app-builder` builds and edits a whole app — tables, relationships, forms,
 views, charts, security roles, app + sitemap — from a natural-language intent; `/genpage` builds
 generative pages for an app that already exists. Use either independently — neither requires the other
 

@@ -10,7 +10,7 @@ A plugin for building Power Apps for **model-driven apps**. Two **authoring** sk
 - **`/genpage`** — build and deploy standalone **generative pages** (genux): React 17 + TypeScript +
   Fluent UI V9 single-file components, deployed via PAC CLI. Orchestrates specialist agents (planner,
   optional entity builder, parallel page builders).
-- **`/app-builder`** *(Preview)* — build and edit a **whole model-driven app** (tables, columns,
+- **`/app-builder`** — build and edit a **whole model-driven app** (tables, columns,
   relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
   admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
 
@@ -673,7 +673,7 @@ hooks/                         ← Lifecycle hooks (registered in hooks/hooks.js
   run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
   app-builder/
-    SKILL.md                   ← intent → model-driven app (create + edit); **Preview**
+    SKILL.md                   ← intent → model-driven app (create + edit)
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
     edit-flow.md               ← Edit flow steps (loaded only on edit path)
@@ -687,7 +687,7 @@ skills/
 | Skill | Description |
 |-------|-------------|
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
-| `/app-builder` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
+| `/app-builder` | Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
 | `/telemetry` | Enable, disable, or check usage telemetry (`on \| off \| status`) |
 

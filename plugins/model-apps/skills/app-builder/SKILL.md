@@ -1,7 +1,7 @@
 ---
 name: app-builder
-version: 0.8.1
-description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, business rules, business process flows, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", "add a business process flow", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
+version: 1.0.0
+description: Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, business rules, business process flows, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", "add a business process flow", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
@@ -11,10 +11,6 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, Enter
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # app-builder — intent → model-driven app
-
-> ⚠️ **Preview.** This skill is in preview — its App Spec shape, flags, and build behavior may change
-> between versions. Review the plan-mode summary before applying, and prefer a non-production
-> environment while it stabilizes.
 
 Turn a natural-language intent into a deployed model-driven app. You author a reviewable **App Spec**
 (JSON) with the user across confirmed turns, then a deterministic engine (`cds-maker-sdk`, vendored)
@@ -152,6 +148,39 @@ Rules:
 
 Follow **[references/authoring-flow.md](../../references/authoring-flow.md)** step by step, running
 every prompt yourself via `AskUserQuestion`. In short:
+
+#### Unattended runs (Copilot autopilot / automation)
+
+Resolve the interaction mode once before the first authoring question:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-interaction-mode.js" [--non-interactive]
+```
+
+`POWER_PLATFORM_SKILLS_NONINTERACTIVE=1`/`true` (or the equivalent
+`--non-interactive` invocation) means there is no user waiting for prompts. In
+that mode:
+
+- do not call `AskUserQuestion`, `EnterPlanMode`, or `ExitPlanMode`;
+- use explicit requirements and supplied existing specs as authoritative, and
+  use documented defaults only where the request leaves a non-destructive
+  choice open;
+- record each skipped gate as
+  `Unattended default: <question> → <answer> (<reason>)` in `workflow-log.md`;
+- treat the completed lint, preview, rendered design document, and build dry-run
+  as the approved plan, then continue with the normal approved path;
+- halt rather than guessing an ambiguous environment, app identity, or
+  destructive structural edit.
+
+Suppressing interaction never authorizes destructive work. An unattended
+existing-app apply still requires `--allow-destructive` wherever the build
+normally requires it; `POWER_PLATFORM_SKILLS_NONINTERACTIVE` only suppresses
+prompts.
+
+Carry the resolved mode through subprocesses: when it is unattended, append
+`--non-interactive` to every `build-model-app.js` invocation (dry-run, data
+pre-build, recovery rerun, and full apply). Do not append `--allow-destructive`
+unless destructive authority was supplied independently.
 
 1. **Prereqs** — `node --version`, `pac help` (≥ 2.7.0).
 2. **Environment (PAC)** — `pac auth list`. If exactly one / an active profile, **confirm it

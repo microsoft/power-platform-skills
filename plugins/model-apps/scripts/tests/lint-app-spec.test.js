@@ -156,6 +156,16 @@ test('CLI --profile deploy is available for gating a final, deployable spec', ()
   assert.match(deploy.stdout, /FAIL \[profile: deploy\]/);
 });
 
+test('CLI rejects an implemented page whose codeFile is missing on disk', () => {
+  const s = good();
+  s.pages = [{ key: 'ov', name: 'Overview', source: { kind: 'tsx', codeFile: 'missing.tsx' } }];
+  s.appShell = { areas: [{ label: 'M', groups: [{ label: 'M', subAreas: [{ title: 'Overview', page: 'ov' }] }] }] };
+  const out = runCli(s, ['--profile', 'deploy', '--json']);
+  assert.strictEqual(out.code, 1);
+  const payload = JSON.parse(out.stdout);
+  assert.ok(payload.errors.some((error) => /missing\.tsx.*does not exist or is not a file/.test(error)), out.stdout);
+});
+
 // Regression contract. The JSON payload's `ok` must describe the COMMAND's outcome. A warnings-only
 // --strict run exits 1, so emitting ok:true there would let a machine consumer read a failure as
 // a success.

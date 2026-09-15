@@ -158,6 +158,13 @@ Also read `config.json.connectorBindings` and `config.json.actionBindings`.
 > and re-invoke the builder with the answers plus everything it already returned.
 > Do **not** continue to Edit Phase 4 until the builder returns its binding files —
 > proceeding on a `needs_input` return ships connector code with no matching binding.
+>
+> If `genpage-connector-builder` instead reports that its declared
+> process-execution or file tools are unavailable, do **not** retry the same worker. Record the failure,
+> read `agents/genpage-connector-builder.md`, and run the worker workflow inline
+> in this orchestrator with the already-captured edit mode, `envUrl`, existing
+> bindings, and edit intent. This inline fallback preserves every feature gate,
+> discovery rule, and mutation boundary from the agent file.
 
 - Do not add or persist connection IDs. Env-specific `ConnectionId` values belong
   to the connectionreference row and ALM deployment settings, not the page config.
@@ -195,6 +202,12 @@ Also read `config.json.connectorBindings` and `config.json.actionBindings`.
 > ask/record/re-invoke loop as for the connector builder above, and do **not** continue
 > to Edit Phase 4 until it returns its binding files — proceeding on a `needs_input`
 > return ships `executeAction`/`executeFunction` calls with no matching binding.
+>
+> If `genpage-customapi-builder` reports unavailable declared file or
+> process-execution tools, do **not** retry the same worker. Record the failure,
+> read `agents/genpage-customapi-builder.md`, and run its read-only discovery and
+> binding-output workflow inline with the same feature gate, environment, page
+> tables, existing bindings, and intent.
 
 ## Edit Phase 4: Plan the Edit
 
@@ -247,6 +260,12 @@ The planner reads `page.tsx`, `config.json`, and `prompt.txt` for context and
 proposes the edit plan. It is a **headless** agent: it cannot ask the user anything
 and cannot present plan mode. Drive the loop from here until it completes:
 
+If `genpage-edit-planner` reports that its declared file tools are unavailable,
+do **not** retry the same worker and do not hand-write `genpage-edit-plan.md`.
+Halt the edit flow with the selected app/page and requested edit recorded. Plan
+provenance is a hard gate: unlike the pure discovery builders, the edit planner
+cannot be replaced by an inline fallback that invents its approved contract.
+
 - **`{ "action": "needs_input", "questions": [...] }`** — ask each question with
   `AskUserQuestion` in this loop, record every exchange in `workflow-log.md` as
   `AskUserQuestion: <question> → <answer>`, then re-invoke the planner with the
@@ -294,6 +313,12 @@ names, datasets, table GUIDs, and operations from the seeded connector bindings
 or approved edit plan when the edit touches connector data access.
 
 Do NOT rewrite the entire file. Use the minimum necessary `Edit` operations.
+
+Before Edit Phase 6, Grep the edited `page.tsx` with
+`['"]?borderWidth['"]?\s*:`. Griffel rejects that shorthand only at runtime;
+the regex also catches quoted keys and whitespace before the colon. Replace every match with
+`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
+`borderLeftWidth`. Do not upload while any match remains.
 
 ## Edit Phase 6: Deploy Updated Page
 
