@@ -2,16 +2,89 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
 // FetchXML operators that take no <value> (so a filter may omit value/values).
-const NO_VALUE_OPS = new Set(['null', 'not-null', 'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams',
+//
+// The list is the documented value-less ConditionOperator set, NOT a curated subset: an operator
+// missing here makes the lint demand a value the operator must not carry and reject a correct spec
+// (#546 — `eq-businessid` / `ne-businessid`, the business-unit equivalents of `eq-userid` /
+// `ne-userid`, which are the natural way to express "rows owned by my business unit"). The reverse
+// error matters too, so do not add a value-TAKING operator here: that would silently stop the lint
+// catching a missing value and push the failure to the platform at build time.
+//
+// Every name below is copied verbatim from the documented operator table, and the test pins them
+// against an INDEPENDENT literal list — iterating this set to test itself cannot catch a typo in it,
+// and a typo reintroduces exactly the #546 false positive.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const NO_VALUE_OPS = new Set(['null', 'not-null',
+  // current-user / current-business-unit context
+  'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-businessid', 'ne-businessid', 'eq-userlanguage',
+  // relative date
   'today', 'yesterday', 'tomorrow', 'this-week', 'last-week', 'next-week', 'this-month', 'last-month', 'next-month',
-  'this-year', 'last-year', 'next-year', 'this-fiscal-year', 'last-seven-days', 'next-seven-days']);
+  'this-year', 'last-year', 'next-year', 'last-seven-days', 'next-seven-days',
+  // relative fiscal period
+  'this-fiscal-year', 'last-fiscal-year', 'next-fiscal-year',
+  'this-fiscal-period', 'last-fiscal-period', 'next-fiscal-period']);
+
+// Every operator the condition table documents, value-less ones included. Transcribed in the doc
+// table's own alphabetical order so it can be diffed against the source by eye.
+//
+// WHY this exists: without it, a typo'd operator fell through to the missing-value check and was
+// reported as `needs a value` — advice that is not merely unhelpful but WRONG. The author adds a
+// value, the lint goes green, and Dataverse rejects the operator at build time. That is the same
+// shape as the #546 false positive, with an extra step. Mirrors how business-rule operators are
+// already validated (see BUSINESS_RULE_OPERATORS in app-spec.js, which also offers a near match).
+//
+// An unknown operator is a WARNING, not an error, and that is the direct lesson of #546: an
+// INCOMPLETE list here would reject a correct spec, which is worse than letting a rare unknown
+// operator through to a build-time failure that at least names it. `--strict` still fails on it.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const KNOWN_FILTER_OPS = new Set([
+  'above', 'begins-with', 'between', 'contain-values', 'ends-with', 'eq', 'eq-businessid',
+  'eq-or-above', 'eq-or-under', 'eq-userid', 'eq-userlanguage', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-useroruserteams', 'eq-userteams', 'ge', 'gt', 'in',
+  'in-fiscal-period', 'in-fiscal-period-and-year', 'in-fiscal-year',
+  'in-or-after-fiscal-period-and-year', 'in-or-before-fiscal-period-and-year', 'last-fiscal-period',
+  'last-fiscal-year', 'last-month', 'last-seven-days', 'last-week', 'last-x-days',
+  'last-x-fiscal-periods', 'last-x-fiscal-years', 'last-x-hours', 'last-x-months', 'last-x-weeks',
+  'last-x-years', 'last-year', 'le', 'like', 'lt', 'ne', 'ne-businessid', 'ne-userid', 'neq',
+  'next-fiscal-period', 'next-fiscal-year', 'next-month', 'next-seven-days', 'next-week',
+  'next-x-days', 'next-x-fiscal-periods', 'next-x-fiscal-years', 'next-x-hours', 'next-x-months',
+  'next-x-weeks', 'next-x-years', 'next-year', 'not-begin-with', 'not-between',
+  'not-contain-values', 'not-end-with', 'not-in', 'not-like', 'not-null', 'not-under', 'null',
+  'olderthan-x-days', 'olderthan-x-hours', 'olderthan-x-minutes', 'olderthan-x-months',
+  'olderthan-x-weeks', 'olderthan-x-years', 'on', 'on-or-after', 'on-or-before',
+  'this-fiscal-period', 'this-fiscal-year', 'this-month', 'this-week', 'this-year', 'today',
+  'tomorrow', 'under', 'yesterday',
+]);
+
+// Cheap near-match for the "did you mean" hint, in the same spirit as the business-rule operator
+// check. Catches the two mistakes that actually happen: wrong case (`EQ-USERID`) and a single
+// dropped/extra/substituted character (`eq-useroruserteam`, `eq-businesid`).
+function nearestFilterOp(op) {
+  const lower = String(op).toLowerCase();
+  for (const known of KNOWN_FILTER_OPS) if (known === lower) return known;
+  for (const known of KNOWN_FILTER_OPS) {
+    if (Math.abs(known.length - lower.length) > 1) continue;
+    // Walk both strings once, allowing a single edit. Full Levenshtein is not worth it here.
+    let i = 0, j = 0, edits = 0;
+    while (i < known.length && j < lower.length) {
+      if (known[i] === lower[j]) { i++; j++; continue; }
+      if (++edits > 1) break;
+      if (known.length > lower.length) i++;
+      else if (known.length < lower.length) j++;
+      else { i++; j++; }
+    }
+    if (edits + (known.length - i) + (lower.length - j) <= 1) return known;
+  }
+  return null;
+}
 
 function lintAppSpec(spec) {
   const errors = [];
@@ -286,7 +359,7 @@ function lintAppSpec(spec) {
     // author picks a distinct name (or knowingly customizes the stock default).
     const ve = (spec.entities || []).find((x) => lc(x.schemaName) === lc(v.entity));
     if (ve && v.name) {
-      const plural = ve.pluralName || `${ve.displayName || ve.schemaName}s`;
+      const plural = labelText(ve.pluralName, spec && spec.languageCode) || `${labelText(ve.displayName, spec && spec.languageCode) || ve.schemaName}s`;
       if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
         W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
@@ -294,9 +367,47 @@ function lintAppSpec(spec) {
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';
-      if (op === 'in' || op === 'not-in') {
+      if (!KNOWN_FILTER_OPS.has(op)) {
+        // Reported INSTEAD of the missing-value check below, never alongside it: `needs a value` is
+        // wrong advice for an operator that does not exist, and acting on it produces a spec that
+        // lints clean and then fails at the platform.
+        const near = nearestFilterOp(op);
+        W(`View '${v.name}' filter on '${f.attr}' uses '${op}', which is not a documented FetchXML condition operator${near ? ` — did you mean '${near}'?` : ''}. Dataverse will reject it when the view is built.`);
+      } else if (op === 'in' || op === 'not-in') {
         if (!(Array.isArray(f.values) && f.values.length)) E(`View '${v.name}' filter on '${f.attr}' uses ${op} but has no values[]`);
-      } else if (!NO_VALUE_OPS.has(op) && f.value === undefined) {
+      } else if (NO_VALUE_OPS.has(op)) {
+        // A value on a value-less operator is a WARNING, not an error, and the distinction was
+        // settled by measurement rather than assumption. Probed live against Dataverse Web API:
+        //   eq-businessid value="00000000-0000-0000-0000-000000000000"  -> HTTP 200, 1 row
+        //   eq-businessid (no value)                                    -> HTTP 200, 1 row
+        //   this-year     value="1999"                                  -> HTTP 200, 1 row
+        //   this-year     (no value)                                    -> HTTP 200, 1 row
+        // The platform neither rejects the condition nor honours the value — it IGNORES it. So
+        // erroring would block specs that build and run correctly today, while staying silent
+        // leaves a filter that does not do what its `value` says. The author almost always meant
+        // a value-TAKING operator (`eq` against a specific business unit) — hence the advice.
+        //
+        // Note this deliberately differs from the business-rule operator check in app-spec.js,
+        // which ERRORS on the same shape. That is a different engine: a business rule is compiled
+        // client-side, where the stray value is not harmless.
+        //
+        // The operator set spans several unrelated semantics (`null`/`not-null` test presence,
+        // `eq-userlanguage` matches the user's language, the relative-date ones match a period), so
+        // the message deliberately says only that the value has no effect — asserting a particular
+        // match semantics would be wrong for most of the set.
+        //
+        // `value` and `values` are called out separately because they are dropped at different
+        // points, and a message that named the wrong one would send the author to the wrong place:
+        // `value` is forwarded into the condition and discarded by Dataverse (sdk-build.js emits it
+        // for any non-in/not-in operator), whereas `values` is only ever read by the in/not-in
+        // branch, so it never reaches the platform at all.
+        if (f.value !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — it is sent to Dataverse and ignored there, so it has no effect on what the filter matches. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
+        }
+        if (f.values !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries values[] — values[] is only read by the 'in'/'not-in' operators, so it is dropped when the view is built. Drop it, or use 'in' if you meant to match a list.`);
+        }
+      } else if (f.value === undefined) {
         E(`View '${v.name}' filter on '${f.attr}' (${op}) needs a value`);
       }
     }
@@ -421,4 +532,14 @@ function dupWarn(names, kind, W) {
   }
 }
 
-module.exports = { lintAppSpec };
+// The operator sets are exported FROZEN — as arrays, not the live Sets. The module-level Set is
+// shared by every in-process consumer through the require cache, so handing out the instance would
+// let one caller's `.add()`/`.delete()` silently change lint behaviour for everything else.
+// Exported so the regression test can compare them against an independent, doc-derived literal list
+// in BOTH directions — a missing/typo'd entry reintroduces the #546 false positive, and an extra
+// (value-taking) entry silently disables the missing-value check.
+module.exports = {
+  lintAppSpec,
+  NO_VALUE_OPS: Object.freeze([...NO_VALUE_OPS]),
+  KNOWN_FILTER_OPS: Object.freeze([...KNOWN_FILTER_OPS]),
+};

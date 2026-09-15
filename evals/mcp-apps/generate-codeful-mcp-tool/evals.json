@@ -1,0 +1,210 @@
+{
+  "skill_name": "generate-codeful-mcp-tool",
+  "common_assertions": [
+    "Creates exactly one final JavaScript file with a .tool.js suffix and one matching JSON file with a .tool.json suffix",
+    "Exports an async function named runTool",
+    "Uses the runTool parameter shape { toolInput, dataApi }",
+    "The .tool.json parses as JSON and contains exactly name, description, annotations, inputSchema, and outputSchema",
+    "The sidecar name matches the kebab-case basename shared by the .tool.js and .tool.json files",
+    "The sidecar description concisely explains what the tool does and when a model should call it",
+    "annotations contains boolean readOnlyHint, destructiveHint, idempotentHint, and openWorldHint fields that match the generated behavior",
+    "annotations.openWorldHint is always false",
+    "inputSchema has an object root and represents every accepted input field, required field, default, and runtime constraint",
+    "inputSchema sets additionalProperties to false unless the prompt explicitly requires extensible input",
+    "outputSchema has an object root and describes only the model-visible structuredContent business payload",
+    "Contains no runtime import, require, package, network, filesystem, or environment access",
+    "Contains no TODOs, ellipses, placeholder implementations, credentials, or real environment identifiers",
+    "Validates externally supplied toolInput before using it",
+    "Uses only methods defined by CodefulToolHostDataApi",
+    "Returns only JSON-serializable data",
+    "Throws actionable errors instead of returning a success-shaped fallback",
+    "Leaves no RuntimeTypes.ts or schema-discovery artifacts beside the final output"
+  ],
+  "evals": [
+    {
+      "id": 1,
+      "tier": "smoke",
+      "prompt": "Generate a codeful MCP tool named calculate-order-total. It accepts an array of items with quantity and unitPrice and returns subtotal, 8 percent tax, and total, rounded to two decimal places. It does not use Dataverse.",
+      "input_sample": {
+        "items": [
+          { "quantity": 2, "unitPrice": 12.5 },
+          { "quantity": 1, "unitPrice": 5 }
+        ]
+      },
+      "expected_result_sample": {
+        "subtotal": 30,
+        "tax": 2.4,
+        "total": 32.4
+      },
+      "assertions": [
+        "Does not invoke PAC CLI because Dataverse is not used",
+        "Rejects missing, empty, negative, or non-numeric item values",
+        "Returns a plain object so the host promotes it to structuredContent",
+        "Marks the deterministic calculation as read-only, non-destructive, idempotent, and not open-world",
+        "inputSchema requires items and constrains each quantity and unitPrice consistently with runtime validation",
+        "outputSchema requires subtotal, tax, and total as numbers"
+      ]
+    },
+    {
+      "id": 2,
+      "tier": "smoke",
+      "prompt": "Generate a codeful MCP tool named search-accounts. It accepts nameContains and limit, queries account records, and returns account name, revenue, and status label.",
+      "input_sample": {
+        "nameContains": "Contoso",
+        "limit": 20
+      },
+      "dataverse": {
+        "tables": ["account"],
+        "required_columns": ["accountid", "name", "revenue", "statecode"]
+      },
+      "assertions": [
+        "Runs exact-match PAC table discovery and temporary RuntimeTypes generation",
+        "Uses account as a singular logical table name",
+        "Escapes nameContains before interpolating it into an OData filter",
+        "Reads rows from queryTable result.rows",
+        "Reads the status label from statecode@OData.Community.Display.V1.FormattedValue",
+        "Marks the query as read-only, non-destructive, idempotent, and not open-world",
+        "inputSchema represents nameContains as an optional string and limit as a bounded integer",
+        "outputSchema describes the returned account summaries and count fields"
+      ]
+    },
+    {
+      "id": 3,
+      "tier": "full",
+      "prompt": "Generate a codeful MCP tool named update-account-category. It accepts accountId and categoryValue, validates both, verifies the account table schema, updates accountcategorycode, and returns the updated id and category value.",
+      "input_sample": {
+        "accountId": "00000000-0000-0000-0000-000000000001",
+        "categoryValue": 1
+      },
+      "dataverse": {
+        "tables": ["account"],
+        "required_columns": ["accountid", "accountcategorycode"]
+      },
+      "assertions": [
+        "Uses only writable columns verified in RuntimeTypes.ts",
+        "Validates the GUID and permits only verified numeric choice values",
+        "Calls updateRow with the singular account logical name",
+        "Does not return success when updateRow throws",
+        "Marks the set-value update as writable, destructive, idempotent, and not open-world",
+        "inputSchema requires accountId with UUID format and constrains categoryValue to verified choices",
+        "outputSchema describes the updated id and category value"
+      ]
+    },
+    {
+      "id": 4,
+      "tier": "full",
+      "prompt": "Generate a codeful MCP tool named list-active-contacts. It accepts limit up to 100, requests pages of 25 contacts, follows continuation pages until the limit, and reports whether more rows remain.",
+      "input_sample": {
+        "limit": 60
+      },
+      "dataverse": {
+        "tables": ["contact"],
+        "required_columns": ["contactid", "fullname", "statecode"]
+      },
+      "assertions": [
+        "Uses page.rows instead of treating queryTable as an array",
+        "Calls loadMoreRows only when hasMoreRows is true and loadMoreRows exists",
+        "Stops at the validated limit",
+        "Does not include loadMoreRows or another function in the returned object",
+        "Marks the paged query as read-only, non-destructive, idempotent, and not open-world",
+        "inputSchema constrains limit to an integer from 1 through 100",
+        "outputSchema includes the returned contacts and hasMoreRows flag"
+      ]
+    },
+    {
+      "id": 5,
+      "tier": "smoke",
+      "prompt": "Generate a codeful MCP tool named account-revenue-summary and an MCP App bar-chart widget. Return a short model-visible sentence, structured account totals, and widget-private chart hints.",
+      "input_sample": {
+        "limit": 10
+      },
+      "expected_result_sample": {
+        "content": "Found 2 accounts.",
+        "structuredContent": {
+          "accounts": [
+            { "name": "Contoso", "revenue": 1500000 },
+            { "name": "Fabrikam", "revenue": 2300000 }
+          ],
+          "totalCount": 2
+        },
+        "meta": {
+          "preferredView": "bar-chart",
+          "categoryField": "name",
+          "valueField": "revenue"
+        }
+      },
+      "assertions": [
+        "Returns an intentional content, structuredContent, and meta envelope",
+        "Explains that authored meta is delivered to the widget as runtime _meta",
+        "Marks the account query as read-only, non-destructive, idempotent, and not open-world",
+        "outputSchema describes only the accounts and totalCount inside structuredContent and excludes content, meta, and _meta",
+        "Invokes generate-mcp-app-ui after validating the server file",
+        "Passes content, structuredContent, and normalized _meta to the UI skill",
+        "Produces one .tool.js, one .tool.json, and one .html artifact"
+      ]
+    },
+    {
+      "id": 6,
+      "tier": "full",
+      "prompt": "Generate a codeful MCP tool named inspect-document that returns business data with fields named content, meta, and owner. These are domain fields and must all remain model-visible.",
+      "input_sample": {
+        "documentId": "doc-123"
+      },
+      "expected_result_sample": {
+        "structuredContent": {
+          "content": "Document body",
+          "meta": { "revision": 4 },
+          "owner": "A. User"
+        }
+      },
+      "assertions": [
+        "Recognizes content and meta as reserved result-envelope keys",
+        "Wraps the complete business payload inside structuredContent",
+        "Does not accidentally move the business meta field into widget-private _meta",
+        "Marks the document inspection as read-only, non-destructive, idempotent, and not open-world",
+        "outputSchema directly describes the business content, meta, and owner fields without adding a structuredContent wrapper"
+      ]
+    },
+    {
+      "id": 7,
+      "tier": "full",
+      "prompt": "Generate a codeful MCP tool named retrieve-account that accepts accountId and returns the account name. Invalid input and Dataverse failures must be surfaced.",
+      "input_sample": {
+        "accountId": "not-a-guid"
+      },
+      "dataverse": {
+        "tables": ["account"],
+        "required_columns": ["accountid", "name"]
+      },
+      "assertions": [
+        "Rejects malformed accountId before calling dataApi",
+        "Adds useful context to a retrieveRow failure and rethrows it",
+        "Does not return an empty account or ok false object as a fallback",
+        "Marks the retrieval as read-only, non-destructive, idempotent, and not open-world",
+        "inputSchema requires accountId with UUID format"
+      ]
+    },
+    {
+      "id": 8,
+      "tier": "full",
+      "prompt": "Generate a codeful MCP tool named create-follow-up-task. It accepts subject and regardingAccountId, creates a task linked to the account, and returns the new task id.",
+      "input_sample": {
+        "subject": "Call customer",
+        "regardingAccountId": "00000000-0000-0000-0000-000000000001"
+      },
+      "dataverse": {
+        "tables": ["task", "account"],
+        "required_columns": ["activityid", "subject", "_regardingobjectid_value"]
+      },
+      "assertions": [
+        "Verifies the writable lookup shape in RuntimeTypes.ts",
+        "Writes the lookup through _regardingobjectid_value using /account(guid)",
+        "Does not emit @odata.bind or a plural entity-set path",
+        "Returns the id resolved by createRow",
+        "Marks the create as writable, non-destructive, non-idempotent, and not open-world",
+        "inputSchema requires subject and regardingAccountId and constrains regardingAccountId with UUID format",
+        "outputSchema describes the newly created task id"
+      ]
+    }
+  ]
+}

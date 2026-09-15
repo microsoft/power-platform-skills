@@ -246,8 +246,10 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
   const meta = await readEntityWithDescriptions(sdk, 'new_order');
   const e = entityFromMetadata(meta, 'new_order');
 
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
+  // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
   assert.strictEqual(status.description, 'State shown to dispatchers.');
@@ -1324,11 +1326,35 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
 
   assert.strictEqual(res.ok, true, `the download itself must succeed; got ${res.error || ''}`);
   const text = written.join('');
-  assert.match(text, /form\(s\) are restricted to specific security roles/, 'the warning must fire');
-  assert.match(text, /new_order\.Dispatcher Form/, 'and must NAME the restricted form');
-  assert.doesNotMatch(text, /Everyone Form/,
+  // Scoped to the RESTRICTION warning's own line. The download also emits a separate
+  // not-round-tripped note (AB#6686423) that lists every deployed form by name — including the
+  // unrestricted one — so scanning all of stderr would now assert the wrong thing. The intent of
+  // this check has always been "the restriction warning must not name an unrestricted form".
+  const restrictionLine = text.split('\n').find((l) => /are restricted to specific security roles/.test(l)) || '';
+  assert.ok(restrictionLine, 'the warning must fire');
+  assert.match(restrictionLine, /new_order\.Dispatcher Form/, 'and must NAME the restricted form');
+  assert.doesNotMatch(restrictionLine, /Everyone Form/,
     'the <Everyone /> form is the unrestricted DEFAULT — warning on it would make the warning noise');
-  assert.match(text, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
+  assert.match(restrictionLine, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
+
+  // AB#6686423 — BEHAVIOURAL: the same run must also report the artifact classes it did not
+  // reconstruct, and carry that report in the RESULT so `--json` consumers see it too. The unit
+  // tests in download-not-round-tripped.test.js pin the wording; this pins that it is actually
+  // reached from a real download, which a source-shape assertion could not.
+  //
+  // This app has only forms, and the sentence now names only the classes actually reported — it used
+  // to read "forms[], views[] or charts[]" regardless, telling the operator two things were missing
+  // that were never there.
+  assert.match(text, /NOTE: this download does not reconstruct forms\[\] —/);
+  assert.doesNotMatch(text, /does not reconstruct[^\n]*views\[\]/, 'no views were found, so none may be claimed');
+  assert.ok(res.notRoundTripped, 'the summary must ride on the runDownload result, not only on stderr');
+  assert.strictEqual(res.notRoundTripped.total, 2, JSON.stringify(res.notRoundTripped));
+  // SORTED, not in the order the mock returned them. `notRoundTripped` is compared between runs, so
+  // it sorts at every level; `descriptionInventory` below is the raw read and keeps Dataverse's
+  // order, which is why the two lists differ here.
+  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [], businessRules: [] }]);
+  // The spec on disk still carries them under descriptionInventory — the note's claim must be true.
+  assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Everyone Form', 'Dispatcher Form']);
 });
 
 test('runDownload stays SILENT when no form is role-restricted', async () => {

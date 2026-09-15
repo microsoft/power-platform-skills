@@ -1006,9 +1006,46 @@ test('teardown plans an ai-summaries step (before tables) for each candidate and
   assert.ok(removeCalls.some((c) => c.entityLogicalName === 'new_memo'), 'removeRowSummary called for the candidate table');
 });
 
-test('planTeardown omits ai-summaries steps when spec.ai.summaries is absent', () => {
+test('planTeardown omits ai-summaries steps when the spec has no `ai` block at all', () => {
   const steps = planTeardown(fullSpec()); // no spec.ai
-  assert.ok(!steps.some((s) => s.kind === 'aiSummary'), 'no aiSummary steps when spec has no ai.summaries');
+  assert.ok(!steps.some((s) => s.kind === 'aiSummary'), 'no aiSummary steps when the spec opts out of ai entirely');
+});
+
+// The regression this section now guards, found by a LIVE teardown rather than by review.
+//
+// The build calls `selectSummaryTables` UNCONDITIONALLY whenever `spec.ai` exists, so a spec that
+// carries only `ai.appFeatures` still gets a row summary per eligible table. Teardown used to plan
+// its removal only `if (spec.ai && spec.ai.summaries)`, so for exactly that spec it planned nothing —
+// and the orphaned `msdyn_aimodel` references the table, so Dataverse then REFUSED the table delete:
+//   ✗ table new_uptakeorder — HTTP 400 … referenced by 1 other components
+// Teardown finished "with errors" having left the table and everything in it behind.
+//
+// Asserted as build/teardown SYMMETRY rather than as "an aiSummary step exists": the two must plan
+// over the identical set, which is the property that was violated, and a one-off existence check
+// would not catch the next divergence (`default: 'off'` plus a per-table opt-in, say).
+test('teardown plans a row-summary removal for a spec with ai.appFeatures and NO summaries block', () => {
+  const { selectSummaryTables } = require(path.join(__dirname, '..', 'lib', 'ai-candidates.js'));
+  const spec = {
+    solution: { uniqueName: 'AiTest', publisherPrefix: 'new' },
+    app: { name: 'AiApp' },
+    entities: [
+      { schemaName: 'new_memo', displayName: 'Memo', primaryAttribute: { schemaName: 'new_name' }, columns: [{ schemaName: 'new_body', displayName: 'Body', type: 'Memo' }] },
+    ],
+    relationships: [],
+    ai: { appFeatures: { formFill: true } }, // no `summaries` — the shape that regressed
+  };
+
+  const built = selectSummaryTables(spec).map((s) => String(s).toLowerCase());
+  assert.deepStrictEqual(built, ['new_memo'], 'precondition: the BUILD would create a summary here');
+
+  const plan = planTeardown(spec);
+  const planned = plan.filter((s) => s.kind === 'aiSummary').map((s) => s.target.entityLogicalName);
+  assert.deepStrictEqual(planned, built, 'teardown must plan exactly the set the build creates');
+
+  const aiIdx = plan.findIndex((s) => s.kind === 'aiSummary');
+  const tableIdx = plan.findIndex((s) => s.kind === 'table');
+  assert.ok(tableIdx === -1 || aiIdx < tableIdx,
+    'the summary must be removed BEFORE the table, or Dataverse refuses the table delete');
 });
 
 test('planTeardown omits ai-summaries steps when default is off and no overrides', () => {

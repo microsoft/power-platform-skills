@@ -13,6 +13,9 @@ const {
   manyToManySchemaName,
   quickCreateEnabledFor,
   normalizeLanguageCode,
+  labelText,
+  isLocalizedLabelMap,
+  localizedLabelLcids,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -76,6 +79,70 @@ async function checkProvisioned(lcid, source, provisionedLanguages) {
     + `through the columns. Provisioned languages: ${list.join(', ')}. Pick one of those, provision `
     + `${lcid} in the organization first, or omit the override to use the base language.`,
     { phase: 'data-model', code: 'language-not-provisioned', recoverable: false }
+  );
+}
+
+// Every LCID the spec's LOCALIZED labels ask for, deduped and sorted, with an example of where each
+// was declared so the halt below can name one. AB#6686428.
+function localizedLabelLcidsInSpec(spec) {
+  const byLcid = new Map(); // lcid -> a human-readable "where" for the first site that used it
+  const note = (value, where) => {
+    for (const lcid of localizedLabelLcids(value)) if (!byLcid.has(lcid)) byLcid.set(lcid, where);
+  };
+  for (const e of (spec && spec.entities) || []) {
+    const at = `entity ${e && e.schemaName}`;
+    note(e && e.displayName, `${at} displayName`);
+    note(e && e.pluralName, `${at} pluralName`);
+    note(e && e.primaryAttribute && e.primaryAttribute.displayName, `${at} primaryAttribute.displayName`);
+    for (const c of (e && e.columns) || []) {
+      note(c && c.displayName, `${at} column ${c && c.schemaName} displayName`);
+      for (const o of (c && c.options) || []) note(o, `${at} column ${c && c.schemaName} option`);
+    }
+    for (const k of (e && e.alternateKeys) || []) note(k && k.displayName, `${at} alternate key ${k && k.schemaName}`);
+  }
+  for (const r of (spec && spec.relationships) || []) note(r && r.lookup && r.lookup.displayName, `relationship lookup ${r && r.lookup && r.lookup.schemaName}`);
+  for (const g of (spec && spec.globalChoices) || []) {
+    note(g && g.displayName, `globalChoice ${g && g.name} displayName`);
+    for (const o of (g && g.options) || []) note(o, `globalChoice ${g && g.name} option`);
+  }
+  return [...byLcid.entries()].sort(([a], [b]) => a - b).map(([lcid, where]) => ({ lcid, where }));
+}
+
+// Halt when a LOCALIZED label names a language the organization has not provisioned. AB#6686428.
+//
+// This is NOT a validation nicety — it is the difference between the feature working and the feature
+// re-creating the exact bug it fixes. LIVE-MEASURED against a 1033-only organization: `createTable`
+// with `DisplayName: { 1033, 3082 }` returns SUCCESS and stores ONLY the 1033 label. Dataverse does
+// not warn, error, or report the drop anywhere. So without this check an author labels a table in
+// Spanish, gets a green build, and the Spanish is simply gone — "a successful build with the request
+// gone and nothing reporting the loss", which is the failure this whole feature exists to end.
+//
+// Distinct from `checkProvisioned` above, which guards the single build-wide authoring language: that
+// one can also fail LOUDLY later (a DateTime/Memo column is rejected outright), whereas a dropped
+// localized label has no downstream symptom at all.
+//
+// Best-effort in exactly the same way: an unreadable probe leaves the build unchanged, because a
+// diagnostic that cannot answer must not block work that would otherwise succeed.
+async function checkLocalizedLabelLanguages(spec, provisionedLanguages) {
+  const wanted = localizedLabelLcidsInSpec(spec);
+  if (!wanted.length || typeof provisionedLanguages !== 'function') return;
+  let list;
+  try {
+    list = await provisionedLanguages();
+  } catch {
+    return;
+  }
+  if (!Array.isArray(list) || !list.length) return;
+  const missing = wanted.filter((w) => !list.includes(w.lcid));
+  if (!missing.length) return;
+  throw new BuildHalt(
+    `${missing.length} localized label language(s) are not provisioned in this organization: `
+    + `${missing.map((m) => `${m.lcid} (first used by ${m.where})`).join('; ')}. `
+    + 'Dataverse would ACCEPT those labels and silently store only the provisioned one — live-measured: '
+    + 'a create carrying an unprovisioned LCID returns success and the label is simply absent afterwards, '
+    + 'with nothing reporting the loss. Provisioned languages: '
+    + `${list.join(', ')}. Provision the language in the organization first, or drop it from the labels.`,
+    { phase: 'data-model', code: 'localized-label-language-not-provisioned', recoverable: false }
   );
 }
 
@@ -290,6 +357,103 @@ function requiredLevelValue(raw) {
 function columnRequiredLevel(c) {
   if (!c) return undefined;
   return requiredLevelValue(c.RequiredLevel) || requiredLevelValue(c.requiredLevel);
+}
+
+// The columns a table already has, as `[{ logicalName, RequiredLevel }]`.
+//
+// Same reason as `findExistingTable` above, and the same measurement: calling the SDK's
+// `findColumns` immediately before `createColumn` makes Dataverse store ONLY the base-language
+// label of a multi-language column name. Order-controlled, 8 columns, sequence C,F,F,C,C,F,F,C:
+// `createColumn` alone kept both languages 4/4; `findColumns` then `createColumn` kept both 0/4.
+//
+// This path matters MORE than the table one, not less: it is the table-REUSE branch, i.e. adding a
+// column to a table that already exists — which is exactly the scenario AB#6686428 was reported
+// against ("adding a table to an existing app"). A fresh-table build never reaches it, which is why
+// the first round of this fix missed it and why the end-to-end verification did not catch it.
+//
+// The projection deliberately matches `readAttributeRequiredLevels` below, so the rows still answer
+// `columnRequiredLevel`.
+//
+// ON THE FAILURE PATH, and this is the subtle part: when the raw client is PRESENT but the read
+// fails or returns a non-2xx, we return `[]` rather than falling back to `findColumns`. Falling back
+// would re-introduce the exact poisoning this function exists to remove, silently, on the very
+// branch it targets — `createColumn` is guaranteed to run here for every column that looks new. An
+// empty list instead makes every column look new, and `createColumn`'s `skipIf: isAlreadyExists`
+// de-duplicates the ones that already exist WITHOUT a poisoning pre-read. The cost is that the
+// required/capability reconcile degrades to best-effort for this table, which is the same
+// degradation a `readAttributeRequiredLevels` failure already produces — and it is warned about,
+// because a silent degradation is what this whole line of fixes is about.
+//
+// `findColumns` is therefore reserved for the one case where it cannot poison anything: no raw
+// client at all, which in practice means a unit-test double.
+async function findExistingColumns(provision, logical, warn) {
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    let res = null;
+    let err = null;
+    try {
+      res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes?$select=LogicalName,RequiredLevel`);
+    } catch (e) { err = e; }
+    if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+      return res.body.value.map((a) => ({ logicalName: String(a.LogicalName || '').toLowerCase(), RequiredLevel: a.RequiredLevel }));
+    }
+    const why = err ? ((err && err.message) || String(err)) : `HTTP ${res && res.status}`;
+    if (typeof warn === 'function') {
+      warn(`could not read existing columns for ${logical} (${why}) — treating every declared column as new. `
+        + 'Existing ones are de-duplicated by the create\'s already-exists handling; required-level reconciliation '
+        + 'is skipped for this table this run.');
+    }
+    return [];
+  }
+  if (typeof (provision && provision.findColumns) !== 'function') return [];
+  return (await provision.findColumns(logical)) || [];
+}
+
+// Does a relationship with this schema name already exist on the entity?
+//
+// A NARROW relationship read, for the third time and the same measured reason: the plugin used to
+// answer this with `provision.fetchEntityMetadata(...)`, and any broad metadata read immediately
+// before a labelled create makes Dataverse store ONLY the base-language label. Order-controlled
+// (C,F,F,C): `createRelationship` alone kept a bilingual `lookupDisplayName` 2/2;
+// `fetchEntityMetadata` then `createRelationship` kept it 0/2.
+//
+// `$select=SchemaName` on the relationship collection is the smallest question that answers this.
+// Falls back to `fetchEntityMetadata` when the raw client is unavailable (unit-test doubles).
+//
+// Returns `true`/`false`, or `null` when it genuinely could not tell — the caller treats null the
+// way the old `catch {}` did (assume absent and let the create's own already-exists handling deal
+// with it), because a table created moments ago legitimately 404s here.
+//
+// `hasLocalizedLabels` closes the same hole `findExistingTable` documents, for the same reason and
+// with the same rule. `fetchEntityMetadata` → `createRelationship` is one of the three broad-read →
+// create pairs that makes Dataverse keep ONLY the base-language label (AB#6686428), so falling back
+// to it after an inconclusive narrow probe would silently reintroduce the bug on a transient 5xx —
+// invisibly, because the request body is byte-identical either way and the relationship is still
+// created. For a localized lookup label the fallback is therefore skipped and `null` is returned:
+// "assume absent" costs at most a redundant create that already-exists handling absorbs, whereas the
+// poisoning read costs a label nobody can see is wrong until a user switches language.
+// A relationship with a plain-string label keeps the fallback exactly as before.
+async function relationshipExists(provision, entityLogical, schemaName, type, { hasLocalizedLabels = false } = {}) {
+  const collection = type === 'ManyToMany' ? 'ManyToManyRelationships' : 'OneToManyRelationships';
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    try {
+      const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(entityLogical)}')/${collection}?$select=SchemaName`);
+      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+        return res.body.value.some((r) => String(r.SchemaName || '').toLowerCase() === String(schemaName).toLowerCase());
+      }
+      if (res && res.status === 404) return false;
+    } catch { /* fall through */ }
+    // Inconclusive AND localized: never resolve it with the broad read.
+    if (hasLocalizedLabels) return null;
+  }
+  if (typeof (provision && provision.fetchEntityMetadata) !== 'function') return null;
+  try {
+    const meta = await provision.fetchEntityMetadata(entityLogical);
+    return ((meta && meta.relationships) || []).some((r) => String(r.schemaName || '').toLowerCase() === String(schemaName).toLowerCase());
+  } catch {
+    return null;
+  }
 }
 
 async function readAttributeRequiredLevels({ sdk, provision, logical }) {
@@ -516,6 +680,72 @@ async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, read
 
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
+// Does this table already exist? Returns { logicalName, entitySetName } or null.
+//
+// Deliberately a NARROW `EntityDefinitions(LogicalName=…)` read rather than the SDK's `findTables`,
+// and this is a correctness requirement rather than an optimisation. LIVE-MEASURED, order-controlled
+// (8 tables, sequence C,F,F,C,C,F,F,C so each arm appears early and late): calling `findTables`
+// before `createTable` makes Dataverse store ONLY the base-language label of a multi-language name —
+// `create only` kept both languages 4/4, `findTables + create` kept both 0/4. The outgoing
+// EntityDefinitions body is byte-identical in both cases, so the loss is caused by the preceding
+// unfiltered metadata read, not by the create payload.
+//
+// Without this the localized-label feature silently degrades to English-only on the real build path
+// while every unit test (which never issues the preceding read) passes — the exact silent-drop class
+// of failure AB#6686428 exists to end.
+//
+// `dataverse.get` RESOLVES with `{ status }` on a 404 instead of throwing, so the status is checked
+// explicitly. Falls back to `findTables` when the raw client is unavailable (older callers and
+// unit-test doubles) or when the narrow read is INCONCLUSIVE — with one exception, below.
+//
+// `hasLocalizedLabels` closes the gap that fallback would otherwise leave open. `findTables` can
+// safely prove PRESENCE (a hit means we reuse the table and no create follows, so nothing is
+// poisoned), but a MISS is followed immediately by `createTable` — with the poisoning read already
+// on the wire. So for an entity whose labels ARE localized, an inconclusive probe is never resolved
+// by `findTables`: the narrow read is retried, and if it stays inconclusive the build HALTS rather
+// than silently shipping an English-only table. Same fail-closed rule as the unprovisioned-language
+// check above, and for the same reason: by the time a warning is read the table already exists, and
+// fixing a label after the fact is a manual job.
+async function findExistingTable(provision, schemaName, { hasLocalizedLabels = false, attempts = 3 } = {}) {
+  const logical = String(schemaName).toLowerCase();
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    const escaped = logical.replace(/'/g, "''");
+    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`;
+    // Retried only for a LOCALIZED entity, where the alternative to a conclusive answer is a halt.
+    // For everything else one attempt then `findTables` is both cheaper and exactly the old
+    // behaviour.
+    const tries = hasLocalizedLabels ? Math.max(1, attempts) : 1;
+    let lastWhy = 'unknown';
+    for (let i = 0; i < tries; i += 1) {
+      // Wrapped like its `findExistingColumns` sibling. The client resolves `{status}` for a 404 and
+      // even a persistent 5xx, and throws only on a persistent TRANSPORT error; letting that
+      // propagate here would abort the build on a blip the fallback might well survive.
+      let res = null;
+      try { res = await raw.get(url); } catch (err) { res = null; lastWhy = (err && err.message) || String(err); }
+      if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
+        return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
+      }
+      if (res && res.status === 404) return null;
+      if (res) lastWhy = `HTTP ${res.status}${res.body && res.body.LogicalName === undefined && res.status < 300 ? ' with no LogicalName in the body' : ''}`;
+    }
+    if (hasLocalizedLabels) {
+      throw new BuildHalt(
+        `could not determine whether table '${logical}' already exists (${lastWhy}), and its labels are localized. `
+        + 'Resolving this by the broad metadata read the build normally falls back to is what makes Dataverse store '
+        + 'ONLY the base-language label (live-measured, 0/4 vs 4/4), so the build stops here instead of silently '
+        + 'creating an English-only table. Re-run once the environment answers metadata reads.',
+        { phase: 'data-model', code: 'table-probe-inconclusive', recoverable: true },
+      );
+    }
+    // Any other status is inconclusive — fall through to findTables rather than assume "absent",
+    // because assuming absent turns a transient read failure into a duplicate-create attempt.
+  }
+  if (typeof (provision && provision.findTables) !== 'function') return null;
+  const hits = await provision.findTables(schemaName, { top: 50 });
+  return (hits || []).find((t) => t.logicalName === logical) || null;
+}
+
 async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
@@ -526,6 +756,11 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // that construct the SDK themselves and for the existing unit tests.
   const resolvedLanguageCode = preResolvedLanguageCode
     || await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
+
+  // Before any write: refuse a localized label naming a language this org has not provisioned.
+  // Dataverse would accept it and silently keep only the provisioned label (live-measured), so this
+  // must run ahead of the first createTable rather than as a post-hoc verify.
+  await checkLocalizedLabelLanguages(spec, provisionedLanguages);
 
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
@@ -547,18 +782,41 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
   for (const e of spec.entities) {
     const logical = e.schemaName.toLowerCase();
-    const hits = await provision.findTables(e.schemaName, { top: 50 });
-    const existingTable = (hits || []).find((t) => t.logicalName === logical);
+    // Whether THIS entity carries any localized label. It decides whether an inconclusive existence
+    // probe may be resolved by the broad `findTables` read — safe for a plain-label entity, poisoning
+    // for a localized one. See findExistingTable.
+    const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
+    const hits = await findExistingTable(provision, e.schemaName, { hasLocalizedLabels: entityIsLocalized });
+    const existingTable = hits;
     let existingCols = new Set();
     let existingColRows = [];
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-      existingColRows = (await provision.findColumns(logical)) || [];
+      existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {
-        const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
+        // `displayName` / `pluralName` / `primaryColumnDisplayName` are passed THROUGH unflattened: a
+        // plain string emits one label at `resolvedLanguageCode`, and an LCID map emits one per
+        // language (AB#6686428 — measured on the wire against the vendored bundle). The English
+        // plural fallback is only reachable for a STRING displayName; validateAppSpec requires an
+        // explicit `pluralName` beside a localized one, because appending "s" is not a plural rule
+        // outside English and would write "Línea base del proyectos" into Dataverse.
+        //
+        // The schema-name fallback is NOT cosmetic. `displayName` is optional in the App Spec — the
+        // validator accepts an omitted or blank one, exactly as it does for a column — and every
+        // other create site here already falls back (`c.displayName || c.schemaName` for columns,
+        // customer columns and alternate keys). The table was the one that did not, and handing the
+        // SDK `undefined` throws inside its label builder with `Cannot convert undefined or null to
+        // object` BEFORE any request is issued — an opaque failure with nothing naming the table or
+        // the field. MEASURED against the real vendored bundle; `''` gets past it but would label the
+        // table blank. A localized MAP must pass through untouched, so it is never routed through
+        // `labelText`, which would flatten it to one language.
+        const tableDisplayName = isLocalizedLabelMap(e.displayName)
+          ? e.displayName
+          : (labelText(e.displayName, resolvedLanguageCode) || e.schemaName);
+        const createOpts = { schemaName: e.schemaName, displayName: tableDisplayName, pluralName: e.pluralName || `${labelText(tableDisplayName, resolvedLanguageCode) || e.schemaName}s`,
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
@@ -571,9 +829,9 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         } catch (err) {
           if (!isAlreadyExists(err)) throw err;
           // First POST likely succeeded server-side; a transient-network retry hit "already exists".
-          // Rediscover to capture entitySetName (required by later phases).
-          const rehits = await provision.findTables(e.schemaName, { top: 50 });
-          const found = (rehits || []).find((x) => x.logicalName === logical);
+          // Rediscover to capture entitySetName (required by later phases). No poisoning concern
+          // here whatever the labels are — the table now EXISTS, so no create follows this read.
+          const found = await findExistingTable(provision, e.schemaName);
           if (!found) throw err;
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
         }
@@ -769,9 +1027,13 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   for (const rel of spec.relationships || []) {
     if (rel.type === 'OneToMany') {
       const schema = relationshipSchemaName(rel, publisherPrefix);
-      let exists = false;
-      try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-      if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+      // `null` (could not tell) is treated as absent, exactly as the previous `catch {}` did: a table
+      // created moments earlier legitimately 404s here, and the create's own already-exists handling
+      // covers the race. A localized lookup label suppresses the broad-read fallback inside the
+      // probe — see relationshipExists.
+      const exists = await relationshipExists(provision, rel.referenced.toLowerCase(), schema, 'OneToMany',
+        { hasLocalizedLabels: localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0 });
+      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
         const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode });
         result.relationships.push({
@@ -783,9 +1045,8 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       }, { skipIf: isAlreadyExists });
     } else if (rel.type === 'ManyToMany') {
       const schema = manyToManySchemaName(rel, publisherPrefix);
-      let exists = false;
-      try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-      if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+      const exists = await relationshipExists(provision, rel.entity1.toLowerCase(), schema, 'ManyToMany');
+      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, async () => {
         const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode });
         result.relationships.push({
@@ -932,4 +1193,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages };

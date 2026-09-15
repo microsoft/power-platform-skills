@@ -906,10 +906,16 @@ test('REAL BUNDLE: every spec operator EXISTS in the SDK table, and none silentl
   //
   // Pinned against the bundle's own table so a re-vendor that renames or drops an operator fails
   // here rather than in production.
+  //
+  // The module alias in front of `WorkflowConditionOperator` is MINIFIER-ASSIGNED and changes on
+  // every re-vendor — it was `z` when this was written and became `G` on the next bundle, which made
+  // this test fail with "got 0" for a table that was fully intact. Match the alias as a wildcard, not
+  // a literal: hardcoding a minified identifier is the same rebuild-unstable-string trap the build
+  // engine documents for `err.name`, and here it costs a false failure rather than a silent pass.
   const bundle = fs.readFileSync(BUNDLE, 'utf8');
   const m = bundle.match(/\b[A-Za-z_$][\w$]*=\{Equals:[^}]*\}/);
   assert.ok(m, 'the operator table must be present in the vendored bundle');
-  const sdkOperators = [...m[0].matchAll(/(\w+):z\.WorkflowConditionOperator\./g)].map((x) => x[1]);
+  const sdkOperators = [...m[0].matchAll(/(\w+):\s*[A-Za-z_$][\w$]*\.WorkflowConditionOperator\./g)].map((x) => x[1]);
   assert.ok(sdkOperators.length >= 16, `expected the full table, got ${sdkOperators.length}: ${sdkOperators}`);
 
   const { BUSINESS_RULE_OPERATORS } = require('../lib/app-spec.js');

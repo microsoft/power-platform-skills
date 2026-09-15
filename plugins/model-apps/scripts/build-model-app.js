@@ -20,7 +20,7 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
@@ -70,11 +70,12 @@ function makeSdk(env, spec, workspaceDir, languageCode) {
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
-  // `httpClient` is returned so the caller can wire verify's role-privilege reader, which needs the
-  // raw client (and the org URL) to compose an absolute `EntityDefinitions(...)?$select=Privileges`
-  // request — the SDK's entity metadata projects `Privileges` away. Returning the SAME instance
-  // rather than constructing a second one keeps token acquisition and retry state shared.
-  return { sdk, provisionSdk, httpClient, cleanup };
+  // Only the two SDK instances and the cleanup are returned. The raw `httpClient` used to come back
+  // with them so the caller could wire verify's role-privilege reader — that read had no SDK surface
+  // and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request itself. The
+  // vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw client
+  // has no caller. Returning it anyway would advertise a bypass this file no longer takes.
+  return { sdk, provisionSdk, cleanup };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -522,6 +523,22 @@ async function main() {
   // (#456), before the SDK is constructed and before any label is written. That halt is the point:
   // Dataverse would otherwise accept some labels under the wrong language and reject others
   // mid-build, phases away from the flag that caused it.
+  // AB#6686427 — prove the ambient Azure CLI identity can reach this org BEFORE anything else on an
+  // apply. Everything below (the language read, the destructive-apply safety probe, every phase)
+  // authenticates through that identity, and when it is wrong they each fail in their own vocabulary
+  // — "could not determine the organization's base language", "preflight safety check could not run"
+  // — none of which names the actual cause. Dry runs skip it: they perform no writes and need no
+  // identity. An INCONCLUSIVE verdict never blocks; see preflightAuth.
+  if (opts.apply) {
+    const auth = await preflightAuth(env);
+    // A single, already-explained failure uses `error`, not `errors: [...]`. `emitResult` reserves
+    // the array for a genuine PARTIAL failure and summarises it as a COUNT ("completed with 1
+    // error(s); see stdout JSON") — which would replace a message written specifically to tell the
+    // operator which identity to sign in as. `download-model-app.js` uses `error` for the identical
+    // failure, so the array here also made two sibling CLIs report the same problem differently.
+    if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, error: auth.error }); return; }
+    if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
+  }
   const authoringLanguageCode = opts.apply
     ? await resolveAuthoringLanguage({ envUrl: env, languageCode, spec, warn: (m) => process.stderr.write(`⚠ ${m}\n`) })
     : undefined;
@@ -531,7 +548,7 @@ async function main() {
   opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, httpClient, cleanup } = makeSdk(env, spec, workspaceDir, authoringLanguageCode);
+  const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply
@@ -585,13 +602,13 @@ async function main() {
       log: (m) => process.stderr.write(m + '\n'),
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal,
-      // `httpClient` + `envUrl` are threaded through so the role-privileges check actually RUNS
-      // here. verify-spec skips it unless BOTH `rolePrivileges` and `entityPrivileges` readers are
-      // present, and `entityPrivileges` needs the raw client and the org URL to compose an absolute
-      // EntityDefinitions request. Omitting them degraded silently: `--apply --verify` reported a
-      // clean PASS having never checked what any persona's role actually grants. Caught live —
+      // The role-privileges check must actually RUN here. verify-spec skips it unless BOTH
+      // `rolePrivileges` and `entityPrivileges` readers are present, and `entityPrivileges` used to
+      // need the raw client plus the org URL — omitting them degraded silently, so `--apply --verify`
+      // reported a clean PASS having never checked what any persona's role grants. Caught live:
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
-      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env }), verifyOpts),
+      // The reader now takes its privilege read off the SDK, so there is nothing left to forget.
+      verify: (s, verifyOpts) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir }), verifyOpts),
       // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
       // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
       provisionedLanguages: () => readProvisionedLanguages(env),

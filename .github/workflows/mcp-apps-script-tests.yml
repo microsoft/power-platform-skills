@@ -1,0 +1,63 @@
+# Functional tests for the MCP Apps plugin's committed runtime assets and
+# single-file composition tooling. The matrix protects path handling because
+# generated widgets must work from local plugin installs on every supported OS.
+name: mcp-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/mcp-apps/**"
+            - "evals/mcp-apps/**"
+            - ".github/workflows/mcp-apps-script-tests.yml"
+
+jobs:
+    test-mcp-apps-scripts:
+        name: test-mcp-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: ${{ matrix.node }}
+
+            - name: run-mcp-apps-script-tests
+              shell: bash
+              working-directory: plugins/mcp-apps
+              run: node --test scripts/tests/*.test.js
+
+    check-mcp-apps-runtime:
+        name: check-mcp-apps-runtime
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: 22
+
+            - name: install-pinned-vendor-dependencies
+              shell: bash
+              working-directory: plugins/mcp-apps/scripts/_vendor-build
+              run: npm ci --ignore-scripts --no-audit --no-fund
+
+            - name: verify-committed-runtime
+              shell: bash
+              working-directory: plugins/mcp-apps/scripts/_vendor-build
+              run: npm run check

@@ -913,3 +913,44 @@ test('requireSuccessfulPush keeps the re-download remedy for the SDK\u0027s own 
     }
   );
 });
+
+
+// ── AB#6686428: the relationship existence probe must not fall back to the POISONING broad read ──
+// `fetchEntityMetadata` -> `createRelationship` is one of the three broad-read -> create pairs that
+// makes Dataverse keep only the base-language label. The narrow probe exists to avoid it; an
+// inconclusive narrow probe falling through to the broad read silently reintroduces the bug, and
+// invisibly, because the create's request body is byte-identical either way.
+const relSpec = (lookupDisplayName) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [],
+  relationships: [{ type: 'OneToMany', referenced: 'new_a', referencing: 'new_b', lookup: { schemaName: 'new_aid', displayName: lookupDisplayName } }],
+});
+// A raw client whose narrow probe is INCONCLUSIVE (a transient 5xx), which is the trigger.
+const inconclusiveRaw = () => ({ get: async () => ({ status: 503, headers: {}, body: {} }) });
+
+test('AB#6686428: an inconclusive probe for a LOCALIZED lookup label skips the broad metadata read', async () => {
+  const m = mockSdk();
+  const broadReads = [];
+  m.provision.dataverse = inconclusiveRaw();
+  m.provision.fetchEntityMetadata = async (l) => { broadReads.push(l); return { logicalName: l, entitySetName: l + 's', relationships: [] }; };
+  const runner = makeRunner({ emit: () => {}, total: 4 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: relSpec({ 1033: 'Account', 3082: 'Cuenta' }), apply: true });
+
+  assert.deepStrictEqual(broadReads, [],
+    'the broad read must NOT run for a localized label -- it is what strips every non-base language');
+  assert.ok(m.calls.some((c) => c[0] === 'createRelationship'),
+    'and the relationship is still created: "could not tell" is treated as absent, as it always was');
+});
+
+test('AB#6686428: a PLAIN lookup label keeps the broad-read fallback unchanged', async () => {
+  // The narrowing must not cost the existence check for the common case. Nothing is at risk there:
+  // a plain string has one label, so the broad read cannot strip anything.
+  const m = mockSdk();
+  const broadReads = [];
+  m.provision.dataverse = inconclusiveRaw();
+  m.provision.fetchEntityMetadata = async (l) => { broadReads.push(l); return { logicalName: l, entitySetName: l + 's', relationships: [] }; };
+  const runner = makeRunner({ emit: () => {}, total: 4 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: relSpec('Account'), apply: true });
+
+  assert.deepStrictEqual(broadReads, ['new_a'], 'the fallback still runs when no label can be poisoned');
+});

@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('node:child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -11,6 +12,35 @@ const {
   main,
   parseArgs,
 } = require('../validate-mobile-files');
+
+test('protected paths remain blocked with POSIX and Windows path separators', () => {
+  for (const filePath of [
+    '/project/power.config.json',
+    'C:\\project\\power.config.json',
+    '/project/src/generated/services/ItemsService.ts',
+    'C:\\project\\src\\generated\\services\\ItemsService.ts',
+    '/project/vendor/package.tgz',
+    'C:\\project\\vendor\\package.tgz',
+  ]) {
+    const result = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../hooks/validate-protected-paths.js'),
+    ], {
+      encoding: 'utf8',
+      input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: filePath } }),
+    });
+    assert.strictEqual(result.status, 2, `${filePath}: ${result.stderr}`);
+    assert.match(result.stderr, /BLOCKED: protected path/);
+  }
+  for (const filePath of ['/project/src/items.ts', 'C:\\project\\src\\items.ts']) {
+    const result = spawnSync(process.execPath, [
+      path.resolve(__dirname, '../../hooks/validate-protected-paths.js'),
+    ], {
+      encoding: 'utf8',
+      input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: filePath } }),
+    });
+    assert.strictEqual(result.status, 0, result.stderr);
+  }
+});
 
 test('all-source flag is explicit and does not require individual files', () => {
   const parsed = parseArgs(['--project-root', '/tmp/project', '--all-source']);

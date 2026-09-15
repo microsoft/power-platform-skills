@@ -9,7 +9,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, emitResult, preflightAuth } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -189,6 +189,9 @@ const APP_COMPONENT_ENTITY_SOURCES = [
   { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
   { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
 ];
+// Dataverse entity set -> the App Spec artifact class it inventories, so a failed read is reported
+// in the author's vocabulary ("forms could not be inventoried") rather than Dataverse's.
+const INVENTORY_KIND_BY_SET = { savedquery: 'views', savedqueryvisualization: 'charts', systemform: 'forms' };
 // Dataverse honors `$top` as a HARD cap and omits `@odata.nextLink`, so this is the point past which
 // components of one type stop being inspected. Generous for a real app (a 70-table app has ~1000
 // views), and exceeded only with a warning.
@@ -309,48 +312,77 @@ async function readAppShellSettings(sdk, appId) {
 }
 
 async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
-  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [] };
+  // `incomplete[]` records an artifact class whose read FAILED. Without it the whole app-component
+  // block shared one broad catch, so a 403 on `systemform` left `forms: []` — indistinguishable from
+  // an app with no forms, which is EXACTLY the reported bug (AB#6686423) reappearing inside the fix
+  // for it. It is a sibling key for the same reason `roleRestrictedForms` is: only the five
+  // whitelisted keys reach `app-spec.json`, so this informs the CLI without changing the spec shape.
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [], incomplete: [] };
+  const fail = (kind, err) => inventory.incomplete.push({ kind, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' });
   try {
     const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
     const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
     const parent = appUniqueId ? String(appUniqueId).replace(/[{}]/g, '') : null;
     if (parent) {
+      // Caught PER ARTIFACT CLASS, not once around the loop: one failed query must not hide the
+      // other two, and the caller has to be told WHICH class it cannot vouch for.
       for (const src of APP_COMPONENT_ENTITY_SOURCES) {
-        const rows = await sdk.queryRecords('appmodulecomponent', {
-          select: ['objectid', 'componenttype'],
-          filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-          top: COMPONENT_PAGE_CAP,
-        });
-        const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
-        if (src.set === 'savedquery') {
-          inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
-            withDescription({ id: r.savedqueryid, name: r.name, entity: r.returnedtypecode }, r.description)));
-        } else if (src.set === 'savedqueryvisualization') {
-          inventory.charts.push(...await rowsByIds(sdk, 'savedqueryvisualization', 'savedqueryvisualizationid', ids, ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'description'], (r) =>
-            withDescription({ id: r.savedqueryvisualizationid, name: r.name, entity: r.primaryentitytypecode }, r.description)));
-        } else if (src.set === 'systemform') {
-          // `formxml` is pulled ONLY to detect a role restriction — it is never stored. A form's
-          // security roles live inside formxml as `<DisplayConditions>` (there is no
-          // systemform↔role relationship), and `forms[]` is not reconstructed by this download at
-          // all, so a restricted form would come back as one every role can see. That is a silent
-          // WIDENING of access on a cross-environment rebuild, which is why it is worth one extra
-          // column on a query this download already makes.
-          //
-          // The flag is kept OFF the form entries and on a sibling key, because
-          // `sanitizeDescriptionInventory` whitelists exactly five keys — so this reaches the
-          // download CLI for its warning without leaking a new field into `app-spec.json`.
-          const rawForms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description', 'formxml'], (r) => r);
-          for (const r of rawForms) {
-            if (!r || !r.objecttypecode || r.objecttypecode === 'none') continue;
-            inventory.forms.push(withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
-            if (isRoleRestrictedFormXml(r.formxml)) {
-              inventory.roleRestrictedForms.push({ name: r.name, entity: r.objecttypecode });
+        try {
+          const rows = await sdk.queryRecords('appmodulecomponent', {
+            select: ['objectid', 'componenttype'],
+            filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
+            top: COMPONENT_PAGE_CAP,
+          });
+          // A FULL page is indistinguishable from a truncated one, so treat it as truncated. `$top` is
+          // a HARD cap and Dataverse omits `@odata.nextLink` when it is honoured, so there is no
+          // signal to read afterwards. `appComponentEntities` warns about the same cap on its own
+          // query, but THIS list feeds `notRoundTrippedSummary`, which reports a count — so a
+          // truncated read there is not merely a missing table, it is a smaller number presented as
+          // the whole truth. Marking the class incomplete makes the report say it cannot vouch for
+          // the class instead. A false positive at exactly the cap costs one honest
+          // "could not be inventoried" line; the alternative is a silent undercount.
+          if ((rows || []).length >= COMPONENT_PAGE_CAP) {
+            fail(INVENTORY_KIND_BY_SET[src.set] || src.set,
+              new Error(`more than ${COMPONENT_PAGE_CAP} app components of this type; the list was truncated, so this class is incomplete`));
+          }
+          const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
+          if (src.set === 'savedquery') {
+            inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
+              withDescription({ id: r.savedqueryid, name: r.name, entity: r.returnedtypecode }, r.description)));
+          } else if (src.set === 'savedqueryvisualization') {
+            inventory.charts.push(...await rowsByIds(sdk, 'savedqueryvisualization', 'savedqueryvisualizationid', ids, ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'description'], (r) =>
+              withDescription({ id: r.savedqueryvisualizationid, name: r.name, entity: r.primaryentitytypecode }, r.description)));
+          } else if (src.set === 'systemform') {
+            // `formxml` is pulled ONLY to detect a role restriction — it is never stored. A form's
+            // security roles live inside formxml as `<DisplayConditions>` (there is no
+            // systemform↔role relationship), and `forms[]` is not reconstructed by this download at
+            // all, so a restricted form would come back as one every role can see. That is a silent
+            // WIDENING of access on a cross-environment rebuild, which is why it is worth one extra
+            // column on a query this download already makes.
+            //
+            // The flag is kept OFF the form entries and on a sibling key, because
+            // `sanitizeDescriptionInventory` whitelists exactly five keys — so this reaches the
+            // download CLI for its warning without leaking a new field into `app-spec.json`.
+            const rawForms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description', 'formxml'], (r) => r);
+            for (const r of rawForms) {
+              if (!r || !r.objecttypecode || r.objecttypecode === 'none') continue;
+              inventory.forms.push(withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
+              if (isRoleRestrictedFormXml(r.formxml)) {
+                inventory.roleRestrictedForms.push({ name: r.name, entity: r.objecttypecode });
+              }
             }
           }
+        } catch (err) {
+          fail(INVENTORY_KIND_BY_SET[src.set] || src.set, err);
         }
       }
+    } else {
+      // No app-component parent means NONE of the three classes could be enumerated.
+      for (const src of APP_COMPONENT_ENTITY_SOURCES) fail(INVENTORY_KIND_BY_SET[src.set] || src.set, new Error('the app\'s component list could not be read'));
     }
-  } catch { /* inventory is best-effort; structural download still carries the rebuildable app spec */ }
+  } catch (err) {
+    for (const src of APP_COMPONENT_ENTITY_SOURCES) fail(INVENTORY_KIND_BY_SET[src.set] || src.set, err);
+  }
 
   try {
     if (solutionUniqueName && !isRestrictedSolution(solutionUniqueName)) {
@@ -379,7 +411,15 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
         }
       }
     }
-  } catch { /* business-rule descriptions are an inspection aid, not a rebuild prerequisite */ }
+  } catch (err) {
+    // FAIL CLOSED, not silent. This used to swallow the error as "an inspection aid, not a rebuild
+    // prerequisite", which was defensible while nothing consumed the list. It is not any more:
+    // `notRoundTrippedSummary` now reports business rules as a class that does not round-trip, and it
+    // reports a class only when it has rows — so a 403 or 500 here leaves the list empty and the
+    // report silently asserts the app HAS no business rules. "Unknown" and "none" must never look
+    // alike in a report whose entire purpose is naming what was left behind.
+    fail('businessRules', err);
+  }
 
   try {
     // Global option sets are not app components, but their Description is another Dataverse Label. This
@@ -392,11 +432,18 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
     // and the catch below would swallow it — leaving this inventory permanently empty while the
     // download still reported success. Same trap, and same fix, as readEntityWithDescriptions.
     //
-    // `dataverse.get` RESOLVES on a non-2xx instead of throwing, so the status is checked explicitly.
+    // `dataverse.get` RESOLVES on a non-2xx instead of throwing, so an unsuccessful or malformed
+    // response has to be REJECTED explicitly. Coercing it to `[]` (the previous `|| []`) put the
+    // failure beyond the catch's reach, so a metadata 403 was indistinguishable from an environment
+    // with no global choices — and now that the report consumes this list, that reads as a positive
+    // claim rather than an absence of information.
     const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description');
-    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || [];
-    inventory.globalChoices.push(...rows.map((r) => withDescription({ name: r.Name }, r.Description)));
-  } catch { /* optional inventory */ }
+    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+    if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
+    inventory.globalChoices.push(...res.body.value.map((r) => withDescription({ name: r.Name }, r.Description)));
+  } catch (err) {
+    fail('globalChoices', err);
+  }
 
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
 }
@@ -545,6 +592,134 @@ function isRoleRestrictedFormXml(formxml) {
   return /<Role\b/i.test(block[0]);
 }
 
+// Which of the app's DEPLOYED artifact classes this download does not reconstruct. AB#6686423.
+//
+// `forms[]`, `views[]` and `charts[]` are emitted EMPTY by hydrateSpec (see the note there for why
+// each is blocked). The artifacts themselves are already captured — `descriptionInventory` in the
+// written app-spec.json lists every one of them by id, name and table — but until this reporter
+// existed nothing SAID they were missing from the rebuildable part of the spec. The reported
+// symptom was exactly that: "it emitted empty forms and views ... with nothing reporting the loss".
+//
+// This is a REPORT, not a gate. Blocking would be wrong: every app has forms and views, so a
+// failure here would break every download, and the omission is not destructive in the environment
+// the app was downloaded from — a rebuild there does not delete artifacts the spec omits. The loss
+// is real only when rebuilding into a DIFFERENT environment, and the message says so rather than
+// stating a blanket "dropped".
+//
+// Returns null when there is nothing to report, so a caller can skip the warning entirely.
+function notRoundTrippedSummary(inventory) {
+  // Data-driven, and the set is derived from what `hydrateSpec` actually emits — NOT from what is
+  // convenient to format. `hydrateSpec` returns `views: []`, `charts: []`, `forms: []`,
+  // `commands: []` and no `businessRules`/`globalChoices` key at all, so all of these are absent
+  // from the rebuildable spec. Reporting only forms/views/charts contradicted the report's own
+  // purpose and left a business rule — a real cross-environment loss — silent.
+  //
+  // `entityScoped: false` for global choices because they are ORG-wide: grouping one under a table
+  // would invent a relationship the platform does not have.
+  //
+  // ⚠ `commands[]` is missing from this list for a different reason, and it is a KNOWN gap rather
+  // than an oversight: `readDescriptionInventory` never collects commands, so there is no count to
+  // report. Adding the class here would emit a permanent "0 commands" that reads as "this app has
+  // none" — the exact false reassurance the `incomplete` channel exists to avoid. Inventory them
+  // first, then add the class.
+  const CLASSES = [
+    { key: 'forms', label: 'form', entityScoped: true },
+    { key: 'views', label: 'view', entityScoped: true },
+    { key: 'charts', label: 'chart', entityScoped: true },
+    { key: 'businessRules', label: 'business rule', entityScoped: true },
+    { key: 'globalChoices', label: 'global choice', entityScoped: false },
+  ];
+  const classes = [];
+  const orgScoped = []; // [{ key, label, names: [] }] — classes with no owning table
+  const byEntity = new Map(); // table logical -> { <classKey>: [names] }
+  const blankEntityRow = () => Object.fromEntries(CLASSES.filter((c) => c.entityScoped).map((c) => [c.key, []]));
+  for (const { key, label, entityScoped } of CLASSES) {
+    const rows = (inventory && Array.isArray(inventory[key]) ? inventory[key] : []).filter((r) => r && r.name);
+    if (!rows.length) continue;
+    classes.push({ kind: key, count: rows.length, label });
+    if (!entityScoped) {
+      orgScoped.push({ kind: key, label, names: rows.map((r) => String(r.name)).sort((a, b) => a.localeCompare(b)) });
+      continue;
+    }
+    for (const r of rows) {
+      const entity = String(r.entity || 'unknown').toLowerCase();
+      if (!byEntity.has(entity)) byEntity.set(entity, blankEntityRow());
+      byEntity.get(entity)[key].push(r.name);
+    }
+  }
+  // A class whose read FAILED is reported too, and is the reason this cannot simply return null on an
+  // empty inventory: "no forms were found" and "the forms query returned 403" look identical from
+  // here, and treating the second as the first is precisely the silent-loss bug being fixed. An
+  // UNKNOWN class is worse than a known-omitted one, so it is surfaced even when nothing was read.
+  const incomplete = (inventory && Array.isArray(inventory.incomplete) ? inventory.incomplete : [])
+    .filter((i) => i && i.kind)
+    .map((i) => ({ kind: i.kind, reason: i.reason || 'read failed' }))
+    .sort((a, b) => a.kind.localeCompare(b.kind));
+  if (!classes.length && !incomplete.length) return null;
+  // Sorted at EVERY level, not just the table one. The rows arrive from `queryRecords`, i.e. in
+  // whatever order Dataverse returned them, which carries no ordering guarantee — so two downloads
+  // of an unchanged app could emit the same artifacts in a different order. This block is written
+  // into the operator's output and compared between runs, so an unstable order reads as a change
+  // that did not happen, which is the opposite of the point: the report exists to make a real
+  // difference visible. `classes` is already deterministic (built from the fixed CLASSES list).
+  const entityKeys = CLASSES.filter((c) => c.entityScoped).map((c) => c.key);
+  return {
+    classes,
+    total: classes.reduce((n, c) => n + c.count, 0),
+    entities: [...byEntity.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([entity, v]) => ({
+        entity,
+        ...Object.fromEntries(entityKeys.map((k) => [k, [...(v[k] || [])].sort((a, b) => String(a).localeCompare(String(b)))])),
+      })),
+    ...(orgScoped.length ? { orgScoped } : {}),
+    ...(incomplete.length ? { incomplete } : {}),
+  };
+}
+
+// Render `notRoundTrippedSummary` as the operator-facing warning. Kept separate from the computation
+// so the wording is testable without a download, and so the same summary can be emitted as JSON.
+function notRoundTrippedWarning(summary) {
+  if (!summary) return '';
+  const lines = [];
+  if (summary.classes.length) {
+    const counts = summary.classes.map((c) => `${c.count} ${c.label}${c.count === 1 ? '' : 's'}`).join(', ');
+    // The class list is rendered from the summary rather than hardcoded. It used to read
+    // "forms[], views[] or charts[]" regardless of what was actually reported, so once business
+    // rules and global choices joined the inventory the sentence named the wrong things — a report
+    // about silent loss quietly misdescribing its own contents.
+    const names = summary.classes.map((c) => (c.kind === 'globalChoices' ? 'globalChoices[]' : `${c.kind}[]`)).join(', ');
+    const tables = summary.entities.length;
+    lines.push(
+      `NOTE: this download does not reconstruct ${names} — ${counts}${tables ? ` on ${tables} table(s)` : ''} are absent from the rebuildable spec.`,
+      '  They are NOT lost: every one is listed under `descriptionInventory` in app-spec.json, and they remain on the deployed app.',
+      '  Rebuilding into THIS environment leaves them untouched. Rebuilding into a DIFFERENT environment will NOT recreate them —',
+      `  re-declare the ones you need in ${names}, or copy them with a solution export.`,
+    );
+    for (const e of summary.entities) {
+      const parts = [];
+      for (const c of summary.classes) {
+        const list = e[c.kind];
+        if (Array.isArray(list) && list.length) parts.push(`${c.kind}: ${list.join(', ')}`);
+      }
+      if (parts.length) lines.push(`    ${e.entity} — ${parts.join('; ')}`);
+    }
+    // Org-scoped classes are listed separately and WITHOUT a table, because they do not belong to
+    // one; filing a global choice under a table would assert a relationship Dataverse does not have.
+    for (const o of summary.orgScoped || []) {
+      lines.push(`    (environment-wide) ${o.kind}: ${o.names.join(', ')}`);
+    }
+  }
+  if (summary.incomplete && summary.incomplete.length) {
+    lines.push(
+      `WARNING: ${summary.incomplete.length} artifact class(es) could NOT be inventoried, so this download cannot say what it left behind:`,
+    );
+    for (const i of summary.incomplete) lines.push(`    ${i.kind} — ${i.reason}`);
+    lines.push('  Treat an empty list for those classes as UNKNOWN, not as "the app has none".');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 // Columns whose type could not be substantiated, so a `download -> rebuild into a fresh org` round
 // trip does not silently create them as Text. `type` is absent for a Choice/MultiChoice (above), or
 // for an attribute whose metadata carried no `attributeType` at all — an attribute with a type that
@@ -592,17 +767,51 @@ function entityFromMetadata(meta, logical) {
     const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) ? undefined : mapped;
     return withDescription({
       schemaName,
-      ...(a && (a.displayName || a.DisplayName) ? { displayName: descriptionFromDataverse(a.displayName || a.DisplayName) || a.displayName || a.DisplayName } : {}),
+      // A column labelled in several languages round-trips as an LCID map; one language stays a
+      // plain string (AB#6686428). Resolution order, and every step must yield a STRING or a map —
+      // never a raw Dataverse Label object:
+      //   1. the RAW `DisplayName` Label merged in by readEntityWithDescriptions (the only source
+      //      that carries every language),
+      //   2. the SDK's own already-flattened `displayName` string,
+      //   3. a single-language Label unwrapped by descriptionFromDataverse.
+      //
+      // Step 2 is not optional tidiness. LIVE-MEASURED: a synthetic lookup `*name` column such as
+      // `cfo_customeridname` carries `{"LocalizedLabels":[],"UserLocalizedLabel":null}` — a wholly
+      // EMPTY Label. `labelFromDataverse` correctly returns undefined for it, and an `|| a.DisplayName`
+      // tail would then emit that raw object as the column's displayName, producing a spec that fails
+      // its own validation with "'LocalizedLabels' is not an LCID". Omitting the label entirely is the
+      // right answer: Dataverse has none either.
+      ...(columnDisplayName(a) !== undefined ? { displayName: columnDisplayName(a) } : {}),
       ...(specType ? { type: specType } : {}),
     }, a && (a.description !== undefined ? a.description : a.Description));
   }).filter((c) => c.schemaName);
+  // Table label + plural. When the table carries more than one language, BOTH must round-trip and
+  // `pluralName` becomes required (validateAppSpec refuses to derive a plural from a label map), so
+  // the plural is emitted whenever the display name is localized.
+  const displayName = labelFromDataverse(meta && meta.DisplayName);
+  const pluralName = labelFromDataverse(meta && meta.DisplayCollectionName);
+  // The primary column's own label. It is EXCLUDED from `columns[]` (it is declared separately as
+  // `primaryAttribute`), so its label has to be read from the un-filtered attribute list here —
+  // otherwise a table whose primary column is called "Order Title" / "Título del pedido" downloads
+  // as the hardcoded "Name", and a fresh-environment rebuild loses both the real label and its
+  // translations. `'Name'` remains the fallback for a metadata read that carried no label at all.
+  const primaryAttr = primaryLower ? attrs.find((a) => String((a && (a.logicalName || a.LogicalName || a.schemaName || a.SchemaName)) || '').toLowerCase() === primaryLower) : null;
+  const primaryLabel = columnDisplayName(primaryAttr);
   return {
     schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
-    displayName: (meta && meta.displayName) || logical,
+    displayName: displayName !== undefined ? displayName : ((meta && meta.displayName) || logical),
+    // Emitted when EITHER label is localized, not only when the singular is. `validateAppSpec`
+    // requires `pluralName` beside a localized `displayName`, which is why the singular's shape is
+    // checked — but a table can carry a single-language `DisplayName` and a multi-language
+    // `DisplayCollectionName` (the two are independent in Dataverse, and an unprovisioned language is
+    // dropped per-label on read). Keying only off the singular silently discarded those plural
+    // translations and a rebuild then derived an English plural. Two PLAIN labels still omit it: a
+    // plain plural is derivable and emitting it would add noise to every download.
+    ...((isLocalizedLabelMap(displayName) || isLocalizedLabelMap(pluralName)) && pluralName !== undefined ? { pluralName } : {}),
     ...(descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) ? { description: descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) } : {}),
     // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
     // does not have, which is exactly the bug this fixes.
-    primaryAttribute: primary ? { schemaName: primary, displayName: 'Name' } : null,
+    primaryAttribute: primary ? { schemaName: primary, displayName: primaryLabel !== undefined ? primaryLabel : 'Name' } : null,
     columns,
     // Flag every recovered table as pre-existing so a teardown of THIS downloaded spec never deletes the
     // table (+ its data). Download cannot prove which tables the app CREATED vs merely REFERENCED, and
@@ -638,24 +847,100 @@ async function readEntityWithDescriptions(sdk, logical) {
   // reintroduce exactly the silence this replaces.
   const entityPath = `/${metadataEntityPath(logical)}`;
   try {
-    const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description`);
-    if (res && res.status >= 200 && res.status < 300 && res.body) meta.Description = res.body.Description;
-  } catch { /* description best-effort — never sink an otherwise usable download */ }
+    // DisplayName / DisplayCollectionName are read alongside Description so a table labelled in more
+    // than one language round-trips (AB#6686428). The SDK's own `fetchEntityMetadata` projection
+    // flattens `displayName` to ONE string, which is enough for identity but silently loses every
+    // other language — a rebuild from such a spec would recreate the table English-only.
+    const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description,DisplayName,DisplayCollectionName`);
+    if (res && res.status >= 200 && res.status < 300 && res.body) {
+      meta.Description = res.body.Description;
+      meta.DisplayName = res.body.DisplayName;
+      meta.DisplayCollectionName = res.body.DisplayCollectionName;
+    } else {
+      // A non-2xx is NOT "this table has no extra languages" — it is "we could not look". Recorded so
+      // the caller can say so; see the catch below for why silence here is the wrong default.
+      meta.labelReadFailed = `HTTP ${res && res.status}`;
+    }
+  } catch (err) {
+    meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
+  }
   try {
     // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
     // `targets` (lookup target tables) and `attributeType`, which this projection does not, and
     // entityFromMetadata/other callers rely on them.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description`);
-    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || null;
-    if (Array.isArray(rows)) {
-      const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r.Description]));
-      meta.attributes = (meta.attributes || []).map((a) => {
-        const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
-        return byLogical.has(key) ? { ...a, Description: byLogical.get(key) } : a;
-      });
+    //
+    // This read carries the SAME weight as the table-level one above: it is the only source of
+    // multi-language labels for every non-primary COLUMN and for the primary attribute. Treating it
+    // as "column descriptions are best-effort" was right when descriptions were all it fetched, and
+    // became wrong the moment labels rode along — a 403 here returns a spec whose columns are
+    // single-language, with nothing saying so. Same recording, same reason.
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName`);
+    if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+    if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
+    const rows = res.body.value;
+    const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r]));
+    meta.attributes = (meta.attributes || []).map((a) => {
+      const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
+      const row = byLogical.get(key);
+      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName } : a;
+    });
+  } catch (err) {
+    // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded
+    // above, because the first reason is the more useful one to show and both describe the same
+    // outcome for the operator: this table came back single-language.
+    if (!meta.labelReadFailed) {
+      meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
     }
-  } catch { /* column descriptions are best-effort */ }
+  }
   return meta;
+}
+
+// Reconstruct an App Spec label from a Dataverse Label, preserving EVERY language. AB#6686428.
+//
+// Shape (see the Label reference linked in hydrate-spec.js):
+//   { "LocalizedLabels": [{ "Label": "Baseline", "LanguageCode": 1033 },
+//                         { "Label": "Línea base", "LanguageCode": 3082 }],
+//     "UserLocalizedLabel": { "Label": "Baseline", "LanguageCode": 1033 } }
+//
+// Returns a plain STRING when the table is labelled in one language, and an LCID map only when there
+// are genuinely two or more. That asymmetry is deliberate: emitting `{ "1033": "Baseline" }` for
+// every single-language table would change the shape of every spec this tool has ever written, for
+// no gain, and would make every download diff noisy. Returns undefined when there is nothing usable,
+// so a caller can fall back to the SDK's flattened `displayName` rather than write an empty label.
+//
+// ⚠ KNOWN LIMITATION, accepted rather than overlooked: the LCID of a SINGLE label is not preserved.
+// A table labelled only in 3082 downloads as a plain string, and a rebuild applies it at the target
+// build's resolved language — correct when rebuilding into the same organization (its base language
+// is the same), wrong when rebuilding into one with a different base, where Spanish text is stored
+// as an English label. Fixing it means threading the org's base language into this pure function and
+// emitting a one-entry map whenever the two differ, which changes the emitted shape for a case that
+// is currently indistinguishable from the common one. `download` also deliberately never pins the
+// org's LCID into the spec (that would make the spec non-portable), so there is no existing signal
+// to key off. Pin `languageCode` in the spec before a cross-organization rebuild.
+function labelFromDataverse(value) {
+  if (!value || typeof value !== 'object') return undefined;
+  const rows = Array.isArray(value.LocalizedLabels) ? value.LocalizedLabels : [];
+  const usable = rows.filter((l) => l && typeof l.Label === 'string' && l.Label.trim() && Number.isInteger(Number(l.LanguageCode)) && Number(l.LanguageCode) > 0);
+  if (!usable.length) return undefined;
+  if (usable.length === 1) return usable[0].Label;
+  const out = {};
+  // NOT sorted, deliberately: V8 orders integer-like object keys ASCENDING regardless of insertion
+  // order, so `JSON.stringify` of this map is already deterministic and two downloads of the same
+  // table produce byte-identical output. A sort here would look like it earned that guarantee and
+  // could never be shown to matter — verified: inserting 3082 then 1033 yields keys ["1033","3082"].
+  for (const l of usable) out[String(Number(l.LanguageCode))] = l.Label;
+  return out;
+}
+
+// The App Spec `displayName` for one downloaded column, or undefined when Dataverse has no usable
+// label. GUARANTEES a string or an LCID map — never a raw Dataverse Label object, which would emit a
+// spec that fails its own validation. See the call site for the live-measured shape that motivated it.
+function columnDisplayName(a) {
+  const localized = labelFromDataverse(a && a.DisplayName);
+  if (localized !== undefined) return localized;
+  // The SDK's `fetchEntityMetadata` projection already flattens this one to a string.
+  if (typeof (a && a.displayName) === 'string' && a.displayName.trim()) return a.displayName;
+  return descriptionFromDataverse(a && a.DisplayName);
 }
 
 // Image webresourcetypes (png/jpg/gif/ico/svg) — an icon reference must resolve to one of these to be
@@ -969,6 +1254,10 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const noPrimaryName = [];   // sitemap tables — a hard failure (the user asked for these)
   const droppedComponents = []; // component-only tables — dropped with a warning (best-effort input)
   const metadataErrors = new Map(); // logical -> error message (the read itself failed)
+  // Tables whose LABEL read failed. Distinct from `metadataErrors`: the table itself was recovered
+  // and the spec is usable, but only the SDK's flattened single-language `displayName` survived, so
+  // a multi-language table silently downloads as English-only. Reported rather than swallowed.
+  const labelReadFailures = new Map(); // logical -> reason
   for (const logical of allLogicals) {
     let e;
     // A metadata READ failure is not the same as metadata that reports no primary name, and it must
@@ -977,7 +1266,9 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // the confusing downstream error the explicit branch below exists to avoid. Bucket it by origin
     // exactly like the no-primary-name case, so the user is told the table AND the reason.
     try {
-      e = entityFromMetadata(await readEntityWithDescriptions(sdk, logical), logical);
+      const meta = await readEntityWithDescriptions(sdk, logical);
+      if (meta && meta.labelReadFailed) labelReadFailures.set(logical, meta.labelReadFailed);
+      e = entityFromMetadata(meta, logical);
     } catch (err) {
       metadataErrors.set(logical, (err && err.message) || String(err));
       (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
@@ -1011,6 +1302,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   }
   if (droppedComponents.length) {
     process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${withReason(droppedComponents)}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
+  }
+  // AB#6686428: the label read is the ONLY source of multi-language labels. When it fails the table
+  // is still recovered, so the download succeeds and the spec looks complete — but it carries the
+  // SDK's flattened single-language `displayName` and every other language is gone. Silently
+  // degrading there is the same shape as the bug this feature fixes, so say so. Not a gate: an
+  // English-only spec is still a usable spec, and failing a read-only command over it would be worse.
+  if (labelReadFailures.size) {
+    const detail = [...labelReadFailures.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([l, r]) => `${l} (${r})`).join(', ');
+    process.stderr.write(`WARNING: a label read failed for ${labelReadFailures.size} table(s) (${detail}). The table AND COLUMN labels for those tables fall back to ONE language, so anything labelled in several languages downloads as single-language and a rebuild would recreate it that way. Re-run the download to recover the other languages before rebuilding into a different environment.\n`);
   }
   // A column whose App Spec type could not be substantiated — a Choice/MultiChoice (whose options
   // this download does not read) or an attribute type the spec cannot declare. Rebuilding into an
@@ -1121,9 +1421,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   if (restricted.length) {
     process.stderr.write(`WARNING: ${restricted.length} form(s) are restricted to specific security roles (${restricted.map((f) => `${f.entity}.${f.name}`).join(', ')}). This download does not reconstruct forms[], so that restriction is NOT carried into the spec — rebuilding into a fresh environment would recreate them visible to EVERY role. Re-declare it with forms[].securityRoles before a cross-environment rebuild.\n`);
   }
+  // AB#6686423: name the artifact classes this download leaves out of the rebuildable spec. The
+  // reported failure was not that they are omitted — that is a documented limitation — but that
+  // NOTHING said so, so a second session reading the spec could not tell "this app has no views"
+  // from "this download does not carry views".
+  const notRoundTripped = notRoundTrippedSummary(capturedInventory);
+  if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped };
 }
 
 async function main() {
@@ -1141,6 +1447,18 @@ async function main() {
   }
   const outDir = path.resolve(outArg || '.');
   fs.mkdirSync(outDir, { recursive: true });
+  // AB#6686427 — prove the ambient Azure CLI identity can actually reach this org BEFORE any read.
+  // Every read below is best-effort by design (a tenant without a setting definition, or a caller
+  // without access to one artifact class, must still produce a usable spec), so an auth failure does
+  // not surface as an error here — it degrades to an EMPTY spec: no forms, no views, no columns, and
+  // guessed primary attributes, reported as a success. That is AB#6686423's symptom, and this is the
+  // gate that stops it being mistaken for a round-trip gap.
+  const auth = await preflightAuth(env);
+  if (!auth.ok && !auth.inconclusive) { emitResult(false, { ok: false, error: auth.error }); return; }
+  // An INCONCLUSIVE probe must not block: it goes through a client with a weaker retry policy than
+  // the one the download itself uses, so a transient 5xx here would otherwise fail a run that would
+  // have succeeded. Surface it and continue.
+  if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
   const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
   const resolved = await resolveAppId(sdk, appArg);
   if (resolved.error) { emitResult(false, { ok: false, error: resolved.error }); return; }
@@ -1159,7 +1477,7 @@ async function main() {
   const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings } = result;
+  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped } = result;
   if (droppedSubareas > 0 || dashboardReconstructionError) {
     const droppedList = (droppedSubareaDetails || [])
       .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -1201,7 +1519,7 @@ async function main() {
   const specPath = path.join(outDir, 'app-spec.json');
   preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
+  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
 }
 
 // Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.
@@ -1242,4 +1560,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
