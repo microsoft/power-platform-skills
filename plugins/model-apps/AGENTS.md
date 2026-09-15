@@ -84,7 +84,14 @@ too**: its agents are headless discovery/generation workers, and an agent that n
 returns a `needs_input` request for the main loop to ask (`references/agent-interaction-contract.md`).
 `scripts/validate-agent-interactivity.js` fails the build if any `plugins/model-apps/agents/*.md`
 declares an interactive tool — the frontmatter is prose to every other test, which is how `/genpage`
-Phase 1 specified an unreachable interactive flow for ~2.5 months. For the end-to-end flow,
+Phase 1 specified an unreachable interactive flow for ~2.5 months. The same validator also fails a
+**one-sided tool declaration**: tool names are host-specific and every host silently ignores a name
+it does not recognize, so a capability named only in one scheme is absent on the other host and the
+agent launches without it. `TaskCreate`/`TaskUpdate`/`TaskList` are the live example — no published
+alias table lists them, so `todo` must be declared alongside. Both skills also support **unattended
+runs** (Copilot autopilot / Claude auto-accept) via
+`scripts/resolve-interaction-mode.js`; suppressing a prompt never authorizes destructive work.
+For the end-to-end flow,
 stage→phase mapping and page-identity model, see
 [`docs/architecture.md`](docs/architecture.md) → `## /app-builder — build pipeline`; that doc owns
 the pipeline and delegates each script's **behavioral spec** to the entries below.

@@ -43,12 +43,58 @@ on; its absence is the only signal you get that the loop did not close.
   "questions": [
     { "id": "<stable-id>",
       "question": "<the question, verbatim>",
-      "options": [ { "label": "<short>", "description": "<what it means>" } ],
+      "options": [ { "label": "<short>", "description": "<what it means>", "default": true } ],
       "multiSelect": false } ] }
 ```
 
 Return everything already discovered alongside the request, so the re-invocation
 does not repeat the reads it has already paid for.
+
+Mark at most one option per question `"default": true`. It is what an **unattended**
+run uses — Copilot autopilot and Claude auto-accept have no user to ask, so a
+question with no marked default halts the run rather than being answered by
+whoever guesses first. Mark a default only where proceeding without a human is
+genuinely safe: the field is how an agent says "this one is safe to assume", and
+omitting it is the correct answer for anything destructive or irreversible.
+
+## Tool names must be portable across hosts
+
+Tool names are **host-specific**, and every host silently **ignores** a name it
+does not recognize instead of reporting it. A capability named only in a scheme
+the running host does not know is therefore simply absent: the agent launches,
+then cannot run `node` or track progress, with nothing in any log saying why.
+
+Copilot publishes a compatible-alias table — `Bash`→`execute`, `Read`→`read`,
+`Write`/`Edit`→`edit`, `Grep`/`Glob`→`search`, case-insensitively — so those
+Claude Code names already carry across.
+`TaskCreate`, `TaskUpdate` and `TaskList` do **not**: they appear in no published
+alias table, so on a Copilot host they are dropped and the agent loses progress
+tracking. The portable name for that capability is `todo`.
+
+The rule is therefore: **declare every capability in both naming schemes.**
+Listing both is safe precisely because unrecognized names are ignored, and it
+removes the dependency on a given host implementing the alias table at all.
+
+```yaml
+tools:
+  - Read
+  - Write
+  - Bash
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - read
+  - edit
+  - execute
+  - todo
+```
+
+`scripts/validate-agent-interactivity.js` fails the build on a one-sided
+declaration, in either direction.
+
+References:
+[Copilot tool aliases](https://docs.github.com/en/copilot/reference/custom-agents-configuration#tool-aliases)
+· [Claude Code ignores unknown tool names](https://github.com/anthropics/claude-code/issues/93171)
 
 ## Logging is unchanged
 

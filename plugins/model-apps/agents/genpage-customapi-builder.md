@@ -7,6 +7,12 @@ description: >-
   the ## Custom API Bindings contract. Invoked only by the top-level genpage orchestrator from
   BOTH the create and edit flows; never invoked by planners or directly by users.
 color: green
+# Two naming schemes on purpose: Claude Code names first, then the portable
+# Copilot aliases for the same capabilities. Every host ignores tool names it
+# does not recognize, so declaring both is safe and keeps this agent's file,
+# shell and todo tools even on a host that does not implement the compatible-
+# alias table. `TaskCreate`/`TaskUpdate`/`TaskList` are NOT aliases anywhere —
+# `todo` is the portable name. See references/agent-interaction-contract.md.
 tools:
   - Read
   - Write
@@ -14,6 +20,10 @@ tools:
   - TaskCreate
   - TaskUpdate
   - TaskList
+  - read
+  - edit
+  - execute
+  - todo
 ---
 ## Interaction contract — this agent is HEADLESS
 

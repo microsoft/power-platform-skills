@@ -14,6 +14,8 @@ const {
   interactiveToolsIn,
   selfInteractionProseIn,
   undeclaredSkillTools,
+  declaredToolsIn,
+  unportableToolsIn,
   agentFiles,
   skillFiles,
   INTERACTIVE_TOOLS,
@@ -188,6 +190,78 @@ test('no scanned agent claims in its frontmatter that it interacts', () => {
     for (const f of files) {
       const prose = selfInteractionProseIn(frontmatterOf(fs.readFileSync(f, 'utf8')));
       assert.deepEqual(prose, [], `${path.relative(ROOT, f)} frontmatter matched ${prose.join(', ')}`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Cross-host tool portability — the second silent failure mode in the same frontmatter.
+//
+// Tool names are host-specific and every host IGNORES a name it does not recognize instead of
+// reporting it, so a capability named only in a scheme the running host does not know is simply
+// absent. The agent launches and then cannot run `node` or track progress, with nothing in any
+// log explaining why. That is the same fail-silent shape as the interactivity defect above,
+// which is why it is guarded in the same place.
+
+test('Claude names that Copilot publishes as compatible aliases are accepted as-is', () => {
+  // Read/Write/Bash ARE documented Copilot aliases, so they are already portable. A check that
+  // cried wolf here would be tuned out, and the real defect below would go with it.
+  assert.deepEqual(unportableToolsIn('tools:\n  - Read\n  - Write\n  - Bash'), []);
+});
+
+test('TaskCreate/TaskUpdate/TaskList alone are flagged — no host but Claude Code knows them', () => {
+  const problems = unportableToolsIn('tools:\n  - Read\n  - TaskCreate\n  - TaskUpdate\n  - TaskList');
+  assert.equal(problems.length, 1, problems.join('; '));
+  assert.match(problems[0], /unknown to Copilot/);
+  assert.match(problems[0], /declare 'todo'/);
+});
+
+test('adding the portable todo alias clears it', () => {
+  assert.deepEqual(unportableToolsIn('tools:\n  - Read\n  - TaskCreate\n  - todo'), []);
+});
+
+test('a Copilot-only declaration is flagged as invisible to Claude Code', () => {
+  const problems = unportableToolsIn('tools:\n  - execute\n  - todo');
+  assert.equal(problems.length, 2, problems.join('; '));
+  assert.ok(problems.every((p) => /unknown to Claude Code/.test(p)), problems.join('; '));
+});
+
+test('a host-specific namespaced tool name carries no assertion', () => {
+  // `execute/runInTerminal` is a real Copilot CLI tool id. It is in neither table, and because
+  // unrecognized names are ignored everywhere, declaring one is deliberately allowed.
+  assert.deepEqual(unportableToolsIn("tools: ['execute/runInTerminal', 'read/readFile']"), []);
+});
+
+test('tool names mentioned in YAML comments are not read as declarations', () => {
+  // The real agent frontmatter explains in a comment WHY both schemes are present, and names
+  // TaskCreate/TaskUpdate/TaskList while doing so. Reading those as declared would make a file
+  // pass or fail for reasons unrelated to what it actually grants.
+  const fm = [
+    '# TaskCreate/TaskUpdate/TaskList are NOT aliases anywhere - todo is the portable name.',
+    'tools:',
+    '  - Read',
+    '  - todo  # portable name',
+  ].join('\n');
+  assert.deepEqual(declaredToolsIn(fm), ['Read', 'todo']);
+});
+
+test('the inline comma form parses like the block form', () => {
+  assert.deepEqual(declaredToolsIn('allowed-tools: Read, Write, Bash'), ['Read', 'Write', 'Bash']);
+});
+
+test('the tool block ends at the next frontmatter key', () => {
+  const fm = 'tools:\n  - Read\n  - todo\ncolor: green\ndescription: not a tool';
+  assert.deepEqual(declaredToolsIn(fm), ['Read', 'todo']);
+});
+
+// Every real agent must satisfy it — this is what fails the PR.
+test('every scanned agent declares each capability in a form both hosts recognize', () => {
+  for (const rel of SCAN_PATHS) {
+    const files = agentFiles(path.join(ROOT, rel));
+    assert.ok(files.length > 0, `expected agents under ${rel}`);
+    for (const f of files) {
+      const problems = unportableToolsIn(frontmatterOf(fs.readFileSync(f, 'utf8')));
+      assert.deepEqual(problems, [], `${path.relative(ROOT, f)}: ${problems.join('; ')}`);
     }
   }
 });

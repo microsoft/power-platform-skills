@@ -6,6 +6,13 @@ description: >-
   and reference docs for code-generation rules. Writes one .tsx file per invocation.
   Called by the genpage skill in parallel — not invoked directly by users.
 color: green
+# Two naming schemes on purpose: Claude Code names first, then the portable
+# Copilot aliases for the same capabilities. Every host ignores tool names it
+# does not recognize, so declaring both is safe and keeps this agent's file,
+# search and todo tools even on a host that does not implement the compatible-
+# alias table. `TaskCreate`/`TaskUpdate` are NOT aliases anywhere — `todo` is
+# the portable name. No `execute`/`Bash`: this agent only authors page source.
+# See references/agent-interaction-contract.md.
 tools:
   - Read
   - Write
@@ -13,6 +20,10 @@ tools:
   - Grep
   - TaskCreate
   - TaskUpdate
+  - read
+  - edit
+  - search
+  - todo
 ---
 
 # Genpage Page Builder

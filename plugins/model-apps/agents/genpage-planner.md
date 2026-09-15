@@ -8,6 +8,14 @@ description: >-
   once the orchestrator re-invokes it with the approval outcome.
   Called by the genpage skill — not invoked directly by users.
 color: cyan
+# Two naming schemes on purpose: Claude Code names first, then the portable
+# Copilot aliases for the same capabilities. Every host ignores tool names it
+# does not recognize, so declaring both is safe and keeps this agent's file,
+# shell and todo tools even on a host that does not implement the compatible-
+# alias table. `TaskCreate`/`TaskUpdate`/`TaskList` are NOT aliases anywhere —
+# `todo` is the portable name. `agent`/`Task` is deliberately ABSENT: this
+# planner returns a discovery request and the orchestrator dispatches.
+# See references/agent-interaction-contract.md.
 tools:
   - Read
   - Write
@@ -15,6 +23,10 @@ tools:
   - TaskCreate
   - TaskUpdate
   - TaskList
+  - read
+  - edit
+  - execute
+  - todo
 ---
 
 # Genpage Planner

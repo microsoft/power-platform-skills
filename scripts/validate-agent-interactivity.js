@@ -43,6 +43,52 @@ const SKILL_SCAN_PATHS = [path.join('plugins', 'model-apps', 'skills')];
 // Tools that require a human on the other end of the conversation.
 const INTERACTIVE_TOOLS = ['AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode'];
 
+// Tool names are HOST-SPECIFIC, and every host silently IGNORES a name it does not
+// recognize rather than reporting it. That fail-silent behaviour is exactly why this needs
+// a machine check: a capability named only in a scheme the running host does not know is
+// simply absent, and the first symptom is a subagent that cannot run `node` or write a file
+// — with nothing in any log saying why.
+//   Copilot: "All unrecognized tool names are ignored, which allows product-specific tools to
+//   be specified in an agent profile without causing problems."
+//   https://docs.github.com/en/copilot/reference/custom-agents-configuration#tool-aliases
+//   Claude Code behaves the same way: https://github.com/anthropics/claude-code/issues/93171
+//
+// Capability -> the Claude Code tool names that provide it. These are the names a Claude host
+// recognizes; a capability declared ONLY as a Copilot primary alias (`execute`) is dropped there.
+const CLAUDE_NAMES_FOR = {
+  read: ['Read', 'NotebookRead'],
+  edit: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
+  execute: ['Bash'],
+  search: ['Grep', 'Glob'],
+  agent: ['Task'],
+  web: ['WebSearch', 'WebFetch'],
+  // TaskCreate/TaskUpdate/TaskList are this repo's Claude-side todo tools.
+  todo: ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList'],
+};
+
+// Every tool name a Copilot host recognizes: the primary aliases plus the published
+// compatible aliases, matched case-insensitively ("All aliases are case insensitive").
+// NOTE the omissions that make this check worth having: TaskCreate, TaskUpdate and TaskList
+// appear in NO published alias table, so on a Copilot host they are silently dropped and the
+// agent loses progress tracking unless `todo` is also declared.
+const COPILOT_RECOGNIZED = new Set(
+  [
+    'read', 'Read', 'NotebookRead',
+    'edit', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit',
+    'execute', 'shell', 'Bash', 'powershell',
+    'search', 'Grep', 'Glob',
+    'agent', 'custom-agent', 'Task',
+    'web', 'WebSearch', 'WebFetch',
+    'todo', 'TodoWrite',
+  ].map((n) => n.toLowerCase())
+);
+
+// Claude-name -> capability, derived so the two tables cannot drift apart.
+const CAPABILITY_OF = Object.entries(CLAUDE_NAMES_FOR).reduce((acc, [capability, names]) => {
+  for (const n of names) acc[n] = capability;
+  return acc;
+}, {});
+
 // Pull the YAML frontmatter block out of an agent .md. Returns '' when the file
 // has no frontmatter, which is itself not an error here — this check is only
 // about what a declared tool list contains.
@@ -86,6 +132,95 @@ const SELF_INTERACTION_PROSE = [/\bplan mode\b/i, /\basks? the user\b/i, /\bprom
 
 function selfInteractionProseIn(frontmatter) {
   return SELF_INTERACTION_PROSE.filter((re) => re.test(frontmatter)).map((re) => String(re));
+}
+
+// Strip YAML comments before reading the tool list. These frontmatter blocks deliberately
+// NAME tool aliases in their comments to explain why both naming schemes are present, so a
+// plain regex over the raw text would read those explanations as declarations.
+// Only whole-line and trailing comments are stripped; no value in this frontmatter is a
+// quoted string containing '#', so there is nothing subtler to handle.
+function stripYamlComments(frontmatter) {
+  return frontmatter
+    .split(/\r?\n/)
+    .map((line) => line.replace(/(^|\s)#.*$/, ''))
+    .join('\n');
+}
+
+// Returns every tool name a frontmatter declares, across the two forms in use here:
+//     tools:                          allowed-tools: Read, Write, Bash
+//       - Read                        tools: ['read/readFile', 'execute/runInTerminal']
+//       - Write
+// Quotes and list brackets are stripped so the inline array form parses like the comma form.
+function declaredToolsIn(frontmatter) {
+  const lines = stripYamlComments(frontmatter).split(/\r?\n/);
+  const tools = [];
+  let inBlock = false;
+  for (const line of lines) {
+    const inline = line.match(/^(?:tools|allowed-tools)\s*:\s*(\S.*)$/);
+    if (inline) {
+      tools.push(
+        ...inline[1]
+          .replace(/[[\]'"]/g, '')
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean)
+      );
+      inBlock = false;
+      continue;
+    }
+    if (/^(?:tools|allowed-tools)\s*:\s*$/.test(line)) {
+      inBlock = true;
+      continue;
+    }
+    if (inBlock) {
+      const item = line.match(/^\s*-\s*(\S.*?)\s*$/);
+      if (item) {
+        tools.push(item[1].replace(/['"]/g, ''));
+        continue;
+      }
+      // Any non-list line at column 0 ends the block (the next frontmatter key).
+      if (/^\S/.test(line)) inBlock = false;
+    }
+  }
+  return tools;
+}
+
+// Returns capabilities that are declared in a way one host cannot see, as human-readable
+// problems. A one-sided declaration is not a style nit: the host that does not recognize the
+// declared name drops it silently, and the agent runs without that capability.
+function unportableToolsIn(frontmatter) {
+  const declared = declaredToolsIn(frontmatter);
+  const primaryAliases = new Set(Object.keys(CLAUDE_NAMES_FOR));
+
+  // Group every declared name under the capability it provides, so each capability is judged
+  // on the whole set of names declared for it rather than name by name.
+  const byCapability = new Map();
+  for (const tool of declared) {
+    const capability = primaryAliases.has(tool.toLowerCase())
+      ? tool.toLowerCase()
+      : CAPABILITY_OF[tool];
+    // A name in neither table (a host-specific tool, e.g. `execute/runInTerminal`) carries no
+    // assertion: it is deliberately allowed, since unrecognized names are ignored everywhere.
+    if (!capability) continue;
+    if (!byCapability.has(capability)) byCapability.set(capability, []);
+    byCapability.get(capability).push(tool);
+  }
+
+  const problems = [];
+  for (const [capability, names] of byCapability) {
+    if (!names.some((n) => CLAUDE_NAMES_FOR[capability].includes(n))) {
+      problems.push(
+        `${names.join('/')} (${capability}) is unknown to Claude Code — also declare one of ` +
+          CLAUDE_NAMES_FOR[capability].join('/')
+      );
+    }
+    if (!names.some((n) => COPILOT_RECOGNIZED.has(n.toLowerCase()))) {
+      problems.push(
+        `${names.join('/')} (${capability}) is unknown to Copilot — also declare '${capability}'`
+      );
+    }
+  }
+  return problems;
 }
 
 function agentFiles(dir) {
@@ -148,6 +283,15 @@ function main() {
             'and say the orchestrator presents it.'
         );
       }
+      const unportable = unportableToolsIn(fm);
+      if (unportable.length) {
+        errors.push(
+          `${path.relative(ROOT, filePath).replace(/\\/g, '/')}: declares ${unportable.join('; ')} — ` +
+            'tool names are host-specific and every host silently IGNORES a name it does not ' +
+            'recognize, so a capability named in only one scheme is simply absent on the other ' +
+            'host and the agent runs without it. Declare both names for the capability.'
+        );
+      }
     }
   }
 
@@ -171,11 +315,11 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`Checked ${checked} agent/skill file(s): agents are headless, and every skill declares the interactive tools it uses.`);
+  console.log(`Checked ${checked} agent/skill file(s): agents are headless, every skill declares the interactive tools it uses, and every agent capability is declared in both naming schemes.`);
 }
 
 if (require.main === module) {
   main();
 }
 
-module.exports = { frontmatterOf, interactiveToolsIn, selfInteractionProseIn, undeclaredSkillTools, agentFiles, skillFiles, INTERACTIVE_TOOLS, SCAN_PATHS, SKILL_SCAN_PATHS };
+module.exports = { frontmatterOf, interactiveToolsIn, selfInteractionProseIn, undeclaredSkillTools, stripYamlComments, declaredToolsIn, unportableToolsIn, agentFiles, skillFiles, INTERACTIVE_TOOLS, CLAUDE_NAMES_FOR, COPILOT_RECOGNIZED, CAPABILITY_OF, SCAN_PATHS, SKILL_SCAN_PATHS };
