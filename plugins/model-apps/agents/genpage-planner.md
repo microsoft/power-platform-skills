@@ -278,25 +278,41 @@ Read `connector-bindings.md` and splice its contents verbatim into the
 If the request implies **only** Dataverse and/or mock data (no connector source),
 write `## Connector Bindings` as exactly `No connector bindings.`.
 
-### Custom API Detection (delegated to genpage-customapi-builder)
+### Custom API Detection (handled by the orchestrator, not by you)
 
 If the request implies **server-side Dataverse logic** — approving/escalating a record,
 running a calculation or validation, or any operation that maps to a Dataverse **Custom API**
-(Action or Function) rather than a plain row read/write — delegate ALL Custom API work to the
-`genpage-customapi-builder` agent via the `Task` tool. Do **not** run the feature-gate probe
-or any Custom API discovery inline — that agent is the single owner of the `custom-api`
-feature gate, Custom API discovery, and the binding contract.
+(Action or Function) rather than a plain row read/write — **do not dispatch any agent and do
+not run the feature-gate probe or any Custom API discovery inline.** You have no `Task` tool,
+and `genpage-customapi-builder` may need to ask the user which Custom API to bind — it cannot
+run headless inside a sub-agent. It is dispatched by the top-level `/genpage` orchestrator.
 
-Invoke `genpage-customapi-builder` with a prompt containing:
+Custom API discovery is **read-only** (a Web API query over the Custom API tables), so unlike
+connector discovery it carries no "wrong environment cannot be undone" hazard. It still runs
+AFTER you, though, so it queries the environment you resolved and binds to the page tables you
+detected. Your first invocation therefore always carries the sentinel `No custom API bindings.`.
 
-- **Mode:** `create`
-- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
-- **Page tables:** the table logical name(s) the page is bound to (from `## Existing
-  Entities` / `pageInput`), or "none"
-- **Intent:** the server-side operation(s) the request implies (e.g. "approve the order",
-  "escalate the case", "compute an order summary")
+Two cases:
 
-It writes two files into the working directory:
+1. **The orchestrator already forwarded Custom API results** — you are being re-invoked after
+   discovery, so your prompt carries a `## Custom API Bindings` block (or the sentinel
+   `No custom API bindings.`) and/or an `actions.json` path. Consume it as-is: copy the block
+   verbatim into the plan's `## Custom API Bindings` section. Never re-derive or edit it.
+2. **A Custom API need is present or surfaces during clarification** — do NOT attempt
+   discovery. Stop and return
+
+   ```json
+   { "action": "custom_api_discovery_required", "intent": "<the operation(s) implied>",
+     "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>",
+     "pageTables": "<page table logical names, comma-separated, or none>" }
+   ```
+
+   `resolvedAction`, `envUrl`, and `pageTables` are **required**: the orchestrator dispatches
+   the builder against exactly those. Return this only after your auth/environment and entity
+   detection steps have run, so all three values are real.
+
+`genpage-customapi-builder` remains the single owner of the `custom-api` feature gate, Custom
+API discovery, and the binding contract. When the orchestrator forwards results it provides:
 
 - `custom-api-bindings.md` — the exact body for the plan's `## Custom API Bindings` section
   (either `No custom API bindings.` or the binding table).
@@ -306,8 +322,7 @@ Read `custom-api-bindings.md` and splice its contents verbatim into the
 `## Custom API Bindings` section of `genpage-plan.md`.
 
 If the request implies **no** server-side Custom API operation (plain Dataverse CRUD and/or
-mock data only), skip the agent entirely and write `## Custom API Bindings` as exactly
-`No custom API bindings.`.
+mock data only), write `## Custom API Bindings` as exactly `No custom API bindings.`.
 
 ### App Detection
 

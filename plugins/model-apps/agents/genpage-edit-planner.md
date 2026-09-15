@@ -163,11 +163,26 @@ at a time (you are headless — see the interaction contract below):
 >   deployed binding**. The orchestrator will run discovery and re-invoke you with a
 >   real connector contract and upload-file status.
 
-> **Custom API changes** (Dataverse Action/Function / plug-in logic): if the edit adds,
-> replaces, or removes a server-side Custom API call, capture it in the plan's `### Custom
-> API Changes` below. Do **not** run Custom API discovery here — the orchestrator delegates
-> that to the `genpage-customapi-builder` agent (which owns the `custom-api` feature gate).
-> Preserving or clearing existing Custom API bindings needs no discovery.
+> **Custom API changes** (Dataverse Action/Function / plug-in logic):
+> Do **not** run Custom API discovery here — the orchestrator delegates that to the
+> `genpage-customapi-builder` agent (which owns the `custom-api` feature gate).
+>
+> - **Preserving or clearing** existing Custom API bindings needs no discovery: capture it
+>   in the plan's `### Custom API Changes` and continue.
+> - **Adding or replacing** a Custom API call that the orchestrator did not already discover
+>   — i.e. the need surfaced in *your* clarification, so your prompt carries the "preserve"
+>   action and `none — omit --actions` — you must **stop and return**
+>
+>   ```json
+>   { "action": "custom_api_discovery_required", "intent": "<the operation(s) implied>",
+>     "resolvedAction": "edit", "envUrl": "<the environment URL you were given>",
+>     "pageTables": "<the page's entity logical names, comma-separated, or none>" }
+>   ```
+>
+>   Do **not** write the edit plan. If you proceed instead, the apply step will generate
+>   `executeAction` / `executeFunction` calls while upload still omits `--actions`, shipping a
+>   page whose Custom API calls have **no deployed binding**. The orchestrator will run
+>   discovery and re-invoke you with a real Custom API contract and upload-file status.
 
 Mark "Analyze existing page" task complete.
 

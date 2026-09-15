@@ -30,6 +30,8 @@ This skill orchestrates specialist agents across the create and edit flows:
    feature-gating and discovery; writes `connector-bindings.md` + `connectors.json`.
    Runs **after** the planner has resolved create-vs-edit and the target environment
    (discovery is mutating), then the planner is re-invoked with its contract.
+   **`genpage-customapi-builder`** — the same top-level dispatch for server-side
+   Custom API (Action/Function) needs; writes `custom-api-bindings.md` + `actions.json`.
 3. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
    relationships, choices, sample data) via the plugin's Node.js Web API scripts
 4. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
@@ -38,13 +40,15 @@ This skill orchestrates specialist agents across the create and edit flows:
 **Edit flow:**
 
 5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
-   replaces, discovers, or clears connector bindings; preserves unchanged bindings
-   when the edit does not touch them, or when the `connectors` rollback gate is off
+   replaces, discovers, removes, or clears connector bindings; preserves unchanged bindings
+   when the edit does not touch them, or when the `connectors` rollback gate is off.
+   **`genpage-customapi-builder`** — the same top-level dispatch when an edit adds, replaces,
+   discovers, removes, or clears Custom API bindings.
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
    requirements, presents an edit plan, writes `genpage-edit-plan.md`
 
-You (the skill) coordinate the agents and own connector dispatch, app creation,
-RuntimeTypes generation, deployment, browser verification, and the inline
+You (the skill) coordinate the agents and own connector and Custom API dispatch, app
+creation, RuntimeTypes generation, deployment, browser verification, and the inline
 application of planned edits.
 
 ## References
@@ -151,14 +155,20 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 1. Run the prerequisite, auth and discovery steps (inline, or via
    `genpage-planner` as a headless worker). Connector discovery has **not** run
    yet, so the contract is the literal `No connector bindings.`, with discovery
-   available on request (see 1a).
+   available on request (see 1a). Custom API discovery is likewise orchestrator-
+   owned and has not run either, so its contract starts as the literal
+   `No custom API bindings.`, with discovery available on request (see 1b).
 2. Ask question 3 (**create new / edit existing**) with `AskUserQuestion`, unless
    `$ARGUMENTS` already settles it. On **edit**, jump to the **Edit Flow** section.
 3. If discovery reports `{ "action": "connector_discovery_required" }`, invoke
    `genpage-connector-builder` with the intent — **Mode: `create`** for a new
    page, **Mode: `edit`** for an edit — using the resolved environment URL, then
    re-run discovery with the builder's `## Connector Bindings` contract and
-   `connectors.json` status.
+   `connectors.json` status. If it instead reports
+   `{ "action": "custom_api_discovery_required" }`, invoke `genpage-customapi-builder`
+   the same way (same mode, resolved environment URL, plus the returned `pageTables`),
+   then re-run the planner with the builder's `## Custom API Bindings` contract and
+   `actions.json` status (see 1b).
 4. If any agent returns `{ "action": "needs_input", … }`, ask its questions here
    with `AskUserQuestion`, record them in `workflow-log.md`, and re-invoke that
    agent with the answers. Agents never prompt; they request.
@@ -217,6 +227,31 @@ rollback gate: it probes first, writes `No connector bindings.` + `[]` when the 
 is off or the page needs no connector, and performs all connection discovery only
 when one is required.
 
+#### 1b. Custom API discovery is orchestrator-owned too
+
+`genpage-customapi-builder` is likewise dispatched only by this top-level orchestrator,
+not by `genpage-planner` — the planner has no `Task` tool, and the builder may need to ask
+the user which Custom API to bind, which only the main loop can do. Custom API discovery is
+**read-only** (a Web API query over the Custom API tables), so unlike connector discovery it
+carries no "wrong environment / wrong mode cannot be undone" hazard. It still runs after the
+planner so it targets the environment the planner resolved and binds to the page tables it
+detected.
+
+- Every first planner invocation gets the literal contract `No custom API bindings.` and is
+  told discovery has not run.
+- When the planner determines a server-side Custom API (Action/Function) is needed — from
+  `$ARGUMENTS` or from its own user clarification — it returns
+  `{ "action": "custom_api_discovery_required", "intent": "...", "resolvedAction": "create",
+  "envUrl": "...", "pageTables": "..." }`.
+- Only then dispatch `genpage-customapi-builder` with that mode, environment URL, page tables,
+  the working directory and `${PLUGIN_ROOT}`. Read `<working-dir>/custom-api-bindings.md` and
+  verify `<working-dir>/actions.json` is a bare JSON array, then re-run the planner with the
+  refreshed contract.
+
+The builder remains the single owner of the `custom-api` feature gate: it probes first, writes
+`No custom API bindings.` + `[]` when the gate is off or the page needs no Custom API, and
+performs discovery only when one is required.
+
 #### Invocation prompt
 
 Pass a prompt that includes:
@@ -228,6 +263,10 @@ Pass a prompt that includes:
   or the literal `No connector bindings.` when discovery was not needed
 - The connector upload file status: `<working-dir>/connectors.json` exists and is
   a bare JSON array, or `no connectors.json; omit --connectors`
+- The Custom API contract: the full body of `<working-dir>/custom-api-bindings.md`,
+  or the literal `No custom API bindings.` when discovery was not needed
+- The Custom API upload file status: `<working-dir>/actions.json` exists and is
+  a bare JSON array, or `no actions.json; omit --actions`
 
 Example:
 
@@ -252,6 +291,20 @@ Example:
 > "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>" }`
 > instead of trying to discover connectors yourself. `resolvedAction` and `envUrl`
 > are required — discovery is dispatched against exactly those.
+>
+> Custom API discovery is orchestrator-owned too. Do **not** invoke
+> `genpage-customapi-builder` from inside the planner. Use this as the entire
+> `## Custom API Bindings` section of the plan:
+>
+> [paste custom-api-bindings.md body, or `No custom API bindings.`]
+>
+> Custom API upload file: [absolute path to actions.json, or `none — omit --actions`]
+>
+> If your clarification questions reveal a server-side Custom API (Action/Function)
+> not covered by the Custom API contract above, stop and return
+> `{ "action": "custom_api_discovery_required", "intent": "<operation>",
+> "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>",
+> "pageTables": "<page tables or none>" }` instead of trying to discover it yourself.
 >
 > Follow the instructions in your agent file. Validate prereqs and confirm auth.
 > The create/edit decision and the resolved environment are supplied to you by the
@@ -744,15 +797,17 @@ target solution so they travel cross-environment.
    `node ${PLUGIN_ROOT}/scripts/add-page-to-solution.js <envUrl> <solutionUniqueName> <app-id> --page-ids "<page-id1,page-id2>" --connection-refs "<logicalName1,logicalName2>"`
 3. Log the command + result to `workflow-log.md`.
 
-Cross-env note (verified 2026-07-10): the app (80) pulls the sitemap (62); the
-GenPage `uxagentproject` (10372) is added explicitly and pulls its
-`uxagentprojectfile` rows (10373, incl. `config.json` with `connectorBindings`);
-each `connectionreference` (10158) is added so bindings resolve. At import the
+Cross-env note: the app (80) pulls the sitemap (62); the GenPage
+`uxagentproject` is added explicitly and pulls its `uxagentprojectfile` rows
+(including `config.json` with `connectorBindings`); each `connectionreference`
+is added so bindings resolve. The script discovers both custom-table component
+types from `EntityDefinitions(...).ObjectTypeCode` in the target environment —
+their numeric values are environment-specific and must never be hardcoded. At import the
 deployer supplies env-specific `ConnectionId` per connection reference via
 `pac solution create-settings` + `pac solution import --settings-file`.
 
 Custom API bindings need **no** extra ALM step: `config.json`'s `actionBindings` travels
-automatically in the `uxagentprojectfile` (10373) rows already pulled with the GenPage. The
+automatically in the `uxagentprojectfile` rows already pulled with the GenPage. The
 referenced Custom APIs are a separate deployment prerequisite (bound by `name`), not added here.
 
 ### Phase 7: Verify in Browser (Optional)
