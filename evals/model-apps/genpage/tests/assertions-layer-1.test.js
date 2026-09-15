@@ -638,33 +638,38 @@ test('Entity scripts --solution (new flow): pass when provision-entities.js used
   assert.equal(result.status, 'pass');
 });
 
-// A log may record its mode only as prose, with no resolver JSON and no `Unattended default:`
-// marker. Classifying that as ATTENDED is a false PASS: the attended branch only checks that
-// EnterPlanMode appears, so an unattended run that wrongly prompted a human scores clean and the
-// violation is hidden. Isolation: this log DOES contain `EnterPlanMode called`, so the attended
-// branch would pass it — only the unattended branch can produce a failure here.
-test('a prose-only unattended mode line marks the log unattended, so a prompt is a failure', () => {
+// The documented mode record puts the log on the unattended branch. genpage SKILL.md's unattended
+// table requires `Unattended default: interaction mode → unattended (<reason>)`, so recording the
+// mode is enough to make a prompt a violation — no prose matching needed. Isolation: this log DOES
+// contain `EnterPlanMode called`, so the attended branch would pass it; only the unattended branch
+// can fail here.
+test('the documented mode record marks the log unattended, so a prompt is a failure', () => {
   const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
-  const log = `Interaction mode: unattended (--non-interactive flag)\nEnterPlanMode called`;
+  const log = `Unattended default: interaction mode → unattended (--non-interactive flag)\nEnterPlanMode called`;
   const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
   assert.equal(result.status, 'fail');
 });
 
-// The mirror of the test above. An attended log can contain the word "unattended" while DENYING it
-// ("Not unattended: ..."), so the prose match keys on a mode DECLARATION rather than on the bare
-// word — `\bunattended\b` also matches inside "not unattended" and "whether unattended". Without
-// that anchoring this correct attended run is graded down the unattended branch and failed for the
-// `EnterPlanMode called` line that attended runs are required to have.
-test('an attended log that denies being unattended is not misread as unattended', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
-  const log = `Interaction mode: attended. Not unattended: the --non-interactive flag was absent\nEnterPlanMode called`;
-  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
-  assert.equal(result.status, 'pass');
-});
+// Guard against re-introducing free-prose mode matching. Each prose form below is an ATTENDED log
+// that merely contains the word "unattended"; a `\bunattended\b` match flags the first, and a
+// `mode: unattended` match flags the rest. Any of them classifying as unattended would fail this
+// correct run for the `EnterPlanMode called` line attended runs are required to have.
+for (const prose of [
+  'Interaction mode: attended. Not unattended: the --non-interactive flag was absent',
+  'Mode: unattended = false',
+  'Interaction mode: unattended? no - TTY present',
+  'Read the mode matrix: Unattended → skip; Attended → ask. We are attended.',
+]) {
+  test(`an attended log mentioning "${prose.slice(0, 34)}..." is not misread as unattended`, () => {
+    const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
+    const result = check({ fixture: fix({ workflowLog: `${prose}\nEnterPlanMode called`, genpagePlan: validPlan() }), eval: evalStub() });
+    assert.equal(result.status, 'pass');
+  });
+}
 
-// `## Custom API Bindings` is opt-in, so omitting it must stay valid — this guards against the
-// obvious wrong fix of adding it to REQUIRED_PLAN_SECTIONS, which would reject every plan that
-// binds no Custom API (all 12 current fixtures).
+// Omitting the section must stay valid — this guards against the obvious wrong fix of adding it to
+// REQUIRED_PLAN_SECTIONS. plan-schema.md:212 does spec the section as always-present, but 0 of the
+// 12 fixture plans emit it, so requiring it would fail 12/12 rather than catch a real defect.
 test('a plan without a Custom API Bindings section is still valid', () => {
   const errors = validateGenpagePlanSchema(validPlan());
   assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 0);

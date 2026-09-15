@@ -48,18 +48,18 @@ function isUnattendedLog(log) {
     // grade that correct attended run down the unattended branch and fail it for lacking an
     // `Unattended default:` marker. Shape emitted by scripts/resolve-interaction-mode.js:
     //   {"ok":true,"interactive":false,"reason":"--non-interactive flag"}
-    /"?reason"?\s*[:=]\s*"?(?:--non-interactive flag|POWER_PLATFORM_SKILLS_NONINTERACTIVE\s+is set)/i.test(log) ||
-    // A log that records the mode only as prose ("Interaction mode: unattended (...)") would
-    // otherwise be graded ATTENDED, so an unattended run that wrongly prompted would score clean
-    // — a false PASS, which is worse than a false fail because it hides the violation.
-    // Matching a bare `unattended` is not safe: it also matches inside "not unattended" and
-    // "whether unattended". Anchoring on a mode DECLARATION is what excludes those — the filler
-    // forbids `:`/`=` so it cannot hop over the colon in "mode: not unattended" to find a later one.
-    // Matches:     "Interaction mode: unattended", "Mode: unattended because ...",
-    //              "Interaction mode resolved: unattended", "Interaction mode: **unattended**"
-    // Not matched: "Interaction mode: attended (no --non-interactive flag)",
-    //              "Not unattended: ...", "Interaction mode: not unattended"
-    /\bmode\b[^\n:=]{0,15}[:=]\s*\**unattended\b/i.test(log)
+    /"?reason"?\s*[:=]\s*"?(?:--non-interactive flag|POWER_PLATFORM_SKILLS_NONINTERACTIVE\s+is set)/i.test(log)
+    // Deliberately NO free-prose alternative here (e.g. matching "Interaction mode: unattended").
+    // Prose is unbounded and every attempt to pattern-match it closed one negation position while
+    // opening another: a bare `\bunattended\b` matches inside "not unattended"; anchoring on
+    // `mode: unattended` fixes that but then admits "Mode: unattended = false",
+    // "Interaction mode: unattended? no", and "the Unattended column" — all ATTENDED logs, each
+    // graded unattended and failed for lacking a marker, which is the exact false failure this
+    // function was fixed to stop causing.
+    // Instead the contract is pinned in the doc: genpage SKILL.md's unattended table requires the
+    // mode to be recorded as `Unattended default: interaction mode → unattended (<reason>)`, which
+    // the first alternative already matches. Matching the documented marker is decidable; matching
+    // English is not. Re-adding a prose alternative re-opens the negation problem.
   );
 }
 
@@ -325,13 +325,18 @@ function validateGenpagePlanSchema(plan) {
     }
   }
 
-  // `## Custom API Bindings` is opt-in (plan-schema.md: "opt-in, unlike the always-present
-  // `## Connector Bindings`"), so this is conditional and stays a no-op for plans that omit it —
-  // it is deliberately NOT added to REQUIRED_PLAN_SECTIONS, which would reject every valid plan
-  // that uses no Custom API. Without this, the Custom API half of the bindings contract had no
-  // enforcement at all: the sentinel at plan-schema.md:143 was stated but never checked, so a
-  // prompt regression that leaked a `----- BEGIN/END ... -----` delimiter into this section
-  // would score green, while the identical regression in the connector half fails loudly.
+  // `## Custom API Bindings` is spec'd as always-present: plan-schema.md:212 gives it the same
+  // "Exact literal ... when empty" sentinel rule as `## Connector Bindings` at :211, and :213
+  // reserves "Opt-in" for `## Solution Packaging` alone — which is why OPTIONAL_PLAN_SECTIONS
+  // contains only that one section. (The "opt-in, unlike the always-present ## Connector Bindings"
+  // sentence at :158-160 sits inside the Solution Packaging block and describes IT, not this
+  // section.) In practice though, 0 of the 12 fixture plans emit `## Custom API Bindings` and
+  // REQUIRED_PLAN_SECTIONS omits it, so requiring it here would fail every existing plan. This
+  // check is therefore conditional until the fixtures catch up with the spec — a deliberate
+  // accommodation of a spec-vs-reality divergence, not a statement that the section is optional.
+  // Without it the Custom API half had no enforcement at all: the sentinel was stated but never
+  // checked, so a prompt regression leaking a `----- BEGIN/END ... -----` delimiter into this
+  // section scored green, while the identical regression in the connector half fails loudly.
   const customApiSection = byTitle.get('Custom API Bindings');
   if (customApiSection) {
     const body = customApiSection.content.trim();

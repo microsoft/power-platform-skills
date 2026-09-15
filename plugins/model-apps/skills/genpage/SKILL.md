@@ -180,6 +180,7 @@ the log still shows what decided the run:
 
 | Gate | Attended | Unattended |
 | --- | --- | --- |
+| Recording the resolved mode | Nothing to record | Write the mode itself as `Unattended default: interaction mode → unattended (<reason>)` before the first gate. Record it with this marker, not as free prose such as `Interaction mode: unattended` — the evaluator keys on the marker, and prose forms are indistinguishable from an attended log that merely mentions the word (`Mode: unattended = false`, `not unattended`). |
 | Create new / edit existing (step 2) | `AskUserQuestion` | Whatever `$ARGUMENTS` states. With nothing stated, **create new** — the only additive choice. |
 | An agent returns `needs_input` (step 4) | Ask, then re-invoke | Re-invoke with the option the agent marked `"default": true`. If it marked none, **halt**. |
 | Plan approval (step 5) | `EnterPlanMode` / `ExitPlanMode` | Treat the plan as approved and continue to step 6, which still writes `genpage-plan.md` through the planner. The plan is recorded, just not presented. Log this gate as `Unattended default: plan approval → approved (<reason>)` — the evaluator looks for the plan/approval wording and `approved` on that one line, so a paraphrase such as `→ auto-approve` is read as a missing approval record. |

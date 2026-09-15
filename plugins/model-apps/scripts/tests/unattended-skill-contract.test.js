@@ -58,3 +58,23 @@ test('genpage planner prompt delimits binding contracts from upload-file status'
     'planner must be told the delimiters are not part of the section body',
   );
 });
+
+// These two markers are a literal-string contract between a doc in plugins/ and an evaluator in
+// evals/, and nothing else reads them: the eval unit tests use hand-written log strings rather than
+// the doc, and no fixture records an interaction mode, so the unattended branch never executes in
+// the harness. Without these assertions the doc could be reworded and every suite would stay green
+// while the contract silently died. Counterpart: evals/model-apps/genpage/lib/assertions-layer-1.js
+// (`isUnattendedLog`, and the plan-approval check in the EnterPlanMode workflow assertion).
+test('the genpage unattended markers satisfy the evaluator patterns they are pinned to', () => {
+  const skill = read('skills', 'genpage', 'SKILL.md');
+  assert.match(
+    skill,
+    /Unattended default:\s*plan approval\s*→\s*approved\b/i,
+    'the pinned plan-approval marker must satisfy the evaluator plan-approval pattern',
+  );
+  assert.match(
+    skill,
+    /Unattended default:\s*interaction mode\s*→\s*unattended\b/i,
+    'the pinned mode marker must start with `Unattended default:` so isUnattendedLog detects it',
+  );
+});
