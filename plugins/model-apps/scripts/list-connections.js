@@ -16,6 +16,7 @@ const {
   dataverseRequest,
   ensureOk,
   parseArgs,
+  validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
 const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
@@ -97,9 +98,26 @@ function parseFixedWidthTable(raw) {
 
 function parseWhitespaceTable(raw) {
   const lines = raw.replace(/\r/g, '').split('\n').filter((line) => line.trim());
-  const headerIndex = lines.findIndex((line) => /Connection Name|Connection Id|Connector/i.test(line));
+  const headerIndex = lines.findIndex((line) => /Connection Name|Connection Id|Connector|API Id/i.test(line));
   if (headerIndex === -1) return [];
   const headers = lines[headerIndex].trim().split(/\s{2,}/);
+  const normalizedHeaders = headers.map(normalizeHeader);
+  // Current PAC builds emit:
+  //   Id  Name  API Id  Status
+  // with no dashed separator. Names may contain spaces, so splitting each row on
+  // whitespace loses the boundary. The connector API path is the stable delimiter.
+  if (normalizedHeaders.join(',') === 'id,name,apiid,status') {
+    return lines
+      .slice(headerIndex + 1)
+      .map((line) => line.match(/^(\S+)\s+(.+?)\s+(\/providers\/Microsoft\.PowerApps\/apis\/\S+)\s+(\S+)\s*$/i))
+      .filter(Boolean)
+      .map((match) => mapConnectionRow({
+        Id: match[1],
+        Name: match[2],
+        'API Id': match[3],
+        Status: match[4],
+      }));
+  }
   return lines
     .slice(headerIndex + 1)
     .filter((line) => !/^-+$/.test(line.trim()))
@@ -186,9 +204,20 @@ async function main() {
   // this normally passes; exit 3 = "feature off" stays distinct from 1 = runtime/usage error.
   exitIfConnectorsDisabled();
 
-  const { positional } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { positional } = parseArgs(argv);
+  const USAGE = 'Usage: node list-connections.js <envUrl>';
+  // This CLI takes no flags at all, so the contract declares an EMPTY `known` set. That is not a
+  // no-op: parseArgs accepts any `--name` and drops it silently while still swallowing the token
+  // after it, so `--environment https://contoso.crm.dynamics.com` would leave `positional` empty
+  // and report a missing envUrl — naming the symptom instead of the typo that caused it.
+  const flagError = validateFlags(argv, { known: [] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
   if (positional.length < 1) {
-    process.stderr.write('Usage: node list-connections.js <envUrl>\n');
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const [envUrl] = positional;

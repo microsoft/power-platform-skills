@@ -27,6 +27,19 @@ test('missing args exits 1 with usage', () => {
   assert.match(res.stderr, /Usage:/);
 });
 
+test('an unknown flag is a usage error, not a token the CLI silently swallows', () => {
+  // Without validateFlags, parseArgs drops `--environment` AND eats the URL after it, so this
+  // typo left `positional` empty and the CLI reported a MISSING envUrl the caller had supplied.
+  const res = spawnSync(
+    process.execPath,
+    [scriptPath, '--environment', 'https://contoso.crm.dynamics.com'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(res.status, 1, 'a usage error is exit 1, distinct from the exit 3 rollback gate');
+  assert.match(res.stderr, /unknown flag\(s\): --environment/);
+  assert.match(res.stderr, /Usage:/);
+});
+
 test('the rollback switch still works end to end (exit 3, distinct from a usage error)', () => {
   // connectors ships ON, so this is the path that only runs if someone turns it off. Exercise it
   // for real: a gate that has quietly stopped working is worthless as a rollback, and nothing else
@@ -135,6 +148,27 @@ test('falls back to a whitespace-separated table when there is no dashed separat
   ]);
 });
 
+test('parses current PAC Id/Name/API Id/Status output without a separator row', () => {
+  const raw = [
+    'Id                               Name                                API Id                                                              Status',
+    '00000000000000000000000000000001 maker@contoso.onmicrosoft.com       /providers/Microsoft.PowerApps/apis/shared_commondataservice        Connected',
+    '00000000000000000000000000000002 Contoso Smoke Test - Dataverse      /providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps Connected',
+  ].join('\n');
+
+  assert.deepEqual(parsePacConnectionList(raw), [
+    {
+      connectorId: '/providers/Microsoft.PowerApps/apis/shared_commondataservice',
+      connectionId: '00000000000000000000000000000001',
+      displayName: 'maker@contoso.onmicrosoft.com',
+    },
+    {
+      connectorId: '/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps',
+      connectionId: '00000000000000000000000000000002',
+      displayName: 'Contoso Smoke Test - Dataverse',
+    },
+  ]);
+});
+
 test('header matching is case- and punctuation-insensitive', () => {
   // normalizeHeader strips non-alphanumerics and lower-cases, so "Connection Id", "connectionId"
   // and "CONNECTION-ID" are the same column. Without that, a cosmetic CLI header change silently
@@ -168,4 +202,3 @@ test('rows with no identifying field at all are dropped', () => {
   const raw = JSON.stringify([{ 'Connection Name': '', 'Connection Id': '' }, { 'Connection Name': 'Real', 'Connection Id': SP_CONN }]);
   assert.deepEqual(parsePacConnectionList(raw).map((r) => r.displayName), ['Real']);
 });
-
