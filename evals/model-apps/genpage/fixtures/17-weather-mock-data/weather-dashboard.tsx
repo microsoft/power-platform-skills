@@ -14,8 +14,8 @@ import {
     WaterRegular,
 } from '@fluentui/react-icons';
 
-// Mock weather data for Seattle — the MSN Weather connector is gated behind the
-// connectors feature flag (currently OFF), so this page uses inline mock data.
+// Mock weather data for Seattle — the maker chose "Mock data" as the data source,
+// so this page carries inline sample data rather than an MSN Weather connector binding.
 
 interface WeatherRecord {
     date: string;

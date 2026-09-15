@@ -6,7 +6,7 @@ description: >
   with the model-apps plugin to the GitHub repository.
 user-invocable: true
 argument-hint: "[optional: brief description of the bug]"
-allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, read, execute, search, todo
 model: sonnet
 ---
 

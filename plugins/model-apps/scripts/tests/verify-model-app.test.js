@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { readerFor, appIdFor } = require('../verify-model-app.js');
+const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -214,6 +215,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,
+        validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         readJsonArg: (arg) => {
           events.push({ type: 'readJsonArg', arg });
           return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
@@ -518,4 +520,133 @@ test('rolePrivileges paginates and never caps with top', async () => {
   assert.ok(q, 'expected a roleprivileges query');
   assert.strictEqual(q.options.paginate, true, 'must follow @odata.nextLink to completion');
   assert.strictEqual('top' in q.options, false, 'must NOT cap with top -- Dataverse treats it as a hard cap and drops nextLink');
+});
+
+// ---------------------------------------------------------------------------
+// appEntityComponents(): the app's TABLE (type-1) components.
+//
+// These drive the REAL reader through readerFor(), not a hand-fed fake handed to verify-spec — the
+// consumer tests in verify-spec.test.js prove the CHECK, these prove the Dataverse plumbing it
+// depends on (the componenttype filter, pagination, resolution direction and failure modes).
+// ---------------------------------------------------------------------------
+
+const META = { new_order: 'aaaa0000-0000-0000-0000-000000000001', new_line: 'aaaa0000-0000-0000-0000-000000000002', entity: 'eeee0000-0000-0000-0000-00000000000e' };
+
+// `componentIds` are the type-1 rows the app carries. `calls` records every query/metadata read.
+function componentsSdk({ componentIds = [], calls = [], resolve = META, noApp = false } = {}) {
+  return {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (noApp) return [];
+      if (set === 'appmodule') return [{ appmoduleid: 'app-uuid-1', appmoduleidunique: 'uid-1' }];
+      if (set === 'appmodulecomponent') return componentIds.map((id) => ({ objectid: id, componenttype: 1 }));
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+        const logical = m && m[1];
+        if (typeof resolve === 'function') return resolve(logical);
+        const id = resolve[logical];
+        return id ? { status: 200, headers: {}, body: { MetadataId: id } } : { status: 404, headers: {}, body: null };
+      },
+    },
+  };
+}
+const readerWith = (sdk) => readerFor(sdk, 'contoso_app', { workspaceDir: os.tmpdir() });
+
+test('appEntityComponents(): filters componenttype 1 and PAGINATES rather than capping with top', async () => {
+  // `top` is a HARD cap in Dataverse and suppresses @odata.nextLink, so a capped page truncates
+  // silently — and for a MEMBERSHIP check a row that fell off the end reads as NOT PRESENT, i.e.
+  // verify would report a correctly built app as broken. The same trap was already found live on
+  // roleprivileges in this file. It would also hide the `entity` placeholder rows this check exists
+  // to find, since those are exactly what accumulates in a corrupted app.
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: [META.new_order], calls });
+  await readerWith(sdk).appEntityComponents(['new_order']);
+  const q = calls.find((c) => c.set === 'appmodulecomponent');
+  assert.ok(q, 'the component query must run');
+  assert.match(q.opts.filter, /componenttype eq 1/);
+  assert.strictEqual(q.opts.paginate, true, 'must paginate to completion');
+  assert.strictEqual(q.opts.top, undefined, 'must NOT cap with top — a truncated page reads as "missing"');
+});
+
+test('appEntityComponents(): reports present vs absent for the WANTED tables', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  assert.strictEqual(r.placeholder, false);
+});
+
+test('appEntityComponents(): detects an `entity` placeholder component', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order, META.entity] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.placeholder, true, 'a component pointing at the `entity` metadata table must be reported');
+  assert.deepStrictEqual(r.present, ['new_order'], 'and the real table is still present');
+});
+
+test('appEntityComponents(): cost is bounded by the WANTED set, not by the component count', async () => {
+  // Resolving every COMPONENT instead would scale with the app and reintroduce the need for a cap.
+  const many = Array.from({ length: 300 }, (_, i) => `bbbb0000-0000-0000-0000-${String(i).padStart(12, '0')}`);
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: many.concat(META.new_order), calls });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  const metadataReads = calls.filter((c) => c.url).length;
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  // one per wanted table + one for the `entity` placeholder probe
+  assert.strictEqual(metadataReads, 2, `expected 2 metadata reads for 301 components, got ${metadataReads}`);
+});
+
+test('appEntityComponents(): a wanted table that does not exist is ABSENT, not a read failure', async () => {
+  // A 404 means the table is not in the environment at all, which the separate entity-existence
+  // check already reports. Failing the whole answer would mask it behind an unrelated error.
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_ghost']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+});
+
+test('appEntityComponents(): a non-404 resolution error fails closed and names the TABLE, not a GUID', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order], resolve: (logical) => (logical === 'new_line' ? { status: 403, headers: {}, body: null } : { status: 200, headers: {}, body: { MetadataId: META[logical] } }) });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /new_line/, 'the reason must name the table so an operator can act on it');
+  assert.match(r.reason, /403/);
+});
+
+test('appEntityComponents(): an unresolvable app fails closed', async () => {
+  const r = await readerWith(componentsSdk({ noApp: true })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /contoso_app/);
+});
+
+test('appEntityComponents(): an app with NO table components answers ok with nothing present', async () => {
+  // This is the reported defect itself (a sitemap naming tables the app does not contain), not a
+  // read failure — and it cannot mask a permissions problem, because the sitemap is read from the
+  // same appmodulecomponent table and would fail visibly first.
+  const r = await readerWith(componentsSdk({ componentIds: [] })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, []);
+});
+
+test('appEntityComponents(): memoized per wanted-set — one live read per verify run', async () => {
+  const calls = [];
+  const reader = readerWith(componentsSdk({ componentIds: [META.new_order], calls }));
+  await reader.appEntityComponents(['new_order']);
+  await reader.appEntityComponents(['new_order']);
+  assert.strictEqual(calls.filter((c) => c.set === 'appmodulecomponent').length, 1, 'the component query must not repeat');
+});
+test('appEntityComponents(): matches an objectid whose CASING differs from the resolved MetadataId', async () => {
+  // Dataverse does not guarantee that a component `objectid` and the table's `MetadataId` come back
+  // in the same casing, and a GUID is case-insensitive. Comparing raw strings would report a
+  // correctly pinned table as MISSING — a false red build on a healthy app.
+  const sdk = componentsSdk({ componentIds: [META.new_order.toUpperCase()] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order'], 'an upper-cased objectid must still match');
 });

@@ -10,7 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
@@ -52,6 +52,67 @@ async function appIdFor(sdk, appUnique) {
   return rows && rows[0] && rows[0].appmoduleid;
 }
 
+// Which of `wanted` (table logical names) are real TABLE components of the app
+// (`appmodulecomponent` componenttype 1), plus whether the app carries an `entity` PLACEHOLDER row.
+//
+// Returns `{ ok: true, present, placeholder }` or `{ ok: false, reason }`. The caller fails the check
+// on `ok: false` rather than passing, because "we could not look" and "the app is fine" must never be
+// the same answer here.
+//
+// Direction matters, and an earlier version had it backwards. Resolving every COMPONENT id to a
+// logical name meant: a read per component (unbounded by anything the spec controls), a whole-answer
+// failure whenever one foreign id would not resolve — reported as an opaque GUID an operator cannot
+// act on — and a cap on the component query. This resolves only the tables the SPEC asks about, so
+// the cost is bounded by the spec (LIVE-MEASURED ~100 ms per table), a component pointing at a
+// deleted table is simply not one of ours, and every message names a table.
+//
+// `paginate: true`, never `top`. Dataverse honours `$top` as a HARD cap and omits
+// `@odata.nextLink`, so a capped page silently truncates — and for a membership check a row that
+// fell off the end reads as NOT PRESENT, i.e. verify reports a correctly built app as broken. The
+// same trap was already found live on `roleprivileges` in this file (see `rolePrivileges` below);
+// using `top` here would have reintroduced it, and would additionally have hidden the placeholder
+// rows this check exists to find, since those are exactly what accumulates in a corrupted app.
+//
+// An EMPTY component list is returned as `ok: true` with nothing present, NOT as a read failure:
+// that is the reported defect itself (a sitemap naming tables the app does not contain). It cannot
+// mask a permissions problem, because the sitemap is read from the SAME `appmodulecomponent` table
+// (componenttype 62) and would fail visibly first.
+async function appEntityComponentsFor(sdk, appUnique, wanted) {
+  try {
+    const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
+    const app = apps && apps[0];
+    if (!app || !app.appmoduleidunique) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
+    const rows = await sdk.queryRecords('appmodulecomponent', {
+      select: ['objectid', 'componenttype'],
+      filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 1`,
+      paginate: true,
+    });
+    const ids = new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((s) => String(s).toLowerCase()));
+    // A type-1 `objectid` is a table's MetadataId, not a row id. `fetchEntityMetadata` resolves by
+    // LOGICAL NAME and is a disk-cached projection, so this goes through the raw client instead.
+    // A 404 means the table does not exist at all, which the separate `entity` existence check
+    // already reports — so it is "not a component", not a read failure.
+    const metadataId = async (logical) => {
+      const res = await sdk.dataverse.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')?$select=MetadataId`);
+      if (res && res.status === 404) return null;
+      if (!res || res.status < 200 || res.status >= 300 || !res.body || !res.body.MetadataId) {
+        throw new Error(`could not resolve table '${logical}' (HTTP ${res && res.status})`);
+      }
+      return String(res.body.MetadataId).toLowerCase();
+    };
+    const present = [];
+    for (const logical of wanted || []) {
+      const id = await metadataId(logical);
+      if (id && ids.has(id)) present.push(logical);
+    }
+    // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` METADATA table.
+    const entityId = await metadataId('entity');
+    return { ok: true, present, placeholder: !!(entityId && ids.has(entityId)) };
+  } catch (err) {
+    return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
+  }
+}
+
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
   const genpageCli = opts.genpageCli;
@@ -66,6 +127,8 @@ function readerFor(sdk, appUnique, opts) {
   // Memoize fetchSitemap: both sitemapXml and sitemapPageIds share one live query (Imp7 — one snapshot).
   let sitemapP;
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
+  // Memoized app TABLE components — one live read per verify run, keyed by the wanted-table set.
+  const appComponentsP = new Map();
 
   // Per-id page code cache. Downloads by specific id on demand rather than pulling all pages at once
   // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
@@ -137,6 +200,13 @@ function readerFor(sdk, appUnique, opts) {
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
+    // The app's TABLE components, so verify can tell "the sitemap shows this table" from
+    // "the app module actually contains it". Memoized per wanted-set — one live read per verify run.
+    appEntityComponents: (wanted) => {
+      const key = (wanted || []).join(',');
+      if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
+      return appComponentsP.get(key);
+    },
   };
 
   // entityPrivileges(logical): the privilege set a table exposes, as [{ PrivilegeId, PrivilegeType, ... }].
@@ -230,15 +300,24 @@ function readerFor(sdk, appUnique, opts) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs sets a value-less flag to boolean `true`; treat those as missing so a bare
-  // `--env`/`--spec`/`--workspace` fails with the usage message instead of crashing later in
-  // createAzHttpClient / path.resolve / fs.mkdirSync when a boolean value reaches them.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
-  const workspaceArg = typeof flags.workspace === 'string' ? flags.workspace : undefined;
-  if (!env || !specArg || flags.workspace === true) {
-    process.stderr.write('Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]\n');
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]';
+  // Reject an unknown or value-less flag before any network work: an unrecognised flag is dropped
+  // by parseArgs AND swallows the token after it, so `--workspce x` would silently verify against
+  // the default workspace and report drift the caller cannot explain.
+  const flagError = validateFlags(argv, { known: ['env', 'spec', 'workspace'], needValue: ['env', 'spec', 'workspace'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  // Each is now either absent or a non-empty string, so a boolean can no longer reach
+  // createAzHttpClient / path.resolve / fs.mkdirSync.
+  const env = flags.env;
+  const specArg = flags.spec || positional[0];
+  const workspaceArg = flags.workspace;
+  if (!env || !specArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);

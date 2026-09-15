@@ -5,7 +5,93 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.7.1
+## [Unreleased] — 2.8.0
+
+A dry run that says what an apply would really do, sample data that can express a hierarchy, and
+downloads that round-trip Choice columns.
+
+### Added
+
+- **The dry run resolves create-vs-reuse against the live environment** ([#559]). Without `--apply`
+  the plan was a static echo of the spec, identical whether every artifact already existed or none
+  did — the one question a dry run exists to answer. Each item is now `+ create` or `= reuse`, with
+  a summary (`2 to create, 6 already present`); an unreadable item is `? unknown`, never guessed.
+  The probe reuses the build's own discovery, so the plan cannot drift from the apply.
+  `--no-live-plan` restores the offline listing.
+- **Sample data can express a hierarchy on one table** ([#544]). A `$parent` may target the row's
+  own entity (an org tree, a "reports to" chain). Rows are seeded in dependency waves, so
+  declaration order does not matter, and a cycle is rejected by the lint rather than failing the
+  build partway through. Add `$parent.lookup` to say which relationship a bind uses — required only
+  when two or more relationships connect the same pair, and now **rejected** rather than silently
+  taking the first declared one.
+
+### Fixed
+
+- **A download round-trips Choice and MultiChoice columns** ([#564]). They were emitted with no
+  `type`, so rebuilding into a **fresh** environment created single-line Text while Memo, Money and
+  DateTime survived — an asymmetry harder to notice than an outright failure. Option sets are now
+  read per table: a local set becomes inline `options[]` (localizations preserved), a shared one a
+  `globalChoice` reference plus a `globalChoices[]` declaration. Four related defects went with it:
+  a **MultiChoice column was dropped from the spec entirely** (Dataverse types it `Virtual`); a
+  lookup's synthetic `<lookup>name` column was emitted as a real Text column, which a fresh rebuild
+  then created; a legal multi-language option set could abort the **whole** download; and
+  `globalChoices[]` could declare sets nothing referenced. A column whose option set cannot be read
+  is still left untyped — but now named, with the reason. Note the App Spec cannot express option
+  *values*: labels and order round-trip, and a fresh rebuild re-bases them to `100000000 + index`.
+- **`--verify` checks that a sitemap-visible table really belongs to the app.** The sitemap and the
+  app module's table list are separate facts and can disagree, so an app could show a table in
+  navigation while omitting it from its Tables list — and verify still said PASS, because the table
+  existed and the sitemap named it. It now fails by table name, fails **closed** when the component
+  list cannot be read, and reports leftover `entity` placeholder components.
+- **A multi-line page prompt is no longer flattened on upload** ([#565]). Prompts went to `pac`
+  inline, where a newline guard collapsed every line break — so a downloaded conversation transcript
+  degraded a little more on each edit-rebuild. They now go through `--prompt-file` /
+  `--agent-message-file`. `upload()` also accepts an optional `compiledCodeFile`.
+- **`/genpage` Phase 1 is reachable again** ([#541]). Its interactive flow was specified to run
+  inside a headless `Task` subagent, so create flows could not complete. Interaction now runs in the
+  main loop; the agents are headless workers that return a `needs_input` request when they need a
+  decision (`references/agent-interaction-contract.md`).
+- **Teardown no longer reports a false failure for a self-referencing relationship** ([#544]). The
+  table delete already removes it, so deleting it first returned `referenced by 2 other components`
+  and a completely clean run still exited non-zero.
+- **A mistyped flag now fails instead of quietly changing what the command does.** An unrecognised
+  flag was dropped *and* swallowed the token after it: `--stagee ui` planned all 9 phases instead of
+  3 and exited 0 — with `--apply`, a scoped apply became a full one. Every CLI now declares the
+  flags it accepts, rejects anything else with a "did you mean", and rejects a value-bearing flag
+  passed bare. This also covers `--allow-destructiv` and friends on the destructive tools.
+- **A test file in a `scripts/tests/` subdirectory is no longer silently skipped.** Discovery was a
+  flat `readdir`, so a nested suite would be committed, reviewed, reported green and never run.
+
+### Changed
+
+- **`/app-builder` is GA.** The preview notice is gone: the App Spec shape, the CLI flags and the
+  build phases are now treated as a stable contract rather than one that may change between
+  versions. The guidance that outlived the notice stays — review the dry-run plan before approving,
+  and use `teardown-model-app.js --apply` to clean up probes. `--changed-only` (partial apply) is
+  the one piece still experimental, and remains off by default.
+- **Connector authoring is GA and on by default.** SharePoint / weather / Office 365 / SQL /
+  custom-REST binding and ALM packaging of connection references work without opting in. The
+  `connectors` flag is **flipped to `true` and kept for one release as a rollback switch** —
+  `GENPAGE_ENABLE_CONNECTORS=0` restores the old behaviour — and is scheduled for removal next
+  release. `custom-api` and `custom-telemetry` are unaffected and still default-OFF.
+- **The Phase 4.5 dispatch value is the binding count, not the flag state.** The page-builder gets
+  `Connectors: none` or `<n> binding(s)`; a disabled gate and an empty binding table both yield
+  `none`, so the dispatch stays stable when the flag is removed.
+- **The App Spec schema is split so the always-read half is smaller.** `globalChoices`,
+  `webResources`, `commands`, `businessRules`, `businessProcessFlows`, `dashboards` and `roleGrants`
+  moved to `app-spec-schema-advanced.md`, leaving a pointer table: 105 KB → 82 KB eagerly read.
+- **The CLI flag contract is shared rather than per-script**, so the flag rules and the "did you
+  mean" suggestion cannot drift between commands.
+- **Deeper tests on the paths connectors GA just made live**, including a connector *edit* eval and
+  a contract test pinning the dispatch fields the skills hand to the page-builder.
+
+[#541]: https://github.com/microsoft/power-platform-skills/issues/541
+[#544]: https://github.com/microsoft/power-platform-skills/issues/544
+[#559]: https://github.com/microsoft/power-platform-skills/issues/559
+[#564]: https://github.com/microsoft/power-platform-skills/issues/564
+[#565]: https://github.com/microsoft/power-platform-skills/issues/565
+
+## [2.7.1]
 
 Three defects an author hits before reaching an environment, and a session-start warning.
 

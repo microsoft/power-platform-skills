@@ -1,20 +1,16 @@
 ---
 name: app-builder
-version: 0.8.1
-description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, business rules, business process flows, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", "add a business process flow", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
+version: 1.0.0
+description: Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, business rules, business process flows, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", "add a business process flow", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList, read, edit, execute, search, agent, todo
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # app-builder — intent → model-driven app
-
-> ⚠️ **Preview.** This skill is in preview — its App Spec shape, flags, and build behavior may change
-> between versions. Review the plan-mode summary before applying, and prefer a non-production
-> environment while it stabilizes.
 
 Turn a natural-language intent into a deployed model-driven app. You author a reviewable **App Spec**
 (JSON) with the user across confirmed turns, then a deterministic engine (`cds-maker-sdk`, vendored)
@@ -64,7 +60,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   nothing: a command handler is handed the record (`function doThing(primaryControl)`) — the build
   supplies the parameter, so write that signature; and **never hardcode Choice values** like
   `100000003`, because they are assigned per publisher. Resolve by label via `getOptions()`
-  (see `references/app-spec-schema.md` → webResources). Note also that command and web-resource
+  (see `references/app-spec-schema-advanced.md` → webResources). Note also that command and web-resource
   **edits do not redeploy on rebuild** — the phases reuse what exists, so changing a button or a
   script means deleting it first.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
@@ -153,6 +149,39 @@ Rules:
 Follow **[references/authoring-flow.md](../../references/authoring-flow.md)** step by step, running
 every prompt yourself via `AskUserQuestion`. In short:
 
+#### Unattended runs (Copilot autopilot / automation)
+
+Resolve the interaction mode once before the first authoring question:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-interaction-mode.js" [--non-interactive]
+```
+
+`POWER_PLATFORM_SKILLS_NONINTERACTIVE=1`/`true` (or the equivalent
+`--non-interactive` invocation) means there is no user waiting for prompts. In
+that mode:
+
+- do not call `AskUserQuestion`, `EnterPlanMode`, or `ExitPlanMode`;
+- use explicit requirements and supplied existing specs as authoritative, and
+  use documented defaults only where the request leaves a non-destructive
+  choice open;
+- record each skipped gate as
+  `Unattended default: <question> → <answer> (<reason>)` in `workflow-log.md`;
+- treat the completed lint, preview, rendered design document, and build dry-run
+  as the approved plan, then continue with the normal approved path;
+- halt rather than guessing an ambiguous environment, app identity, or
+  destructive structural edit.
+
+Suppressing interaction never authorizes destructive work. An unattended
+existing-app apply still requires `--allow-destructive` wherever the build
+normally requires it; `POWER_PLATFORM_SKILLS_NONINTERACTIVE` only suppresses
+prompts.
+
+Carry the resolved mode through subprocesses: when it is unattended, append
+`--non-interactive` to every `build-model-app.js` invocation (dry-run, data
+pre-build, recovery rerun, and full apply). Do not append `--allow-destructive`
+unless destructive authority was supplied independently.
+
 1. **Prereqs** — `node --version`, `pac help` (≥ 2.7.0).
 2. **Environment (PAC)** — `pac auth list`. If exactly one / an active profile, **confirm it
    (FYI), don't ask**. If several and none active, **ask** which to use. If none, ask the user
@@ -162,7 +191,14 @@ every prompt yourself via `AskUserQuestion`. In short:
 4. **Levelled authoring** — **first read the App Spec format** so you author to the exact
    shape (do this once; don't go spelunking through scripts):
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
-   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). Phase 1 is
+   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). That document
+   covers everything an app always has. **Additionally read
+   [`references/app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md) once your
+   design calls for a conditional feature** — business rules, a business process flow, command-bar
+   buttons, web resources, global choices, classic dashboards, or `roleGrants[]`. Its pointer table
+   is in the main schema, and the toolbox above tells you when to reach for each; read the detail
+   only for the ones you are actually using, and never skip a capability just to avoid the read.
+   Phase 1 is
    **design-only**: never emit page `.tsx` here. Each level is confirmed via `AskUserQuestion` before
    the next begins, and `app-spec.json` is persisted after each — full prompts in the playbook.
    - **Level (a0) — personas & jobs-to-be-done** (`personas[]`): **before proposing any tables**, ask
@@ -263,7 +299,8 @@ After plan-mode approval (before the full build):
    > - Target file: [file from step 3 — already includes .tsx; do NOT append another]
    > - Plan document: [absolute path to the app-builder-page-plan.md written in step 3]
    > - Data mode: **[dataMode from step 3 — `dataverse` or `mock`]**
-   > - Connectors: **disabled**
+   > - Connectors: **none**
+   > - Telemetry: **disabled**
    > - RuntimeTypes: [absolute path to RuntimeTypes.ts]   ← omit this line when Data mode is `mock`
    > - Working directory: [absolute working-dir path]
    > - Plugin root: ${PLUGIN_ROOT}
@@ -273,8 +310,11 @@ After plan-mode approval (before the full build):
    The plan's `## Environment` carries `Mode: app-builder` and every page row carries a **Key**, so
    the worker emits `"PAGEREF_<key>"` for cross-page navigation (never a file-derived token — a
    downloaded page's `codeFile` is a path, not its identity). Custom nav ids go in `data:` — never
-   `recordId`. `Connectors: disabled` is a constant here: the App Spec has no connector-binding
-   concept, so the projected plan always says `No connector bindings.`
+   `recordId`. `Connectors: none` and `Telemetry: disabled` are constants here: the App Spec has no
+   connector-binding concept (so the projected plan always says `No connector bindings.`), and
+   `/app-builder` never runs the Phase 4.7 `custom-telemetry` probe. Both are stated explicitly
+   rather than omitted — the page-builder treats a missing line as the same fail-closed value, but
+   an explicit line is what makes the dispatch contract checkable.
 
 5. **Validate + commit the transition (transactional)** — never flip `source` by hand, and never
    flip pages one at a time as workers return. Run:
@@ -607,5 +647,7 @@ child view id. Each step emits `[n/total]`.
   **custom grid rendering** (`entities[].columns[].visualization` — radial dial / line chart /
   heat map / star rating, preview); web resources + form JS event handlers; sample data with
   **multi-parent `$parents`** + **`statusReason`**. See [`docs/app-builder-capabilities.md`](../../docs/app-builder-capabilities.md) and
-  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
-  doc; you should not need to read the SDK, lint, or engine to write a spec.
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) (plus
+  [`app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md) for the conditional
+  fields it points at) — author from those docs; you should not need to read the SDK, lint, or
+  engine to write a spec.

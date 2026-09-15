@@ -33,9 +33,11 @@
 //   node lint-app-spec.js --spec @<app-folder>/app-spec.json
 //                         [--profile design|plan|deploy|structural] [--strict] [--json]
 
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const path = require('node:path');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { validateAppSpec, migrateAppSpec, VALIDATION_PROFILES } = require('./lib/app-spec.js');
 const { lintAppSpec } = require('./lib/spec-lint.js');
+const { pageSourceFileErrors } = require('./lib/content-hash.js');
 
 const USAGE = 'Usage: node lint-app-spec.js --spec @<path-to-app-spec.json> [--profile design|plan|deploy|structural] [--strict] [--json]';
 
@@ -85,8 +87,10 @@ function lintSpec(rawSpec, opts) {
     lint = { ok: false, errors: [`lint could not run on this spec: ${err.message}`], warnings: [] };
   }
 
+  const fileErrors = opts && opts.appDir ? pageSourceFileErrors(spec, opts.appDir) : [];
   const errors = [
     ...validationErrors.map((e) => `schema: ${e}`),
+    ...fileErrors.map((e) => `schema: ${e}`),
     ...((lint.errors || []).map((e) => `lint: ${e}`)),
   ];
   const warnings = [
@@ -127,20 +131,21 @@ function main() {
 
   // Unknown flags are a USAGE ERROR, not something to ignore. parseArgs accepts any `--name`, so a
   // typo (`--profle deploy`) would otherwise be dropped and the command would run the DEFAULT plan
-  // profile while exiting 0 — a CI job reporting success for a gate it never applied. This CLI ships
-  // in this change, so no caller can be relying on a flag outside this set.
+  // profile while exiting 0 — a CI job reporting success for a gate it never applied.
   //
-  // Read from argv rather than Object.keys(flags): assigning to `flags['__proto__']` goes through
-  // the inherited setter and never becomes an own property, so `--__proto__ deploy` would slip the
-  // allow-list AND swallow the next token. Same hazard modelapps-hook-utils.js guards with
-  // Object.create(null).
-  const KNOWN_FLAGS = new Set(['spec', 'profile', 'strict', 'json', 'help', 'h']);
-  const passedFlagNames = process.argv.slice(2)
-    .filter((a) => a.startsWith('--'))
-    .map((a) => a.slice(2).split('=')[0]);
-  const unknown = [...new Set(passedFlagNames.filter((k) => !KNOWN_FLAGS.has(k)))];
-  if (unknown.length > 0) {
-    return usageError(`unknown flag(s): ${unknown.map((k) => '--' + k).join(', ')}\n${USAGE}`);
+  // This check, and the value-less-flag check that used to sit below it, now come from the shared
+  // validateFlags so every CLI in this directory enforces the same contract; the bespoke copy that
+  // lived here only ever protected this one command.
+  const flagError = validateFlags(process.argv.slice(2), {
+    known: ['spec', 'profile', 'strict', 'json', 'help', 'h'],
+    needValue: ['spec', 'profile'],
+    // Keep the specific guidance the bespoke checks carried: a bare `--profile` is a caller who
+    // asked for a gate and did not say which, and naming the four valid profiles is the difference
+    // between a one-line fix and a trip to the docs.
+    hints: { spec: 'a path to the App Spec JSON', profile: `one of: ${VALIDATION_PROFILES.join(', ')}` },
+  });
+  if (flagError) {
+    return usageError(`${flagError}\n${USAGE}`);
   }
   // A positional argument is equally suspect: `--spec` is the only way to name the file. But the
   // overwhelmingly likely cause on Windows is an UNQUOTED path containing spaces — the documented
@@ -156,21 +161,11 @@ function main() {
     return usageError(`unexpected argument(s): ${positional.join(', ')}${hint}\n${USAGE}`);
   }
 
-  // parseArgs yields `true` for a bare `--flag` and a string for `--flag=value` / `--flag value`.
-  // For a VALUE-taking flag, that bare `true` is a usage error and must be rejected rather than
-  // coerced: a bare `--profile` silently falling back to the default would skip a `deploy` gate a
-  // CI job believed it had requested, and a bare `--spec` would reach readJsonArg and surface as
-  // "spec is not an object" — a gate report about a file the caller never named.
+  // validateFlags has already rejected a bare `--spec` / `--profile` and the `--flag=` empty form,
+  // so anything still present here is a non-empty string.
   const isOn = (v) => v === true || v === 'true';
   const specArg = flags.spec;
   if (specArg === undefined) return usageError(USAGE);
-  if (typeof specArg !== 'string' || !specArg.trim()) return usageError(`--spec needs a path\n${USAGE}`);
-  if (flags.profile !== undefined && (typeof flags.profile !== 'string' || !flags.profile.trim())) {
-    // Covers both the bare `--profile` (boolean true) and `--profile=` / `--profile ''` (empty
-    // string). Both are a caller who asked for a profile and did not supply one; neither may fall
-    // through to the default.
-    return usageError(`--profile needs one of: ${VALIDATION_PROFILES.join(', ')}\n${USAGE}`);
-  }
 
   let rawSpec;
   try {
@@ -183,7 +178,7 @@ function main() {
     return usageError(`could not read spec ${specArg}: ${err.message}`);
   }
 
-  const report = lintSpec(rawSpec, { profile: flags.profile });
+  const report = lintSpec(rawSpec, { profile: flags.profile, appDir: path.dirname(path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg)) });
   const strict = isOn(flags.strict);
   const failed = !report.ok || (strict && report.warnings.length > 0);
 

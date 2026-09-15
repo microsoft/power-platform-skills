@@ -9,6 +9,7 @@ const {
   sampleRecordsFor,
   resolveSampleRecords,
   relationshipFor,
+  resolveParentRelationship,
   relationshipSchemaName,
   manyToManySchemaName,
   quickCreateEnabledFor,
@@ -855,6 +856,13 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     // outer entity loop is already sequential, so serial columns here means one metadata
     // customization is in flight per entity at a time — the only order Dataverse permits.
     const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+    const requiredDeclared = [
+      e.primaryAttribute,
+      ...buildable,
+    ].filter((c) => c && c.schemaName && hasExplicitRequired(c));
+    const capabilityDeclared = buildable.filter((c) => c.type !== 'Customer'
+      && (c.defaultValue !== undefined || c.integerFormat !== undefined
+        || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
     const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
@@ -864,10 +872,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       { skipIf: isAlreadyExists }));
     if (existingTable) {
       const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
-      const requiredTargets = [
-        e.primaryAttribute,
-        ...buildable,
-      ].filter((c) => c && c.schemaName && hasExplicitRequired(c) && existingCols.has(c.schemaName.toLowerCase()));
+      const requiredTargets = requiredDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
       const requiredLevels = new Map();
       for (const c of requiredTargets) {
         const current = columnRequiredLevel(existingColMeta.get(c.schemaName.toLowerCase()));
@@ -928,9 +933,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       // `updateColumn` refuses ANY change to a Customer column (measured — it throws "type
       // 'Customer' not supported"), because Customer has no entry in the SDK's attribute-type ->
       // OData-cast table (it is created through the wholly separate createCustomerColumn instead).
-      const capabilityTargets = buildable.filter((c) => c.type !== 'Customer' && existingCols.has(c.schemaName.toLowerCase())
-        && (c.defaultValue !== undefined || c.integerFormat !== undefined
-          || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
+      const capabilityTargets = capabilityDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
       await runner.mapLimit(capabilityTargets, 1, (c) => {
         const columnLogical = c.schemaName.toLowerCase();
         const opts = {};
@@ -954,6 +957,16 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
           `could not update column capabilities for ${logical}.${columnLogical} — the rest of the build continues`
         );
       });
+    }
+    for (const c of requiredDeclared) {
+      if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {
+        runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (applied on create)`);
+      }
+    }
+    for (const c of capabilityDeclared) {
+      if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {
+        runner.skip('data-model', `column capabilities ${e.schemaName}.${c.schemaName} (applied on create)`);
+      }
     }
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {
@@ -1112,6 +1125,15 @@ function chooseMatchOn(e, seedRecords) {
   return undefined;
 }
 
+// Resolve WHICH 1:N relationship a `$parent` binds through, throwing the shared message.
+// `resolveParentRelationship` (app-spec.js) owns the rule and the wording so the lint-time gate and
+// this runtime backstop cannot drift; validateAppSpec normally catches these first. #544.
+function relationshipForParent(spec, parentEntity, childEntity, wanted) {
+  const { rel, error } = resolveParentRelationship(spec, parentEntity, childEntity, wanted);
+  if (error) throw new Error(`sample data for '${childEntity}' ${error}`);
+  return rel;
+}
+
 function buildSeedGroup({ spec, e, records, statusReasonValues }) {
   const resolved = resolveSampleRecords(e, records, spec);
   const seedRecords = [];
@@ -1126,7 +1148,7 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
     const parents = [].concat(raw && raw.$parent ? [raw.$parent] : [], (raw && raw.$parents) || []);
     for (const parent of parents) {
       if (!parent || !parent.entity || !parent.match) continue;
-      const rel = relationshipFor(spec, parent.entity, e.schemaName);
+      const rel = relationshipForParent(spec, parent.entity, e.schemaName, parent.lookup);
       const parentEntity = entityByLogical(spec, parent.entity);
       // #1: fail loud on a bind that can't be formed instead of silently dropping it (which created
       // the child with the lookup UNSET and still reported success). validateAppSpec catches these at
@@ -1156,6 +1178,47 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
   return { entityLogical: e.schemaName.toLowerCase(), ...(matchOn ? { matchOn } : {}), records: seedRecords };
 }
 
+// Order one entity's sample rows into WAVES by their SELF-references. #544.
+//
+// `seedRecordGraph` resolves EVERY bind in a group before creating ANY of that group's rows, and
+// publishes the group's ids only once it completes. Topological ordering BETWEEN entities (which
+// provisionSampleData already does) therefore cannot help WITHIN one: a `$parent` pointing at the
+// row's own entity always resolves against an id that does not exist yet, and the whole sample-data
+// phase halts — several phases into a build that has already written data. The App Spec cannot work
+// around it either, because the plugin, not the author, decides the grouping.
+//
+// So the plugin splits the group: wave N holds the rows whose self-parents all landed in an earlier
+// wave. Returns an array of waves, each an array of ORIGINAL record indices — original, because a
+// bind's `parentIndex` is an index into the entity's full sample list and that is what the SDK looks
+// up as `createdIds[entity][parentIndex]`.
+//
+// Returns a single wave when nothing self-references, which is the overwhelmingly common case and
+// must stay byte-identical to the previous one-call-per-entity behaviour.
+function selfReferenceWaves(entityLogical, records, labelFor) {
+  const selfParents = records.map((r) =>
+    (r.binds || []).filter((b) => b.parentEntity === entityLogical).map((b) => b.parentIndex));
+  if (!selfParents.some((p) => p.length)) return [records.map((_, i) => i)];
+
+  const waveOf = new Array(records.length).fill(-1);
+  const waves = [];
+  let remaining = records.map((_, i) => i);
+  while (remaining.length) {
+    const ready = remaining.filter((i) => selfParents[i].every((p) => waveOf[p] >= 0));
+    if (!ready.length) {
+      // Every remaining row is waiting on another remaining row: a cycle (including a row that is
+      // its own parent). Name the rows — "a cycle exists" is not actionable, and the author needs
+      // to know WHICH records to break. Failing here also beats looping forever.
+      const involved = remaining.map((i) => labelFor(i)).join(', ');
+      throw new Error(`sample data for '${entityLogical}' has a $parent cycle among its own rows (${involved}) — a row cannot be created before its parent. Break the cycle, or set the lookup after the build.`);
+    }
+    const readySet = new Set(ready);
+    for (const i of ready) waveOf[i] = waves.length;
+    waves.push(ready);
+    remaining = remaining.filter((i) => !readySet.has(i));
+  }
+  return waves;
+}
+
 // Create sample rows topologically via the SDK's record-graph seeder. The plugin owns the App
 // Spec translation (buildSeedGroup); the SDK owns @odata.bind formation and resolve-by-name
 // idempotency. Groups are seeded one entity at a time (preserving the per-entity progress emit),
@@ -1183,14 +1246,46 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
       if (!group.matchOn && group.records.length > 0) {
         process.stderr.write(`WARNING: sample rows for ${e.schemaName} have no idempotency key (no single-column alternate key, and not every row has a non-empty ${e.primaryAttribute.schemaName}) — a re-run or a retried insert will DUPLICATE these ${group.records.length} row(s). Add a single-column alternate key or give every row a unique ${e.primaryAttribute.schemaName} value.\n`);
       }
-      const { createdIds: made } = await sdk.seedRecordGraph([group], { entitySetFor, createdIds });
-      Object.assign(createdIds, made);
-      result.records[e.schemaName] = made[e.schemaName.toLowerCase()];
+      const logical = e.schemaName.toLowerCase();
+      // #544: seed in waves when rows reference their OWN entity. `waves` is [[0,1,2,...]] — one
+      // wave holding every row in order — unless a self-reference exists, so the common path below
+      // is exactly the single call it has always been.
+      const waves = selfReferenceWaves(logical, group.records, (i) => {
+        const name = records[i] && records[i][e.primaryAttribute.schemaName];
+        return name ? `'${name}'` : `record[${i}]`;
+      });
+
+      if (waves.length === 1) {
+        const { createdIds: made } = await sdk.seedRecordGraph([group], { entitySetFor, createdIds });
+        Object.assign(createdIds, made);
+        result.records[e.schemaName] = made[logical];
+        return;
+      }
+
+      // Ids indexed by ORIGINAL record position — the index a bind's `parentIndex` carries, and the
+      // index the SDK reads as createdIds[entity][parentIndex]. A wave-local array would misresolve
+      // every self-bind, silently linking rows to the wrong parents.
+      const idsByIndex = new Array(group.records.length);
+      for (const wave of waves) {
+        const waveGroup = { ...group, records: wave.map((i) => group.records[i]) };
+        const { createdIds: made } = await sdk.seedRecordGraph([waveGroup], {
+          entitySetFor,
+          // The SDK prefers ids created in the CURRENT call over these, but it publishes those only
+          // after a group completes — so during bind resolution this array is what a self-bind sees.
+          createdIds: { ...createdIds, [logical]: idsByIndex },
+        });
+        const madeIds = made[logical] || [];
+        wave.forEach((original, k) => { idsByIndex[original] = madeIds[k]; });
+        // A group only ever creates its own entity, but merge anything else the SDK reports rather
+        // than dropping it on the floor.
+        for (const [k, v] of Object.entries(made)) if (k !== logical) createdIds[k] = v;
+      }
+      createdIds[logical] = idsByIndex;
+      result.records[e.schemaName] = idsByIndex;
     });
   }
-
   // Return entitySetFor closure so later phases can resolve entity-set names
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

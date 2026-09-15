@@ -6,7 +6,7 @@
 //
 // Usage:
 //   node build-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--apply]
-//        [--sample-data] [--publish] [--verify] [--stage <data|ui|app|publish>]
+//        [--sample-data] [--publish] [--verify] [--no-live-plan] [--stage <data|ui|app|publish>]
 //        [--only <phases>] [--skip <phases>] [--from <phase>] [--to <phase>]
 //        [--workspace <dir>]
 //   phases: solution,data-model,sample-data,web-resources,views,charts,forms,commands,dashboards,app-shell,pages,ai-features,security,publish
@@ -20,13 +20,17 @@ const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
-const { annotateContentHashes } = require('./lib/content-hash.js');
+const { annotateContentHashes, pageSourceFileErrors } = require('./lib/content-hash.js');
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
 const { classifyOps, sitemapTargets } = require('./lib/op-diff.js');
+// Unattended-mode detection lives in one module so /app-builder and /genpage cannot drift apart
+// on what "unattended" means. Re-exported from here because callers and tests already import it
+// from this file.
+const { envTruthy } = require('./lib/interaction-mode.js');
 // R3 (auto-verify): after a successful --apply the build can reconcile the spec against what actually
 // deployed, so a silent partial build surfaces in the same run instead of only on a separate manual
 // `verify-model-app.js` pass. Reuses the read-only reconcile core + the SDK reader (DRY — same code the
@@ -91,7 +95,16 @@ function cliEmit(log, opts = {}) {
   return (e) => {
     if (e.phase !== phase) { phase = e.phase; log(`\n▶ ${phase}`); }
     if (e.status === 'start') return; // header only; the terminal event prints the status line
-    if (!opts.apply) { log(`  [${e.n}/${e.total}] ▢ ${e.label}`); return; } // dry-run plan
+    if (!opts.apply) {
+      // #559: the dry run now resolves each item against the live environment, so say which way it
+      // will go. A glyph alone cannot carry three states, and an unresolved one must not look like
+      // either decision — so name it.
+      if (e.status === 'warn') { log(`  ⚠ ${e.label}`); return; }
+      const mark = e.state === 'create' ? '+ create' : e.state === 'reuse' ? '= reuse ' : e.state === 'unknown' ? '? unknown' : '▢';
+      const why = e.state === 'unknown' && e.stateWhy ? ` — ${e.stateWhy}` : '';
+      log(`  [${e.n}/${e.total}] ${mark} ${e.label}${why}`);
+      return;
+    }
     if (counts) counts[e.status] = (counts[e.status] || 0) + 1;
     const glyph = e.status === 'ok' ? '✓' : e.status === 'skip' ? '⊘' : '✗';
     const tail = e.status === 'error' ? ` — ${e.detail || ''}` : '';
@@ -160,6 +173,8 @@ async function buildModelApp(spec, opts, deps) {
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
+  const fileErrors = pageSourceFileErrors(spec, opts.appDir);
+  if (fileErrors.length) return { ok: false, errors: fileErrors };
   const log = deps.log || (() => undefined);
   // Surface non-blocking validation advisories (e.g. a PRE-EXISTING duplicate page name the build does
   // not create — see validateAppSpec). These no longer HALT the build; they are narrated so the maker
@@ -277,6 +292,7 @@ async function buildModelApp(spec, opts, deps) {
         apply: opts.apply,
         sampleData: opts.sampleData,
         publish: opts.publish,
+        livePlan: opts.livePlan,
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
@@ -309,6 +325,19 @@ async function buildModelApp(spec, opts, deps) {
       if (journal) journal.close({ status: 'halt', phase: err && err.phase, code: err && err.code, recoverable: !!(err && err.recoverable), message: String((err && err.message) || err), ...counts });
       throw err;
     }
+  }
+  // #559: a dry run's whole purpose is to say what an apply would DO, so summarise the decision
+  // rather than only listing the spec back. `unknown` is counted separately and never folded into
+  // either real decision — an unresolved probe is missing information, not a verdict.
+  if (r && r.dryRun && Array.isArray(r.planItems)) {
+    const n = (s) => r.planItems.filter((p) => p.state === s).length;
+    const unprobed = r.planItems.filter((p) => !p.state).length;
+    const parts = [`${n('create')} to create`, `${n('reuse')} already present`];
+    if (n('unknown')) parts.push(`${n('unknown')} could not be read`);
+    if (unprobed) parts.push(`${unprobed} not probed`);
+    log(r.livePlan
+      ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). Re-run with --apply to execute.`
+      : `\n▢ dry run — ${r.planItems.length} steps, spec-only (no live probe; --no-live-plan). Re-run with --apply to execute.`);
   }
   if (opts.apply && r && r.ok && !r.dryRun) {
     log(`\n✓ build complete — ${counts.ok} created, ${counts.skip} skipped, ${counts.error} failed (${counts.ok + counts.skip + counts.error} steps)`);
@@ -415,16 +444,6 @@ function backoffMs(attempt) {
   return Math.min(30000, 3000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 1000);
 }
 
-// Env var truthiness for the unattended opt-in: '1' or 'true' (case-insensitive) count as set; a
-// missing/other value is false. Matches the dotnet-style boolean env convention used elsewhere in this
-// repo (see AGENTS.md "Shared Telemetry"). This gates PROMPT SUPPRESSION ONLY — it never grants
-// destructive authority (only --allow-destructive does).
-function envTruthy(v) {
-  if (v == null) return false;
-  const s = String(v).trim().toLowerCase();
-  return s === '1' || s === 'true';
-}
-
 function list(v) {
   return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
@@ -445,26 +464,37 @@ function parseLanguageCode(value) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs sets a value-less flag to boolean `true`. Coerce required-VALUE flags to missing so a
-  // bare flag fails with the usage message instead of (a) crashing later, or (b) — critically for the
-  // phase selectors — being read as `undefined` and SILENTLY SELECTING ALL PHASES. e.g. `--apply --only`
-  // with no value must NOT become a full apply on this destructive tool. Boolean switches
-  // (--apply/--publish/--verify/…) legitimately stay `true`.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
-  if (!env || !specArg) {
-    process.stderr.write(
-      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
-    );
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE =
+    'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--no-live-plan] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]';
+  // The declared flag contract, enforced before anything else runs.
+  //
+  // `needValue` lists every flag whose MISSING value would be read as a default rather than an
+  // error — critically the phase selectors, where a bare `--only` is dropped by
+  // list()/stagePhasesOrResolve and silently resolves to the full phase set. `--apply --only` must
+  // not become a full apply on this destructive tool.
+  //
+  // validateFlags additionally rejects an unrecognised flag, which parseArgs would otherwise drop
+  // while swallowing the token after it. Measured before this guard: `--stage ui` planned 3 steps
+  // but the one-letter typo `--stagee ui` planned all 9 and still exited 0 — a caller who believed
+  // they had scoped an apply to the UI phases got a full data-model apply with no diagnostic.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'spec', 'apply', 'sample-data', 'publish', 'verify', 'changed-only', 'no-live-plan',
+      'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'non-interactive',
+      'allow-destructive', 'workspace'],
+    needValue: ['env', 'spec', 'stage', 'only', 'skip', 'from', 'to', 'language-code', 'languageCode', 'workspace'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  // A value-less phase selector (or --workspace) is a USAGE ERROR — never a silent all-phases select
-  // or default workspace. `--only`/`--skip`/`--from`/`--to`/`--stage` with no value would otherwise be
-  // dropped by list()/stagePhasesOrResolve and resolve to the full phase set.
-  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace', 'language-code', 'languageCode'].find((k) => flags[k] === true);
-  if (valuelessFlag) {
-    process.stderr.write(`✗ --${valuelessFlag} requires a value.\n`);
+  // validateFlags has already rejected a bare or empty --env/--spec, so each is now either absent
+  // or a non-empty string; the typeof dance these lines used to carry is subsumed by it.
+  const env = flags.env;
+  const specArg = flags.spec || positional[0];
+  if (!env || !specArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   // #changed-only (Preview): a SAFE partial apply. Incompatible with manual phase selection — the flow
@@ -500,6 +530,10 @@ async function main() {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
+    // #559: a dry run resolves create-vs-reuse against the live environment by default, because a
+    // plan that cannot tell them apart is not a plan. `--no-live-plan` restores the offline,
+    // spec-only listing for a caller with no environment access.
+    livePlan: flags['no-live-plan'] !== true,
     verify: flags.verify === true,
     phases,
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',

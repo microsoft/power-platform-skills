@@ -1,4 +1,4 @@
-# Workflow Log — Eval 18: SharePoint Team Documents (connectors feature flag ON)
+# Workflow Log — Eval 18: SharePoint Team Documents (connector-backed)
 
 ## Phase 0 — Working directory setup
 - Working directory created: `sharepoint-team-docs/` (kebab-case derived from "SharePoint team site documents")
@@ -23,8 +23,7 @@
 
 ### Connector Detection (delegated to genpage-connector-builder)
 - Request is explicitly for SharePoint connector → planner delegates all connector work to the `genpage-connector-builder` agent (mode: create) via the Task tool
-- genpage-connector-builder probes the gate FIRST: `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` → `enabled` (exit 0)
-- Connectors feature flag ON: proceeding with connector discovery
+- genpage-connector-builder assesses the data source FIRST: the maker answered "SharePoint (connector)", so connector discovery runs
 - `node "${PLUGIN_ROOT}/scripts/list-connections.js" "https://contoso-dev.crm10.dynamics.com/"` → 2 connections found:
   - SharePoint Online: logical name `new_uxtest_sharepoint`, connectorId `/providers/Microsoft.PowerApps/apis/shared_sharepointonline`
   - OneDrive for Business: logical name `new_uxtest_onedrive`, connectorId `/providers/Microsoft.PowerApps/apis/shared_onedriveforbusiness`

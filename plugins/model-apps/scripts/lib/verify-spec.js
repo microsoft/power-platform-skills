@@ -317,6 +317,52 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
+  // App-module TABLE membership (appmodulecomponent componenttype 1).
+  //
+  // The sitemap and the app's component list are SEPARATE facts, and they can disagree: an app can
+  // show a table in navigation while omitting it from its Tables list. That is an internally
+  // inconsistent app definition and it breaks consumers that read app-module membership — but every
+  // check above passes, because the table EXISTS and the sitemap DOES name it. Verify reported PASS
+  // on exactly that app, which is what made the divergence invisible.
+  //
+  // Scoped to SITEMAP-VISIBLE entities on purpose. A spec entity with no subarea is a legitimate
+  // data-model-only/supporting table that the build does not pin, so requiring it would fail every
+  // app that declares one.
+  //
+  // Optional capability: verify-spec is also driven by minimal readers, and an optional reader must
+  // never become a TypeError for them (same rule as `columnVisualization`).
+  if (typeof read.appEntityComponents === 'function') {
+    const sitemapEntities = [];
+    for (const a of (spec.appShell && spec.appShell.areas) || []) {
+      for (const g of a.groups || []) {
+        for (const sa of g.subAreas || []) {
+          const logical = sa && sa.entity ? String(sa.entity).toLowerCase() : null;
+          if (logical && !sitemapEntities.includes(logical)) sitemapEntities.push(logical);
+        }
+      }
+    }
+    if (sitemapEntities.length) {
+      const res = await read.appEntityComponents(sitemapEntities);
+      if (!res || res.ok !== true) {
+        // Fail closed. "We could not look" must never read as "the app is fine" — that is the exact
+        // shape of the bug this check exists to catch.
+        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'}`);
+      } else {
+        // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
+        const present = new Set((res.present || []).map((n) => String(n).toLowerCase()));
+        for (const logical of sitemapEntities) add('app-table-component', logical, present.has(logical));
+        // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` METADATA
+        // table itself, so the row points at no real table. Those rows are junk, they accumulate
+        // across reconciliation attempts, and they are worth naming even when every declared table
+        // is present.
+        if (res.placeholder) {
+          add('app-table-component', 'invalid `entity` placeholder component(s)', false,
+            'the app module contains component(s) pointing at the `entity` metadata table rather than a real table — remove them.');
+        }
+      }
+    }
+  }
+
   // Pages (design §13.1). Match BY ID against three authorities — IDENTITY (manifest), EXISTENCE
   // (env-wide id set), MEMBERSHIP (app sitemap ids). Reader must supply sitemapPageIds(),
   // existenceIds(), manifest(), and pageCode(id) when any page has nav. Fail-closed (Imp7):

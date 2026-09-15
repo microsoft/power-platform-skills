@@ -10,7 +10,7 @@ A plugin for building Power Apps for **model-driven apps**. Two **authoring** sk
 - **`/genpage`** — build and deploy standalone **generative pages** (genux): React 17 + TypeScript +
   Fluent UI V9 single-file components, deployed via PAC CLI. Orchestrates specialist agents (planner,
   optional entity builder, parallel page builders).
-- **`/app-builder`** *(Preview)* — build and edit a **whole model-driven app** (tables, columns,
+- **`/app-builder`** — build and edit a **whole model-driven app** (tables, columns,
   relationships, adaptive forms, views, charts, generative pages, app + sitemap, sample data, and
   admin-gated AI features) from a natural-language intent, via the vendored headless `cds-maker-sdk`.
 
@@ -47,7 +47,8 @@ able to tell what moved from the docs alone):
 | [`docs/app-builder-capabilities.md`](docs/app-builder-capabilities.md) | `/app-builder` **capabilities** — what ships today, with the evidence for each | You ship an app-builder capability |
 | [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
-| [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
+| [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract (always-present fields) | You change the App Spec shape or validation |
+| [`references/app-spec-schema-advanced.md`](references/app-spec-schema-advanced.md) | The conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants) — split out so the always-read contract stays small | You change one of those features |
 
 Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
 tree and teardown order both did before).
@@ -78,7 +79,19 @@ A second skill (`/app-builder`) builds a whole **model-driven app** (tables, col
 relationships, adaptive forms with sub-grids, views, Choice-column charts, app module +
 sitemap) from a natural-language intent — distinct from `/genpage`, which builds generative
 *pages*. The **whole flow runs in the main conversation loop, never a `Task` subagent** — subagents
-are headless, so `AskUserQuestion` and plan mode cannot reach the user. For the end-to-end flow,
+are headless, so `AskUserQuestion` and plan mode cannot reach the user. **This applies to `/genpage`
+too**: its agents are headless discovery/generation workers, and an agent that needs a decision
+returns a `needs_input` request for the main loop to ask (`references/agent-interaction-contract.md`).
+`scripts/validate-agent-interactivity.js` fails the build if any `plugins/model-apps/agents/*.md`
+declares an interactive tool — the frontmatter is prose to every other test, which is how `/genpage`
+Phase 1 specified an unreachable interactive flow for ~2.5 months. The same validator also fails a
+**one-sided tool declaration**: tool names are host-specific and every host silently ignores a name
+it does not recognize, so a capability named only in one scheme is absent on the other host and the
+agent launches without it. `TaskCreate`/`TaskUpdate`/`TaskList` are the live example — no published
+alias table lists them, so `todo` must be declared alongside. Both skills also support **unattended
+runs** (Copilot autopilot / Claude auto-accept) via
+`scripts/resolve-interaction-mode.js`; suppressing a prompt never authorizes destructive work.
+For the end-to-end flow,
 stage→phase mapping and page-identity model, see
 [`docs/architecture.md`](docs/architecture.md) → `## /app-builder — build pipeline`; that doc owns
 the pipeline and delegates each script's **behavioral spec** to the entries below.
@@ -282,6 +295,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
   component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
   Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
+  `--verify` now asserts the same membership INDEPENDENTLY of the write path: it resolves the app's
+  `componenttype: 1` rows and fails, by table name, when a sitemap-visible table is not among them,
+  fails closed when that list cannot be read, and reports any leftover `entity` placeholder row. The
+  SDK's read-back only covers what a build intended to pin, so an app that drifted afterwards (or was
+  edited elsewhere) still verified clean — the sitemap named the table and the table existed, which
+  was all verify checked.
   The same rule binds **tests and evals**, with a distinction that is easy to get backwards:
   an EXPECTATION must come from the CONTRACT, independent of the code under test, while the FIXTURE
   that stands in for the environment should be generated from the builder's real output so it cannot
@@ -508,7 +527,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (rebuild via `scripts/_vendor-build/`); **`scripts/lib/sdk-http-client.js`** injects an
   `az`-token HttpClient. No browser, no relay — the SDK reuses the designer's own serializers.
 - The build log is **phase-grouped with per-step status** (`▶ phase` / `[n/total] ✓ created` /
-  `⊘ skipped` / `✗ failed`) + a closing summary; dry-run lists the same plan with a `▢` marker.
+  `⊘ skipped` / `✗ failed`) + a closing summary. A **dry run resolves each item against the live
+  environment** (#559) and marks it `+ create`, `= reuse`, or `? unknown` when the read failed —
+  never guessing, because a wrong confident answer is worse than none. Items with no live identity
+  (sample data, publish, generated icons) stay `▢` unprobed and are counted separately in the
+  summary. The probe reuses the build's OWN discovery helpers (`findExistingTable`,
+  `findExistingColumns`, `relationshipExists`, `artifactIdentityQuery`) rather than a parallel
+  implementation, so the plan cannot disagree with what the apply then does; it is read-only, and
+  `--no-live-plan` restores the offline, spec-only listing.
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
@@ -538,7 +564,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
-feature-flags.json             ← Default-OFF feature flags (connectors, custom-api, custom-telemetry)
+feature-flags.json             ← Feature flags (connectors=ga/on, custom-api, custom-telemetry)
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
@@ -592,7 +618,8 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
     provision-input.js         ← Input validation for entity provisioning
-    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`), plus the CLI arg contract (parseArgs/validateFlags)
+    nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + connector script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
@@ -646,7 +673,7 @@ hooks/                         ← Lifecycle hooks (registered in hooks/hooks.js
   run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
   app-builder/
-    SKILL.md                   ← intent → model-driven app (create + edit); **Preview**
+    SKILL.md                   ← intent → model-driven app (create + edit)
   genpage/
     SKILL.md                   ← Orchestrator skill (delegates to agents)
     edit-flow.md               ← Edit flow steps (loaded only on edit path)
@@ -660,7 +687,7 @@ skills/
 | Skill | Description |
 |-------|-------------|
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
-| `/app-builder` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
+| `/app-builder` | Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
 | `/telemetry` | Enable, disable, or check usage telemetry (`on \| off \| status`) |
 
@@ -697,14 +724,25 @@ Unreleased functionality is gated behind committed, **default-OFF** feature flag
 the skill can merge ahead of its cross-repo dependencies. With a flag OFF, the
 **deployed page behavior is identical to before the feature existed** — the guarantee
 is about runtime/deploy output, not that every authoring artifact is byte-for-byte
-unchanged (e.g. plans still carry a `## Connector Bindings: No connector bindings.`
-line). The mechanism lives in `scripts/lib/feature-flags.js` with the committed
+unchanged. The mechanism lives in `scripts/lib/feature-flags.js` with the committed
 values in `feature-flags.json` at the plugin root.
 
-- **Source of truth:** `feature-flags.json` (e.g. `{ "connectors": false }`). Flip a
-  flag to `true` in a one-line PR once its dependencies are GA in PROD.
+**A GA flag is flipped to `true` FIRST and removed in a LATER change, not both at once.**
+Flipping is reversible in one line if the rollout turns out to be incomplete in some tenant;
+deleting the gate in the same change that enables the feature leaves no way back except a
+revert. Once a release has shipped with the flag on and no rollback was needed, remove it —
+a permanently-on gate is dead weight that still has to be probed, branched on and reasoned
+about at every call site.
+
+`connectors` is in that window now: **GA, shipping `true`, gate retained as a rollback
+switch, scheduled for removal in the next release.**
+
+- **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": false }`). Flip a
+  flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
+  it in a follow-up that deletes its gates.
 - **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
-  `GENPAGE_ENABLE_CONNECTORS=1`) → committed `feature-flags.json` → default `false`
+  `GENPAGE_ENABLE_CONNECTORS=0` to roll connectors back) → committed
+  `feature-flags.json` → default `false`
   (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
 - **LLM gate:** skill/agent markdown probes a flag with
   `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" <flag>` (prints `enabled`/`disabled`,
@@ -723,7 +761,7 @@ values in `feature-flags.json` at the plugin root.
   to `true` — accidentally enable the wrong thing).
 
 **Each gated feature has a SINGLE OWNER agent, and every entry point must go through it or the
-shared helper.** Both currently-gated features gate at the same five places, so the rule is stated
+shared helper.** The currently-gated features gate at the same five places, so the rule is stated
 once here and only the per-feature specifics are tabled below:
 
 1. **Discovery** — the owner agent runs the probe first; planners/edit-planners delegate to it and
@@ -745,10 +783,12 @@ once here and only the per-feature specifics are tabled below:
 | **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
 | **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
 
-One connectors-only nuance: at Phase 4.5 the `/genpage` orchestrator re-probes and passes the
-verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch — **that dispatch
-value wins over the plan's `## Connector Bindings` section.** Phase 4.7 does the same for
-`Telemetry: enabled|disabled`.
+At Phase 4.7 the `/genpage` orchestrator probes and passes the verbatim result as
+`Telemetry: enabled|disabled` in every page-builder dispatch — **that dispatch value wins over
+the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
+difference: that value is the **binding count**, not the flag state. A disabled gate and an empty
+binding table both yield `none`, because the page-builder only needs to know how many bindings it
+may call — which keeps the dispatch stable when the flag is eventually removed.
 
 `custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
 section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
@@ -869,6 +909,51 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - **Responsive design** — flexbox, relative units, never `100vh`/`100vw`
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
+
+## CLI argument contract
+
+**Every `scripts/*.js` entry point declares its flags and validates them up front.** `parseArgs`
+accepts any `--name`, and an unrecognised flag is both dropped silently *and* swallows the token
+after it — so a typo does not fail, it quietly changes what the command does. Measured on
+`build-model-app.js` before this was enforced: `--stage ui` planned 3 steps, while `--stagee ui`
+planned all 9 and still exited 0, turning a scoped UI apply into a full data-model apply.
+
+So a `main()` starts with:
+
+```js
+const argv = process.argv.slice(2);
+const { positional, flags } = parseArgs(argv);
+const flagError = validateFlags(argv, {
+  known: ['env', 'spec', 'stage', 'apply'],   // every flag this CLI accepts
+  needValue: ['env', 'spec', 'stage'],        // those that must carry a value
+  hints: { stage: 'one of: data, ui, app, publish' }, // optional, for closed value sets
+});
+if (flagError) { process.stderr.write(`✗ ${flagError}\n${USAGE}\n`); process.exit(1); }
+```
+
+`validateFlags` (`scripts/lib/dataverse-auth.js`) rejects unknown flags with a single-edit "did you
+mean" (via `scripts/lib/nearest-name.js`, shared with the FetchXML operator lint), and rejects a
+value-bearing flag passed bare or empty. It reads flag names from `argv` rather than the parsed
+object, because `--__proto__` goes through the inherited setter and never becomes an own property.
+
+Two consequences worth knowing:
+
+- Because `validateFlags` guarantees a `needValue` flag is either absent or a non-empty string,
+  `typeof flags.x === 'string' ? flags.x : undefined` is redundant afterwards — read `flags.x`.
+- `needValue` must be a subset of `known`; `validateFlags` throws if it is not, which catches a
+  rename applied to one list and not the other.
+
+When a CLI test harness cans `parseArgs` to a fixed result, use
+`scripts/tests/helpers/fake-auth.js` → `validateFlagsFromParsed` so the harness exercises the **real**
+validator instead of a hand-written copy that can drift from it.
+
+**Testing a CLI end to end:** `scripts/tests/helpers/cli-harness.js` → `loadCli(scriptPath, { requires, argv })`
+loads an entry point with injectable module stubs and a shadowed `process`, so a test can drive
+`main()` and assert the **wire calls** it makes (the Dataverse requests, the `AddSolutionComponent`
+component types, the temp-workspace cleanup) rather than regex-matching the source. It uses
+`vm.compileFunction`, **not** `vm.runInNewContext`: a new VM context is a separate realm with its own
+`Array`/`Object` prototypes, so every array the script builds would fail `assert.deepStrictEqual`
+against a host array with "same structure but not reference-equal".
 
 ## Dataverse Access From Scripts
 

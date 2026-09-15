@@ -7,7 +7,7 @@ description: >
   telemetry", "stop collecting usage data", "enable telemetry", "telemetry status".
 user-invocable: true
 argument-hint: "on | off | status"
-allowed-tools: Bash
+allowed-tools: Bash, execute
 model: haiku
 ---
 

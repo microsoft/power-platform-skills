@@ -22,6 +22,8 @@
 
 const { sha256 } = require('./hash.js');
 const { normalizePageSource } = require('./app-spec.js');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // Resolve the on-disk source path a page's content lives at, or null for an intent (design-only) page
 // that has nothing on disk to hash. Delegates to the canonical page-source normalizer so the legacy
@@ -70,4 +72,48 @@ function annotateContentHashes(spec, readFile) {
   return clone;
 }
 
-module.exports = { annotateContentHashes, pageContentPath };
+// Validate the on-disk half of every implemented page declaration. Schema validation proves a
+// `source.kind: "tsx"` page NAMES a confined codeFile; this proves the named file exists and is a
+// regular file before lint/preview/dry-run can call the page "implemented". `isFile` is injectable
+// so tests stay hermetic.
+function pageSourceFileErrors(spec, appDir, deps = {}) {
+  if (!spec || !Array.isArray(spec.pages) || !appDir) return [];
+  // Function shorthand is retained for existing tests/callers. In that injected mode realpath is
+  // identity unless supplied explicitly; production takes the object/default path and canonicalizes.
+  const isFile = typeof deps === 'function'
+    ? deps
+    : deps.isFile || ((absolutePath) => fs.statSync(absolutePath).isFile());
+  const realpath = typeof deps === 'function'
+    ? (absolutePath) => absolutePath
+    : deps.realpath || ((absolutePath) => (fs.realpathSync.native || fs.realpathSync)(absolutePath));
+  const root = path.resolve(appDir);
+  let realRoot;
+  try { realRoot = realpath(root); } catch { realRoot = root; }
+  const errors = [];
+  for (const page of spec.pages) {
+    const rel = pageContentPath(page);
+    if (!rel) continue;
+    const absolute = path.resolve(root, rel);
+    const confined = path.relative(root, absolute);
+    // Confinement is reported by validateAppSpec; do not touch an out-of-workspace path here.
+    if (confined === '..' || confined.startsWith(`..${path.sep}`) || path.isAbsolute(confined)) continue;
+    let exists = false;
+    try { exists = isFile(absolute) === true; } catch { exists = false; }
+    if (!exists) {
+      errors.push(`page '${page.key || page.name}': codeFile '${rel}' does not exist or is not a file`);
+      continue;
+    }
+    let realFile;
+    try { realFile = realpath(absolute); } catch {
+      errors.push(`page '${page.key || page.name}': codeFile '${rel}' does not exist or is not a file`);
+      continue;
+    }
+    const realRelative = path.relative(realRoot, realFile);
+    if (realRelative === '..' || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
+      errors.push(`page '${page.key || page.name}': codeFile '${rel}' resolves outside the workspace`);
+    }
+  }
+  return errors;
+}
+
+module.exports = { annotateContentHashes, pageContentPath, pageSourceFileErrors };
