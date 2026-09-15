@@ -727,6 +727,35 @@ test('apply progress total includes existing-column reconciliation steps', async
   assert.equal(terminal.at(-1).n, terminal.at(-1).total, 'the final step index must equal the advertised total');
 });
 
+// Live-reproduced on a real environment: a page-LESS spec rebuilt against an app that already
+// exists ran `finalize sitemap (genpage subareas)` and overran its own denominator ([37/36]).
+// The runtime finalizes whenever `appHasPageSubareas(spec) || appWasExisting`, but the plan only
+// counted the step when the SPEC had page subareas — so the `appWasExisting` branch, which is a
+// live fact planFor cannot see, was never budgeted for. Same family as the [75/62] overrun, and
+// invisible on a create run because that path ends exactly on total.
+test('apply progress total covers the existing-app sitemap finalize on a page-less spec', async () => {
+  const spec = makeSpec();
+  assert.equal((spec.pages || []).length, 0, 'this case is specifically the page-LESS spec');
+  const { sdk } = mockSdk({ artifactsExist: true }); // findArtifact('app') -> existing, so appWasExisting
+  const events = [];
+
+  await runSdkBuild(spec, {
+    sdk,
+    apply: true,
+    phases: ['app-shell', 'pages'],
+    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    emit: (event) => events.push(event),
+  });
+
+  const terminal = events.filter((event) => ['ok', 'skip', 'error'].includes(event.status));
+  assert.ok(terminal.length > 0);
+  assert.ok(
+    terminal.every((event) => event.n <= event.total),
+    `a step index must never exceed its advertised total: ${terminal.map((e) => `${e.n}/${e.total} ${e.label}`).join(' | ')}`
+  );
+  assert.equal(terminal.at(-1).n, terminal.at(-1).total, 'the final step index must equal the advertised total');
+});
+
 // --- Tier 2.x: SDK fix uptake (AutoNumber primary, N:N sub-grids) + folded build steps ----
 test('AutoNumber primary column flows to createTable.primaryColumnAutoNumberFormat', async () => {
   const spec = makeSpec();

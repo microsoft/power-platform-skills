@@ -423,7 +423,14 @@ function planFor(spec, opts) {
   if (has('pages')) for (const p of spec.pages || []) items.push({ phase: 'pages', label: `page "${p.name}"` });
   if (has('pages') && (spec.pages || []).length && appHasCrossPageNav(spec)) items.push({ phase: 'pages', label: 'resolve cross-page navigation' });
   if (has('pages') && (spec.pages || []).length) items.push({ phase: 'pages', label: `page manifest ${appUniqueName(spec)}_pagemanifest` });
-  if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
+  // Budgeted whenever the pages phase runs, NOT only when the spec has page subareas. The runtime
+  // finalizes on `appHasPageSubareas(spec) || appWasExisting`, and `appWasExisting` is a LIVE fact
+  // planFor cannot see — so gating the plan on the spec alone under-counted every rebuild against an
+  // app that already existed, and the run overran its own denominator ([37/36], live-reproduced on a
+  // page-less spec). The runner's total is fixed at construction from plan.length, so the only way to
+  // stay in step is to budget the step and have the runtime emit an explicit `skip` when it does not
+  // fire — the same shape as the existing-column "applied on create" skips.
+  if (has('pages')) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
   if (has('ai-features') && specOptsIntoAi(spec)) {
     items.push({ phase: 'ai-features', label: 'enable app AI features' });
     // Do NOT short-circuit on `summaries.default === 'off'`. `selectSummaryTables` already implements
@@ -3002,12 +3009,23 @@ async function runSdkBuild(spec, opts = {}) {
           reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           return result.created.app;
         });
+      } else {
+        // planFor budgets this step for every pages-phase run, so consume the slot even when there is
+        // nothing to write — otherwise the remaining steps renumber past the advertised total.
+        runner.skip('pages', `finalize sitemap (genpage subareas) (${skipSitemapFinalize ? 'content-only re-upload — sitemap unchanged' : 'no sitemap change'})`);
       }
     } finally {
       // Always clean up run-scoped staging (never leave env GUIDs on disk) and release the advisory lease.
       try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch { /* best-effort */ }
       lease.release();
     }
+  } else if (has('pages')) {
+    // The pages phase was selected but the block above did not open: a FRESH app with a page-less
+    // spec has nothing to build and no pre-existing pages to remove, and its sitemap was already
+    // written by the app-shell create path. planFor still budgeted the finalize step (it cannot see
+    // that the app is fresh), so consume the slot here rather than leaving the run one short of its
+    // advertised total.
+    runner.skip('pages', 'finalize sitemap (genpage subareas) (fresh page-less app — sitemap written on create)');
   }
 
   // 7b-ii. Modern ("new look") shell — opt-in via `app.newLook`.
