@@ -856,6 +856,13 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     // outer entity loop is already sequential, so serial columns here means one metadata
     // customization is in flight per entity at a time — the only order Dataverse permits.
     const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+    const requiredDeclared = [
+      e.primaryAttribute,
+      ...buildable,
+    ].filter((c) => c && c.schemaName && hasExplicitRequired(c));
+    const capabilityDeclared = buildable.filter((c) => c.type !== 'Customer'
+      && (c.defaultValue !== undefined || c.integerFormat !== undefined
+        || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
     const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
@@ -865,10 +872,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       { skipIf: isAlreadyExists }));
     if (existingTable) {
       const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
-      const requiredTargets = [
-        e.primaryAttribute,
-        ...buildable,
-      ].filter((c) => c && c.schemaName && hasExplicitRequired(c) && existingCols.has(c.schemaName.toLowerCase()));
+      const requiredTargets = requiredDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
       const requiredLevels = new Map();
       for (const c of requiredTargets) {
         const current = columnRequiredLevel(existingColMeta.get(c.schemaName.toLowerCase()));
@@ -929,9 +933,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       // `updateColumn` refuses ANY change to a Customer column (measured — it throws "type
       // 'Customer' not supported"), because Customer has no entry in the SDK's attribute-type ->
       // OData-cast table (it is created through the wholly separate createCustomerColumn instead).
-      const capabilityTargets = buildable.filter((c) => c.type !== 'Customer' && existingCols.has(c.schemaName.toLowerCase())
-        && (c.defaultValue !== undefined || c.integerFormat !== undefined
-          || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
+      const capabilityTargets = capabilityDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
       await runner.mapLimit(capabilityTargets, 1, (c) => {
         const columnLogical = c.schemaName.toLowerCase();
         const opts = {};
@@ -955,6 +957,16 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
           `could not update column capabilities for ${logical}.${columnLogical} — the rest of the build continues`
         );
       });
+    }
+    for (const c of requiredDeclared) {
+      if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {
+        runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (applied on create)`);
+      }
+    }
+    for (const c of capabilityDeclared) {
+      if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {
+        runner.skip('data-model', `column capabilities ${e.schemaName}.${c.schemaName} (applied on create)`);
+      }
     }
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {

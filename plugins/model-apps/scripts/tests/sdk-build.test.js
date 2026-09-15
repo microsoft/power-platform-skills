@@ -694,6 +694,39 @@ test('Tier 2: planFor and totals account for web resources and event wiring', as
   assert.ok(onlyWr.length && onlyWr.every((p) => p === 'web-resources'));
 });
 
+test('apply progress total includes existing-column reconciliation steps', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns[0].required = true;
+  spec.entities[0].columns.push({
+    schemaName: 'new_score',
+    displayName: 'Score',
+    type: 'Integer',
+    visualization: 'StarRating',
+  });
+  const { sdk } = mockSdk({
+    existingTables: {
+      new_customer: {
+        entitySetName: 'new_customers',
+        columns: ['new_name', 'new_tier', 'new_score'],
+        relationships: ['new_customer_new_ticket'],
+      },
+      new_ticket: {
+        entitySetName: 'new_tickets',
+        columns: ['new_subject', 'new_priority'],
+      },
+    },
+  });
+  sdk.setColumnVisualization = async () => ({});
+  const events = [];
+
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['data-model'], emit: (event) => events.push(event) });
+
+  const terminal = events.filter((event) => ['ok', 'skip', 'error'].includes(event.status));
+  assert.ok(terminal.length > 0);
+  assert.ok(terminal.every((event) => event.n <= event.total), 'a step index must never exceed its advertised total');
+  assert.equal(terminal.at(-1).n, terminal.at(-1).total, 'the final step index must equal the advertised total');
+});
+
 // --- Tier 2.x: SDK fix uptake (AutoNumber primary, N:N sub-grids) + folded build steps ----
 test('AutoNumber primary column flows to createTable.primaryColumnAutoNumberFormat', async () => {
   const spec = makeSpec();

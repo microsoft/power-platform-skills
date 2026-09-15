@@ -360,6 +360,25 @@ function planFor(spec, opts) {
       for (const c of e.columns || []) {
         if (SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer') items.push({ phase: 'data-model', label: `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`, key: { kind: 'column', entity: e.schemaName, name: c.schemaName } });
       }
+      const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+      for (const c of [e.primaryAttribute, ...buildable]) {
+        if (c && c.schemaName && Object.prototype.hasOwnProperty.call(c, 'required')) {
+          items.push({ phase: 'data-model', label: `required ${e.schemaName}.${c.schemaName}` });
+        }
+      }
+      for (const c of buildable) {
+        if (c.type !== 'Customer' && (
+          c.defaultValue !== undefined || c.integerFormat !== undefined
+          || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined
+        )) {
+          items.push({ phase: 'data-model', label: `column capabilities ${e.schemaName}.${c.schemaName}` });
+        }
+      }
+      for (const c of e.columns || []) {
+        if (c && c.schemaName && c.visualization !== undefined) {
+          items.push({ phase: 'data-model', label: `visualization ${e.schemaName}.${c.schemaName} (${c.visualization})` });
+        }
+      }
       for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
       for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
     }
@@ -715,6 +734,7 @@ async function ensureAppIcon(spec, created, deps) {
   const existing = await findByName(name);
   if (existing) {
     created.webResources[name] = existing;
+    runner.skip('app-shell', `app icon (generated) ${name} (exists — reuse)`);
     return existing;
   }
   let id;
