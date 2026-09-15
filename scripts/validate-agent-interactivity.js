@@ -298,12 +298,25 @@ function main() {
   for (const rel of SKILL_SCAN_PATHS) {
     for (const filePath of skillFiles(path.join(ROOT, rel))) {
       checked += 1;
-      const missing = undeclaredSkillTools(fs.readFileSync(filePath, 'utf8'));
+      const text = fs.readFileSync(filePath, 'utf8');
+      const missing = undeclaredSkillTools(text);
       if (missing.length) {
         errors.push(
           `${path.relative(ROOT, filePath).replace(/\\/g, '/')}: uses ${missing.join(', ')} in its body ` +
             'but does not declare it in allowed-tools — the flow would be moved to a loop that cannot ' +
             'perform it. Add the tool to the frontmatter.'
+        );
+      }
+      // A skill's allowed-tools is the same kind of host-specific allow-list as an agent's, and
+      // fails the same silent way: `/genpage` and `/app-builder` both track progress through
+      // TaskCreate/TaskUpdate/TaskList, which no Copilot host recognizes.
+      const unportable = unportableToolsIn(frontmatterOf(text));
+      if (unportable.length) {
+        errors.push(
+          `${path.relative(ROOT, filePath).replace(/\\/g, '/')}: declares ${unportable.join('; ')} — ` +
+            'tool names are host-specific and every host silently IGNORES a name it does not ' +
+            'recognize, so a capability named in only one scheme is simply absent on the other ' +
+            'host. Declare both names for the capability.'
         );
       }
     }
@@ -315,7 +328,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`Checked ${checked} agent/skill file(s): agents are headless, every skill declares the interactive tools it uses, and every agent capability is declared in both naming schemes.`);
+  console.log(`Checked ${checked} agent/skill file(s): agents are headless, every skill declares the interactive tools it uses, and every agent and skill capability is declared in a form both hosts recognize.`);
 }
 
 if (require.main === module) {

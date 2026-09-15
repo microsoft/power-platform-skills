@@ -265,3 +265,27 @@ test('every scanned agent declares each capability in a form both hosts recogniz
     }
   }
 });
+
+// A skill's allowed-tools is the same kind of host-specific allow-list and fails the same silent
+// way — /genpage and /app-builder both track progress through TaskCreate/TaskUpdate/TaskList,
+// which no Copilot host recognizes.
+test('every scanned skill declares each capability in a form both hosts recognize', () => {
+  for (const rel of SKILL_SCAN_PATHS) {
+    const files = skillFiles(path.join(ROOT, rel));
+    assert.ok(files.length > 0, `expected skills under ${rel}`);
+    for (const f of files) {
+      const problems = unportableToolsIn(frontmatterOf(fs.readFileSync(f, 'utf8')));
+      assert.deepEqual(problems, [], `${path.relative(ROOT, f)}: ${problems.join('; ')}`);
+    }
+  }
+});
+
+// The interactive tools have no portable equivalent — they are Claude-only names and there is
+// nothing to declare alongside them. They must therefore carry NO portability assertion, or every
+// skill that legitimately asks the user would fail this check.
+test('interactive tool names carry no portability assertion', () => {
+  assert.deepEqual(
+    unportableToolsIn('allowed-tools: Read, read, AskUserQuestion, EnterPlanMode, ExitPlanMode'),
+    []
+  );
+});
