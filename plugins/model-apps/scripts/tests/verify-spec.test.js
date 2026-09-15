@@ -838,7 +838,7 @@ test('app table membership: verify FAILS when a sitemap-visible table is absent 
   // EXISTS and that the sitemap names it, but never that the app module actually CONTAINS it. An app
   // can show a table in navigation while omitting it from its Tables list, which is an internally
   // inconsistent definition and breaks consumers that read app-module membership.
-  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, logicalNames: ['new_order'] })));
+  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, present: ['new_order'] })));
   assert.strictEqual(checkFor(res, 'new_order').present, true);
   const missing = checkFor(res, 'new_line');
   assert.ok(missing && missing.present === false, 'the absent table must be reported by name');
@@ -846,7 +846,7 @@ test('app table membership: verify FAILS when a sitemap-visible table is absent 
 });
 
 test('app table membership: verify passes when every sitemap table is a real app component', async () => {
-  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, logicalNames: ['new_order', 'NEW_LINE'] })));
+  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, present: ['new_order', 'NEW_LINE'] })));
   // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
   assert.strictEqual(checkFor(res, 'new_line').present, true);
   assert.ok(res.checks.filter((c) => c.kind === 'app-table-component').every((c) => c.present));
@@ -856,7 +856,7 @@ test('app table membership: an invalid `entity` placeholder component is reporte
   // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` metadata table
   // itself, so the component resolves to the logical name `entity` rather than to a real table.
   // Those rows are junk and accumulate, so name them even when every declared table is present.
-  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, logicalNames: ['new_order', 'new_line', 'entity'] })));
+  const res = await verifySpec(membershipSpec(), membershipRead(async () => ({ ok: true, present: ['new_order', 'new_line'], placeholder: true })));
   const bad = res.checks.find((c) => c.kind === 'app-table-component' && /placeholder/i.test(c.name));
   assert.ok(bad && bad.present === false, 'the `entity` placeholder must be reported');
   assert.strictEqual(res.ok, false);
@@ -883,7 +883,7 @@ test('app table membership: only SITEMAP-visible tables are required to be compo
   // so requiring it would fail every app that declares a supporting table.
   const spec = membershipSpec();
   spec.entities.push({ schemaName: 'new_audit', columns: [] });
-  const res = await verifySpec(spec, membershipRead(async () => ({ ok: true, logicalNames: ['new_order', 'new_line'] })));
+  const res = await verifySpec(spec, membershipRead(async () => ({ ok: true, present: ['new_order', 'new_line'] })));
   assert.strictEqual(checkFor(res, 'new_audit'), undefined, 'a table with no subarea must not be required');
   assert.ok(res.checks.filter((c) => c.kind === 'app-table-component').every((c) => c.present));
 });

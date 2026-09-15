@@ -342,20 +342,20 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
     if (sitemapEntities.length) {
-      const res = await read.appEntityComponents();
+      const res = await read.appEntityComponents(sitemapEntities);
       if (!res || res.ok !== true) {
         // Fail closed. "We could not look" must never read as "the app is fine" — that is the exact
         // shape of the bug this check exists to catch.
         add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'}`);
       } else {
         // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
-        const have = new Set((res.logicalNames || []).map((n) => String(n).toLowerCase()));
-        for (const logical of sitemapEntities) add('app-table-component', logical, have.has(logical));
+        const present = new Set((res.present || []).map((n) => String(n).toLowerCase()));
+        for (const logical of sitemapEntities) add('app-table-component', logical, present.has(logical));
         // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` METADATA
-        // table itself, so the row resolves to the logical name `entity` instead of a real table.
-        // Those rows are junk, they accumulate across reconciliation attempts, and they are worth
-        // naming even when every declared table is present.
-        if (have.has('entity')) {
+        // table itself, so the row points at no real table. Those rows are junk, they accumulate
+        // across reconciliation attempts, and they are worth naming even when every declared table
+        // is present.
+        if (res.placeholder) {
           add('app-table-component', 'invalid `entity` placeholder component(s)', false,
             'the app module contains component(s) pointing at the `entity` metadata table rather than a real table — remove them.');
         }

@@ -52,18 +52,32 @@ async function appIdFor(sdk, appUnique) {
   return rows && rows[0] && rows[0].appmoduleid;
 }
 
-// The app's TABLE components (appmodulecomponent componenttype 1), resolved to logical names.
+// Which of `wanted` (table logical names) are real TABLE components of the app
+// (`appmodulecomponent` componenttype 1), plus whether the app carries an `entity` PLACEHOLDER row.
 //
-// Returns `{ ok: true, logicalNames }`, or `{ ok: false, reason }` when the app, the component read
-// or a metadata resolution fails — the caller fails the check rather than passing, because "we could
-// not look" and "the app is fine" must never be the same answer here.
+// Returns `{ ok: true, present, placeholder }` or `{ ok: false, reason }`. The caller fails the check
+// on `ok: false` rather than passing, because "we could not look" and "the app is fine" must never be
+// the same answer here.
 //
-// Each type-1 row's `objectid` is a table's **MetadataId**, not a row id, so it is resolved through
-// `EntityDefinitions(<MetadataId>)`. LIVE-MEASURED on a healthy app: the rows carry the REAL table
-// MetadataIds (a 3-table app returned three distinct ids resolving to its three tables). A row that
-// resolves to the logical name `entity` is the known corruption — the `entity` METADATA table
-// pinned as though it were the intended table — and it is returned as-is so the caller can name it.
-async function appEntityComponentsFor(sdk, appUnique) {
+// Direction matters, and an earlier version had it backwards. Resolving every COMPONENT id to a
+// logical name meant: a read per component (unbounded by anything the spec controls), a whole-answer
+// failure whenever one foreign id would not resolve — reported as an opaque GUID an operator cannot
+// act on — and a cap on the component query. This resolves only the tables the SPEC asks about, so
+// the cost is bounded by the spec (LIVE-MEASURED ~100 ms per table), a component pointing at a
+// deleted table is simply not one of ours, and every message names a table.
+//
+// `paginate: true`, never `top`. Dataverse honours `$top` as a HARD cap and omits
+// `@odata.nextLink`, so a capped page silently truncates — and for a membership check a row that
+// fell off the end reads as NOT PRESENT, i.e. verify reports a correctly built app as broken. The
+// same trap was already found live on `roleprivileges` in this file (see `rolePrivileges` below);
+// using `top` here would have reintroduced it, and would additionally have hidden the placeholder
+// rows this check exists to find, since those are exactly what accumulates in a corrupted app.
+//
+// An EMPTY component list is returned as `ok: true` with nothing present, NOT as a read failure:
+// that is the reported defect itself (a sitemap naming tables the app does not contain). It cannot
+// mask a permissions problem, because the sitemap is read from the SAME `appmodulecomponent` table
+// (componenttype 62) and would fail visibly first.
+async function appEntityComponentsFor(sdk, appUnique, wanted) {
   try {
     const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
     const app = apps && apps[0];
@@ -71,21 +85,29 @@ async function appEntityComponentsFor(sdk, appUnique) {
     const rows = await sdk.queryRecords('appmodulecomponent', {
       select: ['objectid', 'componenttype'],
       filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 1`,
-      top: 1000,
+      paginate: true,
     });
-    const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((s) => String(s).toLowerCase()))];
-    const logicalNames = [];
-    for (const id of ids) {
-      // `fetchEntityMetadata` resolves by LOGICAL NAME, not MetadataId, so this read goes through the
-      // SDK's generic Dataverse client against the metadata endpoint. A single unresolvable id fails
-      // the whole answer: a partial list would silently read as "that table is not in the app".
-      const res = await sdk.dataverse.get(`/EntityDefinitions(${id})?$select=LogicalName`);
-      if (!res || res.status < 200 || res.status >= 300 || !res.body || !res.body.LogicalName) {
-        return { ok: false, reason: `component ${id} could not be resolved to a table (HTTP ${res && res.status})` };
+    const ids = new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((s) => String(s).toLowerCase()));
+    // A type-1 `objectid` is a table's MetadataId, not a row id. `fetchEntityMetadata` resolves by
+    // LOGICAL NAME and is a disk-cached projection, so this goes through the raw client instead.
+    // A 404 means the table does not exist at all, which the separate `entity` existence check
+    // already reports — so it is "not a component", not a read failure.
+    const metadataId = async (logical) => {
+      const res = await sdk.dataverse.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')?$select=MetadataId`);
+      if (res && res.status === 404) return null;
+      if (!res || res.status < 200 || res.status >= 300 || !res.body || !res.body.MetadataId) {
+        throw new Error(`could not resolve table '${logical}' (HTTP ${res && res.status})`);
       }
-      logicalNames.push(String(res.body.LogicalName));
+      return String(res.body.MetadataId).toLowerCase();
+    };
+    const present = [];
+    for (const logical of wanted || []) {
+      const id = await metadataId(logical);
+      if (id && ids.has(id)) present.push(logical);
     }
-    return { ok: true, logicalNames };
+    // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` METADATA table.
+    const entityId = await metadataId('entity');
+    return { ok: true, present, placeholder: !!(entityId && ids.has(entityId)) };
   } catch (err) {
     return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
   }
@@ -105,8 +127,8 @@ function readerFor(sdk, appUnique, opts) {
   // Memoize fetchSitemap: both sitemapXml and sitemapPageIds share one live query (Imp7 — one snapshot).
   let sitemapP;
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
-  // Memoized app TABLE components — one live read per verify run.
-  let appComponentsP;
+  // Memoized app TABLE components — one live read per verify run, keyed by the wanted-table set.
+  const appComponentsP = new Map();
 
   // Per-id page code cache. Downloads by specific id on demand rather than pulling all pages at once
   // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
@@ -179,8 +201,12 @@ function readerFor(sdk, appUnique, opts) {
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
     // The app's TABLE components, so verify can tell "the sitemap shows this table" from
-    // "the app module actually contains it". Memoized — one live read per verify run.
-    appEntityComponents: () => (appComponentsP || (appComponentsP = appEntityComponentsFor(sdk, appUnique))),
+    // "the app module actually contains it". Memoized per wanted-set — one live read per verify run.
+    appEntityComponents: (wanted) => {
+      const key = (wanted || []).join(',');
+      if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
+      return appComponentsP.get(key);
+    },
   };
 
   // entityPrivileges(logical): the privilege set a table exposes, as [{ PrivilegeId, PrivilegeType, ... }].
