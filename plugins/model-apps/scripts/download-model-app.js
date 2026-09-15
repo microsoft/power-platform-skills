@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -77,6 +77,187 @@ async function readDashboards(sdk, app, warn) {
     }
   }
   return out;
+}
+
+// Reconstruct relationships[] from live metadata (#567).
+//
+// Derived from the CHILD ("referencing") side via `ManyToOneRelationships`, because that is how App
+// Spec indexes a 1:N: `referencing` is the table that carries the lookup column. Reading from the
+// parent side instead would miss the documented "bridge to a standard table" pattern — where the
+// parent is `systemuser`/`account` and is therefore never one of the downloaded entities, so its
+// metadata is never read — which references/app-spec-schema.md explicitly supports.
+//
+// This deliberately does NOT use the SDK's `fetchEntityMetadata().relationships` projection, which
+// LIVE-MEASURED returns entries shaped:
+//   {"schemaName":"cfo_workorder_SyncErrors","type":"OneToMany","relatedEntity":"syncerror","relatedAttribute":"regardingobjectid"}
+// and is missing all three facts this needs: (1) no `IsCustomRelationship`, and on a 3-table app 20
+// of 22 entries per table were platform plumbing (SyncErrors, AsyncOperations,
+// MailboxTrackingFolders, BulkDeleteFailures, …) that must not become spec relationships; (2) no
+// properly-cased lookup `SchemaName` — App Spec wants `cfo_CustomerId`, the projection lowercases
+// to `cfo_customerid`; and (3) no ManyToMany entries.
+//
+// Returns { relationships, skipped } — `skipped` feeds the not-round-tripped report so a
+// relationship this cannot express is DECLARED missing rather than silently absent, which was the
+// whole complaint in #567.
+async function readRelationships(sdk, logicals, publisherPrefix, warn) {
+  const inApp = new Set((logicals || []).map((l) => String(l).toLowerCase()));
+  const lc = (s) => String(s || '').toLowerCase();
+  const relationships = [];
+  const skipped = [];
+  const seen = new Set(); // relationship SchemaName (lower) — a 1:N read from both ends, and every N:N, appears twice
+  const parentOk = new Map(); // logical -> can a rebuild target be relied on to have this table?
+  const note = (name, entity, reason) => {
+    skipped.push({ name, entity, reason });
+    if (typeof warn === 'function') warn(`relationship '${name}' on '${entity}' is not carried into the spec: ${reason}`);
+  };
+
+  // A parent OUTSIDE the app is only safe to declare when a fresh rebuild target is guaranteed to
+  // have it — i.e. it is a stock table. A CUSTOM table this app does not include would not exist
+  // there, so declaring the relationship would turn a silent omission into a failed build.
+  const referencedIsRebuildable = async (logical) => {
+    const key = lc(logical);
+    if (inApp.has(key)) return true;
+    if (parentOk.has(key)) return parentOk.get(key);
+    let ok = false;
+    try {
+      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}?$select=IsCustomEntity`);
+      if (res && res.status >= 200 && res.status < 300 && res.body) ok = res.body.IsCustomEntity === false;
+    } catch { ok = false; }
+    parentOk.set(key, ok);
+    return ok;
+  };
+
+  for (const logical of logicals || []) {
+    let rows = null;
+    try {
+      // `dataverse.get` RESOLVES on a non-2xx rather than throwing, so the status must be checked
+      // explicitly — a bare try/catch would turn a 403 into "this table has no relationships".
+      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/ManyToOneRelationships`
+        + '?$select=SchemaName,ReferencedEntity,ReferencingEntity,ReferencingAttribute,IsCustomRelationship');
+      if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+      rows = ((res.body && res.body.value) || []).filter((r) => r && r.IsCustomRelationship);
+    } catch (e) {
+      // Report rather than swallow: "no relationships" and "the query failed" must not look alike.
+      // `rows` stays null so the 1:N block below is skipped, but the N:N read still runs — an
+      // earlier version `continue`d here, which meant a failed 1:N read ALSO skipped the N:N read
+      // silently, leaving any N:N both unreconstructed and unmentioned.
+      note('(all)', lc(logical), `their metadata could not be read (${e && e.message})`);
+    }
+
+    if (rows === null) rows = [];
+    // Properly-cased lookup SchemaName + label. Best-effort: on failure the relationship still
+    // round-trips using the lowercase logical name, which produces the same Dataverse column.
+    // Skipped entirely when there is no relationship to label, so a table whose 1:N read failed
+    // does not also pay for an attribute read whose result nothing would consume.
+    const lookups = new Map();
+    if (rows.length) {
+      try {
+        const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata`
+          + '?$select=LogicalName,SchemaName,DisplayName,Targets');
+        for (const a of ((res && res.body && res.body.value) || [])) lookups.set(lc(a.LogicalName), a);
+      } catch { /* fall back to the relationship's own ReferencingAttribute */ }
+    }
+
+    // POLYMORPHIC lookups. One lookup column that targets several tables surfaces as SEVERAL
+    // relationships sharing ONE ReferencingAttribute — LIVE-MEASURED, `cfo_billto` with
+    // Targets ["account","contact"] produced BOTH `cfo_cfo_workorder_account` and
+    // `cfo_cfo_workorder_contact`. relationships[] has exactly one `referenced` per lookup, so
+    // emitting both would declare the same lookup schema name twice and the rebuild would fail
+    // creating the second. Skip the whole group and say so.
+    const byAttr = new Map();
+    for (const r of rows) {
+      const k = lc(r.ReferencingAttribute);
+      if (!byAttr.has(k)) byAttr.set(k, []);
+      byAttr.get(k).push(r);
+    }
+
+    for (const [attr, group] of byAttr) {
+      if (group.length > 1) {
+        note(group.map((g) => g.SchemaName).sort().join(' + '), lc(logical),
+          `lookup '${attr}' is polymorphic (targets ${group.map((g) => lc(g.ReferencedEntity)).sort().join(', ')}) and relationships[] declares exactly one referenced table per lookup`);
+        continue;
+      }
+      const r = group[0];
+      const key = lc(r.SchemaName);
+      if (seen.has(key)) continue;
+      const referenced = lc(r.ReferencedEntity);
+      const referencing = lc(r.ReferencingEntity);
+      if (!(await referencedIsRebuildable(referenced))) {
+        note(r.SchemaName, referencing, `its parent table '${referenced}' is a custom table this app does not include, so a rebuild target would not have it`);
+        continue;
+      }
+      seen.add(key);
+      const a = lookups.get(attr);
+      const lookup = { schemaName: (a && a.SchemaName) || r.ReferencingAttribute };
+      const displayName = a && labelFromDataverse(a.DisplayName);
+      if (displayName) lookup.displayName = displayName;
+      // The deployed schema name is emitted ONLY when it differs from the one the build would
+      // generate anyway AND it satisfies the publisher-prefix rule the lint enforces
+      // (spec-lint.js "must start with the publisher prefix"). Emitting a foreign-prefix name would
+      // hand back a spec that fails its own lint — the exact defect #572 is about — while omitting a
+      // DIVERGENT name would make a rebuild into this same environment create a second relationship
+      // beside the existing one instead of matching it.
+      const auto = relationshipSchemaName({ referenced, referencing }, publisherPrefix);
+      const deployed = r.SchemaName;
+      const prefixOk = !publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`);
+      const rel = { type: 'OneToMany', referenced, referencing, lookup };
+      if (deployed && lc(deployed) !== lc(auto)) {
+        if (prefixOk) rel.schemaName = deployed;
+        else note(deployed, referencing, `its schema name does not start with this solution's publisher prefix '${publisherPrefix}_', so it is rebuilt under the generated name '${auto}' instead`);
+      }
+      relationships.push(rel);
+    }
+
+    // Many-to-many. Both ends must be in the app: the intersect table is created by the platform,
+    // so there is nothing to declare for a partner table a rebuild target would not have.
+    // Attempted INDEPENDENTLY of the 1:N read above: a failed 1:N read says nothing about whether
+    // N:N metadata is readable.
+    try {
+      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}/ManyToManyRelationships`
+        + '?$select=SchemaName,Entity1LogicalName,Entity2LogicalName,IsCustomRelationship');
+      if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
+      for (const r of ((res.body && res.body.value) || []).filter((x) => x && x.IsCustomRelationship)) {
+        const key = lc(r.SchemaName);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const e1 = lc(r.Entity1LogicalName);
+        const e2 = lc(r.Entity2LogicalName);
+        if (!inApp.has(e1) || !inApp.has(e2)) {
+          note(r.SchemaName, lc(logical), `it links '${e1}' to '${e2}' and this app does not include both tables`);
+          continue;
+        }
+        relationships.push({ type: 'ManyToMany', entity1: e1, entity2: e2 });
+      }
+    } catch (e) {
+      note('(many-to-many)', lc(logical), `their metadata could not be read (${e && e.message})`);
+    }
+  }
+
+  // Deterministic order: the metadata endpoints carry no ordering guarantee, and this block is
+  // written to a file that operators diff between runs, so an unstable order reads as a change that
+  // did not happen.
+  relationships.sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)));
+  skipped.sort((x, y) => (x.entity + x.name).localeCompare(y.entity + y.name));
+  return { relationships, skipped };
+}
+
+// Render the relationships this download could NOT express in relationships[] (#567).
+//
+// Deliberately NOT folded into `notRoundTrippedSummary`. That report describes classes this download
+// does not reconstruct AT ALL and whose members are all recorded under `descriptionInventory` — both
+// of its standing sentences ("this download does not reconstruct …", "They are NOT lost: every one
+// is listed under descriptionInventory") would be FALSE for relationships, which are now
+// reconstructed apart from specific, individually-explained exceptions. A report whose value is that
+// its claims are true cannot be extended with a claim that is not.
+function relationshipsSkippedWarning(skipped) {
+  if (!skipped || !skipped.length) return '';
+  const lines = [
+    `NOTE: ${skipped.length} relationship(s) could not be expressed in relationships[] and are absent from the rebuildable spec.`,
+    '  They remain on the deployed app, so rebuilding into THIS environment leaves them untouched. Rebuilding into a',
+    '  DIFFERENT environment will NOT recreate them — re-declare or re-create the ones you need there.',
+  ];
+  for (const s of skipped) lines.push(`    - ${s.entity}: ${s.name} — ${s.reason}`);
+  return `${lines.join('\n')}\n`;
 }
 
 function makeProvision(env, workspaceDir) {
@@ -1712,6 +1893,24 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`);
   }
 
+  // Relationships (#567). Reconstructed from live metadata; anything that cannot be expressed in
+  // relationships[] is collected in `relationshipsSkipped` and reported with the other
+  // not-round-tripped classes, so an omission is stated rather than left to be discovered.
+  let relationships = [];
+  let relationshipsSkipped = [];
+  try {
+    const rel = await readRelationships(sdk, allLogicals, solution.publisherPrefix, (m) => {
+      process.stderr.write(`WARNING: ${m}\n`);
+    });
+    relationships = rel.relationships;
+    relationshipsSkipped = rel.skipped;
+  } catch (e) {
+    // A total failure must not sink the download, but it must not masquerade as "this app has no
+    // relationships" either — that is precisely the silent absence #567 was filed about.
+    relationshipsSkipped = [{ name: '(all)', entity: 'unknown', reason: `relationship metadata could not be read (${e && e.message})` }];
+    process.stderr.write(`WARNING: relationships could not be reconstructed: ${e && e.message}\n`);
+  }
+
   // Captured by the descriptionInventory accessor below so the role-restriction warning can read it
   // without making a second query.
   let capturedInventory;
@@ -1723,6 +1922,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     app: async () => ({ ...app, uniquename: (app && app.uniquename) || appUnique, ...(await readAppShellSettings(sdk, appId)) }),
     pages: async () => pages,
     entities: async () => entities,
+    relationships: async () => relationships,
     webResources: async () => webResources,
     dashboards: async () => dashboards,
     solution: async () => solution,
@@ -1757,9 +1957,10 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // from "this download does not carry views".
   const notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, globalChoiceDecls));
   if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
+  if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped };
 }
 
 async function main() {
@@ -1899,4 +2100,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, roundTrippedAware, isRoleRestrictedFormXml, notRoundTrippedSummary, notRoundTrippedWarning, relationshipsSkippedWarning, labelFromDataverse, columnDisplayName, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, readAppShellSettings, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

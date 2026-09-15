@@ -449,6 +449,62 @@ test('errors on a dashboard tile referencing an unknown view', () => {
   assert.ok(!r.ok && r.errors.some((m) => /references unknown view/i.test(m)));
 });
 
+// #572 — a downloaded app's dashboards carry ID-PASSTHROUGH tiles (the deployed view/chart ids +
+// entity, no names) because the artifacts already exist. `validateAppSpec` and the build both
+// accept that form; this lint did not, so `download-model-app.js` produced a spec that failed its
+// own structural lint with "references unknown chart 'undefined'".
+test('accepts id-passthrough dashboard tiles with no declared views[]/charts[] (#572)', () => {
+  const s = base();
+  s.views = [];
+  s.charts = [];
+  s.dashboards = [{
+    name: 'Field Ops Overview',
+    tiles: [
+      { type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: '11111111-1111-1111-1111-111111111111', visualizationId: '22222222-2222-2222-2222-222222222222' },
+      { type: 'list', name: 'Open', entity: 'new_ticket', viewId: '33333333-3333-3333-3333-333333333333' },
+    ],
+  }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('an id-passthrough chart tile still needs entity and viewId (#572)', () => {
+  const noEntity = base();
+  noEntity.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', viewId: 'v1', visualizationId: 'c1' }] }];
+  assert.ok(lintAppSpec(noEntity).errors.some((m) => /id-based chart tile needs entity/i.test(m)));
+
+  // A visualization with no view has nothing to plot, so the view id is the load-bearing half.
+  const noView = base();
+  noView.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', entity: 'new_ticket', visualizationId: 'c1' }] }];
+  assert.ok(lintAppSpec(noView).errors.some((m) => /also needs viewId/i.test(m)));
+
+  const noListEntity = base();
+  noListEntity.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', name: 'X', viewId: 'v1' }] }];
+  assert.ok(lintAppSpec(noListEntity).errors.some((m) => /id-based list tile needs entity/i.test(m)));
+});
+
+test('a tile with neither a name nor an id reports the absence, not a chart called undefined (#572)', () => {
+  const s = base();
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X' }] }];
+  const r = lintAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  // The old check interpolated a missing key straight into the message.
+  assert.ok(!r.errors.some((m) => /'undefined'/.test(m)), `leaked undefined: ${JSON.stringify(r.errors)}`);
+  assert.ok(r.errors.some((m) => /chart tile needs a chart \(by name\) or viewId\+visualizationId/i.test(m)));
+});
+
+test('name-based dashboard tiles are still validated against declared views/charts (#572)', () => {
+  const s = base();
+  s.views = [{ entity: 'new_ticket', name: 'Active', columns: ['new_name'] }];
+  s.charts = [{ entity: 'new_ticket', name: 'By Priority', groupBy: 'new_priority' }];
+  // Correct names pass...
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'By Priority', view: 'Active' }] }];
+  assert.strictEqual(lintAppSpec(s).ok, true, JSON.stringify(lintAppSpec(s).errors));
+  // ...and a wrong one is still caught, so the id branch did not disable the name branch.
+  s.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: 'Nope', view: 'Active' }] }];
+  assert.ok(lintAppSpec(s).errors.some((m) => /references unknown chart 'Nope'/i.test(m)));
+});
+
 test('warns on prefix drift', () => {
   const s = base();
   s.entities[1].schemaName = 'cr123_ticket';

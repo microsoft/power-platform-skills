@@ -267,6 +267,16 @@ function lintAppSpec(spec) {
   }
 
   // Dashboards — chart/list tiles must reference a declared chart/view; webresource a web resource.
+  //
+  // ID PASSTHROUGH: a tile from a downloaded/round-tripped app carries the deployed view/chart ids
+  // (+ target entity) instead of names, binding to artifacts that ALREADY exist rather than to
+  // anything the spec declares. `validateAppSpec` (app-spec.js, "ID-passthrough tiles") and the
+  // build (sdk-build.js `dashboardTileOpts`, "ID passthrough (round-tripped dashboards)") have both
+  // always accepted that form, and `download-model-app.js readDashboards` deliberately emits it —
+  // this lint was the only stage that did not know about it, so a freshly downloaded spec failed
+  // its OWN structural lint. Because such a tile has no `chart`/`view` key at all, the old check
+  // also interpolated `undefined` into the message and reported a chart literally named
+  // 'undefined'. See #572.
   const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
   const viewNames = new Set((spec.views || []).map((v) => lc(v.name)));
   const chartNames = new Set((spec.charts || []).map((c) => lc(c.name)));
@@ -275,8 +285,25 @@ function lintAppSpec(spec) {
     if (!(d.tiles && d.tiles.length)) W(`Dashboard '${d.name}' has no tiles`);
     for (const t of d.tiles || []) {
       if (!DASH_TILE_TYPES.has(t.type)) { E(`Dashboard '${d.name}' has a tile with invalid type '${t.type}' (chart/list/iframe/webresource)`); continue; }
-      if (t.type === 'chart' && (!t.chart || !chartNames.has(lc(t.chart)))) E(`Dashboard '${d.name}' chart tile references unknown chart '${t.chart}'`);
-      if ((t.type === 'chart' || t.type === 'list') && (!t.view || !viewNames.has(lc(t.view)))) E(`Dashboard '${d.name}' ${t.type} tile references unknown view '${t.view}'`);
+      const byId = t.viewId || t.visualizationId;
+      if (t.type === 'chart') {
+        if (byId) {
+          // A chart tile renders a visualization over a view, so the view id is the load-bearing
+          // half: a visualizationId alone has no data to plot.
+          if (!t.viewId) E(`Dashboard '${d.name}' chart tile with visualizationId also needs viewId`);
+          if (!t.entity) E(`Dashboard '${d.name}' id-based chart tile needs entity`);
+        } else {
+          if (!t.chart) E(`Dashboard '${d.name}' chart tile needs a chart (by name) or viewId+visualizationId (id passthrough)`);
+          else if (!chartNames.has(lc(t.chart))) E(`Dashboard '${d.name}' chart tile references unknown chart '${t.chart}'`);
+          if (!t.view) E(`Dashboard '${d.name}' chart tile needs a view (by name) or viewId+visualizationId (id passthrough)`);
+          else if (!viewNames.has(lc(t.view))) E(`Dashboard '${d.name}' chart tile references unknown view '${t.view}'`);
+        }
+      } else if (t.type === 'list') {
+        if (byId) {
+          if (!t.entity) E(`Dashboard '${d.name}' id-based list tile needs entity`);
+        } else if (!t.view) E(`Dashboard '${d.name}' list tile needs a view (by name) or a viewId (id passthrough)`);
+        else if (!viewNames.has(lc(t.view))) E(`Dashboard '${d.name}' list tile references unknown view '${t.view}'`);
+      }
       if (t.type === 'iframe' && !t.url) E(`Dashboard '${d.name}' iframe tile needs a url`);
       if (t.type === 'webresource' && (!t.webResource || !webResourceNames.has(lc(t.webResource)))) E(`Dashboard '${d.name}' webresource tile references undeclared web resource '${t.webResource}'`);
     }
