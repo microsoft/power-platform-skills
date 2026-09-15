@@ -49,11 +49,31 @@ if (skillVersion.Length > 0)
 }
 RequireMetadata("Source revision", expected: null);
 
-var plannedActions = ReadColumn(planLines, "## Action Contracts", 0, errors);
+var plannedActionRows = ReadRows(planLines, "## Action Contracts", errors);
+var plannedActions = plannedActionRows.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
 var plannedScenarios = ReadColumn(planLines, "## Functional Test Matrix", 0, errors);
 var plannedScreens = ReadColumn(planLines, "## Dispatch", 1, errors, keyColumn: 1);
 var plannedTargets = ReadColumn(planLines, "## Dispatch", 2, errors, keyColumn: 1);
 var plannedRecordFields = ReadOptionalRows(planLines, "## Required Record Fields", errors);
+var plannedLifecycleEvidence = ReadOptionalRows(
+    planLines,
+    "## Mutation Lifecycle Evidence",
+    errors);
+var plannedFieldLedgerRows = ReadOptionalRowsAllowDuplicates(
+    planLines,
+    "## Mutation Field Ledger",
+    errors);
+var plannedContinuations = ReadOptionalRows(
+    planLines,
+    "## Continuation Contracts",
+    errors);
+var explicitStateDrivenSurfaces = ReadOptionalRows(
+    planLines,
+    "## State-Driven Surface Visibility",
+    errors);
+var plannedStateDrivenSurfaces = MergeActionObserverSurfaceDeclarations(
+    explicitStateDrivenSurfaces,
+    plannedActionRows);
 var acceptedActions = ReadRows(acceptanceLines, "## Action Contract Acceptance", errors);
 var acceptedScenarios = ReadRows(acceptanceLines, "## Functional Test Matrix Results", errors);
 var acceptedScreens = ReadRows(acceptanceLines, "## Screen QA Evidence", errors);
@@ -61,6 +81,21 @@ var acceptedRecordFields = ReadOptionalRows(
     acceptanceLines,
     "## Required Record Field Evidence",
     errors);
+var acceptedLifecycleEvidence = plannedLifecycleEvidence.Count == 0
+    ? ReadOptionalRows(acceptanceLines, "## Mutation Lifecycle Evidence", errors)
+    : ReadRows(acceptanceLines, "## Mutation Lifecycle Evidence", errors);
+var acceptedFieldEvidenceRows = plannedFieldLedgerRows.Count == 0
+    ? ReadOptionalRowsAllowDuplicates(acceptanceLines, "## Mutation Field Evidence", errors)
+    : ReadRequiredRowsAllowDuplicates(
+        acceptanceLines,
+        "## Mutation Field Evidence",
+        errors);
+var acceptedContinuations = plannedContinuations.Count == 0
+    ? ReadOptionalRows(acceptanceLines, "## Continuation Evidence", errors)
+    : ReadRows(acceptanceLines, "## Continuation Evidence", errors);
+var acceptedStateDrivenSurfaces = plannedStateDrivenSurfaces.Count == 0
+    ? ReadOptionalRows(acceptanceLines, "## State-Driven Surface Visibility Evidence", errors)
+    : ReadRows(acceptanceLines, "## State-Driven Surface Visibility Evidence", errors);
 var compoundEvidence = ReadOptionalRows(
     acceptanceLines,
     "## Compound Sequence Evidence",
@@ -95,6 +130,21 @@ CompareCoverage(
     "required record field",
     plannedRecordFields.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
     acceptedRecordFields,
+    errors);
+CompareCoverage(
+    "mutation lifecycle",
+    plannedLifecycleEvidence.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
+    acceptedLifecycleEvidence,
+    errors);
+CompareCoverage(
+    "continuation",
+    plannedContinuations.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
+    acceptedContinuations,
+    errors);
+CompareCoverage(
+    "state-driven surface visibility",
+    plannedStateDrivenSurfaces.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase),
+    acceptedStateDrivenSurfaces,
     errors);
 CompareCoverage(
     "directional mutation pair",
@@ -234,7 +284,22 @@ foreach (var row in acceptedScreens.Values)
 }
 
 ValidateDirectionalMutationEvidence(directionalEvidence);
-ValidateDataEntryLabels(dataEntryLabelEvidence);
+ValidateMutationLifecycleAndFields(
+    plannedLifecycleEvidence,
+    acceptedLifecycleEvidence,
+    plannedFieldLedgerRows,
+    acceptedFieldEvidenceRows,
+    plannedActionRows,
+    acceptedActions);
+ValidateContinuations(
+    plannedContinuations,
+    acceptedContinuations,
+    plannedActionRows,
+    acceptedActions);
+ValidateStateDrivenSurfaceVisibility(
+    plannedStateDrivenSurfaces,
+    acceptedStateDrivenSurfaces);
+ValidateDataEntryLabels(dataEntryLabelEvidence, plannedStateDrivenSurfaces);
 ValidateGalleryRenderingContracts();
 ValidateLayoutReachability(CollectLayoutRequiredControls(
     acceptedActions,
@@ -248,9 +313,207 @@ if (errors.Count > 0)
 
 Console.WriteLine(
     $"PASS: {plannedActions.Count} actions, {plannedScenarios.Count} scenarios, " +
-    $"{plannedRecordFields.Count} required record fields, {plannedScreens.Count} screens; " +
+    $"{plannedRecordFields.Count} required record fields, " +
+    $"{plannedStateDrivenSurfaces.Count} state-driven surfaces, {plannedScreens.Count} screens; " +
     "runtime evaluation NOT RUN.");
 return 0;
+
+void ValidateStateDrivenSurfaceVisibility(
+    Dictionary<string, List<string>> planned,
+    Dictionary<string, List<string>> accepted)
+{
+    foreach (var (surfaceKey, planRow) in planned)
+    {
+        if (planRow.Count != 5)
+        {
+            errors.Add(
+                $"State-driven surface '{surfaceKey}' must have five planning columns.");
+            continue;
+        }
+
+        var surfaceControl = Clean(planRow[2]);
+        var plannedPredicate = Clean(planRow[3]).Replace("\\|", "|", StringComparison.Ordinal);
+        if (!Regex.IsMatch(
+                surfaceControl,
+                @"^[A-Za-z_][A-Za-z0-9_]*$",
+                RegexOptions.CultureInvariant) ||
+            string.IsNullOrWhiteSpace(Clean(planRow[1])) ||
+            string.IsNullOrWhiteSpace(Clean(planRow[4])))
+        {
+            errors.Add(
+                $"State-driven surface '{surfaceKey}' must declare its owner screen, " +
+                "surface control, and visible/hidden states.");
+        }
+        if (!plannedPredicate.StartsWith('=') ||
+            IsAlwaysVisiblePredicate(plannedPredicate))
+        {
+            errors.Add(
+                $"State-driven surface '{surfaceKey}' must declare a nonconstant state predicate " +
+                "beginning with '='; always-visible surfaces do not belong in this contract.");
+        }
+
+        if (!TryGetControlBlock(yamlLines, surfaceControl, out var surfaceBlock))
+        {
+            errors.Add(
+                $"Plan-declared state-driven surface '{surfaceControl}' does not exist in final app YAML.");
+        }
+        else
+        {
+            // A surface block contains all descendants, so the generic property lookup can
+            // accidentally return a child's Visible formula. This contract must inspect only
+            // the declared surface itself; child gating is explicitly not surface evidence.
+            var implementedPredicate = GetOwnPropertyFormula(
+                surfaceControl,
+                surfaceBlock,
+                "Visible");
+            if (implementedPredicate is null)
+            {
+                errors.Add(
+                    $"Plan-declared state-driven surface '{surfaceControl}' has no Visible property " +
+                    "in final app YAML.");
+            }
+            else if (!AreProvablyEquivalentVisibilityPredicates(
+                plannedPredicate,
+                implementedPredicate))
+            {
+                errors.Add(
+                    $"Plan-declared state-driven surface '{surfaceControl}' final-YAML Visible " +
+                    "predicate is not the same as or provably equivalent to the plan predicate.");
+            }
+        }
+
+        if (!accepted.TryGetValue(surfaceKey, out var acceptanceRow))
+        {
+            continue;
+        }
+        if (acceptanceRow.Count != 3)
+        {
+            errors.Add(
+                $"State-driven surface '{surfaceKey}' must have three acceptance columns.");
+            continue;
+        }
+        if (!string.Equals(
+                Clean(acceptanceRow[2]),
+                "PASS",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"State-driven surface '{surfaceKey}' does not pass.");
+        }
+
+        var binding = ParseYamlBinding(
+            acceptanceRow[1],
+            $"State-driven surface '{surfaceKey}' visibility binding");
+        if (binding is null)
+        {
+            continue;
+        }
+        ValidateYamlBinding(binding, $"State-driven surface '{surfaceKey}'");
+        if (!string.Equals(
+                binding.Value.Control,
+                surfaceControl,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                binding.Value.Property,
+                "Visible",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add(
+                $"State-driven surface '{surfaceKey}' evidence must bind the declared surface " +
+                $"itself as '{surfaceControl}.Visible'; child-only visibility is not surface evidence.");
+        }
+        if (!AreProvablyEquivalentVisibilityPredicates(
+                plannedPredicate,
+                binding.Value.Formula))
+        {
+            errors.Add(
+                $"State-driven surface '{surfaceKey}' YAML visibility predicate is not the same as " +
+                "or provably equivalent to the plan predicate.");
+        }
+    }
+}
+
+Dictionary<string, List<string>> MergeActionObserverSurfaceDeclarations(
+    Dictionary<string, List<string>> explicitRows,
+    Dictionary<string, List<string>> actionRows)
+{
+    var merged = new Dictionary<string, List<string>>(
+        explicitRows,
+        StringComparer.OrdinalIgnoreCase);
+    foreach (var actionRow in actionRows.Values.Where(row => row.Count >= 10))
+    {
+        foreach (Match quoted in Regex.Matches(
+            actionRow[9],
+            @"`(?<declaration>[^`]+)`",
+            RegexOptions.CultureInvariant))
+        {
+            var declaration = Regex.Match(
+                quoted.Groups["declaration"].Value,
+                @"^(?<control>[A-Za-z_][A-Za-z0-9_]*)\.Visible\s*(?::\s*)?=\s*(?<predicate>.+)$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!declaration.Success)
+            {
+                continue;
+            }
+
+            var control = declaration.Groups["control"].Value;
+            var predicate = "=" + declaration.Groups["predicate"].Value.TrimStart('=').Trim();
+            if (IsAlwaysVisiblePredicate(predicate) ||
+                !IsWholeSurfaceControl(control))
+            {
+                continue;
+            }
+
+            var existing = merged.Values.FirstOrDefault(row =>
+                row.Count == 5 &&
+                string.Equals(Clean(row[2]), control, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+            {
+                if (!AreProvablyEquivalentVisibilityPredicates(Clean(existing[3]), predicate))
+                {
+                    errors.Add(
+                        $"Plan declares conflicting state predicates for surface '{control}'.");
+                }
+                continue;
+            }
+
+            var key = control;
+            if (merged.ContainsKey(key))
+            {
+                errors.Add(
+                    $"Plan state-driven surface key '{key}' conflicts with an existing declaration.");
+                continue;
+            }
+            merged[key] =
+            [
+                key,
+                Clean(actionRow[3]),
+                control,
+                predicate,
+                $"Declared by Action Contract '{Clean(actionRow[0])}' observer",
+            ];
+        }
+    }
+    return merged;
+}
+
+bool IsWholeSurfaceControl(string control)
+{
+    if (!TryGetControlBlock(yamlLines, control, out var block))
+    {
+        // A declared surface missing from YAML must remain in the contract so validation
+        // reports the missing control rather than silently treating the declaration as absent.
+        return true;
+    }
+
+    var type = Regex.Match(
+        block,
+        @"^\s*Control:\s*(?<type>[^\r\n]+)",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    return type.Success && Regex.IsMatch(
+        type.Groups["type"].Value,
+        @"(?:Container|Gallery|Form|Card|DataGrid|Table)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
 
 HashSet<string> CollectLayoutRequiredControls(
     Dictionary<string, List<string>> actions,
@@ -311,13 +574,1064 @@ HashSet<string> CollectLayoutRequiredControls(
     return required;
 }
 
-void ValidateDataEntryLabels(Dictionary<string, List<string>> evidence)
+void ValidateMutationLifecycleAndFields(
+    Dictionary<string, List<string>> plannedLifecycle,
+    Dictionary<string, List<string>> acceptedLifecycle,
+    List<List<string>> plannedFields,
+    List<List<string>> acceptedFields,
+    Dictionary<string, List<string>> actionPlans,
+    Dictionary<string, List<string>> actionAcceptance)
+{
+    var mutations = new Dictionary<string, StaticMutation>(StringComparer.OrdinalIgnoreCase);
+    foreach (var action in plannedLifecycle.Keys
+        .Concat(plannedFields.Where(row => row.Count > 0).Select(row => Clean(row[0])))
+        .Distinct(StringComparer.OrdinalIgnoreCase))
+    {
+        if (!actionAcceptance.TryGetValue(action, out var actionRow) || actionRow.Count < 3)
+        {
+            errors.Add($"Mutation action '{action}' has no Action Contract acceptance event formula.");
+            continue;
+        }
+
+        var eventBindings = ParseEvidenceBindings(
+            actionRow[2],
+            $"Mutation action '{action}' event formula");
+        foreach (var binding in eventBindings)
+        {
+            ValidateYamlBinding(binding, $"Mutation action '{action}'");
+        }
+
+        var mutationBindings = eventBindings
+            .Where(binding => binding.Property.StartsWith("On", StringComparison.OrdinalIgnoreCase))
+            .Where(binding => ContainsSupportedOrBoundedMutation(binding.Formula))
+            .ToList();
+        if (mutationBindings.Count != 1)
+        {
+            errors.Add(
+                $"Mutation action '{action}' must resolve exactly one event binding containing its mutation; " +
+                $"found {mutationBindings.Count}.");
+            continue;
+        }
+
+        var mutation = ParseStaticMutation(mutationBindings[0]);
+        if (mutation is null)
+        {
+            errors.Add(
+                $"Mutation action '{action}' uses SubmitForm, a connector/dynamic mutation, or another " +
+                "unsupported write shape. Static mutation field-parity validation cannot prove runtime success; use " +
+                "Patch, Collect, or UpdateIf for static field parity, or keep the action explicitly " +
+                "bounded for manual/runtime validation with Runtime evaluation: NOT RUN.");
+            continue;
+        }
+
+        mutations[action] = mutation.Value;
+    }
+
+    foreach (var (action, row) in acceptedLifecycle)
+    {
+        if (row.Count != 8)
+        {
+            errors.Add($"Mutation lifecycle '{action}' must have eight acceptance columns.");
+            continue;
+        }
+        if (!string.Equals(Clean(row[7]), "PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"Mutation lifecycle '{action}' does not pass.");
+        }
+        if (!mutations.TryGetValue(action, out var mutation))
+        {
+            continue;
+        }
+
+        var receipt = RequireEvidenceBindings(row[1], action, "receipt");
+        var canonical = RequireEvidenceBindings(row[2], action, "canonical observer");
+        var destination = RequireEvidenceBindings(row[3], action, "requested destination observer");
+        var stableId = Clean(row[4]).Replace(" ", "", StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(stableId) || stableId.Equals("N/A", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"Mutation lifecycle '{action}' must declare one stable ID expression.");
+            continue;
+        }
+
+        ValidateIdentityEvidence(action, "receipt", receipt, stableId);
+        ValidateIdentityEvidence(action, "canonical observer", canonical, stableId);
+        ValidateIdentityEvidence(action, "requested destination observer", destination, stableId);
+        if (!MutationProducesStableId(mutation, stableId))
+        {
+            errors.Add(
+                $"Mutation lifecycle '{action}' stable ID '{stableId}' is not captured from the " +
+                "supported mutation result or a fresh canonical-source lookup in the mutation event.");
+        }
+        if (!canonical.Any(binding => ReferencesIdentifier(binding.Formula, mutation.Source)))
+        {
+            errors.Add(
+                $"Mutation lifecycle '{action}' canonical observer must read mutation source " +
+                $"'{mutation.Source}'.");
+        }
+
+        var destinationSource = destination
+            .Select(binding => ExtractObserverSource(binding.Formula))
+            .FirstOrDefault(source => source is not null);
+        var sourcesDiffer = destinationSource is not null &&
+            !string.Equals(destinationSource, mutation.Source, StringComparison.OrdinalIgnoreCase);
+        if (sourcesDiffer)
+        {
+            var synchronization = RequireEvidenceBindings(row[5], action, "synchronization");
+            if (!synchronization.Any(binding =>
+                ReferencesIdentifier(binding.Formula, mutation.Source) &&
+                ReferencesIdentifier(binding.Formula, destinationSource!)))
+            {
+                errors.Add(
+                    $"Mutation lifecycle '{action}' destination reads '{destinationSource}' rather than " +
+                    $"canonical source '{mutation.Source}'; synchronization must update/requery that " +
+                    "destination from the canonical source on the successful mutation path.");
+            }
+            if (!synchronization.Any(binding =>
+                SameBinding(binding, mutation.Binding) ||
+                ContainsExpression(mutation.Binding.Formula, binding.Formula)))
+            {
+                errors.Add(
+                    $"Mutation lifecycle '{action}' synchronization must be part of the successful " +
+                    $"mutation event '{mutation.Binding.Control}.{mutation.Binding.Property}'.");
+            }
+        }
+        else if (!IsNotApplicable(row[5]))
+        {
+            foreach (var binding in RequireEvidenceBindings(row[5], action, "synchronization"))
+            {
+                ValidateYamlBinding(binding, $"Mutation lifecycle '{action}' synchronization");
+            }
+        }
+
+        var destinationIsMultiRecord = destination.Any(binding =>
+            string.Equals(binding.Property, "Items", StringComparison.OrdinalIgnoreCase));
+        if (destinationIsMultiRecord)
+        {
+            var focus = RequireEvidenceBindings(row[6], action, "destination focus");
+            ValidateIdentityEvidence(action, "destination focus", focus, stableId);
+        }
+        else if (!IsNotApplicable(row[6]))
+        {
+            RequireEvidenceBindings(row[6], action, "destination focus");
+        }
+    }
+
+    var plannedByKey = IndexFieldRows(plannedFields, "plan");
+    var acceptedByKey = IndexFieldRows(acceptedFields, "acceptance");
+    foreach (var missing in plannedByKey.Keys.Where(key => !acceptedByKey.ContainsKey(key)))
+    {
+        errors.Add($"Missing mutation field evidence for '{missing}'.");
+    }
+    foreach (var extra in acceptedByKey.Keys.Where(key => !plannedByKey.ContainsKey(key)))
+    {
+        errors.Add($"Unexpected mutation field evidence for '{extra}'.");
+    }
+
+    foreach (var actionGroup in plannedByKey.Values.GroupBy(row => Clean(row[0]), StringComparer.OrdinalIgnoreCase))
+    {
+        var action = actionGroup.Key;
+        if (!mutations.TryGetValue(action, out var mutation))
+        {
+            continue;
+        }
+
+        var changed = actionGroup
+            .Where(row => row.Count > 2 && Clean(row[2]).Equals("Changed", StringComparison.OrdinalIgnoreCase))
+            .Select(row => Clean(row[1]))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var preserved = actionGroup
+            .Where(row => row.Count > 2 && Clean(row[2]).Equals("Preserved", StringComparison.OrdinalIgnoreCase))
+            .Select(row => Clean(row[1]))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        CompareFieldSets(action, "derived static write", mutation.Fields.Keys, changed);
+        if (!actionPlans.TryGetValue(action, out var actionPlan) || actionPlan.Count < 10)
+        {
+            errors.Add(
+                $"Mutation action '{action}' with field-ledger evidence must use the ten-column Action Contract " +
+                "and declare Mutation write set and Receipt proof set.");
+        }
+        else
+        {
+            CompareFieldSets(action, "declared write set", ParseDeclaredFieldSet(actionPlan[7]), changed);
+            CompareFieldSets(action, "declared receipt proof set", ParseDeclaredFieldSet(actionPlan[8]), changed);
+        }
+
+        foreach (var field in preserved.Where(field => mutation.Fields.ContainsKey(field)))
+        {
+            errors.Add(
+                $"Mutation field '{action} / {field}' is declared Preserved but the handler writes it.");
+        }
+    }
+
+    foreach (var (key, row) in acceptedByKey)
+    {
+        if (row.Count != 8)
+        {
+            errors.Add($"Mutation field '{key}' must have eight acceptance columns.");
+            continue;
+        }
+        if (!string.Equals(Clean(row[7]), "PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"Mutation field '{key}' does not pass.");
+        }
+        if (!plannedByKey.TryGetValue(key, out var planned) || planned.Count != 7)
+        {
+            continue;
+        }
+
+        var action = Clean(row[0]);
+        var field = Clean(row[1]);
+        var classification = Clean(row[2]);
+        if (!classification.Equals(Clean(planned[2]), StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"Mutation field '{key}' classification does not match the plan.");
+        }
+
+        for (var column = 3; column <= 6; column++)
+        {
+            if (string.IsNullOrWhiteSpace(Clean(row[column])))
+            {
+                errors.Add($"Mutation field '{key}' has incomplete evidence in column {column + 1}.");
+            }
+        }
+
+        var evidenceBindings = row.Skip(3)
+            .SelectMany((cell, index) => ParseEvidenceBindings(
+                cell,
+                $"Mutation field '{key}' column {index + 4}",
+                reportMissing: false))
+            .ToList();
+        foreach (var binding in evidenceBindings)
+        {
+            ValidateYamlBinding(binding, $"Mutation field '{key}'");
+        }
+
+        if (classification.Equals("Changed", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!mutations.TryGetValue(action, out var mutation) ||
+                !mutation.Fields.ContainsKey(field))
+            {
+                errors.Add($"Mutation field '{key}' is Changed but is absent from the static write.");
+            }
+            var proof = ParseEvidenceBindings(
+                row[5],
+                $"Mutation field '{key}' receipt/proof binding");
+            if (proof.Count != 1 || !proof[0].Formula.Contains(
+                $".{field}",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add(
+                    $"Mutation field '{key}' needs exactly one readable receipt/proof binding for field '{field}'.");
+            }
+        }
+        else if (classification.Equals("Preserved", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Regex.IsMatch(
+                Clean(row[4]),
+                @"\b(?:omit(?:ted)?|carry|canonical)\b",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                errors.Add(
+                    $"Mutation field '{key}' preservation mechanism must state canonical carry-forward " +
+                    "or omission from a partial update.");
+            }
+            if (mutations.TryGetValue(action, out var mutation) && mutation.Fields.ContainsKey(field))
+            {
+                errors.Add($"Mutation field '{key}' claims preservation but the static write changes it.");
+            }
+            foreach (var (cell, label) in new[]
+            {
+                (row[3], "canonical pre-state"),
+                (row[5], "preservation proof"),
+                (row[6], "post-state observer"),
+            })
+            {
+                var bindings = ParseEvidenceBindings(
+                    cell,
+                    $"Mutation field '{key}' {label}");
+                if (!bindings.Any(binding => binding.Formula.Contains(
+                    $".{field}",
+                    StringComparison.OrdinalIgnoreCase)))
+                {
+                    errors.Add(
+                        $"Mutation field '{key}' {label} must read field '{field}' from exact evidence.");
+                }
+            }
+        }
+        else
+        {
+            errors.Add($"Mutation field '{key}' classification must be Changed or Preserved.");
+        }
+    }
+}
+
+void ValidateContinuations(
+    Dictionary<string, List<string>> planned,
+    Dictionary<string, List<string>> accepted,
+    Dictionary<string, List<string>> actionPlans,
+    Dictionary<string, List<string>> actionAcceptance)
+{
+    foreach (var (createAction, planRow) in planned)
+    {
+        if (planRow.Count != 6)
+        {
+            errors.Add($"Continuation contract '{createAction}' must have six planning columns.");
+            continue;
+        }
+        if (!actionPlans.ContainsKey(createAction))
+        {
+            errors.Add($"Continuation contract '{createAction}' must name an existing create Action Contract.");
+        }
+
+        var downstreamAction = Clean(planRow[2]);
+        var successorKind = GetContinuationSuccessorKind(downstreamAction);
+        if (successorKind is null)
+        {
+            errors.Add(
+                $"Continuation contract '{createAction}' must explicitly declare a later edit, delete, " +
+                "relationship, approval, or transition successor.");
+            continue;
+        }
+
+        var downstreamName = actionPlans.Keys
+            .Where(action => downstreamAction.Contains(action, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(action => action.Length)
+            .FirstOrDefault();
+        if (downstreamName is null)
+        {
+            errors.Add(
+                $"Continuation contract '{createAction}' downstream action '{downstreamAction}' " +
+                "must name an existing Action Contract.");
+        }
+
+        var declaredEvent = ExtractDeclaredControlEvent(downstreamAction);
+        if (declaredEvent is null)
+        {
+            errors.Add(
+                $"Continuation contract '{createAction}' must declare the exact downstream Control.Event.");
+        }
+
+        if (!accepted.TryGetValue(createAction, out var row))
+        {
+            continue;
+        }
+        if (row.Count != 7)
+        {
+            errors.Add($"Continuation evidence '{createAction}' must have seven acceptance columns.");
+            continue;
+        }
+        if (!string.Equals(Clean(row[6]), "PASS", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"Continuation evidence '{createAction}' does not pass.");
+        }
+
+        var returned = ParseEvidenceBindings(
+            row[1],
+            $"Continuation '{createAction}' returned stable-ID binding");
+        var downstream = ParseEvidenceBindings(
+            row[2],
+            $"Continuation '{createAction}' downstream action/event");
+        var targets = ParseEvidenceBindings(
+            row[3],
+            $"Continuation '{createAction}' downstream target binding");
+        var success = ParseEvidenceBindings(
+            row[4],
+            $"Continuation '{createAction}' successful-completion clear");
+        var cancellation = ParseEvidenceBindings(
+            row[5],
+            $"Continuation '{createAction}' cancellation clear");
+
+        if (returned.Count != 1)
+        {
+            errors.Add(
+                $"Continuation '{createAction}' must declare exactly one create event containing the returned-ID capture.");
+            continue;
+        }
+        if (downstream.Count != 1)
+        {
+            errors.Add(
+                $"Continuation '{createAction}' must declare exactly one downstream control/event binding.");
+            continue;
+        }
+
+        var createBinding = returned[0];
+        var downstreamBinding = downstream[0];
+        if (declaredEvent is not null &&
+            (!string.Equals(downstreamBinding.Control, declaredEvent.Value.Control, StringComparison.OrdinalIgnoreCase) ||
+             !string.Equals(downstreamBinding.Property, declaredEvent.Value.Property, StringComparison.OrdinalIgnoreCase)))
+        {
+            errors.Add(
+                $"Continuation '{createAction}' downstream evidence must use declared event " +
+                $"'{declaredEvent.Value.Control}.{declaredEvent.Value.Property}'.");
+        }
+        if (downstreamName is not null &&
+            actionAcceptance.TryGetValue(downstreamName, out var downstreamAcceptance) &&
+            downstreamAcceptance.Count > 2)
+        {
+            var acceptedActionBindings = ParseEvidenceBindings(
+                downstreamAcceptance[2],
+                $"Continuation downstream Action Contract '{downstreamName}'");
+            if (!acceptedActionBindings.Any(binding =>
+                SameBinding(binding, downstreamBinding) &&
+                string.Equals(
+                    NormalizePowerFx(binding.Formula),
+                    NormalizePowerFx(downstreamBinding.Formula),
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                errors.Add(
+                    $"Continuation '{createAction}' downstream event does not exactly match Action Contract " +
+                    $"'{downstreamName}'.");
+            }
+        }
+
+        if (!TryResolveReturnedCreateIdentity(
+            createBinding,
+            out var createdRecordVariable,
+            out var continuationIdVariable))
+        {
+            errors.Add(
+                $"Continuation '{createAction}' returned stable ID must be assigned directly from the " +
+                "record returned by its create Patch/Collect; canonical rediscovery is not continuation.");
+            continue;
+        }
+
+        var downstreamMutationBindings = targets
+            .Concat(downstream)
+            .Where(binding => SameBinding(binding, downstreamBinding))
+            .Distinct()
+            .Where(binding => ContainsMutation(binding.Formula))
+            .ToList();
+        if (downstreamMutationBindings.Count != 1)
+        {
+            errors.Add(
+                $"Continuation '{createAction}' downstream event must contain exactly one declared successor mutation.");
+            continue;
+        }
+
+        var mutationBinding = downstreamMutationBindings[0];
+        if (UsesManualRediscovery(mutationBinding.Formula))
+        {
+            errors.Add(
+                $"Continuation '{createAction}' downstream mutation manually rediscovers the created record " +
+                "by selection, display text, or list position instead of the returned stable ID.");
+        }
+        if (!UsesExactStableIdTarget(mutationBinding.Formula, continuationIdVariable))
+        {
+            errors.Add(
+                $"Continuation '{createAction}' downstream selection/mutation must target returned stable ID " +
+                $"'{continuationIdVariable}' with an exact ID predicate.");
+        }
+
+        var successClears = GetBlankClears(success);
+        var cancellationClears = GetBlankClears(cancellation);
+        if (!successClears.Contains(continuationIdVariable))
+        {
+            errors.Add(
+                $"Continuation '{createAction}' successful completion must clear continuation ID " +
+                $"'{continuationIdVariable}'.");
+        }
+        if (!cancellationClears.Contains(continuationIdVariable))
+        {
+            errors.Add(
+                $"Continuation '{createAction}' cancellation must clear continuation ID " +
+                $"'{continuationIdVariable}'.");
+        }
+
+        var createAssignments = ExtractEventAssignments(createBinding.Formula)
+            .GroupBy(assignment => assignment.Variable, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last().Expression,
+                StringComparer.OrdinalIgnoreCase);
+        var modeVariables = successClears
+            .Intersect(cancellationClears, StringComparer.OrdinalIgnoreCase)
+            .Where(variable =>
+                !string.Equals(variable, continuationIdVariable, StringComparison.OrdinalIgnoreCase) &&
+                createAssignments.TryGetValue(variable, out var expression) &&
+                !IsBlankExpression(expression))
+            .ToList();
+        if (modeVariables.Count == 0)
+        {
+            errors.Add(
+                $"Continuation '{createAction}' must set a continuation mode during create and clear it " +
+                "on both successful completion and cancellation.");
+        }
+
+        if (!success.Any(binding =>
+            SameBinding(binding, downstreamBinding) ||
+            binding.Property.Equals("OnSuccess", StringComparison.OrdinalIgnoreCase)))
+        {
+            errors.Add(
+                $"Continuation '{createAction}' successful-completion clear must be bound to the declared " +
+                $"downstream event '{downstreamBinding.Control}.{downstreamBinding.Property}' or its exact OnSuccess event.");
+        }
+        if (cancellation.Any(binding => ContainsMutation(binding.Formula)))
+        {
+            errors.Add($"Continuation '{createAction}' cancellation clear must not mutate data.");
+        }
+
+        if (successorKind == "delete")
+        {
+            ValidateDeleteContinuation(
+                createAction,
+                mutationBinding,
+                targets,
+                continuationIdVariable);
+        }
+    }
+}
+
+static string? GetContinuationSuccessorKind(string value)
+{
+    foreach (var kind in new[] { "edit", "delete", "relationship", "approval", "transition" })
+    {
+        if (Regex.IsMatch(
+            value,
+            $@"(?<![A-Za-z0-9_]){kind}(?![A-Za-z0-9_])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return kind;
+        }
+    }
+    return null;
+}
+
+static (string Control, string Property)? ExtractDeclaredControlEvent(string value)
+{
+    var matches = Regex.Matches(
+        value,
+        @"(?<![A-Za-z0-9_])(?<control>[A-Za-z_][A-Za-z0-9_]*)\.(?<property>On[A-Za-z0-9_]+)(?![A-Za-z0-9_])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    return matches.Count == 1
+        ? (matches[0].Groups["control"].Value, matches[0].Groups["property"].Value)
+        : null;
+}
+
+static bool TryResolveReturnedCreateIdentity(
+    YamlBinding binding,
+    out string createdRecordVariable,
+    out string continuationIdVariable)
+{
+    createdRecordVariable = "";
+    continuationIdVariable = "";
+    var assignments = ExtractEventAssignments(binding.Formula).ToList();
+    var returnedRecords = assignments
+        .Where(assignment => IsCreateResultExpression(assignment.Expression))
+        .Select(assignment => assignment.Variable)
+        .ToList();
+    foreach (var record in returnedRecords)
+    {
+        var identity = assignments.FirstOrDefault(assignment =>
+            Regex.IsMatch(
+                assignment.Expression,
+                $@"^\s*{Regex.Escape(record)}\.ID\s*$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+        if (!string.IsNullOrWhiteSpace(identity.Variable))
+        {
+            createdRecordVariable = record;
+            continuationIdVariable = identity.Variable;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool IsCreateResultExpression(string expression)
+{
+    var patch = Regex.Match(
+        expression,
+        @"^\s*Patch\s*\(",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (patch.Success)
+    {
+        var argumentsText = ExtractBalancedGroup(
+            expression,
+            patch.Index + patch.Length,
+            '(',
+            ')');
+        if (argumentsText is null)
+        {
+            return false;
+        }
+        var arguments = SplitPowerFxArguments(argumentsText);
+        return arguments.Count >= 3 &&
+            Regex.IsMatch(
+                arguments[1],
+                @"^\s*Defaults\s*\(",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    return Regex.IsMatch(
+        expression,
+        @"^\s*Collect\s*\(",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+static bool UsesManualRediscovery(string formula)
+{
+    var code = RemovePowerFxStringLiterals(formula);
+    return Regex.IsMatch(
+        code,
+        @"\bThisItem(?:\.|\b)|\b(?:First|FirstN|Last|LastN|Index|Search)\s*\(|" +
+        @"\.(?:Selected|SelectedItems|AllItems|Text)\b|\[\s*\d+\s*\]|" +
+        @"\b(?:Name|Title|DisplayName)\s*=",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+static bool UsesExactStableIdTarget(string formula, string idVariable)
+{
+    foreach (var function in new[] { "LookUp", "Filter", "UpdateIf", "RemoveIf" })
+    {
+        foreach (var argumentsText in ExtractFunctionArguments(formula, function))
+        {
+            var arguments = SplitPowerFxArguments(argumentsText);
+            if (arguments.Count > 1 &&
+                IsExactIdEquality(arguments[1], idVariable))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool IsExactIdEquality(string condition, string idVariable)
+{
+    var sides = SplitTopLevelOperator(condition, '=');
+    if (sides.Count != 2)
+    {
+        return false;
+    }
+    return new[]
+        {
+            (sides[0].Trim(), sides[1].Trim()),
+            (sides[1].Trim(), sides[0].Trim()),
+        }
+        .Any(pair =>
+            Regex.IsMatch(
+                pair.Item1,
+                @"^(?:[A-Za-z_][A-Za-z0-9_]*\.)?ID$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+            string.Equals(
+                NormalizePowerFx(pair.Item2),
+                NormalizePowerFx(idVariable),
+                StringComparison.OrdinalIgnoreCase));
+}
+
+static HashSet<string> GetBlankClears(IEnumerable<YamlBinding> bindings) =>
+    bindings
+        .SelectMany(binding => ExtractEventAssignments(binding.Formula))
+        .Where(assignment => IsBlankExpression(assignment.Expression))
+        .Select(assignment => assignment.Variable)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+static bool IsBlankExpression(string expression) =>
+    Regex.IsMatch(
+        expression,
+        @"^\s*Blank\s*\(\s*\)\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+void ValidateDeleteContinuation(
+    string createAction,
+    YamlBinding mutation,
+    List<YamlBinding> targets,
+    string continuationIdVariable)
+{
+    var assignments = ExtractEventAssignments(mutation.Formula).ToList();
+    var snapshot = assignments.FirstOrDefault(assignment =>
+        ExtractFunctionArguments(assignment.Expression, "LookUp")
+            .Select(SplitPowerFxArguments)
+            .Any(arguments =>
+                arguments.Count > 1 &&
+                IsExactIdEquality(arguments[1], continuationIdVariable)));
+    if (string.IsNullOrWhiteSpace(snapshot.Variable))
+    {
+        errors.Add(
+            $"Continuation '{createAction}' delete must capture a same-ID snapshot before removal.");
+        return;
+    }
+
+    var remove = ExtractFunctionArguments(mutation.Formula, "Remove")
+        .Select(SplitPowerFxArguments)
+        .FirstOrDefault(arguments =>
+            arguments.Count > 1 &&
+            string.Equals(
+                NormalizePowerFx(arguments[1]),
+                NormalizePowerFx(snapshot.Variable),
+                StringComparison.OrdinalIgnoreCase));
+    if (remove is null)
+    {
+        errors.Add(
+            $"Continuation '{createAction}' delete must remove the captured same-ID snapshot.");
+        return;
+    }
+
+    var source = remove[0].Trim();
+    var nonEventTargets = targets
+        .Where(binding => !SameBinding(binding, mutation))
+        .ToList();
+    if (!nonEventTargets.Any(binding =>
+        binding.Property.Equals("Text", StringComparison.OrdinalIgnoreCase) &&
+        ReferencesIdentifier(binding.Formula, snapshot.Variable) &&
+        Regex.IsMatch(
+            RemovePowerFxStringLiterals(binding.Formula),
+            $@"(?<![A-Za-z0-9_]){Regex.Escape(snapshot.Variable)}\.ID(?![A-Za-z0-9_])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))
+    {
+        errors.Add(
+            $"Continuation '{createAction}' delete needs a receipt bound to the same-ID deletion snapshot.");
+    }
+
+    var absenceProofs = nonEventTargets
+        .Where(binding =>
+            ReferencesIdentifier(binding.Formula, source) &&
+            UsesExactStableIdTarget(binding.Formula, $"{snapshot.Variable}.ID") &&
+            Regex.IsMatch(
+                RemovePowerFxStringLiterals(binding.Formula),
+                @"\bIsBlank\s*\(",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        .Select(binding => $"{binding.Control}.{binding.Property}")
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Count();
+    if (absenceProofs < 2)
+    {
+        errors.Add(
+            $"Continuation '{createAction}' delete requires exact same-ID canonical and destination absence proof bindings.");
+    }
+}
+
+static bool MutationProducesStableId(StaticMutation mutation, string stableId)
+{
+    var id = stableId.Trim();
+    var member = Regex.Match(
+        id,
+        @"^(?<variable>[A-Za-z_][A-Za-z0-9_]*)\.(?<field>[A-Za-z_][A-Za-z0-9_]*)$",
+        RegexOptions.CultureInvariant);
+    if (!member.Success)
+    {
+        return NormalizePowerFx(mutation.Binding.Formula).Contains(
+            NormalizePowerFx(id),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    var variable = member.Groups["variable"].Value;
+    foreach (var assignment in ExtractSetAssignments(mutation.Binding.Formula)
+        .Where(assignment => string.Equals(
+            assignment.Variable,
+            variable,
+            StringComparison.OrdinalIgnoreCase)))
+    {
+        if (Regex.IsMatch(
+            assignment.Expression,
+            @"^\s*Patch\s*\(",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+        if (Regex.IsMatch(
+                assignment.Expression,
+                @"^\s*LookUp\s*\(",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+            ReferencesIdentifier(assignment.Expression, mutation.Source))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+List<YamlBinding> RequireEvidenceBindings(string cell, string action, string label)
+{
+    if (IsNotApplicable(cell))
+    {
+        errors.Add($"Mutation lifecycle '{action}' requires exact {label} evidence; N/A is not valid here.");
+        return [];
+    }
+    return ParseEvidenceBindings(cell, $"Mutation lifecycle '{action}' {label}");
+}
+
+List<YamlBinding> ParseEvidenceBindings(string value, string label, bool reportMissing = true)
+{
+    var bindings = ParseEmbeddedYamlBindings(value, label);
+    if (bindings.Count == 0)
+    {
+        foreach (var candidate in value.Split(
+            "<br>",
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!Regex.IsMatch(
+                Clean(candidate),
+                @"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*:",
+                RegexOptions.CultureInvariant))
+            {
+                continue;
+            }
+            var binding = ParseYamlBinding(candidate, label);
+            if (binding is not null)
+            {
+                bindings.Add(binding.Value);
+            }
+        }
+    }
+    if (reportMissing && bindings.Count == 0)
+    {
+        errors.Add($"{label} must contain at least one exact final-YAML `Control.Property: =formula` binding.");
+    }
+    foreach (var binding in bindings)
+    {
+        ValidateYamlBinding(binding, label);
+    }
+    return bindings;
+}
+
+void ValidateIdentityEvidence(string action, string label, List<YamlBinding> bindings, string stableId)
+{
+    if (!bindings.Any(binding =>
+        NormalizePowerFx(binding.Formula).Contains(
+            NormalizePowerFx(stableId),
+            StringComparison.OrdinalIgnoreCase)))
+    {
+        errors.Add(
+            $"Mutation lifecycle '{action}' {label} must reference stable ID '{stableId}'.");
+    }
+}
+
+Dictionary<string, List<string>> IndexFieldRows(List<List<string>> rows, string artifact)
+{
+    var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+    foreach (var row in rows)
+    {
+        if (row.Count < 2)
+        {
+            errors.Add($"Mutation field {artifact} row must contain Action and Field columns.");
+            continue;
+        }
+        var key = $"{Clean(row[0])} / {Clean(row[1])}";
+        if (!result.TryAdd(key, row))
+        {
+            errors.Add($"Duplicate mutation field {artifact} row '{key}'.");
+        }
+    }
+    return result;
+}
+
+void CompareFieldSets(
+    string action,
+    string label,
+    IEnumerable<string> actualValues,
+    HashSet<string> expected)
+{
+    var actual = actualValues.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    foreach (var missing in expected.Where(field => !actual.Contains(field)))
+    {
+        errors.Add($"Mutation action '{action}' {label} is missing field '{missing}'.");
+    }
+    foreach (var extra in actual.Where(field => !expected.Contains(field)))
+    {
+        errors.Add($"Mutation action '{action}' {label} has unmatched field '{extra}'.");
+    }
+}
+
+static HashSet<string> ParseDeclaredFieldSet(string value) =>
+    Regex.Split(Clean(value).Replace("<br>", ",", StringComparison.OrdinalIgnoreCase), @"[,;/]")
+        .Select(field => field.Trim().Trim('`'))
+        .Where(field =>
+            !string.IsNullOrWhiteSpace(field) &&
+            !field.Equals("N/A", StringComparison.OrdinalIgnoreCase))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+static bool IsNotApplicable(string value) =>
+    Regex.IsMatch(
+        Clean(value),
+        @"^(?:N/A|not applicable)(?:\s*[—-].*)?$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+static string NormalizePowerFx(string value) =>
+    Regex.Replace(Clean(value), @"[\s`]", "", RegexOptions.CultureInvariant);
+
+static bool IsAlwaysVisiblePredicate(string formula)
+{
+    var canonical = CanonicalVisibilityPredicate(formula);
+    return canonical.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+        Regex.IsMatch(
+            canonical,
+            @"^(?:1=1|Not\(false\))$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+}
+
+static bool AreProvablyEquivalentVisibilityPredicates(string planned, string implemented) =>
+    string.Equals(
+        CanonicalVisibilityPredicate(planned),
+        CanonicalVisibilityPredicate(implemented),
+        StringComparison.OrdinalIgnoreCase);
+
+static string CanonicalVisibilityPredicate(string formula)
+{
+    var value = NormalizePowerFx(formula).TrimStart('=');
+    value = StripWholeOuterParentheses(value);
+
+    // These rewrites preserve the Boolean value used by Visible without attempting
+    // general Power Fx equivalence. Anything outside this bounded set must match exactly.
+    while (value.StartsWith("Not(Not(", StringComparison.OrdinalIgnoreCase) &&
+        value.EndsWith("))", StringComparison.Ordinal))
+    {
+        var outer = ExtractBalancedGroup(value, value.IndexOf('(') + 1, '(', ')');
+        if (outer is null ||
+            !outer.StartsWith("Not(", StringComparison.OrdinalIgnoreCase) ||
+            !outer.EndsWith(')'))
+        {
+            break;
+        }
+        value = StripWholeOuterParentheses(outer[4..^1]);
+    }
+
+    var trueSuffix = Regex.Match(
+        value,
+        @"^(?<predicate>.+)=true$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (trueSuffix.Success)
+    {
+        value = StripWholeOuterParentheses(trueSuffix.Groups["predicate"].Value);
+    }
+    else
+    {
+        var truePrefix = Regex.Match(
+            value,
+            @"^true=(?<predicate>.+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (truePrefix.Success)
+        {
+            value = StripWholeOuterParentheses(truePrefix.Groups["predicate"].Value);
+        }
+    }
+
+    return value;
+}
+
+static string StripWholeOuterParentheses(string value)
+{
+    var result = value;
+    while (result.Length >= 2 && result[0] == '(' && result[^1] == ')')
+    {
+        var inner = ExtractBalancedGroup(result, 1, '(', ')');
+        if (inner is null || inner.Length != result.Length - 2)
+        {
+            break;
+        }
+        result = inner;
+    }
+    return result;
+}
+
+static bool ReferencesIdentifier(string formula, string identifier) =>
+    Regex.IsMatch(
+        RemovePowerFxStringLiterals(formula),
+        $@"(?<![A-Za-z0-9_]){Regex.Escape(identifier)}(?![A-Za-z0-9_])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+static string? ExtractObserverSource(string formula)
+{
+    var call = Regex.Match(
+        formula,
+        @"\b(?:Filter|LookUp|Search|Sort|SortByColumns)\s*\(\s*(?<source>[A-Za-z_][A-Za-z0-9_]*)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (call.Success)
+    {
+        return call.Groups["source"].Value;
+    }
+    var direct = Regex.Match(
+        formula,
+        @"^=\s*(?<source>[A-Za-z_][A-Za-z0-9_]*)\s*$",
+        RegexOptions.CultureInvariant);
+    return direct.Success ? direct.Groups["source"].Value : null;
+}
+
+static bool ContainsSupportedOrBoundedMutation(string formula) =>
+    Regex.IsMatch(
+        formula,
+        @"\b(?:Patch|Collect|UpdateIf|SubmitForm|Remove|RemoveIf)\s*\(|\.[A-Za-z_][A-Za-z0-9_]*\s*\(",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+StaticMutation? ParseStaticMutation(YamlBinding binding)
+{
+    foreach (var function in new[] { "Patch", "Collect", "UpdateIf" })
+    {
+        var match = Regex.Match(
+            binding.Formula,
+            $@"\b{function}\s*\(",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            continue;
+        }
+        var argumentsText = ExtractBalancedGroup(
+            binding.Formula,
+            match.Index + match.Length,
+            '(',
+            ')');
+        if (argumentsText is null)
+        {
+            return null;
+        }
+        var arguments = SplitPowerFxArguments(argumentsText);
+        var minimum = function == "Collect" ? 2 : 3;
+        if (arguments.Count < minimum ||
+            !Regex.IsMatch(arguments[0], @"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant))
+        {
+            return null;
+        }
+
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var records = function == "Collect" ? arguments.Skip(1) : arguments.Skip(2);
+        foreach (var recordExpression in records)
+        {
+            var trimmed = recordExpression.Trim();
+            if (!trimmed.StartsWith('{'))
+            {
+                return null;
+            }
+            var record = ExtractBalancedGroup(trimmed, 1, '{', '}');
+            if (record is null)
+            {
+                return null;
+            }
+            foreach (var fieldExpression in SplitPowerFxArguments(record))
+            {
+                var parts = SplitTopLevelOperator(fieldExpression, ':');
+                if (parts.Count != 2)
+                {
+                    return null;
+                }
+                var field = parts[0].Trim().Trim('\'');
+                if (!Regex.IsMatch(field, @"^[A-Za-z_][A-Za-z0-9_ ]*$", RegexOptions.CultureInvariant) ||
+                    !fields.TryAdd(field, parts[1].Trim()))
+                {
+                    return null;
+                }
+            }
+        }
+        return new(binding, arguments[0], fields);
+    }
+    return null;
+}
+
+void ValidateDataEntryLabels(
+    Dictionary<string, List<string>> evidence,
+    Dictionary<string, List<string>> stateDrivenSurfaces)
 {
     var nodes = BuildYamlNodes(yamlLines);
     var byName = nodes
         .GroupBy(node => node.Name, StringComparer.OrdinalIgnoreCase)
         .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
     var required = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var declaredSurfacePredicates = stateDrivenSurfaces.Values
+        .Where(row => row.Count == 5)
+        .GroupBy(row => Clean(row[2]), StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(
+            group => group.Key,
+            group => Clean(group.First()[3]),
+            StringComparer.OrdinalIgnoreCase);
     var evidenceText = acceptedActions.Values
         .SelectMany(row => row)
         .Concat(directionalEvidence.Values.SelectMany(row => row));
@@ -347,7 +1661,10 @@ void ValidateDataEntryLabels(Dictionary<string, List<string>> evidence)
         var nativeLabel = GetOwnPropertyFormula(control, block, "Label");
         if (SupportsNativeVisibleLabel(block) &&
             IsPersistentHumanReadableLabel(nativeLabel) &&
-            IsPersistentlyVisible(control, byName))
+            IsPersistentlyVisible(
+                control,
+                byName,
+                DeclaredSurfacesContaining(control, control, byName, declaredSurfacePredicates)))
         {
             continue;
         }
@@ -365,10 +1682,18 @@ void ValidateDataEntryLabels(Dictionary<string, List<string>> evidence)
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!binding.Success ||
             !TryGetControlBlock(yamlLines, binding.Groups["control"].Value, out var labelBlock) ||
-            !IsPersistentHumanReadableLabel(GetPropertyFormula(
+            !IsPersistentHumanReadableLabel(GetOwnPropertyFormula(
+                binding.Groups["control"].Value,
                 labelBlock,
                 binding.Groups["property"].Value)) ||
-            !IsPersistentlyVisible(binding.Groups["control"].Value, byName))
+            !IsPersistentlyVisible(
+                binding.Groups["control"].Value,
+                byName,
+                DeclaredSurfacesContaining(
+                    control,
+                    binding.Groups["control"].Value,
+                    byName,
+                    declaredSurfacePredicates)))
         {
             errors.Add(
                 $"Data entry label: evidence for required control '{control}' must name a persistent visible label binding such as lblField.Text with human-readable text.");
@@ -376,12 +1701,18 @@ void ValidateDataEntryLabels(Dictionary<string, List<string>> evidence)
         }
 
         var labelControl = binding.Groups["control"].Value;
-        if (!byName.TryGetValue(control, out var inputNode) ||
-            !byName.TryGetValue(labelControl, out var labelNode) ||
-            !string.Equals(inputNode.Parent, labelNode.Parent, StringComparison.OrdinalIgnoreCase))
+        var foundInput = byName.TryGetValue(control, out var inputNode);
+        var foundLabel = byName.TryGetValue(labelControl, out var labelNode);
+        if (!foundInput ||
+            !foundLabel ||
+            !string.Equals(inputNode.Parent, labelNode.Parent, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                Clean(row[2]),
+                inputNode.Parent,
+                StringComparison.OrdinalIgnoreCase))
         {
             errors.Add(
-                $"Data entry label: control '{control}' and label '{labelControl}' must share the same reachable field layout region.");
+                $"Data entry label: control '{control}' and label '{labelControl}' must share the same reachable field layout region; evidence declares '{Clean(row[2])}', input parent is '{inputNode.Parent ?? "<none>"}', and label parent is '{labelNode.Parent ?? "<none>"}'.");
         }
     }
 }
@@ -423,7 +1754,44 @@ static bool IsPersistentHumanReadableLabel(string? formula)
         Regex.IsMatch(literal.Groups["text"].Value, @"[A-Za-z]", RegexOptions.CultureInvariant);
 }
 
-bool IsPersistentlyVisible(string control, Dictionary<string, YamlNode> byName)
+HashSet<string> DeclaredSurfacesContaining(
+    string input,
+    string label,
+    Dictionary<string, YamlNode> byName,
+    Dictionary<string, string> declaredSurfacePredicates)
+{
+    return declaredSurfacePredicates.Keys
+        .Where(surface =>
+            IsDescendantOf(input, surface, byName) &&
+            IsDescendantOf(label, surface, byName))
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+}
+
+static bool IsDescendantOf(
+    string control,
+    string ancestor,
+    Dictionary<string, YamlNode> byName)
+{
+    var current = control;
+    while (byName.TryGetValue(current, out var node))
+    {
+        if (string.Equals(current, ancestor, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (node.Parent is null)
+        {
+            return false;
+        }
+        current = node.Parent;
+    }
+    return false;
+}
+
+bool IsPersistentlyVisible(
+    string control,
+    Dictionary<string, YamlNode> byName,
+    HashSet<string>? allowedConditionalSurfaces = null)
 {
     var current = control;
     while (byName.TryGetValue(current, out var node))
@@ -437,7 +1805,11 @@ bool IsPersistentlyVisible(string control, Dictionary<string, YamlNode> byName)
                     @"^=true$",
                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             {
-                return false;
+                if (allowedConditionalSurfaces is null ||
+                    !allowedConditionalSurfaces.Contains(node.Name))
+                {
+                    return false;
+                }
             }
         }
         if (node.Parent is null)
@@ -3825,6 +5197,20 @@ static List<List<string>> ReadOptionalRowsAllowDuplicates(
     return rows;
 }
 
+static List<List<string>> ReadRequiredRowsAllowDuplicates(
+    string[] lines,
+    string heading,
+    List<string> errors)
+{
+    if (!Array.Exists(lines, line => line.Trim() == heading))
+    {
+        errors.Add($"Missing acceptance section '{heading}'.");
+        return [];
+    }
+
+    return ReadOptionalRowsAllowDuplicates(lines, heading, errors);
+}
+
 static HashSet<string> ReadColumn(
     string[] lines,
     string heading,
@@ -4202,6 +5588,10 @@ readonly record struct NumericLayout(
     public double Maximum => Math.Max(Less, Else);
 }
 readonly record struct SetAssignment(string Variable, string Expression);
+readonly record struct StaticMutation(
+    YamlBinding Binding,
+    string Source,
+    Dictionary<string, string> Fields);
 readonly record struct OperationSelection(
     YamlBinding Binding,
     string Variable,

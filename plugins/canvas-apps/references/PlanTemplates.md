@@ -46,6 +46,20 @@ stable unique field key per row. A surface that renders only one secondary value
 time, does not satisfy omitted requested fields. Omit this section only when the app has no
 record list, card, row, or detail surface.]
 
+## State-Driven Surface Visibility
+
+| Surface key | Owner screen | Surface control | State predicate | Visible and hidden states |
+| ----------- | ------------ | --------------- | --------------- | ------------------------- |
+| [stable surface identifier] | [Screen] | [Container/card/panel control] | [Exact `=state predicate`] | [State where the surface appears; state where it is hidden] |
+
+[Include a row only when the plan requires a whole UI surface to appear or disappear
+according to app state. The named control is the surface whose `Visible` property owns the
+disclosure, not a child control. Omit always-visible surfaces, navigation-based disclosure,
+child-only visibility, and visibility not required by the plan. An exact
+`Surface.Visible=state predicate` declaration in an Action Contract's
+`Observer and evidence` cell is the established compact form of the same contract; do not
+duplicate it in this table.]
+
 ## Action Contracts
 
 | Requested action            | Preconditions                             | Entry point                            | Owner screen | Control and event                     | Source and stable ID                          | Transition and postcondition                 | Mutation write set                   | Receipt proof set                                          | Observer and evidence                                              |
@@ -80,6 +94,46 @@ action is independently gated and no dead shared gate is claimed; their control 
 commits direction, so they require no shared operation variable/reset. Every direct action
 still gates selected ID and amount.]
 
+## Mutation Lifecycle Evidence
+
+| Action | Receipt binding | Canonical source and observer | Requested destination and observer | Stable ID continuity | Synchronization when sources differ | Destination focus |
+| ------ | --------------- | ----------------------------- | ---------------------------------- | -------------------- | ----------------------------------- | ----------------- |
+| [Mutation Action Contract] | [Returned record/ID or deletion snapshot plus receipt control] | [Authoritative source and exact post-state observer] | [Requested list/detail/review/relationship/status surface and exact observer] | [Same immutable ID across operation, receipt, canonical observer, and destination] | [Exact success-path refresh/requery/cache update, or N/A — same live source] | [Exact select/filter/highlight/open-by-ID behavior, or N/A — single-record destination] |
+
+[Include one row per mutation. This lifecycle ledger supplements, rather than replaces, the
+Action Contract. The requested destination is the surface where the requirement expects
+the result to be usable or inspectable. When it reads a different cache, projection,
+related collection, or external query from the canonical source, name the synchronization
+event that runs only after success. A multi-record destination must focus the same stable
+ID; display text and list position are not identity.]
+
+## Mutation Field Ledger
+
+| Action | Field | Classification | Canonical pre-state or input | Write or preservation mechanism | Receipt/proof binding | Post-state observer |
+| ------ | ----- | -------------- | ---------------------------- | ------------------------------- | --------------------- | ------------------- |
+| [Mutation Action Contract] | [Field/status] | Changed / Preserved | [Live input/transition expression, or canonical pre-state lookup] | [Exact write target/expression, omitted partial-update field, or canonical carry-forward] | [Labeled receipt binding for Changed; preservation evidence for Preserved] | [Exact canonical/destination formula reading the same ID and field] |
+
+[Include every field/status written by the handler and every user-visible or
+lifecycle-significant field that must survive it. This field ledger expands the existing
+write-set/proof-set contract: each Changed row appears in both sets and has one readable
+proof binding. Each Preserved row names how the canonical value survives and where the
+post-state proves it; never source preservation from a default, display text, stale
+selection, or parallel collection.]
+
+## Continuation Contracts
+
+[Include this conditional continuation section only when a create intentionally feeds a later edit, delete,
+relationship, approval, or state-transition action. Otherwise omit it.]
+
+| Create action | Returned stable-ID binding | Downstream action and event | Downstream target binding | Successful-completion clear | Cancellation clear |
+| ------------- | -------------------------- | --------------------------- | ------------------------- | ---------------------------- | ------------------ |
+| [Create Action Contract] | [Exact captured returned ID] | [Later mutation and reachable control event] | [Exact lookup/target using that ID] | [Exact successful downstream event clearing ID and mode] | [Exact cancel event clearing ID and mode without mutation] |
+
+[The continuation action, later mutation receipt, observers, and requested destination
+must use the captured returned ID. Never recover the created record from display text,
+list position, or implicit selection. A downstream failure may retain the ID for retry,
+but completion and cancellation are the only clearing paths.]
+
 ## Functional Test Matrix
 
 | Scenario                 | Given                                   | When                                | Then                         | Evidence surface                              | Boundary or negative case                                     |
@@ -91,7 +145,9 @@ required boundary or negative path. Use concrete seeded IDs and values when the 
 local/mock data. Every Then clause must be provable from the named source through the
 Evidence surface; do not use appearance, navigation, or notification as proof. Opposing
 transitions require separate scenarios with the same concrete old value and amount so
-their expected results prove both arithmetic directions.]
+their expected results prove both arithmetic directions. When Continuation Contracts are
+present, include returned-ID-bound downstream completion and cancellation scenarios; both
+must prove continuation state clears, while cancellation leaves the source unchanged.]
 
 ## Directional Mutation Evidence
 
@@ -227,6 +283,18 @@ surface, source, formula, visibility, or layout is touched. Preserve unaffected 
 fields on a modified surface. Omit this section only when the edit cannot affect a record
 list, card, row, or detail surface.]
 
+## State-Driven Surface Visibility
+
+| Surface key | Owner screen | Surface control | State predicate | Visible and hidden states |
+| ----------- | ------------ | --------------- | --------------- | ------------------------- |
+| [stable surface identifier] | [Screen] | [Container/card/panel control] | [Exact `=state predicate`] | [State where the surface appears; state where it is hidden] |
+
+[Include changed plan-declared whole-surface state gating only. Omit always-visible
+surfaces, navigation-based disclosure, child-only visibility, and visibility that the
+plan does not declare. Preserve an existing exact
+`Surface.Visible=state predicate` Action Contract observer as an equivalent compact
+declaration rather than requiring a duplicate row.]
+
 ## Action Contracts
 
 | Requested action            | Preconditions                             | Entry point                            | Owner screen | Control and event                     | Source and stable ID                          | Transition and postcondition                 | Mutation write set                   | Receipt proof set                                          | Observer and evidence                                              |
@@ -240,6 +308,36 @@ cycles, and requested export/report output. Preserve or add separate Action Cont
 for opposing transitions. A shared form does not merge Receive/Issue, Increase/Decrease,
 Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable/Disable into one contract.]
 
+## Mutation Lifecycle Evidence
+
+| Action | Receipt binding | Canonical source and observer | Requested destination and observer | Stable ID continuity | Synchronization when sources differ | Destination focus |
+| ------ | --------------- | ----------------------------- | ---------------------------------- | -------------------- | ----------------------------------- | ----------------- |
+| [Changed or affected mutation] | [Returned record/ID or deletion snapshot plus receipt control] | [Authoritative source and exact post-state observer] | [Requested destination and exact observer] | [Same immutable ID throughout] | [Exact success-path synchronization, or N/A — same live source] | [Exact focus-by-ID behavior, or N/A] |
+
+[Include every changed mutation and every existing mutation whose source, destination,
+identity, synchronization, focus, or evidence is affected. Apply the mutation lifecycle contract from
+`${PLUGIN_ROOT}/references/BehaviorGuide.md`; preserve unaffected rows.]
+
+## Mutation Field Ledger
+
+| Action | Field | Classification | Canonical pre-state or input | Write or preservation mechanism | Receipt/proof binding | Post-state observer |
+| ------ | ----- | -------------- | ---------------------------- | ------------------------------- | --------------------- | ------------------- |
+| [Changed or affected mutation] | [Field/status] | Changed / Preserved | [Live input/transition expression, or canonical pre-state lookup] | [Exact write or preservation behavior] | [Changed-field receipt or preserved-field evidence] | [Exact observer for the same ID and field] |
+
+[Include changed fields and preserved user-visible or lifecycle-significant fields for
+each affected mutation. Changed rows retain write-set/proof-set parity. Preserved rows
+must identify canonical carry-forward or omission from a partial update and post-state
+evidence; preserve unaffected ledger rows.]
+
+## Continuation Contracts
+
+[Include only when this edit adds, changes, or can break a create-to-later-mutation
+continuation. Otherwise omit it.]
+
+| Create action | Returned stable-ID binding | Downstream action and event | Downstream target binding | Successful-completion clear | Cancellation clear |
+| ------------- | -------------------------- | --------------------------- | ------------------------- | ---------------------------- | ------------------ |
+| [Create Action Contract] | [Exact captured returned ID] | [Later edit/delete/relationship/approval/transition event] | [Exact target lookup using that ID] | [Exact success clear] | [Exact non-mutating cancel clear] |
+
 ## Functional Test Matrix
 
 | Scenario                     | Given                     | When                        | Then                                       | Evidence surface                      | Boundary or negative case                    |
@@ -249,7 +347,8 @@ Credit/Debit, Allocate/Release, Check-in/Check-out, or Enable/Disable into one c
 [Cover every changed Action Contract and every existing action whose source, fields,
 controls, or observer are touched by this edit. This is the regression contract. When an
 opposing pair is affected, include one concrete scenario per direction and verify explicit
-before/amount/after semantics.]
+before/amount/after semantics. When a Continuation Contract is affected, include
+returned-ID-bound downstream completion and non-mutating cancellation/clear scenarios.]
 
 ## Data Entry Label Contracts
 
@@ -418,6 +517,16 @@ prove that the value is visible in the normal state. A combined control may sati
 multiple rows only when its formula references every named source field. Do not replace
 requested text with an icon, tooltip, accessible label, record ID, or time-only summary.]
 
+## State-Driven Surface Visibility
+
+[Copy every plan row owned by this screen. Implement the named surface control's own
+`Visible` property with the exact planned predicate or a provably equivalent Boolean
+form. Do not substitute child visibility or navigation.]
+
+| Surface key | Surface control | State predicate | Visible and hidden states |
+| ----------- | --------------- | --------------- | ------------------------- |
+| [key copied from plan] | [Prefixed surface control] | [Exact `=state predicate`] | [Both states] |
+
 ## Required Actions
 
 | Action                              | Preconditions    | Entry point and event                                   | Source and stable ID                          | Transition and postcondition                  | Mutation write set                   | Receipt proof set                                 | Observer and evidence                                    |
@@ -432,6 +541,25 @@ visibility state, and labeled binding for every proof-set field. Preserve write-
 parity from the Action Contract. Expand every success, boundary, rejection, persistence,
 and recalculation path assigned by the plan. Keep paired review decisions as separate rows
 but require both controls on the same eligible record surface.]
+
+## Mutation Lifecycle Evidence
+
+[Copy every mutation lifecycle row owned or observed by this screen from the plan index, including the
+receipt, canonical observer, requested destination observer, same-ID trace,
+synchronization step when sources differ, and destination focus.]
+
+## Mutation Field Ledger
+
+[Copy every mutation field-ledger row owned by this screen. Keep each Changed field aligned
+with the Required Action write set, proof set, receipt binding, and observer. Implement
+each Preserved row from canonical pre-state and retain its post-state evidence.]
+
+## Continuation Contracts
+
+[Copy this section only when the screen creates a record for a later
+edit/delete/relationship/approval/transition or owns that later action. Bind the
+continuation to the returned stable ID and implement both successful-completion and
+cancellation clearing.]
 
 ## Functional Test Scenarios
 
@@ -525,6 +653,15 @@ fields disappear.]
 
 [Control -> property -> exact value; or "None"]
 
+## State-Driven Surface Visibility
+
+[Copy every changed or affected plan row owned by this screen. Preserve whole-surface
+gating on the named control; child visibility and navigation are not substitutes.]
+
+| Surface key | Surface control | State predicate | Visible and hidden states |
+| ----------- | --------------- | --------------- | ------------------------- |
+| [key copied from plan] | [Surface control] | [Exact `=state predicate`] | [Both states] |
+
 ## Required Actions
 
 | Action                              | Preconditions    | Entry point and event                           | Source and stable ID                          | Transition and postcondition                  | Mutation write set                   | Receipt proof set                                 | Observer and evidence                                    |
@@ -538,6 +675,23 @@ changes, define finite-choice values and defaults, stable identity, visible Edit
 prepopulation, save-by-ID, reset, cancel behavior, and the exact reveal receipt. Name its
 control, visibility state, and one labeled binding per proof-set field. Keep changed
 success, boundary, rejection, persistence, and recalculation paths separate.]
+
+## Mutation Lifecycle Evidence
+
+[Copy every changed or affected mutation lifecycle row for this screen. Preserve the receipt, canonical
+source, requested destination, same stable ID, synchronization/focus behavior, and exact
+observer formulas.]
+
+## Mutation Field Ledger
+
+[Copy every changed or affected mutation field-ledger row. Changed fields must retain write/proof parity;
+preserved fields must keep canonical pre-state sourcing and post-state evidence.]
+
+## Continuation Contracts
+
+[Include only when this screen participates in an affected create-to-later
+edit/delete/relationship/approval/transition continuation. Preserve the returned-ID target
+and clear continuation identity/mode on downstream completion or cancellation.]
 
 ## Functional Test Scenarios
 

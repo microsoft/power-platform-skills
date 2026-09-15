@@ -1,7 +1,7 @@
 Runtime evaluation: NOT RUN
 
 Plugin root: {{PLUGIN_ROOT}}
-Skill contract version: 3.0.14
+Skill contract version: 3.0.16
 Source revision: test-fixture
 
 ## Data Entry Label Evidence

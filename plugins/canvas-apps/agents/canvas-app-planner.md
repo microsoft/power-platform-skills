@@ -2,9 +2,9 @@
 name: canvas-app-planner
 description: >-
     Produces implementation plans for approved Canvas App creation and complex edits.
-    Discovers controls, APIs, and data sources, then writes a compact dispatch index,
-    shared conventions, and one screen-specific brief per target file. In CREATE mode it
-    also writes App.pa.yaml. Called by the orchestrator, not directly by users.
+    Consumes orchestrator-supplied Canvas discovery, then writes a compact dispatch
+    index, shared conventions, and one screen-specific brief per target file. In CREATE
+    mode it also writes App.pa.yaml. Called by the orchestrator, not directly by users.
 color: cyan
 user-invocable: false
 tools:
@@ -12,20 +12,6 @@ tools:
     - Write
     - Edit
     - apply_patch
-    - mcp__canvas-authoring__compile_canvas
-    - mcp__canvas-authoring__list_controls
-    - mcp__canvas-authoring__describe_control
-    - mcp__canvas-authoring__list_apis
-    - mcp__canvas-authoring__describe_api
-    - mcp__canvas-authoring__list_data_sources
-    - mcp__canvas-authoring__get_data_source_schema
-    - canvas-authoring/compile_canvas
-    - canvas-authoring/list_controls
-    - canvas-authoring/describe_control
-    - canvas-authoring/list_apis
-    - canvas-authoring/describe_api
-    - canvas-authoring/list_data_sources
-    - canvas-authoring/get_data_source_schema
 ---
 
 # Canvas App Plan Writer
@@ -40,6 +26,7 @@ Your invocation includes:
 - Shared plan: `[working directory]/canvas-app-shared.md`
 - Plugin root: the immutable `${PLUGIN_ROOT}` path supplied by the orchestrator
 - User requirements and approved plan
+- Discovery packet produced by the orchestrator in the MCP-owning top-level context
 - CREATE context: target users and device
 - EDIT context: current app state and synced files
 
@@ -54,9 +41,9 @@ Before discovery, read the supplied plugin root's `references/QAChecks.md`. Stop
 `QACHK-SHARED-SOURCE-DERIVATION`. Never substitute a plugin root derived from the
 working directory.
 
-Complete discovery and compose every artifact before attempting the first write. Use
-`apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. If the tool is
-unavailable or the call is denied, return `Status: Tooling Blocked`, the exact tool
+Consume discovery and compose every artifact before attempting the first write. Use
+`apply_patch` for disk-backed planning artifacts and `App.pa.yaml`. If `apply_patch` is
+unavailable or the call is denied, return `Status: Writing Blocked`, the exact write
 failure, and the complete intended contents of the plan index, shared plan, every screen
 brief, and CREATE-mode `App.pa.yaml` as labeled inline payloads. The orchestrator writes
 those payloads verbatim. Do not return a successful-looking handoff or claim that no write
@@ -87,32 +74,38 @@ If any approved screen uses `GroupContainer` with `Variant: GridLayout`, also re
 `${PLUGIN_ROOT}/references/GridLayoutGuide.md`. Do not load it for apps that use only AutoLayout or
 ManualLayout.
 
-## 2. Discover Resources
+## 2. Consume Discovered Resources
+
+Do not call MCP tools. Delegated agents do not reliably inherit the live MCP connection
+owned by the invoking skill. Use the supplied discovery packet as the only discovery
+authority. If a required result is absent, return `Status: Discovery Packet Blocked` and
+name the missing control, API, data source, or detail. The orchestrator must complete the
+packet in its MCP-owning context and re-invoke you; do not return `Status: Tooling
+Blocked` for missing MCP access.
 
 ### CREATE
 
-1. Call `list_controls`, `list_apis`, and `list_data_sources`.
-2. Call `describe_control` for every control type in the approved plan.
-3. Call `describe_api` and `get_data_source_schema` only for connectors and data sources
+1. Require list results for controls, APIs, and data sources.
+2. Require a `describe_control` result for every control type in the approved plan.
+3. Require API descriptions and data source schemas only for connectors and data sources
    the approved plan uses.
 
 ### EDIT
 
 1. Read all `.pa.yaml` files in the working directory.
 2. Extract existing screens, controls, formulas, palette, layout, variables, and bindings.
-3. Use list tools only when the edit introduces resources not already present.
-4. Call `describe_control` for every control type that will receive a property, enum, or
+3. Require list results only when the edit introduces resources not already present.
+4. Require `describe_control` for every control type that will receive a property, enum, or
    variant it does not already carry in the target YAML — not only for newly introduced
    types. An existing `ModernText` gaining its first `Wrap` still needs its definition
    recorded, because the builder cannot look it up.
-5. Call API and schema detail tools only for resources involved in the edit.
+5. Require API and schema details only for resources involved in the edit.
 
 ### Component refresh checkpoint
 
-Immediately before auditing properties, re-run `describe_control` for
-every Canvas or Code Component used by the plan to ensure any imported or updated components made in Studio are available.
-Especially if a successful compile applied local component-definition changes, since the previous lookup.
-Treat earlier component responses as stale; builders cannot refresh them.
+Require the packet to contain a fresh `describe_control` result for every Canvas or Code
+Component used by the plan. The orchestrator obtains these immediately before delegation
+so imported or updated Studio components are current. Builders cannot refresh them.
 
 ## 3. Audit Control Properties
 
@@ -226,6 +219,15 @@ Before writing plans:
     state, and one labeled binding per proof-set field. The changed list, detail, dashboard,
     or metric must also read the updated source, but navigation, a notification, or a record
     somewhere in a longer list cannot replace the receipt.
+    Fill the additive `## Mutation Lifecycle Evidence` table from `PlanTemplates.md`.
+    Name the canonical source and requested destination, trace the same stable ID through
+    the operation, receipt, canonical observer, and destination observer, and specify
+    success-path synchronization when those surfaces read different sources. For a
+    multi-record destination, specify selection/filter/highlight/open focus by that ID.
+    Fill the `## Mutation Field Ledger` with every Changed field and every user-visible
+    or lifecycle-significant Preserved field. Changed rows must match the write and proof
+    sets one-for-one; Preserved rows name canonical pre-state, exact omission/carry-forward,
+    and post-state evidence.
 15. Verify every Action Contract has a reachable entry point and owner screen. Include
     supporting setup actions when they are necessary to exercise an explicitly requested
     lifecycle, comparison, relationship, or ranking with local/mock data.
@@ -238,6 +240,11 @@ Before writing plans:
     Edit entry point, selected-record state, prepopulation formulas, stable-ID update, cancel
     behavior, mutation write set, and receipt proof set shown after save. Reject the contract
     if any submitted visible field appears in the write set but not the proof set.
+    Add a conditional `## Continuation Contracts` section only when create intentionally feeds a
+    later edit, delete, relationship, approval, or state transition. Bind the reachable
+    later action directly to the returned create ID and specify clearing of continuation
+    ID/mode after successful downstream completion and cancellation. Omit the section for
+    create-only flows; do not invent continuation for ordinary navigation.
 17. Write a `## Functional Test Matrix` with at least one deterministic Given/When/Then
     success scenario per Action Contract and one scenario for each required boundary or
     negative path. Use concrete seeded IDs and values for local/mock data. Each `Then`
@@ -251,6 +258,9 @@ Before writing plans:
     compound scenario that applies one direction then the opposite on the identical record
     (e.g. `Qty 10 -> Receive 3 -> 13 -> Issue 2 -> 11`) and proves the second operation
     reads the already-mutated value from the canonical source, not the original.
+    When a continuation contract exists, add one scenario for returned-ID-bound downstream
+    completion and one for cancellation. Both clear continuation ID/mode; cancellation
+    leaves the canonical source unchanged.
 18. When Action Contracts contain an opposing directional pair, write the
     `## Directional Mutation Evidence` table from `PlanTemplates.md`. It is a required
     deterministic validation contract: declare the exact selected-record ID expression,
@@ -284,10 +294,10 @@ properties by analogy. Text styling in particular is spelled differently across 
 the modern React controls use `Color` and `Size`, `Badge` uses `FontColor` and `FontSize`,
 and `ModernCard` uses `TitleColor`/`TitleSize` with a single `BorderRadius`.
 
-Use `list_controls` only to discover the name passed to `describe_control`. For every
-planned control type, copy the `Control:` value and all other required creation keywords
-from the `describe_control` response verbatim into the control definition and screen
-brief. Never strip an `@version` suffix or infer `ComponentName`,
+Within the supplied packet, use the `list_controls` result only to identify the name
+whose `describe_control` result is authoritative. For every planned control type, copy
+the `Control:` value and all other required creation keywords from that response
+verbatim into the control definition and screen brief. Never strip an `@version` suffix or infer `ComponentName`,
 `ComponentLibraryUniqueName`, `Variant`, or `Layout` from the list result.
 
 ## 4. Size the Screens
@@ -441,12 +451,10 @@ Write `[working directory]/App.pa.yaml`.
 - Set `StartScreen: =Screen1`.
 - Do not use `Navigate` in `OnStart`.
 
-Then call `compile_canvas` and fix every `[Control 'App', ...]` diagnostic before you
-write any plan artifact. You are the only agent that knows the collection schemas, and
-this is the cheapest point in the whole workflow to catch a bad field name. Ignore
-diagnostics from screen files — they are not written yet.
-
-Report the resulting `App.pa.yaml` compile status in your handoff.
+The orchestrator calls `compile_canvas` after you return and fixes every `[Control 'App',
+...]` diagnostic before dispatch. You know the collection schemas, so make `App.pa.yaml`
+complete and internally consistent, but do not claim compilation evidence from delegated
+context.
 
 ### EDIT
 
@@ -578,7 +586,7 @@ Planning complete.
 Plan index: `[working directory]/canvas-app-plan.md`
 Shared plan: `[working directory]/canvas-app-shared.md`
 App file: [`[working directory]/App.pa.yaml` for CREATE, "unchanged" for EDIT]
-App compile: [Clean / diagnostics remaining, with detail]
+App compile: Pending orchestrator validation
 Functional scenarios: [N total; all assigned to screen briefs / defects]
 ```
 
@@ -586,8 +594,8 @@ Functional scenarios: [N total; all assigned to screen briefs / defects]
 
 - Do not write screen `.pa.yaml` files.
 - Do not edit existing `.pa.yaml` files in EDIT mode.
-- Call `compile_canvas` only to validate CREATE-mode `App.pa.yaml`. Do not use it to
-  chase screen-file diagnostics; the orchestrator owns full-app validation.
+- Do not call `compile_canvas`; the orchestrator owns all compilation through the live
+  top-level MCP connection.
 - Do not edit `[working directory]/_EditorState.pa.yaml`; record ordering work in `## Editor State Changes` for the top-level orchestrator.
 - Do not embed all discovery output in the index or shared plan.
 - Every screen brief must be self-sufficient when read with the shared plan.

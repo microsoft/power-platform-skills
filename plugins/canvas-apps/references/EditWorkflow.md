@@ -76,6 +76,14 @@ Wait for user approval. Revise and re-present if requested.
 
 ## 4. Invoke the Planner
 
+Before delegation, use the top-level skill's MCP connection for discovery introduced by
+the edit. List resources only when the edit introduces resources not already present.
+Call `describe_control` for every type receiving a property, enum, or variant not already
+carried in its target YAML, and retrieve details only for APIs and data sources involved
+in the edit. For Canvas or Code Components, make their `describe_control` calls last.
+Preserve the exact results as the discovery packet. Do not delegate these calls: task
+agents do not reliably inherit the configured MCP connection.
+
 Invoke the `canvas-app-planner` agent with `Task` and:
 
 ```text
@@ -88,13 +96,16 @@ Edit requirements: [user requirements]
 Approved plan: [full approved plan]
 Current app state: [palette, variables, layout, screens, controls]
 Synced files: [absolute working-directory paths]
+Discovery packet: [complete results gathered above]
 ```
 
 The planner writes the plan index, shared plan, and one screen brief per dispatch row. It
 does not edit any `.pa.yaml` file in EDIT mode.
 
-If it returns `Status: Tooling Blocked`, apply its complete inline artifact payloads
-verbatim as required by the skill before entering Planned Build Handoff.
+If it returns `Status: Discovery Packet Blocked`, gather the named missing result in this
+top-level context and re-invoke it with the completed packet. If writing is blocked, apply
+its complete inline artifact payloads verbatim as required by the skill before entering
+Planned Build Handoff.
 
 Wait for the planner to finish, then return to **Planned Build Handoff** in the
 `canvas-app` skill.

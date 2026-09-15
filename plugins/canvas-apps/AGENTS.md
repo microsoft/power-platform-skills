@@ -73,7 +73,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
-| `canvas-app-planner` | `canvas-app` | Receives the approved plan, discovers resources, validates CREATE-mode `App.pa.yaml`, and writes a compact dispatch index, shared conventions, and one self-sufficient brief per screen. |
+| `canvas-app-planner` | `canvas-app` | Receives the approved plan and orchestrator-owned discovery packet, then writes CREATE-mode `App.pa.yaml`, a compact dispatch index, shared conventions, and one self-sufficient brief per screen. The top-level skill owns MCP discovery and compilation because delegated agents do not reliably inherit its live connection. |
 | `canvas-screen-builder` | `canvas-app` | Defines the one-screen implementation and self-QA contract. External-plugin general-purpose workers follow this file in waves of at most three; `canvas-app` owns compilation. |
 
 ## MCP Tools

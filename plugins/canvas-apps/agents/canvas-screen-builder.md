@@ -302,6 +302,22 @@ Do not fix unrelated pre-existing issues.
   field is missing from the receipt. Keep it visible until dismissal or the next mutation.
   Navigation, `Notify()`, or a selected, highlighted, filtered, or sorted list row may
   supplement this receipt but cannot replace it.
+- Implement the brief's mutation lifecycle row exactly. Keep the mutation receipt, canonical
+  observer, requested-destination observer, synchronization, and focus bound to the same
+  stable ID. When the destination reads a cache, projection, related collection, or
+  external query, run its declared refresh/requery/update only after success and before
+  revealing destination evidence. Focus multi-record destinations by ID, never by display
+  text or list position.
+- Implement every mutation field-ledger row. A Changed field must occur in the handler write set
+  and receipt proof set with one labeled binding. Preserve each Preserved field by omitting
+  it from a partial update or carrying forward its canonical pre-state value, and keep its
+  post-state observer; never substitute a default, stale selection, display value, or
+  parallel collection.
+- Implement conditional stable-ID continuation only when the brief declares it for create feeding a later
+  edit, delete, relationship, approval, or transition. Bind the reachable downstream
+  action and mutation target to the returned create ID. Clear continuation identity and
+  mode after successful downstream completion or cancellation; retain it on failure only
+  when retry is intended. Do not synthesize continuation for create-only flows.
 - At phone width, stack a manageable record row or provide an immediately visible
   overflow/detail entry so full identity text, status, and required Edit/review/remove
   actions remain reachable. Do not implement required actions only in right-side desktop

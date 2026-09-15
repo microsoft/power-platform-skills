@@ -1,0 +1,95 @@
+Screens:
+    Screen1:
+        Properties:
+            OnVisible: =Reset(drpOperation); Reset(cmbAdjustItem)
+        Children:
+            - lblAdjustItem:
+                Control: Classic/Label
+                Properties:
+                    Text: ="Inventory item"
+            - cmbAdjustItem:
+                Control: Classic/ComboBox
+                Properties:
+                    AllowEmptySelection: =true
+                    DefaultSelectedItems: =[]
+                    Items: =colInventory
+            - lblOperation:
+                Control: Classic/Label
+                Properties:
+                    Text: ="Operation"
+            - drpOperation:
+                Control: Classic/DropDown
+                Properties:
+                    AllowEmptySelection: =true
+                    Default: =Blank()
+                    Items: =["Receive", "Issue"]
+            - lblAmount:
+                Control: Classic/Label
+                Properties:
+                    Text: ="Amount"
+            - txtAmount:
+                Control: Classic/TextInput
+                Properties:
+                    Format: =TextFormat.Number
+            - btnReceive:
+                Control: Classic/Button
+                Properties:
+                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                    OnSelect: =Set(varLastOperation, "Receive"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity + varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity + varAmount, Notes: "Adjusted"}))
+            - btnIssue:
+                Control: Classic/Button
+                Properties:
+                    DisplayMode: =If(IsBlank(drpOperation.Selected.Value) || IsBlank(cmbAdjustItem.Selected.ID) || Not(Value(txtAmount.Text) > 0), DisplayMode.Disabled, DisplayMode.Edit)
+                    OnSelect: =Set(varLastOperation, "Issue"); Set(varOldQuantity, cmbAdjustItem.Selected.Quantity); Set(varAmount, Value(txtAmount.Text)); Set(varExpectedQuantity, varOldQuantity - varAmount); Set(varLastMutation, Patch(colInventory, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID), {Quantity: varOldQuantity - varAmount, Notes: "Adjusted"}))
+            - galInventory:
+                Control: Gallery
+                Properties:
+                    Items: =Filter(colInventory, ID = varLastMutation.ID)
+            - lblReceiptId:
+                Control: Classic/Label
+                Properties:
+                    Text: =varLastMutation.ID
+            - lblCanonicalQuantity:
+                Control: Classic/Label
+                Properties:
+                    Text: =LookUp(colInventory, ID = varLastMutation.ID).Quantity
+            - lblCanonicalNotes:
+                Control: Classic/Label
+                Properties:
+                    Text: =LookUp(colInventory, ID = varLastMutation.ID).Notes
+            - lblCanonicalName:
+                Control: Classic/Label
+                Properties:
+                    Text: =LookUp(colInventory, ID = varLastMutation.ID).Name
+            - lblPreName:
+                Control: Classic/Label
+                Properties:
+                    Text: =LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Name
+            - lblReceiptNotes:
+                Control: Classic/Label
+                Properties:
+                    Text: =varLastMutation.Notes
+            - lblReceiptName:
+                Control: Classic/Label
+                Properties:
+                    Text: =varLastMutation.Name
+            - lblReceiptOperation:
+                Control: Classic/Label
+                Properties:
+                    Text: =varLastOperation
+            - lblReceiptOld:
+                Control: Classic/Label
+                Properties:
+                    Text: =varOldQuantity
+            - lblReceiptAmount:
+                Control: Classic/Label
+                Properties:
+                    Text: =varAmount
+            - lblReceiptExpected:
+                Control: Classic/Label
+                Properties:
+                    Text: =varExpectedQuantity
+            - lblReceiptActual:
+                Control: Classic/Label
+                Properties:
+                    Text: =varLastMutation.Quantity

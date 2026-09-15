@@ -1,10 +1,10 @@
 ---
 name: canvas-app
-version: 3.0.14
+version: 3.0.16
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Read, Write, Edit, apply_patch, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas, mcp__canvas-authoring__describe_control
+allowed-tools: Read, Write, Edit, apply_patch, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas, mcp__canvas-authoring__list_controls, mcp__canvas-authoring__describe_control, mcp__canvas-authoring__list_apis, mcp__canvas-authoring__describe_api, mcp__canvas-authoring__list_data_sources, mcp__canvas-authoring__get_data_source_schema
 
 ---
 
@@ -22,7 +22,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 
 1. Treat `${PLUGIN_ROOT}` as immutable runtime provenance. Never derive it from the
    current directory, app workspace, repository root, or a sibling worktree.
-2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.14`.
+2. Read `${PLUGIN_ROOT}/skills/canvas-app/SKILL.md` and require `version: 3.0.16`.
    Read `${PLUGIN_ROOT}/references/QAChecks.md` and require
    `QACHK-SHARED-SOURCE-DERIVATION`. If either check fails, stop with the expected and
    observed paths and versions; do not mix prompt generations.
@@ -55,6 +55,26 @@ without leaf controls do not make the app non-empty.
 - **Existing app:** read `${PLUGIN_ROOT}/references/EditWorkflow.md` and follow it.
 
 Do not load both workflow documents.
+
+## MCP Ownership
+
+The top-level skill invocation owns the configured Canvas Authoring MCP connection.
+Delegated agents do not inherit the host's live MCP connection reliably, even when an
+agent frontmatter allowlist names MCP tools. Therefore:
+
+1. Perform all MCP discovery required by the selected workflow in this context, before
+   invoking the planner.
+2. Pass the planner a complete `Discovery packet` containing the relevant list results,
+   every required `describe_control` result, and any required API descriptions or data
+   source schemas. Preserve exact control creation keywords, input-property names,
+   variants, enum names, and enum members.
+3. Treat an unavailable or denied MCP call here as a real tooling blocker. Do not invoke
+   the planner with placeholders or ask it to retry the MCP call.
+4. The planner and builders consume the packet and local files only. They must not report
+   `Tooling Blocked` merely because MCP tools are absent in their delegated context.
+5. Run every `compile_canvas` operation in this top-level context. Delegated workers may
+   write or repair their assigned artifacts, but compilation remains here so it uses the
+   same live connection established before synchronization.
 
 ## Planned Build Handoff
 
@@ -91,6 +111,20 @@ CREATE and complex EDIT workflows return here after the planner finishes.
     - Every mutation names an observable bound result, not only a confirmation message.
     - Every mutation declares a write set and receipt proof set. For create/edit, reject the
       plan when any user-entered or user-selected write-set field is absent from the proof set.
+    - Every mutation has an additive lifecycle row naming its receipt, canonical source,
+      requested destination, same stable ID, and exact synchronization/focus behavior when
+      the destination differs or contains multiple records.
+    - Every mutation has a Changed/Preserved field ledger. Changed rows match handler
+      writes and receipt proofs one-for-one; Preserved rows retain canonical pre-state and
+      name post-state evidence.
+    - Conditional stable-ID continuation exists only when create feeds a later edit, delete, relationship,
+      approval, or transition. It binds that action to the returned create ID and clears
+      continuation state on downstream completion or cancellation.
+    - Every plan-declared state-driven UI surface names the surface control and its exact
+      state predicate. Recognize either the dedicated table or an exact
+      `Surface.Visible=state predicate` Action Contract observer. Do not add rows for
+      always-visible surfaces, child-only visibility, navigation-based disclosure, or
+      visibility not declared by the plan.
     - Supporting setup actions exist when required to exercise an explicitly requested
       lifecycle, relationship, comparison, or ranking.
     - Role-scoped management of all primary records includes separate visible select/edit/save
@@ -109,6 +143,8 @@ CREATE and complex EDIT workflows return here after the planner finishes.
       least two matching records and one non-matching record.
     - EDIT scenarios cover existing behavior touched by changed sources, fields, controls,
       or observer formulas.
+    - When a continuation contract is present, scenarios cover the returned-ID-bound downstream
+      completion and non-mutating cancellation paths, including continuation-state clear.
 6. When the plan contains an opposing directional pair, require `## Directional Mutation
    Evidence` before dispatch. It must state a nullable selected-ID state with blank reset
    and row assignment, the actual operation state with an entry/success `Blank()` reset
@@ -143,10 +179,10 @@ CREATE and complex EDIT workflows return here after the planner finishes.
 9. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
    `[working directory]/App.pa.yaml` now. Screens bind to those collections, formulas and variables, and
    compiling them against a stale `App.pa.yaml` produces a flood of false name errors.
-10. Confirm the planner reported a clean `compile_canvas` for `[working directory]/App.pa.yaml`. If it
-   did not, compile now and resolve every `App`-level diagnostic before dispatching.
-    For EDIT mode, compile after applying the before-builder app changes and resolve
-    App-level diagnostics before dispatching.
+10. Call `compile_canvas` now and resolve every `App`-level diagnostic before dispatching.
+    The planner cannot validate through the top-level MCP connection. For EDIT mode,
+    compile after applying the before-builder app changes and resolve App-level
+    diagnostics before dispatching.
 11. Invoke one general-purpose agent with `Task` per dispatch row and instruct it to read
    and follow `${PLUGIN_ROOT}/agents/canvas-screen-builder.md` using the supplied
    assignment. Run these workers in waves of **at most three**. Fire each wave together,
@@ -251,6 +287,23 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   every user-entered or user-selected field written by the handler needs a readable labeled
   receipt binding. Navigation, a notification, hidden state, or a row somewhere in a longer
   list cannot replace it. Compile success does not prove runtime usability.
+- Verify each `## Mutation Lifecycle Evidence` row against final YAML: receipt,
+  canonical-source observer, requested-destination observer, synchronization/focus, and
+  operation all retain one stable ID. If source and destination differ, synchronization
+  must occur only after mutation success and before destination evidence.
+- Verify each `## Mutation Field Ledger` row against the handler. Every Changed field has
+  write/proof parity and one labeled receipt binding. Every Preserved field comes from
+  canonical pre-state, survives by omission or exact carry-forward, and has post-state
+  evidence for the same ID.
+- When `## Continuation Contracts` exists, verify create's returned ID directly targets the
+  declared later edit/delete/relationship/approval/transition, and both completion and
+  cancellation clear continuation ID/mode. Do not require this section for create-only
+  flows.
+- When `## State-Driven Surface Visibility` exists, require one acceptance row per plan
+  key with the exact final-YAML `Surface.Visible: =state predicate` binding. Verify the
+  named surface itself implements the planned predicate or a provably equivalent Boolean
+  form. Child visibility and navigation do not satisfy the surface contract. Do not infer
+  this contract for always-visible or undeclared surfaces.
 - For a shared-operation flow, inspect the final YAML and verify selectors only set the
   declared operation state plus optional receipt/display state, never mutate, while the
   distinct event that performs the guarded mutation is the only mutation entry point. The
@@ -358,6 +411,10 @@ Report the guide path and highest defined check as `Status: Provenance Blocked`.
   Data Entry Label Evidence unless the control is a `ModernNumberInput` with a native
   visible `Label`; all other types need a sibling Text/Label control. `AccessibleLabel`
   and `HintText` do not count as the field's visible name.
+  A plan-declared state-driven surface may gate both siblings without making the label
+  transient: require the input and label to share the evidenced immediate field parent
+  inside that same validated surface, and reject any separate conditional `Visible`
+  formula on the label.
 - When Approve and Reject/Decline are paired contracts, verify every eligible pending record
   exposes both decisions on the same row or the same immediately reachable detail at phone
   width. Send the owning screen back when either decision is missing; never accept a

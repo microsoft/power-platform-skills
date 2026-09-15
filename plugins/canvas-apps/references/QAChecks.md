@@ -772,6 +772,12 @@ immediate field-region parent. `AccessibleLabel` and `HintText` alone fail this 
 contract. Static acceptance recognizes a native visible `Label` only for
 `ModernNumberInput`; every other type needs a sibling Text/Label control.
 
+A validated plan-declared state-driven surface may conditionally gate both the input and
+its sibling label. That shared ancestor predicate does not make the label transient while
+the surface is visible. Still reject a label with its own false or conditional `Visible`
+formula, a label outside the input's immediate field region, a label nested under the
+input, or a conditional ancestor not declared as that shared surface.
+
 ---
 
 ## Check 19 — `QACHK-NO-REFLOW` (horizontal row with no narrow-width strategy)
@@ -1348,7 +1354,12 @@ prove that the requested outcome occurred.
 4. Compare the Required Action's mutation write set with its receipt proof set and the
    handler formula. Every field or status changed by the formula must appear in the declared
    write set. For create/edit, every user-entered or user-selected write-set field must also
-   appear in the proof set.
+   appear in the proof set. Compare the Mutation Field Ledger as well: every handler
+   write is a Changed row with write/proof parity, while every user-visible or
+   lifecycle-significant value that must survive is a Preserved row. A Preserved row must
+   either be absent from a partial update or carry the exact canonical pre-state value and
+   must name a post-state observer. Defaults, display text, stale selection, and parallel
+   collections are not preservation sources.
 5. Inspect the receipt controls and confirm each proof-set field has a readable label and a
    visible binding to the captured state. Input values before submission, hidden variables,
    agent memory, unlabeled or truncated text, and fields available only in a scrolled list
@@ -1363,7 +1374,15 @@ prove that the requested outcome occurred.
 7. For a shared create/edit form, require intentional state reset after create and save.
 8. Confirm the observer formula reads the same source, stable ID, and changed fields used
    by the handler. A receipt copied from input controls, a parallel collection, a stale
-   `ThisItem`, or a badge bound to a different status field fails.
+   `ThisItem`, or a badge bound to a different status field fails. Apply the complete mutation
+   lifecycle trace: identify the canonical source and the requested destination, then
+   confirm their observers, the mutation receipt, and the operation all use the same
+   stable ID. If the destination reads a cache, projection, related collection, or
+   external query rather than the canonical live source, require an exact refresh,
+   requery, or cache update on the successful path before destination evidence appears.
+   If the destination contains multiple records, require selection, filtering,
+   highlighting, or opening by that stable ID. Display text and list position do not
+   establish focus.
 9. Mentally substitute the Functional Test Scenario's concrete Given values into the
    handler. Confirm its Then postcondition and every proof-set value follow from the
    formula without assuming runtime state not established by the app.
@@ -1471,7 +1490,9 @@ prove that the requested outcome occurred.
 
 **Fix:** Preserve the affected record state, update or refresh the visible binding, and add
 the required in-viewport mutation receipt with write-set/proof-set parity and one labeled
-binding per proof-set field. For opposing transitions, split merged contracts and
+binding per proof-set field. Complete the mutation lifecycle row and field ledger, including
+same-ID destination synchronization/focus and canonical preservation evidence. For
+opposing transitions, split merged contracts and
 scenarios, expose a reachable operation selector, fail closed on invalid inputs, repair the
 arithmetic direction, and show complete before/after receipt evidence. Wire every staging
 variable to its live input control (a reachable `Set`/`UpdateContext` before `Patch`, or an
@@ -1479,6 +1500,10 @@ inline `Control.Value`/`Control.Selected` read at mutation time) rather than lea
 an `App.OnStart`/`Screen.OnVisible` seed or assigning it after the write. For
 shared-operation flows, move mutations out of selectors and into the one distinct guarded
 mutation event. `Notify()` alone is not an observable outcome.
+
+This check is static inspection. It cannot prove that a runtime event fires, an external
+write or synchronization succeeds, or destination focus renders. Preserve
+`Runtime evaluation: NOT RUN` until those behaviors are executed in the running app.
 
 **Exception:** None for a mutation named in `## Required Actions`.
 
@@ -1736,6 +1761,14 @@ object through edit prepopulation, the mutation target, preservation of unchange
 and the immediate result observer. Review/status actions must write the same status field
 that filters, badges, dashboards, and reports render.
 
+When the plan declares a conditional continuation, trace the stable ID returned by create directly
+into the later edit, delete, relationship, approval, or transition target. Require a
+reachable continuation action bound to that ID, and require continuation identity and
+mode to clear after successful downstream completion and after non-mutating cancellation.
+A failed downstream mutation may retain context for retry. Do not require continuation
+for create-only flows, and reject recovery by display name, list position, or implicit
+control selection.
+
 Also apply a **LookUp key integrity** pass to every `LookUp`/`Filter` used to locate a
 mutation target (`Patch`, `Remove`, `UpdateIf`, or a connector mutation). The key comparison
 must test the collection's real key field against the exact selected or context value —
@@ -1761,7 +1794,8 @@ receipt and observer report.
 evidence to the same source and identity. Compare the `LookUp`/`Filter` key against the raw
 selected/context value with no concatenation, prefix, suffix, or reshaping unless the
 documented schema requires it; remove any phantom key surgery so the target row is actually
-found.
+found. For declared continuations, bind the downstream target to the returned create ID
+and clear continuation state on completion or cancellation.
 
 **Exception:** Create has no prior identity, but must assign a unique stable ID used by
 later lifecycle actions.
@@ -1783,3 +1817,15 @@ successful mutation path.
 
 **Exception:** An immutable version snapshot may use a separate source when the plan
 explicitly defines snapshot identity and comparison semantics.
+
+### Plan-declared state-driven surface visibility
+
+When a plan row or an exact `Surface.Visible=state predicate` Action Contract
+observer declares that a whole UI surface appears only in a named state, inspect the named
+surface control's own `Visible` property. It must use the planned predicate or a provably
+equivalent Boolean form, and acceptance must copy that exact final-YAML binding. Visibility
+on a child does not gate the surface. Navigation to another screen is a different
+disclosure mechanism and does not satisfy this contract.
+
+Do not apply this rule to always-visible surfaces or infer it from implementation alone.
+It applies only to visibility explicitly declared in the plan.

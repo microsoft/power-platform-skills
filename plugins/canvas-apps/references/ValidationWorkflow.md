@@ -220,11 +220,41 @@ Source revision: [git revision, package version, or "unavailable"]
 | -------- | ------------- | --------------- | --------------------- | ---------------- | ----------------- | ------ |
 | [action] | [control]     | [exact final-YAML `Control.Property: =formula` binding(s)] | [source and identity] | [exact formula]  | [path and bounds] | PASS   |
 
+## Mutation Lifecycle Evidence
+
+| Action | Receipt binding | Canonical source / observer | Requested destination / observer | Stable ID continuity | Synchronization | Focus | Result |
+| ------ | --------------- | --------------------------- | -------------------------------- | -------------------- | --------------- | ----- | ------ |
+| [mutation] | [exact final-YAML returned-record/ID or deletion-snapshot and receipt bindings] | [exact source and observer formula] | [exact destination and observer formula] | [same ID expression throughout] | [exact success-path sync, or N/A — same live source] | [exact focus-by-ID, or N/A] | PASS |
+
+## Mutation Field Evidence
+
+| Action | Field | Classification | Canonical pre-state or input | Write / preservation formula | Receipt / proof binding | Post-state observer | Result |
+| ------ | ----- | -------------- | ---------------------------- | ---------------------------- | ----------------------- | ------------------- | ------ |
+| [mutation] | [field/status] | Changed / Preserved | [exact final-YAML binding] | [exact final-YAML write, omission, or carry-forward evidence] | [exact labeled receipt or preservation evidence] | [exact observer for same ID/field] | PASS |
+
+## Continuation Evidence
+
+[Include only when the plan contains `## Continuation Contracts`.]
+
+| Create action | Returned stable-ID binding | Downstream action / event | Downstream target binding | Successful-completion clear | Cancellation clear | Result |
+| ------------- | -------------------------- | ------------------------- | ------------------------- | ---------------------------- | ------------------ | ------ |
+| [create] | [exact final-YAML returned ID capture] | [exact later mutation event] | [exact same-ID target] | [exact success clear] | [exact cancel clear] | PASS |
+
 ## Required Record Field Evidence
 
 | Field key | Bound control | Exact formula | Record hierarchy | Visibility and layout evidence | Result |
 | --------- | ------------- | ------------- | ---------------- | ------------------------------ | ------ |
 | [key]     | [control]     | [formula]     | [card/row/detail path] | [normal-state bounds and text fit] | PASS |
+
+## State-Driven Surface Visibility Evidence
+
+[Include when the plan contains `## State-Driven Surface Visibility` or an Action
+Contract `Observer and evidence` cell declares an exact
+`Surface.Visible=state predicate` binding.]
+
+| Surface key | Surface visibility binding | Result |
+| ----------- | -------------------------- | ------ |
+| [plan key] | [exact final-YAML `Surface.Visible: =state predicate`] | PASS |
 
 ## Data Entry Label Evidence
 
@@ -279,6 +309,20 @@ Even a recorded runtime success for directional arithmetic (for example,
 `10 + 3 = 13`, then `13 - 2 = 11`) proves only those executed transitions. It does not
 prove blank-selection, blank-operation, zero/non-positive amount, reset, cross-branch
 layout, or downstream visibility scenarios that were not executed and evidenced.
+
+The mutation lifecycle, field-ledger, and continuation tables are static formula evidence
+under that same boundary. A `PASS` proves
+that final YAML contains the receipt, canonical-source and requested-destination observers,
+same-ID trace, field ledger, synchronization/focus formulas, and conditional continuation
+bindings claimed by the plan. It does not prove that an event fired, an external write or
+refresh completed, a destination rendered the record, or focus moved in the running app.
+
+When the plan declares state-driven surface visibility—either in its dedicated table or
+with an exact `Surface.Visible=state predicate` Action Contract observer—static
+acceptance must preserve the named surface's exact `Visible` binding. The final YAML
+predicate must be the same as the plan or fall within the validator's bounded Boolean
+equivalence rules. This contract does not infer requirements for always-visible surfaces,
+child-only visibility, navigation-based disclosure, or visibility absent from the plan.
 
 The first line of the file must be exactly `Runtime evaluation: NOT RUN`; do not place a
 heading before it. The Action Contract table has exactly one row per Action Contract. When
@@ -363,6 +407,10 @@ including `ModernTextInput`, `ModernNumberInput`, `ModernRadio`, `ModernDropdown
 `ModernCombobox`. Name the exact visible label binding and immediate shared parent/field
 region. `AccessibleLabel` and `HintText` do not count. Only a `ModernNumberInput` with a
 native visible `Label` may omit the row; every other type needs a sibling label.
+When the input and sibling label are inside the same plan-declared state-driven surface,
+that surface's validated `Visible` predicate defines when both participate in the UI and
+does not make the label transient. The label itself must have no separate conditional
+`Visible` formula, and the evidence region must match their actual immediate parent.
 Logical canvas width evidence is never proof that a narrow branch activates in an
 embedded or scale-to-fit host; without settings exposed in `.pa.yaml`, require wrapping,
 always-stacked fields, deliberate scrolling, or a statically bounded wide/default branch.
@@ -465,7 +513,26 @@ app, and a live browser evaluation remains the authority for the runtime functio
 
 
 For mutations, also compare the handler, write set, proof set, receipt bindings, and
-downstream observer one-for-one. For filters, verify the concrete selector value is
+downstream observer one-for-one. Require one `## Mutation Lifecycle Evidence` row per
+mutation Action Contract. Confirm the receipt, canonical observer, requested destination,
+and destination observer all use the mutated stable ID. When destination and canonical
+source differ, require an exact successful-path synchronization formula before destination
+evidence; for multi-record destinations require an exact focus-by-ID formula.
+
+Require `## Mutation Field Evidence` to match the plan ledger. Every handler-written field
+is classified Changed, occurs in the Action Contract write and proof sets, and has one
+readable receipt binding. Every Preserved row identifies canonical pre-state, proves
+omission from a partial update or exact carry-forward, and names a post-state observer for
+the same stable ID. A default, stale selection, display value, or parallel collection is
+not preservation evidence.
+
+Require `## Continuation Evidence` only when the plan declares a continuation from create
+to a later edit, delete, relationship, approval, or transition. Trace the returned create
+ID directly into that later target and verify both successful completion and cancellation
+clear continuation identity/mode. Do not require or synthesize continuation for
+create-only flows.
+
+For filters, verify the concrete selector value is
 pointer-committed into the target `Items` predicate, preserves both matching seeded
 records, excludes the non-match, shows the active criterion, and clears deterministically.
 

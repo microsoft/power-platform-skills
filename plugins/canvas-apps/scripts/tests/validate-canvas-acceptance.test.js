@@ -29,6 +29,9 @@ const compoundFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-compou
 // must report both defects. Individual tests repair the key or add live OnChange assignments
 // to prove each rule independently instead of allowing one failure to mask the other.
 const staleStagingFixtureDir = path.join(testsDir, 'fixtures', 'receive-issue-stale-staging');
+const lifecycleFieldsFixtureDir = path.join(testsDir, 'fixtures', 'mutation-lifecycle-fields');
+const continuationFixtureDir = path.join(testsDir, 'fixtures', 'continuation-stable-id');
+const stateDrivenSurfaceFixtureDir = path.join(testsDir, 'fixtures', 'state-driven-surface');
 const workRoot = path.join(testsDir, '.work');
 
 // The valid issue mutation subtracts the amount from the old value (`old - amount`).
@@ -1248,6 +1251,14 @@ function materializeLayout(caseName, { responsive = false } = {}) {
 `;
     fs.writeFileSync(path.join(workspace, 'Screen1.pa.yaml'), yaml);
     const acceptancePath = path.join(workspace, 'canvas-app-acceptance.md');
+    const acceptance = fs.readFileSync(acceptancePath, 'utf8')
+        .replace('| cmbAdjustItem | lblAdjustItem.Text | Screen1 |',
+            '| cmbAdjustItem | lblAdjustItem.Text | fldAdjustItem |')
+        .replace('| drpOperation | lblOperation.Text | Screen1 |',
+            '| drpOperation | lblOperation.Text | fldOperation |')
+        .replace('| txtAmount | lblAmount.Text | Screen1 |',
+            '| txtAmount | lblAmount.Text | fldAmount |');
+    fs.writeFileSync(acceptancePath, acceptance);
     fs.appendFileSync(
         acceptancePath,
         '\n## Layout Budget Evidence\n\n' +
@@ -1272,6 +1283,59 @@ function runValidator(workspace) {
 function rewriteScreen(workspace, transform) {
     const screenPath = path.join(workspace, 'Screen1.pa.yaml');
     fs.writeFileSync(screenPath, transform(fs.readFileSync(screenPath, 'utf8')));
+}
+
+function rewriteArtifact(workspace, file, transform) {
+    const artifactPath = path.join(workspace, file);
+    fs.writeFileSync(artifactPath, transform(fs.readFileSync(artifactPath, 'utf8')));
+}
+
+function materializeLifecycle(caseName) {
+    return materialize(caseName, { sourceDir: lifecycleFieldsFixtureDir });
+}
+
+function materializeContinuation(caseName) {
+    return materializeFocusedFixture(caseName, continuationFixtureDir);
+}
+
+function materializeStateDrivenSurface(caseName) {
+    return materializeFocusedFixture(caseName, stateDrivenSurfaceFixtureDir);
+}
+
+function materializeFocusedFixture(caseName, sourceDir) {
+    const workspace = path.join(workRoot, caseName);
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.mkdirSync(workspace, { recursive: true });
+    for (const file of ['App.pa.yaml', 'Screen1.pa.yaml']) {
+        fs.copyFileSync(
+            path.join(sourceDir, file),
+            path.join(workspace, file));
+    }
+    for (const [template, output] of [
+        ['canvas-app-plan.template.md', 'canvas-app-plan.md'],
+        ['canvas-app-acceptance.template.md', 'canvas-app-acceptance.md'],
+    ]) {
+        const content = fs.readFileSync(path.join(sourceDir, template), 'utf8')
+            .replaceAll('{{WORKSPACE}}', workspace)
+            .replaceAll('{{PLUGIN_ROOT}}', pluginRoot);
+        fs.writeFileSync(path.join(workspace, output), content);
+    }
+    return workspace;
+}
+
+function rewriteTableRow(workspace, file, heading, key, transform) {
+    rewriteArtifact(workspace, file, (text) => {
+        const lines = text.split('\n');
+        const headingIndex = lines.findIndex((line) => line.trim() === heading);
+        assert.notStrictEqual(headingIndex, -1, `missing ${heading}`);
+        const rowIndex = lines.findIndex(
+            (line, index) => index > headingIndex && line.startsWith(`| ${key} |`));
+        assert.notStrictEqual(rowIndex, -1, `missing ${key} row under ${heading}`);
+        const row = lines[rowIndex].trim();
+        const cells = row.slice(1, -1).split('|').map((cell) => cell.trim());
+        lines[rowIndex] = `| ${transform(cells).join(' | ')} |`;
+        return lines.join('\n');
+    });
 }
 
 function nestExplicitSelectorInGallery(workspace, { safe = true } = {}) {
@@ -1420,6 +1484,9 @@ test('accepts a compact field group with a visible sibling label', () => {
             fieldChildren +
             yaml.slice(inputEnd);
     });
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        '| txtAmount | lblAmount.Text | Screen1 |',
+        '| txtAmount | lblAmount.Text | conAmountField |'));
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(
         code,
@@ -2781,6 +2848,549 @@ test('matches required record fields against block-scalar YAML formulas', () => 
         { requiredRecordScalar: 'block' });
     const { code, stdout, stderr } = runValidator(workspace);
     assert.strictEqual(code, 0, `expected PASS but validator exited ${code}.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts mutation lifecycle evidence and multi-field changed/preserved parity', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-field-parity-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected mutation lifecycle and field-parity fixture to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /runtime evaluation NOT RUN/);
+});
+
+test('derives field-ledger entries from a balanced UpdateIf change record', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-update-if');
+    const patch = /Set\(varLastMutation, Patch\(colInventory, LookUp\(colInventory, ID = cmbAdjustItem\.Selected\.ID\), (\{[^}]+\})\)\)/g;
+    const updateIf = (_, record) =>
+        `UpdateIf(colInventory, ID = cmbAdjustItem.Selected.ID, ${record}); ` +
+        'Set(varLastMutation, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID))';
+    rewriteScreen(workspace, (yaml) => yaml.replace(patch, updateIf));
+    for (const file of ['canvas-app-plan.md', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text
+            .replace(patch, updateIf)
+            .replace(/^\| Receive\s*\|/gm, '| Save up |')
+            .replace(/^\| Issue\s*\|/gm, '| Save down |'));
+    }
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected balanced UpdateIf field derivation to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('derives every field from a balanced Collect record', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-collect-field');
+    const patch = /Set\(varLastMutation, Patch\(colInventory, LookUp\(colInventory, ID = cmbAdjustItem\.Selected\.ID\), \{([^}]+)\}\)\)/g;
+    const collect = (_, fields) =>
+        `Collect(colInventory, {ID: cmbAdjustItem.Selected.ID, ${fields}}); ` +
+        'Set(varLastMutation, LookUp(colInventory, ID = cmbAdjustItem.Selected.ID))';
+    rewriteScreen(workspace, (yaml) => yaml.replace(patch, collect));
+    for (const file of ['canvas-app-plan.md', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text
+            .replace(patch, collect)
+            .replace(/^\| Receive\s*\|/gm, '| Save up |')
+            .replace(/^\| Issue\s*\|/gm, '| Save down |'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected Collect ID omitted from the ledger to fail');
+    assert.match(stderr, /derived static write has unmatched field 'ID'/);
+});
+
+test('rejects receipt-only lifecycle evidence without canonical and destination observers', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-receipt-only');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Mutation Lifecycle Evidence',
+        'Receive',
+        (cells) => {
+            cells[2] = 'N/A';
+            cells[3] = 'N/A';
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected receipt-only lifecycle evidence to fail');
+    assert.match(stderr, /requires exact canonical observer evidence/);
+    assert.match(stderr, /requires exact requested destination observer evidence/);
+});
+
+test('rejects a lifecycle canonical observer bound to the wrong source', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-wrong-source');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Text: =LookUp(colInventory, ID = varLastMutation.ID).Quantity',
+        'Text: =LookUp(colInventoryArchive, ID = varLastMutation.ID).Quantity'));
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Mutation Lifecycle Evidence',
+        'Receive',
+        (cells) => {
+            cells[2] = cells[2].replace('colInventory', 'colInventoryArchive');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrong canonical source to fail');
+    assert.match(stderr, /canonical observer must read mutation source 'colInventory'/);
+});
+
+test('rejects lifecycle evidence whose canonical observer uses another stable ID', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-wrong-id');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Text: =LookUp(colInventory, ID = varLastMutation.ID).Quantity',
+        'Text: =LookUp(colInventory, ID = cmbAdjustItem.Selected.ID).Quantity'));
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Mutation Lifecycle Evidence',
+        'Receive',
+        (cells) => {
+            cells[2] = cells[2].replace('varLastMutation.ID', 'cmbAdjustItem.Selected.ID');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched lifecycle ID to fail');
+    assert.match(stderr, /canonical observer must reference stable ID 'varLastMutation.ID'/);
+});
+
+test('requires synchronization when the requested destination reads another source', () => {
+    const workspace = materializeLifecycle('mutation-lifecycle-missing-sync');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        'Items: =Filter(colInventory, ID = varLastMutation.ID)',
+        'Items: =Filter(colInventoryView, ID = varLastMutation.ID)'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replaceAll(
+        'galInventory.Items: =Filter(colInventory, ID = varLastMutation.ID)',
+        'galInventory.Items: =Filter(colInventoryView, ID = varLastMutation.ID)'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unsynchronized destination source to fail');
+    assert.match(stderr, /requires exact synchronization evidence/);
+});
+
+test('rejects a statically written field missing from the mutation field ledger', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-missing-field');
+    rewriteArtifact(workspace, 'canvas-app-plan.md', (text) => text.replace(
+        /^\| Receive \| Notes \|.*\r?\n/m,
+        ''));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        /^\| Receive \| Notes \|.*\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected an unledgered static write field to fail');
+    assert.match(stderr, /derived static write has unmatched field 'Notes'/);
+});
+
+test('rejects a declared write set that mismatches the field-ledger changed fields', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-mismatched-write-set');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-plan.md',
+        '## Action Contracts',
+        'Receive',
+        (cells) => {
+            cells[7] = 'Quantity, Status';
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched declared write set to fail');
+    assert.match(stderr, /declared write set is missing field 'Notes'/);
+    assert.match(stderr, /declared write set has unmatched field 'Status'/);
+});
+
+test('rejects partial proof coverage for a multi-field mutation', () => {
+    const workspace = materializeLifecycle('mutation-field-ledger-partial-proof');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        /^\| Receive \| Notes \|.*\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected partial multi-field proof to fail');
+    assert.match(stderr, /Missing mutation field evidence for 'Receive \/ Notes'/);
+});
+
+test('bounds unsupported SubmitForm and connector mutations without claiming static success', () => {
+    for (const [name, formula] of [
+        ['submit-form', 'SubmitForm(frmInventory)'],
+        ['connector', 'InventoryConnector.UpdateRecord(cmbAdjustItem.Selected.ID)'],
+    ]) {
+        const workspace = materializeLifecycle(`mutation-field-ledger-${name}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            /OnSelect: =Set\(varLastOperation, "Receive"\);[^\r\n]+/,
+            `OnSelect: =${formula}`));
+        rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replaceAll(
+            /btnReceive\.OnSelect: =Set\(varLastOperation, "Receive"\);[^|<\r\n]+/g,
+            `btnReceive.OnSelect: =${formula}`));
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected unsupported ${name} mutation to be bounded`);
+        assert.match(
+            stderr,
+            /Static mutation field-parity validation cannot prove runtime success.*Runtime evaluation: NOT RUN/);
+    }
+});
+
+test('keeps standalone creates valid when no continuation contract is declared', () => {
+    const workspace = materializeLifecycle('continuation-not-applicable');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected continuation N/A to preserve the existing fixture.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /runtime evaluation NOT RUN/);
+});
+
+test('accepts returned-ID delete continuation with clearing and absence proof', () => {
+    const workspace = materializeContinuation('continuation-delete-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected returned-ID delete continuation to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+    assert.match(stdout, /runtime evaluation NOT RUN/);
+});
+
+test('accepts a plan-declared state-driven surface with an equivalent visibility predicate', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected state-driven surface fixture to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('accepts a persistent sibling label inside the same declared state-driven surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-label-pass');
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected same-surface sibling label to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('rejects a fabricated shared region for a same-surface sibling label', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-wrong-region');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        '| inpEditorValue | lblEditorValue.Text | conItemEditor |',
+        '| inpEditorValue | lblEditorValue.Text | Screen1 |'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected fabricated field-region evidence to fail');
+    assert.match(stderr, /must share the same reachable field layout region/);
+});
+
+test('rejects labels with their own false or transient visibility predicate', () => {
+    for (const [name, predicate] of [
+        ['false', '=false'],
+        ['transient', '=varTransientLabelState'],
+    ]) {
+        const workspace = materializeStateDrivenSurface(`state-driven-label-${name}`);
+        rewriteScreen(workspace, (yaml) => yaml.replace(
+            '                            Text: ="Item name"',
+            '                            Text: ="Item name"\n' +
+            `                            Visible: ${predicate}`));
+        const { code, stderr } = runValidator(workspace);
+        assert.notStrictEqual(code, 0, `expected independently ${name} label to fail`);
+        assert.match(
+            stderr,
+            /must name a persistent visible label binding/);
+    }
+});
+
+test('rejects a human-readable label outside the input surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-unrelated');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '            - btnCreate:',
+        '            - lblOutside:\n' +
+        '                Control: Classic/Label\n' +
+        '                Properties:\n' +
+        '                    Text: ="Item name"\n' +
+        '            - btnCreate:'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        'lblEditorValue.Text',
+        'lblOutside.Text'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected unrelated label to fail');
+    assert.match(stderr, /must share the same reachable field layout region/);
+});
+
+test('rejects a label nested under the input instead of a sibling label', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-input-child');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                            HintText: ="Enter a value"',
+        '                            HintText: ="Enter a value"\n' +
+        '                        Children:\n' +
+        '                            - lblNestedValue:\n' +
+        '                                Control: Classic/Label\n' +
+        '                                Properties:\n' +
+        '                                    Text: ="Item name"'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        'lblEditorValue.Text',
+        'lblNestedValue.Text'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected input-child label to fail');
+    assert.match(stderr, /must share the same reachable field layout region/);
+});
+
+test('does not accept placeholder metadata without sibling label evidence', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-placeholder-only');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        /^\| inpEditorValue \|.*\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected placeholder-only input metadata to fail');
+    assert.match(stderr, /AccessibleLabel and HintText do not count/);
+});
+
+test('does not exempt labels under an undeclared conditional surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-label-undeclared-surface');
+    rewriteArtifact(workspace, 'canvas-app-plan.md', (text) => text.replace(
+        '`conItemEditor.Visible=varEditorMode = "Edit"` and title reflects edit state',
+        'title reflects edit state'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => {
+        const start = text.indexOf('## State-Driven Surface Visibility Evidence');
+        const end = text.indexOf('## Data Entry Label Evidence');
+        assert.ok(start >= 0 && end > start, 'expected visibility evidence section');
+        return text.slice(0, start) + text.slice(end);
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected undeclared conditional surface label to fail');
+    assert.match(stderr, /must name a persistent visible label binding/);
+});
+
+test('rejects missing acceptance evidence for a plan-declared state-driven surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-missing-evidence');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => {
+        const start = text.indexOf('## State-Driven Surface Visibility Evidence');
+        const end = text.indexOf('## Continuation Evidence');
+        assert.ok(start >= 0 && end > start, 'expected surface visibility evidence section');
+        return text.slice(0, start) + text.slice(end);
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing surface visibility evidence to fail');
+    assert.match(
+        stderr,
+        /Missing acceptance section '## State-Driven Surface Visibility Evidence'/);
+});
+
+test('rejects a retained-shape surface declaration when final YAML omits Visible', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-missing-yaml');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        /^ {20}Visible: =\(varEditorMode = "Edit"\) = true\r?\n/m,
+        ''));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected missing surface Visible property to fail');
+    assert.match(
+        stderr,
+        /Plan-declared state-driven surface 'conItemEditor' has no Visible property in final app YAML/);
+});
+
+test('rejects YAML and evidence using a different state-driven surface predicate than the plan', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-wrong-predicate');
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text.replaceAll(
+            '=(varEditorMode = "Edit") = true',
+            '=varEditorMode = "Create"'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected wrong surface visibility predicate to fail');
+    assert.match(
+        stderr,
+        /YAML visibility predicate is not the same as or provably equivalent to the plan predicate/);
+});
+
+test('rejects child-only visibility as evidence for a plan-declared surface', () => {
+    const workspace = materializeStateDrivenSurface('state-driven-surface-child-only');
+    rewriteScreen(workspace, (yaml) => yaml
+        .replace('                    Visible: =(varEditorMode = "Edit") = true\n', '')
+        .replace(
+            '                            Text: ="Editor"',
+            '                            Text: ="Editor"\n' +
+            '                            Visible: =varEditorMode = "Edit"'));
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => text.replace(
+        'conItemEditor.Visible: =(varEditorMode = "Edit") = true',
+        'lblEditorTitle.Visible: =varEditorMode = "Edit"'));
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected child-only visibility evidence to fail');
+    assert.match(
+        stderr,
+        /must bind the declared surface itself as 'conItemEditor.Visible'/);
+});
+
+test('does not require visibility evidence for an always-visible surface absent from the plan', () => {
+    const workspace = materializeContinuation('always-visible-surface-not-declared');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '        Children:',
+        '        Children:\n' +
+        '            - conAlwaysVisible:\n' +
+        '                Control: GroupContainer\n' +
+        '                Properties:\n' +
+        '                    Visible: =true'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected undeclared always-visible surface to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('does not infer a visibility contract from navigation-based disclosure', () => {
+    const workspace = materializeContinuation('navigation-disclosure-not-visibility');
+    rewriteScreen(workspace, (yaml) => yaml.replace(
+        '                    Text: ="Create"',
+        '                    Text: ="Create"\n' +
+        '                    OnChange: =Navigate(Screen2)'));
+    const { code, stdout, stderr } = runValidator(workspace);
+    assert.strictEqual(
+        code,
+        0,
+        `expected navigation disclosure without a visibility plan row to pass.\nstdout:\n${stdout}\nstderr:\n${stderr}`);
+});
+
+test('requires continuation evidence only when the plan declares a successor', () => {
+    const workspace = materializeContinuation('continuation-missing-evidence');
+    rewriteArtifact(workspace, 'canvas-app-acceptance.md', (text) => {
+        const start = text.indexOf('## Continuation Evidence');
+        const end = text.indexOf('## Functional Test Matrix Results');
+        assert.ok(start >= 0 && end > start, 'expected continuation evidence section');
+        return text.slice(0, start) + text.slice(end);
+    });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected declared continuation without evidence to fail');
+    assert.match(stderr, /Missing acceptance section '## Continuation Evidence'/);
+});
+
+test('rejects a returned continuation ID recovered by display name', () => {
+    const workspace = materializeContinuation('continuation-create-rediscovery');
+    const returnedCreate = 'Patch(colItems, Defaults(colItems), {Name: "Created"})';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(returnedCreate, 'LookUp(colItems, Name = "Created")'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected create rediscovery to fail');
+    assert.match(
+        stderr,
+        /returned stable ID must be assigned directly from the record returned by its create Patch\/Collect/);
+});
+
+test('rejects downstream continuation rediscovery by display name', () => {
+    const workspace = materializeContinuation('continuation-target-rediscovery');
+    const exactTarget =
+        'LookUp(colItems, ID = varContinuationId)); Remove(colItems, varDeleteSnapshot)';
+    const rediscoveredTarget =
+        'LookUp(colItems, Name = "Created")); Remove(colItems, varDeleteSnapshot)';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(exactTarget, rediscoveredTarget));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected manual downstream rediscovery to fail');
+    assert.match(stderr, /manually rediscovers the created record/);
+});
+
+test('rejects downstream continuation rediscovery by list position', () => {
+    const workspace = materializeContinuation('continuation-target-list-position');
+    const exactTarget =
+        'LookUp(colItems, ID = varContinuationId)); Remove(colItems, varDeleteSnapshot)';
+    const positionalTarget =
+        'First(colItems)); Remove(colItems, varDeleteSnapshot)';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(exactTarget, positionalTarget));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected positional downstream rediscovery to fail');
+    assert.match(stderr, /manually rediscovers the created record/);
+});
+
+test('rejects continuation evidence bound to a different event than the plan', () => {
+    const workspace = materializeContinuation('continuation-plan-event-mismatch');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-plan.md',
+        '## Continuation Contracts',
+        'Create item',
+        (cells) => {
+            cells[2] = 'Delete item / btnOther.OnSelect';
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mismatched declared continuation event to fail');
+    assert.match(stderr, /downstream evidence must use declared event 'btnOther.OnSelect'/);
+});
+
+test('rejects continuation completion that leaves the returned ID set', () => {
+    const workspace = materializeContinuation('continuation-missing-success-id-clear');
+    const clearId = ' Set(varContinuationId, Blank());';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) => text.replaceAll(
+            `Remove(colItems, varDeleteSnapshot);${clearId}`,
+            'Remove(colItems, varDeleteSnapshot);'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected uncleared successful continuation ID to fail');
+    assert.match(stderr, /successful completion must clear continuation ID 'varContinuationId'/);
+});
+
+test('rejects cancellation that does not clear continuation mode', () => {
+    const workspace = materializeContinuation('continuation-missing-cancel-mode-clear');
+    const cancel =
+        'Set(varContinuationId, Blank()); Set(varContinuationMode, Blank())';
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(cancel, 'Set(varContinuationId, Blank())'));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected uncleared cancellation mode to fail');
+    assert.match(stderr, /must set a continuation mode during create and clear it on both/);
+});
+
+test('rejects mutating continuation cancellation', () => {
+    const workspace = materializeContinuation('continuation-mutating-cancel');
+    const cancel = 'Set(varContinuationId, Blank()); Set(varContinuationMode, Blank())';
+    const mutatingCancel =
+        'RemoveIf(colItems, ID = varContinuationId); ' + cancel;
+    for (const file of ['Screen1.pa.yaml', 'canvas-app-acceptance.md']) {
+        rewriteArtifact(workspace, file, (text) =>
+            text.replaceAll(`OnSelect: =${cancel}`, `OnSelect: =${mutatingCancel}`));
+    }
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected mutating cancellation to fail');
+    assert.match(stderr, /cancellation clear must not mutate data/);
+});
+
+test('rejects delete continuation without a same-ID snapshot receipt', () => {
+    const workspace = materializeContinuation('continuation-delete-missing-receipt');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Continuation Evidence',
+        'Create item',
+        (cells) => {
+            cells[3] = cells[3]
+                .split('<br>')
+                .filter((binding) => !binding.includes('lblDeleteReceipt'))
+                .join('<br>');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected delete without snapshot receipt to fail');
+    assert.match(stderr, /delete needs a receipt bound to the same-ID deletion snapshot/);
+});
+
+test('rejects delete continuation missing destination absence proof', () => {
+    const workspace = materializeContinuation('continuation-delete-missing-absence');
+    rewriteTableRow(
+        workspace,
+        'canvas-app-acceptance.md',
+        '## Continuation Evidence',
+        'Create item',
+        (cells) => {
+            cells[3] = cells[3]
+                .split('<br>')
+                .filter((binding) => !binding.includes('lblDestinationAbsent'))
+                .join('<br>');
+            return cells;
+        });
+    const { code, stderr } = runValidator(workspace);
+    assert.notStrictEqual(code, 0, 'expected incomplete delete absence proof to fail');
+    assert.match(stderr, /requires exact same-ID canonical and destination absence proof bindings/);
 });
 
 test('accepts one directional arithmetic field in a multi-field Patch record', () => {

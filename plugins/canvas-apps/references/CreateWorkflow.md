@@ -66,6 +66,14 @@ Otherwise, wait for user approval. Revise and re-present if requested.
 
 ## 4. Invoke the Planner
 
+Before delegation, use the top-level skill's MCP connection to call `list_controls`,
+`list_apis`, and `list_data_sources`; call `describe_control` for every control type in
+the approved plan; and retrieve details only for APIs and data sources the plan uses.
+For Canvas or Code Components, make their `describe_control` calls last so the packet
+contains the freshest Studio snapshot. Preserve the exact results as the discovery
+packet. Do not delegate these calls: task agents do not reliably inherit the configured
+MCP connection.
+
 Invoke the `canvas-app-planner` agent with `Task` and:
 
 ```text
@@ -77,13 +85,16 @@ Plugin root: `${PLUGIN_ROOT}`
 Requirements: [user requirements]
 Approved plan: [full approved plan]
 Target users and device: [stated or inferred]
+Discovery packet: [complete results gathered above]
 ```
 
 The planner discovers resources, writes `[working directory]/App.pa.yaml`, the plan index, shared plan,
 and one screen brief per dispatch row. It does not redesign the approved plan.
 
-If it returns `Status: Tooling Blocked`, apply its complete inline artifact payloads
-verbatim as required by the skill before entering Planned Build Handoff.
+If it returns `Status: Discovery Packet Blocked`, gather the named missing result in this
+top-level context and re-invoke it with the completed packet. If writing is blocked, apply
+its complete inline artifact payloads verbatim as required by the skill before entering
+Planned Build Handoff.
 
 Wait for the planner to finish, then return to **Planned Build Handoff** in the
 `canvas-app` skill.

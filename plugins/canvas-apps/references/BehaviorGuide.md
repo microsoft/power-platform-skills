@@ -123,6 +123,68 @@ Given/When/Then scenarios.
   expected new value/state, and actual persisted new value/state. The destination observer
   must agree with that receipt.
 
+## Canonical mutation and evidence contracts
+
+Apply these contracts to every create, edit, delete, relationship change, approval, and
+state transition. The lifecycle, field-ledger, and continuation contracts below generalize
+the directional rules above to all mutations. The plan and acceptance artifact use additive
+ledgers so existing Action Contract columns remain compatible.
+
+### Mutation lifecycle evidence
+
+- Capture a **mutation receipt** from the operation result (`Patch` result,
+  `Form.LastSubmit`, connector response), a fresh canonical-source lookup by returned
+  stable ID, or a pre-delete snapshot. The receipt names the action and stable ID.
+- Name the **canonical source** that owns the post-state and the **requested destination**
+  where the user expects to use or inspect it after the mutation, such as a list, detail,
+  relationship view, review queue, or status board. The receipt, canonical observer, and
+  destination observer must all refer to the same stable ID.
+- When canonical source and destination read the same live source, state that no
+  synchronization step is needed. When they differ because the destination uses a cache,
+  projection, related collection, or external query, name the successful-path
+  refresh/requery/update that synchronizes it before evidence is shown.
+- When the requested destination can contain multiple records, name the focus mechanism
+  that selects, filters, highlights, or opens the returned stable ID. Focus supplements
+  the receipt; it does not replace it and must not match by display text or list position.
+- Keep success-only synchronization, focus, navigation, and evidence after the mutation
+  succeeds. A failed or cancelled operation must not expose a success receipt or move the
+  user to a destination that implies success.
+
+### Changed/preserved field ledger
+
+- For each mutation, maintain a field ledger that classifies relevant fields as
+  **Changed** or **Preserved**. Include every field/status written by the handler and every
+  user-visible or lifecycle-significant field that the operation must retain. For delete,
+  record existence as Changed and bind its proof to the deletion snapshot plus canonical
+  absence observer.
+- A Changed row names the input or transition expression, canonical write target, and
+  receipt proof binding. Every changed field must appear in both the Action Contract write
+  set and proof set; every write-set field must have exactly one readable proof binding.
+- A Preserved row names its canonical pre-state source and preservation mechanism: omit it
+  from a partial update, or carry forward that exact canonical value. Do not repopulate a
+  preserved field from a control default, stale selection, display text, or parallel
+  collection. Name the post-state observer that demonstrates preservation.
+- The ledger is a contract, not a second mutation schema. It expands the existing
+  write-set/proof-set parity rule without changing the meaning of either set.
+
+### Conditional stable-ID continuation
+
+- Include continuation state only when a successful create is intentionally used by a
+  later edit, delete, relationship, approval, or state-transition action. Do not add a
+  continuation contract for create-only flows or ordinary navigation.
+- Capture the created record's returned stable ID and bind the named continuation action
+  directly to that ID. The later mutation, its receipt, canonical observer, and requested
+  destination must retain the same identity; never recover it from a display name, current
+  list position, or implicit default selection.
+- Clear continuation identity and mode after the downstream action completes successfully
+  or the user cancels it. A failed downstream mutation may retain the ID for retry, but
+  must not claim completion or clear the context as if it succeeded.
+
+These contracts can be traced statically through final YAML, but static traceability does
+not prove that controls rendered, events fired, external writes succeeded, synchronization
+completed, or focus moved at runtime. Keep acceptance labeled
+`Runtime evaluation: NOT RUN` until those paths are actually executed in the running app.
+
 ## Mutation receipt contract
 
 - Reserve a compact result card, banner, or detail region in the action screen's initial viewport. Hide it until a mutation succeeds.
