@@ -13,13 +13,14 @@ test('adds appmodule (80) with required components', () => {
   assert.match(scriptSrc, /addComponent\([^)]*APPMODULE_COMPONENT_TYPE,\s*true\)/);
 });
 
-test('adds connection references by confirmed component type', () => {
+test('discovers connection-reference component type from environment metadata', () => {
   assert.match(scriptSrc, /connectionreferences\?\$filter=connectionreferencelogicalname/);
-  assert.match(scriptSrc, /CONNECTION_REFERENCE_COMPONENT_TYPE\s*=\s*10158/);
+  assert.match(scriptSrc, /EntityDefinitions\(LogicalName=/);
+  assert.match(scriptSrc, /CONNECTION_REFERENCE_LOGICAL_NAME\s*=\s*'connectionreference'/);
 });
 
-test('adds the GenPage uxagentproject explicitly (type 10372)', () => {
-  assert.match(scriptSrc, /UXAGENTPROJECT_COMPONENT_TYPE\s*=\s*10372/);
+test('discovers the GenPage component type from environment metadata', () => {
+  assert.match(scriptSrc, /UXAGENTPROJECT_LOGICAL_NAME\s*=\s*'uxagentproject'/);
   assert.match(scriptSrc, /flags\['page-ids'\]/);
 });
 
@@ -38,7 +39,17 @@ test('missing args exits 1 with usage', () => {
 
 const { loadCli } = require('./helpers/cli-harness.js');
 
-function harness({ argv, refLookup = () => ({ status: 200, data: { value: [{ connectionreferenceid: 'cr-1' }] } }) }) {
+function defaultLookup(requestPath) {
+  if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) {
+    return { status: 200, data: { ObjectTypeCode: 10372 } };
+  }
+  if (requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")) {
+    return { status: 200, data: { ObjectTypeCode: 10158 } };
+  }
+  return { status: 200, data: { value: [{ connectionreferenceid: 'cr-1' }] } };
+}
+
+function harness({ argv, refLookup = defaultLookup }) {
   const calls = [];
   const emitted = [];
   const authStub = {
@@ -64,6 +75,7 @@ test('packages appmodule, each page, and each connection reference with the righ
   const { cli, calls, emitted } = harness({
     argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1,p2', '--connection-refs', 'new_sp'],
   });
+
   await cli.main();
 
   const adds = calls.filter((c) => c.path === 'AddSolutionComponent');
@@ -84,6 +96,27 @@ test('packages appmodule, each page, and each connection reference with the righ
     ['appmodule', 'uxagentproject', 'uxagentproject', 'connectionreference']);
 });
 
+test('discovers environment-specific component types for GenPages and connection references', async () => {
+  const { cli, calls } = harness({
+    argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1', '--connection-refs', 'new_sp'],
+    refLookup: (requestPath) => {
+      if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) {
+        return { status: 200, data: { ObjectTypeCode: 10380 } };
+      }
+      if (requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")) {
+        return { status: 200, data: { ObjectTypeCode: 10162 } };
+      }
+      return { status: 200, data: { value: [{ connectionreferenceid: 'cr-1' }] } };
+    },
+  });
+
+  await cli.main();
+
+  const adds = calls.filter((c) => c.path === 'AddSolutionComponent');
+  assert.equal(adds[1].body.ComponentType, 10380);
+  assert.equal(adds[2].body.ComponentType, 10162);
+});
+
 test('the appmodule is packaged BEFORE any page or connection reference', async () => {
   // Order is load-bearing: adding a uxagentproject to a solution the app is not yet in produces a
   // solution whose page has no owning app.
@@ -97,7 +130,10 @@ test('the appmodule is packaged BEFORE any page or connection reference', async 
 test('a connection reference that does not exist fails the run instead of packaging a partial solution', async () => {
   const { cli, emitted } = harness({
     argv: [ENV, 'sol', 'app-1', '--connection-refs', 'new_missing'],
-    refLookup: () => ({ status: 200, data: { value: [] } }),
+    refLookup: (requestPath) =>
+      requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")
+        ? { status: 200, data: { ObjectTypeCode: 10158 } }
+        : { status: 200, data: { value: [] } },
   });
   await cli.main();
   assert.equal(emitted[0].ok, false);
@@ -108,7 +144,13 @@ test('a connection reference logical name with a quote is OData-escaped, not inj
   const seen = [];
   const { cli } = harness({
     argv: [ENV, 'sol', 'app-1', '--connection-refs', "new_o'brien"],
-    refLookup: (p) => { seen.push(p); return { status: 200, data: { value: [{ connectionreferenceid: 'cr-9' }] } }; },
+    refLookup: (p) => {
+      if (p.includes("EntityDefinitions(LogicalName='connectionreference')")) {
+        return { status: 200, data: { ObjectTypeCode: 10158 } };
+      }
+      seen.push(p);
+      return { status: 200, data: { value: [{ connectionreferenceid: 'cr-9' }] } };
+    },
   });
   await cli.main();
   // OData escapes a single quote by DOUBLING it; an unescaped quote would terminate the literal
@@ -119,13 +161,14 @@ test('a connection reference logical name with a quote is OData-escaped, not inj
 test('no --connection-refs packages the app and pages only', async () => {
   const { cli, calls, emitted } = harness({ argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1'] });
   await cli.main();
-  assert.equal(calls.filter((c) => c.method === 'GET').length, 0, 'no connection-reference lookup');
+  assert.equal(calls.filter((c) => c.method === 'GET').length, 1, 'only the page component-type lookup runs');
   assert.deepEqual(emitted[0].payload.added.map((a) => a.type), ['appmodule', 'uxagentproject']);
 });
 
 test('a failing AddSolutionComponent surfaces as a failure, not a silent partial success', async () => {
   const calls = [];
   const emitted = [];
+  let addCalls = 0;
   const authStub = {
     parseArgs: require('../lib/dataverse-auth.js').parseArgs,
     validateFlags: require('../lib/dataverse-auth.js').validateFlags,
@@ -135,8 +178,10 @@ test('a failing AddSolutionComponent surfaces as a failure, not a silent partial
     emitResult: (ok, payload) => { emitted.push({ ok, payload }); },
     dataverseRequest: async (envUrl, method, p, body) => {
       calls.push({ method, p, body });
+      if (method === 'GET') return { status: 200, data: { ObjectTypeCode: 10372 } };
       // Fail on the SECOND add (the page), after the app already succeeded.
-      return calls.length === 2 ? { status: 400, data: { error: { message: 'bad' } } } : { status: 204, data: {} };
+      addCalls += 1;
+      return addCalls === 2 ? { status: 400, data: { error: { message: 'bad' } } } : { status: 204, data: {} };
     },
   };
   const cli = loadCli(scriptPath, {
@@ -145,6 +190,11 @@ test('a failing AddSolutionComponent surfaces as a failure, not a silent partial
   });
   await cli.main();
   assert.equal(emitted[0].ok, false, 'a mid-sequence failure must not report ok:true');
+  assert.deepEqual(
+    calls.filter((call) => call.p === 'AddSolutionComponent').map((call) => call.body.ComponentType),
+    [80, 10372],
+    'the app add succeeds before the page add fails',
+  );
 });
 
 test('--connection-refs while the rollback switch is off exits 3 before any mutation', () => {
@@ -179,16 +229,15 @@ test('connectionRefsToAdd drops refs only when the switch is off', () => {
   assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], false), []);
 });
 
-test('the live-verified component type codes are pinned', () => {
+test('the stable app component type and dynamic entity names are pinned', () => {
   const {
     APPMODULE_COMPONENT_TYPE,
-    UXAGENTPROJECT_COMPONENT_TYPE,
-    CONNECTION_REFERENCE_COMPONENT_TYPE,
+    UXAGENTPROJECT_LOGICAL_NAME,
+    CONNECTION_REFERENCE_LOGICAL_NAME,
     escapeODataString,
   } = require(scriptPath);
   assert.equal(APPMODULE_COMPONENT_TYPE, 80);
-  assert.equal(UXAGENTPROJECT_COMPONENT_TYPE, 10372);
-  // NOT 371 (msdyn_Connector) — that value fails with "entity ... not found in MetadataCache".
-  assert.equal(CONNECTION_REFERENCE_COMPONENT_TYPE, 10158);
+  assert.equal(UXAGENTPROJECT_LOGICAL_NAME, 'uxagentproject');
+  assert.equal(CONNECTION_REFERENCE_LOGICAL_NAME, 'connectionreference');
   assert.equal(escapeODataString("a'b'c"), "a''b''c");
 });
