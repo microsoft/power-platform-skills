@@ -58,6 +58,29 @@ test('a role holding every declared privilege at the declared depth passes', () 
   assert.deepStrictEqual(r, { ok: true, missing: [] });
 });
 
+// The structural version of the bug this catches. `appendTo` was keyed in ACCESS_TYPE with its
+// camelCase App Spec spelling while the lookup lowercases, so it resolved to `undefined` and every
+// declared appendTo privilege was reported as "the table exposes no such privilege" — a FALSE
+// FAILURE on a correctly granted role, which is worse than no check at all.
+//
+// Driven from the validator's OWN allow-list rather than a hand-written list: any access token the
+// App Spec starts accepting is covered automatically, so the next multi-word token cannot repeat
+// this. A hand-listed test would have had to be remembered, and this one was not.
+test('EVERY access token the App Spec accepts resolves through ACCESS_TYPE (casing included)', () => {
+  const { ACCESS_LEVELS } = require('../lib/app-spec.js');
+  const tokens = [...ACCESS_LEVELS];
+  assert.ok(tokens.length >= 8, `expected the full access-level set, got ${tokens.length}`);
+  // One table exposing one privilege per access token, with the PrivilegeType spelling Dataverse
+  // returns — which is the capitalized token, i.e. exactly what ACCESS_TYPE must map to.
+  const typeFor = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  const privileges = new Map([['msdyn_workorder', tokens.map((t) => ({ Name: `prv${typeFor(t)}Workorder`, PrivilegeId: `wo-${t.toLowerCase()}`, PrivilegeType: typeFor(t) }))]]);
+  const held = new Map(tokens.map((t) => [`wo-${t.toLowerCase()}`, 'Global']));
+  const declared = tokens.map((t) => ({ entity: 'msdyn_workorder', access: t, scope: 'organization' }));
+  const r = compareRolePrivileges(declared, privileges, held);
+  assert.deepStrictEqual(r, { ok: true, missing: [] },
+    `these tokens did not resolve: ${r.missing.map((m) => m.access).join(', ')}`);
+});
+
 // SUBSET semantics: a deeper grant satisfies a shallower declaration. Equality would false-fail on
 // the builder's own max-scope union and on shared Dataverse privileges.
 test('a DEEPER grant than declared still passes', () => {

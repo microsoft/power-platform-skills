@@ -3,12 +3,17 @@
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 // Quote an arg for a Windows/POSIX shell command line (needed because pac resolves as pac.cmd on
 // Windows, which requires shell:true — and shell:true does not quote an args array). Embedded
-// newlines terminate the command line (pac then sees a truncated command and dumps its help), so
-// collapse them to spaces first — downloaded page prompts are multi-line ("Conversation with N
-// prompts:\r\n1. …\r\n2. …") and would otherwise break the upload on an edit-rebuild.
+// newlines terminate the Windows command line (pac then sees a truncated command and dumps its
+// help), so collapse them to spaces first. This is now purely a DEFENSIVE net for whatever args
+// still flow inline — e.g. a page --name; it is NOT how multi-line prompts survive. upload() passes
+// the prompt and agent-message to pac BY FILE (--prompt-file/--agent-message-file) precisely because
+// collapsing THEIR newlines was lossy (a downloaded prompt is a multi-line conversation transcript).
 function quoteArg(a) {
   const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
   const q = s.replace(/"/g, '""').replace(/%/g, '"^%"');
@@ -20,10 +25,11 @@ function quoteArg(a) {
 // Build the spawnSync invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
 // which requires a shell; shell:true ignores an args array, so pass a single cmd-quoted command
 // line ("" escapes an embedded quote). POSIX: spawn pac directly with the args array (no shell) so
-// embedded quotes and other shell metacharacters in prompts round-trip verbatim instead of being
-// mangled by cmd-style quoting. Embedded newlines are collapsed to spaces on every arg first (they
-// truncate the command line on Windows and confuse pac's parsing) — downloaded page prompts are
-// multi-line and would otherwise break the upload on an edit-rebuild.
+// embedded quotes and other shell metacharacters round-trip verbatim instead of being mangled by
+// cmd-style quoting. Embedded newlines are still collapsed to spaces on every arg — a DEFENSIVE net
+// for any arg that still flows inline (e.g. a page --name), since a newline truncates the Windows
+// command line. It is no longer relied on for prompts: upload() passes prompt/agent-message via file
+// precisely because collapsing THEIR newlines was lossy for multi-line transcripts.
 function buildPacInvocation(args, platform = process.platform) {
   const clean = args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
   if (platform === 'win32') {
@@ -209,76 +215,105 @@ function makeGenpageCli(env, deps = {}) {
     //   newIds.length > 1   → THROW (ambiguous; concurrent creates or noise — never guess)
     // NO name matching anywhere in recovery (names are unreliable — app-scoped list misses
     // pre-sitemap pages; env-wide names drift with sitemap titles). Any enumerateEnv failure → THROW.
-    async upload({ appId, pageId, codeFile, name, prompt, agentMessage, dataSources }) {
-      const once = async (pid) => {
-        const args = ['model', 'genpage', 'upload', '--environment', env, '--app-id', appId, '--code-file', codeFile];
-        if (pid) args.push('--page-id', pid);
-        if (name) args.push('--name', name);
-        // pac requires BOTH --prompt and --agent-message for a new page.
-        args.push('--prompt', prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim());
-        args.push('--agent-message', agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by app-builder');
-        if (dataSources && dataSources.length) args.push('--data-sources', dataSources.join(','));
-        return run(args);
-      };
-      let pid = pageId;
-      let lastErr = '';
-      // Snapshot taken once (lazily on the first CREATE attempt) so the before/after diff is anchored
-      // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
-      // safely attribute a later uncertain result — halt to prevent a blind duplicate.
-      let beforeIds = null;
-      for (let i = 0; i < attempts; i += 1) {
-        if (!pid && name && beforeIds === null) {
-          const before = await enumerateEnv();
-          if (!before.ok) {
-            throw new Error(
-              `pac genpage upload for '${name}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
-            );
-          }
-          beforeIds = new Set(before.ids);
-        }
-        const r = await once(pid);
-        if (r.status === 0) {
-          const id = parsePageId(r.stdout);
-          if (id) {
-            // I7 guard: when performing an UPDATE (pid is set — whether caller-provided or adopted after
-            // uncertain-CREATE reconciliation), the returned Page ID MUST equal the pid we used. A mismatch
-            // means pac silently operated on a different page — halt rather than let a wrong record persist.
-            // Case-insensitive: PAC can normalize GUID casing across writes.
-            if (pid && id.toLowerCase() !== pid.toLowerCase()) {
+    async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources }) {
+      // pac REQUIRES both a prompt and an agent-message for a new page. Resolve the effective text
+      // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
+      // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
+      // a multi-line conversation transcript ("Conversation with N prompts:\r\n1. …\r\n2. …"); passed
+      // inline it hits the newline-collapsing in quoteArg/buildPacInvocation (a defensive guard so a
+      // stray newline can't truncate the Windows command line) and silently loses every line break on
+      // an edit-rebuild. A file round-trips the text verbatim. See `pac model genpage upload --help`.
+      const promptText = prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim();
+      const agentMessageText = agentMessage && String(agentMessage).trim() ? String(agentMessage) : 'Authored by app-builder';
+      // Write both files ONCE, before the retry loop, into a unique temp dir. mkdtempSync's random
+      // suffix keeps concurrent uploads from colliding on a fixed filename. UTF-8 because prompts carry
+      // non-ASCII (pac reads these back as UTF-8). The try/finally guarantees the dir is removed on
+      // EVERY exit below — the success return, the retry-exhaustion throw, and the mid-loop throws.
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-upload-'));
+      const promptFile = path.join(tmpDir, 'prompt.txt');
+      const agentMessageFile = path.join(tmpDir, 'agent-message.txt');
+      try {
+        fs.writeFileSync(promptFile, promptText, 'utf8');
+        fs.writeFileSync(agentMessageFile, agentMessageText, 'utf8');
+        const once = async (pid) => {
+          const args = ['model', 'genpage', 'upload', '--environment', env, '--app-id', appId, '--code-file', codeFile];
+          if (pid) args.push('--page-id', pid);
+          // Optional pre-compiled JavaScript. When omitted, pac auto-transpiles the TypeScript (the
+          // live-verified path the plugin uses today) — so only add the flag when the caller supplies one.
+          if (compiledCodeFile) args.push('--compiled-code-file', compiledCodeFile);
+          if (name) args.push('--name', name);
+          // pac requires BOTH for a new page; delivered by file (see above) so a multi-line
+          // prompt/agent-message round-trips intact instead of being newline-collapsed.
+          args.push('--prompt-file', promptFile);
+          args.push('--agent-message-file', agentMessageFile);
+          if (dataSources && dataSources.length) args.push('--data-sources', dataSources.join(','));
+          return run(args);
+        };
+        let pid = pageId;
+        let lastErr = '';
+        // Snapshot taken once (lazily on the first CREATE attempt) so the before/after diff is anchored
+        // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
+        // safely attribute a later uncertain result — halt to prevent a blind duplicate.
+        let beforeIds = null;
+        for (let i = 0; i < attempts; i += 1) {
+          if (!pid && name && beforeIds === null) {
+            const before = await enumerateEnv();
+            if (!before.ok) {
               throw new Error(
-                `pac genpage upload for '${name}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
+                `pac genpage upload for '${name}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
               );
             }
-            return { pageId: id };
+            beforeIds = new Set(before.ids);
           }
-          lastErr = `returned no Page ID: ${lastLine(r)}`;
-        } else {
-          lastErr = lastLine(r);
-        }
-        // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
-        // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
-        // lists miss pre-sitemap pages; a page's list "Name" is its sitemap title, not its identity).
-        if (!pid && name) {
-          const after = await enumerateEnv();
-          if (!after.ok) {
-            throw new Error(
-              `pac genpage upload for '${name}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
-            );
-          }
-          const newIds = after.ids.filter((id) => !beforeIds.has(id));
-          if (newIds.length === 1) {
-            pid = newIds[0]; // CREATE landed → adopt; I7 guard verifies returned id on the UPDATE
-          } else if (newIds.length === 0) {
-            // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
+          const r = await once(pid);
+          if (r.status === 0) {
+            const id = parsePageId(r.stdout);
+            if (id) {
+              // I7 guard: when performing an UPDATE (pid is set — whether caller-provided or adopted after
+              // uncertain-CREATE reconciliation), the returned Page ID MUST equal the pid we used. A mismatch
+              // means pac silently operated on a different page — halt rather than let a wrong record persist.
+              // Case-insensitive: PAC can normalize GUID casing across writes.
+              if (pid && id.toLowerCase() !== pid.toLowerCase()) {
+                throw new Error(
+                  `pac genpage upload for '${name}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
+                );
+              }
+              return { pageId: id };
+            }
+            lastErr = `returned no Page ID: ${lastLine(r)}`;
           } else {
-            throw new Error(
-              `pac genpage upload for '${name}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
-            );
+            lastErr = lastLine(r);
           }
+          // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
+          // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
+          // lists miss pre-sitemap pages; a page's list "Name" is its sitemap title, not its identity).
+          if (!pid && name) {
+            const after = await enumerateEnv();
+            if (!after.ok) {
+              throw new Error(
+                `pac genpage upload for '${name}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
+              );
+            }
+            const newIds = after.ids.filter((id) => !beforeIds.has(id));
+            if (newIds.length === 1) {
+              pid = newIds[0]; // CREATE landed → adopt; I7 guard verifies returned id on the UPDATE
+            } else if (newIds.length === 0) {
+              // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
+            } else {
+              throw new Error(
+                `pac genpage upload for '${name}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
+              );
+            }
+          }
+          if (i < attempts - 1) await sleep(500 * (i + 1));
         }
-        if (i < attempts - 1) await sleep(500 * (i + 1));
+        throw new Error(`pac genpage upload failed for '${name}' after ${attempts} attempt(s): ${lastErr}`);
+      } finally {
+        // Best-effort cleanup on EVERY exit path (success return, retry-exhaustion throw, mid-loop
+        // throws). A cleanup failure (e.g. a transient Windows file lock) must NEVER mask the upload's
+        // own error, so swallow it. force:true also ignores an already-removed dir.
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore cleanup errors */ }
       }
-      throw new Error(`pac genpage upload failed for '${name}' after ${attempts} attempt(s): ${lastErr}`);
     },
     list({ appId }) {
       return listPages(appId);

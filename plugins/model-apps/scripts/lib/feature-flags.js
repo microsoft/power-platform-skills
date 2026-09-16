@@ -3,13 +3,18 @@
 
 // Central feature-flag gate for the /genpage skill.
 //
-// WHY: connector support spans three repos that ship on independent cadences —
-// the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
-// authoring control (power-platform-ux), and the maker/admin ECS setting. Until
-// ALL of them are live in PROD, the skill must behave exactly as it did before
-// connectors existed. A committed, default-OFF flag lets us merge the skill code
+// WHY: a GenPage capability typically spans several repos that ship on independent
+// cadences — a pac CLI verb, a host/authoring runtime, and a maker/admin ECS setting.
+// Until ALL of them are live in PROD, the skill must behave exactly as it did before
+// the capability existed. A committed, default-OFF flag lets us merge the skill code
 // ahead of GA and flip it on in a one-line follow-up PR (or per-run via env var)
 // once the dependencies are released — instead of carrying an un-merged branch.
+//
+// A GA flag is flipped to `true` FIRST and removed in a later change, not both at once.
+// Flipping is reversible in one line if the rollout turns out to be incomplete in some
+// tenant; deleting the gate in the same change that enables the feature leaves no way
+// back except a revert. `connectors` is in that window now: GA, shipping `true`, gate
+// retained as a rollback switch.
 //
 // Precedence (highest first), mirroring the telemetry opt-out convention in
 // AGENTS.md where an env var overrides committed config:
@@ -61,7 +66,7 @@ function readFlagsFile(flagsPath) {
 /**
  * Returns whether a named feature flag is enabled.
  *
- * @param {string} flag  Flag name (e.g. 'connectors').
+ * @param {string} flag  Flag name (e.g. 'custom-api').
  * @param {object} [opts]
  * @param {NodeJS.ProcessEnv} [opts.env]  Env source (defaults to process.env).
  * @param {object} [opts.flags]           Pre-loaded flags map (skips file read).
@@ -94,7 +99,7 @@ function isCustomApiEnabled(opts) {
 // metadata (what it enables, what it depends on, how to turn it on).
 const FLAGS = {
   connectors: {
-    status: 'in-progress',
+    status: 'ga',
     summary:
       'GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) ' +
       'and ALM packaging of connection references.',
@@ -140,6 +145,11 @@ const KNOWN_FLAGS = Object.keys(FLAGS);
 // keeps the disabled message and exit code (3 = "feature off", distinct from
 // 1 = runtime/usage error) consistent and prevents drift. `exit`/`write` are
 // injectable for unit testing.
+//
+// connectors is GA and ships ON, so this normally does nothing. It is retained for one
+// release as the rollback path: if the cross-repo dependencies turn out to be incomplete
+// in some tenant, `"connectors": false` restores the previous behaviour in one line
+// rather than requiring a revert.
 function exitIfConnectorsDisabled(opts = {}) {
   const exit = opts.exit || process.exit;
   const write = opts.write || ((s) => process.stderr.write(s));
@@ -151,8 +161,10 @@ function exitIfConnectorsDisabled(opts = {}) {
 }
 
 // Fail-closed gate shared by every Custom API (Dataverse Action/Function) script entry
-// point. Mirrors exitIfConnectorsDisabled so both features gate the same way: exit 3 =
-// "feature off" (distinct from 1 = runtime/usage error). `exit`/`write` are injectable for tests.
+// point: exit 3 = "feature off", distinct from 1 = runtime/usage error, so a caller can tell
+// "not released" from "it broke". Centralizing it (instead of each script inlining the same
+// `if (!isCustomApiEnabled()) exit 3`) keeps the disabled message and exit code consistent and
+// prevents drift. `exit`/`write` are injectable for unit testing.
 function exitIfCustomApiDisabled(opts = {}) {
   const exit = opts.exit || process.exit;
   const write = opts.write || ((s) => process.stderr.write(s));
@@ -202,16 +214,16 @@ function validateFlags(flags) {
 function connectorsDisabledMessage() {
   return (
     'Connector support is disabled (feature flag "connectors" is OFF). ' +
-    'GenPage connectors require the pac CLI connector verbs, the GenUX authoring ' +
-    'control, and the maker/admin setting to all be live in PROD. To enable for a ' +
-    'single run set GENPAGE_ENABLE_CONNECTORS=1, or flip "connectors" to true in ' +
-    'plugins/model-apps/feature-flags.json once the dependencies are released.'
+    'It is GA and ships ON, so this means it was explicitly turned off — either ' +
+    'GENPAGE_ENABLE_CONNECTORS=0 in this environment, or "connectors": false in ' +
+    'plugins/model-apps/feature-flags.json. Set it back to true (or unset the env var) ' +
+    'to re-enable connector authoring.'
   );
 }
 
 // Standard operator-facing message printed when a Custom API entrypoint is invoked while
-// the flag is OFF. Centralized (mirrors connectorsDisabledMessage) so every Custom API
-// script speaks with one voice about why it stopped and how to turn the feature on.
+// the flag is OFF. Centralized so every Custom API script speaks with one voice about why it
+// stopped and how to turn the feature on.
 function customApiDisabledMessage() {
   return (
     'Dataverse Custom API support is disabled (feature flag "custom-api" is OFF). ' +

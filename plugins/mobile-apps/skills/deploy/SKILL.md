@@ -18,11 +18,11 @@ This skill uses the standard 4-step deployment flow for this plugin: check memor
 
 - `expo run:ios` / `expo run:android` — local native compile is the user's choice; run your platform-specific native command directly when ready.
 - OTA updates and store distribution — out of scope for v0.
-- Starting Metro for local dev — run `npm run dev` (= `expo start`) directly.
+- Starting Metro for local dev — created apps use `npm run dev`; template Metro config writes `.powernative` logs for `/debug-app`.
 
 ## Workflow
 
-1. Check memory bank → 2. Build → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
+1. Check memory bank → 1.5 App ID preflight → 2. Build → 2.4 Native package → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
 
 ---
 
@@ -35,6 +35,31 @@ Read `memory-bank.md` from the project root if present. Capture:
 - Current version
 
 If absent, continue — the project may have been created without the plugin. Re-derive env from `power.config.json` if needed.
+
+### Step 1.5 — App ID preflight (first-deploy gate)
+
+Read `power.config.json` **before building anything**:
+
+```bash
+node -e "const c=require('./power.config.json');console.log(c.appId||'MISSING')"
+```
+
+- **Prints a GUID** → normal path. Continue to Step 2.
+- **Prints `MISSING`** (null, absent, or empty) → this is a **first deploy**. Say so plainly *before* doing any work:
+
+  > "⚠️ First deploy detected — `power.config.json` has no `appId` yet. The app ID is minted by the first push, but it is compiled **into** the native bundle at build time. So two full build+push cycles are required. I'll run both; the second is not optional."
+
+  Then run Steps 2 → 2.4 → 2.5 → 3 **twice**. In cycle 2, `npm run build` *and* the Step 2.4 native packaging commands must all re-run — the Hermes bundles from cycle 1 have an empty app ID compiled in. Step 2.5 (offline profile gate) may be skipped on cycle 2 **only if** no schema or profile file changed between the two cycles; if in doubt, re-run it — it is a local, no-network check.
+
+**Why two cycles are unavoidable.** `power-apps push` mints the app ID and writes it back to `power.config.json`, but it refuses to run at all without an existing build — it fails immediately if the configured `buildPath` (`./dist`) is absent. So the ID cannot be minted before the first build, and the first build cannot contain the ID.
+
+**Why this is so easy to miss.** The runtime guard is:
+
+```js
+Platform.OS !== 'web' && !isDevPlayer && !hasConfiguredValue(powerConfig.appId)
+```
+
+Web is **exempt**, and so is Dev Player. The Code App, `npm run dev`, and the browser preview all look perfectly healthy. The failure appears only in the **wrapped native app**, as a full-screen red *"App ID is missing — Push the mobile app to the Power Platform environment, rebuild it, and try again."* That is after a base-package wrap, a signed build, and a device install — the most expensive possible place to discover a one-line config gap.
 
 ### Step 2 — Build
 
@@ -56,7 +81,30 @@ If `package.json` has no `build` script, fall back to:
 npx expo export --platform web
 ```
 
-(That's what the upstream template's `build` script runs.)
+(The current template does not define a `build` script, so this fallback is the normal path for freshly scaffolded apps. Both forms produce the same `dist/` web output.)
+
+**Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: the Metro config returned by `createPowerAppsMetroConfig` (`metro.config.js`) installs a dev-server middleware internally, which appears to hold an open handle — a web *export* should not need a dev server. Note the template itself only calls `createPowerAppsMetroConfig`; the middleware is applied inside `@microsoft/power-apps-native-host`, not in app code. **Not yet root-caused.**
+
+**Do not wait on the process.** Run it detached and poll for the artifact. Per shared-instructions, scratch files stay project-local in `.tmp/` — a fixed `/tmp/` path would collide across concurrent projects, and a stale log there could satisfy the grep below and falsely report success:
+
+```bash
+mkdir -p .tmp
+rm -f .tmp/expo-web-export.log
+npx expo export --platform web > .tmp/expo-web-export.log 2>&1 &
+EXPORT_PID=$!
+for _ in $(seq 1 90); do
+  grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null && break
+  sleep 2
+done
+if ! grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null; then
+  echo "web export did not complete in 180s"; tail -30 .tmp/expo-web-export.log; exit 1
+fi
+test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
+kill "$EXPORT_PID" 2>/dev/null || true
+echo "✓ web export complete (process terminated manually — known hang)"
+```
+
+Treat a completed `dist/` as success even though the process had to be killed. The Step 2.4 native packaging commands are **not** affected — both exit 0 cleanly and stage into `dist/` via a temp dir, so they do not clear the web build.
 
 If the build fails:
 
@@ -65,6 +113,50 @@ If the build fails:
 - **Metro bundler errors** → surface the full stack and STOP.
 
 Verify `dist/` exists with `index.html` before continuing.
+
+### Step 2.4 — Native package (Hermes bundle + customer assets)
+
+**Print before starting:**
+> "→ Compiling the native Hermes bundle and hash-addressed asset package for iOS and Android. No JavaScript is compiled inside the wrap pipeline — it only consumes these prebuilt files. ~1–3 minutes."
+
+**Node version gate (required).** The native export crashes on **Node < 20.19.4** — it hits `util.styleText(['yellow','inverse','bold'], …)`, which older Node rejects, failing the Metro bundle with a cryptic `ERR_INVALID_ARG_VALUE`. Check first:
+
+```bash
+node -e 'const [M,m,p]=process.versions.node.split(".").map(Number); const ok = M>20 || (M===20 && (m>19 || (m===19 && p>=4))); if (!ok) { console.error(`Node ${process.versions.node} is too old; need >= 20.19.4`); process.exit(1); } console.log(`✓ Node ${process.versions.node}`);'
+```
+If it exits non-zero, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the native packaging commands on older Node.
+
+The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript. Produce both platforms:
+
+```bash
+npm run bundle:android
+npm run bundle:ios
+```
+
+Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
+
+- **Android:** `dist/index.android.bundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-android/` (`manifest.json` + `assets/<fileHash>.<type>`)
+- **iOS:** `dist/main.jsbundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-ios/` (`manifest.json` + `assets/<fileHash>.<type>`)
+
+Both platforms are required — the verification below fails if either bundle or either manifest is missing.
+
+These sit alongside `index.html` under the same container SAS, so the wrap pipeline fetches them as siblings — no RP or connector change is required.
+
+**Verify before continuing** — STOP on any failure (never push a web-only build for a native-wrapped app):
+
+```bash
+# Hermes magic bytes on both bundles (expect c61fbc03)
+for f in dist/index.android.bundle.hbc dist/main.jsbundle.hbc; do
+  test -f "$f" || { echo "MISSING $f"; exit 1; }
+  node -e 'const fs=require("fs"),b=Buffer.alloc(4),fd=fs.openSync(process.argv[1],"r");fs.readSync(fd,b,0,4,0);fs.closeSync(fd);process.exit(b.toString("hex")==="c61fbc03"?0:1)' "$f" || { echo "$f is not Hermes bytecode"; exit 1; }
+done
+# both asset manifests present
+test -f dist/powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
+test -f dist/powerapps-customer-assets-ios/manifest.json     || { echo "MISSING ios manifest"; exit 1; }
+echo "✓ native package + asset manifests present"
+```
+
+If a native packaging step fails, surface the error and STOP. If the app renders bundled images/fonts, also confirm each `manifest.json` `assets` array is non-empty (an empty array means the app doesn't `require()` any static asset yet).
 
 ### Step 2.5 — Offline profile coverage gate
 
@@ -139,6 +231,17 @@ npx power-apps push --non-interactive
 
 Capture the app URL from the output if printed.
 
+**First-deploy loop-back.** If Step 1.5 reported `MISSING`, re-read the config now:
+
+```bash
+node -e "const c=require('./power.config.json');console.log(c.appId||'STILL MISSING')"
+```
+
+- **GUID** → the app was registered. **Go back to Step 2 and run Build → 2.4 → 2.5 → Deploy one more time.** The artifacts now sitting in `dist/` (and already uploaded to the blob) still have an empty app ID compiled in; without the second cycle the wrapped app fails on-device. Step 2.5 may be skipped on this second pass **only if** nothing under `.datamodel-manifest.json` / `offline-profile.json` changed since cycle 1.
+- **`STILL MISSING`** → push did not register the app. STOP and report. Do not proceed to wrap.
+
+On the second pass this check is a no-op, and Step 4 runs as normal.
+
 If deploy fails, report the error and STOP — do not retry silently. Common fixes:
 
 | Error | Fix |
@@ -166,7 +269,7 @@ Environment   : <env-name>
 App URL       : <url or "see make.powerapps.com">
 Bundle path   : dist/
 
-Local dev:    npm run dev          (= expo start, QR for native dev clients)
+Local dev:    npm run dev  (writes .powernative logs for /debug-app)
 Re-deploy:    /deploy
 List conns:   /list-connections
 ─────────────────────────────────────────────
@@ -176,18 +279,18 @@ List conns:   /list-connections
 
 ## Local dev (out of scope for this skill — for reference only)
 
-When the user wants to iterate locally, they run **directly**:
+When the user wants normal Expo iteration with portable monitoring, they can run:
 
 ```bash
-npm run dev          # = expo start  →  Metro + QR for native dev clients
+npm run dev          # Metro + QR + .powernative log
 ```
 
-This launches Metro and prints a QR code. They can:
+This launches Metro, prints a QR code, and writes sanitized output to `.powernative/metro-logs/` so `/debug-app` can reattach after a host/session restart. They can:
 
 - Scan the QR with the installed native dev client
-- Press `r` to reload, `j` to open the debugger, `m` for the dev menu
+- Reload from the native dev-client menu
 
-Runtime debugging for this plugin uses `/debug-app` with native dev-client sessions and Metro terminal logs. Do not use React Native Web, browser automation, direct Metro/localhost HTTP probes, or screen-by-screen runtime checks.
+Do not use React Native Web, browser automation, direct Metro/localhost HTTP probes, or screen-by-screen runtime checks.
 
 If they want to compile a native binary locally, they run the platform-specific native command directly. Local native compile and manual device testing are user-owned and are not deployment gates for this skill.
 

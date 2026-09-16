@@ -12,7 +12,7 @@ const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
 const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -275,26 +275,27 @@ async function provisionEntities(input, opts = {}, deps = {}) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs represents a value-less flag as boolean true. These are value-bearing flags, so
-  // coerce bare `--env` / `--input` to missing and let the usage guard produce the same clear error
-  // as an omitted value instead of passing a boolean into auth or path resolution.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const inputArg = (typeof flags.input === 'string' ? flags.input : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  
-  if (!env || !inputArg || flags.input === true) {
-    process.stderr.write(
-      'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]\n'
-    );
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]';
+  // A value-less `--language-code` must never fall through to the org default, and an unknown flag
+  // must never be dropped while swallowing the token after it.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'input', 'apply', 'sample-data', 'language-code', 'languageCode'],
+    needValue: ['env', 'input', 'language-code', 'languageCode'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  // A value-less `--language-code` is a usage error, never a silent fall-through to the org default.
-  const valuelessLang = ['language-code', 'languageCode'].find((k) => flags[k] === true);
-  if (valuelessLang) {
-    process.stderr.write(`✗ --${valuelessLang} requires a value.\n`);
+  const env = flags.env;
+  const inputArg = flags.input || positional[0];
+
+  if (!env || !inputArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
-  
+
   const inputPath = path.resolve(typeof inputArg === 'string' && inputArg.startsWith('@') ? inputArg.slice(1) : inputArg);
   const input = readJsonArg('@' + inputPath);
   

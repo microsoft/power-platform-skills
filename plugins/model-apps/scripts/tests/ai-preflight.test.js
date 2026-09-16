@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { runPreflight } = require('../ai-preflight.js');
+const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 test('runPreflight lists features and produces admin actions for disabled ones', () => {
   const readiness = {
@@ -88,6 +89,7 @@ function loadPreflightCli({ parseResult, readiness, sdkThrows = null }) {
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,
+        validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
       };
     }

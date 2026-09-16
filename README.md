@@ -66,7 +66,7 @@ Create and deploy Power Pages sites using modern development approaches.
 
 Build model-driven Power Apps end to end, and the generative pages that go in them.
 
-**Skills**: `/app-builder` (**Preview**) builds and edits a whole app — tables, relationships, forms,
+**Skills**: `/app-builder` builds and edits a whole app — tables, relationships, forms,
 views, charts, security roles, app + sitemap — from a natural-language intent; `/genpage` builds
 generative pages for an app that already exists. Use either independently — neither requires the other
 
@@ -74,9 +74,17 @@ generative pages for an app that already exists. Use either independently — ne
 
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
 
-Generate interactive MCP App widgets for MCP tools.
+Generate self-contained JavaScript server runtimes, JSON Schema registration metadata,
+and interactive single-file MCP App widgets for codeful MCP tools.
 
-**Stack**: HTML widgets using the MCP Apps protocol
+**Skills**: `/generate-codeful-mcp-tool` creates a named `runTool` server entry point plus
+its description, MCP behavior annotations, input schema, and structured output schema,
+with verified Dataverse access; `/generate-mcp-app-ui` creates an HTML widget that embeds
+its runtime by default for hosts that block public URLs, while retaining an opt-in CDN
+mode. It can consume model-visible content, structured output, and widget-private
+metadata.
+
+**Stack**: JavaScript codeful tools + HTML widgets using the MCP Apps protocol
 
 ### [Code Apps](plugins/code-apps/AGENTS.md) (`plugins/code-apps`)
 
@@ -213,7 +221,7 @@ power-platform-skills/
 │   |   ├── skills/
 │   |   ├── shared/           # Shared references + samples
 │   |   └── github/           # GitHub Copilot instructions
-│   ├── mcp-apps/             # MCP Apps widget generator plugin
+│   ├── mcp-apps/             # MCP codeful tool + widget generator plugin
 │   │   ├── .plugin/
 │   │   │   └── plugin.json
 │   │   ├── references/
@@ -264,6 +272,7 @@ duplicating display/update metadata.
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
 - [Power Pages REST API](https://learn.microsoft.com/en-us/rest/api/power-platform/powerpages/websites)
 - [Generative Pages with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-page-external-tools)
+- [Build Model-Driven Apps with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/model-driven-app-external-tools)
 - [Power Apps Code Apps](https://learn.microsoft.com/power-apps/developer/code-apps/)
 - [PAC CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference)
 

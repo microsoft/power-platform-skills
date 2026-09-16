@@ -19,12 +19,26 @@ const path = require('node:path');
 const NODE20_BIN = process.env.NODE20_BIN || null;
 
 // The plugin test files to run, as repo-relative paths (sorted, stable order).
+//
+// RECURSIVE on purpose. This used to be a flat `readdirSync`, which silently ran zero tests from any
+// `scripts/tests/<subdir>/*.test.js` — the file would be committed, reviewed and green, and never
+// execute. Nothing else in CI would notice, because the runner reports success on the files it did
+// find. Every test file today happens to be top-level, so this changes nothing now; it removes the
+// trap for the first one that is not. `helpers/` holds fixtures, not tests, so the `.test.js` suffix
+// (not the directory) remains the selector.
 function pluginTestFiles(testsDir) {
-  return fs
-    .readdirSync(testsDir)
-    .filter((f) => f.endsWith('.test.js'))
-    .sort()
-    .map((f) => path.join('scripts', 'tests', f));
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.test.js')) out.push(full);
+    }
+  };
+  walk(testsDir);
+  // Paths stay `scripts/tests/...`-prefixed and relative to the PLUGIN root (what the runner spawns
+  // with), and a nested file keeps its subdirectory segment.
+  return out.map((f) => path.join('scripts', 'tests', path.relative(testsDir, f))).sort();
 }
 
 // Resolve the SDK package dir + whether it (and a Node-20 bin dir) are present.
