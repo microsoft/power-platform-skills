@@ -170,6 +170,9 @@ downloads that round-trip Choice columns.
   per form — a second form on the same table may still place the same column.
 - **A download now reports every dashboard tile it drops** instead of discarding it in silence,
   naming the parameter the tile lacks.
+- **An explicit form layout with no tabs, or a tab with no sections, is rejected at author time.** It
+  previously passed the build gate — only the standalone lint caught it — and silently dropped every
+  field the form declared.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544

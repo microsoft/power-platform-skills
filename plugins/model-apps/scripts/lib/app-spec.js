@@ -1195,6 +1195,25 @@ function formSectionsOf(tab) {
 function validateFormLayoutKeys(f, errors) {
   if (!f || !Array.isArray(f.tabs)) return;
   const label = `form '${f.name || f.entity}'`;
+  // An explicit layout has to supply real structure, and this is the gate that decides: the BUILD
+  // runs `validateAppSpec` only — it never calls the standalone lint — so a rule that lives only in
+  // `spec-lint.js` does not stop a deploy.
+  //
+  // MEASURED before this check, all with `validate.ok === true`:
+  //   tabs: []                        -> compiled 0 tabs, 0 sections, 0 bound cells
+  //   tab with sections: []           -> compiled 1 tab,  0 sections, 0 bound cells
+  //   tab with columns: []            -> same
+  //   tab with columns:[{sections:[]}]-> same
+  // Every declared field was silently dropped, because there is nowhere to place one
+  // (`firstSectionRowsPointer` returns ''). `tabs: []` is worse still: with notes enabled the
+  // compiler throws a raw `Cannot read properties of undefined (reading 'columns')` rather than
+  // reporting anything an author can act on.
+  //
+  // `layout: 'explicit'` with no `tabs` key at all is already rejected elsewhere, so only the
+  // present-but-empty shapes are handled here.
+  if (f.tabs.length === 0) {
+    errors.push(`${label}: uses an explicit layout but declares no tabs — add at least one tab with a section, or use layout:'auto'`);
+  }
   const unknown = (where, obj, allowed) => {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
     for (const k of Object.keys(obj)) {
@@ -1327,6 +1346,13 @@ function validateFormLayoutKeys(f, errors) {
       }
     });
     const sections = formSectionsOf(t);
+    // A tab with no section has nowhere to place a field, a sub-grid or a quick-view, so everything
+    // the author declared for it is dropped in silence. Checked against the FLATTENED list, so the
+    // multi-column shape counts too — looking at `t.sections` alone would report every multi-column
+    // tab as empty, which is the same silent disagreement in the other direction.
+    if (sections.length === 0) {
+      errors.push(`${label}: ${where} has no sections — add at least one section with fields, or drop the tab.`);
+    }
     sections.forEach((s, si) => {      const swhere = `${where} section ${s && s.label ? `'${s.label}'` : `#${si + 1}`}`;
       if (!mustBeObject(swhere, s)) return;
       unknown(swhere, s, FORM_SECTION_KEYS);

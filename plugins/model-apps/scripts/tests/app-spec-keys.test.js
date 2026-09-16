@@ -642,6 +642,44 @@ test('form layout: a downloaded spec that names its containers explicitly stays 
     [], 'round-tripping a built app must not be rejected by its own generated names');
 });
 
+// An explicit layout that supplies no structure used to pass `validateAppSpec` — and that is the
+// gate that matters, because `build-model-app.js` runs the validator and never the standalone lint.
+// MEASURED before this check, every one with `validate.ok === true`: `tabs: []` compiled to 0 tabs /
+// 0 sections / 0 bound cells, and a tab with empty `sections`/`columns` compiled to 1 tab and 0
+// sections — every declared field silently dropped. With notes enabled, `tabs: []` did not even
+// fail cleanly: the compiler threw `Cannot read properties of undefined (reading 'columns')`.
+test('form layout: an explicit layout with no place to put a field is rejected', () => {
+  const form = (tabs) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }];
+    s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs }];
+    return s;
+  };
+  const emptyErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /no tabs|has no sections/.test(e));
+
+  assert.strictEqual(emptyErrors(form([])).length, 1, 'tabs: [] declares no structure at all');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', sections: [] }])).length, 1, 'a tab with no sections has nowhere to place a field');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', columns: [] }])).length, 1, 'nor does a tab with no form-columns');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', columns: [{ width: '100%', sections: [] }] }])).length, 1,
+    'nor one whose only form-column is empty');
+
+  // The emptiness test is on the FLATTENED section list, so an empty form-column BESIDE a populated
+  // one is still a legitimate layout — checking `t.sections` alone would have reported every
+  // multi-column tab as empty, the same silent disagreement in the other direction.
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', columns: [
+    { width: '50%', sections: [] },
+    { width: '50%', sections: [{ label: 'S', fields: ['contoso_name'] }] },
+  ] }])), [], 'an empty form-column beside a populated one is allowed');
+
+  // A section with no fields is NOT rejected: a section may legitimately carry only a sub-grid or a
+  // quick-view, neither of which is declared in `fields[]`.
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', sections: [{ label: 'S', fields: [] }] }])), [],
+    'an empty section is legal — it may host a sub-grid or quick-view');
+
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', sections: [{ label: 'S', fields: ['contoso_name'] }] }])), [],
+    'an ordinary layout stays valid');
+});
+
 // The seeder refuses to use a duplicated primary name as `matchOn` (Dataverse could resolve or
 // deduplicate the wrong row). That refusal happens in the sample-data phase — after tables, forms and
 // views are already deployed — so ordinary sample data used to validate clean and then stop the build
