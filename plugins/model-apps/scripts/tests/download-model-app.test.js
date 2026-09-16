@@ -697,6 +697,75 @@ test('readDashboards omits an id-passthrough tile with no TargetEntityType (and 
   assert.strictEqual(warnings.filter((w) => /TargetEntityType/.test(w)).length, 2, `both omissions must be reported; got ${JSON.stringify(warnings)}`);
 });
 
+// The silent-drop hole the two tests above did NOT cover. `chart`/`list` used to be matched with an
+// `&& viewId` guard, so a component of a supported type carrying no ViewId matched no branch at all
+// and vanished with nothing said — and the dashboard-level "no recognizable tiles" warning cannot
+// catch it, because that only fires when EVERY tile fails. Same untraceability as #572, reached from
+// the one direction the omission warnings missed.
+test('readDashboards reports a supported tile dropped for a missing ViewId instead of dropping it silently', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'chart', name: 'NoView', parameters: { TargetEntityType: 'account', VisualizationId: '{22222222-0000-4000-8000-000000000002}' } },
+      { type: 'list', name: 'AlsoNoView', parameters: { TargetEntityType: 'account' } },
+      { type: 'list', name: 'Good', parameters: { TargetEntityType: 'account', ViewId: '{44444444-0000-4000-8000-000000000004}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'list', name: 'Good', entity: 'account', viewId: '44444444-0000-4000-8000-000000000004' },
+  ], 'only the tile carrying a ViewId may be emitted');
+  assert.ok(/NoView/.test(warnings.join('\n')) && /AlsoNoView/.test(warnings.join('\n')),
+    `both ViewId-less tiles must be named; got ${JSON.stringify(warnings)}`);
+  assert.strictEqual(warnings.filter((w) => /ViewId/.test(w)).length, 2, `both omissions must cite ViewId; got ${JSON.stringify(warnings)}`);
+});
+
+// A component missing SEVERAL required parameters must say so once, naming each — reporting only the
+// first would send a maker back for a second round trip to discover the rest.
+test('readDashboards names every missing parameter on one tile in a single warning', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [{ type: 'chart', name: 'Empty', parameters: {} }] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  const tileWarning = warnings.find((w) => /Empty/.test(w));
+  assert.ok(tileWarning, `the tile omission must be reported; got ${JSON.stringify(warnings)}`);
+  for (const param of ['TargetEntityType', 'ViewId', 'VisualizationId']) {
+    assert.ok(tileWarning.includes(param), `'${param}' must be named in "${tileWarning}"`);
+  }
+});
+
+// An unsupported component type is a silent drop too, for the same reason: a dashboard with one good
+// tile never reaches the dashboard-level catch-all.
+test('readDashboards reports a tile type the App Spec cannot express', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'organizationinsights', name: 'Insights', parameters: {} },
+      { type: 'iframe', name: 'NoUrl', parameters: {} },
+      { type: 'list', name: 'Good', parameters: { TargetEntityType: 'account', ViewId: '{44444444-0000-4000-8000-000000000004}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.strictEqual(dashboards[0].tiles.length, 1, 'only the rebuildable tile may be emitted');
+  assert.ok(warnings.some((w) => /Insights/.test(w) && /organizationinsights/.test(w)),
+    `the unsupported type must be named; got ${JSON.stringify(warnings)}`);
+  assert.ok(warnings.some((w) => /NoUrl/.test(w) && /Url/.test(w)),
+    `the iframe missing its Url must be reported; got ${JSON.stringify(warnings)}`);
+});
+
 test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {  const sdk = {
     fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
     queryRecords: async (_set, opts) => {

@@ -63,25 +63,43 @@ async function readDashboards(sdk, app, warn) {
       const p = c.parameters || {};
       const entity = p.TargetEntityType;
       const viewId = strip(p.ViewId);
-      if (c.type === 'chart' && viewId) {
-        // BOTH ids are load-bearing for a chart tile: it renders a visualization OVER a view, so with
-        // no VisualizationId there is nothing to plot. `entity` is equally required by the spec gates
-        // for any id-passthrough tile. Emitting a tile missing either hands back a spec that fails its
-        // own lint — the exact #572 defect class — so report it and omit it rather than shipping a
-        // tile a rebuild cannot honour.
-        const visualizationId = strip(p.VisualizationId);
-        if (visualizationId && entity) tiles.push({ type: 'chart', name: c.name, entity, viewId, visualizationId });
-        else if (typeof warn === 'function') {
-          warn(`dashboard '${name}' chart tile '${c.name || viewId}' carries no ${!entity ? 'TargetEntityType' : 'VisualizationId'}, so it cannot be rebuilt as a chart; it is omitted from dashboards[].`);
-        }
-      } else if (c.type === 'list' && viewId) {
-        if (entity) tiles.push({ type: 'list', name: c.name, entity, viewId });
-        else if (typeof warn === 'function') {
-          warn(`dashboard '${name}' list tile '${c.name || viewId}' carries no TargetEntityType, so it cannot be rebuilt; it is omitted from dashboards[].`);
+      if (c.type === 'chart' || c.type === 'list') {
+        // The two id-passthrough tile shapes, gated together because they share their required
+        // parameters. EVERY one of these ids is load-bearing: a chart renders a visualization OVER a
+        // view, so it needs both ids, and `entity` is required by both spec gates for either shape.
+        // Emitting a tile missing any of them hands back a spec that fails its own lint — the exact
+        // #572 defect class — so name the missing parameter and omit the tile rather than shipping
+        // one a rebuild cannot honour.
+        //
+        // Collected as a LIST rather than reported one-at-a-time so a component missing several
+        // parameters says so once, and — the reason this is not an `&& viewId` guard — so a tile
+        // with no ViewId is reported too. Falling through to the unsupported-type branch would have
+        // dropped it with no stated cause, which is the untraceability this whole block exists to end.
+        const visualizationId = c.type === 'chart' ? strip(p.VisualizationId) : undefined;
+        const missing = [];
+        if (!entity) missing.push('TargetEntityType');
+        if (!viewId) missing.push('ViewId');
+        if (c.type === 'chart' && !visualizationId) missing.push('VisualizationId');
+        if (!missing.length) {
+          tiles.push(c.type === 'chart'
+            ? { type: 'chart', name: c.name, entity, viewId, visualizationId }
+            : { type: 'list', name: c.name, entity, viewId });
+        } else if (typeof warn === 'function') {
+          warn(`dashboard '${name}' ${c.type} tile '${c.name || viewId || '(unnamed)'}' carries no ${missing.join(' or ')}, so it cannot be rebuilt; it is omitted from dashboards[].`);
         }
       }
       else if (c.type === 'iframe' && p.Url) tiles.push({ type: 'iframe', name: c.name, url: p.Url });
       else if (c.type === 'webresource' && p.WebResourceName) tiles.push({ type: 'webresource', name: c.name, webResource: p.WebResourceName });
+      // Everything else a dashboard can hold. Reported for the same reason as the branches above: the
+      // dashboard-level "no recognizable tiles" warning below only fires when NOTHING survives, so a
+      // dashboard with one good tile would otherwise drop its siblings in silence.
+      else if (typeof warn === 'function') {
+        const missingParam = c.type === 'iframe' ? 'Url' : c.type === 'webresource' ? 'WebResourceName' : null;
+        warn(`dashboard '${name}' tile '${c.name || '(unnamed)'}' of type '${c.type}' `
+          + (missingParam
+            ? `carries no ${missingParam}, so it cannot be rebuilt; it is omitted from dashboards[].`
+            : `is not a tile type the App Spec can express, so it is omitted from dashboards[].`));
+      }
     }
     // A dashboard that read cleanly but yielded no usable tile is ALSO a silent drop — the subarea
     // disappears with nothing said. Distinguish it from the unreadable case above.
