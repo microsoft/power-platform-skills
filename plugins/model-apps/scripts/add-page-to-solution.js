@@ -4,11 +4,13 @@
 // travels cross-environment. Verified live 2026-07-10 on a Dataverse test environment:
 //   - The appmodule (type 80, AddRequiredComponents=true) pulls the sitemap (62) and
 //     appmodulecomponent (10097) but does NOT pull the GenPage — so the GenPage's
-//     uxagentproject row MUST be added explicitly (type 10372); adding it pulls its
-//     uxagentprojectfile children (10373, incl. config.json with connectorBindings).
-//   - connectionreference is its own component (type 10158) and is added explicitly so
+//     uxagentproject row MUST be added explicitly; adding it pulls its
+//     uxagentprojectfile children (incl. config.json with connectorBindings).
+//   - connectionreference is its own component and is added explicitly so
 //     the bindings resolve in the target env (at import the deployer supplies each
 //     ConnectionId via `pac solution create-settings` + `pac solution import --settings-file`).
+//     Both are custom tables whose ObjectTypeCode varies by environment, so their
+//     component types are discovered from EntityDefinitions before any mutation.
 //
 // Usage:
 //   node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId>
@@ -21,20 +23,21 @@ const {
   dataverseRequest,
   ensureOk,
   parseArgs,
+  validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
 const { isConnectorsEnabled, exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
-// Connection references are connector state. When the connectors flag is OFF, ALM must not add
-// them. Two distinct cases, and conflating them is what made this silently lossy:
+// Connection references are connector state. When the connectors flag is OFF (the GA rollback
+// switch), ALM must not add them. Two distinct cases, and conflating them is what made this
+// silently lossy:
 //   1. The caller passed NO --connection-refs → nothing to gate; non-connector page packaging
 //      (appmodule + uxagentproject) proceeds normally whether the flag is on or off.
 //   2. The caller EXPLICITLY passed --connection-refs while the flag is OFF → this is the
-//      documented fail-closed backstop (AGENTS.md → "Script backstop" / gate checklist item 4):
-//      exit 3, BEFORE any AddSolutionComponent call. Previously the refs were dropped and the
-//      script still reported `ok: true`, so an out-of-band/stale-plan call packaged a solution
-//      WITHOUT the connection references the caller asked for and looked like it succeeded —
-//      the resulting solution imports with unbound connectors.
+//      documented fail-closed backstop: exit 3, BEFORE any AddSolutionComponent call. Previously
+//      the refs were dropped and the script still reported `ok: true`, so an out-of-band/stale-plan
+//      call packaged a solution WITHOUT the connection references the caller asked for and looked
+//      like it succeeded — the resulting solution imports with unbound connectors.
 // The gate runs before the first mutation so a refused run leaves the solution untouched rather
 // than half-populated (app + pages added, refs missing).
 function connectionRefsToAdd(refs, connectorsEnabled) {
@@ -42,18 +45,8 @@ function connectionRefsToAdd(refs, connectorsEnabled) {
 }
 
 const APPMODULE_COMPONENT_TYPE = 80;
-// Solution component type for the GenPage itself. uxagentproject IS a registered
-// component type (10372 = its ObjectTypeCode), verified live 2026-07-10 on a
-// Dataverse test environment. It does NOT auto-travel with the appmodule, so it is added
-// explicitly; AddRequiredComponents=true then pulls its uxagentprojectfile rows
-// (10373: page.tsx, page.compiled, config.json, firstPrompt.json).
-const UXAGENTPROJECT_COMPONENT_TYPE = 10372;
-// Solution component type for connectionreference. Verified live (2026-07-10) by
-// reading solutioncomponent.componenttype for an existing connection reference in the
-// Default/Active solutions of a test environment (= 10158). Note: 371 is "Connector"
-// (msdyn_Connector), NOT a connection reference — AddSolutionComponent with 371 fails
-// with "entity ... 'msdyn_Connector' ... not found in MetadataCache".
-const CONNECTION_REFERENCE_COMPONENT_TYPE = 10158;
+const UXAGENTPROJECT_LOGICAL_NAME = 'uxagentproject';
+const CONNECTION_REFERENCE_LOGICAL_NAME = 'connectionreference';
 
 function escapeODataString(value) {
   return String(value).replace(/'/g, "''");
@@ -70,20 +63,45 @@ async function addComponent(envUrl, solutionUniqueName, componentId, componentTy
   ensureOk(res, `Add component ${componentId} (type ${componentType}) to ${solutionUniqueName}`);
 }
 
+async function resolveEntityComponentType(envUrl, logicalName) {
+  const path = `EntityDefinitions(LogicalName='${escapeODataString(logicalName)}')?$select=ObjectTypeCode`;
+  const res = await dataverseRequest(envUrl, 'GET', path);
+  ensureOk(res, `Resolve component type for ${logicalName}`);
+  const componentType = Number(res.data?.ObjectTypeCode);
+  if (!Number.isInteger(componentType) || componentType <= 0) {
+    throw new Error(`Entity '${logicalName}' did not return a valid ObjectTypeCode`);
+  }
+  return componentType;
+}
+
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId> [--page-ids <id1,id2>] [--connection-refs <logicalName1,logicalName2>]';
+  // Both flags are comma-joined id lists. A bare one would become boolean `true`, and `true.split`
+  // is a TypeError mid-way through packaging rather than a usage error before it.
+  const flagError = validateFlags(argv, {
+    known: ['page-ids', 'connection-refs'],
+    needValue: ['page-ids', 'connection-refs'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
   if (positional.length < 3) {
-    process.stderr.write(
-      'Usage: node add-page-to-solution.js <envUrl> <solutionUniqueName> <appId> [--page-ids <id1,id2>] [--connection-refs <logicalName1,logicalName2>]\n'
-    );
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const [envUrl, solutionUniqueName, appId] = positional;
   const added = [];
 
-  // Parse the requested connection references BEFORE any mutation so the fail-closed gate can
-  // refuse the whole run rather than leaving a half-packaged solution.
+  // Parsed BEFORE the first mutation so the fail-closed gate can refuse the whole run rather
+  // than leaving a half-packaged solution (app + pages added, refs missing).
   const refs = (flags['connection-refs'] || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const pageIds = (flags['page-ids'] || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -95,20 +113,26 @@ async function main() {
   }
 
   try {
+    // ObjectTypeCode for custom tables is allocated per environment. Resolve both
+    // types before the first AddSolutionComponent so a metadata failure leaves the
+    // target solution untouched instead of half-packaged.
+    const pageComponentType = pageIds.length
+      ? await resolveEntityComponentType(envUrl, UXAGENTPROJECT_LOGICAL_NAME)
+      : null;
+    const connectionReferenceComponentType = refs.length
+      ? await resolveEntityComponentType(envUrl, CONNECTION_REFERENCE_LOGICAL_NAME)
+      : null;
+
     // The appmodule (type 80) with AddRequiredComponents=true pulls the sitemap and
     // appmodulecomponent, but NOT the GenPage — the page is added explicitly below.
     await addComponent(envUrl, solutionUniqueName, appId, APPMODULE_COMPONENT_TYPE, true);
     added.push({ type: 'appmodule', id: appId });
 
-    // Add each GenPage (uxagentproject, type 10372) explicitly. AddRequiredComponents
-    // pulls its uxagentprojectfile rows (10373) — including config.json with the
+    // Add each GenPage (uxagentproject) explicitly. AddRequiredComponents
+    // pulls its uxagentprojectfile rows — including config.json with the
     // connectorBindings that must travel with the page.
-    const pageIds = (flags['page-ids'] || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
     for (const pageId of pageIds) {
-      await addComponent(envUrl, solutionUniqueName, pageId, UXAGENTPROJECT_COMPONENT_TYPE, true);
+      await addComponent(envUrl, solutionUniqueName, pageId, pageComponentType, true);
       added.push({ type: 'uxagentproject', id: pageId });
     }
 
@@ -123,7 +147,7 @@ async function main() {
       const id = lookup.data?.value?.[0]?.connectionreferenceid;
       if (!id) throw new Error(`Connection reference '${logicalName}' not found in env`);
 
-      await addComponent(envUrl, solutionUniqueName, id, CONNECTION_REFERENCE_COMPONENT_TYPE, false);
+      await addComponent(envUrl, solutionUniqueName, id, connectionReferenceComponentType, false);
       added.push({ type: 'connectionreference', logicalName, id });
     }
 
@@ -139,4 +163,13 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { connectionRefsToAdd };
+// Exported for unit tests. AppModule is a stable system component type; the two custom-table
+// component types are deliberately resolved per environment by resolveEntityComponentType.
+module.exports = {
+  connectionRefsToAdd,
+  escapeODataString,
+  APPMODULE_COMPONENT_TYPE,
+  UXAGENTPROJECT_LOGICAL_NAME,
+  CONNECTION_REFERENCE_LOGICAL_NAME,
+  resolveEntityComponentType,
+};

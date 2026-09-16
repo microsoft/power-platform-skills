@@ -252,7 +252,8 @@ page-intents + design**, and **(c) access**. The author never emits `.tsx`; page
 until generate-pages.
 
 > **Read the spec format once, up front** — don't reverse-engineer it from scripts:
-> [`references/app-spec-schema.md`](./app-spec-schema.md) (every field) and the worked sample
+> [`references/app-spec-schema.md`](./app-spec-schema.md) (every always-present field; conditional
+> ones are in [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)) and the worked sample
 > [`samples/app-spec.support-desk.json`](../samples/app-spec.support-desk.json). Author to that
 > shape. **Do not pre-create tables/columns/solution** during authoring — the build is
 > idempotent and creates only what's missing.
@@ -315,7 +316,10 @@ Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Custome
 column needs `options[]` **or** a `globalChoice` reference. Lookups are **not** a column type —
 declare a `OneToMany` relationship instead.
 
-> **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the single source.**
+> **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the source for
+> everything an app always has; [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)
+> carries the conditional fields it points at (business rules, BPFs, commands, web resources,
+> global choices, dashboards, `roleGrants[]`).**
 > Its **modeling cheatsheet** answers the recurring questions without reading the SDK/lint/engine:
 > auto-number identity → `autoNumberFormat` on `primaryAttribute`; **N:N with attributes** (e.g.
 > Technician↔Work-Order with a Role) → a **junction entity** + two `OneToMany` (sample rows bind
@@ -387,7 +391,7 @@ relationship-name-vs-lookup-name collision Dataverse rejects) **before** the use
 on top of a broken model, the most expensive point to unwind:
 
 ```bash
-node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
+node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<abs-path-to-app-spec.json> --json
 ```
 
 On a data-model-only spec the linter surfaces **only** data-model findings (the forms/views/app checks
@@ -628,12 +632,17 @@ spec — the data model was already gated by the early lint at the end of Level 
 validating the artifacts/sample-data/app layered on top):
 
 ```bash
-node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
+node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<abs-path-to-app-spec.json> --json
 ```
 
 Replace `<abs-path-to-app-spec.json>` with the actual absolute path to
-`<working-dir>/app-spec.json`. Use `require()` with an absolute path so Node
-resolves it regardless of cwd.
+`<working-dir>/app-spec.json`. Pass an absolute path so it resolves regardless of cwd.
+The CLI runs migration and `validateAppSpec` — the gates the build itself runs on load — plus
+the `lintAppSpec` authoring guardrails, which the builder does **not** run. It exits non-zero on
+errors. It validates under the `plan` profile, which allows pages that are still intents (they
+are generated in Phase 1.5, after this gate); `plan` relaxes only that rule. Errors are tagged
+`schema:` (the hard gate) or `lint:` (authoring guardrails); fix the `schema:` ones first,
+because lint advice on a spec that fails the gate is advice on a spec that cannot build.
 
 **Interpret the result:**
 

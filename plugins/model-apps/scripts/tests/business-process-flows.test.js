@@ -205,10 +205,16 @@ test('a cross-entity stage is rejected rather than silently retargeted', () => {
 test('a knob the build cannot verify is REJECTED, not ignored — at flow, stage AND step level', () => {
   // Silently dropping a key the author wrote is how a spec "deploys" something it does not: they
   // would see the stages appear and reasonably assume the rest applied.
-  for (const key of ['securityRoles', 'branch', 'actions', 'globalActions']) {
-    const errs = errorsFor([{ ...FLOW, [key]: key === 'securityRoles' ? ['Salesperson'] : [{}] }]);
+  //
+  // `securityRoles` is NO LONGER in this list: it is supported since #513 (see the dedicated tests
+  // below). It stays rejected as an ARRAY though — the shape here — because the supported form is
+  // an object, so the old spelling still fails rather than being read as something else.
+  for (const key of ['branch', 'actions', 'globalActions']) {
+    const errs = errorsFor([{ ...FLOW, [key]: [{}] }]);
     assert.ok(errs.some((e) => new RegExp(`unsupported key '${key}'`).test(e)), `${key}: ${JSON.stringify(errs)}`);
   }
+  const arrayRoles = errorsFor([{ ...FLOW, securityRoles: ['Salesperson'] }]);
+  assert.ok(arrayRoles.some((e) => /securityRoles must be an object like \{ "personas"/.test(e)), JSON.stringify(arrayRoles));
   // STAGE level is where an author would naturally write branching/actions — the SDK models them
   // there, and bpfDef maps only name/entity/steps, so an unguarded key vanishes without a word.
   for (const key of ['branch', 'actions', 'nextStageId', 'category', 'relationshipName']) {
@@ -791,6 +797,30 @@ test('REGRESSION: a status-only edit is a full build but NOT permanent debt', ()
   const restaged = specWith([{ ...FLOW, stages: [{ name: 'Only', steps: [{ name: 'S', field: 'new_notes' }] }] }]);
   const stageEdit = classifyChanges(restaged, draft);
   assert.ok(stageEdit.debt.some((d) => /edit-not-convergent/.test(d.reason)), `a stage edit is real debt; got ${JSON.stringify(stageEdit.debt)}`);
+});
+
+test('REGRESSION: a securityRoles-only edit is a full build but NOT permanent debt either (#513)', () => {
+  // Stronger than the `status` case above. A BPF grant always targets a PERSONA role, and the
+  // security phase applies persona roles with `ReplacePrivilegesRole` — so a rebuild both ADDS a
+  // newly-declared persona and REMOVES one that was dropped. Filing permanent debt disabled every
+  // later fast apply over a divergence a full build erases. (`roleGrants[]` would NOT qualify: it is
+  // additive and cannot revoke.)
+  const { classifyChanges } = require('../lib/classify-changes.js');
+  const withPersonas = (personas) => {
+    const s = specWith([personas ? { ...FLOW, securityRoles: { personas } } : { ...FLOW }]);
+    s.personas = [{ persona: 'Dispatcher', jobs: [{ name: 'J', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] }];
+    return s;
+  };
+  const none = withPersonas(null);
+  const granted = withPersonas(['Dispatcher']);
+
+  for (const [label, cur, prior] of [['added', granted, none], ['removed', none, granted]]) {
+    const r = classifyChanges(cur, prior);
+    assert.deepStrictEqual(r.debt, [], `securityRoles ${label} is reconciled; got ${JSON.stringify(r.debt)}`);
+    assert.ok(r.changedPhases.includes('business-process-flows'), `${label}: it still needs a full build`);
+    assert.ok(r.fullReasons.some((x) => /securityRoles changed — reconciled/.test(x)),
+      `${label}: and the reason must name the field that changed, not the whole converged list: ${JSON.stringify(r.fullReasons)}`);
+  }
 });
 
 test('REGRESSION: the same status-only rule applies to business rules', () => {

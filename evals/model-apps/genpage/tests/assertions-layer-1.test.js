@@ -232,6 +232,81 @@ test('node --version and pac help: fail when version not verified', () => {
   assert.equal(result.status, 'fail');
 });
 
+test('unattended create/edit determination passes without AskUserQuestion marker', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion');
+  const log = `Unattended default: create new or edit existing → create new (--non-interactive flag)`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('unattended plan approval passes without attended interaction markers', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
+  const log = `Unattended default: plan approval → approved (--non-interactive flag)`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('unattended plan approval rejects attended marker text even when phrased as not called', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
+  const log = `Unattended default: plan approval → approved (--non-interactive flag)\nEnterPlanMode called → NOT called`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+// `non-interactive: false` describes an ATTENDED run. Reading `interactive: false` out of the tail
+// of that word flipped the whole log to the unattended branch, which then failed it for having no
+// `Unattended default:` marker — a real attended run rejected for recording its own mode.
+test('an attended log that records the flag as off is not misread as unattended', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion');
+  const log = `Interaction mode resolved: non-interactive: false\nAskUserQuestion: new or edit → create new`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+// resolve-interaction-mode.js emits `{"ok":true,"interactive":false,"reason":"..."}`. A log that
+// pastes that line is reporting an unattended run, so the QUOTED JSON key must register the same as
+// the prose form. Isolation matters here: the probe line carries no `reason` and no
+// `Unattended default:` marker, and the plan DOES need metadata work — so the attended branch would
+// PASS this log (metadata required + question asked). Only the unattended branch can fail it, which
+// makes the assertion sensitive to the quoted-key match and nothing else.
+test('the resolver JSON line marks the log unattended, so an interactive question is a failure', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The solution selection question is asked via AskUserQuestion ONLY when the build needs metadata work (new entities OR new app); for code-only flows the question is skipped but the Default values are still written');
+  const plan = `${validPlan()}\n\n## Environment\n- App: create new app\n`;
+  const log = `Interaction mode probe returned {"ok":true,"interactive":false}\nAskUserQuestion: which solution? → Default`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+// An ATTENDED log legitimately NEGATES the two reason phrases when it explains why it is
+// attended. Matching them as bare substrings anywhere in the log flipped such a log to the
+// unattended branch, where its (correct) `AskUserQuestion:` line reads as an attended-marker
+// violation — a correct run graded broken. The phrases only mean "unattended" in the resolver's
+// `reason` field, so they are anchored to it.
+test('an attended log that explains the flag was absent is not misread as unattended', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion');
+  const log = `Interaction mode: attended (no --non-interactive flag, TTY present)\nAskUserQuestion: new or edit → create new`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('an attended log that records the env var as unset is not misread as unattended', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion');
+  const log = `Checked: POWER_PLATFORM_SKILLS_NONINTERACTIVE is set -> no\nAskUserQuestion: new or edit → create new`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+// The complement of the two tests above: in the resolver's own `reason` field the same phrase DOES
+// mean unattended, so anchoring must not cost us the real signal. Same isolation trick as the
+// quoted-JSON test — the plan needs metadata work, so only the unattended branch can fail this.
+test('the resolver reason field still marks the log unattended', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The solution selection question is asked via AskUserQuestion ONLY when the build needs metadata work (new entities OR new app); for code-only flows the question is skipped but the Default values are still written');
+  const plan = `${validPlan()}\n\n## Environment\n- App: create new app\n`;
+  const log = `Mode: {"ok":true,"reason":"--non-interactive flag"}\nAskUserQuestion: which solution? → Default`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
 // ---------- Solution lines in plan ----------
 
 test('Solution+Publisher lines: pass with list-marker format', () => {
@@ -561,4 +636,62 @@ test('Entity scripts --solution (new flow): pass when provision-entities.js used
   const elog = `## Environment\n- Solution: Default\n`;
   const result = check({ fixture: fix({ workflowLog: log, entityCreationLog: elog }), eval: evalStub() });
   assert.equal(result.status, 'pass');
+});
+
+// The documented mode record puts the log on the unattended branch. genpage SKILL.md's unattended
+// table requires `Unattended default: interaction mode → unattended (<reason>)`, so recording the
+// mode is enough to make a prompt a violation — no prose matching needed. Isolation: this log DOES
+// contain `EnterPlanMode called`, so the attended branch would pass it; only the unattended branch
+// can fail here.
+test('the documented mode record marks the log unattended, so a prompt is a failure', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
+  const log = `Unattended default: interaction mode → unattended (--non-interactive flag)\nEnterPlanMode called`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: validPlan() }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+// Guard against re-introducing free-prose mode matching. Each prose form below is an ATTENDED log
+// that merely contains the word "unattended"; a `\bunattended\b` match flags the first, and a
+// `mode: unattended` match flags the rest. Any of them classifying as unattended would fail this
+// correct run for the `EnterPlanMode called` line attended runs are required to have.
+for (const prose of [
+  'Interaction mode: attended. Not unattended: the --non-interactive flag was absent',
+  'Mode: unattended = false',
+  'Interaction mode: unattended? no - TTY present',
+  'Read the mode matrix: Unattended → skip; Attended → ask. We are attended.',
+]) {
+  test(`an attended log mentioning "${prose.slice(0, 34)}..." is not misread as unattended`, () => {
+    const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested');
+    const result = check({ fixture: fix({ workflowLog: `${prose}\nEnterPlanMode called`, genpagePlan: validPlan() }), eval: evalStub() });
+    assert.equal(result.status, 'pass');
+  });
+}
+
+// Omitting the section must stay valid — this guards against the obvious wrong fix of adding it to
+// REQUIRED_PLAN_SECTIONS. plan-schema.md:212 does spec the section as always-present, but 0 of the
+// 12 fixture plans emit it, so requiring it would fail 12/12 rather than catch a real defect.
+test('a plan without a Custom API Bindings section is still valid', () => {
+  const errors = validateGenpagePlanSchema(validPlan());
+  assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 0);
+});
+
+test('an opt-in Custom API Bindings section accepts the exact sentinel', () => {
+  const plan = `${validPlan()}\n\n## Custom API Bindings\nNo custom API bindings.\n`;
+  const errors = validateGenpagePlanSchema(plan);
+  assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 0);
+});
+
+// The Custom API mirror of the connector delimiter leak. If the planner prompt regresses and the
+// planner copies the `----- BEGIN/END CUSTOM API BINDINGS -----` framing into the plan, the body
+// is no longer the exact sentinel and must be rejected — previously nothing checked this half.
+test('a leaked prompt delimiter in Custom API Bindings is rejected', () => {
+  const plan = `${validPlan()}\n\n## Custom API Bindings\n----- BEGIN CUSTOM API BINDINGS -----\nNo custom API bindings.\n----- END CUSTOM API BINDINGS -----\n`;
+  const errors = validateGenpagePlanSchema(plan);
+  assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 1);
+});
+
+test('a populated Custom API Bindings table is accepted', () => {
+  const plan = `${validPlan()}\n\n## Custom API Bindings\n| Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |\n|------|------|--------------|--------------|-------------------------|\n| new_ApproveOrder | Action | salesorder | Approve Order | Comment: String |\n`;
+  const errors = validateGenpagePlanSchema(plan);
+  assert.equal(errors.filter((e) => e.code === 'missing-customapi-table').length, 0);
 });

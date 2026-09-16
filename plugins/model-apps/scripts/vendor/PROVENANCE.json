@@ -1,14 +1,14 @@
 {
-  "commit": "e7e8e601a5587ebed523bf9de0043130eafa7888",
-  "subject": "Fix PPAPI licensing recommendation pagination",
+  "commit": "331b9f56705b8f5887f73bd40a1cceddc9fbf2e1",
+  "subject": "Revert 'fix: scheduled trigger skips its first run when the start time is in the future'",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-04T21:32:20.419Z",
-  "newestSrcAt": "2026-09-04T21:24:55.321Z",
+  "libBuiltAt": "2026-09-11T02:08:20.161Z",
+  "newestSrcAt": "2026-09-11T02:03:26.756Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v22.13.1",
-  "builtAt": "2026-09-04T21:43:31.252Z",
-  "bundleSha256": "dabef5c4e76ce646d613834d1114f32e89c013a6a16b91e1fb83c7f4ee4494ed",
-  "bundleBytes": 692039
+  "builtAt": "2026-09-11T02:08:49.251Z",
+  "bundleSha256": "e51103ce286d9b7749b1c542e5313d837374978c3584184c47f48d2886d9e248",
+  "bundleBytes": 695310
 }

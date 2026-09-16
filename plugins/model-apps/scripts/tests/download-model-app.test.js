@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { untypedColumnNames, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
+const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -246,8 +246,10 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
   const meta = await readEntityWithDescriptions(sdk, 'new_order');
   const e = entityFromMetadata(meta, 'new_order');
 
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
+  // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
   assert.strictEqual(status.description, 'State shown to dispatchers.');
@@ -395,6 +397,194 @@ test('a downloaded Choice column is reported as untyped, so the Text downgrade i
   assert.deepStrictEqual(untypedColumnNames([entityFromMetadata(meta, 'new_ticket')]), ['new_ticket.new_status']);
 });
 
+// ---------------------------------------------------------------------------
+// #564 — Choice / MultiChoice column TYPES survive a download.
+// ---------------------------------------------------------------------------
+
+// A picklist attribute row exactly as Dataverse returns it through the cast + $expand. LIVE-MEASURED
+// against a stock org on `account.accountcategorycode`:
+//   { "LogicalName": "accountcategorycode",
+//     "OptionSet": { "Name": "account_accountcategorycode", "IsGlobal": false,
+//                    "Options": [ { "Value": 1, "Label": { "LocalizedLabels": [ { Label, LanguageCode } ],
+//                                                          "UserLocalizedLabel": { "Label": "Preferred Customer" } } } ] },
+//     "GlobalOptionSet": { "Name": "account_accountcategorycode", "MetadataId": "..." } }
+// Note GlobalOptionSet is populated even though IsGlobal is FALSE — the trap pinned below.
+function picklistRow(logicalName, { name, isGlobal, options, globalEcho = true }) {
+  const label = (l) => (typeof l === 'string'
+    ? { LocalizedLabels: [{ Label: l, LanguageCode: 1033 }], UserLocalizedLabel: { Label: l, LanguageCode: 1033 } }
+    : { LocalizedLabels: Object.entries(l).map(([lcid, text]) => ({ Label: text, LanguageCode: Number(lcid) })), UserLocalizedLabel: { Label: l['1033'], LanguageCode: 1033 } });
+  return {
+    LogicalName: logicalName,
+    OptionSet: { Name: name, IsGlobal: isGlobal, Options: options.map(([value, l]) => ({ Value: value, Label: label(l) })) },
+    ...(globalEcho ? { GlobalOptionSet: { Name: name, MetadataId: 'aaaaaaaa-0000-0000-0000-000000000001' } } : {}),
+  };
+}
+
+// An sdk whose RAW client answers the description reads AND the two picklist cast reads.
+function sdkWithOptionSets({ attributes, picklist = [], multiSelect = [], optionSetStatus = 200, urls = [], throwOnOptionSets = false }) {
+  return {
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name', attributes }),
+    queryRecords: async (set) => { throw new Error("queryRecords must not be used for metadata paths (got '" + set + "')"); },
+    dataverse: {
+      get: async (url) => {
+        urls.push(url);
+        if (/AttributeMetadata/.test(url)) {
+          if (throwOnOptionSets) throw new Error('metadata read blew up');
+          const rows = /MultiSelectPicklistAttributeMetadata/.test(url) ? multiSelect : picklist;
+          return { status: optionSetStatus, headers: {}, body: { value: rows } };
+        }
+        if (/\/Attributes\?/.test(url)) return { status: 200, headers: {}, body: { value: [] } };
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+}
+
+const CHOICE_ATTRS = [
+  { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+  { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'Memo', isCustomAttribute: true },
+];
+
+test('#564 a LOCAL option set downloads as a real Choice with inline options[], not an untyped column', async () => {
+  const urls = [];
+  const sdk = sdkWithOptionSets({
+    attributes: CHOICE_ATTRS,
+    picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[100000000, 'Open'], [100000001, 'Closed']] })],
+    urls,
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
+  const status = e.columns.find((c) => c.schemaName === 'new_status');
+  assert.strictEqual(status.type, 'Choice');
+  // Plain label strings, in the order Dataverse returned them — the App Spec assigns
+  // value = 100000000 + index, so the ARRAY ORDER is semantics, not presentation.
+  assert.deepStrictEqual(status.options, ['Open', 'Closed']);
+  assert.strictEqual(status.globalChoice, undefined, 'a local set must not emit a globalChoice reference');
+  // The column is no longer reported as untyped — that warning exists for columns we cannot type.
+  assert.deepStrictEqual(untypedColumnNames([e]), []);
+  // The cast segment is required: Attributes is a heterogeneous collection, so OptionSet can only be
+  // expanded through it. Pin the exact URL so a silent shape change is caught here, not live.
+  assert.ok(
+    urls.some((u) => u === "/EntityDefinitions(LogicalName='new_ticket')/Attributes/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet($select=Name,IsGlobal,Options)"),
+    'picklist read URL wrong: ' + urls.join(' | ')
+  );
+});
+
+test('#564 GlobalOptionSet being present does NOT make a local set global (live-measured trap)', async () => {
+  // Measured on a live org: a LOCAL set (IsGlobal:false) still returns a populated GlobalOptionSet
+  // echoing its own name. Keying off GlobalOptionSet would emit a globalChoice reference to a shared
+  // set that does not exist, and the rebuild would bind the column to nothing.
+  const sdk = sdkWithOptionSets({
+    attributes: CHOICE_ATTRS,
+    picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[1, 'Open']], globalEcho: true })],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
+  const status = e.columns.find((c) => c.schemaName === 'new_status');
+  assert.strictEqual(status.globalChoice, undefined);
+  assert.deepStrictEqual(status.options, ['Open']);
+});
+
+test('#564 a GLOBAL-bound picklist emits a globalChoice reference instead of inline options', async () => {
+  const sdk = sdkWithOptionSets({
+    attributes: CHOICE_ATTRS,
+    picklist: [picklistRow('new_status', { name: 'shared_stage', isGlobal: true, options: [[1, 'Draft'], [2, 'Final']] })],
+  });
+  const meta = await readEntityWithDescriptions(sdk, 'new_ticket');
+  const e = entityFromMetadata(meta, 'new_ticket');
+  const status = e.columns.find((c) => c.schemaName === 'new_status');
+  assert.strictEqual(status.type, 'Choice');
+  assert.strictEqual(status.globalChoice, 'shared_stage');
+  assert.strictEqual(status.options, undefined, 'a global-bound column must not ALSO carry inline options');
+  // The shared set itself has to be declared, or a fresh-environment rebuild has nothing to bind to.
+  const decls = new Map();
+  collectGlobalChoices(meta, decls);
+  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Draft', 'Final'] }]);
+});
+
+test('#564 a MultiSelect picklist downloads as MultiChoice', async () => {
+  const sdk = sdkWithOptionSets({
+    attributes: [{ logicalName: 'new_tags', displayName: 'Tags', attributeType: 'MultiSelectPicklist', isCustomAttribute: true }],
+    multiSelect: [picklistRow('new_tags', { name: 'new_ticket_new_tags', isGlobal: false, options: [[1, 'Urgent'], [2, 'Billable']] })],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
+  const tags = e.columns.find((c) => c.schemaName === 'new_tags');
+  assert.strictEqual(tags.type, 'MultiChoice');
+  assert.deepStrictEqual(tags.options, ['Urgent', 'Billable']);
+});
+
+test('#564 inline options keep their localizations, but a global declaration is flattened', async () => {
+  // Inline columns[].options[] localizes correctly; globalChoices[] options are REJECTED by
+  // validateAppSpec when localized, because Dataverse stores only the base language for a shared set.
+  // So the same Label object must be emitted two different ways depending on where it lands.
+  const localized = { 1033: 'Open', 3082: 'Abierto' };
+  const sdk = sdkWithOptionSets({
+    attributes: [
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_stage', displayName: 'Stage', attributeType: 'Picklist', isCustomAttribute: true },
+    ],
+    picklist: [
+      picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[1, localized]] }),
+      picklistRow('new_stage', { name: 'shared_stage', isGlobal: true, options: [[1, localized]] }),
+    ],
+  });
+  const meta = await readEntityWithDescriptions(sdk, 'new_ticket');
+  const e = entityFromMetadata(meta, 'new_ticket');
+  assert.deepStrictEqual(e.columns.find((c) => c.schemaName === 'new_status').options, [{ 1033: 'Open', 3082: 'Abierto' }]);
+  const decls = new Map();
+  collectGlobalChoices(meta, decls);
+  assert.deepStrictEqual([...decls.values()], [{ name: 'shared_stage', options: ['Open'] }]);
+});
+
+test('#564 one global set bound by two columns is declared exactly once', async () => {
+  const sdk = sdkWithOptionSets({
+    attributes: [
+      { logicalName: 'new_a', displayName: 'A', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_b', displayName: 'B', attributeType: 'Picklist', isCustomAttribute: true },
+    ],
+    picklist: [
+      picklistRow('new_a', { name: 'shared_stage', isGlobal: true, options: [[1, 'Draft']] }),
+      picklistRow('new_b', { name: 'shared_stage', isGlobal: true, options: [[1, 'Draft']] }),
+    ],
+  });
+  const decls = new Map();
+  collectGlobalChoices(await readEntityWithDescriptions(sdk, 'new_ticket'), decls);
+  assert.strictEqual(decls.size, 1);
+});
+
+test('#564 a FAILED option-set read leaves the column untyped rather than guessing a type', async () => {
+  // Fail-safe, and the reason the untyped warning survives this change: emitting type "Choice" with
+  // no options[] produces a spec that fails its OWN validation, and guessing options invents data.
+  // A non-2xx and a throw must land on the same untyped outcome.
+  for (const variant of [{ optionSetStatus: 403 }, { throwOnOptionSets: true }]) {
+    const sdk = sdkWithOptionSets({ attributes: CHOICE_ATTRS, ...variant });
+    const meta = await readEntityWithDescriptions(sdk, 'new_ticket');
+    const e = entityFromMetadata(meta, 'new_ticket');
+    assert.strictEqual(e.columns.find((c) => c.schemaName === 'new_status').type, undefined, JSON.stringify(variant));
+    assert.deepStrictEqual(untypedColumnNames([e]), ['new_ticket.new_status'], JSON.stringify(variant));
+    // The failure is RECORDED, not swallowed — a silent degrade here is the bug being fixed.
+    assert.ok(meta.optionSetReadFailed, 'the read failure was not recorded for ' + JSON.stringify(variant));
+  }
+});
+
+test('#564 a picklist the option-set read did not cover stays untyped', async () => {
+  // A 200 that simply omits the attribute is NOT evidence of "no options" — it is evidence we did
+  // not see them. Typing it anyway would emit an invalid spec.
+  const sdk = sdkWithOptionSets({ attributes: CHOICE_ATTRS, picklist: [] });
+  const meta = await readEntityWithDescriptions(sdk, 'new_ticket');
+  const e = entityFromMetadata(meta, 'new_ticket');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'new_status').type, undefined);
+  assert.deepStrictEqual(untypedColumnNames([e]), ['new_ticket.new_status']);
+});
+
+test('#564 an option set with no usable labels is not emitted as an empty Choice', async () => {
+  // An option whose Label carries no usable text would emit options: [undefined], which fails
+  // validateAppSpec ("options[0] must be a non-empty string"). Refuse to type it instead.
+  const sdk = sdkWithOptionSets({
+    attributes: CHOICE_ATTRS,
+    picklist: [{ LogicalName: 'new_status', OptionSet: { Name: 'new_ticket_new_status', IsGlobal: false, Options: [{ Value: 1, Label: { LocalizedLabels: [], UserLocalizedLabel: null } }] } }],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'new_status').type, undefined);
+});
 test('iconWebResources looks up web resources by NAME (not id) and maps type from webresourcetype', async () => {
   const calls = [];
   const sdk = {
@@ -569,8 +759,48 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
   assert.ok(calls.some((c) => c.set === 'savedqueryvisualization' && c.opts.select.includes('description')), 'chart read selects description');
   assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('description')), 'form read selects description');
   assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('description')), 'business-rule read selects description');
-  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description'),
-    `global choices must be read through the RAW client (queryRecords cannot take a metadata path); calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
+  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description,IsManaged'),
+    `global choices must be read through the RAW client (queryRecords cannot take a metadata path), selecting IsManaged so managed sets can be excluded; calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
+});
+
+test('the global-choice inventory excludes MANAGED option sets but keeps an unknown flag', async () => {
+  // A managed global choice ships with its solution and exists in any environment that has that
+  // solution, so naming it as "not round-tripped" is false — there is nothing for a rebuild to
+  // recreate. Measured live on a stock environment: 149 option sets, exactly 1 unmanaged, so
+  // reporting all of them buried the real findings under 148 unactionable lines.
+  //
+  // `$filter` cannot do this server-side: GlobalOptionSetDefinitions answers HTTP 405
+  // (0x80060888) for `?$filter=IsManaged eq false`, which is why the filter is client-side.
+  const sdk = {
+    queryRecords: async () => [],
+    dataverse: {
+      get: async (url) => {
+        if (/^\/GlobalOptionSetDefinitions\?/.test(url)) {
+          return {
+            status: 200,
+            headers: {},
+            body: {
+              value: [
+                { Name: 'new_priority', IsManaged: false },
+                { Name: 'msdyn_solutionhealthruleseverity', IsManaged: true },
+                { Name: 'legacy_noflag' }, // IsManaged absent — must be KEPT, not silently dropped
+              ],
+            },
+          };
+        }
+        return { status: 404, headers: {}, body: {} };
+      },
+    },
+  };
+
+  const inv = await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution');
+  const names = (inv.globalChoices || []).map((c) => c.name);
+  assert.ok(names.includes('new_priority'), 'an unmanaged choice is genuinely not round-tripped');
+  assert.ok(!names.includes('msdyn_solutionhealthruleseverity'), 'a managed choice must not be reported');
+  assert.ok(
+    names.includes('legacy_noflag'),
+    'an ABSENT IsManaged must keep the row — this inventory must not assert an absence it cannot substantiate'
+  );
 });
 
 test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
@@ -1324,11 +1554,35 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
 
   assert.strictEqual(res.ok, true, `the download itself must succeed; got ${res.error || ''}`);
   const text = written.join('');
-  assert.match(text, /form\(s\) are restricted to specific security roles/, 'the warning must fire');
-  assert.match(text, /new_order\.Dispatcher Form/, 'and must NAME the restricted form');
-  assert.doesNotMatch(text, /Everyone Form/,
+  // Scoped to the RESTRICTION warning's own line. The download also emits a separate
+  // not-round-tripped note (AB#6686423) that lists every deployed form by name — including the
+  // unrestricted one — so scanning all of stderr would now assert the wrong thing. The intent of
+  // this check has always been "the restriction warning must not name an unrestricted form".
+  const restrictionLine = text.split('\n').find((l) => /are restricted to specific security roles/.test(l)) || '';
+  assert.ok(restrictionLine, 'the warning must fire');
+  assert.match(restrictionLine, /new_order\.Dispatcher Form/, 'and must NAME the restricted form');
+  assert.doesNotMatch(restrictionLine, /Everyone Form/,
     'the <Everyone /> form is the unrestricted DEFAULT — warning on it would make the warning noise');
-  assert.match(text, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
+  assert.match(restrictionLine, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
+
+  // AB#6686423 — BEHAVIOURAL: the same run must also report the artifact classes it did not
+  // reconstruct, and carry that report in the RESULT so `--json` consumers see it too. The unit
+  // tests in download-not-round-tripped.test.js pin the wording; this pins that it is actually
+  // reached from a real download, which a source-shape assertion could not.
+  //
+  // This app has only forms, and the sentence now names only the classes actually reported — it used
+  // to read "forms[], views[] or charts[]" regardless, telling the operator two things were missing
+  // that were never there.
+  assert.match(text, /NOTE: this download does not reconstruct forms\[\] —/);
+  assert.doesNotMatch(text, /does not reconstruct[^\n]*views\[\]/, 'no views were found, so none may be claimed');
+  assert.ok(res.notRoundTripped, 'the summary must ride on the runDownload result, not only on stderr');
+  assert.strictEqual(res.notRoundTripped.total, 2, JSON.stringify(res.notRoundTripped));
+  // SORTED, not in the order the mock returned them. `notRoundTripped` is compared between runs, so
+  // it sorts at every level; `descriptionInventory` below is the raw read and keeps Dataverse's
+  // order, which is why the two lists differ here.
+  assert.deepStrictEqual(res.notRoundTripped.entities, [{ entity: 'new_order', forms: ['Dispatcher Form', 'Everyone Form'], views: [], charts: [], businessRules: [] }]);
+  // The spec on disk still carries them under descriptionInventory — the note's claim must be true.
+  assert.deepStrictEqual((res.spec.descriptionInventory.forms || []).map((f) => f.name), ['Everyone Form', 'Dispatcher Form']);
 });
 
 test('runDownload stays SILENT when no form is role-restricted', async () => {
@@ -1497,4 +1751,462 @@ test('#514: a tenant without the setting definitions still downloads cleanly', a
   assert.deepStrictEqual(await readAppShellSettings(noDefs, 'app-1'), {});
   const throws = { queryRecords: async () => { throw new Error('no access to appsettings'); } };
   assert.deepStrictEqual(await readAppShellSettings(throws, 'app-1'), {});
+});
+
+// ---------------------------------------------------------------------------
+// #564 — the emitted spec must be valid, and the reports must stay truthful.
+// ---------------------------------------------------------------------------
+
+test('#564 a downloaded spec carrying Choice/MultiChoice types still passes validateAppSpec', async () => {
+  // The companion rule is the whole reason the type used to be dropped: declaring type "Choice"
+  // obliges the column to carry options[] or a globalChoice, and a spec that fails its own gate is
+  // useless. This is the positive counterpart to the long-standing "must not claim a type it cannot
+  // substantiate" test — now that we CAN substantiate it, the result still has to validate.
+  const { validateAppSpec: validate } = require('../lib/app-spec.js');
+  const sdk = sdkWithOptionSets({
+    attributes: [
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_tags', displayName: 'Tags', attributeType: 'MultiSelectPicklist', isCustomAttribute: true },
+      { logicalName: 'new_stage', displayName: 'Stage', attributeType: 'Picklist', isCustomAttribute: true },
+    ],
+    picklist: [
+      picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[1, 'Open'], [2, 'Closed']] }),
+      picklistRow('new_stage', { name: 'shared_stage', isGlobal: true, options: [[1, 'Draft'], [2, 'Final']] }),
+    ],
+    multiSelect: [picklistRow('new_tags', { name: 'new_ticket_new_tags', isGlobal: false, options: [[1, 'Urgent']] })],
+  });
+  const meta = await readEntityWithDescriptions(sdk, 'new_ticket');
+  const decls = new Map();
+  collectGlobalChoices(meta, decls);
+  const res = validate({
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [entityFromMetadata(meta, 'new_ticket')],
+    globalChoices: [...decls.values()],
+    appShell: { areas: [] },
+  }, { profile: 'deploy' });
+  assert.deepStrictEqual(res.errors, [], res.errors.join(' | '));
+});
+
+test('#564 roundTrippedAware stops the report claiming a DECLARED global choice was left behind', () => {
+  const { roundTrippedAware: aware } = require('../download-model-app.js');
+  const inventory = { globalChoices: [{ name: 'shared_stage' }, { name: 'untouched_set' }], forms: [{ name: 'F', entity: 'new_ticket' }] };
+  const decls = new Map([['shared_stage', { name: 'shared_stage', options: ['Draft'] }]]);
+  // The set the spec now declares IS carried forward, so reporting it as lost would be false. Every
+  // other set in the environment stays listed — the app does not bind it, so a rebuild will not
+  // recreate it, and that claim is still true.
+  assert.deepStrictEqual(aware(inventory, decls).globalChoices, [{ name: 'untouched_set' }]);
+  assert.deepStrictEqual(aware(inventory, decls).forms, [{ name: 'F', entity: 'new_ticket' }], 'unrelated classes must be untouched');
+  // Nothing left -> the KEY goes, not an empty array: notRoundTrippedSummary skips an empty class,
+  // and `globalChoices: []` would be indistinguishable from "the read returned no rows".
+  const allDeclared = aware({ globalChoices: [{ name: 'shared_stage' }] }, decls);
+  assert.ok(!('globalChoices' in allDeclared), 'an emptied class must be dropped, not left as []');
+  // Case-insensitive: Dataverse does not guarantee the casing of a returned option-set Name.
+  assert.ok(!('globalChoices' in aware({ globalChoices: [{ name: 'SHARED_STAGE' }] }, decls)));
+  // No declarations -> the inventory is returned untouched (identity, not a rebuilt copy).
+  assert.strictEqual(aware(inventory, new Map()), inventory);
+});
+
+test('#564 hydrateSpec emits globalChoices ONLY when the app actually binds one', async () => {
+  const { hydrateSpec: hydrate } = require('../lib/hydrate-spec.js');
+  const base = {
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [] } }),
+    pages: async () => [],
+    entities: async () => [],
+    webResources: async () => [],
+    solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  };
+  const withNone = await hydrate(base);
+  // An empty `globalChoices: []` on every download would read as a positive claim that the app binds
+  // no shared choices — which a download whose option-set read failed cannot substantiate.
+  assert.ok(!('globalChoices' in withNone), 'an app binding no shared choice must not emit the key');
+  const withSome = await hydrate({ ...base, globalChoices: async () => [{ name: 'shared_stage', options: ['Draft'] }] });
+  assert.deepStrictEqual(withSome.globalChoices, [{ name: 'shared_stage', options: ['Draft'] }]);
+  // A legacy `read` with no globalChoices accessor must still hydrate (back-compat).
+  assert.ok(!('globalChoices' in (await hydrate({ ...base, globalChoices: undefined }))));
+});
+test('#564 option ORDER is Dataverse display order, not Value order', async () => {
+  // Dataverse returns options in their DISPLAY order, and the App Spec assigns
+  // value = 100000000 + index — so the array order is what a rebuild reproduces in the picker.
+  // Sorting by Value here would silently reorder any set whose author arranged it by hand. Values
+  // are deliberately DESCENDING so a sort would be visible.
+  //
+  // Driven through readEntityWithDescriptions ON PURPOSE: the ordering decision lives in the READ
+  // (optionSetFromRow), so a test that pre-attaches `optionSet` to the metadata proves nothing — an
+  // earlier version of this test did exactly that and a value-sort mutation survived it.
+  const sdk = sdkWithOptionSets({
+    attributes: [{ logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true }],
+    picklist: [picklistRow('new_status', { name: 'new_ticket_new_status', isGlobal: false, options: [[9, 'Last'], [3, 'Middle'], [1, 'First']] })],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_ticket'), 'new_ticket');
+  assert.deepStrictEqual(e.columns.find((c) => c.schemaName === 'new_status').options, ['Last', 'Middle', 'First']);
+});
+test('#564 a MultiChoice column is NOT dropped even though Dataverse types it as "Virtual"', async () => {
+  // LIVE-MEASURED on a real table. A MultiSelectPicklist attribute reports:
+  //   { "LogicalName": "pp_tags",     "AttributeType": "Virtual", "AttributeTypeName": "MultiSelectPicklistType" }
+  // while its synthetic formatted-value shadow reports:
+  //   { "LogicalName": "pp_tagsname", "AttributeType": "Virtual", "AttributeTypeName": "VirtualType" }
+  // The SDK projection carries only `attributeType`, so BOTH looked like "Virtual" — a type the App
+  // Spec cannot declare — and the real MultiChoice column was filtered out of columns[] ENTIRELY.
+  // That is worse than the untyped degrade #564 describes: the column vanished from the spec, so a
+  // rebuild did not create it at all. The MultiSelect CAST read is the discriminator: only a genuine
+  // multi-select comes back from it, so an attribute it returned is a MultiChoice whatever
+  // `attributeType` claims. The `*name` shadow is absent from every cast read and stays filtered.
+  const sdk = sdkWithOptionSets({
+    attributes: [
+      { logicalName: 'pp_tags', displayName: 'Tags', attributeType: 'Virtual', isCustomAttribute: true },
+      { logicalName: 'pp_tagsname', displayName: 'Tags Name', attributeType: 'Virtual', isCustomAttribute: true },
+      { logicalName: 'pp_stagename', displayName: 'Stage Name', attributeType: 'Virtual', isCustomAttribute: true },
+    ],
+    multiSelect: [picklistRow('pp_tags', { name: 'pp_item_pp_tags', isGlobal: false, options: [[1, 'Urgent'], [2, 'Billable']] })],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_item'), 'pp_item');
+  const tags = e.columns.find((c) => c.schemaName === 'pp_tags');
+  assert.ok(tags, 'the MultiChoice column was dropped from columns[]');
+  assert.strictEqual(tags.type, 'MultiChoice');
+  assert.deepStrictEqual(tags.options, ['Urgent', 'Billable']);
+  // The synthetic shadows must STILL be filtered out: emitting them would feed defaultViewColumns
+  // and rewrite the table's default views with junk.
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['pp_tags']);
+});
+
+test('#564 a Virtual attribute with NO option set is still filtered out', async () => {
+  // The relaxation above must be driven by the presence of companion data, not by the type name —
+  // otherwise every platform Virtual attribute would start appearing in columns[].
+  const sdk = sdkWithOptionSets({
+    attributes: [{ logicalName: 'pp_shadow', displayName: 'Shadow', attributeType: 'Virtual', isCustomAttribute: true }],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_item'), 'pp_item');
+  assert.deepStrictEqual(e.columns, []);
+});
+test('#564 the CAST type outranks the attributeType map (defensive precedence)', async () => {
+  // Today this precedence is not observable: the only disagreement measured in the wild is a
+  // MultiSelectPicklist reporting `Virtual`, which the map does not contain at all — so either order
+  // produces MultiChoice, and a mutation that swaps them survives the other tests. It is pinned
+  // anyway because the ordering is a deliberate contract, not an accident: the cast segment is
+  // direct evidence of what the attribute IS, while `attributeType` has already been observed to
+  // misreport it once. A future cleanup that "simplifies" the order should fail here.
+  const sdk = sdkWithOptionSets({
+    attributes: [{ logicalName: 'pp_odd', displayName: 'Odd', attributeType: 'Picklist', isCustomAttribute: true }],
+    multiSelect: [picklistRow('pp_odd', { name: 'pp_item_pp_odd', isGlobal: false, options: [[1, 'A']] })],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_item'), 'pp_item');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_odd').type, 'MultiChoice',
+    'the map said Choice and the multi-select cast said MultiChoice — the cast must win');
+});
+test('#564 a lookup name SHADOW is filtered out, but a logical CHOICE column is kept', async () => {
+  // LIVE-MEASURED. Creating a lookup `pp_parentorgid` also creates a synthetic formatted-name
+  // attribute `pp_parentorgidname`:
+  //   { AttributeType: "String", AttributeTypeName: "StringType", IsCustomAttribute: true, IsLogical: true }
+  // It reports IsCustomAttribute TRUE, so the custom-only filter let it through, and its String type
+  // maps cleanly to Text — so a downloaded spec declared a REAL Text column named after a lookup's
+  // shadow. Measured consequence on a fresh-environment rebuild: the build happily created
+  // `pp563_org2.pp563_parentorgidname (Text)`, an invented column that also collides with the name
+  // the real lookup's shadow needs. It is IsLogical (not stored on this table), which is what makes
+  // it distinguishable.
+  //
+  // The rule is deliberately "logical AND no option set", NOT plain "logical": on `account`, 6 REAL
+  // choice columns (address1_addresstypecode, address1_freighttermscode, address1_shippingmethodcode
+  // and their address2_ twins) are themselves IsLogical, because they live on the address entity and
+  // surface logically here. Dropping every logical attribute would delete real Choice columns from
+  // the spec — reintroducing exactly the silent column-loss this change exists to end.
+  const sdk = {
+    fetchEntityMetadata: async () => ({
+      logicalName: 'pp_org', schemaName: 'pp_org', displayName: 'Org', primaryNameAttribute: 'pp_name',
+      attributes: [
+        { logicalName: 'pp_parentorgidname', displayName: 'Parent Org Name', attributeType: 'String', isCustomAttribute: true },
+        { logicalName: 'pp_real', displayName: 'Real', attributeType: 'String', isCustomAttribute: true },
+        { logicalName: 'pp_addrtype', displayName: 'Address Type', attributeType: 'Picklist', isCustomAttribute: true },
+      ],
+    }),
+    dataverse: {
+      get: async (url) => {
+        if (/MultiSelectPicklistAttributeMetadata/.test(url)) return { status: 200, headers: {}, body: { value: [] } };
+        if (/PicklistAttributeMetadata/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [picklistRow('pp_addrtype', { name: 'pp_addrtype_set', isGlobal: false, options: [[1, 'Bill To'], [2, 'Ship To']] })] } };
+        }
+        if (/\/Attributes\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'pp_parentorgidname', IsLogical: true },
+            { LogicalName: 'pp_real', IsLogical: false },
+            // A REAL choice column that is nonetheless logical — must survive.
+            { LogicalName: 'pp_addrtype', IsLogical: true },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_org'), 'pp_org');
+  const names = e.columns.map((c) => c.schemaName);
+  assert.ok(!names.includes('pp_parentorgidname'), 'the lookup name shadow must not be emitted as a real Text column');
+  assert.ok(names.includes('pp_real'), 'a normal custom column must survive');
+  assert.ok(names.includes('pp_addrtype'), 'a LOGICAL column that carries an option set is a real Choice and must survive');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_addrtype').type, 'Choice');
+});
+
+test('#564 an attribute whose IsLogical could not be read is KEPT, not dropped', async () => {
+  // Fail-safe: an absent flag means "we could not look", and dropping a real column on that basis is
+  // the more destructive error. Same reasoning as the existing isCustomAttribute handling, which
+  // drops only on an explicit `false`.
+  const sdk = sdkWithOptionSets({
+    attributes: [{ logicalName: 'pp_real', displayName: 'Real', attributeType: 'String', isCustomAttribute: true }],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_org'), 'pp_org');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['pp_real']);
+});
+// ---------------------------------------------------------------------------
+// Review round: findings from the adversarial review of the #564 work.
+// ---------------------------------------------------------------------------
+
+// Builds the `/Attributes?$select=...` row the label/shape read returns.
+const attrRow = (logicalName, { isLogical = false, typeName = undefined } = {}) => ({
+  LogicalName: logicalName,
+  ...(isLogical !== undefined ? { IsLogical: isLogical } : {}),
+  ...(typeName ? { AttributeTypeName: { Value: typeName } } : {}),
+});
+
+// An sdk with FULL control of both reads: the attribute shape read and the two casts.
+function sdkFull({ attributes, attrRows = [], picklist = [], multiSelect = [], picklistStatus = 200, multiSelectStatus = 200, attrStatus = 200 }) {
+  return {
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: logical, displayName: 'T', primaryNameAttribute: 'pp_name', attributes }),
+    dataverse: {
+      get: async (url) => {
+        if (/MultiSelectPicklistAttributeMetadata/.test(url)) return { status: multiSelectStatus, headers: {}, body: { value: multiSelect } };
+        if (/PicklistAttributeMetadata/.test(url)) return { status: picklistStatus, headers: {}, body: { value: picklist } };
+        if (/\/Attributes\?/.test(url)) return { status: attrStatus, headers: {}, body: { value: attrRows } };
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+}
+
+test('REVIEW-A a cross-language AMBIGUOUS option set leaves the column untyped instead of aborting the whole download', async () => {
+  // Reported by adversarial review, proven reachable. Option labels need not be unique across
+  // options OR languages in Dataverse, so this set is legal:
+  //   options[0] = "Open"                       (English only)
+  //   options[1] = { 1033: "Closed", 3082: "Open" }
+  // "Open" then names BOTH options. `ambiguousChoiceAliases` treats that as an ERROR (not a warning)
+  // when either side is localized, because the collision is invisible on the page. Emitting it made
+  // `validateAppSpec` fail, and runDownload returns BEFORE writing the spec — so ONE colliding pair
+  // anywhere aborted the download of the ENTIRE app, and --allow-lossy-download does not bypass that
+  // gate. Pre-#564 these columns carried no options[], so the rule returned early and the download
+  // succeeded. Refusing to type just this column restores that, and is the same fail-safe already
+  // used for an unreadable label.
+  const localized = { 1033: 'Closed', 3082: 'Open' };
+  const sdk = sdkFull({
+    attributes: [{ logicalName: 'pp_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true }],
+    attrRows: [attrRow('pp_status', { typeName: 'PicklistType' })],
+    picklist: [picklistRow('pp_status', { name: 'pp_t_pp_status', isGlobal: false, options: [[1, 'Open'], [2, localized]] })],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
+  const col = e.columns.find((c) => c.schemaName === 'pp_status');
+  assert.ok(col, 'the column must still be emitted');
+  assert.strictEqual(col.type, undefined, 'an ambiguous option set must not be typed');
+  assert.strictEqual(col.options, undefined, 'and must not carry the invalid options[]');
+  assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_status'], 'it is named in the untyped warning instead');
+  // The whole point: the emitted spec must still validate.
+  const { validateAppSpec: validate } = require('../lib/app-spec.js');
+  const res = validate({ solution: { uniqueName: 'S', publisherPrefix: 'pp' }, app: { name: 'A' }, entities: [e], appShell: { areas: [] } }, { profile: 'plan', reconstructed: true });
+  assert.deepStrictEqual(res.errors, [], res.errors.join(' | '));
+});
+
+test('REVIEW-A duplicate PLAIN labels are still typed (they are a warning, not an error)', async () => {
+  // Only the localized/hidden collision is an error. Two identical plain strings provisioned fine
+  // before this rule existed, so refusing to type them would reject specs that still work.
+  const sdk = sdkFull({
+    attributes: [{ logicalName: 'pp_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true }],
+    attrRows: [attrRow('pp_status', { typeName: 'PicklistType' })],
+    picklist: [picklistRow('pp_status', { name: 'pp_t_pp_status', isGlobal: false, options: [[1, 'Open'], [2, 'Open']] })],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_status').type, 'Choice');
+});
+
+test('REVIEW-B a MultiChoice survives an unusable option label - untyped and NAMED, never dropped', async () => {
+  // Reported by adversarial review. A MultiSelectPicklist is `Virtual`, so before this the ONLY
+  // thing keeping it in columns[] was a successfully PARSED option set. An unusable label made
+  // optionSetFromRow return null, the cast membership was discarded, and the column vanished from
+  // the spec entirely while the warning claimed it was "captured WITHOUT a type".
+  const sdk = sdkFull({
+    attributes: [{ logicalName: 'pp_tags', displayName: 'Tags', attributeType: 'Virtual', isCustomAttribute: true }],
+    attrRows: [attrRow('pp_tags', { typeName: 'MultiSelectPicklistType' })],
+    multiSelect: [{ LogicalName: 'pp_tags', OptionSet: { Name: 'pp_t_pp_tags', IsGlobal: false, Options: [{ Value: 1, Label: { LocalizedLabels: [], UserLocalizedLabel: null } }] } }],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
+  assert.ok(e.columns.find((c) => c.schemaName === 'pp_tags'), 'the MultiChoice column must not vanish');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_tags').type, undefined);
+  assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_tags'], 'and it must be NAMED, so the loss is never silent');
+});
+
+test('REVIEW-B/D a MultiChoice survives a FAILED or EMPTY option-set read, identified by AttributeTypeName', async () => {
+  // Two shapes, same requirement. The cast can fail (503) or answer 200 with an empty value[] — the
+  // second does not even throw, so nothing was recorded and the column disappeared with ZERO
+  // operator signal. `AttributeTypeName` identifies a multi-select INDEPENDENTLY of the cast, so
+  // membership is no longer the only thing standing between a real column and silent deletion.
+  for (const variant of [{ multiSelectStatus: 503 }, { multiSelect: [] }]) {
+    const sdk = sdkFull({
+      attributes: [{ logicalName: 'pp_tags', displayName: 'Tags', attributeType: 'Virtual', isCustomAttribute: true }],
+      attrRows: [attrRow('pp_tags', { typeName: 'MultiSelectPicklistType' })],
+      ...variant,
+    });
+    const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
+    const label = JSON.stringify(variant);
+    assert.ok(e.columns.find((c) => c.schemaName === 'pp_tags'), 'MultiChoice vanished for ' + label);
+    assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_tags'], 'not named for ' + label);
+  }
+});
+
+test('REVIEW-C a LOGICAL choice column is not dropped when the option-set read fails', async () => {
+  // The isLogical shadow filter keyed off `optionSet === undefined`, so a genuine logical Choice
+  // whose option read failed was DROPPED rather than left untyped — and the warning then promised a
+  // Text column that a rebuild would never create. Positive type evidence (AttributeTypeName) now
+  // protects it; the shadow, which has none, is still dropped.
+  const sdk = sdkFull({
+    attributes: [
+      { logicalName: 'pp_logchoice', displayName: 'Logical Choice', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'pp_parentidname', displayName: 'Parent Name', attributeType: 'String', isCustomAttribute: true },
+    ],
+    attrRows: [
+      attrRow('pp_logchoice', { isLogical: true, typeName: 'PicklistType' }),
+      attrRow('pp_parentidname', { isLogical: true, typeName: 'StringType' }),
+    ],
+    picklistStatus: 503,
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
+  const names = e.columns.map((c) => c.schemaName);
+  assert.ok(names.includes('pp_logchoice'), 'a real logical Choice must survive a failed option read');
+  assert.ok(!names.includes('pp_parentidname'), 'the lookup shadow must still be dropped');
+  assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_logchoice']);
+});
+
+test('REVIEW-B a failing SECOND cast does not discard the successful first one', async () => {
+  // readOptionSets threw on the first non-2xx, so a 503 on the multi-select cast threw away an
+  // already-valid Picklist map and every Choice on the table lost its type.
+  const sdk = sdkFull({
+    attributes: [{ logicalName: 'pp_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true }],
+    attrRows: [attrRow('pp_status', { typeName: 'PicklistType' })],
+    picklist: [picklistRow('pp_status', { name: 'pp_t_pp_status', isGlobal: false, options: [[1, 'Open']] })],
+    multiSelectStatus: 503,
+  });
+  const meta = await readEntityWithDescriptions(sdk, 'pp_t');
+  const e = entityFromMetadata(meta, 'pp_t');
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'pp_status').type, 'Choice', 'the successful cast must survive the other one failing');
+  assert.ok(meta.optionSetReadFailed, 'the partial failure is still recorded');
+});
+
+test('REVIEW-C globalChoices declares only sets an EMITTED column actually references', async () => {
+  // collectGlobalChoices scanned raw metadata, so a set bound only by a SYSTEM attribute (filtered
+  // out of columns[]) or by a table later dropped for having no primary name still produced a
+  // declaration — and the build then creates or reuses every declaration in the target environment.
+  const sdk = sdkFull({
+    attributes: [
+      { logicalName: 'pp_mine', displayName: 'Mine', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'sys_theirs', displayName: 'Theirs', attributeType: 'Picklist', isCustomAttribute: false },
+    ],
+    attrRows: [attrRow('pp_mine', { typeName: 'PicklistType' }), attrRow('sys_theirs', { typeName: 'PicklistType' })],
+    picklist: [
+      picklistRow('pp_mine', { name: 'bound_set', isGlobal: true, options: [[1, 'A']] }),
+      picklistRow('sys_theirs', { name: 'orphan_set', isGlobal: true, options: [[1, 'B']] }),
+    ],
+  });
+  const meta = await readEntityWithDescriptions(sdk, 'pp_t');
+  const e = entityFromMetadata(meta, 'pp_t');
+  const candidates = collectGlobalChoices(meta, new Map());
+  const decls = finalizeGlobalChoices([e], candidates);
+  assert.deepStrictEqual(decls.map((g) => g.name), ['bound_set'], 'the orphan set must not be declared');
+});
+
+test('REVIEW-D a global-choice reference is canonicalized to the declaration casing', async () => {
+  // Declarations dedupe case-insensitively but each column kept its own raw casing, and
+  // entity-provision looks up `globalChoiceIds[c.globalChoice]` CASE-SENSITIVELY — so a second
+  // casing left that column unbound and it fell back to an empty inline option list.
+  const e = {
+    schemaName: 'pp_t',
+    columns: [
+      { schemaName: 'a', type: 'Choice', globalChoice: 'Shared_Set' },
+      { schemaName: 'b', type: 'Choice', globalChoice: 'shared_set' },
+    ],
+  };
+  const candidates = new Map([['shared_set', { name: 'Shared_Set', options: ['A'] }]]);
+  const decls = finalizeGlobalChoices([e], candidates);
+  assert.deepStrictEqual(decls.map((g) => g.name), ['Shared_Set']);
+  assert.deepStrictEqual(e.columns.map((c) => c.globalChoice), ['Shared_Set', 'Shared_Set'], 'every reference must match the declaration exactly');
+});
+test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real wiring, not the helper)', async () => {
+  // Deliberately driven through runDownload. An earlier version of this test called
+  // finalizeGlobalChoices directly, and a mutation that reverted the ACCESSOR to
+  // `[...globalChoiceDecls.values()]` survived it — the helper was right while the wiring was not.
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-0000000000c1';
+  const APP_UNIQUE = 'test_gcwiring';
+  const SM_ID = '5111e0f2-0000-4000-8000-0000000000c2';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-gc-'));
+  try {
+    const sdk = {
+      fetchArtifact: async () => ({ name: 'GC App', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'contoso_item' }] }] }] } }),
+      queryRecords: async (logical, opts) => {
+        const filter = (opts && opts.filter) || '';
+        if (logical === 'appmodule') {
+          const m = filter.match(/uniquename eq '([^']+)'/);
+          if (m) return m[1] === APP_UNIQUE ? [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-0000000000c3' }] : [];
+          return [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-0000000000c3', uniquename: APP_UNIQUE }];
+        }
+        if (logical === 'appmodulecomponent') return [{ objectid: SM_ID, componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' }];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({
+        schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name',
+        attributes: [
+          { logicalName: 'contoso_mine', displayName: 'Mine', attributeType: 'Picklist', isCustomAttribute: true },
+          // SYSTEM attribute: filtered out of columns[], so the set it binds must NOT be declared.
+          { logicalName: 'sys_theirs', displayName: 'Theirs', attributeType: 'Picklist', isCustomAttribute: false },
+        ],
+      }),
+      dataverse: {
+        get: async (url) => {
+          if (/MultiSelectPicklistAttributeMetadata/.test(url)) return { status: 200, headers: {}, body: { value: [] } };
+          if (/PicklistAttributeMetadata/.test(url)) {
+            return { status: 200, headers: {}, body: { value: [
+              picklistRow('contoso_mine', { name: 'bound_set', isGlobal: true, options: [[1, 'A']] }),
+              picklistRow('sys_theirs', { name: 'orphan_set', isGlobal: true, options: [[1, 'B']] }),
+            ] } };
+          }
+          if (/\/Attributes\?/.test(url)) {
+            return { status: 200, headers: {}, body: { value: [
+              { LogicalName: 'contoso_mine', AttributeTypeName: { Value: 'PicklistType' } },
+              { LogicalName: 'sys_theirs', AttributeTypeName: { Value: 'PicklistType' } },
+            ] } };
+          }
+          if (/GlobalOptionSetDefinitions/.test(url)) return { status: 200, headers: {}, body: { value: [] } };
+          return { status: 200, headers: {}, body: {} };
+        },
+      },
+    };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+    const res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    assert.ok(res.ok, JSON.stringify(res));
+    assert.deepStrictEqual((res.spec.globalChoices || []).map((g) => g.name), ['bound_set'],
+      'a set bound only by a filtered SYSTEM attribute must not be declared — the build writes every declaration into the target org');
+    const col = res.spec.entities[0].columns.find((c) => c.schemaName === 'contoso_mine');
+    assert.strictEqual(col.globalChoice, 'bound_set');
+    // And the emitted spec must still validate.
+    assert.deepStrictEqual(validateAppSpec(res.spec, { profile: 'plan' }).errors, []);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('REVIEW-B cast membership still keeps a column when the ATTRIBUTE read also failed', async () => {
+  // The combination neither guard covers alone: no AttributeTypeName (attribute read 403) AND an
+  // unparseable option label. Cast MEMBERSHIP is then the only evidence the column exists, so the
+  // entry must be recorded even when its options cannot be parsed.
+  const sdk = sdkFull({
+    attributes: [{ logicalName: 'pp_tags', displayName: 'Tags', attributeType: 'Virtual', isCustomAttribute: true }],
+    attrStatus: 403,
+    multiSelect: [{ LogicalName: 'pp_tags', OptionSet: { Name: 'pp_t_pp_tags', IsGlobal: false, Options: [{ Value: 1, Label: { LocalizedLabels: [], UserLocalizedLabel: null } }] } }],
+  });
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
+  assert.ok(e.columns.find((c) => c.schemaName === 'pp_tags'), 'cast membership must keep the column when nothing else can');
+  assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_tags']);
 });

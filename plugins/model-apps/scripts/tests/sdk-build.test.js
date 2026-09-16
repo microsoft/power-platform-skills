@@ -352,14 +352,72 @@ const cellsFromAdd = (v) => {
   return [];
 };
 
+// Every mutating SDK call the engine can make. A dry run must issue NONE of them — but it now does
+// issue READS (#559), so "wrote nothing" can no longer be spelled `calls.length === 0`.
+const MUTATING_CALLS = new Set([
+  'createPublisher', 'createSolution', 'createTable', 'updateTable', 'createColumn', 'createRelationship',
+  'createGlobalOptionSet', 'createCustomerColumn', 'insertStatusValue', 'createAlternateKey',
+  'createRecordsBulk', 'seedRecordGraph', 'enrichDefaultViews', 'createArtifact', 'createWebResource',
+  'pushArtifact', 'publishArtifact', 'addElement', 'updateElement', 'removeElement', 'updateRecord',
+  'addSolutionComponent', 'associateRecords', 'disassociateRecords', 'deleteAppCascade',
+  'setColumnVisualization', 'setAppAiFeatures', 'configureRowSummary', 'createSecurityRole',
+  'createPersonaRole', 'addEntityPrivilegesToRole', 'deleteSecurityRole',
+]);
+
 test('dry-run emits a plan and writes nothing', async () => {
   const { sdk, calls } = mockSdk();
   const events = [];
   const r = await runSdkBuild(makeSpec(), { sdk, apply: false, sampleData: true, publish: true, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(calls.length, 0);
+  const wrote = calls.filter((c) => MUTATING_CALLS.has(c.name));
+  assert.deepStrictEqual(wrote.map((c) => c.name), [], 'a dry run must not mutate the environment');
   assert.ok(r.plan.some((l) => l.includes('solution ContosoSD')));
-  assert.ok(events.every((e) => e.status === 'skip'));
+  assert.ok(events.every((e) => e.status === 'skip' || e.status === 'warn'));
+});
+
+// #559: the dry run used to print planFor's static listing and exit before any discovery, so the
+// SAME plan appeared for a spec whose artifacts all exist and for one that would create everything.
+test('#559 dry-run resolves create vs reuse against the live environment', async () => {
+  // new_customer exists and already has new_tier; new_ticket does not exist at all.
+  const { sdk } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name', 'new_tier'] } } });
+  const r = await runSdkBuild(makeSpec(), { sdk, apply: false, emit: () => {} });
+  assert.strictEqual(r.livePlan, true, 'the plan was resolved live');
+  const find = (frag) => r.planItems.find((p) => p.label.includes(frag));
+
+  assert.strictEqual(find('table new_customer').state, 'reuse', 'an existing table reads as reuse');
+  assert.strictEqual(find('table new_ticket').state, 'create', 'a missing table reads as create');
+  assert.strictEqual(find('column new_customer.new_tier').state, 'reuse', 'an existing column reads as reuse');
+  // A column on a table that does not exist is unambiguously a create, with no metadata read needed.
+  assert.strictEqual(find('column new_ticket.new_priority').state, 'create');
+  // The distinction the issue is about: the two tables must NOT report the same thing.
+  assert.notStrictEqual(find('table new_customer').state, find('table new_ticket').state);
+});
+
+test('#559 the plan labels carry the state so a printed plan is readable', async () => {
+  const { sdk } = mockSdk({ existingTables: { new_customer: { entitySetName: 'new_customers', columns: ['new_name'] } } });
+  const r = await runSdkBuild(makeSpec(), { sdk, apply: false, emit: () => {} });
+  assert.ok(r.plan.some((l) => /table new_customer .*\[reuse\]/.test(l)), JSON.stringify(r.plan.slice(0, 6)));
+  assert.ok(r.plan.some((l) => /table new_ticket .*\[create\]/.test(l)), JSON.stringify(r.plan.slice(0, 6)));
+});
+
+test('#559 livePlan:false keeps the offline, spec-only listing', async () => {
+  const { sdk, calls } = mockSdk();
+  const r = await runSdkBuild(makeSpec(), { sdk, apply: false, livePlan: false, emit: () => {} });
+  assert.strictEqual(r.livePlan, false);
+  assert.ok(r.plan.every((l) => !/\[(create|reuse|unknown)\]/.test(l)), 'no states without a live probe');
+  assert.deepStrictEqual(calls.map((c) => c.name), [], 'and no calls of any kind');
+});
+
+// A read that FAILS must not be reported as either create or reuse: guessing "create" overstates the
+// work and "reuse" understates it, and both read as certainty the run does not have.
+test('#559 a failed probe reports unknown, never a guess', async () => {
+  const { sdk } = mockSdk();
+  sdk.findTables = async () => { throw new Error('metadata service unavailable'); };
+  sdk.dataverse = { get: async () => { throw new Error('metadata service unavailable'); } };
+  const r = await runSdkBuild(makeSpec(), { sdk, apply: false, emit: () => {} });
+  const tbl = r.planItems.find((p) => p.label.includes('table new_customer'));
+  assert.strictEqual(tbl.state, 'unknown');
+  assert.match(tbl.stateWhy, /metadata service unavailable/);
 });
 
 test('fresh build runs phases in order and creates everything', async () => {
@@ -634,6 +692,68 @@ test('Tier 2: planFor and totals account for web resources and event wiring', as
   // web-resources phase only runs when selected
   const onlyWr = planFor(specWithFormJs(), { phases: ['web-resources'] }).map((p) => p.phase);
   assert.ok(onlyWr.length && onlyWr.every((p) => p === 'web-resources'));
+});
+
+test('apply progress total includes existing-column reconciliation steps', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns[0].required = true;
+  spec.entities[0].columns.push({
+    schemaName: 'new_score',
+    displayName: 'Score',
+    type: 'Integer',
+    visualization: 'StarRating',
+  });
+  const { sdk } = mockSdk({
+    existingTables: {
+      new_customer: {
+        entitySetName: 'new_customers',
+        columns: ['new_name', 'new_tier', 'new_score'],
+        relationships: ['new_customer_new_ticket'],
+      },
+      new_ticket: {
+        entitySetName: 'new_tickets',
+        columns: ['new_subject', 'new_priority'],
+      },
+    },
+  });
+  sdk.setColumnVisualization = async () => ({});
+  const events = [];
+
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['data-model'], emit: (event) => events.push(event) });
+
+  const terminal = events.filter((event) => ['ok', 'skip', 'error'].includes(event.status));
+  assert.ok(terminal.length > 0);
+  assert.ok(terminal.every((event) => event.n <= event.total), 'a step index must never exceed its advertised total');
+  assert.equal(terminal.at(-1).n, terminal.at(-1).total, 'the final step index must equal the advertised total');
+});
+
+// Live-reproduced on a real environment: a page-LESS spec rebuilt against an app that already
+// exists ran `finalize sitemap (genpage subareas)` and overran its own denominator ([37/36]).
+// The runtime finalizes whenever `appHasPageSubareas(spec) || appWasExisting`, but the plan only
+// counted the step when the SPEC had page subareas — so the `appWasExisting` branch, which is a
+// live fact planFor cannot see, was never budgeted for. Same family as the [75/62] overrun, and
+// invisible on a create run because that path ends exactly on total.
+test('apply progress total covers the existing-app sitemap finalize on a page-less spec', async () => {
+  const spec = makeSpec();
+  assert.equal((spec.pages || []).length, 0, 'this case is specifically the page-LESS spec');
+  const { sdk } = mockSdk({ artifactsExist: true }); // findArtifact('app') -> existing, so appWasExisting
+  const events = [];
+
+  await runSdkBuild(spec, {
+    sdk,
+    apply: true,
+    phases: ['app-shell', 'pages'],
+    genpageCli: { enumerateEnv: async () => ({ ok: true, ids: [] }) },
+    emit: (event) => events.push(event),
+  });
+
+  const terminal = events.filter((event) => ['ok', 'skip', 'error'].includes(event.status));
+  assert.ok(terminal.length > 0);
+  assert.ok(
+    terminal.every((event) => event.n <= event.total),
+    `a step index must never exceed its advertised total: ${terminal.map((e) => `${e.n}/${e.total} ${e.label}`).join(' | ')}`
+  );
+  assert.equal(terminal.at(-1).n, terminal.at(-1).total, 'the final step index must equal the advertised total');
 });
 
 // --- Tier 2.x: SDK fix uptake (AutoNumber primary, N:N sub-grids) + folded build steps ----
@@ -2623,6 +2743,70 @@ test('ai-features phase: a result missing the newer buckets does not throw (olde
   const events = [];
   await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
   assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'error').length, 0, 'no error events');
+});
+
+// ── AB#6688904: `skipped` is now a RETRYABLE outcome, not a final one ─────────────────────────
+// The SDK used to pre-empt a write when an org readiness gate read off, so `skipped` meant "never
+// attempted" and no retry could change it — correctly excluded from the post-publish re-issue. Since
+// AB#6688904 the write IS attempted and `skipped` means "attempted, absent, and a gate explains it".
+// That matters because NO app-scope write persists before the app is published, so on a fresh app
+// the gate diagnosis fires for every gate-bearing feature (`nlSearch`, `nlChart`,
+// `formFillSmartPaste`) and abandoning them leaves `--verify` failing on override rows the build
+// declined to write a second time.
+//
+// Driven through the mock rather than the real bundle deliberately: the bundle's own behaviour is
+// pinned by ai-app-features-real-bundle.test.js, whereas what is under test here is the ENGINE's
+// choice of which buckets to defer — which no bundle-level test can see.
+const aiRetrySpec = () => makeSpec({ ai: { appFeatures: { nlSearch: true }, summaries: { default: 'off' } } });
+const withAiResults = (results) => {
+  const { sdk, calls } = mockSdk();
+  let n = 0;
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return results[Math.min(n++, results.length - 1)];
+  };
+  return { sdk, calls };
+};
+const skippedResult = () => ({
+  applied: [], skipped: ['nlSearch'], notPersisted: [], unverified: [], failed: [],
+  outcomes: [{ feature: 'nlSearch', setting: 'NLGridSearchSetting', status: 'skipped', appOverrideExists: false, reason: "the org readiness gate 'EnableNLGridSearch' reads 'false'" }],
+});
+
+test('ai-features phase: a `skipped` feature is RE-ISSUED after publish and reported applied', async () => {
+  const { sdk, calls } = withAiResults([
+    skippedResult(),
+    { applied: ['nlSearch'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [{ feature: 'nlSearch', status: 'applied' }] },
+  ]);
+  const events = [];
+  const r = await runSdkBuild(aiRetrySpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'the gate-explained failure must be re-issued after publish');
+  const af = r.created.ai.appFeatures;
+  assert.ok(af.applied.includes('nlSearch'), `expected nlSearch applied, got ${JSON.stringify(af.applied)}`);
+  assert.ok(!af.skipped.includes('nlSearch'),
+    'it must also be REMOVED from `skipped`, or created.ai.appFeatures contradicts itself for a --json consumer');
+  const outcome = (af.outcomes || []).find((o) => o.feature === 'nlSearch');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.strictEqual(outcome.appOverrideExists, true);
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0,
+    'a recovered feature must not also be reported as a problem');
+});
+
+test('ai-features phase: a `skipped` feature the re-issue cannot recover is reported as ADMIN GATE OFF', async () => {
+  // The honest other half: when the gate really is blocking, the re-issue changes nothing and the
+  // operator gets an actionable message rather than a silent success — and the SDK's own per-feature
+  // reason (which names the gate and its value) is preferred over the canned bucket text.
+  const { sdk, calls } = withAiResults([skippedResult()]);
+  const events = [];
+  const r = await runSdkBuild(aiRetrySpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'it is still re-issued — only the outcome differs');
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warnings.some((e) => /ADMIN GATE OFF: nlSearch/.test(e.label)),
+    `expected an ADMIN GATE OFF warning, got ${JSON.stringify(warnings.map((e) => e.label))}`);
+  assert.ok(warnings.some((e) => /EnableNLGridSearch/.test(e.label)),
+    'the SDK reason names the gate, which is the actionable part');
+  assert.ok(!r.created.ai.appFeatures.applied.includes('nlSearch'), 'and it is NOT claimed as applied');
 });
 
 test('ai-features phase: passes a raised verify budget so a fresh app module is not falsely reported', async () => {

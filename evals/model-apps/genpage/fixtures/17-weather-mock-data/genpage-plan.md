@@ -41,7 +41,7 @@ No connector bindings.
 
 ## Design Preferences
 
-- Inline mock weather data (connectors feature flag OFF — connector not available at this time)
+- Inline mock weather data (maker chose mock data — no connector binding requested)
 - KPI-style metric cards for temperature, conditions, humidity
 - 5-day forecast card row below current conditions
 - Responsive flex layout (no 100vh / 100vw)

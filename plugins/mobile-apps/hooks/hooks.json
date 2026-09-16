@@ -1,5 +1,4 @@
 {
-  "_comment": "Telemetry-only start hooks. They never validate, mutate, or block tool calls. File validation stays owned by each workflow through scripts/validate-mobile-files.js.",
   "hooks": {
     "PreToolUse": [
       {
