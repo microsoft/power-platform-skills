@@ -254,7 +254,7 @@ function downloadFacts(spec) {
     const primary = lc(e.primaryAttribute.schemaName);
     const attrs = [];
     const shadows = [];
-    const attr = (o) => attrs.push(Object.assign({ IsCustomAttribute: true, IsLogical: false, AttributeOf: null }, o));
+    const attr = (o) => attrs.push(Object.assign({ IsCustomAttribute: true, IsLogical: false, AttributeOf: null, IsValidForCreate: true }, o));
     attr({ SchemaName: e.primaryAttribute.schemaName, LogicalName: primary, AttributeType: 'String' });
 
     // `polymorphic` picks the IsLogical value Dataverse reports, and gates the third shadow: only a
@@ -278,6 +278,15 @@ function downloadFacts(spec) {
       const type = String(col.type || 'Text');
       attr({ SchemaName: col.schemaName, LogicalName: lc(col.schemaName), AttributeType: DATAVERSE_ATTRIBUTE_TYPE[type] || 'String' });
       if (type === 'Customer' || type === 'Lookup') addShadows(lc(col.schemaName), type === 'Customer');
+      // A Money column gets a base-currency twin, and it is the awkward case: no `AttributeOf`, not
+      // logical, and `IsCustomAttribute: true`, so every shadow rule is blind to it. The ONE fact
+      // that separates it from an authored column is that the API refuses to create it. Modelled
+      // here so a Money column anywhere in the corpus guards that rule.
+      if (type === 'Money') {
+        const twin = `${lc(col.schemaName)}_base`;
+        attr({ SchemaName: twin, LogicalName: twin, AttributeType: 'Money', IsValidForCreate: false });
+        shadows.push(twin);
+      }
     }
     // A relationship's lookup lands on the REFERENCING table and is single-target, so its shadow is
     // the logical variant. lookupColumnsFor is the same resolver the build side uses.
