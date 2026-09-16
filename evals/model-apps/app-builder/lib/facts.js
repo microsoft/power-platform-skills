@@ -5,8 +5,11 @@ const path = require('node:path');
 // same depth genpage/lib uses to reach references/verified-icons.txt). These are offline-only modules
 // with no I/O, no SDK handle, and no network access, so they are safe to call from the eval harness.
 function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', 'lib', name)); }
+// Same, for a top-level script rather than a lib module. download-model-app.js exports its pure
+// helpers and performs no I/O at require time, so it is safe to load from the offline harness.
+function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', name)); }
 
-const { migrateAppSpec, validateAppSpec, lookupColumnsFor, SDK_ROLE_MARKER } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor, formSectionsOf, SDK_ROLE_MARKER } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
 const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
 const { subgridSectionIntent } = pluginLib('artifact-intent.js');
@@ -17,6 +20,10 @@ const { verifySpec } = pluginLib('verify-spec.js');
 // and the reverse-of-build teardown plan fully offline (no live env). See EVAL_GUIDE.md.
 const { planTeardown } = pluginLib('sdk-teardown.js');
 const { hydrateSpec } = pluginLib('hydrate-spec.js');
+// entityFromMetadata is the PURE metadata->spec projection the downloader uses for a table's
+// `columns[]`. Grading it here (rather than only in the plugin's unit tests) puts the download
+// side of the round-trip under the same fixture corpus as the build side.
+const { entityFromMetadata } = pluginLib2('download-model-app.js');
 
 // Plan 3's pure PAGEREF_ resolver may not be landed yet — load it optionally so the page oracle
 // degrades to a SKIP instead of crashing the harness. It IS present on this branch, but the
@@ -86,7 +93,18 @@ function wireFacts(spec) {
   return {
     views: (spec.views || []).map((v) => { const d = viewDef(spec, v); return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name) }; }),
     charts: (spec.charts || []).map((c) => { const d = chartDef(spec, c); return { entity: d.entityLogicalName, name: d.name, measure: d.series[0].aggregate, groupBy: d.categories[0].attribute }; }),
-    forms: (spec.forms || []).map((f) => { const intent = compileFormIntent(spec, f, {}); return { entity: intent.entityLogicalName, name: intent.name, fields: formFieldLogicals(intent) }; }),
+    forms: (spec.forms || []).map((f) => {
+      const intent = compileFormIntent(spec, f, {});
+      return {
+        entity: intent.entityLogicalName,
+        name: intent.name,
+        fields: formFieldLogicals(intent),
+        explicit: !!intent.__explicitLayout,
+        authoredShape: authoredFormShape(f),
+        compiledShape: compiledFormShape(intent),
+        placements: formPlacements(intent),
+      };
+    }),
     defaultViews: defaultViewFacts(spec),
     subgrids: subgridFacts(spec),
   };
@@ -124,6 +142,161 @@ function subgridFacts(spec) {
       const section = subgridSectionIntent({ subgridClassId: 'x', targetEntity: lc(sg.childEntity), relationshipName: 'r', viewId: 'v', label });
       out.push({ form: f.name || lc(f.entity), childEntity: lc(sg.childEntity), sectionColumns: section.columns, label });
     }
+  }
+  return out;
+}
+
+// --- form layout (#575) ------------------------------------------------------------------------
+// An explicit `tabs` layout used to be FLATTENED at build time: every field was pushed into the
+// deployed form's first section and no tab / form-column / section was ever created or resized, so a
+// two-column form an author wrote was deployed as one long single-column list. Nothing in this corpus
+// caught it, because no fixture used an explicit layout and no fact projected a form's SHAPE — only
+// its flat field list.
+//
+// So the shape is projected TWICE, from two independent code paths, which is what makes comparing
+// them an oracle rather than a restatement:
+//   · `authored` reads the raw spec, through formSectionsOf — the one helper that understands both
+//     the `sections` shorthand and the multi-column `columns[]` form. A reader that opens
+//     `tab.sections` directly silently skips every multi-column tab.
+//   · `compiled` reads compileFormIntent's output, which is what the engine actually deploys.
+// Flattening collapses `compiled` while `authored` is unchanged, so the two diverge.
+const cellsOfSection = (s) => ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
+// A sub-grid cell carries a RelationshipName parameter instead of a plain field control. The engine
+// appends sub-grid sections on EVERY layout (auto included), so a shape comparison must ignore them
+// or an authored-vs-compiled diff would report a section the author never wrote.
+const isSubgridCell = (c) => !!(c && c.control && c.control.parameters && c.control.parameters.RelationshipName);
+const labelOf = (x) => (x && x.label !== undefined ? x.label : null);
+
+function authoredFormShape(f) {
+  if (!f || !Array.isArray(f.tabs)) return null; // `auto` — the author declared no shape to honour
+  return f.tabs.map((t) => ({
+    label: labelOf(t),
+    expanded: t.expanded !== false,
+    // The `sections` shorthand IS one full-width form-column, so both shapes normalise to columns[].
+    columnCount: Array.isArray(t.columns) ? t.columns.length : 1,
+    // Only widths the author actually WROTE. Omitted widths are split evenly by the compiler, and
+    // asserting the eval's own copy of that split would grade the compiler against itself.
+    declaredWidths: Array.isArray(t.columns) ? t.columns.map((c) => (c && c.width) || null) : [null],
+    sections: formSectionsOf(t).map((s) => ({
+      label: labelOf(s),
+      columns: s.columns === undefined ? 1 : s.columns,
+      fields: (s.fields || []).map((x) => lc(typeof x === 'string' ? x : x && x.name)),
+    })),
+  }));
+}
+
+function compiledFormShape(intent) {
+  return (intent.tabs || []).map((t) => ({
+    label: labelOf(t),
+    expanded: t.expanded !== false,
+    columnCount: (t.columns || []).length,
+    declaredWidths: (t.columns || []).map((c) => (c && c.width) || null),
+    sections: (t.columns || []).flatMap((c) => ((c && c.sections) || [])
+      .filter((s) => !cellsOfSection(s).some(isSubgridCell))
+      .map((s) => ({
+        label: labelOf(s),
+        columns: s.columns === undefined ? 1 : s.columns,
+        fields: cellsOfSection(s).map((cell) => lc(cell.control && cell.control.fieldName)),
+      }))),
+  }));
+}
+
+// Every placed control, flattened. Feeds the two invariants that hold on EVERY layout: a field is
+// placed exactly ONCE (the reconcile MOVES a misplaced control between sections — it must never
+// duplicate one), and the placed set is exactly the set the form intends to carry.
+function formPlacements(intent) {
+  const out = [];
+  for (const t of intent.tabs || []) {
+    for (const c of t.columns || []) {
+      for (const s of (c && c.sections) || []) {
+        for (const cell of cellsOfSection(s)) {
+          if (isSubgridCell(cell)) continue;
+          out.push({
+            tab: t.name,
+            section: s.name,
+            field: lc(cell.control && cell.control.fieldName),
+            colspan: cell.colspan === undefined ? 1 : cell.colspan,
+            rowspan: cell.rowspan === undefined ? 1 : cell.rowspan,
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// --- download column projection (#574) ----------------------------------------------------------
+// Dataverse materialises SHADOW attributes beside every lookup: `<lookup>name`, `<lookup>yominame`,
+// and for a polymorphic (Customer / multi-target) lookup also `<lookup>idtype`. None was ever
+// authored, and a download that emits them invents Text columns which a fresh-environment rebuild
+// then really creates — replacing a lookup with two text fields.
+//
+// The two shadow shapes differ in the one field that used to be the whole filter. A single-target
+// lookup's shadow is logical (`IsLogical: true`); a POLYMORPHIC lookup's shadow is physically stored,
+// so `IsLogical` is false and that rule could not see it (#574). `AttributeOf` names the attribute a
+// shadow projects and is the fact that covers both. Feeding both shapes through the real projection
+// means a regression in EITHER rule surfaces here as an invented column.
+//
+// Dataverse's own AttributeType spelling per spec type — deliberately written out here rather than
+// imported, because this models what the PLATFORM returns, not what the plugin believes.
+const DATAVERSE_ATTRIBUTE_TYPE = {
+  Text: 'String', Memo: 'Memo', Choice: 'Picklist', MultiChoice: 'Virtual', Boolean: 'Boolean',
+  Money: 'Money', DateTime: 'DateTime', Integer: 'Integer', BigInt: 'BigInt', Decimal: 'Decimal',
+  Double: 'Double', File: 'File', Image: 'Image', AutoNumber: 'String', Customer: 'Customer',
+  Lookup: 'Lookup',
+};
+
+function downloadFacts(spec) {
+  const out = [];
+  for (const e of spec.entities || []) {
+    if (!e || e.existing || !e.primaryAttribute) continue;
+    const logical = lc(e.schemaName);
+    const primary = lc(e.primaryAttribute.schemaName);
+    const attrs = [];
+    const shadows = [];
+    const attr = (o) => attrs.push(Object.assign({ IsCustomAttribute: true, IsLogical: false, AttributeOf: null }, o));
+    attr({ SchemaName: e.primaryAttribute.schemaName, LogicalName: primary, AttributeType: 'String' });
+
+    // `polymorphic` picks the IsLogical value Dataverse reports, and gates the third shadow: only a
+    // multi-target lookup needs an `idtype` discriminator.
+    const addShadows = (lookupLogical, polymorphic) => {
+      const isLogical = !polymorphic;
+      for (const suffix of ['name', 'yominame']) {
+        const n = `${lookupLogical}${suffix}`;
+        attr({ SchemaName: n, LogicalName: n, AttributeType: 'String', AttributeOf: lookupLogical, IsLogical: isLogical });
+        shadows.push(n);
+      }
+      if (polymorphic) {
+        const n = `${lookupLogical}idtype`;
+        attr({ SchemaName: n, LogicalName: n, AttributeType: 'EntityName', AttributeOf: lookupLogical, IsLogical: false });
+        shadows.push(n);
+      }
+    };
+
+    for (const col of e.columns || []) {
+      if (!col || !col.schemaName) continue;
+      const type = String(col.type || 'Text');
+      attr({ SchemaName: col.schemaName, LogicalName: lc(col.schemaName), AttributeType: DATAVERSE_ATTRIBUTE_TYPE[type] || 'String' });
+      if (type === 'Customer' || type === 'Lookup') addShadows(lc(col.schemaName), type === 'Customer');
+    }
+    // A relationship's lookup lands on the REFERENCING table and is single-target, so its shadow is
+    // the logical variant. lookupColumnsFor is the same resolver the build side uses.
+    for (const l of lookupColumnsFor(spec, logical) || []) {
+      if (!l || !l.logical) continue;
+      attr({ SchemaName: l.logical, LogicalName: l.logical, AttributeType: 'Lookup' });
+      addShadows(l.logical, false);
+    }
+    // One stock attribute, so the custom-only rule stays under test alongside the shadow rules.
+    attr({ SchemaName: 'CreatedOn', LogicalName: 'createdon', AttributeType: 'DateTime', IsCustomAttribute: false });
+
+    const recovered = entityFromMetadata({ primaryNameAttribute: primary, attributes: attrs }, logical);
+    out.push({
+      entity: logical,
+      authoredColumns: (e.columns || []).map((c) => lc(c && c.schemaName)).sort(),
+      recoveredColumns: (((recovered && recovered.columns) || []).map((c) => lc(c && c.schemaName))).sort(),
+      shadowNames: shadows.sort(),
+      systemAttributes: ['createdon'],
+    });
   }
   return out;
 }
@@ -483,6 +656,7 @@ async function stageFacts(rawSpec) {
     page: pageFacts(spec),
     process: processFacts(spec),
     teardown: teardownFacts(spec),
+    download: downloadFacts(spec),
     roundTrip: await roundTripFacts(spec),
     PHASES,
   };

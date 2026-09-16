@@ -472,7 +472,10 @@ test('verifySpec: view-columns check is SKIPPED when the reader gives no layoutx
 });
 
 test('verifySpec: default-form — the selected Main form must read back systemform.isdefault=true', async () => {
-  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
+  // The owning table must be declared, and declared as one this solution OWNS: the build only
+  // promotes a default form for its own custom tables, so verify only asserts it for those.
+  const spec = { solution: { publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', columns: [] }], views: [], charts: [], appShell: { areas: [] },
     forms: [
       { entity: 'new_ticket', name: 'Agent Form', formType: 'Main' },
       { entity: 'new_ticket', name: 'Manager Form', formType: 'Main', isDefault: true },
@@ -497,8 +500,39 @@ test('verifySpec: default-form — the selected Main form must read back systemf
   assert.strictEqual(r.ok, false);
 });
 
-test('verifySpec: default-form check is reader-gated for existence-only callers', async () => {
-  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
+// The build refuses to re-point the default form of a reused or stock table (sdk-build.js
+// `isOwnCustomTable`) because that is an environment-wide side effect on a table the spec does not
+// own. A verifier that asserts `isdefault` anyway makes --verify permanently unsatisfiable: the
+// author is told the build failed to do something it deliberately never attempts.
+test('verifySpec: no default-form check is emitted for a reused or stock table the build never promotes', async () => {
+  const spec = { solution: { publisherPrefix: 'new' },
+    entities: [{ schemaName: 'account', existing: true, columns: [] }, { schemaName: 'new_ticket', columns: [] }],
+    views: [], charts: [], appShell: { areas: [] },
+    forms: [
+      { entity: 'account', name: 'Account Main', formType: 'Main' },
+      { entity: 'new_ticket', name: 'Ticket Main', formType: 'Main' },
+    ] };
+  const read = {
+    findTable: async (l) => ({ logicalName: l }), findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (/name eq 'Account Main'/.test(opts.filter)) return [{ formid: 'account-form-id' }];
+      if (/name eq 'Ticket Main'/.test(opts.filter)) return [{ formid: 'ticket-form-id' }];
+      return [];
+    },
+    // Dataverse's own stock Account form holds the default slot, so the reused table reads false.
+    formDefaultState: async (entity, formId) => ({ isDefault: formId === 'ticket-form-id' }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(!r.checks.some((c) => c.kind === 'form-default' && /^account\./.test(c.name)),
+    'a reused table must not be asserted to hold the default form');
+  assert.ok(r.checks.some((c) => c.kind === 'form-default' && c.name === 'new_ticket.Ticket Main' && c.present),
+    "the solution's own custom table is still checked");
+});
+
+test('verifySpec: default-form check is reader-gated for existence-only callers', async () => {  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
     forms: [{ entity: 'new_ticket', name: 'Agent Form', formType: 'Main', isDefault: true }] };
   const read = {
     findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',

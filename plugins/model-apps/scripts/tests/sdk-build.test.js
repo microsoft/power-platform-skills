@@ -1701,6 +1701,92 @@ test('form topology: a section the deployed form lacks is CREATED, not flattened
   assert.deepStrictEqual(added[0].args[3].rows, [], 'a new section is created EMPTY — the field pass places controls, so a field already on the form is moved rather than duplicated');
 });
 
+// --- container identity: two wants must never converge on one live container -------------------
+
+// `addSubgrids` appends a sub-grid host section to tabs[0].columns[0].sections on EVERY layout, so
+// it sits in the same array as the author's own sections, just after them. The positional fallback
+// has no notion of "this is not a field section", so the moment an explicit layout declares as many
+// sections as the sub-grid's index, it claimed the sub-grid: relabelled it to the author's title and
+// injected bound controls into the row holding the grid. The author's section was never created and
+// the build was green — and because it converges on the same wrong shape, a rebuild and --verify
+// both agree with it.
+function formWithSubgrid() {
+  const cell = (fn) => ({ cells: [{ control: { fieldName: fn } }] });
+  return { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true,
+      columns: [{ width: '100%', sections: [
+        { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: false, columns: 1, rows: [cell('new_name')] },
+        { id: 's1', name: 'section_grid_tickets', label: 'Tickets', visible: true, showLabel: true, columns: 1,
+          rows: [{ cells: [{ control: { parameters: { RelationshipName: 'new_customer_new_ticket' } } }] }] },
+      ] }] },
+  ], bag: { a: [], c: [] } };
+}
+
+test('form topology: an engine-owned sub-grid section is not seized by the positional fallback', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name'] },
+    { name: 'section_brandnew', label: 'Brand New', columns: 1, fields: ['new_tier'] },
+  ] }]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: formWithSubgrid() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const added = find(calls, 'addElement').filter((c) => /\/sections$/.test(String(c.args[2])));
+  assert.strictEqual(added.length, 1, `the author's section must be CREATED, not taken from the sub-grid; saw ${added.map((c) => c.args[2]).join(', ')}`);
+  assert.strictEqual(added[0].args[3].name, 'section_brandnew');
+  const relabelled = find(calls, 'updateElement').filter((c) => c.args[2] === '/tabs/0/columns/0/sections/1' && c.args[3] && c.args[3].label !== undefined);
+  assert.deepStrictEqual(relabelled, [], 'the sub-grid section must keep its own label');
+});
+
+// The compiler substitutes a DEFAULT label for an unlabeled container — 'General' for a tab,
+// 'Details' for a section (artifact-intent.js). So an author who labels nothing produces several
+// wants carrying the same label, and a label pass with no memory of what an earlier want already
+// took returns index 0 for every one of them.
+test('form topology: two unlabeled sections do not collapse onto the same live section', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ sections: [
+    { fields: ['new_name'] },
+    { fields: ['new_tier'] },
+  ] }]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const added = find(calls, 'addElement').filter((c) => /\/sections$/.test(String(c.args[2])));
+  assert.strictEqual(added.length, 1, 'the second unlabeled section must be created, not merged into the first');
+  assert.strictEqual(added[0].args[3].name, 'section_0_1');
+});
+
+test('form topology: two unlabeled tabs do not collapse onto the same live tab', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([
+    { sections: [{ fields: ['new_name'] }] },
+    { sections: [{ fields: ['new_tier'] }] },
+  ]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const addedTabs = find(calls, 'addElement').filter((c) => c.args[2] === '/tabs');
+  assert.strictEqual(addedTabs.length, 1, 'the second unlabeled tab must be created, not merged into the first');
+  assert.strictEqual(addedTabs[0].args[3].name, 'tab_1');
+});
+
+// The field pass places only BOUND fields. A notes/timeline section holds one non-field control, so
+// creating it with `rows: []` like an ordinary section deployed a visible "Notes" header promising a
+// timeline that nothing ever adds — and the build was green.
+test('form topology: a created notes section keeps its timeline row instead of deploying empty', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name'] },
+  ] }]);
+  spec.forms[0].notes = true;
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const notes = find(calls, 'addElement').filter((c) => /\/sections$/.test(String(c.args[2])) && c.args[3] && c.args[3].name === 'section_notes');
+  assert.strictEqual(notes.length, 1, 'the notes section must be created');
+  assert.ok((notes[0].args[3].rows || []).length >= 1, 'the notes section must carry its timeline row, not be created empty');
+});
+
 test('form topology: a section column count is converged on an EXISTING section (1 -> 2 columns)', async () => {
   const spec = makeSpec();
   spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [

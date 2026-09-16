@@ -672,9 +672,11 @@ why they need naming here at all.
 | section | `fields[]` | Column logical names, or `{ "name": …, … }` entries. |
 | field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it. |
 
-A tab declares **either** `sections` **or** `columns`, never both. Any other key is **rejected** —
-including `showLabel`/`labelPosition` on a tab and `labelPosition`/`locked` on a section, which the
-SDK's serializer silently discards, so accepting them would promise a layout Dataverse never renders.
+A tab declares **either** `sections` **or** `columns`, never both. `columns` on a **tab** is the list
+of form-columns; `columns` on a **section** is its 1–4 grid width — a number on a tab is rejected
+rather than silently discarded. Any other key is **rejected** — including `showLabel`/`labelPosition`
+on a tab and `labelPosition`/`locked` on a section, which the SDK's serializer silently discards, so
+accepting them would promise a layout Dataverse never renders.
 
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
 flattened into its first section: missing tabs, form-columns and sections are **created**, a
@@ -683,6 +685,19 @@ the wrong section is **moved** (never duplicated — the cell keeps its id and a
 maker edited). Containers are matched by `name`, then `label`, then position, so a form built by an
 earlier `auto` layout — or by hand in Maker — converges instead of gaining a duplicate tab. Nothing
 is renamed, because form scripts and business rules can reference a section by name.
+
+Two rules keep that matching from claiming the wrong container. An index an earlier tab or section
+already matched is **not reused**, because an unlabeled container compiles to a default label
+(`General` for a tab, `Details` for a section) and several of them would otherwise all match the
+first one. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
+matched only by `name`: a label or a position is not evidence about what a container *is*, and
+matching one positionally would relabel a sub-grid and place fields in the row holding its grid.
+
+⚠ Containers are only ever added or updated, never removed. Moving a section between form-columns or
+tabs while letting its `name` be generated therefore leaves the original behind as an **empty
+section with the same label** — generated names encode position (`section_<tab>_<column>_<index>`),
+so the moved section is a different identity. Give a section an explicit `name` when you intend to
+move it, and delete a section you no longer want in Maker.
 
 ⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
 layout does not list is removed (never the primary field). Set `"prune": false` to restyle or

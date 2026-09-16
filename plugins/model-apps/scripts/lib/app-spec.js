@@ -1172,6 +1172,14 @@ function validateFormLayoutKeys(f, errors) {
     if (t && Array.isArray(t.columns) && Array.isArray(t.sections)) {
       errors.push(`${label}: ${where} declares both 'sections' and 'columns' — 'sections' is the shorthand for one full-width column, so use one or the other (move those sections into columns[0].sections).`);
     }
+    // `columns` means an INTEGER grid width on a section but an ARRAY of form-columns on a tab — the
+    // single most confusable key in this schema. A non-array tab `columns` used to validate clean and
+    // then be discarded by the compiler (which reads `Array.isArray(t.columns)`), so `"columns": 2`
+    // on a tab silently produced a one-column form: exactly the silent no-op this allow-list exists
+    // to end.
+    if (t && t.columns !== undefined && !Array.isArray(t.columns)) {
+      errors.push(`${label}: ${where} has columns '${t.columns}' — on a TAB, 'columns' is the list of form-columns ([{ "width": "60%", "sections": [...] }]). To give a SECTION a multi-column grid, put 'columns': ${t.columns} on the section instead.`);
+    }
     const columns = (t && Array.isArray(t.columns)) ? t.columns : [];
     columns.forEach((c, ci) => {
       unknown(`${where} column #${ci + 1}`, c, FORM_TAB_COLUMN_KEYS);
@@ -2480,6 +2488,42 @@ function validateAppSpec(spec, opts = {}) {
         const ent = lower.has(k.toLowerCase())
           ? (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === k.toLowerCase())
           : null;
+        // Mirror chooseMatchOn (entity-provision.js): with no safe single-column alternate key the
+        // loader falls back to the primary NAME column as `matchOn`, and duplicate names would let
+        // Dataverse resolve or deduplicate the wrong row — so the seeder refuses. That refusal lands
+        // in the sample-data phase, i.e. AFTER tables, forms and views are already deployed, which
+        // turns ordinary sample data (two tickets both called 'Printer issue') into a spec that
+        // validates clean and then stops building halfway. Caught here instead, at author time.
+        //
+        // Values are read case-insensitively because a sample record is keyed by the column name as
+        // the author wrote it, while the runtime compares the resolved lowercase logical name.
+        if (ent && ent.primaryAttribute && ent.primaryAttribute.schemaName) {
+          const valueOf = (rec, col) => {
+            if (!rec || typeof rec !== 'object') return undefined;
+            const want = String(col).toLowerCase();
+            for (const key of Object.keys(rec)) if (key.toLowerCase() === want) return rec[key];
+            return undefined;
+          };
+          const filled = (col) => v.length > 0 && v.every((r) => {
+            const x = valueOf(r, col);
+            return x !== undefined && x !== null && x !== '';
+          });
+          // An alternate key is enforced-unique by Dataverse, so it is preferred and makes the
+          // primary-name fallback irrelevant.
+          const hasSafeKey = (ent.alternateKeys || []).some((key) => (key.columns || []).length === 1 && filled(key.columns[0]));
+          const primaryCol = ent.primaryAttribute.schemaName;
+          if (!hasSafeKey && filled(primaryCol)) {
+            const seen = new Set();
+            for (const r of v) {
+              const val = String(valueOf(r, primaryCol));
+              if (seen.has(val)) {
+                errors.push(`sampleData['${k}']: duplicate ${String(primaryCol).toLowerCase()} value '${val}'. With no single-column alternate key, ${String(primaryCol).toLowerCase()} is used as matchOn and Dataverse could resolve or deduplicate the wrong row. Add a single-column alternate key with unique values, or make ${String(primaryCol).toLowerCase()} unique across the sample rows.`);
+                break;
+              }
+              seen.add(val);
+            }
+          }
+        }
         for (const rec of v) {
           for (const { field, token } of invalidChoiceSampleTokens(spec, ent, rec)) {
             errors.push(`sampleData['${k}']: value '${token}' for choice column '${field}' is not a declared option label`);
@@ -3073,6 +3117,11 @@ module.exports = {
   relationshipFor,
   resolveParentRelationship,
   lookupColumnsFor,
+  // Exported so every raw-spec form reader — including the offline eval harness — goes through the
+  // one helper that understands BOTH tab shapes. A reader that opens `tab.sections` directly silently
+  // skips every multi-column tab, which is exactly how a lint rule came to report such a tab as
+  // having no sections at all.
+  formSectionsOf,
   childRelationshipsFor,
   relationshipSchemaName,
   prefixedRelationshipName,

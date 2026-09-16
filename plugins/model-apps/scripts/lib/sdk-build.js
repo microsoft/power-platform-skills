@@ -1798,13 +1798,44 @@ async function runSdkBuild(spec, opts = {}) {
   //      authored names emits `tab_0`/`section_0_0` — so name matching alone would append a second
   //      tab to every form this plugin had already built, on every single rebuild.
   // A container is CREATED only when all three miss, which is what stops a rebuild duplicating one.
-  const matchContainer = (list, want, wantIndex) => {
+  //
+  // `claimed` carries the indices an EARLIER want already took. Without it every want is matched
+  // independently, and because the compiler substitutes a DEFAULT label for an unlabeled container
+  // ('General' for a tab, 'Details' for a section), an author who labels nothing produces several
+  // wants with an identical label — the label pass then returns index 0 for all of them and the
+  // whole layout collapses into one container. Position has the same failure with repeated indices.
+  //
+  // `skip` hides containers the weaker passes must not claim. Only NAME may match them, because a
+  // name is positive evidence and a label/position is not.
+  const matchContainer = (list, want, wantIndex, opts) => {
     const items = list || [];
+    const claimed = (opts && opts.claimed) || null;
+    const skip = (opts && opts.skip) || (() => false);
     const eq = (a, b) => a !== undefined && a !== null && String(a).toLowerCase() === String(b || '').toLowerCase();
-    let idx = items.findIndex((x) => want.name && eq(x.name, want.name));
-    if (idx < 0) idx = items.findIndex((x) => want.label && eq(x.label, want.label));
-    if (idx < 0 && wantIndex < items.length) idx = wantIndex;
+    const free = (i) => !claimed || !claimed.has(i);
+    let idx = items.findIndex((x, i) => free(i) && want.name && eq(x.name, want.name));
+    if (idx < 0) idx = items.findIndex((x, i) => free(i) && !skip(x) && want.label && eq(x.label, want.label));
+    if (idx < 0 && wantIndex < items.length && free(wantIndex) && !skip(items[wantIndex])) idx = wantIndex;
     return idx < 0 ? null : { index: idx, item: items[idx] };
+  };
+
+  // A section the ENGINE owns rather than one the author laid out: a sub-grid host, or the
+  // notes/timeline section. `addSubgrids` appends one such section per authored sub-grid on EVERY
+  // layout (auto included), and `compileFormIntent` appends the notes section — so they sit in the
+  // same `sections[]` array as the author's own, just after them.
+  //
+  // They must be invisible to the LABEL and POSITION passes. Otherwise, as soon as an explicit
+  // layout declares as many sections as the index of the first appended one, the positional fallback
+  // claims the sub-grid: it gets relabelled to the author's section title, bound field controls are
+  // injected into the row holding the grid control, and the author's section is never created. The
+  // build is green and a rebuild converges on the same wrong shape, so nothing downstream reports it.
+  //
+  // Detected structurally (every cell carries a control with no `fieldName`) rather than by name, so
+  // it holds for a sub-grid whose section the author renamed in Maker. An EMPTY section has no cells
+  // and is deliberately NOT engine-owned — it stays matchable so a vacated section can be reused.
+  const isEngineOwnedSection = (s) => {
+    const cells = ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
+    return cells.length > 0 && cells.every((c) => c && c.control && !c.control.fieldName);
   };
 
   // Send only the keys that actually differ, so a rebuild that changes nothing issues no writes.
@@ -1835,24 +1866,32 @@ async function runSdkBuild(spec, opts = {}) {
   // It cannot re-derive this by name: a position-matched section keeps its own deployed name (it is
   // deliberately NOT renamed, because form scripts and business rules can reference a section name).
   const reconcileFormTopology = async (formId, def) => {
-    const stripRows = (section) => Object.assign({}, section, { rows: [] });
+    // An engine-owned section carries its rows INTACT when created: the field pass places only bound
+    // fields, so a notes/timeline section created empty would deploy a visible section header
+    // promising a control that nothing ever adds.
+    const stripRows = (section) => (isEngineOwnedSection(section) ? Object.assign({}, section) : Object.assign({}, section, { rows: [] }));
     const sectionTargets = {};
     const wantTabs = def.tabs || [];
+    // Indices already taken by an earlier want, so two wants can never converge on one container.
+    const claimedTabs = new Set();
+    const claimedSections = new Map(); // column pointer -> Set(index)
+    const claimedIn = (key) => { if (!claimedSections.has(key)) claimedSections.set(key, new Set()); return claimedSections.get(key); };
     for (let ti = 0; ti < wantTabs.length; ti++) {
       const wantTab = wantTabs[ti];
       // Re-read before every mutation: addElement appends and shifts sibling indices, so a pointer
       // computed against an earlier snapshot can address the wrong container.
       let form = await provision.getArtifact('form', formId) || {};
-      const tabMatch = matchContainer(form.tabs, wantTab, ti);
+      const tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
       if (!tabMatch) {
         await provision.addElement('form', formId, '/tabs', Object.assign({}, wantTab, {
           columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: (c.sections || []).map(stripRows) })),
         }));
         form = await provision.getArtifact('form', formId) || {};
-        const added = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1);
-        if (added) recordSectionTargets(sectionTargets, wantTab, added.index, added.item);
+        const added = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
+        if (added) { claimedTabs.add(added.index); recordSectionTargets(sectionTargets, wantTab, added.index, added.item); }
         continue;
       }
+      claimedTabs.add(tabMatch.index);
       const tabPointer = '/tabs/' + tabMatch.index;
       const tabPatch = diffPatch(tabMatch.item, wantTab, ['label', 'expanded', 'visible']);
       if (Object.keys(tabPatch).length) await provision.updateElement('form', formId, tabPointer, tabPatch);
@@ -1884,15 +1923,18 @@ async function runSdkBuild(spec, opts = {}) {
           // A section may have been dragged to a different tab in Maker; it is still THAT section,
           // so a form-wide name hit outranks a positional one inside this column.
           const global = wantSection.name ? findSectionLocation(form, wantSection.name) : null;
-          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si);
+          const claimedHere = claimedIn(columnPointer);
+          const local = global ? null : matchContainer((liveSections || {}).sections, wantSection, si, { claimed: claimedHere, skip: isEngineOwnedSection });
           if (!global && !local) {
             await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection));
             form = await provision.getArtifact('form', formId) || {};
             const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
             const addedIdx = addedList.length - 1;
+            claimedHere.add(addedIdx);
             sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
             continue;
           }
+          if (local) claimedHere.add(local.index);
           const pointer = global ? global.pointer : columnPointer + '/sections/' + local.index;
           const live = global ? global.section : local.item;
           sectionTargets[wantSection.name] = { pointer, name: live.name };

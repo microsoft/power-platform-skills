@@ -211,7 +211,7 @@ test('readerFor + verifySpec reads deployed fetchxml and systemform.isdefault th
   const spec = {
     solution: { publisherPrefix: 'new' },
     app: { name: 'Support Desk', uniqueName: 'new_supportdesk' },
-    entities: [], charts: [], appShell: { areas: [] },
+    entities: [{ schemaName: 'new_ticket', columns: [] }], charts: [], appShell: { areas: [] },
     views: [{ entity: 'new_ticket', name: 'My Tickets', columns: ['new_subject'], activeOnly: false, filters: [{ attr: 'modifiedon', op: 'this-week' }] }],
     forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', isDefault: true }],
   };

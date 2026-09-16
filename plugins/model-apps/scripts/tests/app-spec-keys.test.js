@@ -436,6 +436,17 @@ test('form layout: a tab cannot declare both sections and columns', () => {
     .some((e) => /declares both \x27sections\x27 and \x27columns\x27/.test(e)));
 });
 
+// `columns` is an INTEGER grid width on a section but an ARRAY of form-columns on a tab. A non-array
+// tab `columns` used to validate clean and then be dropped by the compiler (which reads
+// `Array.isArray(t.columns)`), so `"columns": 2` on a tab silently shipped a one-column form — the
+// exact silent no-op this allow-list exists to end, on the schema's most confusable key. The
+// "declares both" rule above cannot catch it: that too requires Array.isArray.
+test('form layout: a tab columns that is a NUMBER is rejected and points at the section key', () => {
+  const errs = errsFor([{ label: 'G', columns: 2, sections: [{ label: 'S', fields: [] }] }]);
+  assert.ok(errs.some((e) => /has columns \x272\x27/.test(e)), `expected a tab-columns error; got ${JSON.stringify(errs)}`);
+  assert.ok(errs.some((e) => /put \x27columns\x27: 2 on the section instead/.test(e)), 'the message must name the fix');
+});
+
 test('form layout: out-of-range spans, section columns and column widths are rejected', () => {
   assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', columns: 9, fields: [] }] }])
     .some((e) => /may span 1 to 4 columns/.test(e)), 'section columns');
@@ -453,6 +464,33 @@ test('form layout: a valid explicit layout with spans and multi-column tabs pass
     { width: '40%', sections: [{ name: 's2', label: 'S2', columns: 1, fields: ['contoso_name'] }] },
   ] }]);
   assert.deepStrictEqual(errs.filter((e) => /unknown key|must be a percentage|may span|has colspan|has rowspan/.test(e)), []);
+});
+
+// The seeder refuses to use a duplicated primary name as `matchOn` (Dataverse could resolve or
+// deduplicate the wrong row). That refusal happens in the sample-data phase — after tables, forms and
+// views are already deployed — so ordinary sample data used to validate clean and then stop the build
+// halfway. The gate mirrors chooseMatchOn exactly, including both of its escape hatches.
+test('sampleData: duplicate primary-name values are rejected at author time, not mid-build', () => {
+  const dup = base();
+  dup.sampleData = { contoso_order: [{ contoso_name: 'Printer issue' }, { contoso_name: 'Printer issue' }] };
+  assert.ok(validateAppSpec(dup, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name value 'Printer issue'/.test(e)));
+
+  const unique = base();
+  unique.sampleData = { contoso_order: [{ contoso_name: 'A' }, { contoso_name: 'B' }] };
+  assert.ok(!validateAppSpec(unique, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)), 'unique names must stay valid');
+
+  // A single-column alternate key is enforced-unique by Dataverse, so it is what matchOn uses and
+  // the primary name never comes into it.
+  const keyed = base();
+  keyed.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+  keyed.sampleData = { contoso_order: [{ contoso_name: 'X', contoso_code: '1' }, { contoso_name: 'X', contoso_code: '2' }] };
+  assert.ok(!validateAppSpec(keyed, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)), 'a safe alternate key makes the primary irrelevant');
+
+  // A partially/entirely empty primary means matchOn is omitted altogether, so there is no wrong-row
+  // resolve to guard against.
+  const empty = base();
+  empty.sampleData = { contoso_order: [{ contoso_name: '' }, { contoso_name: '' }] };
+  assert.ok(!validateAppSpec(empty, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)));
 });
 
 test('sampleData: _seedKey is rejected because it reaches Dataverse as an unknown attribute', () => {

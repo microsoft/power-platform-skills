@@ -56,6 +56,16 @@ async function verifySpec(spec, read, opts = {}) {
     if (formType !== 'Main') continue;
     const entity = String(f.entity || '').toLowerCase();
     if (!entity) continue;
+    // Mirror the BUILD's promotion guard exactly (sdk-build.js `isOwnCustomTable`): the build
+    // refuses to re-point the default form of a reused or stock table, because that is an
+    // environment-wide side effect on a table the spec does not own. Asserting `isdefault` for a
+    // table the build deliberately never promotes makes `--verify` permanently unsatisfiable for any
+    // spec that puts a Main form on `account`, `contact`, or an `existing: true` table.
+    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === entity);
+    const prefix = spec.solution && spec.solution.publisherPrefix;
+    const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
+      String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
+    if (!isOwnCustomTable) continue;
     const current = selectedDefaultForms.get(entity);
     if (!current || (f.isDefault === true && current.isDefault !== true)) selectedDefaultForms.set(entity, f);
   }

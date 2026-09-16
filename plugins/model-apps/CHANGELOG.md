@@ -47,7 +47,29 @@ downloads that round-trip Choice columns.
   patched in place when they differ (including a section's column count), and a field in the wrong
   section is **moved** rather than duplicated — the cell keeps its id and any control state a maker
   edited. Containers match by `name`, then `label`, then position, so a form built by an earlier
-  `auto` layout converges instead of gaining a duplicate tab on every rebuild.
+  `auto` layout converges instead of gaining a duplicate tab on every rebuild. Two containers can
+  never converge on the same live one: an index an earlier section or tab claimed is taken out of the
+  running, because the compiler substitutes a default label (`General`, `Details`) for an unlabeled
+  container and a whole layout of unlabeled sections used to collapse into the first. Sections the
+  **engine** owns — a sub-grid host, the notes/timeline section — are matched only by name, never by
+  label or position, so an explicit layout can no longer relabel a sub-grid and inject fields into
+  the row holding its grid control; and a notes section keeps its timeline row when created, instead
+  of deploying a section header promising a control nothing adds.
+- **`--verify` no longer demands a default form the build never promotes.** The build refuses to
+  re-point the default form of a reused or stock table (that is an environment-wide side effect on a
+  table the spec does not own), but the verifier asserted it anyway — so any spec with a Main form on
+  `account`, `contact`, or an `existing: true` table failed verify permanently, with nothing the
+  author could do about it. Verify now applies the build's own guard.
+- **A tab's `columns` must be a list of form-columns.** `columns` is an integer grid width on a
+  *section* and an array of form-columns on a *tab* — the schema's most confusable key. `"columns": 2`
+  on a tab validated clean and was then discarded by the compiler, silently shipping a one-column
+  form. It is now an error that names the fix.
+- **Duplicate sample-data names fail at author time, not halfway through the build.** With no
+  single-column alternate key the loader uses the primary name as `matchOn`, and refuses to do so
+  when two rows share one — a refusal that landed in the sample-data phase, after tables, forms and
+  views were already deployed. Two tickets both called "Printer issue" is ordinary sample data; it is
+  now caught by `validateAppSpec`, with the same escape hatches the loader honours (a safe alternate
+  key, or an empty primary that omits `matchOn` altogether).
 - **Two silent no-ops now report themselves.** A failed default-form promotion was swallowed
   entirely, so a build could record a default form it had not set; it warns with the reason, and
   `--verify` proves the deployed `systemform.isdefault` independently. An **existing** view's
