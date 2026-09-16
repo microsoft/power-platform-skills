@@ -441,6 +441,25 @@ test('form layout: a tab cannot declare both sections and columns', () => {
 // `Array.isArray(t.columns)`), so `"columns": 2` on a tab silently shipped a one-column form — the
 // exact silent no-op this allow-list exists to end, on the schema's most confusable key. The
 // "declares both" rule above cannot catch it: that too requires Array.isArray.
+// A cell that spans DOWN reserves its column in the rows beneath it, and FormXml fills a row's cells
+// left to right with no way to skip a reserved slot. Measured on the stock account/contact Main
+// forms: every section using rowspan puts it on the LAST cell, precisely because nothing can be
+// positioned beside it.
+test('form layout: a rowspan is rejected unless it is the last field in its section', () => {
+  const bad = errsFor([{ label: 'G', sections: [{ label: 'S', columns: 2, fields: [{ name: 'a', rowspan: 2 }, 'b'] }] }]);
+  assert.ok(bad.some((e) => /rowspan 2 but is not the last field in its section/.test(e)), `expected a rowspan placement error; got ${JSON.stringify(bad)}`);
+
+  const ok = errsFor([{ label: 'G', sections: [{ label: 'S', columns: 2, fields: ['b', { name: 'a', rowspan: 2 }] }] }]);
+  assert.ok(!ok.some((e) => /rowspan/.test(e)), `a terminal rowspan must stay valid; got ${JSON.stringify(ok)}`);
+});
+
+// formSectionsOf treats a non-array `sections` as absent, so a typo silently dropped the whole
+// form-column's layout instead of failing.
+test('form layout: a non-array sections inside a form-column is rejected', () => {
+  const errs = errsFor([{ label: 'G', columns: [{ width: '50%', sections: {} }] }]);
+  assert.ok(errs.some((e) => /non-array 'sections'/.test(e)), `expected a non-array sections error; got ${JSON.stringify(errs)}`);
+});
+
 test('form layout: a tab columns that is a NUMBER is rejected and points at the section key', () => {
   const errs = errsFor([{ label: 'G', columns: 2, sections: [{ label: 'S', fields: [] }] }]);
   assert.ok(errs.some((e) => /has columns \x272\x27/.test(e)), `expected a tab-columns error; got ${JSON.stringify(errs)}`);

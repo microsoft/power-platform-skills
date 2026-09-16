@@ -1968,6 +1968,30 @@ async function runSdkBuild(spec, opts = {}) {
     return (col && (col.sections || [])[Number(t[5])]) || null;
   };
 
+  // Write an authored `colspan`/`rowspan` onto a cell that is already on the form. Only a span the
+  // author explicitly declared is sent, and only when the deployed value differs, so a rebuild that
+  // changes nothing issues no writes.
+  const convergeCellSpans = async (formId, form, location, wantCell) => {
+    if (!location || !wantCell) return;
+    const live = cellAt(form, location);
+    if (!live) return;
+    const patch = {};
+    for (const key of ['colspan', 'rowspan']) {
+      const want = wantCell[key];
+      if (want === undefined) continue; // no opinion — never overwrite a maker's hand-set span
+      const current = live[key] === undefined ? 1 : live[key];
+      if (current !== want) patch[key] = want;
+    }
+    if (Object.keys(patch).length) await provision.updateElement('form', formId, location.cellPointer, patch);
+  };
+
+  // The live cell a findFieldCellLocation result points at.
+  const cellAt = (form, location) => {
+    const section = sectionAt(form, location.sectionPointer);
+    const row = section && (section.rows || [])[location.rowIndex];
+    return (row && (row.cells || [])[location.cellIndex]) || null;
+  };
+
   // Place one field in the section the layout declares, whether it is absent or merely misplaced.
   //
   // A field whose declared section could not be resolved falls back to the form's first section —
@@ -1984,6 +2008,15 @@ async function runSdkBuild(spec, opts = {}) {
       await provision.addElement('form', formId, rowsPtr, { cells: [wantCell] });
       return;
     }
+    // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
+    // used to be create-only on an existing form: an author who widened a field to `colspan: 2` on a
+    // deployed form got a green build and an unchanged cell.
+    //
+    // Only spans the author EXPLICITLY set are written. `fieldCellIntent` omits a span of 1, so an
+    // absent span means "no opinion" and leaves a cell a maker widened by hand alone — the same rule
+    // that keeps `isReadOnly: false` from ever being written.
+    await convergeCellSpans(formId, form, existing, wantCell);
+
     // Already on the form and already in the right section (or we have no opinion) — leave it be,
     // so a rebuild converges instead of reshuffling the form on every run.
     if (!targetPointer || existing.sectionPointer === targetPointer) return;
@@ -2158,8 +2191,8 @@ async function runSdkBuild(spec, opts = {}) {
       const reason = (err && err.message) ? String(err.message).slice(0, 200) : 'unknown error';
       if (typeof opts.warn === 'function') opts.warn(`could not make form the default for '${entityLogical}': ${reason} — the table keeps its previous default form`);
     }
-    if (!deactivateOthers || !promoted) return;
-    if (typeof provision.queryRecords !== 'function') return;
+    if (!deactivateOthers || !promoted) return promoted;
+    if (typeof provision.queryRecords !== 'function') return promoted;
     try {
       // Main forms only (systemform.type == 2). Every other ACTIVE main form is deactivated
       // (formactivationstate 1 -> 0); ours is skipped by id. A form already inactive
@@ -2183,6 +2216,7 @@ async function runSdkBuild(spec, opts = {}) {
     } catch {
       /* best-effort */
     }
+    return promoted;
   };
 
   // helper: create an artifact — or UPDATE it in place if it already exists — then add to the solution.
@@ -2421,9 +2455,11 @@ async function runSdkBuild(spec, opts = {}) {
       const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
         String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
       if (!isOwnCustomTable) continue;
-      // Serialized deliberately: two promotions racing is the bug being fixed.
-      await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
-      promotedEntities.add(entityLogical);
+      // Serialized deliberately: two promotions racing is the bug being fixed. `promoted` gates the
+      // bookkeeping below — a build that could not set the flag must not report a default form it
+      // did not set, which is what `result.created.defaultForms` claims.
+      const promoted = await promoteDefaultForm(chosen.id, entityLogical, chosen.f.deactivateOtherMainForms === true);
+      if (promoted) promotedEntities.add(entityLogical);
     }
     if (promotedEntities.size) result.created.defaultForms = Object.fromEntries(
       [...mainByEntity].filter(([k]) => promotedEntities.has(k)).map(([k, v]) => [k, v.id])

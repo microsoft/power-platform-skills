@@ -483,6 +483,23 @@ test('an id-passthrough chart tile still needs entity and viewId (#572)', () => 
   assert.ok(lintAppSpec(noListEntity).errors.some((m) => /id-based list tile needs entity/i.test(m)));
 });
 
+// `visualizationId` identifies a CHART and means nothing on a list tile, but one shared id test was
+// applied to both. A list tile carrying a stray visualizationId therefore took the id path and
+// escaped the viewId requirement, and a chart tile with only a viewId had nothing to plot.
+test('id-passthrough tiles: visualizationId is chart-only, and a chart needs BOTH ids (#572 follow-up)', () => {
+  // A list tile with only a visualizationId must not be treated as id-based.
+  const strayViz = base();
+  strayViz.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', name: 'X', entity: 'new_ticket', visualizationId: 'c1' }] }];
+  assert.ok(lintAppSpec(strayViz).errors.some((m) => /list tile needs a view/i.test(m)),
+    `a list tile without a viewId must be rejected; got ${JSON.stringify(lintAppSpec(strayViz).errors)}`);
+
+  // A chart tile with a viewId but no visualizationId has no visualization to render.
+  const noViz = base();
+  noViz.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', entity: 'new_ticket', viewId: 'v1' }] }];
+  assert.ok(lintAppSpec(noViz).errors.some((m) => /also needs visualizationId/i.test(m)),
+    `a chart tile without a visualizationId must be rejected; got ${JSON.stringify(lintAppSpec(noViz).errors)}`);
+});
+
 test('a tile with neither a name nor an id reports the absence, not a chart called undefined (#572)', () => {
   const s = base();
   s.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X' }] }];

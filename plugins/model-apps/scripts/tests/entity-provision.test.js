@@ -574,6 +574,23 @@ test('buildSeedGroup rejects duplicate primary-name values when matchOn would fa
   );
 });
 
+// An alternate key is enforced-unique by Dataverse, but the SAMPLE ROWS are not checked by anything
+// before they are sent — so duplicate key values resolve two authored records to the same row, the
+// same wrong-row resolve the primary-name rule rejects. The rule must follow whichever column
+// actually becomes matchOn.
+test('buildSeedGroup rejects duplicate values in the single-column alternate key it selects as matchOn', () => {
+  const spec = seedSpec();
+  spec.entities[0].alternateKeys = [{ schemaName: 'new_codekey', columns: ['new_code'] }];
+  spec.sampleData.new_customer = [
+    { new_name: 'A', new_code: 'DUP', new_tier: 'Free' },
+    { new_name: 'B', new_code: 'DUP', new_tier: 'Pro' },
+  ];
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} }),
+    /duplicate new_code value 'DUP'/,
+  );
+});
+
 test('buildSeedGroup omits matchOn (no dedup) when the key value is empty in a record', () => {
   const spec = seedSpec();
   // A record with no primary name value and no alternate key -> no safe dedup key -> omit matchOn.

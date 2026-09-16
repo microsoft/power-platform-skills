@@ -28,13 +28,23 @@ function rowsFromCells(cells, columns) {
   let current = [];
   let used = 0;
   for (const cell of cells) {
-    const span = Math.max(1, Math.min(cols, Number(cell && cell.colspan) || 1));
+    const declared = Math.max(1, Number(cell && cell.colspan) || 1);
+    const span = Math.min(cols, declared);
     if (used + span > cols && current.length) {
       rows.push({ cells: current });
       current = [];
       used = 0;
     }
-    current.push(cell);
+    // The clamp has to reach the EMITTED cell, not just the row arithmetic. Packing a `colspan: 4`
+    // cell as width 2 while still serializing `colspan="4"` produces exactly the overrunning cell
+    // this clamp exists to prevent, and contradicts the documented behaviour. A span clamped back
+    // down to 1 drops the attribute entirely, matching fieldCellIntent's omit-the-default rule.
+    let out = cell;
+    if (span !== declared) {
+      out = Object.assign({}, cell);
+      if (span > 1) out.colspan = span; else delete out.colspan;
+    }
+    current.push(out);
     used += span;
   }
   if (current.length) rows.push({ cells: current });

@@ -69,7 +69,33 @@ downloads that round-trip Choice columns.
   when two rows share one — a refusal that landed in the sample-data phase, after tables, forms and
   views were already deployed. Two tickets both called "Printer issue" is ordinary sample data; it is
   now caught by `validateAppSpec`, with the same escape hatches the loader honours (a safe alternate
-  key, or an empty primary that omits `matchOn` altogether).
+  key, or an empty primary that omits `matchOn` altogether). The same duplicate rule now also covers
+  a single-column **alternate key** when that is what `matchOn` selects — it had the identical hole.
+- **Cell spans converge on an existing form, and are clamped where they are written.** `colspan`/
+  `rowspan` were create-only: widening a field on a deployed form produced a green build and an
+  unchanged cell. A span the author declared is now written to the deployed cell, while a span they
+  did *not* declare is still never sent, so a cell a maker widened by hand survives. A `colspan`
+  wider than its section is now clamped in the **emitted** cell too, not only in the row arithmetic —
+  it previously packed as the clamped width but serialized the original, producing the overrunning
+  cell the clamp exists to prevent. A `rowspan` is now rejected unless it is the last field in its
+  section: a cell that spans down reserves its column, and FormXml cannot position a later field
+  beside it (measured on the stock account/contact forms, which only ever use `rowspan` terminally).
+- **A build no longer reports a default form it failed to set.** `result.created.defaultForms`
+  recorded the entity even when the `isdefault` write threw.
+- **`--verify` proves sort PRECEDENCE, not just membership.** Each authored order was checked for
+  existence anywhere in the deployed query, so a deployed `[name asc, createdon desc]` satisfied an
+  authored `[createdon desc, name asc]` — two views that return rows in different orders. Authored
+  orders must now appear in their declared relative order; extra platform orders are still tolerated.
+- **Dashboard id-passthrough tiles are validated per tile type.** `visualizationId` identifies a
+  chart and means nothing on a list tile, but one shared test covered both: a list tile carrying a
+  stray `visualizationId` skipped the `viewId` requirement entirely, and a chart tile with only a
+  `viewId` passed with no visualization to render.
+- **A downloaded relationship that is renamed is no longer reported as lost.** A relationship whose
+  deployed schema name sits under a foreign publisher prefix *is* carried into the spec under the
+  generated name, but it was also recorded as skipped — so the summary claimed it was "absent from
+  the rebuildable spec". It is now reported as a rename. Separately, a parent table whose metadata
+  could not be read is reported as undetermined instead of being diagnosed, wrongly, as "a custom
+  table this app does not include".
 - **Two silent no-ops now report themselves.** A failed default-form promotion was swallowed
   entirely, so a build could record a default form it had not set; it warns with the reason, and
   `--verify` proves the deployed `systemform.isdefault` independently. An **existing** view's

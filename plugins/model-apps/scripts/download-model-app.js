@@ -114,17 +114,23 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
   // A parent OUTSIDE the app is only safe to declare when a fresh rebuild target is guaranteed to
   // have it — i.e. it is a stock table. A CUSTOM table this app does not include would not exist
   // there, so declaring the relationship would turn a silent omission into a failed build.
-  const referencedIsRebuildable = async (logical) => {
+  // Three OUTCOMES, deliberately kept apart: the parent is in the app or is a stock table
+  // ('rebuildable'); it is a confirmed custom table this app omits ('custom'); or its metadata could
+  // not be read ('unknown'). Collapsing the last two into `false` made a transient 403/503 report
+  // the confident and possibly wrong diagnosis "is a custom table this app does not include".
+  const referencedRebuildability = async (logical) => {
     const key = lc(logical);
-    if (inApp.has(key)) return true;
+    if (inApp.has(key)) return 'rebuildable';
     if (parentOk.has(key)) return parentOk.get(key);
-    let ok = false;
+    let state = 'unknown';
     try {
       const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}?$select=IsCustomEntity`);
-      if (res && res.status >= 200 && res.status < 300 && res.body) ok = res.body.IsCustomEntity === false;
-    } catch { ok = false; }
-    parentOk.set(key, ok);
-    return ok;
+      if (res && res.status >= 200 && res.status < 300 && res.body) {
+        state = res.body.IsCustomEntity === false ? 'rebuildable' : 'custom';
+      }
+    } catch { state = 'unknown'; }
+    parentOk.set(key, state);
+    return state;
   };
 
   for (const logical of logicals || []) {
@@ -182,8 +188,11 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
       if (seen.has(key)) continue;
       const referenced = lc(r.ReferencedEntity);
       const referencing = lc(r.ReferencingEntity);
-      if (!(await referencedIsRebuildable(referenced))) {
-        note(r.SchemaName, referencing, `its parent table '${referenced}' is a custom table this app does not include, so a rebuild target would not have it`);
+      const rebuildability = await referencedRebuildability(referenced);
+      if (rebuildability !== 'rebuildable') {
+        note(r.SchemaName, referencing, rebuildability === 'custom'
+          ? `its parent table '${referenced}' is a custom table this app does not include, so a rebuild target would not have it`
+          : `its parent table '${referenced}' could not be read, so whether a rebuild target would have it could not be determined`);
         continue;
       }
       seen.add(key);
@@ -203,7 +212,13 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn) {
       const rel = { type: 'OneToMany', referenced, referencing, lookup };
       if (deployed && lc(deployed) !== lc(auto)) {
         if (prefixOk) rel.schemaName = deployed;
-        else note(deployed, referencing, `its schema name does not start with this solution's publisher prefix '${publisherPrefix}_', so it is rebuilt under the generated name '${auto}' instead`);
+        else if (typeof warn === 'function') {
+          // RENAMED, not skipped. This relationship IS pushed below, so recording it in `skipped`
+          // made the summary claim it was "absent from the rebuildable spec" — the opposite of what
+          // happens. Warn through the plain channel so the rename stays visible without being
+          // counted as a loss.
+          warn(`relationship '${deployed}' on '${referencing}' does not start with this solution's publisher prefix '${publisherPrefix}_', so the spec rebuilds it under the generated name '${auto}' instead`);
+        }
       }
       relationships.push(rel);
     }

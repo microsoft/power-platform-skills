@@ -1787,6 +1787,61 @@ test('form topology: a created notes section keeps its timeline row instead of d
   assert.ok((notes[0].args[3].rows || []).length >= 1, 'the notes section must carry its timeline row, not be created empty');
 });
 
+// The clamp has to reach the emitted cell. Packing a `colspan: 4` cell as width 2 while still
+// serializing colspan="4" produces the overrunning cell the clamp exists to prevent, and contradicts
+// the documented behaviour ("a cell wider than its section is clamped to it").
+test('form topology: a colspan wider than the section is clamped in the EMITTED cell, not just in row packing', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 4 }, 'new_tier'] },
+  ] }]);
+  const intent = compileFormIntent(spec, spec.forms[0], {});
+  const rows = intent.tabs[0].columns[0].sections[0].rows;
+  assert.strictEqual(rows[0].cells[0].colspan, 2, `a colspan of 4 in a 2-column section must serialize as 2; got ${JSON.stringify(rows)}`);
+});
+
+// `colspan`/`rowspan` used to be create-only on an existing form: an author who widened a field on a
+// deployed form got a green build and an unchanged cell.
+test('form topology: an authored colspan converges on a field already in the right section', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: [{ name: 'new_name', colspan: 2 }, 'new_tier'] },
+  ] }]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const spanPatch = find(calls, 'updateElement').filter((c) => /\/cells\/\d+$/.test(String(c.args[2])) && c.args[3] && c.args[3].colspan === 2);
+  assert.strictEqual(spanPatch.length, 1, `the authored colspan must be written to the deployed cell; saw ${JSON.stringify(find(calls, 'updateElement').map((c) => [c.args[2], c.args[3]]))}`);
+});
+
+// A span the author did NOT declare must never be written, or a rebuild would flatten a cell a maker
+// widened by hand — the same rule that keeps `isReadOnly: false` from ever being sent.
+test('form topology: a field with no authored span leaves the deployed cell alone', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 2, fields: ['new_name', 'new_tier'] },
+  ] }]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const spanPatch = find(calls, 'updateElement').filter((c) => c.args[3] && (c.args[3].colspan !== undefined || c.args[3].rowspan !== undefined));
+  assert.deepStrictEqual(spanPatch, [], 'no span may be written when the author declared none');
+});
+
+// A build that could not set `isdefault` must not report a default form it did not set.
+test('default form: a failed promotion is not recorded in result.created.defaultForms', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', formType: 'Main', layout: 'auto' }];
+  const { sdk } = mockSdk({ artifactsExist: false });
+  const original = sdk.updateRecord;
+  sdk.updateRecord = async (entity, id, data) => {
+    if (entity === 'systemform' && data && data.isdefault === true) throw new Error('privilege denied');
+    return original(entity, id, data);
+  };
+  const warnings = [];
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(m) });
+  assert.deepStrictEqual(result.created.defaultForms, undefined, 'a failed promotion must not be reported as a set default form');
+  assert.ok(warnings.some((w) => /could not make form the default/i.test(w)), `the failure must be warned; got ${JSON.stringify(warnings)}`);
+});
+
 test('form topology: a section column count is converged on an EXISTING section (1 -> 2 columns)', async () => {
   const spec = makeSpec();
   spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [

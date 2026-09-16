@@ -151,8 +151,23 @@ async function verifySpec(spec, read, opts = {}) {
         add('view-filters', viewName, missing.length === 0, missing.length ? `missing filter(s): ${missing.map(formatCondition).join('; ')}` : '');
       }
       if (expected.orders.length) {
-        const missing = expected.orders.filter((want) => !actual.orders.some((got) => orderMatches(want, got)));
-        add('view-sort', viewName, missing.length === 0, missing.length ? `missing sort(s): ${missing.map(formatOrder).join('; ')}` : '');
+        // Sort PRECEDENCE is the whole point of a sort, so membership is not enough: a deployed
+        // `[name asc, createdon desc]` would satisfy an authored `[createdon desc, name asc]` under a
+        // per-order `some(...)`, even though the two views return rows in different orders.
+        //
+        // Authored orders must therefore appear as an ordered SUBSEQUENCE of the deployed ones.
+        // Extra platform-owned orders are still tolerated (same subset rule as the filters above),
+        // but the authored ones may not be reordered relative to each other.
+        let ei = 0;
+        for (const got of actual.orders) {
+          if (ei < expected.orders.length && orderMatches(expected.orders[ei], got)) ei++;
+        }
+        const satisfied = ei === expected.orders.length;
+        const absent = expected.orders.filter((want) => !actual.orders.some((got) => orderMatches(want, got)));
+        add('view-sort', viewName, satisfied, satisfied ? ''
+          : absent.length
+            ? `missing sort(s): ${absent.map(formatOrder).join('; ')}`
+            : `deployed sort order does not match the authored precedence ${expected.orders.map(formatOrder).join(', ')} (deployed: ${actual.orders.map(formatOrder).join(', ')})`);
       }
     }
   }

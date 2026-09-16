@@ -1188,6 +1188,11 @@ function validateFormLayoutKeys(f, errors) {
       if (c && c.width !== undefined && !/^\d{1,3}%$/.test(String(c.width))) {
         errors.push(`${label}: ${where} column #${ci + 1} has width '${c.width}' — a form-column width must be a percentage such as '60%'`);
       }
+      // A non-array `sections` is treated as absent by formSectionsOf, so the column's whole layout
+      // would be silently dropped rather than rejected.
+      if (c && c.sections !== undefined && !Array.isArray(c.sections)) {
+        errors.push(`${label}: ${where} column #${ci + 1} has a non-array 'sections' — it must be a list of sections`);
+      }
     });
     const sections = formSectionsOf(t);
     sections.forEach((s, si) => {      const swhere = `${where} section ${s && s.label ? `'${s.label}'` : `#${si + 1}`}`;
@@ -1195,12 +1200,21 @@ function validateFormLayoutKeys(f, errors) {
       if (s && s.columns !== undefined && (!Number.isInteger(s.columns) || s.columns < 1 || s.columns > 4)) {
         errors.push(`${label}: ${swhere} has columns '${s.columns}' — a section may span 1 to 4 columns`);
       }
-      for (const entry of (s && Array.isArray(s.fields) ? s.fields : [])) {
-        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const entries = (s && Array.isArray(s.fields) ? s.fields : []);
+      entries.forEach((entry, fi) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
         const fwhere = `${swhere} field '${entry.name || '?'}'`;
         unknown(fwhere, entry, FORM_FIELD_ENTRY_KEYS);
         checkSpan(fwhere, entry);
-      }
+        // A cell that spans DOWN reserves its column in the rows beneath it, and FormXml has no way
+        // to say "skip the reserved slot" — cells fill a row left to right, so the next field would
+        // render on top of the spanning one. Every stock Dataverse form that uses `rowspan` puts it
+        // on the LAST cell of its section for exactly this reason (measured on the account and
+        // contact Main forms). Anything else would promise a layout the platform does not lay out.
+        if (Number.isInteger(entry.rowspan) && entry.rowspan > 1 && fi !== entries.length - 1) {
+          errors.push(`${label}: ${fwhere} has rowspan ${entry.rowspan} but is not the last field in its section — a cell that spans rows reserves its column underneath, and FormXml cannot position a later field beside it. Move this field to the end of the section, or drop the rowspan.`);
+        }
+      });
     });
   });
 }

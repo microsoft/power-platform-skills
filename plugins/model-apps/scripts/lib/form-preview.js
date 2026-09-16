@@ -102,12 +102,13 @@ function renderFormWireframe(spec, f) {
     if (tabLabels.length > 1) lines.push(row(`${tab.expanded === false ? '▸' : '▾'} ${tab.label || 'General'}${tab.visible === false ? '   (hidden)' : ''}${tab.expanded === false ? '   (collapsed)' : ''}`));
     // New topology inserts a FormColumn layer between tab and section.
     const cols = tab.columns || [];
-    for (const col of cols) {
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci];
       // Name the form-column when a tab has more than one, so a two-column tab is visibly two
       // columns rather than sections stacked in sequence. Rendering them truly side by side would
       // need column-aware wrapping of every section; naming the split keeps the preview honest
       // about the structure without pretending to be a pixel layout.
-      if (cols.length > 1) lines.push(row(`  ╷ column ${cols.indexOf(col) + 1} of ${cols.length}${col.width ? `  (${col.width})` : ''}`));
+      if (cols.length > 1) lines.push(row(`  ╷ column ${ci + 1} of ${cols.length}${col.width ? `  (${col.width})` : ''}`));
       for (const sec of col.sections || []) {
         if (sec.name === 'section_notes') {
           lines.push(rule('▤ Notes / Timeline'));

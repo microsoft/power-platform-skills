@@ -471,6 +471,53 @@ test('verifySpec: view-columns check is SKIPPED when the reader gives no layoutx
   assert.ok(!r.checks.some((c) => c.kind === 'view-columns'), 'no layoutxml -> no view-columns check (best-effort)');
 });
 
+// Sort PRECEDENCE decides what a view returns, so proving each authored order merely EXISTS
+// somewhere is not proof: a deployed [name asc, createdon desc] would satisfy an authored
+// [createdon desc, name asc] under a per-order membership test.
+test('verifySpec: view-sort fails when the deployed sort has the authored orders in the WRONG precedence', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, entities: [], charts: [], appShell: { areas: [] }, forms: [],
+    views: [{ entity: 'new_ticket', name: 'Ordered', columns: ['new_name'], activeOnly: false,
+      sort: [{ attr: 'createdon', dir: 'desc' }, { attr: 'new_name', dir: 'asc' }] }] };
+  const fetchxml = '<fetch><entity name="new_ticket">'
+    + '<order attribute="new_name" descending="false"/>'
+    + '<order attribute="createdon" descending="true"/>'
+    + '</entity></fetch>';
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery'
+      ? [{ savedqueryid: 'v1', layoutxml: '<grid><row><cell name="new_name"/></row></grid>', fetchxml }]
+      : []),
+  };
+
+  const r = await verifySpec(spec, read);
+  const c = r.checks.find((x) => x.kind === 'view-sort');
+  assert.ok(c, 'a view-sort check must be emitted');
+  assert.strictEqual(c.present, false, 'reversed precedence must not pass');
+  assert.match(c.detail, /precedence/i);
+});
+
+test('verifySpec: view-sort passes when the authored orders keep their relative order among extras', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, entities: [], charts: [], appShell: { areas: [] }, forms: [],
+    views: [{ entity: 'new_ticket', name: 'Ordered', columns: ['new_name'], activeOnly: false,
+      sort: [{ attr: 'createdon', dir: 'desc' }, { attr: 'new_name', dir: 'asc' }] }] };
+  // A platform-owned order appended after the authored ones must still pass (subset semantics).
+  const fetchxml = '<fetch><entity name="new_ticket">'
+    + '<order attribute="createdon" descending="true"/>'
+    + '<order attribute="new_name" descending="false"/>'
+    + '<order attribute="modifiedon" descending="true"/>'
+    + '</entity></fetch>';
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery'
+      ? [{ savedqueryid: 'v1', layoutxml: '<grid><row><cell name="new_name"/></row></grid>', fetchxml }]
+      : []),
+  };
+
+  const r = await verifySpec(spec, read);
+  const c = r.checks.find((x) => x.kind === 'view-sort');
+  assert.ok(c && c.present === true, `authored precedence preserved must pass; got ${JSON.stringify(c)}`);
+});
+
 test('verifySpec: default-form — the selected Main form must read back systemform.isdefault=true', async () => {
   // The owning table must be declared, and declared as one this solution OWNS: the build only
   // promotes a default form for its own custom tables, so verify only asserts it for those.

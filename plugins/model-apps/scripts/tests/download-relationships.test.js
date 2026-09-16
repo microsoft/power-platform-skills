@@ -110,14 +110,36 @@ test('emits an explicit schemaName only when it diverges from the generated defa
   assert.strictEqual(diff.relationships[0].schemaName, 'new_CustomerTicketLink');
 });
 
-test('a divergent schemaName under a foreign prefix is reported, not emitted into a spec that fails lint (#567)', async () => {
+// An unreadable parent and a confirmed-custom parent are different facts. Collapsing them made a
+// transient 403/503 report the confident (and possibly wrong) diagnosis "is a custom table this app
+// does not include", sending the author to fix a modelling problem that may not exist.
+test('an unreadable parent table is reported as undetermined, not as a confirmed custom table (#567)', async () => {
+  const sdk = makeSdk({
+    m2o: { new_ticket: [rel({ SchemaName: 'new_foo_new_ticket', ReferencedEntity: 'foo_parent', ReferencingEntity: 'new_ticket', ReferencingAttribute: 'new_fooid' })] },
+  });
+  // Make the IsCustomEntity probe fail the way a throttled or forbidden metadata read does.
+  const inner = sdk.dataverse.get;
+  sdk.dataverse.get = async (url) => (/IsCustomEntity/.test(url) ? { status: 503, body: null } : inner(url));
+
+  const { relationships, skipped } = await readRelationships(sdk, ['new_customer', 'new_ticket'], 'new');
+  assert.strictEqual(relationships.length, 0, 'an undetermined parent is still not declared');
+  assert.strictEqual(skipped.length, 1);
+  assert.match(skipped[0].reason, /could not be read/i);
+  assert.doesNotMatch(skipped[0].reason, /is a custom table/i, 'a read failure must not be stated as a fact about the table');
+});
+
+test('a divergent schemaName under a foreign prefix is reported as a RENAME, not as a loss (#567)', async () => {
   const sdk = makeSdk({
     m2o: { new_ticket: [rel({ SchemaName: 'zzz_LegacyLink', ReferencedEntity: 'new_customer', ReferencingEntity: 'new_ticket', ReferencingAttribute: 'new_customerid' })] },
   });
-  const { relationships, skipped } = await readRelationships(sdk, ['new_customer', 'new_ticket'], 'new');
+  const warnings = [];
+  const { relationships, skipped } = await readRelationships(sdk, ['new_customer', 'new_ticket'], 'new', (m) => warnings.push(m));
   assert.strictEqual(relationships.length, 1);
   assert.strictEqual(relationships[0].schemaName, undefined, 'a foreign-prefix name would fail the publisher-prefix lint');
-  assert.match(skipped[0].reason, /publisher prefix/i);
+  // It IS carried into the spec, just under the generated name — so reporting it as skipped made the
+  // summary say it was "absent from the rebuildable spec", the opposite of what happens.
+  assert.deepStrictEqual(skipped, [], 'an emitted relationship must not be counted as skipped');
+  assert.ok(warnings.some((w) => /publisher prefix/i.test(w) && /generated name/i.test(w)), `the rename must still be reported; got ${JSON.stringify(warnings)}`);
 });
 
 test('reconstructs N:N only when both ends are in the app, and reports the rest (#567)', async () => {

@@ -292,12 +292,16 @@ function lintAppSpec(spec) {
     if (!(d.tiles && d.tiles.length)) W(`Dashboard '${d.name}' has no tiles`);
     for (const t of d.tiles || []) {
       if (!DASH_TILE_TYPES.has(t.type)) { E(`Dashboard '${d.name}' has a tile with invalid type '${t.type}' (chart/list/iframe/webresource)`); continue; }
-      const byId = t.viewId || t.visualizationId;
+      // `visualizationId` identifies a CHART; it means nothing on a list tile. One shared id test let
+      // a list tile carrying a stray visualizationId take the id path and skip the viewId requirement
+      // altogether, so the tile deployed with no view to list.
+      const byId = t.type === 'chart' ? (t.viewId || t.visualizationId) : t.viewId;
       if (t.type === 'chart') {
         if (byId) {
-          // A chart tile renders a visualization over a view, so the view id is the load-bearing
-          // half: a visualizationId alone has no data to plot.
+          // A chart tile renders a visualization over a view, so BOTH halves are load-bearing: a
+          // visualizationId alone has no data to plot, and a viewId alone has nothing to plot with.
           if (!t.viewId) E(`Dashboard '${d.name}' chart tile with visualizationId also needs viewId`);
+          if (!t.visualizationId) E(`Dashboard '${d.name}' id-based chart tile with viewId also needs visualizationId`);
           if (!t.entity) E(`Dashboard '${d.name}' id-based chart tile needs entity`);
         } else {
           if (!t.chart) E(`Dashboard '${d.name}' chart tile needs a chart (by name) or viewId+visualizationId (id passthrough)`);

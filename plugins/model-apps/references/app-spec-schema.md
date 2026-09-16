@@ -670,13 +670,19 @@ why they need naming here at all.
 | section | `label`, `showLabel`, `visible` | Section heading, whether it renders, whether the section shows. |
 | section | `columns` | `1`–`4` grid columns. |
 | section | `fields[]` | Column logical names, or `{ "name": …, … }` entries. |
-| field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it. |
+| field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it — the clamp reaches the deployed cell, not just the row packing. `rowspan` is valid only on the **last** field of a section (see below). |
 
 A tab declares **either** `sections` **or** `columns`, never both. `columns` on a **tab** is the list
 of form-columns; `columns` on a **section** is its 1–4 grid width — a number on a tab is rejected
 rather than silently discarded. Any other key is **rejected** — including `showLabel`/`labelPosition`
 on a tab and `labelPosition`/`locked` on a section, which the SDK's serializer silently discards, so
 accepting them would promise a layout Dataverse never renders.
+
+**`rowspan` must be the last field in its section.** A cell that spans down reserves its column in
+the rows beneath it, and FormXml fills a row's cells left to right with no way to skip a reserved
+slot — so a field declared after it would render on top of it. Every stock Dataverse form that uses
+`rowspan` puts it on the last cell of its section for exactly this reason, and a layout that does
+otherwise is rejected instead of deploying something the platform cannot lay out.
 
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
 flattened into its first section: missing tabs, form-columns and sections are **created**, a

@@ -1130,7 +1130,17 @@ function chooseMatchOn(e, seedRecords) {
     seedRecords.every((r) => { const v = r.body[attr]; return v !== undefined && v !== null && v !== ''; });
   for (const k of e.alternateKeys || []) {
     const cols = (k.columns || []).map((c) => String(c).toLowerCase());
-    if (cols.length === 1 && hasNonEmpty(cols[0])) return cols[0];
+    // An alternate key is enforced-unique by Dataverse, but the SAMPLE ROWS are not checked by
+    // anything before they are sent. Two rows sharing the key value resolve to the same record — the
+    // same wrong-row resolve the primary-name fallback below rejects — and the failure would land
+    // mid-seed rather than here. So the duplicate rule applies to whichever column becomes matchOn.
+    if (cols.length === 1 && hasNonEmpty(cols[0])) {
+      const duplicate = firstDuplicateNonEmpty(seedRecords, cols[0]);
+      if (duplicate !== undefined) {
+        throw new Error(`sample data for '${e.schemaName}' has duplicate ${cols[0]} value '${String(duplicate)}'; ${cols[0]} is the single-column alternate key used as matchOn, so Dataverse could resolve or deduplicate the wrong row. Make ${cols[0]} unique across the sample rows.`);
+      }
+      return cols[0];
+    }
   }
   const primary = e.primaryAttribute.schemaName.toLowerCase();
   if (hasNonEmpty(primary)) {
