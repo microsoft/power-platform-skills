@@ -366,6 +366,26 @@ function normalizeNextLink(nextLink) {
   return nextLink && markerIndex >= 0 ? nextLink.slice(markerIndex + marker.length) : nextLink;
 }
 
+function metadataCollectionValues(data, label) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)
+    || !Array.isArray(data.value)
+    || data.value.some((item) => !item || typeof item !== 'object' || Array.isArray(item))) {
+    throw new Error(`${label} must return an OData collection with an object-array value`);
+  }
+  if (data['@odata.nextLink'] != null
+    && (typeof data['@odata.nextLink'] !== 'string' || !data['@odata.nextLink'].trim())) {
+    throw new Error(`${label} returned an invalid OData continuation link`);
+  }
+  return data.value;
+}
+
+function requireEntityIdentities(entities, label) {
+  if (entities.some((entity) => typeof entity?.LogicalName !== 'string'
+    || !/^[A-Za-z][A-Za-z0-9_]*$/.test(entity.LogicalName))) {
+    throw new Error(`${label} contains a missing or invalid table LogicalName`);
+  }
+}
+
 async function requestCollection(request, apiPath, label, { optional = false } = {}) {
   const values = [];
   let next = apiPath;
@@ -379,7 +399,7 @@ async function requestCollection(request, apiPath, label, { optional = false } =
       error.metadataError = detail;
       throw error;
     }
-    values.push(...(response.data?.value || []));
+    values.push(...metadataCollectionValues(response.data, label));
     next = response.data?.['@odata.nextLink'] || null;
   }
   return values;
@@ -534,11 +554,13 @@ async function resolveExactNameEntities(
           + `${response.error || JSON.stringify(response.data || {})}`,
         );
       }
+      const exactEntities = metadataCollectionValues(response.data, 'Exact-name table metadata');
+      requireEntityIdentities(exactEntities, 'Exact-name table metadata');
       if (response.data?.['@odata.nextLink']) {
         throw new Error('Exact-name table metadata exceeded one bounded response page');
       }
       const batchKeys = new Set(batch.map((name) => name.toLowerCase()));
-      discovered.push(...(response.data?.value || []).filter(
+      discovered.push(...exactEntities.filter(
         (entity) => batchKeys.has(logicalNameOf(entity).toLowerCase()),
       ));
     }
@@ -1891,6 +1913,7 @@ async function createSnapshot({
       ].join(''),
       'Customizable-table inventory',
     );
+  requireEntityIdentities(customizableEntities, 'Customizable-table inventory');
   const requiredNames = uniqueLogicalNames(tableNames);
   const proposedNames = uniqueLogicalNames(proposedTableNames);
   // Required exact-name discovery and proposed-name collision checks share one

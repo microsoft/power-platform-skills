@@ -155,6 +155,93 @@ Second, compact architect evidence for the live subsets grew from about
 must separate model time and approval waiting before claiming an end-to-end
 planning improvement or reducing the facts supplied to the architect.
 
+## Actual agent planning observations
+
+Three real prompt runs were recorded on 2026-09-16 against revision `61647b22`.
+Each used the actual `create-mobile-app` skill and its named planner/architect
+agents, explicitly loaded from that PR checkout in an isolated Copilot CLI
+configuration. A fresh tracked template and normal dependency installation
+preceded each run. No expected table names, schema contracts, or reuse choices
+were supplied by the evaluation runner.
+
+The measured boundary is the user's **Proceed** response at the cost-preview
+gate through the final foreground **Gate 1: Data Model** presentation. It
+includes concept extraction, live metadata discovery, agent modeling,
+revisions, and the validations actually performed. It excludes dependency
+installation, prerequisite/setup questions, approval waiting before Proceed,
+and every later implementation gate. These runs did not approve or execute
+tenant schema changes.
+
+| Run | Proceed to Gate 1 | Metadata snapshot time | Metadata requests | Proposed table decisions |
+|---|---:|---:|---:|---|
+| Original gym | 23m 30.813s | 10.182s across 3 passes | 136 | 8 reuse; no create/extend |
+| ICRC goods reception | 6m 20.108s | 7.891s in 1 pass | 14 | 6 create; no reuse/extend |
+| Fresh gym rerun | 5m 40.799s | 1.117s in 1 pass | 2 | 6 create; no reuse/extend |
+
+The gym prompt covers QR equipment lookup, multiple gyms, maintenance records,
+issues, ongoing repairs, upcoming maintenance, and warranties. The ICRC prompt
+covers expected shipments, receipts, scan identification, received/damaged
+quantities, inspections, batch/expiry, damage photos, GPS, and recipient
+confirmation. Prompts were unchanged between repeated runs.
+
+The original gym run used a 530-table inventory and included host-tool denials,
+revisions, and a 4m 0.819s unobserved interruption/resume gap. Its remaining
+observed segments are not pure model time. The later runs used the same newer
+212-table environment, which lacked the relevant domain tables; its 116
+custom tables were not equivalent to having 116 suitable reuse candidates.
+The newer gym model must therefore not be compared with the earlier reuse-only
+model as a speedup. None of these is a paired PR-versus-main benchmark.
+
+All recorded metadata requests succeeded without retries or throttling.
+The deterministic planning-evidence validator passed for every final contract.
+ICRC produced 6 tables, 44 columns, and 7 relationships. The fresh gym model
+has 6 tables, 37 columns, 6 relationships, and a QR alternate key. These
+counts describe proposals, not tables created in Dataverse.
+
+### Observed workflow limitations
+
+- Model-authored progress was not reliable: the original gym reported 4
+  seconds and stale decisions; ICRC reported 20 seconds and wrong inventory
+  and relationship counts; the gym rerun reported zero inventory tables even
+  though the authoritative snapshot contained 212. Use recorded execution
+  timestamps and artifact-derived counts for performance claims.
+- Both newer runs retried an unavailable short model alias using a model
+  supported by the host. That retry remains part of measured elapsed time.
+- ICRC did not run the changed-file validator. The gym rerun validated its
+  Markdown files but omitted its JSON contract from that check. Independent
+  post-run file validation passed; it is not credited to the agent's timing.
+- The gym rerun extracted a maintenance-record concept but did not explicitly
+  map it to repeatable completed-work history. A schedule's last-completed
+  date alone is not a history. Repairs could carry that history with a clear
+  lifecycle and mapping, but the proposal did not specify one. Passing
+  metadata validation does not prove business-requirement completeness.
+
+### Post-evaluation regression fixes
+
+The baseline measurements above were preserved before applying these fixes:
+
+- Malformed successful OData collection bodies, continuation links, and
+  missing table identities now fail instead of becoming empty inventory or
+  false proposed-name availability. Genuine empty collections still work.
+- Legacy timing-stage attempt counters recover from recorded history instead
+  of producing `NaN`/JSON `null`; malformed histories fail validation.
+- Request percentiles use nearest rank. The former lower-index formula could
+  report the faster of two requests as p95. Historical wall timings are
+  unchanged; old request-percentile fields are not silently recomputed.
+- Template test fixtures exclude installed `node_modules`, preventing local
+  dependency caches from being copied repeatedly during the script suite.
+
+Post-fix local verification: 374 tests discovered, 373 passed, 0 failed, and
+1 opt-in live test skipped. The earlier explicitly run live CLI test remains
+a separate baseline result, not a live retest of these changes.
+
+**Conclusion:** the evidence-bound discovery path works in these observations,
+but end-to-end speedup, model decision quality, and factual progress are not
+universally established. Live schema create/extend/adapt/publish timing was
+not measured by these prompt runs. The 10-15 minute readiness target is not a
+measured guarantee, and the smaller component timings must not be substituted
+for the complete data-model gate.
+
 ## Matched live read benchmark
 
 Use the same environment, tenant, typed concepts file, exact/proposed names,
@@ -235,7 +322,7 @@ because unrelated detail-request latency varied between the two runs.
   target evidence before Gate 1.
 - No missing cross-entity projection or risk notes.
 - First factual progress milestone appears within 30 seconds.
-- Gate 2/data-model readiness targets 10–15 minutes, quality first.
+- Gate 1/data-model readiness targets 10–15 minutes, quality first.
 - Any inventory-only or core candidate needed for reuse/extend/adapt triggers
   an exact incremental full-detail snapshot expansion. New names continue
   automatically; already-attempted names never cause a duplicate read.

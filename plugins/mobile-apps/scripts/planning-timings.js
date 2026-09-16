@@ -68,6 +68,21 @@ function updatePlanningTiming(artifact, {
     needsContextCount: 0,
     history: [],
   };
+  if (typeof current !== 'object' || Array.isArray(current)) {
+    throw new Error(`Planning stage ${stage} must be an object`);
+  }
+  if (current.history === undefined) current.history = [];
+  if (!Array.isArray(current.history)) {
+    throw new Error(`Planning stage ${stage} history must be an array`);
+  }
+  const recordedAttempts = current.history.reduce((highest, attempt) => (
+    Number.isInteger(attempt?.attempt) && attempt.attempt >= 0
+      ? Math.max(highest, attempt.attempt)
+      : highest
+  ), current.history.length);
+  current.attempts = Number.isInteger(current.attempts) && current.attempts >= recordedAttempts
+    ? current.attempts
+    : recordedAttempts;
   current.retryCount = Number.isInteger(current.retryCount)
     ? current.retryCount
     : 0;

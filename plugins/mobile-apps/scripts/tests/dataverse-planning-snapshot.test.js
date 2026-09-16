@@ -133,6 +133,74 @@ function validSnapshotBase(overrides = {}) {
   return snapshot;
 }
 
+test('malformed successful metadata never becomes an empty inventory or a free name', async () => {
+  const malformedBodies = [null, {}, [], { value: null }, { value: {} },
+    { value: 'invalid' }, { value: [null] }, { value: ['invalid'] }];
+  for (const data of malformedBodies) {
+    let requests = 0;
+    await assert.rejects(createSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+      proposedTableNames: ['new_equipment'],
+      request: async () => { requests += 1; return { status: 200, data }; },
+    }), /OData collection/);
+    assert.equal(requests, 1);
+    await assert.rejects(createReconciliationSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+      tableNames: ['new_equipment'], proposedTableNames: ['new_equipment'],
+      request: async () => ({ status: 200, data }),
+    }), /Exact-name table metadata.*OData collection/);
+  }
+});
+
+test('table metadata without valid identities cannot authorize name availability', async () => {
+  for (const row of [{}, { LogicalName: null }, { LogicalName: '' },
+    { LogicalName: 7 }, { LogicalName: 'bad table' }]) {
+    await assert.rejects(createSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+      proposedTableNames: ['new_equipment'],
+      request: async () => ({ status: 200, data: { value: [row] } }),
+    }), /invalid table LogicalName/);
+    await assert.rejects(createReconciliationSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+      tableNames: ['new_equipment'], proposedTableNames: ['new_equipment'],
+      request: async () => ({ status: 200, data: { value: [row] } }),
+    }), /invalid table LogicalName/);
+  }
+});
+
+test('malformed continuation pages stop inventory discovery before name checks', async () => {
+  let requests = 0;
+  await assert.rejects(createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+    proposedTableNames: ['new_equipment'],
+    request: async () => {
+      requests += 1;
+      return requests === 1 ? { status: 200, data: {
+        value: [entity('new_gym', 'Gym')],
+        '@odata.nextLink': 'https://example.crm.dynamics.com/api/data/v9.2/EntityDefinitions?$skiptoken=next',
+      } } : { status: 200, data: {} };
+    },
+  }), /OData collection/);
+  assert.equal(requests, 2);
+  for (const nextLink of [{}, [], 7, ' ']) {
+    await assert.rejects(createSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+      request: async () => ({ status: 200, data: { value: [], '@odata.nextLink': nextLink } }),
+    }), /invalid OData continuation/);
+  }
+});
+
+test('valid empty metadata collections still support create-only planning', async () => {
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+    proposedTableNames: ['new_equipment'],
+    request: async () => ({ status: 200, data: { value: [] } }),
+  });
+  assert.deepEqual(snapshot.inventory, []);
+  assert.deepEqual(snapshot.proposedNameChecks.missing, ['new_equipment']);
+  assert.equal(validateSnapshot(snapshot).valid, true);
+});
+
 test('concept ranking normalizes plurals and maps workflow families', () => {
   assert.equal(singularizeToken('activities'), 'activity');
   assert.equal(singularizeToken('batches'), 'batch');

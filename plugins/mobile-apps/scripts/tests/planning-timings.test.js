@@ -106,6 +106,30 @@ test('planning timing upgrades earlier schema-v1 stages with explicit counters',
   assert.equal(artifact.stages.nativePlanner.needsContextCount, 0);
 });
 
+test('planning timing recovers missing or invalid attempt counters without losing history', () => {
+  for (const attempts of [undefined, null, NaN, -1, 1.5, '2']) {
+    for (const action of ['start', 'record']) {
+      const history = [{ attempt: 4, durationMs: 20, status: 'done' }];
+      const artifact = { schemaVersion: 1, stages: { modelArchitect: { attempts, history } } };
+      updatePlanningTiming(artifact, {
+        stage: 'modelArchitect', action, durationMs: 10,
+        ...clock(['2026-09-16T00:00:00.000Z'], [1000]),
+      });
+      assert.equal(artifact.stages.modelArchitect.attempts, 5);
+      assert.equal(artifact.stages.modelArchitect.history[0].attempt, 4);
+      assert.equal(JSON.parse(JSON.stringify(artifact)).stages.modelArchitect.attempts, 5);
+    }
+  }
+  const artifact = { schemaVersion: 1, stages: { modelArchitect: { status: 'done' } } };
+  updatePlanningTiming(artifact, { stage: 'modelArchitect', action: 'start' });
+  updatePlanningTiming(artifact, { stage: 'modelArchitect', action: 'finish' });
+  assert.equal(artifact.stages.modelArchitect.attempts, 1);
+  assert.equal(artifact.stages.modelArchitect.history.length, 1);
+  assert.throws(() => updatePlanningTiming({ stages: { modelArchitect: { history: {} } } }, {
+    stage: 'modelArchitect', action: 'start',
+  }), /history must be an array/);
+});
+
 test('planning timing summary keeps outer wall, model, and approval durations separate', () => {
   const artifact = {
     schemaVersion: 1,

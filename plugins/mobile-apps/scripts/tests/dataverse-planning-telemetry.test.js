@@ -9,6 +9,7 @@ const test = require('node:test');
 const {
   appendPlanningTelemetry,
   createPlanningTelemetryCollector,
+  percentile,
   summarizeEvents,
 } = require('../lib/dataverse-planning-telemetry');
 
@@ -64,12 +65,24 @@ test('telemetry summary groups categories and computes observed percentiles', ()
     responseBytes: 25,
     summedRequestDurationMs: 200,
     p50DurationMs: 30,
-    p95DurationMs: 40,
+    p95DurationMs: 100,
     retryCount: 1,
     rateLimitCount: 1,
     tokenAcquisitionCount: 1,
     tokenRefreshCount: 0,
   });
+});
+
+test('nearest-rank percentiles retain slow requests in small samples', () => {
+  assert.equal(percentile([], 0.95), 0);
+  assert.equal(percentile([1064], 0.95), 1064);
+  assert.equal(percentile([31, 1064], 0.95), 1064);
+  assert.equal(percentile([1, 2, 3, 4, 100], 0.95), 100);
+  const values = [4, 2, 3, 1];
+  assert.equal(percentile(values, 0.5), 2);
+  assert.equal(percentile(values, 0), 1);
+  assert.equal(percentile(values, 1), 4);
+  assert.deepEqual(values, [4, 2, 3, 1]);
 });
 
 test('planning telemetry appends runs atomically', (context) => {
