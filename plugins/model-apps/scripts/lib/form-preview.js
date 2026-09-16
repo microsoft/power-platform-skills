@@ -97,16 +97,24 @@ function renderFormWireframe(spec, f) {
   }
 
   for (const tab of def.tabs) {
-    if (tabLabels.length > 1) lines.push(row(`▾ ${tab.label || 'General'}`));
+    // `expanded: false` is a real authored state, so show it — the wireframe IS the approval gate,
+    // and a preview that renders every tab open promises a layout the build does not deploy.
+    if (tabLabels.length > 1) lines.push(row(`${tab.expanded === false ? '▸' : '▾'} ${tab.label || 'General'}${tab.visible === false ? '   (hidden)' : ''}${tab.expanded === false ? '   (collapsed)' : ''}`));
     // New topology inserts a FormColumn layer between tab and section.
-    for (const col of tab.columns || []) {
+    const cols = tab.columns || [];
+    for (const col of cols) {
+      // Name the form-column when a tab has more than one, so a two-column tab is visibly two
+      // columns rather than sections stacked in sequence. Rendering them truly side by side would
+      // need column-aware wrapping of every section; naming the split keeps the preview honest
+      // about the structure without pretending to be a pixel layout.
+      if (cols.length > 1) lines.push(row(`  ╷ column ${cols.indexOf(col) + 1} of ${cols.length}${col.width ? `  (${col.width})` : ''}`));
       for (const sec of col.sections || []) {
         if (sec.name === 'section_notes') {
           lines.push(rule('▤ Notes / Timeline'));
           lines.push(row('   (activity timeline + notes — type to add a note)'));
           continue;
         }
-        lines.push(rule(sec.label || 'Details'));
+        lines.push(rule(`${sec.label || 'Details'}${sec.visible === false ? '  (hidden)' : ''}`));
         for (const r of sec.rows || []) {
           // A bound field cell has control.fieldName; the notes control has none.
           const cells = (r.cells || []).filter((c) => c.control && c.control.fieldName);

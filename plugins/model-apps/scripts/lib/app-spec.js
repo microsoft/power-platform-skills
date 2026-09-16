@@ -1137,6 +1137,16 @@ const FORM_LAYOUT_KEY_HINTS = {
   readonly: " — did you mean 'readOnly'?",
 };
 
+// Sections a tab declares, from EITHER shape: directly on `sections` (the single-full-width-column
+// shorthand) or nested inside `columns[]` (the multi-column form). Every raw-spec reader must go
+// through this — reading `tab.sections` alone silently skips every check for a multi-column tab,
+// which is how a lint rule came to report such a tab as having no sections at all.
+function formSectionsOf(tab) {
+  if (!tab || typeof tab !== 'object') return [];
+  if (Array.isArray(tab.columns)) return tab.columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : []));
+  return Array.isArray(tab.sections) ? tab.sections : [];
+}
+
 function validateFormLayoutKeys(f, errors) {
   if (!f || !Array.isArray(f.tabs)) return;
   const label = `form '${f.name || f.entity}'`;
@@ -1171,9 +1181,8 @@ function validateFormLayoutKeys(f, errors) {
         errors.push(`${label}: ${where} column #${ci + 1} has width '${c.width}' — a form-column width must be a percentage such as '60%'`);
       }
     });
-    const sections = columns.length ? columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : [])) : ((t && t.sections) || []);
-    sections.forEach((s, si) => {
-      const swhere = `${where} section ${s && s.label ? `'${s.label}'` : `#${si + 1}`}`;
+    const sections = formSectionsOf(t);
+    sections.forEach((s, si) => {      const swhere = `${where} section ${s && s.label ? `'${s.label}'` : `#${si + 1}`}`;
       unknown(swhere, s, FORM_SECTION_KEYS);
       if (s && s.columns !== undefined && (!Number.isInteger(s.columns) || s.columns < 1 || s.columns > 4)) {
         errors.push(`${label}: ${swhere} has columns '${s.columns}' — a section may span 1 to 4 columns`);
@@ -1205,7 +1214,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   const listedByLayout = new Set();
 
   for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
-    for (const s of ((t && t.sections) || [])) {
+    for (const s of formSectionsOf(t)) {
       if (s && s.fields !== undefined && !Array.isArray(s.fields)) {
         // Guard the compiler, which does `(s.fields || []).map(...)`. A string is ITERABLE and every
         // character of it IS a string, so a `fields: "new_name"` typo would pass a naive per-entry
@@ -1324,7 +1333,7 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   // warning, not an error: the author asked for it by name and may be pairing it with a custom control.
   if (explicit) {
     for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
-      for (const s of ((t && t.sections) || [])) {
+      for (const s of formSectionsOf(t)) {
         // Re-guard: the array check in the first loop `continue`s that loop only. Without repeating
         // it here a non-iterable `fields` (e.g. `{}` or `3`) throws a raw TypeError out of
         // validateAppSpec — discarding the correct finding the first loop already pushed.

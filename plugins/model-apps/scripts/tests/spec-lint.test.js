@@ -609,3 +609,26 @@ test('lint accepts a v2 page subarea referenced by KEY when key !== name (no fal
   bad.appShell.areas[0].groups[0].subAreas[0].page = 'nope-not-a-page';
   assert.ok(lintAppSpec(bad).errors.some((e) => /unknown page/i.test(e)), 'an unknown page ref still errors');
 });
+
+// A multi-column tab holds its sections inside `columns[]`, not directly on `sections`. Reading
+// only `t.sections` reported EVERY multi-column tab as empty -- found by linting a real spec, not
+// by a unit test, which is why this guard exists.
+test('a multi-column tab is not reported as having no sections', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket', layout: 'explicit', tabs: [{
+    name: 'tab_g', label: 'G', columns: [
+      { width: '60%', sections: [{ name: 's1', label: 'S1', columns: 1, fields: ['new_name'] }] },
+      { width: '40%', sections: [{ name: 's2', label: 'S2', columns: 1, fields: ['new_priority'] }] },
+    ] }] }];
+  const out = lintAppSpec(migrateAppSpec(s));
+  assert.deepStrictEqual(out.errors.filter((e) => /has no sections/.test(e)), []);
+});
+
+test('a tab that genuinely declares no sections in EITHER shape is still an error', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket', layout: 'explicit', tabs: [{ label: 'Empty' }] }];
+  assert.ok(lintAppSpec(migrateAppSpec(s)).errors.some((e) => /has no sections/.test(e)));
+  const s2 = base();
+  s2.forms = [{ entity: 'new_ticket', name: 'T', layout: 'explicit', tabs: [{ label: 'E', columns: [{ width: '100%', sections: [] }] }] }];
+  assert.ok(lintAppSpec(migrateAppSpec(s2)).errors.some((e) => /has no sections/.test(e)));
+});

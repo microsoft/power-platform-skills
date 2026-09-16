@@ -205,7 +205,14 @@ function lintAppSpec(spec) {
     if (isExplicit) {
       if (!Array.isArray(f.tabs) || f.tabs.length === 0) E(`Form ${f.entity} uses an explicit layout but declares no tabs — add at least one tab with a section, or use layout:'auto'`);
       else for (const t of f.tabs) {
-        if (!Array.isArray(t.sections) || t.sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
+        // A tab holds sections either directly (the single-full-width-column shorthand) or inside
+        // `columns[]` (the multi-column form). Checking only `t.sections` reported every
+        // multi-column tab as empty, which is the exact silent-disagreement this lint exists to
+        // prevent — the compiler and validator both accept the `columns[]` shape.
+        const sections = Array.isArray(t.columns)
+          ? t.columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : []))
+          : t.sections;
+        if (!Array.isArray(sections) || sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
       }
     }
     for (const sg of f.subgrids || []) {

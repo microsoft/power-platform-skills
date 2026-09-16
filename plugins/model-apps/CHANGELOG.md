@@ -19,7 +19,10 @@ downloads that round-trip Choice columns.
   was measured against the vendored SDK first: keys its serializer discards — `showLabel`/
   `labelPosition` on a tab, `labelPosition`/`locked` on a section — are **rejected** rather than
   accepted and dropped, and `tabs[]`/`sections[]`/field entries are now allow-listed, so a typo
-  fails instead of silently vanishing.
+  fails instead of silently vanishing. The **form wireframe** renders the new structure — a
+  multi-column tab shows its columns and widths, and a collapsed or hidden tab says so — because
+  that preview is the approval gate, and one that cannot show a layout would have users approving
+  something other than what ships.
 
 - **The dry run resolves create-vs-reuse against the live environment** ([#559]). Without `--apply`
   the plan was a static echo of the spec, identical whether every artifact already existed or none

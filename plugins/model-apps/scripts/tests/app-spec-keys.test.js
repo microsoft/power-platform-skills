@@ -462,3 +462,24 @@ test('sampleData: _seedKey is rejected because it reaches Dataverse as an unknow
   assert.ok(errs.some((e) => /_seedKey. is not a supported sample-record key/.test(e)));
   assert.ok(errs.some((e) => /single-column alternate key/.test(e)), 'points at the real mechanism');
 });
+
+// A multi-column tab nests its sections inside columns[]. Every raw-spec reader must see them, or
+// section-level validation silently stops running for exactly the richer layouts it should police.
+test('form layout: sections nested in columns[] are still validated', () => {
+  const badKey = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', locked: true, fields: [] }] }] }]);
+  assert.ok(badKey.some((e) => /unknown key .locked./.test(e)), `nested section keys must be checked; got ${JSON.stringify(badKey)}`);
+  const badCols = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', columns: 9, fields: [] }] }] }]);
+  assert.ok(badCols.some((e) => /may span 1 to 4 columns/.test(e)), 'nested section column counts must be checked');
+  const badSpan = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', colspan: 0 }] }] }] }]);
+  assert.ok(badSpan.some((e) => /has colspan .0./.test(e)), 'nested field spans must be checked');
+});
+
+test('form layout: a non-array fields inside columns[] is caught, not thrown on', () => {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', type: 'Text' }];
+  s.forms = [{ entity: 'contoso_order', name: 'O', layout: 'explicit',
+    tabs: [{ label: 'G', columns: [{ width: '100%', sections: [{ label: 'S', fields: 'contoso_amount' }] }] }] }];
+  // A string is ITERABLE, so a naive per-entry loop would walk its characters instead of failing.
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors;
+  assert.ok(errs.some((e) => /fields must be an array/.test(e)), `got ${JSON.stringify(errs)}`);
+});

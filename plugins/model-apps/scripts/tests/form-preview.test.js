@@ -88,3 +88,28 @@ test('renderFormWireframe shows multi-tab forms, truncates wide labels, and fall
   assert.match(w, /\[text area\]/, 'Memo columns keep their multiline widget hint');
   assert.match(w, /new_missinglookupid\s+\[lookup\]/, 'unknown fields are treated as relationship lookups');
 });
+
+test('the wireframe shows a multi-column tab as columns, and a collapsed tab as collapsed', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Main', columns: [
+      { width: '65%', sections: [{ name: 'a', label: 'Left', columns: 1, fields: ['new_status'] }] },
+      { width: '35%', sections: [{ name: 'b', label: 'Right', columns: 1, fields: ['new_cost'] }] },
+    ] },
+    { name: 't2', label: 'Extra', expanded: false, sections: [{ name: 'c', label: 'More', columns: 1, fields: ['new_number'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  // The wireframe IS the approval gate: showing two form-columns stacked as one, or a collapsed
+  // tab as open, promises a layout the build does not deploy.
+  assert.match(out, /column 1 of 2.*65%/, `multi-column split not shown:\n${out}`);
+  assert.match(out, /column 2 of 2.*35%/);
+  assert.match(out, /Extra.*\(collapsed\)/, `collapsed state not shown:\n${out}`);
+});
+
+test('a single-column tab shows no column banner (the common case stays clean)', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Main', sections: [{ name: 'a', label: 'Only', columns: 1, fields: ['new_status'] }] },
+  ] }];
+  assert.doesNotMatch(renderFormWireframe(s, s.forms[0]), /column 1 of/);
+});
