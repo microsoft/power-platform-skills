@@ -679,10 +679,14 @@ on a tab and `labelPosition`/`locked` on a section, which the SDK's serializer s
 accepting them would promise a layout Dataverse never renders.
 
 **`rowspan` must be the last field in its section.** A cell that spans down reserves its column in
-the rows beneath it, and FormXml fills a row's cells left to right with no way to skip a reserved
-slot — so a field declared after it would render on top of it. Every stock Dataverse form that uses
-`rowspan` puts it on the last cell of its section for exactly this reason, and a layout that does
-otherwise is rejected instead of deploying something the platform cannot lay out.
+the rows beneath it, and the cells of the following row fill the section left to right — so a field
+declared after a spanning one would land in the reserved slot. Every stock Dataverse form that uses
+`rowspan` puts it on the last cell of its section, so that is the shape this plugin emits.
+
+This is a **compiler limitation, not a platform one.** Positioning a field beside a vertical span
+requires emitting an empty *spacer* cell to occupy the reserved slot, which the SDK serializes
+correctly; the compiler does not emit one yet. The restriction can be lifted once it does — tracked
+in [#581](https://github.com/microsoft/power-platform-skills/issues/581).
 
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
 flattened into its first section: missing tabs, form-columns and sections are **created**, a

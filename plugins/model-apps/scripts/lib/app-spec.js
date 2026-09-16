@@ -1206,13 +1206,19 @@ function validateFormLayoutKeys(f, errors) {
         const fwhere = `${swhere} field '${entry.name || '?'}'`;
         unknown(fwhere, entry, FORM_FIELD_ENTRY_KEYS);
         checkSpan(fwhere, entry);
-        // A cell that spans DOWN reserves its column in the rows beneath it, and FormXml has no way
-        // to say "skip the reserved slot" — cells fill a row left to right, so the next field would
-        // render on top of the spanning one. Every stock Dataverse form that uses `rowspan` puts it
-        // on the LAST cell of its section for exactly this reason (measured on the account and
-        // contact Main forms). Anything else would promise a layout the platform does not lay out.
+        // A cell that spans DOWN reserves its column in the rows beneath it, and the following row's
+        // cells fill the section left to right — so a field declared after a spanning one lands in
+        // the reserved slot. Every stock Dataverse form that uses `rowspan` puts it on the LAST cell
+        // of its section (measured on the account and contact Main forms), so that is the shape this
+        // compiler emits.
+        //
+        // This is a COMPILER limitation, not a platform one: an empty SPACER cell occupies the
+        // reserved slot and the SDK serializes it correctly (measured against the vendored bundle —
+        // `{}` pushes as `<cell … colspan="1" rowspan="1" />`). Emitting spacers would lift this
+        // restriction; until the compiler does, rejecting is better than silently mispositioning a
+        // control. Tracked in #581.
         if (Number.isInteger(entry.rowspan) && entry.rowspan > 1 && fi !== entries.length - 1) {
-          errors.push(`${label}: ${fwhere} has rowspan ${entry.rowspan} but is not the last field in its section — a cell that spans rows reserves its column underneath, and FormXml cannot position a later field beside it. Move this field to the end of the section, or drop the rowspan.`);
+          errors.push(`${label}: ${fwhere} has rowspan ${entry.rowspan} but is not the last field in its section — a cell that spans rows reserves its column underneath, and this compiler does not yet emit the spacer cell needed to place a field beside it. Move this field to the end of the section, or drop the rowspan.`);
         }
       });
     });

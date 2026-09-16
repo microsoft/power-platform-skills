@@ -78,8 +78,10 @@ downloads that round-trip Choice columns.
   wider than its section is now clamped in the **emitted** cell too, not only in the row arithmetic —
   it previously packed as the clamped width but serialized the original, producing the overrunning
   cell the clamp exists to prevent. A `rowspan` is now rejected unless it is the last field in its
-  section: a cell that spans down reserves its column, and FormXml cannot position a later field
-  beside it (measured on the stock account/contact forms, which only ever use `rowspan` terminally).
+  section: a cell that spans down reserves its column, and the compiler does not yet emit the spacer
+  cell needed to place a field beside it (stock account/contact forms only ever use `rowspan`
+  terminally, so this matches the platform's own shape). The SDK does serialize a spacer, so the
+  restriction is the compiler's rather than the platform's — lifting it is tracked in [#581].
 - **A build no longer reports a default form it failed to set.** `result.created.defaultForms`
   recorded the entity even when the `isdefault` write threw.
 - **`--verify` proves sort PRECEDENCE, not just membership.** Each authored order was checked for
@@ -203,6 +205,7 @@ downloads that round-trip Choice columns.
 [#572]: https://github.com/microsoft/power-platform-skills/issues/572
 [#574]: https://github.com/microsoft/power-platform-skills/issues/574
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
+[#581]: https://github.com/microsoft/power-platform-skills/issues/581
 
 ## [2.7.1]
 
