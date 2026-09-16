@@ -505,6 +505,11 @@ rather than silently dropped:
   have (a bridge to a *standard* table like `systemuser`/`account` is kept — every org has one);
 - an **N:N whose partner table is outside the app**.
 
+A polymorphic lookup's **shadow attributes** (`<lookup>name`, `<lookup>yominame`) are excluded from
+`columns[]` along with it, so a rebuild does not gain invented Text columns where the lookup used to
+be. Every lookup has shadows; a polymorphic one's are physically stored rather than logical, which is
+why they need naming here at all.
+
 ## views[]
 ```jsonc
 { "entity": "new_ticket", "name": "Active Tickets", "columns": ["new_subject","new_priority"],

@@ -1164,6 +1164,23 @@ function entityFromMetadata(meta, logical) {
     // label-read warning now names that consequence explicitly.
     const isLogical = a.IsLogical !== undefined ? a.IsLogical : a.isLogical;
     if (isLogical === true && a.optionSet === undefined && choiceTypeFromTypeName(a) === undefined) return false;
+    // SHADOW-OF, the precise form of the same rule. `AttributeOf` names the attribute this one is a
+    // projection of, so a non-empty value is positive proof the column was never authored — no type
+    // inference and no relationship context needed.
+    //
+    // This is not redundant with the `IsLogical` rule above. LIVE-MEASURED on a polymorphic
+    // (`Customer`-type) lookup `cfo_billto` targeting account + contact:
+    //   cfo_billtoname      AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=String
+    //   cfo_billtoyominame  AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=String
+    //   cfo_customeridname  AttributeOf=cfo_customerid  IsLogical=TRUE  (single-target — already caught)
+    // The polymorphic shadows are physically stored, so `IsLogical` is false and the rule above
+    // cannot see them; they were emitted as real Text columns and a fresh-environment rebuild
+    // invented two text fields where a lookup used to be (#574). A real column — including the
+    // lookup itself — reports `AttributeOf: null`, so nothing authored is at risk.
+    //
+    // Absent KEEPS the attribute, matching every other rule here: when the label read fails no
+    // attribute carries `AttributeOf`, and "we could not look" must not become a column deletion.
+    if (a.AttributeOf) return false;
     // Keep only attribute types the App Spec can declare (see the map above), PLUS any attribute the
     // option-set read matched, PLUS any attribute `AttributeTypeName` proves is a choice. That last
     // clause is what keeps a MultiChoice when the cast read failed or came back empty: its
@@ -1337,7 +1354,10 @@ async function readEntityWithDescriptions(sdk, logical) {
     // `IsLogical` rides along for the synthetic-shadow filter in entityFromMetadata: a lookup's
     // formatted-name attribute (`<lookup>name`) reports IsCustomAttribute TRUE and AttributeType
     // String, so nothing else distinguishes it from a real Text column the author wrote.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeTypeName`);
+    // `AttributeOf` rides along for the same filter and is the STRONGER signal: it names the
+    // attribute a shadow belongs to, and a POLYMORPHIC lookup's shadows report `IsLogical: false`
+    // (live-measured), so `IsLogical` alone cannot see them.
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName`);
     if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
     if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
     const rows = res.body.value;
@@ -1345,7 +1365,7 @@ async function readEntityWithDescriptions(sdk, logical) {
     meta.attributes = (meta.attributes || []).map((a) => {
       const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
       const row = byLogical.get(key);
-      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeTypeName: row.AttributeTypeName } : a;
+      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeOf: row.AttributeOf, AttributeTypeName: row.AttributeTypeName } : a;
     });
   } catch (err) {
     // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded

@@ -249,7 +249,7 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
   // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
   // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
   assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
   assert.strictEqual(status.description, 'State shown to dispatchers.');
@@ -2209,4 +2209,88 @@ test('REVIEW-B cast membership still keeps a column when the ATTRIBUTE read also
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
   assert.ok(e.columns.find((c) => c.schemaName === 'pp_tags'), 'cast membership must keep the column when nothing else can');
   assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_tags']);
+});
+
+test('#574 a POLYMORPHIC lookup shadow is filtered out via AttributeOf, even though IsLogical is false', async () => {
+  // LIVE-MEASURED on a Customer-type lookup `cfo_billto` targeting account + contact. Dataverse
+  // creates THREE shadows for it, and unlike a single-target lookup they are physically stored:
+  //   cfo_billtoname      AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=String
+  //   cfo_billtoyominame  AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=String
+  //   cfo_billtoidtype    AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=EntityName
+  // vs a single-target lookup, whose shadow IS logical:
+  //   cfo_customeridname  AttributeOf=cfo_customerid  IsLogical=TRUE
+  // So the IsLogical rule cannot see the polymorphic ones: they were emitted as real Text columns
+  // and a fresh-environment rebuild invented two text fields where a lookup used to be.
+  const e = entityFromMetadata({
+    schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { logicalName: 'cfo_name', attributeType: 'String', IsCustomAttribute: true },
+      { logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true },
+      { logicalName: 'cfo_billtoname', attributeType: 'String', IsCustomAttribute: true, IsLogical: false, AttributeOf: 'cfo_billto' },
+      { logicalName: 'cfo_billtoyominame', attributeType: 'String', IsCustomAttribute: true, IsLogical: false, AttributeOf: 'cfo_billto' },
+      { logicalName: 'cfo_customeridname', attributeType: 'String', IsCustomAttribute: true, IsLogical: true, AttributeOf: 'cfo_customerid' },
+    ],
+  }, 'cfo_workorder');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref'],
+    `only the authored column survives; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
+});
+
+test('#574 a REAL column is never dropped by the AttributeOf rule (AttributeOf is null on authored columns)', async () => {
+  // The lookup itself, and every ordinary column, report AttributeOf: null -- so nothing authored
+  // is at risk. Guards the rule against becoming a silent column deletion.
+  const e = entityFromMetadata({
+    schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true, AttributeOf: null },
+      { logicalName: 'cfo_resolution', attributeType: 'Memo', IsCustomAttribute: true, AttributeOf: null },
+      { logicalName: 'cfo_onsiteduration', attributeType: 'Integer', IsCustomAttribute: true },
+    ],
+  }, 'cfo_workorder');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref', 'cfo_resolution', 'cfo_onsiteduration']);
+});
+
+test('#574 an attribute whose AttributeOf could not be read is KEPT, not dropped', async () => {
+  // When the label read fails NO attribute carries AttributeOf. Dropping on absent would empty the
+  // table\u0027s columns[] entirely -- the same direction every other rule here takes: "we could not
+  // look" must never become a deletion.
+  const e = entityFromMetadata({
+    schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+    attributes: [{ logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true }],
+  }, 'cfo_workorder');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref']);
+});
+
+test('#574 AttributeOf survives the description merge, so the shadow is dropped through the REAL read path', async () => {
+  // The unit tests above hand AttributeOf straight to entityFromMetadata. This one drives the
+  // integration seam: the SDK metadata has NO AttributeOf (it is not in its projection), so the
+  // value only reaches the filter if readEntityWithDescriptions merges it off the label read.
+  // Dropping that one field from the merge silently re-enables the leak.
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+      attributes: [
+        { logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true },
+        { logicalName: 'cfo_billtoname', attributeType: 'String', IsCustomAttribute: true },
+        { logicalName: 'cfo_billtoyominame', attributeType: 'String', IsCustomAttribute: true },
+      ],
+    }),
+    queryRecords: async (set) => { throw new Error(`queryRecords must not be used for metadata paths (got \u0027${set}\u0027)`); },
+    dataverse: {
+      get: async (url) => {
+        if (/\/Attributes\?/.test(url)) {
+          // Exactly the live shape: polymorphic shadows are NOT logical, so only AttributeOf marks them.
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'cfo_intakeref', IsLogical: false, AttributeOf: null },
+            { LogicalName: 'cfo_billtoname', IsLogical: false, AttributeOf: 'cfo_billto' },
+            { LogicalName: 'cfo_billtoyominame', IsLogical: false, AttributeOf: 'cfo_billto' },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+  const meta = await readEntityWithDescriptions(sdk, 'cfo_workorder');
+  const e = entityFromMetadata(meta, 'cfo_workorder');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref'],
+    `the polymorphic shadows must not survive the real read path; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
 });

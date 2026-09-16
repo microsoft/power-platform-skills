@@ -62,6 +62,16 @@ downloads that round-trip Choice columns.
   filters/sort parsed from `fetchxml` (a condition with no `value` is correct, not missing — that is
   how current-user and relative-date operators serialize), and app-role associations. Each fails
   closed when its proof cannot be read.
+- **A download no longer invents text columns from a polymorphic lookup** ([#574]). Dataverse creates
+  shadow attributes for every lookup, and a **polymorphic** one (`Customer`-type, or any multi-target
+  lookup) additionally stores them physically — so unlike a single-target lookup's shadows they
+  report `IsLogical: false` and slipped past the filter that catches the rest. `<lookup>name` and
+  `<lookup>yominame` were emitted as real `Text` columns, and because `relationships[]` cannot express
+  a polymorphic lookup either, a rebuild into a fresh environment gained two invented text fields
+  where a lookup used to be. The filter now keys on `AttributeOf`, which names the attribute a shadow
+  belongs to — positive proof the column was never authored, with no type inference and no
+  relationship context needed. An authored column, the lookup included, reports `AttributeOf: null`,
+  and an unreadable value keeps the column rather than deleting it.
 - **A download reconstructs `relationships[]`** ([#567]). The block was absent entirely, and — unlike
   forms, views, charts, business rules and global choices — nothing said so, so a downloaded spec
   looked complete while a rebuild into a fresh environment produced tables with no lookups and no
@@ -143,6 +153,7 @@ downloads that round-trip Choice columns.
 [#565]: https://github.com/microsoft/power-platform-skills/issues/565
 [#567]: https://github.com/microsoft/power-platform-skills/issues/567
 [#572]: https://github.com/microsoft/power-platform-skills/issues/572
+[#574]: https://github.com/microsoft/power-platform-skills/issues/574
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 
 ## [2.7.1]
