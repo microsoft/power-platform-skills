@@ -1344,7 +1344,7 @@ Arguments:
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
-- `DONE` → continue to Step 6.85. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
+- `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
@@ -1376,7 +1376,7 @@ The user skipped the design system but still deserves to see their screens befor
 
 4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
 
-  > `→ Preview rendered with default styling. Continuing to Step 6.85. (Interrupt and re-run /design-system or /edit-app to revise.)`
+  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
 
 This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
 

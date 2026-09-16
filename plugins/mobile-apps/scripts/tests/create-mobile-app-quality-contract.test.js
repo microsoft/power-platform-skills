@@ -34,7 +34,10 @@ test('offline setup follows materialized Dataverse data and never infers connect
   assert.ok(dataModel < sampleData);
   assert.ok(sampleData < offline);
   assert.ok(offline < native);
-  assert.doesNotMatch(skill, /### Step 6\.85/);
+  assert.doesNotMatch(skill, /Step 6\.85/);
+  const design = skill.slice(skill.indexOf('### Step 6.75'), skill.indexOf('### Step 7'));
+  assert.match(design, /`DONE`[^\n]+continue to Step 7/);
+  assert.match(design, /Continuing to Step 7/);
   assert.match(skill, /Do not classify a missing\s+manifest as connector-only/);
   assert.match(skill, /Missing,\s+malformed, or empty manifests are `BLOCKED/);
   assert.match(skill, /seeding step fails for a non-manifest reason[\s\S]*continue to Step 8\.85/);

@@ -387,6 +387,111 @@ const REQUIREMENT_SETS = [
   },
 ];
 
+function createScaleScenario(tableCount, profile) {
+  const profiles = {
+    best: { decisions: ['reuse', 'reuse', 'reuse', 'reuse', 'extend', 'create'], fields: 2, noise: 0 },
+    base: { decisions: ['reuse', 'extend', 'create', 'reuse', 'extend', 'create'], fields: 2, noise: 150 },
+    worst: { decisions: ['reuse', 'extend', 'create', 'extend', 'create', 'adapt'], fields: 20, noise: 1000 },
+    'all-reuse': { decisions: ['reuse'], fields: 2, noise: 0 },
+    'all-create': { decisions: ['create'], fields: 2, noise: 0 },
+  };
+  if (![6, 12, 24].includes(tableCount) || !profiles[profile]) {
+    throw new Error('scale scenarios require 6, 12, or 24 tables and a best, base, or worst profile, or all-reuse/all-create');
+  }
+  const settings = profiles[profile];
+  const names = [
+    'Warehouse', 'Product', 'Supplier', 'Purchase Order', 'Purchase Line', 'Receipt',
+    'Receipt Line', 'Inspection', 'Inspection Result', 'Stock Location', 'Stock Balance', 'Stock Movement',
+    'Shipment', 'Shipment Line', 'Carrier', 'Delivery', 'Delivery Line', 'Return Request',
+    'Return Line', 'Damage Report', 'Attachment', 'Inventory Count', 'Count Line', 'Replenishment',
+  ].slice(0, tableCount);
+  const entities = [];
+  const metadataTables = [];
+  const tables = names.map((displayName, index) => {
+    const logicalName = `cr1_${displayName.toLowerCase().replace(/ /g, '')}`;
+    const plannedDecision = settings.decisions[index % settings.decisions.length];
+    const createsTable = ['create', 'adapt'].includes(plannedDecision);
+    const primaryName = {
+      logicalName: 'cr1_name', schemaName: 'cr1_name', displayName: 'Name',
+      type: 'string', primaryName: true, requiredLevel: 'ApplicationRequired',
+      plannedDecision: createsTable ? 'create' : 'reuse',
+    };
+    const extraColumns = plannedDecision === 'reuse' ? [] : Array.from({
+      length: settings.fields,
+    }, (_, fieldIndex) => ({
+      logicalName: `cr1_value${fieldIndex}`, schemaName: `cr1_value${fieldIndex}`,
+      displayName: `Value ${fieldIndex}`, type: ['string', 'integer', 'decimal', 'boolean'][fieldIndex % 4],
+      plannedDecision: 'create', requiredLevel: 'None',
+      ...(fieldIndex % 4 === 3 ? { options: [{ value: 0, label: 'No' }, { value: 1, label: 'Yes' }] } : {}),
+    }));
+    const relationships = [];
+    if (['base', 'worst'].includes(profile) && plannedDecision !== 'reuse') {
+      extraColumns.push({
+        logicalName: 'cr1_warehouseid', schemaName: 'cr1_warehouseid', displayName: 'Warehouse',
+        type: 'lookup', plannedDecision: 'create', requiredLevel: 'None', lookupTarget: 'cr1_warehouse',
+      });
+      relationships.push({
+        kind: 'many-to-one', schemaName: `${logicalName}_Warehouse`, plannedDecision: 'create',
+        parentTable: 'cr1_warehouse', childTable: logicalName,
+        lookup: {
+          logicalName: 'cr1_warehouseid', schemaName: 'cr1_warehouseid',
+          displayName: 'Warehouse', requiredLevel: 'None',
+        },
+      });
+    }
+    if (plannedDecision !== 'create') {
+      const rawEntity = entity(logicalName, displayName, {
+        PrimaryNameAttribute: 'cr1_name', OwnershipType: plannedDecision === 'adapt' ? 'OrganizationOwned' : 'UserOwned',
+        HasActivities: false, HasNotes: false, IsAvailableOffline: true, ChangeTrackingEnabled: true,
+        CanBePrimaryEntityInRelationship: { Value: true },
+        CanBeRelatedEntityInRelationship: { Value: true }, CanBeInManyToMany: { Value: true },
+      });
+      const rawColumns = [column('cr1_name', 'String', {
+        IsPrimaryName: true, RequiredLevel: { Value: 'ApplicationRequired' },
+        MaxLength: 200, FormatName: { Value: 'Text' },
+      })];
+      entities.push(rawEntity);
+      metadataTables.push(table(logicalName, rawColumns));
+      if (profile === 'worst') {
+        const alternative = `legacy_${logicalName.slice(4)}`;
+        entities.push({ ...rawEntity, LogicalName: alternative, SchemaName: alternative,
+          EntitySetName: `${alternative}s`, PrimaryIdAttribute: `${alternative}id` });
+        metadataTables.push(table(alternative, rawColumns));
+      }
+    }
+    return {
+      logicalName, schemaName: logicalName, displayName, displayCollectionName: `${displayName}s`,
+      plannedDecision, dependencyTier: relationships.length ? 1 : 0, serviceRequired: true,
+      ownershipType: 'UserOwned', columns: [primaryName, ...extraColumns], relationships,
+      alternateKeys: profile === 'worst' && plannedDecision !== 'reuse' ? [{
+        schemaName: `${logicalName}_code_key`, displayName: 'Code Key', plannedDecision: 'create',
+        columns: ['cr1_value0'],
+      }] : [],
+      ...(plannedDecision === 'adapt' ? {
+        adaptedLogicalName: `${logicalName}v2`, adaptedSchemaName: `${logicalName}v2`,
+        reason: 'Existing organization-owned table cannot satisfy the approved user-owned schema.',
+      } : {}),
+    };
+  });
+  for (let index = 0; index < settings.noise; index += 1) {
+    entities.push(entity(`noise_record${index}`, `Background Record ${index}`));
+  }
+  return {
+    id: `warehouse-${tableCount}-${profile}`,
+    prompt: `Build a warehouse operations app covering ${names.join(', ')}. Reuse compatible tables, extend only missing fields, and adapt incompatible tables without changing existing data. Warehouse staff need barcode capture and offline access.`,
+    concepts: [...names.map((name) => concept(name)),
+      concept('warehouse staff', 'role', false), concept('barcode capture', 'action', false),
+      concept('offline access', 'constraint', false)],
+    entities,
+    tables: metadataTables,
+    contract: { schemaVersion: 1, publisherPrefix: 'cr1', tables },
+    proposedNames: tables.filter((item) => ['create', 'adapt'].includes(item.plannedDecision))
+      .map((item) => item.adaptedLogicalName || item.logicalName),
+    expectedDetailed: tables.filter((item) => item.plannedDecision !== 'create').map((item) => item.logicalName),
+    extensionFieldCount: settings.fields,
+  };
+}
+
 function tableNameFromPath(apiPath) {
   const match = apiPath.match(/EntityDefinitions\(LogicalName='([^']+)'\)/);
   return match?.[1] || null;
@@ -454,6 +559,13 @@ function createFixtureRequest(requirementSet, calls) {
     }
     if (/AttributeMetadata/.test(apiPath) && apiPath.includes('$expand=OptionSet')) {
       return { status: 200, data: { value: [] } };
+    }
+
+    const ordinaryType = apiPath.match(/\/Attributes\/Microsoft\.Dynamics\.CRM\.([A-Za-z]+)AttributeMetadata/);
+    if (ordinaryType) {
+      return { status: 200, data: {
+        value: fixture.columns.filter((attribute) => attribute.AttributeType === ordinaryType[1]),
+      } };
     }
 
     const metadataId = apiPath.match(/\/Attributes\(([^)]+)\)\//)?.[1];
@@ -585,11 +697,15 @@ async function evaluateRequirementSet(requirementSet) {
 }
 
 async function runBenchmark(requirementSets = REQUIREMENT_SETS) {
+  const scenarios = [];
+  for (const requirementSet of requirementSets) {
+    scenarios.push(await evaluateRequirementSet(requirementSet));
+  }
   return {
     version: 2,
     methodology: 'Fixture-backed execution through typed createSnapshot and compact architect evidence',
     limitation: 'Matched agent A/B runs are still required for model decision and timing claims.',
-    scenarios: await Promise.all(requirementSets.map(evaluateRequirementSet)),
+    scenarios,
   };
 }
 
@@ -655,6 +771,7 @@ if (require.main === module) {
 module.exports = {
   REQUIREMENT_SETS,
   createFixtureRequest,
+  createScaleScenario,
   evaluateRequirementSet,
   normalizeEvidence,
   renderBenchmarkMarkdown,

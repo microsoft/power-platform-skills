@@ -429,8 +429,17 @@ async function requestCombinedBaseMetadata(request, root, logicalName) {
   return result;
 }
 
+const unsupportedCombinedReadRequests = new WeakSet();
+
 async function requestBaseMetadata(request, root, logicalName, combinedBaseRead = false) {
-  if (combinedBaseRead) return requestCombinedBaseMetadata(request, root, logicalName);
+  if (combinedBaseRead && !unsupportedCombinedReadRequests.has(request)) {
+    try {
+      return await requestCombinedBaseMetadata(request, root, logicalName);
+    } catch (error) {
+      if (![400, 501].includes(error.status)) throw error;
+      unsupportedCombinedReadRequests.add(request);
+    }
+  }
   const result = {};
   for (const collection of BASE_METADATA_COLLECTIONS) {
     result[collection.result] = await requestCollection(
