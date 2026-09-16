@@ -124,6 +124,16 @@ downloads that round-trip Choice columns.
   belongs to — positive proof the column was never authored, with no type inference and no
   relationship context needed. An authored column, the lookup included, reports `AttributeOf: null`,
   and an unreadable value keeps the column rather than deleting it.
+- **A download no longer invents a Money column's base-currency twin either.** Found by live
+  round-trip after the fix above. Dataverse generates a `<money>_base` column beside every `Money`
+  column, and it carries **no** `AttributeOf`, is **not** logical, and reports
+  `IsCustomAttribute: true` — so all three rules above are blind to it. Live-measured on a real
+  table: `cfo_budget` and `cfo_budget_base` differ only in `IsValidForCreate` (`true` vs `false`).
+  The downloaded spec therefore declared `cfo_budget_base` as an authored column, and a rebuild into
+  a fresh environment would try to **create** it, colliding with the twin the platform generates for
+  that table's own Money column. A column the API refuses to create was, by definition, never
+  authored, so it is now dropped — and, like every other rule here, an unreadable value keeps the
+  column rather than deleting it.
 - **A download reconstructs `relationships[]`** ([#567]). The block was absent entirely, and — unlike
   forms, views, charts, business rules and global choices — nothing said so, so a downloaded spec
   looked complete while a rebuild into a fresh environment produced tables with no lookups and no

@@ -1205,6 +1205,21 @@ function entityFromMetadata(meta, logical) {
     // Absent KEEPS the attribute, matching every other rule here: when the label read fails no
     // attribute carries `AttributeOf`, and "we could not look" must not become a column deletion.
     if (a.AttributeOf) return false;
+    // NOT CREATABLE. The platform generates companion columns that carry no `AttributeOf`, are not
+    // logical, and report `IsCustomAttribute: true` — so every rule above is blind to them. The one
+    // fact that separates them from an authored column is that the API refuses to create them.
+    //
+    // LIVE-MEASURED on a Money column `cfo_budget`:
+    //   cfo_budget       AttributeOf=null  IsLogical=false  IsCustomAttribute=true  IsValidForCreate=TRUE
+    //   cfo_budget_base  AttributeOf=null  IsLogical=false  IsCustomAttribute=true  IsValidForCreate=FALSE
+    // `<money>_base` is the base-currency twin Dataverse creates for every Money column. Emitting it
+    // as a spec column meant a rebuild into a fresh environment tried to CREATE `cfo_budget_base`,
+    // colliding with the twin the platform generates for that table's own Money column — the same
+    // invented-column failure as the shadow rule above, reached by a different route.
+    //
+    // Absent KEEPS the attribute, like every other rule here: when the label read fails no attribute
+    // carries `IsValidForCreate`, and "we could not look" must not become a column deletion.
+    if (a.IsValidForCreate === false) return false;
     // Keep only attribute types the App Spec can declare (see the map above), PLUS any attribute the
     // option-set read matched, PLUS any attribute `AttributeTypeName` proves is a choice. That last
     // clause is what keeps a MultiChoice when the cast read failed or came back empty: its
@@ -1381,7 +1396,12 @@ async function readEntityWithDescriptions(sdk, logical) {
     // `AttributeOf` rides along for the same filter and is the STRONGER signal: it names the
     // attribute a shadow belongs to, and a POLYMORPHIC lookup's shadows report `IsLogical: false`
     // (live-measured), so `IsLogical` alone cannot see them.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName`);
+    // `IsValidForCreate` catches the rest: a platform-generated companion the API refuses to create.
+    // LIVE-MEASURED on a Money column `cfo_budget`, whose auto-generated base-currency twin
+    // `cfo_budget_base` reports AttributeOf null, IsLogical false AND IsCustomAttribute true — so it
+    // slips past every other rule — while `IsValidForCreate` is false. See the filter for why that
+    // matters on a rebuild.
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName,IsValidForCreate`);
     if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
     if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
     const rows = res.body.value;
@@ -1389,7 +1409,7 @@ async function readEntityWithDescriptions(sdk, logical) {
     meta.attributes = (meta.attributes || []).map((a) => {
       const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
       const row = byLogical.get(key);
-      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeOf: row.AttributeOf, AttributeTypeName: row.AttributeTypeName } : a;
+      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeOf: row.AttributeOf, AttributeTypeName: row.AttributeTypeName, IsValidForCreate: row.IsValidForCreate } : a;
     });
   } catch (err) {
     // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded

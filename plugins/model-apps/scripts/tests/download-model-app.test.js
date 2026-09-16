@@ -249,7 +249,7 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
   // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
   // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
   assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName,IsValidForCreate$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
   assert.strictEqual(status.description, 'State shown to dispatchers.');
@@ -2311,8 +2311,71 @@ test('#574 AttributeOf survives the description merge, so the shadow is dropped 
       },
     },
   };
-  const meta = await readEntityWithDescriptions(sdk, 'cfo_workorder');
-  const e = entityFromMetadata(meta, 'cfo_workorder');
-  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref'],
-    `the polymorphic shadows must not survive the real read path; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
+  const meta574 = await readEntityWithDescriptions(sdk, 'cfo_workorder');
+  const e574 = entityFromMetadata(meta574, 'cfo_workorder');
+  assert.deepStrictEqual(e574.columns.map((c) => c.schemaName), ['cfo_intakeref'],
+    `the polymorphic shadows must not survive the real read path; got ${JSON.stringify(e574.columns.map((c) => c.schemaName))}`);
+});
+
+// A platform-generated companion that carries NO AttributeOf, is not logical, and reports
+// IsCustomAttribute true slips past every rule above. `<money>_base` is the canonical case.
+test('#574 follow-up: a not-creatable platform companion (<money>_base) is dropped, and the real Money column is kept', async () => {
+  // LIVE-MEASURED on cfo_rtproject:
+  //   cfo_budget       AttributeOf=null IsLogical=false IsCustomAttribute=true IsValidForCreate=TRUE
+  //   cfo_budget_base  AttributeOf=null IsLogical=false IsCustomAttribute=true IsValidForCreate=FALSE
+  const e = entityFromMetadata({
+    primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { SchemaName: 'cfo_name', LogicalName: 'cfo_name', AttributeType: 'String', IsCustomAttribute: true, IsLogical: false, AttributeOf: null, IsValidForCreate: true },
+      { SchemaName: 'cfo_budget', LogicalName: 'cfo_budget', AttributeType: 'Money', IsCustomAttribute: true, IsLogical: false, AttributeOf: null, IsValidForCreate: true },
+      { SchemaName: 'cfo_budget_base', LogicalName: 'cfo_budget_base', AttributeType: 'Money', IsCustomAttribute: true, IsLogical: false, AttributeOf: null, IsValidForCreate: false },
+    ],
+  }, 'cfo_rtproject');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget'],
+    `the base-currency twin must not be emitted as an authored column; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
+});
+
+test('#574 follow-up: an attribute whose IsValidForCreate could not be read is KEPT, not dropped', async () => {
+  // Same fail-open direction as every other rule: when the label read fails, no attribute carries
+  // IsValidForCreate, and "we could not look" must never become a column deletion.
+  const e = entityFromMetadata({
+    primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { SchemaName: 'cfo_name', LogicalName: 'cfo_name', AttributeType: 'String', IsCustomAttribute: true },
+      { SchemaName: 'cfo_budget', LogicalName: 'cfo_budget', AttributeType: 'Money', IsCustomAttribute: true },
+    ],
+  }, 'cfo_rtproject');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget']);
+});
+
+test('#574 follow-up: IsValidForCreate survives the description merge, so the twin is dropped through the REAL read path', async () => {
+  // As with AttributeOf, the SDK's own projection does not carry IsValidForCreate — it only reaches
+  // the filter if readEntityWithDescriptions merges it off the label read. Dropping it from the
+  // merge silently re-enables the leak.
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'cfo_rtproject', displayName: 'RT Project', primaryNameAttribute: 'cfo_name',
+      attributes: [
+        { logicalName: 'cfo_budget', attributeType: 'Money', IsCustomAttribute: true },
+        { logicalName: 'cfo_budget_base', attributeType: 'Money', IsCustomAttribute: true },
+      ],
+    }),
+    queryRecords: async (set) => { throw new Error(`queryRecords must not be used for metadata paths (got \u0027${set}\u0027)`); },
+    dataverse: {
+      get: async (url) => {
+        if (/\/Attributes\?/.test(url)) {
+          assert.match(url, /IsValidForCreate/, 'the label read must request IsValidForCreate');
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'cfo_budget', IsLogical: false, AttributeOf: null, IsValidForCreate: true },
+            { LogicalName: 'cfo_budget_base', IsLogical: false, AttributeOf: null, IsValidForCreate: false },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+  const meta = await readEntityWithDescriptions(sdk, 'cfo_rtproject');
+  const e = entityFromMetadata(meta, 'cfo_rtproject');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget'],
+    `the base-currency twin must not survive the real read path; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
 });
