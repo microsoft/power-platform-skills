@@ -12,6 +12,15 @@ downloads that round-trip Choice columns.
 
 ### Added
 
+- **Richer form layouts: multi-column tabs, cell spans, and per-container visibility.** A tab can
+  now hold several form-columns (`tabs[].columns[]` with a `width`), a field entry can set
+  `colspan`/`rowspan`, and `expanded`/`visible`/`showLabel` are author-controlled. Row packing
+  accounts for span, so a full-width field no longer leaves a stray cell beside it. Every new key
+  was measured against the vendored SDK first: keys its serializer discards — `showLabel`/
+  `labelPosition` on a tab, `labelPosition`/`locked` on a section — are **rejected** rather than
+  accepted and dropped, and `tabs[]`/`sections[]`/field entries are now allow-listed, so a typo
+  fails instead of silently vanishing.
+
 - **The dry run resolves create-vs-reuse against the live environment** ([#559]). Without `--apply`
   the plan was a static echo of the spec, identical whether every artifact already existed or none
   did — the one question a dry run exists to answer. Each item is now `+ create` or `= reuse`, with
@@ -27,6 +36,29 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **Editing a form with an explicit layout reshapes it, instead of flattening it** ([#575]). Every
+  field was appended to the first section of the first tab and no tab or section was ever created or
+  resized — while declaring explicit `tabs` simultaneously switched **pruning** on. An author moving
+  a deployed form to a two-column layout therefore got the old layout, minus any field they had not
+  re-declared, and a green build. Tabs, form-columns and sections are now created when missing,
+  patched in place when they differ (including a section's column count), and a field in the wrong
+  section is **moved** rather than duplicated — the cell keeps its id and any control state a maker
+  edited. Containers match by `name`, then `label`, then position, so a form built by an earlier
+  `auto` layout converges instead of gaining a duplicate tab on every rebuild.
+- **Two silent no-ops now report themselves.** A failed default-form promotion was swallowed
+  entirely, so a build could record a default form it had not set; it warns with the reason, and
+  `--verify` proves the deployed `systemform.isdefault` independently. An **existing** view's
+  authored filters/sort are still not reapplied (only columns and description converge) — that is
+  now said out loud when the author declared any, rather than reported as success.
+- **`_seedKey` in `sampleData` is rejected instead of being sent to Dataverse.** It was never a
+  loader sentinel — only `$parent`, `$parents` and `statusReason` are stripped — so it reached the
+  API as an attribute no table has. The error names the real mechanism: a single-column alternate
+  key. Ambiguous parent binds (a duplicate primary-name fallback resolving several rows) are
+  rejected for the same reason rather than binding to an arbitrary one.
+- **`--verify` gained three oracles**: the deployed default Main form, a view's authored
+  filters/sort parsed from `fetchxml` (a condition with no `value` is correct, not missing — that is
+  how current-user and relative-date operators serialize), and app-role associations. Each fails
+  closed when its proof cannot be read.
 - **A download reconstructs `relationships[]`** ([#567]). The block was absent entirely, and — unlike
   forms, views, charts, business rules and global choices — nothing said so, so a downloaded spec
   looked complete while a rebuild into a fresh environment produced tables with no lookups and no
@@ -108,6 +140,7 @@ downloads that round-trip Choice columns.
 [#565]: https://github.com/microsoft/power-platform-skills/issues/565
 [#567]: https://github.com/microsoft/power-platform-skills/issues/567
 [#572]: https://github.com/microsoft/power-platform-skills/issues/572
+[#575]: https://github.com/microsoft/power-platform-skills/issues/575
 
 ## [2.7.1]
 

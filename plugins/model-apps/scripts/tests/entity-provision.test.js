@@ -492,6 +492,15 @@ test('buildSeedGroup translates $parent.match into a lookup bind (parentIndex) a
   assert.strictEqual(group.records[0].body['new_CustomerId@odata.bind'], undefined, 'no @odata.bind baked in (SDK forms it)');
 });
 
+test('buildSeedGroup rejects unsupported _seedKey before it reaches the outbound body', () => {
+  const spec = seedSpec();
+  spec.sampleData.new_ticket[0]._seedKey = 'ticket-1';
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} }),
+    /_seedKey[\s\S]*not supported[\s\S]*alternate key/,
+  );
+});
+
 test('#1 buildSeedGroup THROWS (not silently drops) when a $parent.match resolves to no parent row', () => {
   const spec = seedSpec();
   // No new_customer row matches this -> the bind cannot be formed. Before #1 this was a silent skip
@@ -500,6 +509,19 @@ test('#1 buildSeedGroup THROWS (not silently drops) when a $parent.match resolve
   assert.throws(
     () => buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} }),
     /found no 'new_customer' sample record|left unset/,
+  );
+});
+
+test('buildSeedGroup THROWS when a $parent.match resolves to more than one parent row', () => {
+  const spec = seedSpec();
+  spec.sampleData.new_customer = [
+    { new_name: 'Same', new_tier: 'Free' },
+    { new_name: 'Same', new_tier: 'Pro' },
+  ];
+  spec.sampleData.new_ticket[0].$parent.match = { new_name: 'Same' };
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[1], records: spec.sampleData.new_ticket, statusReasonValues: {} }),
+    /parent match[\s\S]*matched 2 'new_customer' sample records[\s\S]*new_CustomerId/,
   );
 });
 
@@ -538,6 +560,18 @@ test('buildSeedGroup prefers a single-column alternate key as matchOn over the p
   spec.sampleData.new_customer = [{ new_name: 'Acme', new_tier: 'Pro', new_code: 'AC-1' }];
   const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} });
   assert.strictEqual(group.matchOn, 'new_code', 'alt-key column wins over primary name');
+});
+
+test('buildSeedGroup rejects duplicate primary-name values when matchOn would fall back to name', () => {
+  const spec = seedSpec();
+  spec.sampleData.new_customer = [
+    { new_name: 'Same', new_tier: 'Free' },
+    { new_name: 'Same', new_tier: 'Pro' },
+  ];
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_customer, statusReasonValues: {} }),
+    /duplicate new_name value 'Same'[\s\S]*single-column alternate key/,
+  );
 });
 
 test('buildSeedGroup omits matchOn (no dedup) when the key value is empty in a record', () => {

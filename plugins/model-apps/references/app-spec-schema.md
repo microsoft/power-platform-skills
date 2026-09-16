@@ -234,6 +234,18 @@ agent later inspects an app it did not build — to extend it, debug it, or answ
 Good: `"Severity 1-5; drives the escalation rule and the SLA clock."`
 Weak: `"The priority column."` (restates the name and adds nothing)
 
+**`app.description` additionally has to ROUTE.** It is the one field an orchestrator reads to decide
+whether *this* app is the right place to send a request, and there is no separate "AI description"
+field — the SDK's app surface has nowhere to put one, so anything extra would be silently dropped.
+Write the routing signal into `app.description` itself: who the app is for, the tasks it covers,
+what it deliberately **excludes**, and — when two apps expose the same tables — how to tell them
+apart. Sibling apps over the same data are precisely where a purpose-only description fails.
+
+Good: `"Project-manager and portfolio work: planning projects, assigning and reprioritizing work,
+and managing sprints, budgets, risks and releases. Prefer the My Work app when the request is about
+the signed-in contributor's own assigned items."`
+Weak: `"An app for managing projects."` (no persona, no scope boundary, nothing to disambiguate)
+
 **Rules:** must be a non-empty string, max 2000 characters (the Dataverse ceiling — the platform
 truncates silently past it, so it is rejected at author time instead). Omit the field entirely rather
 than setting `""`; every write site omits an absent description, so **a rebuild never blanks one a
@@ -550,6 +562,19 @@ rather than silently dropped:
   "tabs": [ { "label": "General", "sections": [
     { "label": "Details", "columns": 2, "fields": ["new_name","new_budget","new_status"] } ] } ] }
 
+// explicit layout, richer: multi-column tabs, per-cell spans, visibility
+{ "entity": "new_project", "type": "main", "name": "Project",
+  "tabs": [
+    { "name": "tab_delivery", "label": "Delivery", "expanded": true, "columns": [
+      { "width": "65%", "sections": [
+        { "name": "sec_scope", "label": "Scope", "columns": 2, "fields": [
+          { "name": "new_summary", "colspan": 2 },     // span the whole 2-column section
+          "new_startdate", "new_targetdate" ] } ] },
+      { "width": "35%", "sections": [
+        { "name": "sec_status", "label": "Status", "columns": 1, "fields": ["new_status","new_owner"] } ] } ] },
+    { "name": "tab_audit", "label": "Audit", "expanded": false,
+      "sections": [ { "name": "sec_audit", "label": "Audit", "columns": 2, "fields": ["createdon","modifiedon"] } ] } ] }
+
 // per-field control options: read-only, hidden, and targeted positioning
 { "entity": "new_workitem", "name": "Work Item", "layout": "auto",
   "fieldOptions": {
@@ -602,6 +627,12 @@ rather than silently dropped:
   default and only ever applies to a table THIS build owns (a custom, publisher-prefixed, non-`existing`
   table); it never touches a reused/system table. Teardown reactivates the stock form before deleting
   ours, so a torn-down table is left clean.
+- **`isDefault`** *(optional, boolean, Main forms only)* — which Main form the table **opens with**.
+  Exactly one Main form per table may set it; the fallback is the first Main form in spec order, so
+  selection is order-independent either way (it is applied once, after every form exists, rather than
+  each form racing to promote itself). A promotion the environment refuses is reported as a warning
+  and fails `--verify`, which proves the deployed `systemform.isdefault` independently — so a build
+  can no longer record a default it did not actually set.
 - **Form resolution is by `(entity, name, formType)`** — a Dataverse form name is unique only per
   `(entity, type)`, so a table's auto-created **Main**, **Quick View**, and **Card** forms can all be
   named "Information" without colliding. A `formType:"Main"` edit reconciles **only** the Main form;
@@ -618,6 +649,39 @@ rather than silently dropped:
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
   The build fetches the pushed form, injects the handlers, then publishes it.
+
+### Explicit layout — tabs, form-columns, sections
+
+| Level | Key | Meaning |
+|---|---|---|
+| tab | `name` | Stable identity. Emitted as `tab_<i>` when omitted — see *editing an existing form* below. |
+| tab | `label` | Tab title. |
+| tab | `expanded` | `false` collapses the tab on open (default `true`). |
+| tab | `visible` | `false` hides the tab (default `true`). |
+| tab | `sections[]` | Shorthand for **one full-width form-column**. |
+| tab | `columns[]` | The multi-column form: each entry is `{ "width": "60%", "sections": [...] }`. |
+| form-column | `width` | Percentage string (`"60%"`). Omitted widths split evenly (3 columns → 34/33/33). |
+| section | `name` | Stable identity, `section_<tab>_<i>` when omitted. |
+| section | `label`, `showLabel`, `visible` | Section heading, whether it renders, whether the section shows. |
+| section | `columns` | `1`–`4` grid columns. |
+| section | `fields[]` | Column logical names, or `{ "name": …, … }` entries. |
+| field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it. |
+
+A tab declares **either** `sections` **or** `columns`, never both. Any other key is **rejected** —
+including `showLabel`/`labelPosition` on a tab and `labelPosition`/`locked` on a section, which the
+SDK's serializer silently discards, so accepting them would promise a layout Dataverse never renders.
+
+**Editing an existing form.** An explicit layout is converged onto the deployed form rather than
+flattened into its first section: missing tabs, form-columns and sections are **created**, a
+section's `columns`/`label`/`showLabel`/`visible` are **updated in place**, and a field sitting in
+the wrong section is **moved** (never duplicated — the cell keeps its id and any control state a
+maker edited). Containers are matched by `name`, then `label`, then position, so a form built by an
+earlier `auto` layout — or by hand in Maker — converges instead of gaining a duplicate tab. Nothing
+is renamed, because form scripts and business rules can reference a section by name.
+
+⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
+layout does not list is removed (never the primary field). Set `"prune": false` to restyle or
+reorder a subset without re-declaring every other field.
 
 ### Per-field control options — `readOnly`, `hidden`, `after`
 

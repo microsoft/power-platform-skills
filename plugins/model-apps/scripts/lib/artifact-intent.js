@@ -20,10 +20,37 @@ const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 function rowsFromCells(cells, columns) {
   const cols = Math.max(1, Math.min(4, columns || 1));
   const rows = [];
-  for (let i = 0; i < cells.length; i += cols) {
-    rows.push({ cells: cells.slice(i, i + cols) });
+  // Pack by the WIDTH each cell occupies, not by cell count: a `colspan: 2` cell fills two of the
+  // section's columns, so counting cells would put 2 cells in a 2-column row whose first cell
+  // already spans it and push the second into an overflowing row. A span wider than the section is
+  // clamped, because Dataverse renders a cell that overruns its section unpredictably and the
+  // author's intent ("as wide as possible") is preserved by the clamp.
+  let current = [];
+  let used = 0;
+  for (const cell of cells) {
+    const span = Math.max(1, Math.min(cols, Number(cell && cell.colspan) || 1));
+    if (used + span > cols && current.length) {
+      rows.push({ cells: current });
+      current = [];
+      used = 0;
+    }
+    current.push(cell);
+    used += span;
   }
+  if (current.length) rows.push({ cells: current });
   return rows;
+}
+
+// Widths for a tab's FormColumns when the author did not set them explicitly.
+//
+// A single column is '100%' EXACTLY — that literal is what every previously generated form carries,
+// and changing it would make each rebuild look like a width edit. Remaining columns split evenly with
+// the first absorbing the rounding remainder, so three columns are 34/33/33 rather than 99% total.
+function equalColumnWidths(n) {
+  const count = Math.max(1, n || 1);
+  if (count === 1) return ['100%'];
+  const base = Math.floor(100 / count);
+  return Array.from({ length: count }, (_, i) => (i === 0 ? 100 - base * (count - 1) : base) + '%');
 }
 
 // Minimal push-ready bound-field cell.
@@ -64,6 +91,12 @@ function fieldCellIntent(logical, opts) {
   // Same asymmetry, same reason: only `visible: false` is written. An explicit `true` would
   // un-hide a control someone deliberately hid outside the spec.
   if (opts.hidden) cell.visible = false;
+  // Spans are written only when they are NOT the adapter's default of 1, for the same reason
+  // `isReadOnly: false` is never written: emitting the default on every ordinary cell would
+  // overwrite a span a maker widened by hand on a form the spec never claimed to own that of.
+  // Both serialize to real `colspan`/`rowspan` attributes (verified against the vendored bundle).
+  if (opts.colspan > 1) cell.colspan = opts.colspan;
+  if (opts.rowspan > 1) cell.rowspan = opts.rowspan;
   return cell;
 }
 
@@ -85,19 +118,24 @@ const NON_FORM_RENDERABLE_TYPES = new Set(['BigInt']);
 //   { "name": "co_ticketnumber",   "readOnly": true }
 //   { "name": "co_storypoints",    "hidden": true }
 //   { "name": "co_daysremaining",  "after": "co_duedate" }
-// Returns a canonical { name, readOnly, hidden, after } with `name`/`after` lower-cased, because
-// every downstream comparison (form field logicals, cell pointers, Dataverse attribute logical
-// names) is lower-case.
+//   { "name": "co_description",    "colspan": 2 }
+// Returns a canonical { name, readOnly, hidden, after, colspan, rowspan } with `name`/`after`
+// lower-cased, because every downstream comparison (form field logicals, cell pointers, Dataverse
+// attribute logical names) is lower-case. Spans normalize to `undefined` rather than 1 so the cell
+// builder can distinguish "author asked for the default" from "author said nothing".
 function normalizeFieldEntry(entry) {
+  const span = (v) => (Number.isFinite(Number(v)) && Number(v) > 1 ? Math.floor(Number(v)) : undefined);
   if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
     return {
       name: String(entry.name || '').toLowerCase(),
       readOnly: entry.readOnly === true,
       hidden: entry.hidden === true,
       after: entry.after ? String(entry.after).toLowerCase() : undefined,
+      colspan: span(entry.colspan),
+      rowspan: span(entry.rowspan),
     };
   }
-  return { name: String(entry || '').toLowerCase(), readOnly: false, hidden: false, after: undefined };
+  return { name: String(entry || '').toLowerCase(), readOnly: false, hidden: false, after: undefined, colspan: undefined, rowspan: undefined };
 }
 
 // Form-level per-field control options, keyed by column logical name:
@@ -118,6 +156,8 @@ function fieldOptionsMap(formSpec) {
       readOnly: v.readOnly === true,
       hidden: v.hidden === true,
       after: v.after ? String(v.after).toLowerCase() : undefined,
+      colspan: Number(v.colspan) > 1 ? Math.floor(Number(v.colspan)) : undefined,
+      rowspan: Number(v.rowspan) > 1 ? Math.floor(Number(v.rowspan)) : undefined,
     };
   }
   return map;
@@ -387,45 +427,59 @@ function compileFormIntent(spec, formSpec, opts) {
       readOnly: inline.readOnly || base.readOnly,
       hidden: inline.hidden || base.hidden,
       after: inline.after !== undefined ? inline.after : base.after,
+      colspan: inline.colspan !== undefined ? inline.colspan : base.colspan,
+      rowspan: inline.rowspan !== undefined ? inline.rowspan : base.rowspan,
     };
   };
 
   let tabs;
 
   if (explicit && Array.isArray(formSpec.tabs)) {
-    // Honor the authored layout verbatim. Wrap each tab's sections in a single FormColumn
-    // (the new topology requires it; old tabs had sections directly without a column layer).
+    // Honor the authored layout verbatim. A tab is one or more FormColumns: `tabs[].sections` is
+    // the single-full-width-column shorthand, `tabs[].columns[]` the explicit multi-column shape.
+    // Declaring both is rejected at the spec gate, so reading `columns` first cannot mask `sections`.
     tabs = formSpec.tabs.map(function (t, ti) {
+      const authoredColumns = Array.isArray(t.columns)
+        ? t.columns
+        : [{ width: '100%', sections: t.sections || [] }];
+      const defaultWidths = equalColumnWidths(authoredColumns.length);
       return {
         name: t.name || ('tab_' + ti),
         label: t.label || 'General',
-        expanded: true,
-        visible: true,
-        // Each tab is one FormColumn. width is set explicitly ('100%') for exact control; as of
-        // hardening-3 the SDK's normalizeColumn ALSO defaults a synthesized column's width to '100%'
-        // (a belt-and-suspenders safety net), but we keep setting it here so the value is never left to
-        // an implicit default and older bundles that don't default it still produce valid formxml
-        // (columnToRaw omits an undefined width, which makes Dataverse reject the push).
-        columns: [{
-          width: '100%',
-          sections: (t.sections || []).map(function (s, si) {
-            const cells = (s.fields || []).map(function (fl) {
-              const inline = normalizeFieldEntry(fl);
-              const opt = optionsFor(inline.name, inline);
-              recordPosition(opt);
-              return fieldCellIntent(inline.name, { isRequired: requiredFor(inline.name), readOnly: opt.readOnly, hidden: opt.hidden });
-            });
-            const secCols = Math.min(s.columns || 1, maxCols);
-            return {
-              name: s.name || ('section_' + ti + '_' + si),
-              label: s.label || 'Details',
-              visible: true,
-              showLabel: s.showLabel !== false,
-              columns: secCols,
-              rows: rowsFromCells(cells, secCols)
-            };
-          })
-        }]
+        // Only an explicit `false` collapses/hides a tab; anything else keeps the previous
+        // always-visible, always-expanded behavior, so existing specs compile unchanged.
+        expanded: t.expanded !== false,
+        visible: t.visible !== false,
+        columns: authoredColumns.map(function (c, ci) {
+          return {
+            // width is set explicitly for exact control; the SDK's normalizeColumn also defaults a
+            // synthesized column's width to '100%', but keeping it explicit works on every bundle
+            // (an undefined width is omitted by columnToRaw and Dataverse would reject it).
+            width: c.width || defaultWidths[ci],
+            sections: (c.sections || []).map(function (s, si) {
+              const cells = (s.fields || []).map(function (fl) {
+                const inline = normalizeFieldEntry(fl);
+                const opt = optionsFor(inline.name, inline);
+                recordPosition(opt);
+                return fieldCellIntent(inline.name, { isRequired: requiredFor(inline.name), readOnly: opt.readOnly, hidden: opt.hidden, colspan: opt.colspan, rowspan: opt.rowspan });
+              });
+              const secCols = Math.min(s.columns || 1, maxCols);
+              return {
+                // The generated fallback name is the form's identity for this section on a REBUILD
+                // (topology reconcile matches deployed sections by name), so the ci segment is
+                // appended only for ci > 0. Adding it unconditionally would rename every section on
+                // every already-deployed single-column form, and each rebuild would then create a
+                // duplicate section beside the original instead of converging onto it.
+                name: s.name || ('section_' + ti + (ci > 0 ? '_' + ci : '') + '_' + si),
+                label: s.label || 'Details',
+                visible: s.visible !== false,
+                showLabel: s.showLabel !== false,
+                columns: secCols,
+                rows: rowsFromCells(cells, secCols)
+              };
+            })
+          };
+        })
       };
     });
   } else {
@@ -437,7 +491,7 @@ function compileFormIntent(spec, formSpec, opts) {
     const autoCell = function (logical, extra) {
       const opt = optionsFor(logical, null);
       recordPosition(opt);
-      return fieldCellIntent(logical, Object.assign({ readOnly: opt.readOnly, hidden: opt.hidden }, extra || {}));
+      return fieldCellIntent(logical, Object.assign({ readOnly: opt.readOnly, hidden: opt.hidden, colspan: opt.colspan, rowspan: opt.rowspan }, extra || {}));
     };
     if (entity) {
       cells.push(autoCell(entity.primaryAttribute.schemaName.toLowerCase(), { isRequired: true }));
@@ -679,6 +733,54 @@ function findFieldCellLocation(formJson, logical) {
   return null;
 }
 
+// A deployed section, located by NAME (case-insensitive) across the WHOLE form, or null.
+//
+// The search is form-wide rather than scoped to the expected tab on purpose: section names are
+// unique per form in Dataverse, and a section a maker dragged to another tab is still THAT section.
+// Scoping the lookup to the tab the spec now names would miss it and create a duplicate beside it.
+function findSectionLocation(formJson, sectionName) {
+  const want = String(sectionName || '').toLowerCase();
+  if (!want) return null;
+  const tabs = formJson.tabs || [];
+  for (let ti = 0; ti < tabs.length; ti++) {
+    const cols = tabs[ti].columns || [];
+    for (let ci = 0; ci < cols.length; ci++) {
+      const sections = cols[ci].sections || [];
+      for (let si = 0; si < sections.length; si++) {
+        if (String(sections[si].name || '').toLowerCase() !== want) continue;
+        const pointer = '/tabs/' + ti + '/columns/' + ci + '/sections/' + si;
+        return { pointer, rowsPointer: pointer + '/rows', tabIndex: ti, columnIndex: ci, sectionIndex: si, section: sections[si] };
+      }
+    }
+  }
+  return null;
+}
+
+// Where the COMPILED layout says each bound field belongs: logical name -> section name.
+//
+// Derived from the compiled intent rather than the raw spec so it cannot disagree with the tree the
+// create path builds (the compiler is what resolves generated section names, shorthand columns and
+// field-entry objects). The first placement wins — a field listed twice is already an authoring
+// error the spec gate reports, and picking the first keeps this pure and total.
+function declaredSectionByField(intentTabs) {
+  const out = {};
+  for (const t of intentTabs || []) {
+    for (const col of t.columns || []) {
+      for (const s of col.sections || []) {
+        for (const r of s.rows || []) {
+          for (const c of r.cells || []) {
+            const fn = c.control && c.control.fieldName;
+            if (!fn || isNonFieldControl(c.control)) continue;
+            const logical = String(fn).toLowerCase();
+            if (out[logical] === undefined) out[logical] = s.name;
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // JsonPointer to the cell hosting the BOUND field `logical`, or null if not present.
 // Used by the engine's field-removal reconcile (removeElement(pointer) on the SDK). Non-field
 // controls are skipped even if their fieldName matches, so a prune never targets a quick-view whose
@@ -704,6 +806,9 @@ module.exports = {
   sectionRowsPointer,
   findFieldCellPointer,
   findFieldCellLocation,
+  findSectionLocation,
+  declaredSectionByField,
+  equalColumnWidths,
   normalizeFieldEntry,
   fieldOptionsMap,
   NON_FORM_RENDERABLE_TYPES

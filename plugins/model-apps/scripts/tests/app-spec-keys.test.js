@@ -398,3 +398,67 @@ test('#537 review follow-up: a NON-STRING schemaName is an error, not a crash', 
 // means resolving the name ONCE into a local and threading it through every site, which is its own
 // change with its own tests. Unlike the non-string case above, this shape cannot come from
 // `JSON.parse` — only a programmatic caller can build it — so it is not on any real input path.
+
+// --- explicit form layout: unknown/unserializable keys (#575 follow-on) ---
+// tabs[]/sections[] had NO allow-list, so an invented key validated clean and vanished. Several
+// plausible keys are also accepted by the SDK normalizers and then dropped by its serializer.
+
+function withForm(tabs) {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', type: 'Text' }];
+  s.forms = [{ entity: 'contoso_order', name: 'Order', layout: 'explicit', tabs }];
+  return s;
+}
+const errsFor = (tabs) => validateAppSpec(withForm(tabs), { profile: 'plan' }).errors;
+
+test('form layout: an unknown key on a tab, section or field entry is rejected', () => {
+  assert.ok(errsFor([{ label: 'G', bogusTabKey: 1, sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /unknown key \x27bogusTabKey\x27 on tab/.test(e)), 'tab key');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', bogusSectionKey: 1, fields: [] }] }])
+    .some((e) => /unknown key \x27bogusSectionKey\x27 on tab .* section/.test(e)), 'section key');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', bogusFieldKey: 1 }] }] }])
+    .some((e) => /unknown key \x27bogusFieldKey\x27 on tab .* field/.test(e)), 'field entry key');
+});
+
+test('form layout: keys the SDK serializer DROPS are rejected with the real mechanism named', () => {
+  // Measured against the vendored bundle: a tab serializes only name/expanded/visible + label.
+  const tabShowLabel = errsFor([{ label: 'G', showLabel: true, sections: [{ label: 'S', fields: [] }] }]);
+  assert.ok(tabShowLabel.some((e) => /unknown key \x27showLabel\x27 on tab/.test(e)));
+  assert.ok(tabShowLabel.some((e) => /a TAB has no label toggle in FormXml/.test(e)), 'names what to use instead');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', labelPosition: 'Top', fields: [] }] }])
+    .some((e) => /unknown key \x27labelPosition\x27 on tab .* section/.test(e)));
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', locked: true, fields: [] }] }])
+    .some((e) => /unknown key \x27locked\x27/.test(e)));
+});
+
+test('form layout: a tab cannot declare both sections and columns', () => {
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'A', fields: [] }], columns: [{ sections: [{ label: 'B', fields: [] }] }] }])
+    .some((e) => /declares both \x27sections\x27 and \x27columns\x27/.test(e)));
+});
+
+test('form layout: out-of-range spans, section columns and column widths are rejected', () => {
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', columns: 9, fields: [] }] }])
+    .some((e) => /may span 1 to 4 columns/.test(e)), 'section columns');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', colspan: 0 }] }] }])
+    .some((e) => /has colspan \x270\x27/.test(e)), 'colspan 0');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', rowspan: 1.5 }] }] }])
+    .some((e) => /has rowspan \x271.5\x27/.test(e)), 'fractional rowspan');
+  assert.ok(errsFor([{ label: 'G', columns: [{ width: '60px', sections: [{ label: 'S', fields: [] }] }] }])
+    .some((e) => /width \x2760px\x27 .* must be a percentage/.test(e)), 'non-percentage width');
+});
+
+test('form layout: a valid explicit layout with spans and multi-column tabs passes clean', () => {
+  const errs = errsFor([{ name: 'tab_g', label: 'G', expanded: false, visible: true, columns: [
+    { width: '60%', sections: [{ name: 's1', label: 'S1', columns: 2, showLabel: true, visible: true, fields: [{ name: 'contoso_amount', colspan: 2 }] }] },
+    { width: '40%', sections: [{ name: 's2', label: 'S2', columns: 1, fields: ['contoso_name'] }] },
+  ] }]);
+  assert.deepStrictEqual(errs.filter((e) => /unknown key|must be a percentage|may span|has colspan|has rowspan/.test(e)), []);
+});
+
+test('sampleData: _seedKey is rejected because it reaches Dataverse as an unknown attribute', () => {
+  const s = base();
+  s.sampleData = { contoso_order: [{ contoso_name: 'A', _seedKey: 'order-1' }] };
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors;
+  assert.ok(errs.some((e) => /_seedKey. is not a supported sample-record key/.test(e)));
+  assert.ok(errs.some((e) => /single-column alternate key/.test(e)), 'points at the real mechanism');
+});

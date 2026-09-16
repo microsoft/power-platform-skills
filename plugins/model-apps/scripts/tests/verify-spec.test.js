@@ -471,6 +471,195 @@ test('verifySpec: view-columns check is SKIPPED when the reader gives no layoutx
   assert.ok(!r.checks.some((c) => c.kind === 'view-columns'), 'no layoutxml -> no view-columns check (best-effort)');
 });
 
+test('verifySpec: default-form — the selected Main form must read back systemform.isdefault=true', async () => {
+  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
+    forms: [
+      { entity: 'new_ticket', name: 'Agent Form', formType: 'Main' },
+      { entity: 'new_ticket', name: 'Manager Form', formType: 'Main', isDefault: true },
+    ] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (/name eq 'Agent Form'/.test(opts.filter)) return [{ formid: 'agent-form-id' }];
+      if (/name eq 'Manager Form'/.test(opts.filter)) return [{ formid: 'manager-form-id' }];
+      return [];
+    },
+    formDefaultState: async (entity, formId) => ({ isDefault: formId === 'agent-form-id' }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(r.checks.some((c) => c.kind === 'form' && c.name === 'Manager Form' && c.present), 'the selected form exists');
+  const c = r.checks.find((x) => x.kind === 'form-default' && x.name === 'new_ticket.Manager Form');
+  assert.ok(c && c.present === false, 'the actual isdefault flag, not form existence, decides the default-form check');
+  assert.match(c.detail, /isdefault is false/);
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: default-form check is reader-gated for existence-only callers', async () => {
+  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
+    forms: [{ entity: 'new_ticket', name: 'Agent Form', formType: 'Main', isDefault: true }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'agent-form-id' }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(r.checks.some((c) => c.kind === 'form' && c.present));
+  assert.ok(!r.checks.some((c) => c.kind === 'form-default'), 'no formDefaultState reader -> no content check');
+  assert.strictEqual(r.ok, true);
+});
+
+test('verifySpec: view-filters — every authored condition must be present in deployed fetchxml', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'My Open', columns: ['new_subject'], activeOnly: true,
+      filters: [
+        { attr: 'ownerid', op: 'eq-userid' },
+        { attr: 'new_priority', op: 'not-in', values: ['100000000'] },
+        { attr: 'modifiedon', op: 'this-week' },
+      ],
+      sort: [{ attr: 'createdon', dir: 'desc' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: '<fetch><entity name="new_ticket"><attribute name="new_subject"/>' +
+        '<filter type="and"><condition attribute="statecode" operator="eq" value="0"/>' +
+        '<condition attribute="ownerid" operator="eq-userid"/>' +
+        '<condition attribute="modifiedon" operator="this-week"/>' +
+        '<filter type="and"><condition attribute="new_priority" operator="ne" value="100000000"/></filter>' +
+        '</filter><order attribute="createdon" descending="true"/></entity></fetch>',
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(r.checks.some((c) => c.kind === 'view-filters' && c.present), JSON.stringify(r.missing));
+  assert.ok(r.checks.some((c) => c.kind === 'view-sort' && c.present), JSON.stringify(r.missing));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+});
+
+test('verifySpec: view-filters — value-less operators missing value are correct, missing operator is a failure', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'This Week', columns: ['new_subject'], activeOnly: false,
+      filters: [{ attr: 'modifiedon', op: 'this-week' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="createdon" operator="this-week"/></filter></entity></fetch>',
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'view-filters');
+  assert.ok(c && c.present === false, 'omitting value is fine; the wrong attribute is not');
+  assert.match(c.detail, /modifiedon this-week/);
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: view-sort — a missing authored order fails without demanding FetchXML byte equality', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'Sorted', columns: ['new_subject'], activeOnly: false,
+      sort: [{ attr: 'createdon', dir: 'desc' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="ownerid" operator="eq-userid"/></filter><order attribute="new_subject" descending="false"/></entity></fetch>',
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(!r.checks.some((c) => c.kind === 'view-filters'), 'platform-added undeclared filters are tolerated');
+  const c = r.checks.find((x) => x.kind === 'view-sort');
+  assert.ok(c && c.present === false);
+  assert.match(c.detail, /createdon desc/);
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: view-filters fail closed when the reader supplied an unreadable fetchxml value', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'Mine', columns: ['new_subject'], activeOnly: false,
+      filters: [{ attr: 'ownerid', op: 'eq-userid' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: null,
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'view-filters');
+  assert.ok(c && c.present === false);
+  assert.match(c.detail, /could not read deployed savedquery.fetchxml/);
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: app-role association — app access personas must be linked to the app module', async () => {
+  const spec = {
+    entities: [{ schemaName: 'new_ticket', columns: [] }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    personas: [
+      { persona: 'Agent', jobs: [{ name: 'work', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+      { persona: 'Auditor', appAccess: false, jobs: [{ name: 'audit', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+    ],
+  };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_ticket' }),
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      if (set === 'businessunit') return [{ businessunitid: '00000000-0000-0000-0000-000000000001' }];
+      if (set === 'role' && /Agent/.test(opts.filter)) return [{ roleid: 'role-agent', description: SDK_ROLE_MARKER, ismanaged: false }];
+      if (set === 'role' && /Auditor/.test(opts.filter)) return [{ roleid: 'role-auditor', description: SDK_ROLE_MARKER, ismanaged: false }];
+      return [];
+    },
+    appRoleIds: async () => ({ ok: true, roleIds: ['role-other'] }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'app-role' && x.name === 'Agent');
+  assert.ok(c && c.present === false, 'existing role is not enough; the actual association row must exist');
+  assert.ok(!r.checks.some((x) => x.kind === 'app-role' && x.name === 'Auditor'), 'appAccess:false personas should not require an app association');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: app-role association read failures fail closed', async () => {
+  const spec = {
+    entities: [{ schemaName: 'new_ticket', columns: [] }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    personas: [{ persona: 'Agent', jobs: [{ name: 'work', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] }],
+  };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_ticket' }),
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'businessunit'
+      ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
+      : [{ roleid: 'role-agent', description: SDK_ROLE_MARKER, ismanaged: false }]),
+    appRoleIds: async () => ({ ok: false, reason: 'HTTP 403' }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'app-role');
+  assert.ok(c && c.present === false);
+  assert.match(c.detail, /could not read.*403/);
+  assert.strictEqual(r.ok, false);
+});
+
 test('verifySpec: relationship existence — a declared relationship absent from the child metadata FAILS (F5)', async () => {
   const spec = { entities: [{ schemaName: 'new_o' }], views: [], charts: [], forms: [], appShell: { areas: [] },
     relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_o', lookup: { schemaName: 'new_CustomerId' } }] };

@@ -6,7 +6,7 @@
 
 const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
@@ -49,6 +49,16 @@ async function verifySpec(spec, read, opts = {}) {
   // normal `--changed-only` fast-apply path that would be wrong every single time.
   const environmentSkipped = [];
   const phaseSkipped = [];
+
+  const selectedDefaultForms = new Map();
+  for (const f of spec.forms || []) {
+    const formType = f.formType || 'Main';
+    if (formType !== 'Main') continue;
+    const entity = String(f.entity || '').toLowerCase();
+    if (!entity) continue;
+    const current = selectedDefaultForms.get(entity);
+    if (!current || (f.isDefault === true && current.isDefault !== true)) selectedDefaultForms.set(entity, f);
+  }
 
   // Entities + their declared columns.
   for (const e of spec.entities || []) {
@@ -98,7 +108,7 @@ async function verifySpec(spec, read, opts = {}) {
     let rows = [];
     let readError = null;
     try {
-      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
+      rows = await read.queryRecords('savedquery', { select: ['savedqueryid', 'layoutxml', 'fetchxml'], filter: `returnedtypecode eq '${String(v.entity).toLowerCase()}' and name eq '${odataLit(v.name)}'`, top: 1 });
     } catch (error) {
       readError = error;
     }
@@ -112,6 +122,28 @@ async function verifySpec(spec, read, opts = {}) {
       const deployed = new Set(layoutColumnNames(row.layoutxml));
       const missingCols = specCols.filter((c) => !deployed.has(c));
       add('view-columns', viewName, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
+    }
+    if (row && Object.prototype.hasOwnProperty.call(row, 'fetchxml')) {
+      const expected = expectedViewFetchParts(spec, v);
+      // Dataverse stores savedquery.fetchxml as the authoritative query content for a system view, so
+      // the verifier proves the DEPLOYED predicates/orders rather than trusting the build's intended
+      // view definition. Subset semantics are deliberate: Dataverse may add platform-owned predicates
+      // that the App Spec never authored, and those must not block a good app.
+      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/savedquery
+      if (!row.fetchxml && (expected.conditions.length || expected.orders.length)) {
+        if (expected.conditions.length) add('view-filters', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored filters');
+        if (expected.orders.length) add('view-sort', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored sort');
+        continue;
+      }
+      const actual = parseFetchXml(row.fetchxml);
+      if (expected.conditions.length) {
+        const missing = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
+        add('view-filters', viewName, missing.length === 0, missing.length ? `missing filter(s): ${missing.map(formatCondition).join('; ')}` : '');
+      }
+      if (expected.orders.length) {
+        const missing = expected.orders.filter((want) => !actual.orders.some((got) => orderMatches(want, got)));
+        add('view-sort', viewName, missing.length === 0, missing.length ? `missing sort(s): ${missing.map(formatOrder).join('; ')}` : '');
+      }
     }
   }
   for (const ch of spec.charts || []) {
@@ -130,6 +162,21 @@ async function verifySpec(spec, read, opts = {}) {
       id = await resolveExistingFormId(read, { entityLogicalName: String(f.entity).toLowerCase(), name, formType: f.formType, formId: f.formId });
     } catch { id = null; }
     add('form', name, id);
+    const entityLogical = String(f.entity || '').toLowerCase();
+    if (id && selectedDefaultForms.get(entityLogical) === f && typeof read.formDefaultState === 'function') {
+      let state = null;
+      let readError = null;
+      try { state = await read.formDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
+      // Default-form promotion is a stored systemform flag, not a property of the App Spec or the
+      // build result. A form can exist with the right name/type while still not being the table's
+      // default, so this proves the platform row the model-driven runtime uses.
+      // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
+      const present = !!(state && state.isDefault === true);
+      add('form-default', `${entityLogical}.${name}`, present, present ? '' :
+        readError
+          ? `could not read deployed systemform.isdefault: ${readError}`
+          : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
+    }
   }
 
   // Relationships (existence) — currently a build can declare a relationship that silently fails to
@@ -463,6 +510,11 @@ async function verifySpec(spec, read, opts = {}) {
   // therefore verify the role exists AND carries the SDK ownership marker (a same-name role someone
   // else built would pass a bare existence check but is NOT the role the security phase authored).
   const roleBuCache = {}; // memoize the root-BU lookup across personas in this verify pass
+  let appRoleIdsP;
+  const appRoleIds = async () => {
+    if (!appRoleIdsP) appRoleIdsP = read.appRoleIds();
+    return appRoleIdsP;
+  };
   for (const p of spec.personas || []) {
     const roleName = canonicalPersonaName(p); // trimmed — matches the SDK's created name
     if (!roleName) continue;
@@ -480,6 +532,18 @@ async function verifySpec(spec, read, opts = {}) {
       }
     } catch { row = undefined; }
     add('role', roleName, row, row ? '' : 'persona security role not found (or its business unit could not be resolved)');
+
+    if (row && p.appAccess !== false && typeof read.appRoleIds === 'function') {
+      let res = null;
+      try { res = await appRoleIds(); } catch (e) { res = { ok: false, reason: (e && e.message) || String(e) }; }
+      if (!res || res.ok !== true) {
+        add('app-role', roleName, false, `could not read appmoduleroles_association rows: ${(res && res.reason) || 'unknown'}`);
+      } else {
+        const ids = new Set((res.roleIds || []).map((id) => String(id).toLowerCase()));
+        add('app-role', roleName, ids.has(String(row.roleid).toLowerCase()),
+          ids.has(String(row.roleid).toLowerCase()) ? '' : 'persona role is not associated to the app module, so the app may not appear for users with this role');
+      }
+    }
 
     // Privilege depth check — reader-gated (see `entityRelationships` / `commandBar` above for the
     // same pattern), so an existence-only reader behaves exactly as before. Proving the role ROW
@@ -842,6 +906,105 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function expectedViewFetchParts(spec, view) {
+  const def = viewDef(spec, view);
+  const conditions = [];
+  const walk = (group) => {
+    for (const c of (group && group.conditions) || []) {
+      conditions.push({
+        attribute: String(c.attribute || '').toLowerCase(),
+        operator: String(c.operator || 'eq').toLowerCase(),
+        value: c.value === undefined ? undefined : String(c.value),
+      });
+    }
+    for (const child of (group && group.groups) || []) walk(child);
+  };
+  walk(def.filters);
+  const orders = (def.sort || []).map((s) => ({
+    attribute: String(s.attribute || '').toLowerCase(),
+    descending: s.descending === true,
+  }));
+  return { conditions: conditions.filter((c) => c.attribute && c.operator), orders };
+}
+
+function xmlDecode(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+function tagAttrs(tag) {
+  const attrs = {};
+  const re = /\b([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  let m;
+  while ((m = re.exec(String(tag || ''))) !== null) attrs[String(m[1]).toLowerCase()] = xmlDecode(m[2] != null ? m[2] : m[3]);
+  return attrs;
+}
+
+// Parse only the FetchXML facts the App Spec authors and the verifier must prove. Raw deployed
+// shape, with the platform quirks that matter:
+//   <fetch><entity name="new_ticket">
+//     <filter type="and">
+//       <condition attribute="ownerid" operator="eq-userid" />
+//       <condition attribute="modifiedon" operator="this-week"></condition>
+//       <condition attribute="new_priority" operator="ne" value="100000000" />
+//     </filter>
+//     <order attribute="createdon" descending="true" />
+//   </entity></fetch>
+// Current-user and relative-date operators serialize with NO `value` attribute; that is a correct
+// deployed condition, not malformed XML. Attribute order and quote style vary, and Dataverse may add
+// extra filters, so callers compare for presence rather than byte equality.
+function parseFetchXml(xml) {
+  const conditions = [];
+  const conditionRe = /<condition\b[^>]*?(?:\/>|>[\s\S]*?<\/condition>)/gi;
+  let m;
+  while ((m = conditionRe.exec(String(xml || ''))) !== null) {
+    const tag = m[0];
+    const attrs = tagAttrs(tag);
+    if (!attrs.attribute || !attrs.operator) continue;
+    const valueMatch = /<value\b[^>]*>([\s\S]*?)<\/value>/i.exec(tag);
+    const values = attrs.value !== undefined ? [attrs.value] : valueMatch ? [xmlDecode(valueMatch[1].trim())] : [undefined];
+    for (const value of values) {
+      conditions.push({
+        attribute: String(attrs.attribute).toLowerCase(),
+        operator: String(attrs.operator).toLowerCase(),
+        value: value === undefined ? undefined : String(value),
+      });
+    }
+  }
+  const orders = [];
+  const orderRe = /<order\b[^>]*>/gi;
+  while ((m = orderRe.exec(String(xml || ''))) !== null) {
+    const attrs = tagAttrs(m[0]);
+    if (!attrs.attribute) continue;
+    orders.push({
+      attribute: String(attrs.attribute).toLowerCase(),
+      descending: String(attrs.descending || 'false').toLowerCase() === 'true',
+    });
+  }
+  return { conditions, orders };
+}
+
+function conditionMatches(want, got) {
+  if (want.attribute !== got.attribute || want.operator !== got.operator) return false;
+  return want.value === undefined || String(want.value) === String(got.value);
+}
+
+function orderMatches(want, got) {
+  return want.attribute === got.attribute && want.descending === got.descending;
+}
+
+function formatCondition(c) {
+  return `${c.attribute} ${c.operator}${c.value === undefined ? '' : ` ${c.value}`}`;
+}
+
+function formatOrder(o) {
+  return `${o.attribute} ${o.descending ? 'desc' : 'asc'}`;
+}
+
 // Extract the deployed column logical names from a saved view's layoutxml. Shape (Dataverse grid
 // layout), e.g.:
 //   <grid name='resultset' ...><row ...><cell name='new_name' width='200' /><cell name='new_status' /></row></grid>
@@ -904,4 +1067,4 @@ function appShellReferencesPage(spec, key) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames };
+module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };

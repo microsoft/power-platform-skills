@@ -1110,6 +1110,84 @@ function validateFormSecurityRoles(f, spec, errors) {
   }
 }
 
+// Allow-listed keys for an explicit form layout, with the reason each rejection exists.
+//
+// `tabs[]`/`sections[]` had no allow-list at all, so an invented or misspelled key validated clean
+// and then vanished — the same class of silent loss that let `entities[].localizedLabels` ship as a
+// no-op. Worse here, several plausible keys are accepted by the SDK's normalizers and then DROPPED
+// by its serializer: measured against the vendored bundle, a tab emits only name/expanded/visible
+// + label, and a section only name/showlabel/visible/columns + label. Anything else never reaches
+// the FormXml, so accepting it would promise a layout Dataverse will not render.
+const FORM_TAB_KEYS = new Set(['name', 'label', 'expanded', 'visible', 'sections', 'columns']);
+const FORM_TAB_COLUMN_KEYS = new Set(['width', 'sections']);
+const FORM_SECTION_KEYS = new Set(['name', 'label', 'columns', 'showLabel', 'visible', 'fields']);
+const FORM_FIELD_ENTRY_KEYS = new Set(['name', 'readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+// Keys an author reasonably reaches for that the serializer silently discards. Naming the real
+// mechanism is the difference between an actionable error and a scavenger hunt.
+const FORM_LAYOUT_KEY_HINTS = {
+  showLabel: " — a TAB has no label toggle in FormXml; use the tab's `label`, or move the toggle to a section's `showLabel`",
+  labelPosition: ' — label position is not expressible per tab/section through this SDK',
+  locked: ' — section locking is not expressible through this SDK',
+  column: " — did you mean 'columns'?",
+  field: " — did you mean 'fields'?",
+  title: " — did you mean 'label'?",
+  visibility: " — did you mean 'visible'?",
+  colSpan: " — did you mean 'colspan'?",
+  rowSpan: " — did you mean 'rowspan'?",
+  readonly: " — did you mean 'readOnly'?",
+};
+
+function validateFormLayoutKeys(f, errors) {
+  if (!f || !Array.isArray(f.tabs)) return;
+  const label = `form '${f.name || f.entity}'`;
+  const unknown = (where, obj, allowed) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    for (const k of Object.keys(obj)) {
+      if (allowed.has(k)) continue;
+      errors.push(`${label}: unknown key '${k}' on ${where}${FORM_LAYOUT_KEY_HINTS[k] || ''} (allowed: ${[...allowed].join(', ')})`);
+    }
+  };
+  const checkSpan = (where, entry) => {
+    for (const key of ['colspan', 'rowspan']) {
+      const v = entry[key];
+      if (v === undefined) continue;
+      if (!Number.isInteger(v) || v < 1) errors.push(`${label}: ${where} has ${key} '${v}' — it must be a whole number of ${key === 'colspan' ? 'columns' : 'rows'}, 1 or greater`);
+    }
+  };
+  f.tabs.forEach((t, ti) => {
+    const where = `tab ${t && t.label ? `'${t.label}'` : `#${ti + 1}`}`;
+    unknown(where, t, FORM_TAB_KEYS);
+    // A tab is EITHER the single-full-width-column shorthand or the explicit multi-column shape.
+    // Accepting both would leave the compiler to pick one and silently discard the other's sections.
+    if (t && Array.isArray(t.columns) && Array.isArray(t.sections)) {
+      errors.push(`${label}: ${where} declares both 'sections' and 'columns' — 'sections' is the shorthand for one full-width column, so use one or the other (move those sections into columns[0].sections).`);
+    }
+    const columns = (t && Array.isArray(t.columns)) ? t.columns : [];
+    columns.forEach((c, ci) => {
+      unknown(`${where} column #${ci + 1}`, c, FORM_TAB_COLUMN_KEYS);
+      // Dataverse omits an undefined width from columnToRaw and then rejects the push, and a width
+      // that is not a percentage does not lay out at all.
+      if (c && c.width !== undefined && !/^\d{1,3}%$/.test(String(c.width))) {
+        errors.push(`${label}: ${where} column #${ci + 1} has width '${c.width}' — a form-column width must be a percentage such as '60%'`);
+      }
+    });
+    const sections = columns.length ? columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : [])) : ((t && t.sections) || []);
+    sections.forEach((s, si) => {
+      const swhere = `${where} section ${s && s.label ? `'${s.label}'` : `#${si + 1}`}`;
+      unknown(swhere, s, FORM_SECTION_KEYS);
+      if (s && s.columns !== undefined && (!Number.isInteger(s.columns) || s.columns < 1 || s.columns > 4)) {
+        errors.push(`${label}: ${swhere} has columns '${s.columns}' — a section may span 1 to 4 columns`);
+      }
+      for (const entry of (s && Array.isArray(s.fields) ? s.fields : [])) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+        const fwhere = `${swhere} field '${entry.name || '?'}'`;
+        unknown(fwhere, entry, FORM_FIELD_ENTRY_KEYS);
+        checkSpan(fwhere, entry);
+      }
+    });
+  });
+}
+
 function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   const label = `form '${f.name || f.entity}'`;
   const entity = entityByLower.get(String(f.entity || '').toLowerCase());
@@ -1652,6 +1730,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
     validateFormFieldOptions(f, entityByLower, errors, warnings);
+    validateFormLayoutKeys(f, errors);
     validateFormSecurityRoles(f, spec, errors);
     // `layout: 'explicit'` with no `tabs[]` is a spec that asks for one thing and builds another.
     // `compileFormIntent` takes the explicit path only when `tabs` is an ARRAY, so this combination
@@ -2398,6 +2477,14 @@ function validateAppSpec(spec, opts = {}) {
           }
           if (!rec || typeof rec !== 'object') {
             continue;
+          }
+          // `_seedKey` is not a loader sentinel and never has been: only `$parent`, `$parents` and
+          // `statusReason` are stripped before a record body is sent, so a `_seedKey` reaches
+          // Dataverse as an attribute no table has. Rejected rather than silently stripped because
+          // an author writing one is asking for dedupe/identity behavior that does not exist — the
+          // real mechanism is a single-column alternate key, which `matchOn` resolves.
+          if (Object.prototype.hasOwnProperty.call(rec, '_seedKey')) {
+            errors.push(`sampleData['${k}']: '_seedKey' is not a supported sample-record key — it is sent to Dataverse as an unknown attribute. Declare a single-column alternate key on the table for identity/dedupe instead.`);
           }
           // #1: validate the parent bind(s) — one `$parent` (singular) and/or many `$parents` (a
           // junction row binding multiple sides). Each must name a known parent entity, carry a
