@@ -526,6 +526,46 @@ test('form layout: a valid explicit layout with spans and multi-column tabs pass
   assert.deepStrictEqual(errs.filter((e) => /unknown key|must be a percentage|may span|has colspan|has rowspan/.test(e)), []);
 });
 
+// A field placed twice on one form is a CREATE-vs-REBUILD divergence, not a cosmetic slip: the
+// compiler emits one cell per entry, so a fresh build deploys two cells, while every reconcile path
+// keys placement by logical name and takes the first (`declaredSectionByField`, `findFieldCellPointer`,
+// and `formFieldLogicals`, which de-duplicates). The second cell would appear on create and vanish on
+// the next build. MEASURED before this gate existed: the same spec compiled to 2 bound cells while
+// declaredSectionByField resolved the field to the first section only.
+test('form layout: a field placed twice is rejected, because create and rebuild would disagree', () => {
+  const mk = (secA, secB) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amount', type: 'Decimal' }];
+    s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs: [{ label: 'General', sections: [
+      { label: 'A', name: 'sec_a', fields: secA },
+      { label: 'B', name: 'sec_b', fields: secB },
+    ] }] }];
+    return s;
+  };
+  const dupErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /places field/.test(e));
+
+  assert.strictEqual(dupErrors(mk(['contoso_name', 'contoso_amount'], ['contoso_name'])).length, 1,
+    'the same field in two sections must be rejected');
+  assert.strictEqual(dupErrors(mk(['contoso_name', 'contoso_name'], ['contoso_amount'])).length, 1,
+    'the same field twice in ONE section must be rejected too');
+  // Dataverse logical names are case-insensitive, so a casing difference is the same cell.
+  assert.strictEqual(dupErrors(mk([{ name: 'contoso_name' }], [{ name: 'CONTOSO_NAME' }])).length, 1,
+    'duplicate detection must be case-insensitive and must see field-entry objects');
+  assert.strictEqual(dupErrors(mk(['contoso_name'], [{ name: 'contoso_name' }])).length, 1,
+    'a string entry and an object entry naming the same field are still one field twice');
+
+  // The gate must not fire on an ordinary form — that would make every explicit layout unbuildable.
+  assert.deepStrictEqual(dupErrors(mk(['contoso_name'], ['contoso_amount'])), [],
+    'distinct fields must stay valid');
+
+  // Identity is per FORM, so two forms on the same table may each place the same column.
+  const twoForms = mk(['contoso_name'], ['contoso_amount']);
+  twoForms.forms.push({ entity: 'contoso_order', name: 'Second', layout: 'explicit', tabs: [{ label: 'General', sections: [
+    { label: 'A', name: 'other_a', fields: ['contoso_name'] },
+  ] }] });
+  assert.deepStrictEqual(dupErrors(twoForms), [], 'a second form may place the same field');
+});
+
 // The seeder refuses to use a duplicated primary name as `matchOn` (Dataverse could resolve or
 // deduplicate the wrong row). That refusal happens in the sample-data phase — after tables, forms and
 // views are already deployed — so ordinary sample data used to validate clean and then stop the build

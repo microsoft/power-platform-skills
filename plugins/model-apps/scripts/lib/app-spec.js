@@ -1195,6 +1195,29 @@ function validateFormLayoutKeys(f, errors) {
     }
     seen.set(key, where);
   };
+  // A FIELD is identity too, and form-wide. The create path emits one cell per entry, but every
+  // reconcile path keys placement by logical name and takes the FIRST: `declaredSectionByField`
+  // resolves a field to one section, `findFieldCellPointer` targets the first matching cell, and
+  // `formFieldLogicals` de-duplicates. So a field listed twice deploys TWO cells on a fresh create
+  // and ONE on a rebuild — the same spec producing two different forms, which is the silent
+  // disagreement this whole gate exists to end.
+  //
+  // MEASURED on a two-section form listing `contoso_name` in both: the compiled intent carries 2
+  // bound cells while declaredSectionByField resolves the field to the first section only.
+  //
+  // Rejecting rather than implementing multi-placement because one-cell-per-field is what the rest
+  // of the pipeline is built on; supporting a second placement would mean teaching the reconcile,
+  // the prune and the verifier oracle to carry a set of pointers per field.
+  const seenFieldNames = new Map();
+  const checkUniqueField = (where, name) => {
+    if (typeof name !== 'string' || !name) return;
+    const key = name.toLowerCase();
+    if (seenFieldNames.has(key)) {
+      errors.push(`${label}: ${where} places field '${name}' again — it is already placed by ${seenFieldNames.get(key)}. A form places each field once: a rebuild resolves the field to its first placement, so the second cell would deploy on a fresh create and then vanish on the next build. Remove the duplicate, or move the field to the section you want it in.`);
+      return;
+    }
+    seenFieldNames.set(key, where);
+  };
   f.tabs.forEach((t, ti) => {
     const where = `tab ${t && t.label ? `'${t.label}'` : `#${ti + 1}`}`;
     if (!mustBeObject(where, t)) return;
@@ -1241,6 +1264,11 @@ function validateFormLayoutKeys(f, errors) {
       }
       const entries = (s && Array.isArray(s.fields) ? s.fields : []);
       entries.forEach((entry, fi) => {
+        // Runs for BOTH entry shapes — a bare logical-name string and a `{ name, ... }` object —
+        // because either one places a cell, so either one can be the duplicate.
+        checkUniqueField(swhere, typeof entry === 'string'
+          ? entry
+          : (entry && typeof entry === 'object' && !Array.isArray(entry) ? entry.name : undefined));
         if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return;
         const fwhere = `${swhere} field '${entry.name || '?'}'`;
         unknown(fwhere, entry, FORM_FIELD_ENTRY_KEYS);

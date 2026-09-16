@@ -678,6 +678,19 @@ rather than silently discarded. Any other key is **rejected** — including `sho
 on a tab and `labelPosition`/`locked` on a section, which the SDK's serializer silently discards, so
 accepting them would promise a layout Dataverse never renders.
 
+**Names are identity, and a field is placed once per form.** Two tabs — or two sections — on one
+form may not share a `name`, and a column may not be placed twice, whether in two different sections
+or twice in the same one (matching is case-insensitive, and applies to both the string and the
+`{ "name": … }` entry shape). All three are rejected at author time.
+
+The reason is that create and rebuild would otherwise disagree. The compiler emits **one cell per
+entry**, so a fresh build deploys a duplicated field twice, while every reconcile path resolves a
+field to its **first** placement — the second cell would appear on the initial create and then vanish
+on the next build of the same spec. Duplicate container names fail the same way: `name` is what the
+build matches a deployed tab or section by, so two declarations sharing one would target the same
+live container. A second form on the same table may of course place the same column — identity is
+per form.
+
 **`rowspan` must be the last field in its section.** A cell that spans down reserves its column in
 the rows beneath it, and the cells of the following row fill the section left to right — so a field
 declared after a spanning one would land in the reserved slot. Every stock Dataverse form that uses

@@ -770,8 +770,10 @@ function findSectionLocation(formJson, sectionName) {
 //
 // Derived from the compiled intent rather than the raw spec so it cannot disagree with the tree the
 // create path builds (the compiler is what resolves generated section names, shorthand columns and
-// field-entry objects). The first placement wins — a field listed twice is already an authoring
-// error the spec gate reports, and picking the first keeps this pure and total.
+// field-entry objects). The first placement wins — and that is safe only because the spec gate
+// rejects a field placed twice on one form (`checkUniqueField` in validateFormLayoutKeys). Without
+// that gate this would silently diverge from the create path, which emits one cell per entry: a
+// duplicated field would deploy two cells on a fresh build and one on a rebuild.
 function declaredSectionByField(intentTabs) {
   const out = {};
   for (const t of intentTabs || []) {

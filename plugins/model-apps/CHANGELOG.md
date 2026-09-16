@@ -207,6 +207,18 @@ downloads that round-trip Choice columns.
   mean" suggestion cannot drift between commands.
 - **Deeper tests on the paths connectors GA just made live**, including a connector *edit* eval and
   a contract test pinning the dispatch fields the skills hand to the page-builder.
+- **A form layout may no longer place the same field twice, or reuse a tab/section `name`.** Both
+  are now rejected at author time. The compiler emits one cell per entry, but every reconcile path
+  resolves a field to its *first* placement — so a duplicated field deployed twice on a fresh build
+  and once on the next one, and duplicate container names made two declarations target the same
+  deployed tab or section. This rejects a spec that previously built (into a form that did not
+  survive its own rebuild); remove the duplicate placement, or move the field to the section you
+  want it in. Identity is per form, so a second form on the same table may place the same column.
+- **A download now reports every dashboard tile it drops.** A tile missing `TargetEntityType`,
+  `ViewId` or (for a chart) `VisualizationId`, a tile type the App Spec cannot express, an `iframe`
+  with no `Url` and a `webresource` with no `WebResourceName` were all discarded in silence when the
+  dashboard had at least one usable tile. Each now names what it lacks — one warning per tile,
+  listing every missing parameter — so a round-trip that loses a tile says so.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544
