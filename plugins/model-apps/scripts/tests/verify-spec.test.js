@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { verifySpec, hasElement } = require('../lib/verify-spec.js');
+const { verifySpec, hasElement, parseFetchXml } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 
@@ -1156,4 +1156,59 @@ test('app table membership: only SITEMAP-visible tables are required to be compo
   const res = await verifySpec(spec, membershipRead(async () => ({ ok: true, present: ['new_order', 'new_line'] })));
   assert.strictEqual(checkFor(res, 'new_audit'), undefined, 'a table with no subarea must not be required');
   assert.ok(res.checks.filter((c) => c.kind === 'app-table-component').every((c) => c.present));
+});
+
+// --- parseFetchXml scoping and multi-operand conditions ---------------------------------------
+//
+// This parser is a verifier ORACLE, so a false PASS is its worst failure: it would report that a
+// deployed view filters the way the spec says when it does not.
+
+// FetchXML puts a joined table's predicates inside <link-entity>. Collecting conditions from the
+// whole document let a condition on the JOINED table satisfy an authored base-entity condition by
+// attribute/operator coincidence — the two read identically (`statecode eq 0`) but constrain
+// different tables.
+test('parseFetchXml ignores conditions and orders that belong to a link-entity', () => {
+  const xml = `<fetch><entity name="account">`
+    + `<link-entity name="contact"><filter><condition attribute="statecode" operator="eq" value="0"/></filter>`
+    + `<order attribute="fullname"/></link-entity></entity></fetch>`;
+  const r = parseFetchXml(xml);
+  assert.deepStrictEqual(r.conditions, [], 'a linked table predicate is not the base entity one');
+  assert.deepStrictEqual(r.orders, [], 'and a linked table sort is not the base entity one either');
+});
+
+// link-entities NEST, and a join used only for projection is self-closing. A non-greedy regex would
+// stop at the first </link-entity> and let the outer subtree leak back in, so the scanner tracks
+// depth. Base-entity content on BOTH sides of the subtree has to survive.
+test('parseFetchXml keeps base-entity content around nested and self-closing link-entities', () => {
+  const nested = `<fetch><entity name="a"><condition attribute="base" operator="eq" value="1"/>`
+    + `<link-entity name="b"><link-entity name="c"><condition attribute="deep" operator="eq" value="9"/>`
+    + `</link-entity></link-entity><order attribute="baseorder"/></entity></fetch>`;
+  const n = parseFetchXml(nested);
+  assert.deepStrictEqual(n.conditions.map((c) => c.attribute), ['base'], 'a doubly-nested condition must not leak');
+  assert.deepStrictEqual(n.orders.map((o) => o.attribute), ['baseorder'], 'the base order after the subtree must survive');
+
+  const selfClosing = `<fetch><entity name="a"><link-entity name="b" from="x" to="y" />`
+    + `<condition attribute="base" operator="eq" value="1"/><order attribute="o1"/></entity></fetch>`;
+  const s = parseFetchXml(selfClosing);
+  assert.deepStrictEqual(s.conditions.map((c) => c.attribute), ['base'], 'a self-closing join opens no subtree');
+  assert.deepStrictEqual(s.orders.map((o) => o.attribute), ['o1']);
+});
+
+// `in`/`not-in`/`between` serialize their operands as sibling <value> elements. Reading only the
+// first made an authored `in 2` unprovable against a view that really does filter on it.
+test('parseFetchXml reads every <value> of a multi-operand condition', () => {
+  const xml = `<fetch><entity name="a"><filter><condition attribute="statuscode" operator="in">`
+    + `<value>1</value><value>2</value><value>3</value></condition></filter></entity></fetch>`;
+  assert.deepStrictEqual(parseFetchXml(xml).conditions.map((c) => c.value), ['1', '2', '3']);
+});
+
+// The single-operand shape (a `value` ATTRIBUTE) still wins over any child element, and an operator
+// that takes no operand at all stays `undefined` — that is how conditionMatches knows the authored
+// claim is just attribute+operator.
+test('parseFetchXml keeps the value attribute authoritative, and no-operand operators undefined', () => {
+  const attrWins = `<fetch><entity name="a"><condition attribute="x" operator="eq" value="7"><value>ignored</value></condition></entity></fetch>`;
+  assert.deepStrictEqual(parseFetchXml(attrWins).conditions.map((c) => c.value), ['7']);
+
+  const noOperand = `<fetch><entity name="a"><condition attribute="ownerid" operator="eq-userid"/></entity></fetch>`;
+  assert.deepStrictEqual(parseFetchXml(noOperand).conditions, [{ attribute: 'ownerid', operator: 'eq-userid', value: undefined }]);
 });

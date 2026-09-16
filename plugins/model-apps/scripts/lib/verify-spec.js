@@ -982,16 +982,69 @@ function tagAttrs(tag) {
 // Current-user and relative-date operators serialize with NO `value` attribute; that is a correct
 // deployed condition, not malformed XML. Attribute order and quote style vary, and Dataverse may add
 // extra filters, so callers compare for presence rather than byte equality.
+// Strip every `<link-entity>` subtree, leaving only what belongs to the view's ROOT `<entity>`.
+//
+// FetchXML puts a joined table's own predicates and ordering inside `<link-entity>`:
+//   <entity name="account">
+//     <filter><condition attribute="statecode" operator="eq" value="0" /></filter>
+//     <link-entity name="contact" from="parentcustomerid" to="accountid">
+//       <filter><condition attribute="statecode" operator="eq" value="0" /></filter>
+//     </link-entity>
+//   </entity>
+// Both conditions read `statecode eq 0`, but only the first is a predicate on `account`. Scanning the
+// whole document let the linked one satisfy an authored base-entity condition by coincidence — a
+// verifier reporting PASS on a view that does not filter the way the spec says, which is the one
+// outcome an oracle must never produce.
+//
+// Written as a depth scanner rather than a regex because link-entities NEST, and `<link-entity ... />`
+// may also be self-closing (a join used only for its column projection) — a non-greedy regex would
+// stop at the first `</link-entity>` and let an outer subtree leak back in.
+function baseEntityFetchXml(xml) {
+  const s = String(xml || '');
+  const re = /<(\/?)link-entity\b([^>]*)>/gi;
+  let out = '';
+  let last = 0;
+  let depth = 0;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    if (m[1] === '/') {
+      if (depth > 0) depth -= 1;
+      if (depth === 0) last = re.lastIndex;
+      continue;
+    }
+    if (depth === 0) out += s.slice(last, m.index);
+    // A self-closing start tag opens nothing, so only its own text is dropped.
+    if (!/\/\s*$/.test(m[2])) depth += 1;
+    last = re.lastIndex;
+  }
+  // An unbalanced document (depth still open) contributes no trailing text rather than guessing.
+  if (depth === 0) out += s.slice(last);
+  return out;
+}
+
 function parseFetchXml(xml) {
+  // Both scans are scoped to the root entity — see baseEntityFetchXml. Orders are scoped for the
+  // same reason as conditions: an `<order>` inside a link-entity sorts the joined table, and letting
+  // it into this list would satisfy — or break — the authored sort precedence with a foreign order.
+  const scoped = baseEntityFetchXml(xml);
   const conditions = [];
   const conditionRe = /<condition\b[^>]*?(?:\/>|>[\s\S]*?<\/condition>)/gi;
   let m;
-  while ((m = conditionRe.exec(String(xml || ''))) !== null) {
+  while ((m = conditionRe.exec(scoped)) !== null) {
     const tag = m[0];
     const attrs = tagAttrs(tag);
     if (!attrs.attribute || !attrs.operator) continue;
-    const valueMatch = /<value\b[^>]*>([\s\S]*?)<\/value>/i.exec(tag);
-    const values = attrs.value !== undefined ? [attrs.value] : valueMatch ? [xmlDecode(valueMatch[1].trim())] : [undefined];
+    // `in`/`not-in`/`between` serialize their operands as SIBLING <value> elements:
+    //   <condition attribute="statuscode" operator="in"><value>1</value><value>2</value></condition>
+    // Reading only the first made an authored `in 2` unprovable against a view that really does
+    // filter on it. Single-operand conditions use the `value` ATTRIBUTE instead, which wins when
+    // present; an operator with no operand at all (`eq-userid`, `last-x-days`) yields [undefined],
+    // which conditionMatches treats as "attribute+operator is the whole claim".
+    const inner = [];
+    const valueRe = /<value\b[^>]*>([\s\S]*?)<\/value>/gi;
+    let vm;
+    while ((vm = valueRe.exec(tag)) !== null) inner.push(xmlDecode(vm[1].trim()));
+    const values = attrs.value !== undefined ? [attrs.value] : (inner.length ? inner : [undefined]);
     for (const value of values) {
       conditions.push({
         attribute: String(attrs.attribute).toLowerCase(),
@@ -1002,7 +1055,7 @@ function parseFetchXml(xml) {
   }
   const orders = [];
   const orderRe = /<order\b[^>]*>/gi;
-  while ((m = orderRe.exec(String(xml || ''))) !== null) {
+  while ((m = orderRe.exec(scoped)) !== null) {
     const attrs = tagAttrs(m[0]);
     if (!attrs.attribute) continue;
     orders.push({

@@ -17,6 +17,7 @@ const {
   labelText,
   isLocalizedLabelMap,
   localizedLabelLcids,
+  sampleKeyIdentity,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -1106,7 +1107,10 @@ function firstDuplicateNonEmpty(seedRecords, attr) {
   for (const r of seedRecords) {
     const v = r.body[attr];
     if (v === undefined || v === null || v === '') continue;
-    const key = JSON.stringify([typeof v, v]);
+    // SHARED with validateAppSpec's author-time gate (app-spec.js) so the two cannot drift: that
+    // gate exists only to move this refusal earlier, and a different notion of "duplicate" there
+    // would reject a spec this accepts, or accept one this refuses.
+    const key = sampleKeyIdentity(v);
     if (seen.has(key)) return v;
     seen.add(key);
   }

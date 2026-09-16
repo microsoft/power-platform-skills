@@ -566,6 +566,27 @@ test('form layout: a field placed twice is rejected, because create and rebuild 
   assert.deepStrictEqual(dupErrors(twoForms), [], 'a second form may place the same field');
 });
 
+// The gate exists only to move the loader's refusal earlier, so the two must agree EXACTLY. The
+// loader keys on `JSON.stringify([typeof v, v])`, so `1` and `'1'` are distinct rows; a plain
+// `String(...)` key here made them collide and rejected, at author time, a spec that builds. Both
+// sides now call the shared `sampleKeyIdentity`, so they cannot drift apart again.
+test('sampleData: duplicate detection keys values exactly the way the loader does', () => {
+  const withKey = (rows) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Text' }];
+    s.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+    s.sampleData = { contoso_order: rows };
+    return validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /duplicate contoso_code/.test(e));
+  };
+
+  assert.deepStrictEqual(withKey([{ contoso_name: 'A', contoso_code: 1 }, { contoso_name: 'B', contoso_code: '1' }]), [],
+    'the loader treats 1 and "1" as distinct, so this gate must not reject them');
+  assert.strictEqual(withKey([{ contoso_name: 'A', contoso_code: '1' }, { contoso_name: 'B', contoso_code: '1' }]).length, 1,
+    'two identical strings are still a duplicate');
+  assert.strictEqual(withKey([{ contoso_name: 'A', contoso_code: 1 }, { contoso_name: 'B', contoso_code: 1 }]).length, 1,
+    'and so are two identical numbers');
+});
+
 // The seeder refuses to use a duplicated primary name as `matchOn` (Dataverse could resolve or
 // deduplicate the wrong row). That refusal happens in the sample-data phase — after tables, forms and
 // views are already deployed — so ordinary sample data used to validate clean and then stop the build

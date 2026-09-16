@@ -97,11 +97,12 @@ function renderFormWireframe(spec, f) {
   }
 
   for (const tab of def.tabs) {
-    // `expanded: false` is a real authored state, so show it — the wireframe IS the approval gate,
-    // and a preview that renders every tab open promises a layout the build does not deploy.
-    // A hidden tab must be shown even when it is the ONLY tab: the wireframe is the approval gate,
-    // and a preview that silently omits "this tab is hidden" approves a different form.
-    if (tabLabels.length > 1 || tab.visible === false) lines.push(row(`${tab.expanded === false ? '▸' : '▾'} ${tab.label || 'General'}${tab.visible === false ? '   (hidden)' : ''}${tab.expanded === false ? '   (collapsed)' : ''}`));
+    // The banner carries the tab's authored STATE, so it must render whenever that state is not the
+    // default — not only when there are several tabs to tell apart. A single tab that is collapsed or
+    // hidden would otherwise preview as an ordinary open tab, and the wireframe IS the approval gate:
+    // silently dropping "(collapsed)" or "(hidden)" has the maker approve a different form.
+    const annotated = tab.expanded === false || tab.visible === false;
+    if (tabLabels.length > 1 || annotated) lines.push(row(`${tab.expanded === false ? '▸' : '▾'} ${tab.label || 'General'}${tab.visible === false ? '   (hidden)' : ''}${tab.expanded === false ? '   (collapsed)' : ''}`));
     // New topology inserts a FormColumn layer between tab and section.
     const cols = tab.columns || [];
     for (let ci = 0; ci < cols.length; ci++) {

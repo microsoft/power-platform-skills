@@ -1122,6 +1122,21 @@ const FORM_TAB_KEYS = new Set(['name', 'label', 'expanded', 'visible', 'sections
 const FORM_TAB_COLUMN_KEYS = new Set(['width', 'sections']);
 const FORM_SECTION_KEYS = new Set(['name', 'label', 'columns', 'showLabel', 'visible', 'fields']);
 const FORM_FIELD_ENTRY_KEYS = new Set(['name', 'readOnly', 'hidden', 'after', 'colspan', 'rowspan']);
+// Identity of a sample-data `matchOn` value, shared by the author-time gate in `validateAppSpec` and
+// the loader's own refusal in `chooseMatchOn`/`firstDuplicateNonEmpty` (entity-provision.js).
+//
+// It lives here because entity-provision.js already requires this module, so one definition can feed
+// both without a cycle — and the two MUST agree: the gate exists only to move the loader's refusal
+// earlier, so a gate that decides "duplicate" differently either rejects a spec that would build or
+// passes one that would not.
+//
+// Type-sensitive because the loader is: `1` and `'1'` are distinct keys. Dataverse would coerce both
+// to "1" in a text column, so a spec mixing the two still has a latent collision the loader does not
+// catch either — that is a shared limitation, deliberately not papered over on one side only.
+function sampleKeyIdentity(v) {
+  return JSON.stringify([typeof v, v]);
+}
+
 // Keys an author reasonably reaches for that the serializer silently discards. Naming the real
 // mechanism is the difference between an actionable error and a scavenger hunt.
 const FORM_LAYOUT_KEY_HINTS = {
@@ -2615,12 +2630,17 @@ function validateAppSpec(spec, opts = {}) {
           if (matchOnCol) {
             const seen = new Set();
             for (const r of v) {
-              const val = String(valueOf(r, matchOnCol));
-              if (seen.has(val)) {
-                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${val}'. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
+              const raw = valueOf(r, matchOnCol);
+              // Keyed through the SHARED `sampleKeyIdentity` the loader uses, so this gate cannot
+              // decide "duplicate" differently from the code that actually refuses the seed. A
+              // plain `String(...)` key made `1` and `'1'` collide here while the loader treats them
+              // as distinct — rejecting, at author time, a spec that builds.
+              const key = sampleKeyIdentity(raw);
+              if (seen.has(key)) {
+                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${String(raw)}'. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
                 break;
               }
-              seen.add(val);
+              seen.add(key);
             }
           }
         }
@@ -3168,6 +3188,7 @@ function migrateAppSpec(spec) {
 
 module.exports = {
   rejectLocalizedGlobalChoice,
+  sampleKeyIdentity,
   validateAppSpec,
   normalizePageSource,
   normalizeLanguageCode,

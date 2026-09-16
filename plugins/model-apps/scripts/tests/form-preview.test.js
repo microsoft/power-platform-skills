@@ -121,6 +121,33 @@ test('the wireframe shows a hidden single tab, and a showLabel:false section as 
   assert.match(out, /no heading/, 'and the preview should say so explicitly');
 });
 
+// The same hole as the hidden-single-tab case above, reached through the OTHER state flag: the
+// banner was gated on `tabLabels.length > 1 || tab.visible === false`, so a lone COLLAPSED tab
+// rendered no banner at all and previewed exactly like an ordinary open one — even though the
+// comment above the line said collapsed state must be shown because this is the approval gate.
+test('the wireframe shows a collapsed tab even when it is the only tab', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Only', expanded: false,
+      sections: [{ name: 'a', label: 'Details', columns: 1, fields: ['new_status'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  assert.match(out, /\(collapsed\)/, `a collapsed tab must be shown even as the only tab:\n${out}`);
+  assert.match(out, /▸/, 'and it must render with the collapsed marker, not the open one');
+});
+
+// The negative half of the rule: a lone tab in its DEFAULT state still gets no banner, so the
+// common case stays uncluttered. Without this, "always show the banner" would pass the two tests
+// above while making every single-tab wireframe noisier.
+test('the wireframe still omits the banner for a single tab in its default state', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Only', sections: [{ name: 'a', label: 'Details', columns: 1, fields: ['new_status'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  assert.ok(!/▾ Only/.test(out), `an ordinary single tab needs no state banner:\n${out}`);
+});
+
 test('a single-column tab shows no column banner (the common case stays clean)', () => {
   const s = spec();
   s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
