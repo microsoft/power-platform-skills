@@ -63,8 +63,17 @@ async function readDashboards(sdk, app, warn) {
       const p = c.parameters || {};
       const entity = p.TargetEntityType;
       const viewId = strip(p.ViewId);
-      if (c.type === 'chart' && viewId) tiles.push({ type: 'chart', name: c.name, entity, viewId, visualizationId: strip(p.VisualizationId) });
-      else if (c.type === 'list' && viewId) tiles.push({ type: 'list', name: c.name, entity, viewId });
+      if (c.type === 'chart' && viewId) {
+        // BOTH ids are load-bearing for a chart tile: it renders a visualization OVER a view, so with
+        // no VisualizationId there is nothing to plot. Emitting the half-tile anyway hands back a
+        // spec that fails its own lint — the exact #572 defect class — so report it and omit it
+        // rather than shipping a tile a rebuild cannot honour.
+        const visualizationId = strip(p.VisualizationId);
+        if (visualizationId) tiles.push({ type: 'chart', name: c.name, entity, viewId, visualizationId });
+        else if (typeof warn === 'function') {
+          warn(`dashboard '${name}' chart tile '${c.name || viewId}' carries no VisualizationId, so it cannot be rebuilt as a chart; it is omitted from dashboards[].`);
+        }
+      } else if (c.type === 'list' && viewId) tiles.push({ type: 'list', name: c.name, entity, viewId });
       else if (c.type === 'iframe' && p.Url) tiles.push({ type: 'iframe', name: c.name, url: p.Url });
       else if (c.type === 'webresource' && p.WebResourceName) tiles.push({ type: 'webresource', name: c.name, webResource: p.WebResourceName });
     }

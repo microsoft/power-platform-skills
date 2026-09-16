@@ -91,7 +91,9 @@ downloads that round-trip Choice columns.
 - **Dashboard id-passthrough tiles are validated per tile type.** `visualizationId` identifies a
   chart and means nothing on a list tile, but one shared test covered both: a list tile carrying a
   stray `visualizationId` skipped the `viewId` requirement entirely, and a chart tile with only a
-  `viewId` passed with no visualization to render.
+  `viewId` passed with no visualization to render. The **download** was made consistent in the same
+  change: a deployed chart component that carries no `VisualizationId` is now reported and omitted,
+  instead of being emitted as a half-tile that fails the spec's own lint.
 - **A downloaded relationship that is renamed is no longer reported as lost.** A relationship whose
   deployed schema name sits under a foreign publisher prefix *is* carried into the spec under the
   generated name, but it was also recorded as skipped — so the summary claimed it was "absent from

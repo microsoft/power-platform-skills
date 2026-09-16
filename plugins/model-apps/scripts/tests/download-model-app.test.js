@@ -651,8 +651,30 @@ test('readDashboards reconstructs supported tile shapes and skips unreadable das
   ]);
 });
 
-test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {
+// A chart tile renders a visualization OVER a view. A deployed component that carries a ViewId but no
+// VisualizationId therefore has nothing to plot, and emitting it anyway hands back a spec that fails
+// its own lint ("id-based chart tile with viewId also needs visualizationId") — the exact #572 defect
+// class this download path exists to prevent.
+test('readDashboards omits a chart tile with no VisualizationId (and says so) rather than emitting a half-tile', async () => {
+  const warnings = [];
   const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'chart', name: 'Plotless', parameters: { TargetEntityType: 'account', ViewId: '{11111111-0000-4000-8000-000000000001}' } },
+      { type: 'list', name: 'Open', parameters: { TargetEntityType: 'account', ViewId: '{33333333-0000-4000-8000-000000000003}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'list', name: 'Open', entity: 'account', viewId: '33333333-0000-4000-8000-000000000003' },
+  ], 'the plotless chart tile must not be emitted');
+  assert.ok(warnings.some((w) => /VisualizationId/.test(w)), `the omission must be reported; got ${JSON.stringify(warnings)}`);
+});
+
+test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {  const sdk = {
     fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
     queryRecords: async (_set, opts) => {
       assert.ok(opts.select.includes('description'), 'dashboard name lookup also requests description');
