@@ -41,6 +41,24 @@ function deployedRead() {
   };
 }
 
+// "Nobody could look" and "we looked and there are none" are different facts, and collapsing both to
+// `[]` meant the omit-the-key rule could not tell them apart. A reader that predates relationship
+// reconstruction (#567) must not have an absence asserted on its behalf; a reader that really read
+// zero relationships should record that.
+test('hydrateSpec keeps "no relationships reader" apart from "a read that found none" (#567)', async () => {
+  const noReader = await hydrateSpec(deployedRead());
+  assert.ok(!('relationships' in noReader), 'with no reader the key must be OMITTED, not asserted empty');
+
+  const readEmpty = await hydrateSpec({ ...deployedRead(), relationships: async () => [] });
+  assert.deepStrictEqual(readEmpty.relationships, [], 'a real read proving none is a fact worth recording');
+
+  const readSome = await hydrateSpec({
+    ...deployedRead(),
+    relationships: async () => [{ type: 'OneToMany', referenced: 'new_order', referencing: 'new_line', lookup: { schemaName: 'new_OrderId' } }],
+  });
+  assert.strictEqual(readSome.relationships.length, 1);
+});
+
 test('hydrateSpec reconstructs a valid, complete spec (entities + appShell + pages)', async () => {
   const spec = await hydrateSpec(deployedRead());
   const r = validateAppSpec(spec);

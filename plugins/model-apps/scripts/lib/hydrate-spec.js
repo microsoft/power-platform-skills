@@ -111,9 +111,11 @@ async function hydrateSpec(read) {
   });
   const webResources = ((await read.webResources()) || []).map((wr) => withDescription(wr || {}, wr && (wr.description !== undefined ? wr.description : wr.Description)));
   // Optional accessor: hydrateSpec has callers that predate relationship reconstruction (#567) and
-  // pass no `relationships`, and for those an ABSENT key is the faithful result — an empty array
-  // would assert "this app has none", which is the silent-absence problem the feature exists to end.
-  const relationships = ((read.relationships ? await read.relationships() : []) || []);
+  // pass no `relationships`. The two states are kept APART rather than both collapsing to `[]`:
+  //   · `undefined` — nobody could look, so the key is OMITTED rather than asserting an absence,
+  //     which is the silent-absence problem the feature exists to end;
+  //   · `[]` — a real read proved there are none, which is a fact worth recording.
+  const relationships = read.relationships ? ((await read.relationships()) || []) : undefined;
   const dashboards = ((read.dashboards ? await read.dashboards() : []) || [])
     .map((d) => withDescription(d || {}, d && (d.description !== undefined ? d.description : d.Description)));
   // `prefixResolved` is a TRANSIENT download-time signal (whether recoverAppSolution trusted the publisher
@@ -214,7 +216,7 @@ async function hydrateSpec(read) {
       ...(typeof app.headerNavigationRefresh === 'boolean' ? { headerNavigationRefresh: app.headerNavigationRefresh } : {}),
     },
     entities,
-    ...(relationships.length ? { relationships } : {}),
+    ...(relationships ? { relationships } : {}),
     ...(globalChoices.length ? { globalChoices } : {}),
     webResources,
     views: [],
