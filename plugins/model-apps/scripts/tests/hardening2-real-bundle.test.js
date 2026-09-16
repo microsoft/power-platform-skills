@@ -225,3 +225,79 @@ test('412 conflict: pushArtifact resolves to { success:false, error } (the signa
   assert.strictEqual(result.saved !== undefined ? result.saved : result.success, false, 'a 412 is signalled by a failed PushResult, NOT a thrown error');
   assert.ok(result.error, 'the conflict carries an error the engine reports');
 });
+
+// ---------------------------------------------------------------------------
+// TOPOLOGY primitives (#575). The engine converges an existing form onto an explicit layout by
+// appending tabs/columns/sections, patching a section in place and moving cells between sections.
+// sdk-build.test.js covers the ORCHESTRATION against a mock; these lock the four SDK behaviors
+// that orchestration assumes, against the REAL bundle -- a mock proves only self-consistency.
+// ---------------------------------------------------------------------------
+
+const secIntent = (name, label, columns, cells) => ({ name, label, visible: true, showLabel: true, columns, rows: cells.length ? [{ cells }] : [] });
+const fcell = (fn) => ({ control: { fieldName: fn, isRequired: false } });
+const META3 = { new_customer: { new_name: 'String', new_tier: 'Picklist', new_note: 'Memo', new_amt: 'Money' } };
+
+async function seedTwoSectionForm(sdk) {
+  const art = sdk.createArtifact('form', { name: 'T', entityLogicalName: 'new_customer', formType: 'Main' });
+  await sdk.addElement('form', art.id, '/tabs', { name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      secIntent('section_general', 'General', 1, [fcell('new_name'), fcell('new_tier')]),
+      secIntent('section_more', 'More', 1, []),
+    ] }] });
+  await sdk.removeElement('form', art.id, '/tabs/0');
+  return art.id;
+}
+
+test('REAL BUNDLE topology: an existing form gains a tab and a section, and a section widens in place', async () => {
+  const sdk = freshSdk(null, META3);
+  const id = await seedTwoSectionForm(sdk);
+  await sdk.addElement('form', id, '/tabs', { name: 'tab_audit', label: 'Audit', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [secIntent('section_audit', 'Audit', 2, [])] }] });
+  await sdk.addElement('form', id, '/tabs/0/columns/0/sections', secIntent('section_added', 'Added', 2, []));
+  await sdk.updateElement('form', id, '/tabs/0/columns/0/sections/0', { columns: 2 });
+  const form = await sdk.getArtifact('form', id);
+  assert.deepStrictEqual((form.tabs || []).map((x) => x.name), ['tab_general', 'tab_audit'], 'the tab is appended, not replaced');
+  const sections = form.tabs[0].columns[0].sections;
+  assert.deepStrictEqual(sections.map((s) => s.name), ['section_general', 'section_more', 'section_added']);
+  assert.strictEqual(sections[0].columns, 2, 'an EXISTING section is widened in place');
+  assert.strictEqual((sections[0].rows || []).length, 1, 'and keeps its rows -- updateElement MERGES');
+});
+
+test('REAL BUNDLE topology: a field cell moves between sections and serializes under the new one', async () => {
+  const cap = [];
+  const sdk = freshSdk(cap, META3);
+  const id = await seedTwoSectionForm(sdk);
+  // section_more is deployed EMPTY, so a row must be seeded before a cell can move into it.
+  await sdk.addElement('form', id, '/tabs/0/columns/0/sections/1/rows', { cells: [] });
+  let form = await sdk.getArtifact('form', id);
+  const from = ai.findFieldCellLocation(form, 'new_tier');
+  assert.strictEqual(from.sectionPointer, '/tabs/0/columns/0/sections/0', 'precondition: it starts in section_general');
+  await sdk.moveElement('form', id, from.cellPointer, '/tabs/0/columns/0/sections/1/rows/0/cells', { index: 0 });
+  form = await sdk.getArtifact('form', id);
+  assert.strictEqual(ai.findFieldCellLocation(form, 'new_tier').sectionPointer, '/tabs/0/columns/0/sections/1', 'it now lives in section_more');
+  assert.strictEqual(ai.findFieldCellLocation(form, 'new_name').sectionPointer, '/tabs/0/columns/0/sections/0', 'and its neighbour did not follow it');
+  const res = await sdk.pushArtifact('form', id);
+  assert.notStrictEqual(res && res.success, false, 'the restructured form still pushes');
+  const formxml = (cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml;
+  const more = /<section[^>]*name="section_more"[\s\S]*?<\/section>/.exec(formxml);
+  assert.ok(more && /datafieldname="new_tier"/.test(more[0]), 'new_tier serializes INSIDE section_more');
+});
+
+test('REAL BUNDLE layout: multi-column tabs and cell spans reach the serialized formxml', async () => {
+  const cap = [];
+  const sdk = freshSdk(cap, META3);
+  const art = sdk.createArtifact('form', { name: 'W', entityLogicalName: 'new_customer', formType: 'Main' });
+  await sdk.addElement('form', art.id, '/tabs', { name: 'tab_w', label: 'W', expanded: true, visible: true, columns: [
+    { width: '60%', sections: [secIntent('sec_l', 'L', 2, [Object.assign(fcell('new_name'), { colspan: 2 }), fcell('new_tier')])] },
+    { width: '40%', sections: [secIntent('sec_r', 'R', 1, [Object.assign(fcell('new_note'), { rowspan: 2 })])] },
+  ] });
+  await sdk.removeElement('form', art.id, '/tabs/0');
+  await sdk.pushArtifact('form', art.id);
+  const formxml = (cap.find((c) => /systemforms/.test(c.url)) || {}).body.formxml;
+  assert.ok(/<column width="60%">/.test(formxml) && /<column width="40%">/.test(formxml), 'both form-columns carry their authored width');
+  // The SDK encodes an N-column section as N repeated "1"s, so columns:2 serializes as columns="11".
+  assert.ok(/name="sec_l"[^>]*columns="11"/.test(formxml), 'a 2-column section serializes as columns="11"');
+  const nameCell = /<cell[^>]*colspan="2"[^>]*>[\s\S]*?datafieldname="new_name"/.exec(formxml);
+  assert.ok(nameCell, 'an authored colspan reaches the cell attribute');
+  assert.ok(/<cell[^>]*rowspan="2"[^>]*>[\s\S]*?datafieldname="new_note"/.test(formxml), 'an authored rowspan reaches the cell attribute');
+});

@@ -33,7 +33,11 @@
     "process: every BPF step binds a field on the flow entity",
     "process: every BPF stage is scoped to the flow entity (v1 is single-entity)",
     "ui: enriched default views keep parent lookups and drop createdon",
-    "ui: each sub-grid is a full-width section titled by the child display name"
+    "ui: each sub-grid is a full-width section titled by the child display name",
+    "ui: every compiled form places each field exactly once",
+    "ui: every compiled form places exactly the fields it intends to carry",
+    "round-trip: a lookup's shadow columns are never recovered as spec columns (#574)",
+    "round-trip: a download recovers no column the spec never authored"
   ],
   "evals": [
     {
@@ -160,6 +164,32 @@
         "the BPF binds the relationship lookup new_accountref, not just the case table’s own columns",
         "a rule with two conditions compiles both, ANDed, and neither is dropped",
         "every business rule and the process flow each get exactly one teardown step"
+      ]
+    },
+    {
+      "id": 6,
+      "tier": "full",
+      "spec": "app-spec.json",
+      "prompt": "Delivery: projects and work items on hand-authored forms — a two-form-column tab with 65/35 widths, two-column sections, a full-width title, a collapsed tab, and a polymorphic Customer lookup.",
+      "expect": {
+        "tables": [
+          "new_project",
+          "new_workitem"
+        ],
+        "relationships": [
+          "new_project_new_workitem"
+        ],
+        "views": [
+          "Active Projects",
+          "Open Work Items"
+        ],
+        "charts": [
+          "Work Items by Status"
+        ]
+      },
+      "expectations": [
+        "ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)",
+        "ui: an authored colspan and rowspan survive into the compiled cell"
       ]
     }
   ]

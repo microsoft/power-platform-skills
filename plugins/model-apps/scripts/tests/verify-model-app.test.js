@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { readerFor, appIdFor } = require('../verify-model-app.js');
+const { verifySpec } = require('../lib/verify-spec.js');
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
@@ -186,6 +187,46 @@ test('readerFor base readers normalize exact identities for tables, relationship
   assert.ok(calls.some((c) => c.method === 'retrieveSetting' && c.opts && Object.keys(c.opts).length === 0));
 });
 
+test('readerFor + verifySpec reads deployed fetchxml and systemform.isdefault through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'savedquery') {
+        return [{
+          savedqueryid: 'view-1',
+          layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+          fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="ownerid" operator="eq-userid"/></filter></entity></fetch>',
+        }];
+      }
+      if (set === 'systemform') return [{ formid: 'form-1', isdefault: false }];
+      return [];
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = {
+    solution: { publisherPrefix: 'new' },
+    app: { name: 'Support Desk', uniqueName: 'new_supportdesk' },
+    entities: [{ schemaName: 'new_ticket', columns: [] }], charts: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'My Tickets', columns: ['new_subject'], activeOnly: false, filters: [{ attr: 'modifiedon', op: 'this-week' }] }],
+    forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', isDefault: true }],
+  };
+
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+
+  assert.ok(r.missing.some((m) => m.kind === 'view-filters' && /modifiedon this-week/.test(m.detail)), 'the real reader must surface fetchxml to the filter oracle');
+  assert.ok(r.missing.some((m) => m.kind === 'form-default' && /isdefault is false/.test(m.detail)), 'the real reader must surface systemform.isdefault to the default-form oracle');
+  const viewQuery = calls.find((c) => c.set === 'savedquery');
+  assert.ok(viewQuery.opts.select.includes('fetchxml'), 'view reads must request savedquery.fetchxml');
+  const formDefaultQuery = calls.find((c) => c.set === 'systemform' && /formid eq form-1/.test(c.opts.filter));
+  assert.ok(formDefaultQuery, 'default-form proof must read the deployed form row by id');
+  assert.ok(formDefaultQuery.opts.select.includes('isdefault'), 'default-form proof must request systemform.isdefault');
+});
+
 test('appIdFor returns the deployed app id or undefined when the app is already gone', async () => {
   const filters = [];
   const sdk = {
@@ -198,6 +239,49 @@ test('appIdFor returns the deployed app id or undefined when the app is already 
   assert.strictEqual(await appIdFor(sdk, 'contoso_app'), 'app-uuid-1');
   assert.strictEqual(await appIdFor(sdk, 'missing_app'), undefined);
   assert.ok(filters.every((f) => /uniquename eq '/.test(f)), 'app lookup stays name-scoped');
+});
+
+test('readerFor.appRoleIds reads the deployed appmoduleroles_association rows', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'appmodule') return [{ appmoduleid: 'app-id-1' }];
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        return {
+          status: 200,
+          headers: {},
+          body: { value: [{ roleid: 'role-agent' }, { roleid: 'ROLE-MANAGER' }] },
+        };
+      },
+    },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(res.roleIds, ['role-agent', 'role-manager']);
+  assert.ok(calls.some((c) => c.url && /appmodules\(app-id-1\)\/appmoduleroles_association/.test(c.url)), 'must read the actual app-role association navigation property');
+});
+
+test('readerFor.appRoleIds fails closed when the association rows cannot be read', async () => {
+  const sdk = {
+    queryRecords: async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-id-1' }] : []),
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: { get: async () => ({ status: 403, headers: {}, body: { error: { message: 'forbidden' } } }) },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, false);
+  assert.match(res.reason, /403/);
 });
 
 function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false }) {
