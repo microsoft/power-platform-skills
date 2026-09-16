@@ -515,6 +515,11 @@ test('id-passthrough tiles: visualizationId is chart-only, and a chart needs BOT
   noViz.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', name: 'X', entity: 'new_ticket', viewId: 'v1' }] }];
   assert.ok(lintAppSpec(noViz).errors.some((m) => /also needs visualizationId/i.test(m)),
     `a chart tile without a visualizationId must be rejected; got ${JSON.stringify(lintAppSpec(noViz).errors)}`);
+
+  // …and validateAppSpec must agree, or a spec validates clean and then fails its own lint.
+  const { validateAppSpec } = require('../lib/app-spec.js');
+  assert.ok(validateAppSpec(noViz, { profile: 'plan' }).errors.some((m) => /also needs visualizationId/i.test(m)),
+    'the validator and the lint must enforce the same chart-ID contract');
 });
 
 test('a tile with neither a name nor an id reports the absence, not a chart called undefined (#572)', () => {

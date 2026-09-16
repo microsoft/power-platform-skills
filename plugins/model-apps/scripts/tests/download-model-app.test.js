@@ -674,6 +674,29 @@ test('readDashboards omits a chart tile with no VisualizationId (and says so) ra
   assert.ok(warnings.some((w) => /VisualizationId/.test(w)), `the omission must be reported; got ${JSON.stringify(warnings)}`);
 });
 
+// `entity` is required by BOTH spec gates for any id-passthrough tile, so a component with no
+// TargetEntityType produces `entity: undefined` — which JSON drops — and the downloaded spec then
+// fails its own lint. Same class as the missing-VisualizationId case above.
+test('readDashboards omits an id-passthrough tile with no TargetEntityType (and says so)', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'chart', name: 'NoEntity', parameters: { ViewId: '{11111111-0000-4000-8000-000000000001}', VisualizationId: '{22222222-0000-4000-8000-000000000002}' } },
+      { type: 'list', name: 'AlsoNoEntity', parameters: { ViewId: '{33333333-0000-4000-8000-000000000003}' } },
+      { type: 'list', name: 'Good', parameters: { TargetEntityType: 'account', ViewId: '{44444444-0000-4000-8000-000000000004}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'list', name: 'Good', entity: 'account', viewId: '44444444-0000-4000-8000-000000000004' },
+  ], 'only the tile carrying an entity may be emitted');
+  assert.strictEqual(warnings.filter((w) => /TargetEntityType/.test(w)).length, 2, `both omissions must be reported; got ${JSON.stringify(warnings)}`);
+});
+
 test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {  const sdk = {
     fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
     queryRecords: async (_set, opts) => {

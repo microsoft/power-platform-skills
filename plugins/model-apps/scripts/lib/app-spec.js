@@ -2170,10 +2170,16 @@ function validateAppSpec(spec, opts = {}) {
       if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }
       // ID-passthrough tiles (from a round-tripped/downloaded app) carry the deployed view/chart ids
       // + entity directly instead of names — they bind to existing artifacts, so skip the name checks.
-      const byId = t.viewId || t.visualizationId;
+      // `visualizationId` identifies a CHART and means nothing on a list tile; sharing one id test
+      // across both let a list tile with a stray visualizationId skip its viewId requirement.
+      const byId = t.type === 'chart' ? (t.viewId || t.visualizationId) : t.viewId;
       if (t.type === 'chart') {
         if (byId) {
+          // BOTH ids are load-bearing: a chart renders a visualization OVER a view. This mirrors
+          // spec-lint exactly — the two gates disagreeing meant a spec could validate clean and then
+          // fail its own structural lint.
           if (!t.viewId) errors.push(`dashboard '${d.name}': chart tile with visualizationId also needs viewId`);
+          if (!t.visualizationId) errors.push(`dashboard '${d.name}': id-based chart tile with viewId also needs visualizationId`);
           if (!t.entity) errors.push(`dashboard '${d.name}': id-based chart tile needs entity`);
           else badEntityRef(t.entity, `dashboard '${d.name}': chart tile`);
         } else {
