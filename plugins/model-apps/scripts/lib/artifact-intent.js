@@ -11,7 +11,7 @@
 // the SDK's generic mutation surface without hardcoding form-model logic everywhere.
 
 const { entityByLogical } = require('./_graph.js');
-const { lookupColumnsFor } = require('./app-spec.js');
+const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 
 // Arrange field cells into `columns` cells-per-row.
@@ -449,12 +449,10 @@ function compileFormIntent(spec, formSpec, opts) {
     // the single-full-width-column shorthand, `tabs[].columns[]` the explicit multi-column shape.
     // Declaring both is rejected at the spec gate, so reading `columns` first cannot mask `sections`.
     tabs = formSpec.tabs.map(function (t, ti) {
-      const authoredColumns = Array.isArray(t.columns)
-        ? t.columns
-        : [{ width: '100%', sections: t.sections || [] }];
+      const authoredColumns = formColumnsOf(t);
       const defaultWidths = equalColumnWidths(authoredColumns.length);
       return {
-        name: t.name || ('tab_' + ti),
+        name: t.name || generatedTabName(ti),
         label: t.label || 'General',
         // Only an explicit `false` collapses/hides a tab; anything else keeps the previous
         // always-visible, always-expanded behavior, so existing specs compile unchanged.
@@ -476,11 +474,10 @@ function compileFormIntent(spec, formSpec, opts) {
               const secCols = Math.min(s.columns || 1, maxCols);
               return {
                 // The generated fallback name is the form's identity for this section on a REBUILD
-                // (topology reconcile matches deployed sections by name), so the ci segment is
-                // appended only for ci > 0. Adding it unconditionally would rename every section on
-                // every already-deployed single-column form, and each rebuild would then create a
-                // duplicate section beside the original instead of converging onto it.
-                name: s.name || ('section_' + ti + (ci > 0 ? '_' + ci : '') + '_' + si),
+                // (topology reconcile matches deployed sections by name). Shared with the spec gate
+                // via `generatedSectionName` so the two cannot disagree about what an unnamed
+                // section will be called — see that helper for why the ci segment is conditional.
+                name: s.name || generatedSectionName(ti, ci, si),
                 label: s.label || 'Details',
                 visible: s.visible !== false,
                 showLabel: s.showLabel !== false,

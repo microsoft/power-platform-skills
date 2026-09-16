@@ -9,7 +9,7 @@ function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..',
 // helpers and performs no I/O at require time, so it is safe to load from the offline harness.
 function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', name)); }
 
-const { migrateAppSpec, validateAppSpec, lookupColumnsFor, formSectionsOf, SDK_ROLE_MARKER } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor, SDK_ROLE_MARKER } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
 const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
 const { subgridSectionIntent } = pluginLib('artifact-intent.js');
@@ -155,11 +155,15 @@ function subgridFacts(spec) {
 //
 // So the shape is projected TWICE, from two independent code paths, which is what makes comparing
 // them an oracle rather than a restatement:
-//   · `authored` reads the raw spec, through formSectionsOf — the one helper that understands both
-//     the `sections` shorthand and the multi-column `columns[]` form. A reader that opens
+//   · `authored` reads the raw spec, normalising the `sections` shorthand and the multi-column
+//     `columns[]` form itself rather than borrowing the plugin's helper — a reader that opens
 //     `tab.sections` directly silently skips every multi-column tab.
 //   · `compiled` reads compileFormIntent's output, which is what the engine actually deploys.
 // Flattening collapses `compiled` while `authored` is unchanged, so the two diverge.
+//
+// Both keep sections GROUPED BY FORM-COLUMN. An earlier version flattened both sides, which made the
+// oracle blind to a section moved between columns with its order and fields intact — the one thing a
+// multi-column topology assertion most needs to see.
 const cellsOfSection = (s) => ((s && s.rows) || []).flatMap((r) => (r && r.cells) || []);
 // A sub-grid cell carries a RelationshipName parameter instead of a plain field control. The engine
 // appends sub-grid sections on EVERY layout (auto included), so a shape comparison must ignore them
@@ -169,19 +173,25 @@ const labelOf = (x) => (x && x.label !== undefined ? x.label : null);
 
 function authoredFormShape(f) {
   if (!f || !Array.isArray(f.tabs)) return null; // `auto` — the author declared no shape to honour
+  // The `sections` shorthand IS one full-width form-column, so both shapes normalise to columns[].
+  // Normalised HERE rather than through the plugin's own helper, so the oracle states the structure
+  // independently of the code it grades.
+  const columnsOf = (t) => (Array.isArray(t.columns) ? t.columns : [{ width: null, sections: t.sections || [] }]);
   return f.tabs.map((t) => ({
     label: labelOf(t),
     expanded: t.expanded !== false,
-    // The `sections` shorthand IS one full-width form-column, so both shapes normalise to columns[].
     columnCount: Array.isArray(t.columns) ? t.columns.length : 1,
     // Only widths the author actually WROTE. Omitted widths are split evenly by the compiler, and
     // asserting the eval's own copy of that split would grade the compiler against itself.
     declaredWidths: Array.isArray(t.columns) ? t.columns.map((c) => (c && c.width) || null) : [null],
-    sections: formSectionsOf(t).map((s) => ({
+    // Grouped BY FORM-COLUMN, not flattened. A flat list cannot see a section that moved from column
+    // 0 to column 1 with its order and fields intact — which is precisely the topology this fixture
+    // exists to prove, so flattening let the oracle pass a form it should have failed.
+    sectionsByColumn: columnsOf(t).map((c) => ((c && c.sections) || []).map((s) => ({
       label: labelOf(s),
       columns: s.columns === undefined ? 1 : s.columns,
       fields: (s.fields || []).map((x) => lc(typeof x === 'string' ? x : x && x.name)),
-    })),
+    }))),
   }));
 }
 
@@ -191,7 +201,7 @@ function compiledFormShape(intent) {
     expanded: t.expanded !== false,
     columnCount: (t.columns || []).length,
     declaredWidths: (t.columns || []).map((c) => (c && c.width) || null),
-    sections: (t.columns || []).flatMap((c) => ((c && c.sections) || [])
+    sectionsByColumn: (t.columns || []).map((c) => ((c && c.sections) || [])
       .filter((s) => !cellsOfSection(s).some(isSubgridCell))
       .map((s) => ({
         label: labelOf(s),

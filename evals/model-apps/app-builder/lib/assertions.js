@@ -511,12 +511,19 @@ ASSERTIONS.set('ui: an explicit layout compiles to the authored tab, form-column
         const w = at.declaredWidths[wi];
         if (w !== null && w !== ct.declaredWidths[wi]) return fail(`${where} form-column ${wi}: authored width ${w}, compiled ${ct.declaredWidths[wi]}`);
       }
-      if (at.sections.length !== ct.sections.length) return fail(`${where}: ${at.sections.length} section(s) authored, ${ct.sections.length} compiled`);
-      for (let si = 0; si < at.sections.length; si++) {
-        const as = at.sections[si], cs = ct.sections[si];
-        if (as.label !== cs.label) return fail(`${where} section ${si}: label ${JSON.stringify(as.label)} became ${JSON.stringify(cs.label)}`);
-        if (as.columns !== cs.columns) return fail(`${where} section ${JSON.stringify(as.label)}: ${as.columns} grid column(s) authored, ${cs.columns} compiled`);
-        if (!eq(as.fields, cs.fields)) return fail(`${where} section ${JSON.stringify(as.label)}: authored [${as.fields}] compiled [${cs.fields}]`);
+      if (at.sectionsByColumn.length !== ct.sectionsByColumn.length) return fail(`${where}: ${at.sectionsByColumn.length} form-column(s) of sections authored, ${ct.sectionsByColumn.length} compiled`);
+      // Compared PER FORM-COLUMN. A flat list would let a section that moved from column 0 to
+      // column 1 pass whenever its order and fields were unchanged — the exact topology this
+      // assertion exists to prove.
+      for (let ci = 0; ci < at.sectionsByColumn.length; ci++) {
+        const acol = at.sectionsByColumn[ci], ccol = ct.sectionsByColumn[ci];
+        if (acol.length !== ccol.length) return fail(`${where} form-column ${ci}: ${acol.length} section(s) authored, ${ccol.length} compiled`);
+        for (let si = 0; si < acol.length; si++) {
+          const as = acol[si], cs = ccol[si];
+          if (as.label !== cs.label) return fail(`${where} form-column ${ci} section ${si}: label ${JSON.stringify(as.label)} became ${JSON.stringify(cs.label)}`);
+          if (as.columns !== cs.columns) return fail(`${where} form-column ${ci} section ${JSON.stringify(as.label)}: ${as.columns} grid column(s) authored, ${cs.columns} compiled`);
+          if (!eq(as.fields, cs.fields)) return fail(`${where} form-column ${ci} section ${JSON.stringify(as.label)}: authored [${as.fields}] compiled [${cs.fields}]`);
+        }
       }
     }
   }
@@ -577,7 +584,7 @@ ASSERTIONS.set('ui: every compiled form places exactly the fields it intends to 
   for (const f of facts.ui.forms || []) {
     const placed = sorted([...new Set((f.placements || []).map((p) => p.field))]);
     const intended = f.authoredShape
-      ? sorted([...new Set(f.authoredShape.flatMap((t) => t.sections.flatMap((s) => s.fields)))])
+      ? sorted([...new Set(f.authoredShape.flatMap((t) => t.sectionsByColumn.flat().flatMap((s) => s.fields)))])
       : sorted([...new Set((f.fields || []).map((x) => String(x).toLowerCase()))]);
     if (!eq(placed, intended)) {
       const missing = intended.filter((x) => !placed.includes(x));

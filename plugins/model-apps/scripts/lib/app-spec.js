@@ -1137,6 +1137,36 @@ function sampleKeyIdentity(v) {
   return JSON.stringify([typeof v, v]);
 }
 
+// The names the form compiler generates for an UNNAMED tab/section, shared with artifact-intent.js
+// so the spec gate and the compiler cannot disagree about what a container will actually be called.
+//
+// This matters because the generated name is a real identity, not a placeholder: the topology
+// reconcile matches a deployed container by name, so an authored `name: "section_0_0"` and an
+// unnamed first section are the SAME container to every rebuild path even though the create path
+// emits two. Uniqueness therefore has to be checked on the EFFECTIVE name, which means the gate has
+// to know these formulas exactly.
+//
+// The `ci` segment is appended only for ci > 0, and that asymmetry is load-bearing: adding it
+// unconditionally would rename every section on every already-deployed single-column form, and each
+// rebuild would then create a duplicate section beside the original instead of converging onto it.
+function generatedTabName(ti) {
+  return 'tab_' + ti;
+}
+
+function generatedSectionName(ti, ci, si) {
+  return 'section_' + ti + (ci > 0 ? '_' + ci : '') + '_' + si;
+}
+
+// The form-columns a tab declares, in the shape the compiler reads them: `columns[]` is the explicit
+// multi-column form, and `sections[]` is the single-full-width-column shorthand. Shared for the same
+// reason as the name helpers — the section index that feeds `generatedSectionName` is the index
+// WITHIN a form-column, so anything computing an effective name has to walk the same structure.
+function formColumnsOf(tab) {
+  if (!tab || typeof tab !== 'object') return [];
+  if (Array.isArray(tab.columns)) return tab.columns;
+  return [{ width: '100%', sections: Array.isArray(tab.sections) ? tab.sections : [] }];
+}
+
 // Keys an author reasonably reaches for that the serializer silently discards. Naming the real
 // mechanism is the difference between an actionable error and a scavenger hunt.
 const FORM_LAYOUT_KEY_HINTS = {
@@ -1199,16 +1229,32 @@ function validateFormLayoutKeys(f, errors) {
   // Names are IDENTITY for the build's topology reconcile (it matches a deployed container by name,
   // and keys its placement targets by name), so two containers sharing one name make both
   // declarations resolve to the same live container.
+  //
+  // Checked on the EFFECTIVE name — the authored one, or the compiler's generated fallback — because
+  // a generated name is just as real an identity. An unnamed first section and an explicit
+  // `name: "section_0_0"` both compile to `section_0_0`, so create emits two sections while
+  // `declaredSectionByField`/`sectionTargets` route both their fields to one. MEASURED before this
+  // gate: the compiled intent carried two sections named `section_0_0`.
+  //
+  // Reserving the generated namespace instead would be wrong: a spec DOWNLOADED from a deployed app
+  // carries the real deployed section names, which for an app this compiler built are exactly these
+  // generated ones — rejecting them would break every download → rebuild round-trip.
   const seenTabNames = new Map();
   const seenSectionNames = new Map();
-  const checkUniqueName = (where, name, seen, kind) => {
-    if (name === undefined || name === null || name === '') return;
-    const key = String(name).toLowerCase();
+  const checkUniqueName = (where, authored, effective, seen, kind) => {
+    if (effective === undefined || effective === null || effective === '') return;
+    const key = String(effective).toLowerCase();
     if (seen.has(key)) {
-      errors.push(`${label}: ${where} reuses the ${kind} name '${name}', already used by ${seen.get(key)} — a ${kind} name is its identity on a rebuild, so duplicates make both declarations target the same deployed ${kind}.`);
+      const prev = seen.get(key);
+      // Name the generated side explicitly — an author who wrote only one of the two names would
+      // otherwise get an error about a name they cannot find anywhere in their spec.
+      const origin = (!authored || !prev.authored)
+        ? ` — an unnamed ${kind} is given the generated name '${effective}', so this collides with it`
+        : '';
+      errors.push(`${label}: ${where} reuses the ${kind} name '${effective}', already used by ${prev.where}${origin} — a ${kind} name is its identity on a rebuild, so duplicates make both declarations target the same deployed ${kind}. Give one of them a different \`name\`.`);
       return;
     }
-    seen.set(key, where);
+    seen.set(key, { where, authored: !!authored });
   };
   // A FIELD is identity too, and form-wide. The create path emits one cell per entry, but every
   // reconcile path keys placement by logical name and takes the FIRST: `declaredSectionByField`
@@ -1238,7 +1284,19 @@ function validateFormLayoutKeys(f, errors) {
     if (!mustBeObject(where, t)) return;
     unknown(where, t, FORM_TAB_KEYS);
     checkBooleans(where, t, ['expanded', 'visible']);
-    checkUniqueName(where, t.name, seenTabNames, 'tab');
+    checkUniqueName(where, t.name, t.name || generatedTabName(ti), seenTabNames, 'tab');
+    // Section names are checked COLUMN-AWARE, because the index that feeds the generated name is the
+    // section's position within its form-column — not its position in the flattened list the
+    // per-section checks below walk. Done in its own pass so those checks keep their existing
+    // flattened numbering, and their messages do not churn.
+    formColumnsOf(t).forEach((c, ci) => {
+      const colSections = (c && Array.isArray(c.sections)) ? c.sections : [];
+      colSections.forEach((s, si) => {
+        if (!s || typeof s !== 'object' || Array.isArray(s)) return;
+        const nwhere = `${where} section ${s.label ? `'${s.label}'` : `#${si + 1}`}${ci > 0 ? ` (column #${ci + 1})` : ''}`;
+        checkUniqueName(nwhere, s.name, s.name || generatedSectionName(ti, ci, si), seenSectionNames, 'section');
+      });
+    });
     // A tab is EITHER the single-full-width-column shorthand or the explicit multi-column shape.
     // Accepting both would leave the compiler to pick one and silently discard the other's sections.
     if (t && Array.isArray(t.columns) && Array.isArray(t.sections)) {
@@ -1273,7 +1331,6 @@ function validateFormLayoutKeys(f, errors) {
       if (!mustBeObject(swhere, s)) return;
       unknown(swhere, s, FORM_SECTION_KEYS);
       checkBooleans(swhere, s, ['showLabel', 'visible']);
-      checkUniqueName(swhere, s.name, seenSectionNames, 'section');
       if (s && s.columns !== undefined && (!Number.isInteger(s.columns) || s.columns < 1 || s.columns > 4)) {
         errors.push(`${label}: ${swhere} has columns '${s.columns}' — a section may span 1 to 4 columns`);
       }
@@ -3189,6 +3246,9 @@ function migrateAppSpec(spec) {
 module.exports = {
   rejectLocalizedGlobalChoice,
   sampleKeyIdentity,
+  generatedTabName,
+  generatedSectionName,
+  formColumnsOf,
   validateAppSpec,
   normalizePageSource,
   normalizeLanguageCode,

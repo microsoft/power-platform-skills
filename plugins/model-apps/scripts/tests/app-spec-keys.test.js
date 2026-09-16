@@ -587,6 +587,61 @@ test('sampleData: duplicate detection keys values exactly the way the loader doe
     'and so are two identical numbers');
 });
 
+// A generated fallback name is a REAL identity, not a placeholder: the reconcile matches a deployed
+// container by name. So an unnamed section and an explicit `name: "section_0_0"` are the same
+// container to every rebuild path, while create emits two. MEASURED before this gate: the compiled
+// intent carried two sections both named `section_0_0`, and declaredSectionByField routed both
+// sections' fields to that one target. Uniqueness is therefore checked on the EFFECTIVE name.
+test('form layout: an explicit name that collides with a generated one is rejected', () => {
+  const form = (tabs) => { const s = base(); s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }]; s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs }]; return s; };
+  const nameErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /reuses the (tab|section) name/.test(e));
+
+  const secCollision = form([{ label: 'G', sections: [
+    { label: 'A', fields: ['contoso_name'] },                              // unnamed -> section_0_0
+    { label: 'B', name: 'section_0_0', fields: ['contoso_amount'] },       // explicit, same identity
+  ] }]);
+  assert.strictEqual(nameErrors(secCollision).length, 1, 'an unnamed section and an explicit section_0_0 are one container');
+  assert.match(nameErrors(secCollision)[0], /generated name/, 'the message must explain where the other name came from');
+
+  const tabCollision = form([
+    { label: 'A', sections: [{ label: 'S', name: 's1', fields: ['contoso_name'] }] },      // unnamed -> tab_0
+    { label: 'B', name: 'tab_0', sections: [{ label: 'T', name: 's2', fields: ['contoso_amount'] }] },
+  ]);
+  assert.strictEqual(nameErrors(tabCollision).length, 1, 'tabs collide the same way');
+
+  // The generated section name carries its FORM-COLUMN index for ci > 0, so the gate has to walk
+  // columns rather than the flattened section list to compute it.
+  const multiColumn = form([{ label: 'G', columns: [
+    { width: '50%', sections: [{ label: 'L', name: 'section_0_1_0', fields: ['contoso_name'] }] },
+    { width: '50%', sections: [{ label: 'R', fields: ['contoso_amount'] }] },   // -> section_0_1_0
+  ] }]);
+  assert.strictEqual(nameErrors(multiColumn).length, 1, 'a collision with a column-scoped generated name must be caught');
+
+  // Ordinary multi-column layouts generate distinct names and must stay valid.
+  const ok = form([{ label: 'G', columns: [
+    { width: '50%', sections: [{ label: 'L', fields: ['contoso_name'] }] },
+    { width: '50%', sections: [{ label: 'R', fields: ['contoso_amount'] }] },
+  ] }]);
+  assert.deepStrictEqual(nameErrors(ok), [], 'unnamed sections in different form-columns are distinct');
+});
+
+// Reserving the generated namespace instead would break the round trip: a DOWNLOADED spec carries
+// the real deployed names, which for an app this compiler built are exactly the generated ones. They
+// must stay valid when they are the only declaration of that container.
+test('form layout: a downloaded spec that names its containers explicitly stays valid', () => {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }];
+  s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs: [
+    { label: 'General', name: 'tab_0', sections: [
+      { label: 'A', name: 'section_0_0', fields: ['contoso_name'] },
+      { label: 'B', name: 'section_0_1', fields: ['contoso_amount'] },
+    ] },
+  ] }];
+  assert.deepStrictEqual(
+    validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /reuses the (tab|section) name/.test(e)),
+    [], 'round-tripping a built app must not be rejected by its own generated names');
+});
+
 // The seeder refuses to use a duplicated primary name as `matchOn` (Dataverse could resolve or
 // deduplicate the wrong row). That refusal happens in the sample-data phase — after tables, forms and
 // views are already deployed — so ordinary sample data used to validate clean and then stop the build
