@@ -14,25 +14,23 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ---
 
-## Workflow Checkpoint Telemetry
+## Workflow Checkpoints
 
-A workflow opts a step into telemetry with this marker directly below its heading:
+Only steps with this marker directly below the heading emit checkpoint telemetry:
 
 ```markdown
 **Telemetry checkpoint: `<static_snake_case_name>`**
 ```
 
-At a marked boundary, run this command with the current top-level skill name:
+Run from the app directory using the invoked top-level skill's frontmatter `name` and the exact checkpoint marker. `${PLUGIN_ROOT}` is the installed plugin directory.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/emit-telemetry-checkpoint.js" "<skill-name>|<checkpoint-name>|<state>|<optional-info>"
+node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" "<skill-name>|<checkpoint-name>|<state>" || true
 ```
 
-Use `started` immediately before the work, then `completed` after success or `failed` before stopping on failure. A valid branch that bypasses the work emits only `skipped`. Omit the final `|<optional-info>` when no extra classification is needed.
-
-Checkpoint names and optional info must be fixed, author-written `snake_case` values of at most 64 characters. Optional info is for low-cardinality classifications such as `dependency_missing`; never interpolate prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data. Do not emit checkpoints for unmarked steps. Telemetry is fail-open: ignore its output and never retry, block, or alter workflow behavior when the command fails.
-
-Name checkpoints with a precise verb-object phrase that identifies the work being measured, such as `validate_fresh_template` or `generate_connector_data_source`. Do not use broad phase labels such as `planning`, `scaffold`, `screens`, or `app_ready`, and do not include a lifecycle suffix such as `_started`, `_completed`, `_skipped`, or `_failed`; the emitter appends that state.
+- Emit `started` immediately before the work, then `completed` after success or `failed` before stopping on failure. When a valid branch bypasses the work, emit only `skipped`, without `started`. Do not duplicate emissions already embedded in a command block.
+- Keep checkpoint names and optional info fixed, author-written `snake_case` values of at most 64 characters. Use precise verb-object names without lifecycle suffixes. Append `|<optional-info>` only when a static classification is needed; never include prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data.
+- Keep telemetry fail-open and secondary to the workflow. Ignore emitter output, never retry or inspect the emitter, and never change the work when emission fails. Do not emit checkpoints for unmarked steps.
 
 ---
 
@@ -109,8 +107,8 @@ All non-Dataverse connectors require a connection ID or connection reference bef
 
 Plugin-level hooks also run during unrelated plugin workflows, so every mutating mobile skill owns its validation:
 
-1. Track every file written by the skill or its subagents. Exclude untouched output from trusted generators such as `npx power-apps init` and `npx power-apps add-data-source`.
-2. Before returning success, pass each changed file explicitly:
+1. Track changed files by writer: the skill/subagents and preparation helpers versus trusted generators. Use a helper's returned `writtenFiles` when available; track removals separately, not as files to validate. Output from `npx power-apps init` or `npx power-apps add-data-source` is excluded only when produced by that command and not modified afterward by the skill or its subagents. Newly generated does not mean manually written.
+2. Before returning success, pass each existing skill/helper-owned changed file explicitly:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
@@ -120,6 +118,14 @@ Plugin-level hooks also run during unrelated plugin workflows, so every mutating
    ```
 
 3. On exit `2`, repair every finding and rerun. Exit `0` is required before `DONE`.
+
+`--file` runs write-safety checks, not a read-only audit of generator output. For CLI-owned
+`power.config.json` and `src/generated/`, perform the owning phase's read-only identity,
+schema/service and TypeScript checks instead. Do not suppress a protected-path finding
+by excluding a file that was manually edited; stop and recover through its owning command
+under the existing approval/resume rules. Never infer ownership from the path alone or a
+whole-worktree diff. If the manual target list is empty, record that fact; do not invoke
+the validator with no files or add generated files to make a nonempty list.
 
 Never pass a directory or the whole project. Files with common text extensions (see `scripts/lib/mobile-validator-manifest.js`) receive content-based checks; other files receive path-safety-only checks. This gate remains required after a successful typecheck.
 ### MUST (required before acting)
@@ -136,7 +142,7 @@ Never pass a directory or the whole project. Files with common text extensions (
 - MUST NOT install Expo modules with `npm install <pkg>` — use `npx expo install <pkg>` so versions stay Expo-SDK-compatible.
 - MUST NOT add packages with native source, podspecs, codegen configuration, Expo modules/config plugins, or platform projects unless they already exist in the template `package.json`. The wrapped binary only contains the template's native modules.
 - A package name is not evidence of native code. For explicit package requests or approved use cases, pure-JavaScript libraries, including JS-only `react-native-*` packages, may be selected and added at an exact version to app runtime `dependencies`; no Android/iOS rebuild is needed. Follow the selection, approval, and install gates in [`references/javascript-dependency-planning.md`](references/javascript-dependency-planning.md).
-- MUST NOT add browser-based runtime verification steps, React Native Web setup, screen-by-screen runtime checks, route crawling, or direct Metro/localhost HTTP probes to mobile-app skills. Runtime diagnosis, when requested, uses `/debug-app` against the captured Metro terminal output.
+- MUST NOT add browser-based runtime verification steps, React Native Web setup, screen-by-screen runtime checks, route crawling, or direct Metro/localhost HTTP probes to mobile-app skills. Runtime diagnosis, when requested, uses `/debug-app` against sanitized `.powernative/metro-logs/` files.
 - MUST NOT add `react-native-reanimated/plugin` anywhere except as the **last** entry in `babel.config.js` `plugins` array. Wrong order silently breaks animations.
 - MUST NOT modify `app/_layout.tsx`'s provider wrapping order without re-running `npx tsc --noEmit`.
 - MUST NOT make changes outside the project root without user confirmation.

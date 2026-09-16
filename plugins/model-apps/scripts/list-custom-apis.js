@@ -27,6 +27,7 @@ const {
   dataverseRequest,
   ensureOk,
   parseArgs,
+  validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
 const { exitIfCustomApiDisabled } = require('./lib/feature-flags');
@@ -127,9 +128,16 @@ async function main() {
   // from 1 = runtime/usage error, so a caller can tell "not released" from "it broke".
   exitIfCustomApiDisabled();
 
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node list-custom-apis.js <envUrl> [--entities <logicalName1,logicalName2>]';
+  const flagError = validateFlags(argv, { known: ['entities'], needValue: ['entities'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
   if (positional.length < 1) {
-    process.stderr.write('Usage: node list-custom-apis.js <envUrl> [--entities <logicalName1,logicalName2>]\n');
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const [envUrl] = positional;

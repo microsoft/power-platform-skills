@@ -9,10 +9,14 @@ const {
   sampleRecordsFor,
   resolveSampleRecords,
   relationshipFor,
+  resolveParentRelationship,
   relationshipSchemaName,
   manyToManySchemaName,
   quickCreateEnabledFor,
   normalizeLanguageCode,
+  labelText,
+  isLocalizedLabelMap,
+  localizedLabelLcids,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -76,6 +80,70 @@ async function checkProvisioned(lcid, source, provisionedLanguages) {
     + `through the columns. Provisioned languages: ${list.join(', ')}. Pick one of those, provision `
     + `${lcid} in the organization first, or omit the override to use the base language.`,
     { phase: 'data-model', code: 'language-not-provisioned', recoverable: false }
+  );
+}
+
+// Every LCID the spec's LOCALIZED labels ask for, deduped and sorted, with an example of where each
+// was declared so the halt below can name one. AB#6686428.
+function localizedLabelLcidsInSpec(spec) {
+  const byLcid = new Map(); // lcid -> a human-readable "where" for the first site that used it
+  const note = (value, where) => {
+    for (const lcid of localizedLabelLcids(value)) if (!byLcid.has(lcid)) byLcid.set(lcid, where);
+  };
+  for (const e of (spec && spec.entities) || []) {
+    const at = `entity ${e && e.schemaName}`;
+    note(e && e.displayName, `${at} displayName`);
+    note(e && e.pluralName, `${at} pluralName`);
+    note(e && e.primaryAttribute && e.primaryAttribute.displayName, `${at} primaryAttribute.displayName`);
+    for (const c of (e && e.columns) || []) {
+      note(c && c.displayName, `${at} column ${c && c.schemaName} displayName`);
+      for (const o of (c && c.options) || []) note(o, `${at} column ${c && c.schemaName} option`);
+    }
+    for (const k of (e && e.alternateKeys) || []) note(k && k.displayName, `${at} alternate key ${k && k.schemaName}`);
+  }
+  for (const r of (spec && spec.relationships) || []) note(r && r.lookup && r.lookup.displayName, `relationship lookup ${r && r.lookup && r.lookup.schemaName}`);
+  for (const g of (spec && spec.globalChoices) || []) {
+    note(g && g.displayName, `globalChoice ${g && g.name} displayName`);
+    for (const o of (g && g.options) || []) note(o, `globalChoice ${g && g.name} option`);
+  }
+  return [...byLcid.entries()].sort(([a], [b]) => a - b).map(([lcid, where]) => ({ lcid, where }));
+}
+
+// Halt when a LOCALIZED label names a language the organization has not provisioned. AB#6686428.
+//
+// This is NOT a validation nicety — it is the difference between the feature working and the feature
+// re-creating the exact bug it fixes. LIVE-MEASURED against a 1033-only organization: `createTable`
+// with `DisplayName: { 1033, 3082 }` returns SUCCESS and stores ONLY the 1033 label. Dataverse does
+// not warn, error, or report the drop anywhere. So without this check an author labels a table in
+// Spanish, gets a green build, and the Spanish is simply gone — "a successful build with the request
+// gone and nothing reporting the loss", which is the failure this whole feature exists to end.
+//
+// Distinct from `checkProvisioned` above, which guards the single build-wide authoring language: that
+// one can also fail LOUDLY later (a DateTime/Memo column is rejected outright), whereas a dropped
+// localized label has no downstream symptom at all.
+//
+// Best-effort in exactly the same way: an unreadable probe leaves the build unchanged, because a
+// diagnostic that cannot answer must not block work that would otherwise succeed.
+async function checkLocalizedLabelLanguages(spec, provisionedLanguages) {
+  const wanted = localizedLabelLcidsInSpec(spec);
+  if (!wanted.length || typeof provisionedLanguages !== 'function') return;
+  let list;
+  try {
+    list = await provisionedLanguages();
+  } catch {
+    return;
+  }
+  if (!Array.isArray(list) || !list.length) return;
+  const missing = wanted.filter((w) => !list.includes(w.lcid));
+  if (!missing.length) return;
+  throw new BuildHalt(
+    `${missing.length} localized label language(s) are not provisioned in this organization: `
+    + `${missing.map((m) => `${m.lcid} (first used by ${m.where})`).join('; ')}. `
+    + 'Dataverse would ACCEPT those labels and silently store only the provisioned one — live-measured: '
+    + 'a create carrying an unprovisioned LCID returns success and the label is simply absent afterwards, '
+    + 'with nothing reporting the loss. Provisioned languages: '
+    + `${list.join(', ')}. Provision the language in the organization first, or drop it from the labels.`,
+    { phase: 'data-model', code: 'localized-label-language-not-provisioned', recoverable: false }
   );
 }
 
@@ -216,6 +284,29 @@ class BuildHalt extends Error {
   }
 }
 
+// Collect every `code` along an error's `cause` chain, outermost first.
+//
+// A phase-level `skipIf` predicate is handed whatever reached the runner, and that is NOT always the
+// SDK's own error: a failure the SDK reports BY VALUE goes through `requireSuccessfulPush`, which
+// wraps it in a `BuildHalt` carrying the SdkError as `cause`. A predicate that only reads `err.code`
+// therefore matches the thrown form and silently misses the returned form of the SAME condition —
+// which is exactly how a preview-gated capability turned from a clean skip into a build halt when
+// the SDK moved it from a throw to a return.
+//
+// Depth is bounded so a self-referential `cause` (seen in the wild when an error is re-wrapped with
+// itself) cannot spin here.
+function errorCodeChain(err, maxDepth = 5) {
+  const codes = [];
+  const seen = new Set();
+  let e = err;
+  for (let i = 0; e && typeof e === 'object' && i < maxDepth && !seen.has(e); i += 1) {
+    seen.add(e);
+    if (e.code) codes.push(e.code);
+    e = e.cause;
+  }
+  return codes;
+}
+
 // A metadata create that fails because the component already exists (the classic re-run
 // case). Dataverse answers 409, or 400 with a duplicate-name message. Used to make
 // otherwise non-idempotent creates (e.g. alternate keys — the SDK has no key lister) safe
@@ -267,6 +358,103 @@ function requiredLevelValue(raw) {
 function columnRequiredLevel(c) {
   if (!c) return undefined;
   return requiredLevelValue(c.RequiredLevel) || requiredLevelValue(c.requiredLevel);
+}
+
+// The columns a table already has, as `[{ logicalName, RequiredLevel }]`.
+//
+// Same reason as `findExistingTable` above, and the same measurement: calling the SDK's
+// `findColumns` immediately before `createColumn` makes Dataverse store ONLY the base-language
+// label of a multi-language column name. Order-controlled, 8 columns, sequence C,F,F,C,C,F,F,C:
+// `createColumn` alone kept both languages 4/4; `findColumns` then `createColumn` kept both 0/4.
+//
+// This path matters MORE than the table one, not less: it is the table-REUSE branch, i.e. adding a
+// column to a table that already exists — which is exactly the scenario AB#6686428 was reported
+// against ("adding a table to an existing app"). A fresh-table build never reaches it, which is why
+// the first round of this fix missed it and why the end-to-end verification did not catch it.
+//
+// The projection deliberately matches `readAttributeRequiredLevels` below, so the rows still answer
+// `columnRequiredLevel`.
+//
+// ON THE FAILURE PATH, and this is the subtle part: when the raw client is PRESENT but the read
+// fails or returns a non-2xx, we return `[]` rather than falling back to `findColumns`. Falling back
+// would re-introduce the exact poisoning this function exists to remove, silently, on the very
+// branch it targets — `createColumn` is guaranteed to run here for every column that looks new. An
+// empty list instead makes every column look new, and `createColumn`'s `skipIf: isAlreadyExists`
+// de-duplicates the ones that already exist WITHOUT a poisoning pre-read. The cost is that the
+// required/capability reconcile degrades to best-effort for this table, which is the same
+// degradation a `readAttributeRequiredLevels` failure already produces — and it is warned about,
+// because a silent degradation is what this whole line of fixes is about.
+//
+// `findColumns` is therefore reserved for the one case where it cannot poison anything: no raw
+// client at all, which in practice means a unit-test double.
+async function findExistingColumns(provision, logical, warn) {
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    let res = null;
+    let err = null;
+    try {
+      res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes?$select=LogicalName,RequiredLevel`);
+    } catch (e) { err = e; }
+    if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+      return res.body.value.map((a) => ({ logicalName: String(a.LogicalName || '').toLowerCase(), RequiredLevel: a.RequiredLevel }));
+    }
+    const why = err ? ((err && err.message) || String(err)) : `HTTP ${res && res.status}`;
+    if (typeof warn === 'function') {
+      warn(`could not read existing columns for ${logical} (${why}) — treating every declared column as new. `
+        + 'Existing ones are de-duplicated by the create\'s already-exists handling; required-level reconciliation '
+        + 'is skipped for this table this run.');
+    }
+    return [];
+  }
+  if (typeof (provision && provision.findColumns) !== 'function') return [];
+  return (await provision.findColumns(logical)) || [];
+}
+
+// Does a relationship with this schema name already exist on the entity?
+//
+// A NARROW relationship read, for the third time and the same measured reason: the plugin used to
+// answer this with `provision.fetchEntityMetadata(...)`, and any broad metadata read immediately
+// before a labelled create makes Dataverse store ONLY the base-language label. Order-controlled
+// (C,F,F,C): `createRelationship` alone kept a bilingual `lookupDisplayName` 2/2;
+// `fetchEntityMetadata` then `createRelationship` kept it 0/2.
+//
+// `$select=SchemaName` on the relationship collection is the smallest question that answers this.
+// Falls back to `fetchEntityMetadata` when the raw client is unavailable (unit-test doubles).
+//
+// Returns `true`/`false`, or `null` when it genuinely could not tell — the caller treats null the
+// way the old `catch {}` did (assume absent and let the create's own already-exists handling deal
+// with it), because a table created moments ago legitimately 404s here.
+//
+// `hasLocalizedLabels` closes the same hole `findExistingTable` documents, for the same reason and
+// with the same rule. `fetchEntityMetadata` → `createRelationship` is one of the three broad-read →
+// create pairs that makes Dataverse keep ONLY the base-language label (AB#6686428), so falling back
+// to it after an inconclusive narrow probe would silently reintroduce the bug on a transient 5xx —
+// invisibly, because the request body is byte-identical either way and the relationship is still
+// created. For a localized lookup label the fallback is therefore skipped and `null` is returned:
+// "assume absent" costs at most a redundant create that already-exists handling absorbs, whereas the
+// poisoning read costs a label nobody can see is wrong until a user switches language.
+// A relationship with a plain-string label keeps the fallback exactly as before.
+async function relationshipExists(provision, entityLogical, schemaName, type, { hasLocalizedLabels = false } = {}) {
+  const collection = type === 'ManyToMany' ? 'ManyToManyRelationships' : 'OneToManyRelationships';
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    try {
+      const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(entityLogical)}')/${collection}?$select=SchemaName`);
+      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+        return res.body.value.some((r) => String(r.SchemaName || '').toLowerCase() === String(schemaName).toLowerCase());
+      }
+      if (res && res.status === 404) return false;
+    } catch { /* fall through */ }
+    // Inconclusive AND localized: never resolve it with the broad read.
+    if (hasLocalizedLabels) return null;
+  }
+  if (typeof (provision && provision.fetchEntityMetadata) !== 'function') return null;
+  try {
+    const meta = await provision.fetchEntityMetadata(entityLogical);
+    return ((meta && meta.relationships) || []).some((r) => String(r.schemaName || '').toLowerCase() === String(schemaName).toLowerCase());
+  } catch {
+    return null;
+  }
 }
 
 async function readAttributeRequiredLevels({ sdk, provision, logical }) {
@@ -383,17 +571,36 @@ function requireSuccessfulPush(result, what, warn) {
   if (!result) return result;
   const committed = result.saved !== undefined ? result.saved : result.success;
   if (committed === false || (committed === undefined && result.error)) {
-    // Two DIFFERENT by-value failures reach here, and they need different remedies. Reporting an
-    // already-exists collision as a concurrent edit tells the operator to re-download when nothing
-    // changed under them, and hides the actual cause.
-    const alreadyExists = result.error && result.error.code === 'ARTIFACT_ALREADY_EXISTS';
+    // SEVERAL different by-value failures reach here and they need different remedies, so the
+    // diagnosis is SELECTED from the SDK's own error code rather than assumed.
+    //
+    // The set is open and it grows: the SDK keeps moving failures from a throw to a return, and
+    // every newly-returned one landed on the "changed in Maker" wording below — telling the operator
+    // to re-download an app nobody had touched, over a cause that wording cannot describe. (Measured
+    // on the business-rule preview gate: an environment without the bound member now RESOLVES with
+    // `saved:false` where it used to throw.) So an unrecognised code is reported VERBATIM and
+    // propagated as the halt's own `code`, which also lets a phase-level `skipIf` match on it.
+    const label = what || result.type || 'artifact';
+    const sdkCode = (result.error && result.error.code) || null;
     const detail = (result.error && result.error.message) || 'version conflict (412)';
-    throw new BuildHalt(
-      alreadyExists
-        ? `push ${what || result.type || 'artifact'} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`
-        : `push ${what || result.type || 'artifact'} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`,
-      { phase: 'push', code: alreadyExists ? 'already-exists' : 'version-conflict', recoverable: true, cause: result.error }
-    );
+    const opts = { phase: 'push', recoverable: true, cause: result.error };
+    // Reporting an already-exists collision as a concurrent edit tells the operator to re-download
+    // when nothing changed under them, and hides the actual cause.
+    if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`, { ...opts, code: 'already-exists' });
+    }
+    // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
+    // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
+    // re-downloading genuinely IS the remedy.
+    //
+    // `VERSION_CONFLICT` has to be named explicitly. Routing it to the generic branch below silently
+    // DROPPED the re-download instruction from a real 412, and nothing caught that: the unit
+    // fixtures here use a code-less error, and the real-bundle test never routes its result through
+    // this function.
+    if (!sdkCode || sdkCode === 'VERSION_CONFLICT') {
+      throw new BuildHalt(`push ${label} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`, { ...opts, code: 'version-conflict' });
+    }
+    throw new BuildHalt(`push ${label} failed: ${detail}`, { ...opts, code: sdkCode });
   }
   // A push can COMMIT and still be partially wrong, and the SDK reports that by value rather than
   // failing: an app whose components could not all be pinned, whose system-admin role assignment
@@ -474,6 +681,72 @@ async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, read
 
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
+// Does this table already exist? Returns { logicalName, entitySetName } or null.
+//
+// Deliberately a NARROW `EntityDefinitions(LogicalName=…)` read rather than the SDK's `findTables`,
+// and this is a correctness requirement rather than an optimisation. LIVE-MEASURED, order-controlled
+// (8 tables, sequence C,F,F,C,C,F,F,C so each arm appears early and late): calling `findTables`
+// before `createTable` makes Dataverse store ONLY the base-language label of a multi-language name —
+// `create only` kept both languages 4/4, `findTables + create` kept both 0/4. The outgoing
+// EntityDefinitions body is byte-identical in both cases, so the loss is caused by the preceding
+// unfiltered metadata read, not by the create payload.
+//
+// Without this the localized-label feature silently degrades to English-only on the real build path
+// while every unit test (which never issues the preceding read) passes — the exact silent-drop class
+// of failure AB#6686428 exists to end.
+//
+// `dataverse.get` RESOLVES with `{ status }` on a 404 instead of throwing, so the status is checked
+// explicitly. Falls back to `findTables` when the raw client is unavailable (older callers and
+// unit-test doubles) or when the narrow read is INCONCLUSIVE — with one exception, below.
+//
+// `hasLocalizedLabels` closes the gap that fallback would otherwise leave open. `findTables` can
+// safely prove PRESENCE (a hit means we reuse the table and no create follows, so nothing is
+// poisoned), but a MISS is followed immediately by `createTable` — with the poisoning read already
+// on the wire. So for an entity whose labels ARE localized, an inconclusive probe is never resolved
+// by `findTables`: the narrow read is retried, and if it stays inconclusive the build HALTS rather
+// than silently shipping an English-only table. Same fail-closed rule as the unprovisioned-language
+// check above, and for the same reason: by the time a warning is read the table already exists, and
+// fixing a label after the fact is a manual job.
+async function findExistingTable(provision, schemaName, { hasLocalizedLabels = false, attempts = 3 } = {}) {
+  const logical = String(schemaName).toLowerCase();
+  const raw = provision && provision.dataverse;
+  if (raw && typeof raw.get === 'function') {
+    const escaped = logical.replace(/'/g, "''");
+    const url = `/EntityDefinitions(LogicalName='${escaped}')?$select=LogicalName,EntitySetName`;
+    // Retried only for a LOCALIZED entity, where the alternative to a conclusive answer is a halt.
+    // For everything else one attempt then `findTables` is both cheaper and exactly the old
+    // behaviour.
+    const tries = hasLocalizedLabels ? Math.max(1, attempts) : 1;
+    let lastWhy = 'unknown';
+    for (let i = 0; i < tries; i += 1) {
+      // Wrapped like its `findExistingColumns` sibling. The client resolves `{status}` for a 404 and
+      // even a persistent 5xx, and throws only on a persistent TRANSPORT error; letting that
+      // propagate here would abort the build on a blip the fallback might well survive.
+      let res = null;
+      try { res = await raw.get(url); } catch (err) { res = null; lastWhy = (err && err.message) || String(err); }
+      if (res && res.status >= 200 && res.status < 300 && res.body && res.body.LogicalName) {
+        return { logicalName: String(res.body.LogicalName).toLowerCase(), entitySetName: res.body.EntitySetName };
+      }
+      if (res && res.status === 404) return null;
+      if (res) lastWhy = `HTTP ${res.status}${res.body && res.body.LogicalName === undefined && res.status < 300 ? ' with no LogicalName in the body' : ''}`;
+    }
+    if (hasLocalizedLabels) {
+      throw new BuildHalt(
+        `could not determine whether table '${logical}' already exists (${lastWhy}), and its labels are localized. `
+        + 'Resolving this by the broad metadata read the build normally falls back to is what makes Dataverse store '
+        + 'ONLY the base-language label (live-measured, 0/4 vs 4/4), so the build stops here instead of silently '
+        + 'creating an English-only table. Re-run once the environment answers metadata reads.',
+        { phase: 'data-model', code: 'table-probe-inconclusive', recoverable: true },
+      );
+    }
+    // Any other status is inconclusive — fall through to findTables rather than assume "absent",
+    // because assuming absent turns a transient read failure into a duplicate-create attempt.
+  }
+  if (typeof (provision && provision.findTables) !== 'function') return null;
+  const hits = await provision.findTables(schemaName, { top: 50 });
+  return (hits || []).find((t) => t.logicalName === logical) || null;
+}
+
 async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
@@ -484,6 +757,11 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // that construct the SDK themselves and for the existing unit tests.
   const resolvedLanguageCode = preResolvedLanguageCode
     || await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
+
+  // Before any write: refuse a localized label naming a language this org has not provisioned.
+  // Dataverse would accept it and silently keep only the provisioned label (live-measured), so this
+  // must run ahead of the first createTable rather than as a post-hoc verify.
+  await checkLocalizedLabelLanguages(spec, provisionedLanguages);
 
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
@@ -505,18 +783,41 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
   for (const e of spec.entities) {
     const logical = e.schemaName.toLowerCase();
-    const hits = await provision.findTables(e.schemaName, { top: 50 });
-    const existingTable = (hits || []).find((t) => t.logicalName === logical);
+    // Whether THIS entity carries any localized label. It decides whether an inconclusive existence
+    // probe may be resolved by the broad `findTables` read — safe for a plain-label entity, poisoning
+    // for a localized one. See findExistingTable.
+    const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
+    const hits = await findExistingTable(provision, e.schemaName, { hasLocalizedLabels: entityIsLocalized });
+    const existingTable = hits;
     let existingCols = new Set();
     let existingColRows = [];
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-      existingColRows = (await provision.findColumns(logical)) || [];
+      existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {
-        const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
+        // `displayName` / `pluralName` / `primaryColumnDisplayName` are passed THROUGH unflattened: a
+        // plain string emits one label at `resolvedLanguageCode`, and an LCID map emits one per
+        // language (AB#6686428 — measured on the wire against the vendored bundle). The English
+        // plural fallback is only reachable for a STRING displayName; validateAppSpec requires an
+        // explicit `pluralName` beside a localized one, because appending "s" is not a plural rule
+        // outside English and would write "Línea base del proyectos" into Dataverse.
+        //
+        // The schema-name fallback is NOT cosmetic. `displayName` is optional in the App Spec — the
+        // validator accepts an omitted or blank one, exactly as it does for a column — and every
+        // other create site here already falls back (`c.displayName || c.schemaName` for columns,
+        // customer columns and alternate keys). The table was the one that did not, and handing the
+        // SDK `undefined` throws inside its label builder with `Cannot convert undefined or null to
+        // object` BEFORE any request is issued — an opaque failure with nothing naming the table or
+        // the field. MEASURED against the real vendored bundle; `''` gets past it but would label the
+        // table blank. A localized MAP must pass through untouched, so it is never routed through
+        // `labelText`, which would flatten it to one language.
+        const tableDisplayName = isLocalizedLabelMap(e.displayName)
+          ? e.displayName
+          : (labelText(e.displayName, resolvedLanguageCode) || e.schemaName);
+        const createOpts = { schemaName: e.schemaName, displayName: tableDisplayName, pluralName: e.pluralName || `${labelText(tableDisplayName, resolvedLanguageCode) || e.schemaName}s`,
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
@@ -529,9 +830,9 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         } catch (err) {
           if (!isAlreadyExists(err)) throw err;
           // First POST likely succeeded server-side; a transient-network retry hit "already exists".
-          // Rediscover to capture entitySetName (required by later phases).
-          const rehits = await provision.findTables(e.schemaName, { top: 50 });
-          const found = (rehits || []).find((x) => x.logicalName === logical);
+          // Rediscover to capture entitySetName (required by later phases). No poisoning concern
+          // here whatever the labels are — the table now EXISTS, so no create follows this read.
+          const found = await findExistingTable(provision, e.schemaName);
           if (!found) throw err;
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
         }
@@ -555,6 +856,13 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     // outer entity loop is already sequential, so serial columns here means one metadata
     // customization is in flight per entity at a time — the only order Dataverse permits.
     const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+    const requiredDeclared = [
+      e.primaryAttribute,
+      ...buildable,
+    ].filter((c) => c && c.schemaName && hasExplicitRequired(c));
+    const capabilityDeclared = buildable.filter((c) => c.type !== 'Customer'
+      && (c.defaultValue !== undefined || c.integerFormat !== undefined
+        || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
     const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
@@ -564,10 +872,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       { skipIf: isAlreadyExists }));
     if (existingTable) {
       const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
-      const requiredTargets = [
-        e.primaryAttribute,
-        ...buildable,
-      ].filter((c) => c && c.schemaName && hasExplicitRequired(c) && existingCols.has(c.schemaName.toLowerCase()));
+      const requiredTargets = requiredDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
       const requiredLevels = new Map();
       for (const c of requiredTargets) {
         const current = columnRequiredLevel(existingColMeta.get(c.schemaName.toLowerCase()));
@@ -628,9 +933,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       // `updateColumn` refuses ANY change to a Customer column (measured — it throws "type
       // 'Customer' not supported"), because Customer has no entry in the SDK's attribute-type ->
       // OData-cast table (it is created through the wholly separate createCustomerColumn instead).
-      const capabilityTargets = buildable.filter((c) => c.type !== 'Customer' && existingCols.has(c.schemaName.toLowerCase())
-        && (c.defaultValue !== undefined || c.integerFormat !== undefined
-          || c.isValidForCreate !== undefined || c.isValidForUpdate !== undefined || c.isValidForRead !== undefined));
+      const capabilityTargets = capabilityDeclared.filter((c) => existingCols.has(c.schemaName.toLowerCase()));
       await runner.mapLimit(capabilityTargets, 1, (c) => {
         const columnLogical = c.schemaName.toLowerCase();
         const opts = {};
@@ -654,6 +957,16 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
           `could not update column capabilities for ${logical}.${columnLogical} — the rest of the build continues`
         );
       });
+    }
+    for (const c of requiredDeclared) {
+      if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {
+        runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (applied on create)`);
+      }
+    }
+    for (const c of capabilityDeclared) {
+      if (!existingTable || !existingCols.has(c.schemaName.toLowerCase())) {
+        runner.skip('data-model', `column capabilities ${e.schemaName}.${c.schemaName} (applied on create)`);
+      }
     }
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {
@@ -727,9 +1040,13 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   for (const rel of spec.relationships || []) {
     if (rel.type === 'OneToMany') {
       const schema = relationshipSchemaName(rel, publisherPrefix);
-      let exists = false;
-      try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-      if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+      // `null` (could not tell) is treated as absent, exactly as the previous `catch {}` did: a table
+      // created moments earlier legitimately 404s here, and the create's own already-exists handling
+      // covers the race. A localized lookup label suppresses the broad-read fallback inside the
+      // probe — see relationshipExists.
+      const exists = await relationshipExists(provision, rel.referenced.toLowerCase(), schema, 'OneToMany',
+        { hasLocalizedLabels: localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0 });
+      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
         const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode });
         result.relationships.push({
@@ -741,9 +1058,8 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       }, { skipIf: isAlreadyExists });
     } else if (rel.type === 'ManyToMany') {
       const schema = manyToManySchemaName(rel, publisherPrefix);
-      let exists = false;
-      try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
-      if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+      const exists = await relationshipExists(provision, rel.entity1.toLowerCase(), schema, 'ManyToMany');
+      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, async () => {
         const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode });
         result.relationships.push({
@@ -809,6 +1125,15 @@ function chooseMatchOn(e, seedRecords) {
   return undefined;
 }
 
+// Resolve WHICH 1:N relationship a `$parent` binds through, throwing the shared message.
+// `resolveParentRelationship` (app-spec.js) owns the rule and the wording so the lint-time gate and
+// this runtime backstop cannot drift; validateAppSpec normally catches these first. #544.
+function relationshipForParent(spec, parentEntity, childEntity, wanted) {
+  const { rel, error } = resolveParentRelationship(spec, parentEntity, childEntity, wanted);
+  if (error) throw new Error(`sample data for '${childEntity}' ${error}`);
+  return rel;
+}
+
 function buildSeedGroup({ spec, e, records, statusReasonValues }) {
   const resolved = resolveSampleRecords(e, records, spec);
   const seedRecords = [];
@@ -823,7 +1148,7 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
     const parents = [].concat(raw && raw.$parent ? [raw.$parent] : [], (raw && raw.$parents) || []);
     for (const parent of parents) {
       if (!parent || !parent.entity || !parent.match) continue;
-      const rel = relationshipFor(spec, parent.entity, e.schemaName);
+      const rel = relationshipForParent(spec, parent.entity, e.schemaName, parent.lookup);
       const parentEntity = entityByLogical(spec, parent.entity);
       // #1: fail loud on a bind that can't be formed instead of silently dropping it (which created
       // the child with the lookup UNSET and still reported success). validateAppSpec catches these at
@@ -853,6 +1178,47 @@ function buildSeedGroup({ spec, e, records, statusReasonValues }) {
   return { entityLogical: e.schemaName.toLowerCase(), ...(matchOn ? { matchOn } : {}), records: seedRecords };
 }
 
+// Order one entity's sample rows into WAVES by their SELF-references. #544.
+//
+// `seedRecordGraph` resolves EVERY bind in a group before creating ANY of that group's rows, and
+// publishes the group's ids only once it completes. Topological ordering BETWEEN entities (which
+// provisionSampleData already does) therefore cannot help WITHIN one: a `$parent` pointing at the
+// row's own entity always resolves against an id that does not exist yet, and the whole sample-data
+// phase halts — several phases into a build that has already written data. The App Spec cannot work
+// around it either, because the plugin, not the author, decides the grouping.
+//
+// So the plugin splits the group: wave N holds the rows whose self-parents all landed in an earlier
+// wave. Returns an array of waves, each an array of ORIGINAL record indices — original, because a
+// bind's `parentIndex` is an index into the entity's full sample list and that is what the SDK looks
+// up as `createdIds[entity][parentIndex]`.
+//
+// Returns a single wave when nothing self-references, which is the overwhelmingly common case and
+// must stay byte-identical to the previous one-call-per-entity behaviour.
+function selfReferenceWaves(entityLogical, records, labelFor) {
+  const selfParents = records.map((r) =>
+    (r.binds || []).filter((b) => b.parentEntity === entityLogical).map((b) => b.parentIndex));
+  if (!selfParents.some((p) => p.length)) return [records.map((_, i) => i)];
+
+  const waveOf = new Array(records.length).fill(-1);
+  const waves = [];
+  let remaining = records.map((_, i) => i);
+  while (remaining.length) {
+    const ready = remaining.filter((i) => selfParents[i].every((p) => waveOf[p] >= 0));
+    if (!ready.length) {
+      // Every remaining row is waiting on another remaining row: a cycle (including a row that is
+      // its own parent). Name the rows — "a cycle exists" is not actionable, and the author needs
+      // to know WHICH records to break. Failing here also beats looping forever.
+      const involved = remaining.map((i) => labelFor(i)).join(', ');
+      throw new Error(`sample data for '${entityLogical}' has a $parent cycle among its own rows (${involved}) — a row cannot be created before its parent. Break the cycle, or set the lookup after the build.`);
+    }
+    const readySet = new Set(ready);
+    for (const i of ready) waveOf[i] = waves.length;
+    waves.push(ready);
+    remaining = remaining.filter((i) => !readySet.has(i));
+  }
+  return waves;
+}
+
 // Create sample rows topologically via the SDK's record-graph seeder. The plugin owns the App
 // Spec translation (buildSeedGroup); the SDK owns @odata.bind formation and resolve-by-name
 // idempotency. Groups are seeded one entity at a time (preserving the per-entity progress emit),
@@ -880,14 +1246,46 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
       if (!group.matchOn && group.records.length > 0) {
         process.stderr.write(`WARNING: sample rows for ${e.schemaName} have no idempotency key (no single-column alternate key, and not every row has a non-empty ${e.primaryAttribute.schemaName}) — a re-run or a retried insert will DUPLICATE these ${group.records.length} row(s). Add a single-column alternate key or give every row a unique ${e.primaryAttribute.schemaName} value.\n`);
       }
-      const { createdIds: made } = await sdk.seedRecordGraph([group], { entitySetFor, createdIds });
-      Object.assign(createdIds, made);
-      result.records[e.schemaName] = made[e.schemaName.toLowerCase()];
+      const logical = e.schemaName.toLowerCase();
+      // #544: seed in waves when rows reference their OWN entity. `waves` is [[0,1,2,...]] — one
+      // wave holding every row in order — unless a self-reference exists, so the common path below
+      // is exactly the single call it has always been.
+      const waves = selfReferenceWaves(logical, group.records, (i) => {
+        const name = records[i] && records[i][e.primaryAttribute.schemaName];
+        return name ? `'${name}'` : `record[${i}]`;
+      });
+
+      if (waves.length === 1) {
+        const { createdIds: made } = await sdk.seedRecordGraph([group], { entitySetFor, createdIds });
+        Object.assign(createdIds, made);
+        result.records[e.schemaName] = made[logical];
+        return;
+      }
+
+      // Ids indexed by ORIGINAL record position — the index a bind's `parentIndex` carries, and the
+      // index the SDK reads as createdIds[entity][parentIndex]. A wave-local array would misresolve
+      // every self-bind, silently linking rows to the wrong parents.
+      const idsByIndex = new Array(group.records.length);
+      for (const wave of waves) {
+        const waveGroup = { ...group, records: wave.map((i) => group.records[i]) };
+        const { createdIds: made } = await sdk.seedRecordGraph([waveGroup], {
+          entitySetFor,
+          // The SDK prefers ids created in the CURRENT call over these, but it publishes those only
+          // after a group completes — so during bind resolution this array is what a self-bind sees.
+          createdIds: { ...createdIds, [logical]: idsByIndex },
+        });
+        const madeIds = made[logical] || [];
+        wave.forEach((original, k) => { idsByIndex[original] = madeIds[k]; });
+        // A group only ever creates its own entity, but merge anything else the SDK reports rather
+        // than dropping it on the floor.
+        for (const [k, v] of Object.entries(made)) if (k !== logical) createdIds[k] = v;
+      }
+      createdIds[logical] = idsByIndex;
+      result.records[e.schemaName] = idsByIndex;
     });
   }
-
   // Return entitySetFor closure so later phases can resolve entity-set names
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

@@ -29,4 +29,5 @@ forms	form for new_ticket (sub-grids: new_comment)
 forms	form for new_comment
 app-shell	app module "Support Desk" + sitemap
 app-shell	app icon (generated) new_supportdesk_icon
+pages	finalize sitemap (genpage subareas)
 publish	publish customizations

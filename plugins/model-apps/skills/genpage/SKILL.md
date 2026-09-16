@@ -6,7 +6,7 @@ author: Microsoft Corporation
 argument-hint: "<page description> | edit"
 user-invocable: true
 model: sonnet
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList, read, edit, execute, search, web, agent, todo
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
@@ -23,12 +23,15 @@ This skill orchestrates specialist agents across the create and edit flows:
 
 **Create flow:**
 1. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
-   entities and apps exist, presents a plan for approval, writes `genpage-plan.md`.
+   entities and apps exist, and returns a proposed plan for the orchestrator to present.
+   Writes `genpage-plan.md` once the orchestrator re-invokes it with the approval outcome.
    May pause and return `connector_discovery_required` (see 2).
 2. **`genpage-connector-builder`** — top-level orchestrator dispatch for connector
    feature-gating and discovery; writes `connector-bindings.md` + `connectors.json`.
    Runs **after** the planner has resolved create-vs-edit and the target environment
    (discovery is mutating), then the planner is re-invoked with its contract.
+   **`genpage-customapi-builder`** — the same top-level dispatch for server-side
+   Custom API (Action/Function) needs; writes `custom-api-bindings.md` + `actions.json`.
 3. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
    relationships, choices, sample data) via the plugin's Node.js Web API scripts
 4. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
@@ -37,13 +40,15 @@ This skill orchestrates specialist agents across the create and edit flows:
 **Edit flow:**
 
 5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
-   replaces, discovers, or clears connector bindings; preserves unchanged bindings
-   when the feature gate is OFF
+   replaces, discovers, removes, or clears connector bindings; preserves unchanged bindings
+   when the edit does not touch them, or when the `connectors` rollback gate is off.
+   **`genpage-customapi-builder`** — the same top-level dispatch when an edit adds, replaces,
+   discovers, removes, or clears Custom API bindings.
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
    requirements, presents an edit plan, writes `genpage-edit-plan.md`
 
-You (the skill) coordinate the agents and own connector dispatch, app creation,
-RuntimeTypes generation, deployment, browser verification, and the inline
+You (the skill) coordinate the agents and own connector and Custom API dispatch, app
+creation, RuntimeTypes generation, deployment, browser verification, and the inline
 application of planned edits.
 
 ## References
@@ -103,50 +108,156 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 
 ### Phase 1: Plan
 
-> **⚠️ CRITICAL — you MUST invoke `genpage-planner` via the `Task` tool. You MUST
-> NOT inline the planner's questions yourself with `AskUserQuestion`.**
+> **⚠️ CRITICAL — the interactive steps run HERE, in the main conversation loop.
+> You MUST NOT dispatch them to a `Task` subagent.**
 >
-> The planner is not optional or skippable. It runs:
+> A `Task` subagent is **headless**: `AskUserQuestion`, `EnterPlanMode` and
+> `ExitPlanMode` never reach the user from inside one. A flow that specifies them
+> there cannot complete — the question is never answered and the approval never
+> given. This is the same rule `/app-builder` follows, and the reason its
+> subagents are headless workers only.
+>
+> `genpage-planner` is therefore a **headless discovery agent**. It runs the
+> read-only work and returns what it found; **you** ask the questions and present
+> the plan.
+>
+> Run in the main loop (never delegated):
 > 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
-> 3. The structured "Create new / Edit existing" question (via `AskUserQuestion`
->    inside the planner subagent, not here)
+> 3. The structured "Create new / Edit existing" question (`AskUserQuestion`)
 > 4. Language detection (`pac model list-languages`) — only on new-page path
 > 5. Entity existence detection (`pac model list-tables --search`)
 > 6. App detection (`pac model list`) with proper selection prompts
-> 7. Plan-mode presentation and approval
-> 8. Writes `genpage-plan.md` to the working directory
+> 7. Plan-mode presentation and approval (`EnterPlanMode` / `ExitPlanMode`)
+> 8. Telling `genpage-planner` the approval outcome — it writes `genpage-plan.md`
+>    itself — and confirming the file exists before Phase 2
 >
-> Reasons to **NEVER** ask "new or edit?" yourself before invoking the planner:
-> - You would skip prereq + auth (the planner is the only thing that runs them)
-> - The structured question gives the user labeled options; an inline free-text
->   prompt forces them to guess
-> - The planner returns `{ "action": "edit" }` as a contract — your inline
->   question can't produce that signal cleanly
+> Steps 1, 2, 4, 5, 6 are read-only discovery and **may** be delegated to
+> `genpage-planner`; steps 3, 7 and 8 never can. Delegating the discovery is an
+> optimisation, not a requirement — running it inline is equally correct, but
+> `genpage-plan.md` is still written by the planner either way (see step 6 of the
+> Steps list): its section headings are a machine-readable contract every
+> downstream phase parses by name, so it has exactly one author. If you ran the
+> discovery inline, dispatch the planner once with what you found, so it has the
+> context to produce the plan without repeating your reads.
 >
-> Even if `$ARGUMENTS` looks like it tells you the intent, **still invoke the
-> planner**. Pass the intent in the prompt — the planner uses it to skip its
-> own Question 1 if appropriate, but the prereq/auth/env steps still run.
+> **Never skip the prereq/auth steps**, even when `$ARGUMENTS` already states the
+> intent. A stated intent lets you skip *question 3*; it does not establish that
+> the CLI is present, authenticated, or pointed at the right environment.
+>
+> **Whoever runs a step records it in `workflow-log.md`** in the documented
+> format — `AskUserQuestion: <question> → <answer>`, `EnterPlanMode called`
+> followed by the response. The log is the contract the eval harness reads, and
+> it does not care which loop made the call.
+
+#### Unattended runs (Copilot autopilot / Claude auto-accept)
+
+Copilot CLI autopilot and Claude Code auto-accept drive this skill with **no user
+watching**. Every gate below is written as "ask the user", and in those modes
+there is nobody to answer: the run either stalls on a question no one sees or,
+worse, records an answer nobody gave. Resolve the mode **once, at the start of
+Phase 1**, and carry it through every gate:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-interaction-mode.js"
+```
+
+One JSON line, always exit 0 — "there is no user" is a fact about the run, not a
+failure of it:
+
+```json
+{ "ok": true, "interactive": false, "reason": "POWER_PLATFORM_SKILLS_NONINTERACTIVE is set" }
+```
+
+A run is unattended when `--non-interactive` is passed or
+`POWER_PLATFORM_SKILLS_NONINTERACTIVE` is `1`/`true` — the same switch
+`/app-builder` already uses, so one setting covers both skills.
+
+When `interactive` is `false`, do not call `AskUserQuestion`, `EnterPlanMode` or
+`ExitPlanMode` at all. Take the documented default and record it in
+`workflow-log.md` as `Unattended default: <question> → <answer> (<reason>)`, so
+the log still shows what decided the run:
+
+| Gate | Attended | Unattended |
+| --- | --- | --- |
+| Recording the resolved mode | Nothing to record | Write the mode itself as `Unattended default: interaction mode → unattended (<reason>)` before the first gate. Record it with this marker, not as free prose such as `Interaction mode: unattended` — the evaluator keys on the marker, and prose forms are indistinguishable from an attended log that merely mentions the word (`Mode: unattended = false`, `not unattended`). |
+| Create new / edit existing (step 2) | `AskUserQuestion` | Whatever `$ARGUMENTS` states. With nothing stated, **create new** — the only additive choice. |
+| An agent returns `needs_input` (step 4) | Ask, then re-invoke | Re-invoke with the option the agent marked `"default": true`. If it marked none, **halt**. |
+| Plan approval (step 5) | `EnterPlanMode` / `ExitPlanMode` | Treat the plan as approved and continue to step 6, which still writes `genpage-plan.md` through the planner. The plan is recorded, just not presented. Log this gate as `Unattended default: plan approval → approved (<reason>)` — the evaluator looks for the plan/approval wording and `approved` on that one line, so a paraphrase such as `→ auto-approve` is read as a missing approval record. |
+| Browser verification (Phase 7) | Offer it | Skip it. |
+
+**Suppressing a prompt never authorizes destructive work.** Editing an existing
+page overwrites source nobody reviewed, so on the **edit** path an unattended run
+requires the page to be named explicitly in `$ARGUMENTS`. Do not infer the target
+from a search result and do not fall back to "the only page that matched". If the
+target is ambiguous, **halt and say so** — an unattended run that guesses which
+page to overwrite is the one failure this table exists to prevent.
+
+Halting is a normal outcome here, not an error to route around: report what was
+missing and stop, so the run can be re-driven with the decision supplied.
 
 #### Steps
 
-1. Invoke `genpage-planner` via `Task` with the prompt below. Connector discovery
-   has **not** run yet, so tell the planner the contract is the literal
-   `No connector bindings.` and that discovery is available on request (see 1a).
-2. Wait for it to finish (it returns a summary).
-3. If the return includes `{ "action": "connector_discovery_required" }`, invoke
-   `genpage-connector-builder` with the returned intent — **Mode: `create`** for a
-   new page, **Mode: `edit`** if the planner also reported an edit — using the
-   environment URL the planner resolved, then invoke `genpage-planner` again with
-   the builder's `## Connector Bindings` contract and `connectors.json` status.
-4. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
-5. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+1. Run the prerequisite, auth and discovery steps (inline, or via
+   `genpage-planner` as a headless worker). Connector discovery has **not** run
+   yet, so the contract is the literal `No connector bindings.`, with discovery
+   available on request (see 1a). Custom API discovery is likewise orchestrator-
+   owned and has not run either, so its contract starts as the literal
+   `No custom API bindings.`, with discovery available on request (see 1b).
+2. Ask question 3 (**create new / edit existing**) with `AskUserQuestion`, unless
+   `$ARGUMENTS` already settles it. On **edit**, jump to the **Edit Flow** section.
+3. If discovery reports `{ "action": "connector_discovery_required" }`, invoke
+   `genpage-connector-builder` with the intent — **Mode: `create`** for a new
+   page, **Mode: `edit`** for an edit — using the resolved environment URL, then
+   re-run discovery with the builder's `## Connector Bindings` contract and
+   `connectors.json` status. If it instead reports
+   `{ "action": "custom_api_discovery_required" }`, invoke `genpage-customapi-builder`
+   the same way (same mode, resolved environment URL, plus the returned `pageTables`),
+   then re-run the planner with the builder's `## Custom API Bindings` contract and
+   `actions.json` status (see 1b).
+   If `genpage-connector-builder` or `genpage-customapi-builder` instead reports
+   that its declared file or process-execution tools are unavailable, do **not**
+   retry the same worker. Record the worker failure, read that worker's agent
+   file, and run the discovery-builder workflow inline in this orchestrator
+   using the same resolved mode, environment, intent, and safety gates. This
+   inline fallback is recovery from task-runtime tool exposure only; it does not
+   bypass connector/custom-API feature gates or user decisions.
+4. If any agent returns `{ "action": "needs_input", … }`, ask its questions here
+   with `AskUserQuestion`, record them in `workflow-log.md`, and re-invoke that
+   agent with the answers. Agents never prompt; they request.
+5. Present the plan with `EnterPlanMode` and get approval via `ExitPlanMode`.
+   On a revision request, re-invoke the planner with the requested revisions and
+   present the revised plan again.
+6. **On approval, re-invoke `genpage-planner` with the approval outcome _plus
+   the plan body it returned and everything it already discovered_.** The planner
+   writes `genpage-plan.md` in its own final step, and it only reaches that step
+   when it is told the plan was approved — a `Task` subagent is headless, so it
+   cannot see the `ExitPlanMode` result any other way. A re-invocation is a fresh
+   run with no memory of the last one: carry the state forward or it will re-ask
+   questions the user has already answered, or re-derive a plan that is not the
+   one they approved. Same rule as Phase 2b. Do not write the file yourself — its
+   section headings are a machine-readable contract that every downstream phase
+   parses by name.
+
+   If `genpage-planner` reports that the file tools needed to write the approved
+   `genpage-plan.md` are unavailable, do not retry it and do not write the plan
+   inline. **Halt** with the approved plan body and failure recorded. Planner
+   authorship is the provenance gate for every downstream phase.
+7. Confirm `<working-dir>/genpage-plan.md` exists before starting Phase 2.
+   Reaching Phase 2 without it means building from a plan nobody approved, and
+   Phase 2 reads that file as its first action.
+
+   **If it is missing, do not proceed and do not write it yourself.** Re-invoke
+   the planner once more with the approval outcome and the plan body. If it is
+   still missing, stop and tell the user what was approved and what failed to be
+   written — a hand-written substitute is a plan with no provenance, and every
+   later phase will treat it as approved.
 
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
 `genpage-connector-builder` is dispatched only by this top-level orchestrator,
-not by `genpage-planner`. This keeps the connectors feature gate in one agent
-while avoiding nested `Task` calls from the planner.
+not by `genpage-planner`. This keeps connector discovery and its rollback gate in one
+agent while avoiding nested `Task` calls from the planner.
 
 **Never run discovery before the planner returns** — not even when `$ARGUMENTS`
 obviously mentions SharePoint, Teams, Office 365 or a custom REST source.
@@ -169,9 +280,35 @@ So the sequence is always: plan first, then discover, then re-plan.
   `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
   is a bare JSON array, then re-run the planner with the refreshed contract.
 
-The builder remains the single owner of the connectors flag: it probes first,
-writes `No connector bindings.` + `[]` when the flag is OFF, and performs all
-connection discovery only when the flag is ON.
+The builder remains the single owner of connector discovery and of the `connectors`
+rollback gate: it probes first, writes `No connector bindings.` + `[]` when the gate
+is off or the page needs no connector, and performs all connection discovery only
+when one is required.
+
+#### 1b. Custom API discovery is orchestrator-owned too
+
+`genpage-customapi-builder` is likewise dispatched only by this top-level orchestrator,
+not by `genpage-planner` — the planner has no `Task` tool, and the builder may need to ask
+the user which Custom API to bind, which only the main loop can do. Custom API discovery is
+**read-only** (a Web API query over the Custom API tables), so unlike connector discovery it
+carries no "wrong environment / wrong mode cannot be undone" hazard. It still runs after the
+planner so it targets the environment the planner resolved and binds to the page tables it
+detected.
+
+- Every first planner invocation gets the literal contract `No custom API bindings.` and is
+  told discovery has not run.
+- When the planner determines a server-side Custom API (Action/Function) is needed — from
+  `$ARGUMENTS` or from its own user clarification — it returns
+  `{ "action": "custom_api_discovery_required", "intent": "...", "resolvedAction": "create",
+  "envUrl": "...", "pageTables": "..." }`.
+- Only then dispatch `genpage-customapi-builder` with that mode, environment URL, page tables,
+  the working directory and `${PLUGIN_ROOT}`. Read `<working-dir>/custom-api-bindings.md` and
+  verify `<working-dir>/actions.json` is a bare JSON array, then re-run the planner with the
+  refreshed contract.
+
+The builder remains the single owner of the `custom-api` feature gate: it probes first, writes
+`No custom API bindings.` + `[]` when the gate is off or the page needs no Custom API, and
+performs discovery only when one is required.
 
 #### Invocation prompt
 
@@ -181,10 +318,13 @@ Pass a prompt that includes:
 - The working directory (absolute path from Phase 0)
 - The plugin root path: `${PLUGIN_ROOT}`
 - The connector contract: the full body of `<working-dir>/connector-bindings.md`,
-  or the literal `No connector bindings.` when discovery was not needed or the
-  feature gate was OFF
+  or the literal `No connector bindings.` when discovery was not needed
 - The connector upload file status: `<working-dir>/connectors.json` exists and is
   a bare JSON array, or `no connectors.json; omit --connectors`
+- The Custom API contract: the full body of `<working-dir>/custom-api-bindings.md`,
+  or the literal `No custom API bindings.` when discovery was not needed
+- The Custom API upload file status: `<working-dir>/actions.json` exists and is
+  a bare JSON array, or `no actions.json; omit --actions`
 
 Example:
 
@@ -196,12 +336,19 @@ Example:
 > Plugin root: ${PLUGIN_ROOT}
 >
 > Connector discovery is orchestrator-owned. Do **not** invoke
-> `genpage-connector-builder` from inside the planner. Use this as the entire
-> `## Connector Bindings` section of the plan:
+> `genpage-connector-builder` from inside the planner. The `----- BEGIN/END
+> CONNECTOR BINDINGS -----` lines below are delimiters for **this prompt only**:
+> they mark where the contract starts and ends. Do **not** copy them into
+> `genpage-plan.md`. The `## Connector Bindings` section of the plan is exactly
+> the text between them:
 >
+> ----- BEGIN CONNECTOR BINDINGS -----
 > [paste connector-bindings.md body, or `No connector bindings.`]
+> ----- END CONNECTOR BINDINGS -----
 >
-> Connector upload file: [absolute path to connectors.json, or `none — omit --connectors`]
+> Connector upload file (orchestration metadata; not part of the
+> `## Connector Bindings` section): [absolute path to connectors.json, or
+> `none — omit --connectors`]
 >
 > If your clarification questions reveal connector-backed data that is not covered
 > by the connector contract above, stop and return
@@ -210,10 +357,34 @@ Example:
 > instead of trying to discover connectors yourself. `resolvedAction` and `envUrl`
 > are required — discovery is dispatched against exactly those.
 >
-> Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
-> the new/edit question via AskUserQuestion, then proceed accordingly. Write
-> genpage-plan.md to the working directory if creating. Return the page list,
-> entity status, app selection, and any `{ "action": "edit" }` signal when complete.
+> Custom API discovery is orchestrator-owned too. Do **not** invoke
+> `genpage-customapi-builder` from inside the planner. The `----- BEGIN/END
+> CUSTOM API BINDINGS -----` lines below are delimiters for **this prompt only**:
+> they mark where the contract starts and ends. Do **not** copy them into
+> `genpage-plan.md`. The `## Custom API Bindings` section of the plan is exactly
+> the text between them:
+>
+> ----- BEGIN CUSTOM API BINDINGS -----
+> [paste custom-api-bindings.md body, or `No custom API bindings.`]
+> ----- END CUSTOM API BINDINGS -----
+>
+> Custom API upload file (orchestration metadata; not part of the
+> `## Custom API Bindings` section): [absolute path to actions.json, or
+> `none — omit --actions`]
+>
+> If your clarification questions reveal a server-side Custom API (Action/Function)
+> not covered by the Custom API contract above, stop and return
+> `{ "action": "custom_api_discovery_required", "intent": "<operation>",
+> "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>",
+> "pageTables": "<page tables or none>" }` instead of trying to discover it yourself.
+>
+> Follow the instructions in your agent file. Validate prereqs and confirm auth.
+> The create/edit decision and the resolved environment are supplied to you by the
+> orchestrator (it asks; you are headless) — use them rather than prompting. If you
+> need any further decision, return `{ "action": "needs_input", … }`. Write
+> genpage-plan.md to the working directory once the orchestrator reports the plan
+> approved. Return the page list, entity status, app selection, and any
+> `{ "action": "edit" }` signal when complete.
 
 ### Phase 2: Create Entities (Conditional)
 
@@ -277,6 +448,23 @@ plan's `## Environment` — no need to re-thread them here.
 Wait for completion. The builder writes a transactional log at
 `<working-dir>/genpage-entity-creation-log.md` for recovery on failure.
 
+**The builder is headless and will ask for the sample-data decision by returning
+`{ "action": "needs_input", … }`** (it has no way to prompt). Handle it here, in
+this loop, exactly as Phase 1 step 4 does:
+
+- Ask each question with `AskUserQuestion`.
+- Record every exchange in `workflow-log.md` as `AskUserQuestion: <question> → <answer>`.
+- Re-invoke the builder with the answers plus everything it already returned, so
+  it can carry out the step that depended on them (sample data is created by a
+  second pass of its own CLI, not by anything here). A re-invocation restarts the
+  agent at its first step, which is safe — `provision-entities.js` is idempotent
+  and re-reports the existing tables rather than recreating them — but say which
+  decision has now been answered so it goes on to the sample-data step instead of
+  asking again.
+
+Repeat until it returns a completion rather than a request. Proceeding to Phase 3
+on a `needs_input` return silently drops the decision the user was asked to make.
+
 ### Phase 3: App Creation/Selection
 
 Read `genpage-plan.md` for the app decision and the `Solution` line in
@@ -321,32 +509,32 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 ### Phase 4.5: Connector Bindings (Conditional)
 
-**Re-probe the feature gate here — do not rely on the plan content alone.** A plan
-authored while the flag was ON must not deploy connectors after it is turned OFF:
+**Re-probe the rollback gate here — do not rely on the plan content alone.** Connectors
+are GA and the flag ships ON, so this normally passes; it exists so a plan authored
+while the feature was on cannot deploy connectors after it has been turned off:
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
 ```
 
-**If it prints `disabled`:** connectors are OFF. Skip this phase entirely — do not
-create or pass `connectors.json`, and never add `--connectors` on upload —
-**regardless of what the plan's `## Connector Bindings` section says**. (Backstop:
-`list-connections.js` / `create-connection-reference.js` also fail closed with
-exit 3 if invoked while OFF.)
+**If it prints `disabled`:** the outcome is `Connectors: none` **regardless of what the
+plan's `## Connector Bindings` section says**. Skip the rest of this phase — do not
+create or pass `connectors.json`, and do not add `--connectors` on upload. (Backstop:
+`list-connections.js` / `create-connection-reference.js` also fail closed with exit 3.)
 
-**Carry this decision into code generation.** The probe result is `Connectors:
-disabled` / `Connectors: enabled` for the rest of the run, and Phase 5 **must** pass
-it verbatim in every page-builder dispatch. When it is `disabled`, every downstream
-step treats the plan's `## Connector Bindings` section as if it read
-`No connector bindings.` — otherwise the generated page would call a connector that
-this run deliberately never binds, and the page fails at runtime instead of simply
-omitting the feature.
+**If it prints `enabled`:** read the plan's `## Connector Bindings` section and treat it
+as bindings **only when it contains an actual binding table** (a `| Logical Name | …`
+header with at least one data row). If the section is `No connector bindings.`, empty,
+missing, or malformed, the page has no connectors: skip this phase entirely — do not
+create or pass `connectors.json`, and do not add `--connectors` on upload.
 
-**If it prints `enabled`:** read the plan's `## Connector Bindings` section and
-treat it as bindings **only when it contains an actual binding table** (a
-`| Logical Name | …` header with at least one data row). If the section is
-`No connector bindings.`, empty, missing, or malformed, treat the page as having
-no connectors and skip this phase.
+**Carry this decision into code generation.** The outcome is `Connectors: <n>
+binding(s)` or `Connectors: none` for the rest of the run, and Phase 5 **must** pass
+it verbatim in every page-builder dispatch — otherwise the generated page could call
+a connector this run never binds, and the page fails at runtime instead of simply
+omitting the feature. Note the dispatch value is the **binding count**, not the flag
+state: a disabled gate and an empty binding table both produce `none`, because the
+page-builder only ever needs to know how many bindings it may call.
 
 When there are real bindings, the `genpage-connector-builder` agent already wrote
 `<working-dir>/connectors.json` during planning — verify it exists and matches the
@@ -471,7 +659,11 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
-9. Proceed to Phase 6
+9. Grep the generated file with `['"]?borderWidth['"]?\s*:`. Griffel rejects
+   that shorthand only at runtime; the regex catches unquoted, quoted, and
+   whitespace-separated property syntax. Replace every match with the four
+   explicit border-side widths before deployment.
+10. Proceed to Phase 6
 
 This saves ~5-15s of Task overhead and ~3K tokens that would otherwise be
 duplicated in a subagent context.
@@ -488,7 +680,7 @@ For each page, pass a prompt that includes:
 - Target file name (e.g., "candidate-tracker.tsx")
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
-- **Connectors: `enabled` or `disabled`** — the Phase 4.5 probe result, verbatim
+- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 outcome, verbatim
 - **Telemetry: `enabled` or `disabled`** — the Phase 4.7 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
@@ -500,7 +692,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
-> - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Connectors: **[none|<n> binding(s) from Phase 4.5]**
 > - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
 > - Working directory: [absolute path from Phase 0]
@@ -516,7 +708,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
-> - Connectors: **[enabled|disabled from Phase 4.5]**
+> - Connectors: **[none|<n> binding(s) from Phase 4.5]**
 > - Telemetry: **[enabled|disabled from Phase 4.7]**
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
@@ -525,6 +717,13 @@ For each page, pass a prompt that includes:
 > result when done.
 
 Wait for all page-builder tasks to complete before proceeding.
+
+After the parallel workers return, confirm every target file exists. If a worker
+reported missing declared file/process tools or produced no file, do not
+re-dispatch that worker. Run the Phase 5b page-builder workflow inline for only
+the failed page, preserving the same plan and dispatch inputs. Then Grep every
+generated page with `['"]?borderWidth['"]?\s*:` and replace the unsupported
+Griffel shorthand before Phase 6.
 
 ### Phase 6: Deploy
 
@@ -681,15 +880,17 @@ target solution so they travel cross-environment.
    `node ${PLUGIN_ROOT}/scripts/add-page-to-solution.js <envUrl> <solutionUniqueName> <app-id> --page-ids "<page-id1,page-id2>" --connection-refs "<logicalName1,logicalName2>"`
 3. Log the command + result to `workflow-log.md`.
 
-Cross-env note (verified 2026-07-10): the app (80) pulls the sitemap (62); the
-GenPage `uxagentproject` (10372) is added explicitly and pulls its
-`uxagentprojectfile` rows (10373, incl. `config.json` with `connectorBindings`);
-each `connectionreference` (10158) is added so bindings resolve. At import the
+Cross-env note: the app (80) pulls the sitemap (62); the GenPage
+`uxagentproject` is added explicitly and pulls its `uxagentprojectfile` rows
+(including `config.json` with `connectorBindings`); each `connectionreference`
+is added so bindings resolve. The script discovers both custom-table component
+types from `EntityDefinitions(...).ObjectTypeCode` in the target environment —
+their numeric values are environment-specific and must never be hardcoded. At import the
 deployer supplies env-specific `ConnectionId` per connection reference via
 `pac solution create-settings` + `pac solution import --settings-file`.
 
 Custom API bindings need **no** extra ALM step: `config.json`'s `actionBindings` travels
-automatically in the `uxagentprojectfile` (10373) rows already pulled with the GenPage. The
+automatically in the `uxagentprojectfile` rows already pulled with the GenPage. The
 referenced Custom APIs are a separate deployment prerequisite (bound by `name`), not added here.
 
 ### Phase 7: Verify in Browser (Optional)

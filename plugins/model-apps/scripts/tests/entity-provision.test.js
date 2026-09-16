@@ -4,7 +4,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { makeRunner, requireSuccessfulPush, reportPartialPush, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, BuildHalt, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function mockSdk(existing = {}) {
   const calls = [];
@@ -549,6 +549,173 @@ test('buildSeedGroup omits matchOn (no dedup) when the key value is empty in a r
   assert.ok(!('primaryAttribute' in group));
 });
 
+// --- #544: self-referencing $parent (a hierarchy on one table) ---------------------------------
+// seedRecordGraph resolves EVERY bind in a group before creating ANY of that group's rows, and only
+// publishes the group's ids afterwards. Topological ordering BETWEEN entities therefore does not
+// help WITHIN one, so a `$parent` pointing at the row's own entity could never resolve — the whole
+// sample-data phase halted, several phases into a build that had already written data. The spec
+// cannot work around it either: the plugin, not the author, decides the grouping.
+const hierarchySpec = () => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [{ schemaName: 'new_org', displayName: 'Org', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+  relationships: [
+    { type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId', displayName: 'Parent Org' } },
+  ],
+  sampleData: {
+    new_org: [
+      { new_name: 'Root' },
+      { new_name: 'Child', $parent: { entity: 'new_org', match: { new_name: 'Root' } } },
+      { new_name: 'Grandchild', $parent: { entity: 'new_org', match: { new_name: 'Child' } } },
+    ],
+  },
+});
+
+// Capture every seedRecordGraph call so the WAVES are observable, and return ids the way the real
+// bundle does: one id per record of the group it was handed, in order.
+function recordingSdk() {
+  const calls = [];
+  let n = 0;
+  return {
+    calls,
+    seedRecordGraph: async (groups, opts) => {
+      const g = groups[0];
+      calls.push({ names: g.records.map((r) => r.body.new_name), binds: g.records.map((r) => r.binds), createdIds: JSON.parse(JSON.stringify(opts.createdIds || {})) });
+      return { createdIds: { [g.entityLogical]: g.records.map(() => `id-${n++}`) } };
+    },
+  };
+}
+
+async function runHierarchy(spec) {
+  const runner = makeRunner({ emit: () => {}, total: 1 });
+  const sdk = recordingSdk();
+  const dataModel = { entities: { new_org: { logicalName: 'new_org', entitySetName: 'new_orgs' } }, statusReasonValues: {} };
+  const res = await provisionSampleData({ sdk, provision: {}, runner, spec, dataModel });
+  return { sdk, res };
+}
+
+test('#544 a self-referencing $parent seeds in waves instead of failing the whole phase', async () => {
+  const { sdk } = await runHierarchy(hierarchySpec());
+  assert.deepStrictEqual(sdk.calls.map((c) => c.names), [['Root'], ['Child'], ['Grandchild']],
+    'one wave per depth: a row is seeded only after the row it points at');
+});
+
+test('#544 each wave receives its parents ids at their ORIGINAL record index', async () => {
+  const { sdk, res } = await runHierarchy(hierarchySpec());
+  // The bind carries parentIndex = the parent's index in the entity's FULL sample list, and the SDK
+  // looks it up as createdIds[entity][parentIndex]. A wave-local array would misresolve every bind.
+  assert.deepStrictEqual(sdk.calls[1].binds[0], [{ navProperty: 'new_ParentOrgId', parentEntity: 'new_org', parentIndex: 0 }]);
+  assert.strictEqual(sdk.calls[1].createdIds.new_org[0], 'id-0', "wave 2 sees Root's id at index 0");
+  assert.strictEqual(sdk.calls[2].createdIds.new_org[1], 'id-1', "wave 3 sees Child's id at index 1");
+  assert.deepStrictEqual(res.records.new_org, ['id-0', 'id-1', 'id-2'], 'the entity reports one id per ORIGINAL row, in order');
+});
+
+test('#544 a spec with no self-reference still seeds in exactly one call (no behaviour change)', async () => {
+  const spec = hierarchySpec();
+  delete spec.sampleData.new_org[1].$parent;
+  delete spec.sampleData.new_org[2].$parent;
+  const { sdk } = await runHierarchy(spec);
+  assert.strictEqual(sdk.calls.length, 1, 'unchanged specs must not be split into waves');
+  assert.deepStrictEqual(sdk.calls[0].names, ['Root', 'Child', 'Grandchild']);
+  assert.strictEqual(sdk.calls[0].createdIds.new_org, undefined, 'and must not gain a self-entity key in options');
+});
+
+// Waves are by DEPTH, not by row order: independent rows at the same depth go in one call, and a row
+// declared BEFORE its parent still lands after it. Order in the array must not matter.
+test('#544 rows at the same depth share a wave, and a parent declared LATER still goes first', async () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org = [
+    { new_name: 'Leaf', $parent: { entity: 'new_org', match: { new_name: 'Mid' } } },     // depth 2, declared first
+    { new_name: 'Mid', $parent: { entity: 'new_org', match: { new_name: 'Root' } } },     // depth 1
+    { new_name: 'Root' },                                                                 // depth 0, declared last
+    { new_name: 'OtherRoot' },                                                            // depth 0
+    { new_name: 'OtherMid', $parent: { entity: 'new_org', match: { new_name: 'OtherRoot' } } }, // depth 1
+  ];
+  const { sdk, res } = await runHierarchy(spec);
+  assert.deepStrictEqual(sdk.calls.map((c) => c.names), [
+    ['Root', 'OtherRoot'],
+    ['Mid', 'OtherMid'],
+    ['Leaf'],
+  ], 'one call per depth, independent rows batched together');
+  // Ids still come back indexed by the ORIGINAL declaration order, which is what every bind means.
+  assert.strictEqual(res.records.new_org.length, 5);
+  assert.ok(res.records.new_org.every((id) => typeof id === 'string'), JSON.stringify(res.records.new_org));
+});
+
+// `$parents` (the array form used by junction rows) must be treated identically — it is the same
+// bind list, so a self-reference through it has to drive the waves too.
+test('#544 a self-reference expressed through $parents drives the waves as well', async () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org = [
+    { new_name: 'Child', $parents: [{ entity: 'new_org', match: { new_name: 'Root' } }] },
+    { new_name: 'Root' },
+  ];
+  const { sdk } = await runHierarchy(spec);
+  assert.deepStrictEqual(sdk.calls.map((c) => c.names), [['Root'], ['Child']]);
+});
+
+// A CROSS-entity parent must not be mistaken for a self-reference: it is already handled by the
+// topological ordering BETWEEN entities, and splitting on it would add calls for no reason.
+test('#544 a cross-entity $parent does not trigger wave splitting', async () => {
+  const spec = hierarchySpec();
+  spec.entities.push({ schemaName: 'new_owner', displayName: 'Owner', primaryAttribute: { schemaName: 'new_name' }, columns: [] });
+  spec.relationships.push({ type: 'OneToMany', referenced: 'new_owner', referencing: 'new_org', lookup: { schemaName: 'new_OwnerId', displayName: 'Owner' } });
+  spec.sampleData.new_owner = [{ new_name: 'Acme' }];
+  spec.sampleData.new_org = [
+    { new_name: 'A', $parent: { entity: 'new_owner', match: { new_name: 'Acme' } } },
+    { new_name: 'B', $parent: { entity: 'new_owner', match: { new_name: 'Acme' } } },
+  ];
+  const { sdk } = await runHierarchy(spec);
+  const orgCalls = sdk.calls.filter((c) => c.names.includes('A') || c.names.includes('B'));
+  assert.strictEqual(orgCalls.length, 1, 'both org rows seed in one call');
+});
+
+test('#544 a self-reference CYCLE fails with a message naming the rows, not a hang', async () => {  const spec = hierarchySpec();
+  spec.sampleData.new_org[0].$parent = { entity: 'new_org', match: { new_name: 'Grandchild' } };
+  await assert.rejects(runHierarchy(spec), (err) => {
+    assert.match(err.message, /cycle/i);
+    assert.match(err.message, /new_org/);
+    assert.match(err.message, /Root|Grandchild/, `the message must name the rows involved: ${err.message}`);
+    return true;
+  });
+});
+
+test('#544 a row that is its own parent is reported as a cycle', async () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org = [{ new_name: 'Loop', $parent: { entity: 'new_org', match: { new_name: 'Loop' } } }];
+  await assert.rejects(runHierarchy(spec), /cycle/i);
+});
+
+// The ambiguity this fix makes REACHABLE: `$parent` resolves through relationshipFor, which returns
+// the FIRST OneToMany for the pair. A hierarchy table commonly has two self-lookups, and silently
+// binding the wrong one asserts something false about the data.
+test('#544 two relationships for the same pair are rejected unless $parent names the lookup', () => {
+  const spec = hierarchySpec();
+  spec.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_org, statusReasonValues: {} }),
+    /ambiguous|more than one/i
+  );
+});
+
+test('#544 $parent.lookup selects which relationship to bind', () => {
+  const spec = hierarchySpec();
+  spec.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  spec.sampleData.new_org[1].$parent.lookup = 'new_GroupAncestorId';
+  spec.sampleData.new_org[2].$parent.lookup = 'new_ParentOrgId';
+  const group = buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_org, statusReasonValues: {} });
+  assert.strictEqual(group.records[1].binds[0].navProperty, 'new_GroupAncestorId');
+  assert.strictEqual(group.records[2].binds[0].navProperty, 'new_ParentOrgId');
+});
+
+test('#544 an unknown $parent.lookup names the valid ones', () => {
+  const spec = hierarchySpec();
+  spec.sampleData.new_org[1].$parent.lookup = 'new_NopeId';
+  assert.throws(
+    () => buildSeedGroup({ spec, e: spec.entities[0], records: spec.sampleData.new_org, statusReasonValues: {} }),
+    /new_NopeId[\s\S]*new_ParentOrgId/
+  );
+});
+
 // --- provisionSampleData: F9 keyless-seeding warning ------------------------------------------
 function runSample(spec) {
   // The F9 warning goes to stderr (non-fatal), so capture stderr for the duration of the run.
@@ -784,6 +951,51 @@ test('requireSuccessfulPush distinguishes an already-exists collision from a ver
   );
 });
 
+// The set of by-value push failures is OPEN and it grows: the SDK keeps moving failures from a throw
+// to a return. Every newly-returned one used to land on the "changed in Maker" wording, which named
+// a cause that could not possibly apply and sent the operator to re-download an untouched app.
+test('requireSuccessfulPush reports an UNRECOGNISED SDK code verbatim, and propagates the code', () => {
+  const err = new Error("Business-rule authoring (preview) is not enabled on this environment yet: it does not expose 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson'.");
+  err.code = 'BUSINESS_RULE_API_UNAVAILABLE';
+  assert.throws(
+    () => requireSuccessfulPush({ type: 'businessRule', id: 'br1', saved: false, error: err }, 'business rule R'),
+    (e) => {
+      assert.strictEqual(e.name, 'BuildHalt');
+      // The code is propagated so a phase-level `skipIf` can still match on it after the wrap.
+      assert.strictEqual(e.code, 'BUSINESS_RULE_API_UNAVAILABLE', `got ${e.code}`);
+      assert.strictEqual(e.cause, err, 'the SdkError must remain reachable as the cause');
+      assert.match(e.message, /not enabled on this environment/, 'the SDK\'s own diagnosis is what the operator needs');
+      assert.doesNotMatch(e.message, /changed in Maker since it was fetched/,
+        'a cause the SDK named must not be overwritten with a guess');
+      return true;
+    }
+  );
+});
+
+test('errorCodeChain reads codes through the cause chain, and cannot spin on a cycle', () => {
+  // `skipIf` predicates are handed whatever reached the runner. A failure the SDK reports BY VALUE
+  // arrives wrapped in a BuildHalt, so the SDK's own code is one level down; reading only the top
+  // level silently misses it.
+  const inner = Object.assign(new Error('inner'), { code: 'SDK_CODE' });
+  const outer = new BuildHalt('outer', { code: 'push-failed', cause: inner });
+  assert.deepStrictEqual(errorCodeChain(outer), ['push-failed', 'SDK_CODE']);
+  assert.deepStrictEqual(errorCodeChain(inner), ['SDK_CODE']);
+  assert.deepStrictEqual(errorCodeChain(new Error('no code')), []);
+  assert.deepStrictEqual(errorCodeChain(null), []);
+  assert.deepStrictEqual(errorCodeChain(undefined), []);
+
+  // A self-referential cause is not hypothetical — it happens when an error is re-wrapped with
+  // itself — and an unbounded walk would hang the build rather than fail it.
+  const loop = Object.assign(new Error('loop'), { code: 'A' });
+  loop.cause = loop;
+  assert.deepStrictEqual(errorCodeChain(loop), ['A']);
+
+  // Depth is bounded even for a long, non-cyclic chain.
+  let deep = Object.assign(new Error('d0'), { code: 'C0' });
+  for (let i = 1; i < 10; i += 1) deep = Object.assign(new Error(`d${i}`), { code: `C${i}`, cause: deep });
+  assert.strictEqual(errorCodeChain(deep).length, 5, 'the walk stops at maxDepth');
+});
+
 // #455 wiring: the CLI resolves the authoring LCID BEFORE constructing the SDK (because
 // MakerSdkOptions.languageCode is a construction-time option) and then hands the SAME value to the
 // data-model phase. Two things must hold, and neither is covered by testing resolveLanguageCode
@@ -850,4 +1062,62 @@ test('without a pre-resolved language the data-model phase still resolves one it
   const withLang = seen.filter((o) => o && o.languageCode !== undefined);
   assert.ok(withLang.length > 0 && withLang.every((o) => o.languageCode === 1031),
     'the org base language is still resolved when nothing was pre-resolved');
+});
+
+test('requireSuccessfulPush keeps the re-download remedy for the SDK\u0027s own VERSION_CONFLICT code', () => {
+  // The regression this pins: the "report an unrecognised code verbatim" branch swallowed the 412
+  // remedy, because the REAL bundle attaches `code: "VERSION_CONFLICT"` to a version conflict while
+  // every fixture here used a code-less error. So the guard still halted, but the one instruction
+  // the operator needs — re-download, never overwrite a concurrent edit — silently disappeared.
+  const err = Object.assign(new Error('Version conflict'), { code: 'VERSION_CONFLICT' });
+  assert.throws(
+    () => requireSuccessfulPush({ type: 'form', id: 'f1', saved: false, error: err }, 'form F'),
+    (e) => {
+      assert.strictEqual(e.name, 'BuildHalt');
+      assert.strictEqual(e.code, 'version-conflict', `got ${e.code}`);
+      assert.match(e.message, /re-download the app and rebuild/, 'the remedy must survive');
+      return true;
+    }
+  );
+});
+
+
+// ── AB#6686428: the relationship existence probe must not fall back to the POISONING broad read ──
+// `fetchEntityMetadata` -> `createRelationship` is one of the three broad-read -> create pairs that
+// makes Dataverse keep only the base-language label. The narrow probe exists to avoid it; an
+// inconclusive narrow probe falling through to the broad read silently reintroduces the bug, and
+// invisibly, because the create's request body is byte-identical either way.
+const relSpec = (lookupDisplayName) => ({
+  solution: { uniqueName: 'S', publisherPrefix: 'new' },
+  entities: [],
+  relationships: [{ type: 'OneToMany', referenced: 'new_a', referencing: 'new_b', lookup: { schemaName: 'new_aid', displayName: lookupDisplayName } }],
+});
+// A raw client whose narrow probe is INCONCLUSIVE (a transient 5xx), which is the trigger.
+const inconclusiveRaw = () => ({ get: async () => ({ status: 503, headers: {}, body: {} }) });
+
+test('AB#6686428: an inconclusive probe for a LOCALIZED lookup label skips the broad metadata read', async () => {
+  const m = mockSdk();
+  const broadReads = [];
+  m.provision.dataverse = inconclusiveRaw();
+  m.provision.fetchEntityMetadata = async (l) => { broadReads.push(l); return { logicalName: l, entitySetName: l + 's', relationships: [] }; };
+  const runner = makeRunner({ emit: () => {}, total: 4 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: relSpec({ 1033: 'Account', 3082: 'Cuenta' }), apply: true });
+
+  assert.deepStrictEqual(broadReads, [],
+    'the broad read must NOT run for a localized label -- it is what strips every non-base language');
+  assert.ok(m.calls.some((c) => c[0] === 'createRelationship'),
+    'and the relationship is still created: "could not tell" is treated as absent, as it always was');
+});
+
+test('AB#6686428: a PLAIN lookup label keeps the broad-read fallback unchanged', async () => {
+  // The narrowing must not cost the existence check for the common case. Nothing is at risk there:
+  // a plain string has one label, so the broad read cannot strip anything.
+  const m = mockSdk();
+  const broadReads = [];
+  m.provision.dataverse = inconclusiveRaw();
+  m.provision.fetchEntityMetadata = async (l) => { broadReads.push(l); return { logicalName: l, entitySetName: l + 's', relationships: [] }; };
+  const runner = makeRunner({ emit: () => {}, total: 4 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec: relSpec('Account'), apply: true });
+
+  assert.deepStrictEqual(broadReads, ['new_a'], 'the fallback still runs when no label can be poisoned');
 });

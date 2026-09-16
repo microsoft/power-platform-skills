@@ -90,11 +90,12 @@ function getTrackedSkillFromToolInput(toolInput) {
 function getTrackedSkillFromPrompt(prompt) {
   if (typeof prompt !== 'string') return null;
 
-  // Copilot CLI expands a manual slash command before the hook runs and emits no
-  // Skill pre-tool event, so the raw `/mobile-app:<skill>` text never arrives:
-  //   <skill-context name="add-connector">\n<instructions>...
-  const expanded = prompt.match(/^\s*<skill-context\s+name="(?:mobile-app:)?([a-z0-9-]+)"/i);
-  if (expanded) return trackedName(expanded[1]);
+  // Interactive Copilot can prepend its explicit invocation sentence to <skill-context>.
+  const expanded = prompt.match(/^\s*(?:The user explicitly invoked the "(\/(?:mobile-app:)?[a-z0-9-]+)" skill\. Follow its instructions now\.\s*)?<skill-context\s+name="(?:mobile-app:)?([a-z0-9-]+)"/i);
+  if (expanded) {
+    const skillName = trackedName(expanded[2]);
+    return !expanded[1] || detectTrackedSkill(expanded[1]) === skillName ? skillName : null;
+  }
 
   const command = prompt.match(/^\s*(\/(?:mobile-app:)?[a-z0-9-]+)(?=\s|$)/i);
   return command ? detectTrackedSkill(command[1]) : null;

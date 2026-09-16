@@ -608,6 +608,66 @@ test('#1 a valid $parent.match that resolves to a real parent row still passes',
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+// --- #544: self-referencing sample data, validated at LINT time -------------------------------
+// The build halting partway through sample-data — after other data is already written — is the
+// worst outcome, so the rules the seeder enforces at runtime are all gated here first.
+function selfRefDesk() {
+  const s = cloneDesk();
+  s.entities.push({ schemaName: 'new_org', displayName: 'Org', pluralName: 'Orgs', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] });
+  s.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId', displayName: 'Parent Org' } });
+  s.sampleData.new_org = [
+    { new_name: 'Root' },
+    { new_name: 'Child', $parent: { entity: 'new_org', match: { new_name: 'Root' } } },
+  ];
+  return s;
+}
+
+test('#544 a self-referencing $parent hierarchy is VALID (the seeder creates it in waves)', () => {
+  const r = validateAppSpec(selfRefDesk());
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('#544 a self-reference cycle is rejected at lint time, naming the record indices', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org[0].$parent = { entity: 'new_org', match: { new_name: 'Child' } };
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parent cycle/.test(e) && /0, 1/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 a row that is its own parent is rejected as a cycle', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org = [{ new_name: 'Loop', $parent: { entity: 'new_org', match: { new_name: 'Loop' } } }];
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parent cycle/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 TWO relationships for one pair make a $parent ambiguous unless it names the lookup', () => {
+  const s = selfRefDesk();
+  s.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  const ambiguous = validateAppSpec(s);
+  assert.strictEqual(ambiguous.ok, false);
+  assert.ok(ambiguous.errors.some((e) => /ambiguous/.test(e) && /new_ParentOrgId/.test(e) && /new_GroupAncestorId/.test(e)), JSON.stringify(ambiguous.errors));
+
+  s.sampleData.new_org[1].$parent.lookup = 'new_GroupAncestorId';
+  const named = validateAppSpec(s);
+  assert.strictEqual(named.ok, true, JSON.stringify(named.errors));
+});
+
+test('#544 a $parent.lookup that names no relationship lists the valid ones', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org[1].$parent.lookup = 'new_NotARelationship';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /new_NotARelationship/.test(e) && /new_ParentOrgId/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 a cross-entity $parent is unaffected by the self-reference checks', () => {
+  // The stock desk binds tickets to customers; no self-reference exists anywhere in it.
+  assert.strictEqual(validateAppSpec(cloneDesk()).ok, true);
+});
+
 test('#1 (hardening) a non-array $parents is rejected (it diverges from the seeder otherwise)', () => {
   const bad = cloneDesk();
   bad.sampleData.new_ticket[0] = { new_name: 'Row', new_priority: 'High', new_status: 'New',
@@ -1071,4 +1131,145 @@ test('validateAppSpec detects whitespace-distinct persona names as duplicates (S
     { persona: '  Agent  ', jobs: [{ name: 'b', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
   ]));
   assert.ok(!r.ok && r.errors.some((e) => /duplicate persona name/.test(e)), JSON.stringify(r.errors));
+});
+
+// --- views[]: a column reference must be a STRING (#525) ---------------------------------------
+//
+// `viewDef` maps every entry with `String(name).toLowerCase()`, so a non-string is not rejected —
+// it is STRINGIFIED. An object becomes the literal `[object object]`, which reaches the view's
+// fetchxml and is refused by the platform with an opaque metadata error, mid-build, after the
+// solution and tables already exist.
+//
+// The damage outlives the run: the savedquery row is created carrying that fetchxml, and every
+// later read of it also fails, so the next build dies at the same step. Dataverse reports the row
+// as system-defined and refuses to delete it, so recovering means tearing the table down.
+//
+// `{ "name": "..." }` is not a wild guess either — it is exactly the shape `forms[]` uses for its
+// fields, so an author moving between the two surfaces writes it naturally.
+const viewSpec = (view) => {
+  const s = cloneDesk();
+  s.views = [Object.assign({ entity: 'new_customer', name: 'Active Customers' }, view)];
+  return s;
+};
+const viewErrors = (view) => (validateAppSpec(viewSpec(view)).errors || []);
+
+test('validateAppSpec rejects a non-string entry in views[].columns (#525)', () => {
+  for (const bad of [{ name: 'new_name' }, 42, null, ['new_name'], true]) {
+    const errs = viewErrors({ columns: ['new_name', bad] });
+    assert.ok(
+      errs.some((e) => /columns/.test(e) && /string/.test(e)),
+      `${JSON.stringify(bad)} must be rejected as a column; got ${JSON.stringify(errs)}`
+    );
+    // The message has to name the view, or an author with a dozen views cannot act on it.
+    assert.ok(errs.some((e) => /Active Customers/.test(e)), `the error must name the view; got ${JSON.stringify(errs)}`);
+  }
+});
+
+test('validateAppSpec rejects a blank column name, which fetchxml cannot express either', () => {
+  for (const bad of ['', '   ']) {
+    const errs = viewErrors({ columns: [bad] });
+    assert.ok(errs.some((e) => /columns/.test(e)), `${JSON.stringify(bad)} must be rejected; got ${JSON.stringify(errs)}`);
+  }
+});
+
+test('validateAppSpec rejects a non-string sort/filter attribute for the same reason', () => {
+  // `viewDef` stringifies these two the same way (`String(s.attr)` / `String(f.attr)`), so they
+  // carry the identical failure and were fixed together rather than one at a time.
+  const sortErrs = viewErrors({ columns: ['new_name'], sort: [{ attr: { name: 'new_name' }, dir: 'asc' }] });
+  assert.ok(sortErrs.some((e) => /sort/.test(e) && /string/.test(e)), `got ${JSON.stringify(sortErrs)}`);
+  const filterErrs = viewErrors({ columns: ['new_name'], filters: [{ attr: { name: 'new_name' }, op: 'eq', value: 'x' }] });
+  assert.ok(filterErrs.some((e) => /filter/.test(e) && /string/.test(e)), `got ${JSON.stringify(filterErrs)}`);
+});
+
+test('validateAppSpec still accepts a well-formed view (the guard adds no false positive)', () => {
+  const r = validateAppSpec(viewSpec({ columns: ['new_name', 'new_segment'], sort: [{ attr: 'new_name', dir: 'asc' }], filters: [{ attr: 'new_segment', op: 'eq', value: 'SMB' }] }));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  // Omitted collections must stay optional — the primary name column is substituted downstream.
+  assert.strictEqual(validateAppSpec(viewSpec({})).ok, true);
+});
+
+test('the whole shipped sample set still validates (no regression from the views guard)', () => {
+  for (const s of [sample, desk]) {
+    const r = validateAppSpec(s);
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  }
+});
+
+// --- an entity reference is a METADATA NAME, so it must be a string too (#525's sibling) ---------
+//
+// `String([["new_ticket"]])` is `"new_ticket"`, so a one-element nested array passed every
+// entity-membership check and then threw a RAW TypeError deep in the build, where the engine calls
+// `.toLowerCase()` on the array itself. These are valid JSON, so they reach the CLI from a spec file
+// — unlike a Symbol or a throwing getter, which cannot survive JSON.
+test('a nested-array entity reference is a structured error, not a late TypeError', () => {
+  const NESTED = [['new_ticket']];
+  const cases = [
+    ['chart', (s) => { s.charts = [{ name: 'C', entity: NESTED, chartType: 'Column', groupBy: 'new_priority' }]; }],
+    ['form subgrid childEntity', (s) => { s.forms = [{ entity: 'new_customer', name: 'F', subgrids: [{ childEntity: NESTED }] }]; }],
+    ['sitemap subArea', (s) => { s.appShell.areas[0].groups[0].subAreas.push({ entity: NESTED, title: 'X' }); }],
+    ['dashboard chart tile', (s) => { s.dashboards = [{ name: 'D', tiles: [{ type: 'chart', viewId: '11111111-1111-1111-1111-111111111111', visualizationId: '22222222-2222-2222-2222-222222222222', entity: NESTED }] }]; }],
+    ['dashboard list tile', (s) => { s.dashboards = [{ name: 'D2', tiles: [{ type: 'list', viewId: '11111111-1111-1111-1111-111111111111', entity: NESTED }] }]; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const spec = cloneDesk();
+    mutate(spec);
+    let res;
+    assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'plan' }); },
+      `${label}: validation must not throw on a JSON-representable wrong type`);
+    assert.strictEqual(res.ok, false, `${label}: must be rejected`);
+    assert.ok((res.errors || []).some((e) => /must be a table name \(a string\)/.test(e)),
+      `${label}: expected a table-name type error; got ${JSON.stringify(res.errors)}`);
+  }
+});
+
+test('the value describer cannot itself throw (BigInt / a throwing getter)', () => {
+  // A validator that crashes while formatting its own error message is worse than one that misses
+  // the case: the caller gets a stack trace instead of a finding.
+  for (const [label, bad] of [
+    ['BigInt', 10n],
+    ['throwing getter', Object.defineProperty({}, 'toJSON', { get() { throw new Error('nope'); } })],
+  ]) {
+    const spec = cloneDesk();
+    spec.views = [{ entity: 'new_customer', name: 'V', columns: [bad] }];
+    let res;
+    assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'plan' }); }, `${label} must not crash the validator`);
+    assert.strictEqual(res.ok, false, `${label} must still be rejected`);
+  }
+});
+
+// --- AB#6686426: default-form selection must be deterministic --------------------------------------
+//
+// Promotion used to run INSIDE the concurrent per-form build, so every Main form on an owned custom
+// table promoted itself and the LAST to finish won. Which form a table opened with therefore depended
+// on completion order — an alternate read-only or OnSave-blocked form could silently become the
+// default. Promotion is now ONE serialized pass after every form exists, choosing an explicit
+// `isDefault` first and otherwise the first Main form in spec order.
+
+const deskWithForms = (forms) => { const s = cloneDesk(); s.forms = forms; return s; };
+const mainForm = (name, over = {}) => ({
+  entity: desk.entities[0].schemaName, name, formType: 'Main',
+  sections: [{ label: 'General', columns: [desk.entities[0].primaryAttribute.schemaName] }], ...over,
+});
+
+test('AB#6686426: isDefault must be a boolean', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: 'yes' })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /isDefault must be a boolean/);
+});
+
+test('AB#6686426: two Main forms cannot both claim isDefault', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: true }), mainForm('B', { isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /exactly one form can be the table's default/);
+});
+
+test('AB#6686426: isDefault on a NON-Main form is rejected — only Main forms are promoted', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('QC', { formType: 'QuickCreate', isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /only meaningful on a Main form/);
+});
+
+test('AB#6686426: one isDefault among several Main forms is valid', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A'), mainForm('B', { isDefault: true }), mainForm('C')]), { profile: 'plan' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });

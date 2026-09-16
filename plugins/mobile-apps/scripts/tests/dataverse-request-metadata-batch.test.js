@@ -11,6 +11,8 @@ const execFileAsync = promisify(execFile);
 const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
 const fakeAzPreload = path.join(__dirname, 'helpers', 'fake-az-preload.js');
 const {
+  MUTATION_REQUEST_TIMEOUT_MS,
+  READ_REQUEST_TIMEOUT_MS,
   createDataverseRequestExecutor,
   looksLikeDuplicate,
   operationFingerprint,
@@ -21,6 +23,11 @@ const {
   validateManifestExecutionBinding,
   validateJournalOperations,
 } = require('../dataverse-request');
+
+test('metadata mutations allow longer server processing than reads', () => {
+  assert.equal(READ_REQUEST_TIMEOUT_MS, 30000);
+  assert.equal(MUTATION_REQUEST_TIMEOUT_MS, 120000);
+});
 
 function manifestStableJson(value) {
   function clone(item) {

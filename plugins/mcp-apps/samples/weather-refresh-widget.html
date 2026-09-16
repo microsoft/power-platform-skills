@@ -67,7 +67,21 @@
       root.innerHTML = '<div class="error">' + escapeHtml(msg) + '</div>';
     }
 
-    function renderData(data) {
+    function contentText(content) {
+      if (typeof content === 'string') { return content; }
+      if (!Array.isArray(content)) { return ''; }
+      return content
+        .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+        .map((block) => block.text)
+        .join('\n');
+    }
+
+    function renderMessage(message) {
+      root.innerHTML = '<div>' + escapeHtml(message) + '</div>';
+    }
+
+    function renderData(toolResult) {
+      const data = toolResult.structuredContent;
       const temp = parseFloat(data.temperature);
       const humidity = parseFloat(data.humidity);
       const forecast = Array.isArray(data.forecast) ? data.forecast : [];
@@ -119,8 +133,8 @@
         });
         if (result.isError) {
           renderError('Failed to refresh: ' + (result.structuredContent?.message || 'Unknown error'));
-        } else if (result.structuredContent) {
-          renderData(result.structuredContent);
+        } else {
+          renderToolResult(result);
         }
       } catch (err) {
         renderError('Refresh failed: ' + err.message);
@@ -131,14 +145,25 @@
     const app = new App({ name: "weather-refresh", version: "1.0.0" });
     appRef = app;
 
-    app.ontoolresult = (result) => {
-      const data = result.structuredContent;
-      if (data) {
-        renderData(data);
+    function renderToolResult(result) {
+      const toolResult = {
+        content: result.content ?? [],
+        structuredContent: result.structuredContent ?? {},
+        _meta: result._meta ?? {}
+      };
+      if (Object.keys(toolResult.structuredContent).length > 0) {
+        renderData(toolResult);
       } else {
-        renderError('No weather data received.');
+        const message = contentText(toolResult.content);
+        if (message) {
+          renderMessage(message);
+        } else {
+          renderError('No weather data received.');
+        }
       }
-    };
+    }
+
+    app.ontoolresult = renderToolResult;
     app.onhostcontextchanged = (ctx) => { if (ctx.theme) { applyTheme(ctx.theme); } };
     app.onteardown = () => ({});
     await app.connect();

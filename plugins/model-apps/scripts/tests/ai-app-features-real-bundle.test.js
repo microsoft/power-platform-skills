@@ -20,9 +20,10 @@ const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 
 const APP = 'co_supportdesk';
 const APP_ID = '11111111-1111-1111-1111-111111111111';
-// The PER-APP setting for formFill. Note it doubles as its own org gate in the SDK's AI_GATE map,
-// which is why the gate is deliberately read at ORG scope (an app-scope 0 must not look like "the
-// environment forbids this" and permanently block re-enabling).
+// The PER-APP setting for formFill. It doubles as its own "gate" in the SDK's AI_GATE map — which is
+// precisely why the SDK no longer reads it as one (AB#6688904): the row it would consult is the row
+// the write is about to set, so on a new app the platform default `0` read as "the environment
+// forbids this" and pre-empted every write.
 const SETTING = 'FormFillBarUXEnabled';
 const DEF_ID = '22222222-2222-2222-2222-222222222222';
 
@@ -118,11 +119,10 @@ test('REAL BUNDLE: a write that becomes visible late is retried and reported app
 
 test('REAL BUNDLE: an unreadable override row is `unverified`, never applied and never notPersisted', async () => {
   // The ORG GATE and the PER-APP setting use different encodings, which is easy to conflate: the
-  // per-app form-fill value is 0=platform default / 1=disabled / 2=enabled, but the gate
-  // short-circuits only on '0'. MEASURED by mutating this fixture: '0' makes both this test and the
-  // next FAIL (the SDK skips before it writes or proves), while '1' and '2' both reach the path and
-  // pass identically. '2' is used here purely so a fixture for a `formFill: true` request does not
-  // read as "disabled".
+  // per-app form-fill value is 0=platform default / 1=disabled / 2=enabled. The gate value no longer
+  // decides whether this path is reached at all — since AB#6688904 the write and the proof always
+  // run — so `gate` here is inert and `'2'` is used purely so a fixture for a `formFill: true`
+  // request does not read as "disabled".
   const { sdk } = freshSdk({ gate: '2', effective: '2', failProof: true });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.unverified, ['formFill']);
@@ -138,11 +138,36 @@ test('REAL BUNDLE: a throwing write lands in `failed` and does not abort the bat
   assert.match(r.outcomes[0].reason, /boom from SaveSettingValue/);
 });
 
-test('REAL BUNDLE: an org gate that is off yields `skipped` and issues no write', async () => {
+// AB#6688904 rewrote this contract, and the two tests below are the new pinning pair. The OLD
+// behaviour — "an org gate that is off yields `skipped` and issues NO write" — is exactly the defect:
+// the gate was read as a PRECONDITION, and for four of the seven features that "gate" is the very row
+// the write is about to set, so a brand-new app (value `0`, the platform default) looked forbidden and
+// the build shipped an app with no AI features while reporting success.
+//
+// The new contract is: always write, then verify, and read a gate only to EXPLAIN an absence. So the
+// bucket now depends on whether the feature HAS an independent gate, which is what these two separate.
+test('REAL BUNDLE: a gate that is off no longer pre-empts the write — it is issued, then explained as `skipped`', async () => {
+  // `nlSearch` has a genuinely distinct gate (`EnableNLGridSearch`) from its per-app setting
+  // (`NLGridSearchSetting`), so a gate-off diagnosis is meaningful for it.
+  const { sdk, calls } = freshSdk({ gate: '0', effective: '0', overrideRows: [] });
+  const r = await sdk.setAppAiFeatures(APP, { nlSearch: true }, FAST);
+  assert.deepStrictEqual(r.skipped, ['nlSearch'], 'an absent override plus a gate reading off is `skipped`');
+  const writes = calls.filter((c) => c.method === 'POST' && c.url.includes('SaveSettingValue'));
+  assert.strictEqual(writes.length, 1, 'the write MUST be attempted — pre-empting it was the bug');
+  // The engine defers `skipped` to its post-publish re-issue on the strength of this: the outcome is
+  // evidence about one attempt, not a verdict that the app can never hold the setting.
+  assert.strictEqual(r.outcomes[0].appOverrideExists, false, 'skipped now carries a real verification result');
+});
+
+test('REAL BUNDLE: a SELF-GATED feature has no gate to blame — an absent override is notPersisted, never skipped', async () => {
+  // `formFill` reads `FormFillBarUXEnabled` for BOTH its gate and its per-app value. `0` there is the
+  // platform default on a new app, not an admin saying no, so there is nothing to diagnose with and
+  // the honest bucket is `notPersisted`. Reporting `skipped` here would re-tell the AB#6688904 story.
   const { sdk, calls } = freshSdk({ gate: '0', effective: '0', overrideRows: [] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
-  assert.deepStrictEqual(r.skipped, ['formFill']);
-  assert.strictEqual(calls.filter((c) => c.method === 'POST' && c.url.includes('SaveSettingValue')).length, 0);
+  assert.deepStrictEqual(r.skipped, [], 'a self-gated feature can never be `skipped`');
+  assert.deepStrictEqual(r.notPersisted, ['formFill']);
+  assert.strictEqual(calls.filter((c) => c.method === 'POST' && c.url.includes('SaveSettingValue')).length, 1);
 });
 
 test('REAL BUNDLE: disabling is never gated — it writes even when the org gate is off', async () => {
@@ -237,4 +262,43 @@ test('REAL BUNDLE: a supplied appModuleId that DISAGREES with the published app 
 test('REAL BUNDLE: a malformed appModuleId is rejected up front', async () => {
   const { sdk } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
   await assert.rejects(() => sdk.setAppAiFeatures(APP, { formFill: true }, { ...FAST, appModuleId: 'not-a-guid' }));
+});
+
+// The boolean spelling is NOT a flat 1/0, and the schema doc said it was. That inaccuracy caused a
+// real incident: `appFeatures: { nlSearch: false, nlChart: false }` was written believing it meant
+// "leave alone", and it DISABLED two features a live app was inheriting as on. For the form-fill
+// family the tri-state is 0 = platform default, 1 = DISABLED, 2 = enabled, so `false` there is an
+// explicit off rather than an unset.
+//
+// Pinned against the real bundle in BOTH directions, so a re-vendor that changes the encoding fails
+// here instead of silently making the documentation wrong again.
+test('REAL BUNDLE: the boolean-to-numeric mapping is per-family, not a flat 1/0', async () => {
+  const EXPECTED = {
+    formFill: { setting: 'FormFillBarUXEnabled', onValue: '2', offValue: '1' },
+    nlSearch: { setting: 'NLGridSearchSetting', onValue: '1', offValue: '0' },
+    nlChart: { setting: 'NLChartDataVisualizationSetting', onValue: '1', offValue: '0' },
+    m365: { setting: 'm365copilotmodelappenabled', onValue: '1', offValue: '0' },
+  };
+
+  for (const [feature, want] of Object.entries(EXPECTED)) {
+    for (const [flag, expected] of [[true, want.onValue], [false, want.offValue]]) {
+      // Gate reported ON so the SDK writes in both directions (enabling is gated; disabling is not).
+      const { sdk, calls } = freshSdk({ gate: '2', effective: '2', overrideRows: [{ appsettingid: 'a1', value: expected }] });
+      await sdk.setAppAiFeatures(APP, { [feature]: flag }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
+      const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
+      assert.ok(save, `${feature}=${flag}: a SaveSettingValue must be issued`);
+      assert.strictEqual(save.body.SettingName, want.setting, `${feature}: setting name`);
+      assert.strictEqual(String(save.body.Value), expected,
+        `${feature}=${flag} must write ${expected} — the docs previously claimed a flat 1/0, which is wrong for the form-fill family`);
+    }
+  }
+});
+
+test('REAL BUNDLE: disabling is NOT gated — a false is written even when the org gate is off', async () => {
+  // This asymmetry is why an incorrect `false` is the more damaging mistake: it always lands.
+  const { sdk, calls } = freshSdk({ gate: '0', effective: '0', overrideRows: [{ appsettingid: 'a1', value: '1' }] });
+  await sdk.setAppAiFeatures(APP, { formFill: false }, { appModuleId: APP_ID, verifyAttempts: 1, verifyDelayMs: 1 });
+  const save = calls.find((c) => c.method === 'POST' && /SaveSettingValue/i.test(c.url));
+  assert.ok(save, 'a disable must be written even with the gate off');
+  assert.strictEqual(String(save.body.Value), '1', 'and 1 means DISABLED, not platform default');
 });

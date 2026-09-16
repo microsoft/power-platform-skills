@@ -53,10 +53,11 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
+const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
@@ -105,6 +106,57 @@ function isUndeletable(err) {
   const msg = String((err && err.message) || '').toLowerCase();
   if (/referenced by/.test(msg)) return false; // dependency block — a real failure, not a system artifact
   return /system-defined|system managed|system-managed/.test(msg);
+}
+
+// Solution component type codes used when reporting what still references a relationship.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/dependency
+const DEPENDENT_COMPONENT_LABELS = { 1: 'table', 2: 'column', 10: 'relationship', 26: 'view', 59: 'chart', 60: 'form' };
+
+// Turn a blocked relationship delete into something an operator can act on.
+//
+// Dataverse refuses with a COUNT and no identities, e.g.:
+//   "The EntityRelationship(cc5fe264-…) component cannot be deleted because it is referenced by 2
+//    other components. For a list of referenced components, use the RetrieveDependenciesForDeleteRequest."
+// That is a dead end for anyone who now has to find those components by hand, so take the platform's
+// own advice and resolve them. LIVE-MEASURED on a self-referencing 1:N left on a RETAINED
+// (`existing: true`) table: the blocker was a single componenttype 60 (SystemForm) row — the main
+// form the build authored, which this teardown could not plan because the spec no longer declares it.
+//
+// Best-effort and fail-quiet by design: this is diagnostics layered on top of a failure that is
+// already being reported, so any problem here returns null and the caller rethrows the platform's
+// original error unchanged. A diagnostic must never replace a real error with a worse one.
+async function describeBlockingDependencies(sdk, schemaName) {
+  const raw = sdk && sdk.dataverse;
+  if (!raw || typeof raw.get !== 'function') return null;
+  try {
+    const lit = String(schemaName).replace(/'/g, "''");
+    const rel = await raw.get(`/RelationshipDefinitions?$select=MetadataId&$filter=SchemaName eq '${lit}'`);
+    const metadataId = rel && rel.body && Array.isArray(rel.body.value) && rel.body.value[0] && rel.body.value[0].MetadataId;
+    if (!metadataId) return null;
+    // ComponentType 10 = EntityRelationship, matching the component named in the platform's message.
+    const deps = await raw.get(`/RetrieveDependenciesForDelete(ObjectId=${metadataId},ComponentType=10)`);
+    const rows = (deps && deps.body && Array.isArray(deps.body.value)) ? deps.body.value : [];
+    const parts = [];
+    for (const r of rows) {
+      const type = Number(r && r.dependentcomponenttype);
+      const id = r && r.dependentcomponentobjectid;
+      if (!id) continue;
+      const label = DEPENDENT_COMPONENT_LABELS[type] || `component type ${type}`;
+      // Only forms are name-resolved: they are the blocker this path actually hits, and a name is
+      // what makes the message actionable ("Self Ref Acct Form", not a bare GUID).
+      let name = null;
+      if (type === 60) {
+        try {
+          const f = await raw.get(`/systemforms(${id})?$select=name`);
+          name = (f && f.body && f.body.name) || null;
+        } catch { /* a name is a nicety — fall back to the id */ }
+      }
+      parts.push(name ? `${label} "${name}" (${id})` : `${label} ${id}`);
+    }
+    return parts.length ? parts.join(', ') : null;
+  } catch {
+    return null;
+  }
 }
 
 // Before deleting a MAIN form the build promoted to the entity default (Gap 2), restore a stock
@@ -407,6 +459,69 @@ const KIND_HANDLERS = {
     },
     tolerateNotFound: true,
   },
+  businessProcessFlows: {
+    // Same shape as a business rule — a `workflows` row the SDK does not model as a deletable
+    // artifact kind — so resolve and delete it over queryRecords/deleteRecord.
+    //
+    // Scoped by (category 4, businessprocesstype 0, name, primaryentity): a same-named process on
+    // another table, and a same-named TASK FLOW on this one, are both left alone.
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        // DEFINITION rows only (see bpfFilter in sdk-build.js). Activating a process makes the
+        // platform create a `type 2` activated copy parented to the definition; it refuses to delete
+        // that copy directly (405) and removes it with its parent, so an unfiltered query would
+        // produce a guaranteed per-flow teardown failure — the exact bug fixed for business rules.
+        filter: bpfFilter(target.name, target.entity),
+        top: 50,
+      });
+      return (rows || []).map((r) => ({ id: r.workflowid, name: target.name, statecode: r.statecode }));
+    },
+    async del(sdk, item) {
+      // Deactivate before delete: Dataverse refuses to delete an activated process. An activated BPF
+      // additionally owns a backing TABLE (logical name = the workflow's uniquename) that the
+      // platform creates on activation and removes with the process — so this delete is what cleans
+      // that up too, and skipping it would strand a table this app created.
+      if (item.statecode === 1) {
+        try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
+      }
+      try {
+        return await sdk.deleteRecord('workflow', item.id);
+      } catch (e) {
+        // Because the delete cascades a TABLE drop, it is slow — MEASURED live at longer than the
+        // client's 60s HTTP timeout on two of three runs. The server keeps working after the client
+        // gives up, so a timeout here says nothing about whether the flow was removed; reporting it
+        // as a failure made teardown exit non-zero and tell the operator to go clean up something
+        // that was, in fact, already gone.
+        //
+        // So on a TRANSPORT failure only (never on a real HTTP error, which carries a status and a
+        // meaning), POLL for the row to disappear and let the environment decide the verdict.
+        // Polling rather than a single re-read is the whole point: measured, the row is still present
+        // at the moment the client times out and only disappears ~1-2 minutes later, so a single peek
+        // reproduces exactly the false failure this exists to remove.
+        const transport = /timed out|timeout|socket hang up|ECONNRESET|ETIMEDOUT|Transport failure/i.test(String((e && e.message) || ''));
+        if (!transport) throw e;
+        // Bounded by ATTEMPTS, not by wall-clock. A time-based deadline cannot be shortened by a test
+        // that stubs the sleep, so the "row never disappears" case would genuinely block a unit test
+        // for the full budget — which it did, taking the suite from 28s to 242s.
+        const POLL_ATTEMPTS = 16;
+        const POLL_INTERVAL_MS = 15000;   // ~4 minutes total; measured worst case is well inside that
+        for (let attempt = 1; ; attempt++) {
+          let rows;
+          try {
+            rows = await sdk.queryRecords('workflow', { select: ['workflowid'], filter: `workflowid eq ${item.id}`, top: 1 });
+          } catch {
+            // A failed probe is not evidence either way; keep waiting until the budget runs out.
+            rows = [{ unknown: true }];
+          }
+          if (!(rows || []).length) return undefined;
+          if (attempt >= POLL_ATTEMPTS) throw e;
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        }
+      }
+    },
+    tolerateNotFound: true,
+  },
   commands: {
     // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
     // resolveArtifact('command', { entity }) returns that single per-entity artifact and
@@ -488,7 +603,7 @@ const KIND_HANDLERS = {
   form: {
     async resolve(sdk, target) {
       // Resolve by (entity, name, TYPE) or a pinned formId — NOT name alone — so tearing down a Main form
-      // never ALSO deletes the table's same-named Quick View / Card siblings (Sol review: the old name-only
+      // never ALSO deletes the table's same-named Quick View / Card siblings (the old name-only
       // resolveArtifact returned every match and del() deleted each). resolveExistingFormId returns the ONE
       // intended form (null if absent → nothing to delete; throws on a residual (entity,type,name) collision
       // → teardown halts fail-closed rather than delete an arbitrary form).
@@ -521,7 +636,26 @@ const KIND_HANDLERS = {
     async resolve(sdk, target) {
       return [{ id: target.schemaName, schemaName: target.schemaName }];
     },
-    del: (sdk, item) => sdk.deleteRelationship(item.schemaName),
+    async del(sdk, item) {
+      try {
+        await sdk.deleteRelationship(item.schemaName);
+      } catch (err) {
+        // A dependency block here is a genuine leftover (this handler does NOT opt into
+        // tolerateDependencyBlock), so it still fails the step — but it fails with the identities
+        // of whatever is holding the relationship instead of just a count. The enriched message
+        // keeps the platform's original text as its prefix so isDependencyBlocked still matches it.
+        if (!isDependencyBlocked(err)) throw err;
+        const blockers = await describeBlockingDependencies(sdk, item.schemaName);
+        if (!blockers) throw err;
+        const e = new Error(
+          `${err.message} Still referenced by: ${blockers}. `
+          + 'Delete those components (or remove the lookup from them) and re-run teardown — this relationship '
+          + 'and its lookup column are still in the environment.'
+        );
+        e.cause = err;
+        throw e;
+      }
+    },
     tolerateNotFound: true, // a relationship already removed (e.g. by a prior table delete) is "gone"
   },
   // Gap 6: the build adds parent lookups to the built-in Active/Inactive default views, which can't be
@@ -688,6 +822,13 @@ function planTeardown(spec) {
     const entity = String(r.entity).toLowerCase();
     steps.push({ kind: 'businessRules', phase: 'business-rules', label: `business rule "${r.name}" (${entity})`, target: { entity, name: r.name } });
   }
+  // Business process flows, for the same reasons and in the same position: an activated BPF is a
+  // workflow row bound to the entity (plus a platform-owned backing table), so it has to go before
+  // the table it references and is not something a table delete cascades away.
+  for (const p of spec.businessProcessFlows || []) {
+    const entity = String(p.entity).toLowerCase();
+    steps.push({ kind: 'businessProcessFlows', phase: 'business-process-flows', label: `business process flow "${p.name}" (${entity})`, target: { entity, name: p.name } });
+  }
   // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
   // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV
   // form first makes Dataverse 400 ("cannot be deleted because it is referenced by 1 other
@@ -721,6 +862,18 @@ function planTeardown(spec) {
     if (!name) continue;
     steps.push({ kind: 'role', phase: 'security', label: `security role "${name}"`, target: { name, businessUnitId: p.businessUnitId } });
   }
+  // `roleGrants[]` are deliberately NOT torn down. AB#6686429 asks for "safe teardown semantics that
+  // do not remove pre-existing grants", and the safe semantics are to do nothing at all:
+  //
+  //   * the ROLE belongs to someone else — deleting it is out of the question, and the marker gate
+  //     above already refuses (a foreign role carries no SDK_ROLE_MARKER), so no step is needed for that;
+  //   * the PRIVILEGES cannot be revoked safely either. `AddPrivilegesRole` is additive and does not
+  //     record who added what, so a teardown could not tell a privilege this spec granted from one the
+  //     role already held — or one a second spec granted. Removing "what the spec declares" would strip
+  //     access that predates us, which is precisely the outcome the bug asks to avoid, and is worse
+  //     than leaving a stale grant (extra access on a role its owner still administers in Maker).
+  //
+  // Consequence, stated in references/app-spec-schema-advanced.md: a roleGrant is one-way. Revoke in Maker.
   for (const c of spec.charts || []) {
     steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });
   }
@@ -736,13 +889,59 @@ function planTeardown(spec) {
     if (!lookupColumnsFor(spec, logical).length) continue;
     steps.push({ kind: 'resetDefaultViews', phase: 'views', label: `reset default views for ${logical} (drop parent lookups)`, target: { entityLogical: logical, cols: defaultViewColumns(spec, e, { includeLookups: false }) } });
   }
+  const selfRefRelSteps = [];
   for (const r of spec.relationships || []) {
     const schema = r.type === 'ManyToMany' ? manyToManySchemaName(r, spec.solution && spec.solution.publisherPrefix) : relationshipSchemaName(r, spec.solution && spec.solution.publisherPrefix);
-    steps.push({ kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } });
+    const step = { kind: 'relationship', phase: 'relationships', label: `relationship ${schema}`, target: { schemaName: schema } };
+    // A SELF-referencing 1:N (a hierarchy — `referenced === referencing`) is deleted AFTER its table
+    // rather than before. Deleting it first fails:
+    //   ✗ relationship lph_org_lph_org — HTTP 400 … cannot be deleted because it is referenced by
+    //     2 other components.
+    // Its lookup lives on the same table that also hosts the form referencing it, so unlike a
+    // two-table relationship there is nothing left to unpick it from (Gap 6 above clears the default
+    // view, but the table's own main form still holds the lookup). MEASURED live: teardown printed
+    // that error and exited NON-ZERO on a run that then deleted the table and left the environment
+    // completely clean — a cry-wolf failure on the one operation whose report must be trustworthy.
+    // Self-referencing hierarchies became a mainstream shape once sample data could seed them (#544).
+    //
+    // DEFERRING rather than skipping is what keeps it safe for the table this build CREATED. If the
+    // table was deleted, the delete already cascaded this away and the step resolves to "not found",
+    // which this kind already tolerates (`tolerateNotFound: true`).
+    //
+    // If the table is RETAINED — `existing: true`, or one live discovery finds is not custom — the
+    // delete still RUNS, but it is not guaranteed to SUCCEED, and the spec alone cannot tell the two
+    // cases apart, which is why this is an ordering change and not a skip. Gap 6 above clears the
+    // lookup from the default views, but a form is a separate dependency and teardown only plans the
+    // forms the spec declares. LIVE-MEASURED: a retained `account` whose self-lookup was still on a
+    // main form the build authored but the CURRENT spec no longer lists produced
+    //   ✗ relationship pp668_account_account — HTTP 400 … referenced by 2 other components
+    // and left the relationship and its lookup behind. That failure is now reported with the
+    // identity of each blocking component (see describeBlockingDependencies) rather than a bare
+    // count, because the remaining cleanup is the operator's: teardown deliberately does NOT delete
+    // forms it cannot prove it authored — stripping a lookup out of somebody's main form is a worse
+    // outcome than leaving a lookup on a table they already own.
+    if (r.type === 'OneToMany' && String(r.referenced || '').toLowerCase() === String(r.referencing || '').toLowerCase()) {
+      selfRefRelSteps.push(step);
+      continue;
+    }
+    steps.push(step);
   }
   // AI row-summary records must be removed BEFORE tables: the summary record references the
-  // table and would block its delete. Reuses selectSummaryTables to respect default:'off' + overrides.
-  if (spec.ai && spec.ai.summaries) {
+  // table and would block its delete.
+  //
+  // Gated on the SHARED opt-in predicate, deliberately — NOT on `spec.ai.summaries`, and not on
+  // `selectSummaryTables` alone. `selectSummaryTables` owns the default-vs-override decision but is a
+  // CANDIDATE selector, not an opt-in test: handed a spec with no `ai` block at all it returns every
+  // entity with a descriptive column. The BUILD creates a summary per eligible table whenever the
+  // spec opts into `ai`, so a spec carrying only `ai.appFeatures` still gets one.
+  // Short-circuiting on `spec.ai.summaries` here meant teardown planned NOTHING for exactly that
+  // spec, and the orphaned `msdyn_aimodel` then blocked the table delete:
+  //   ✗ table new_uptakeorder — HTTP 400 … cannot be deleted because it is referenced by 1 other
+  //     components
+  // MEASURED live on a spec with `ai.appFeatures` and no `summaries` block. The failure is worse
+  // than a leaked record: teardown reports errors and leaves the TABLE — and any data in it —
+  // behind, on the one operation whose job is to remove them.
+  if (specOptsIntoAi(spec)) {
     for (const schema of selectSummaryTables(spec)) {
       const logical = String(schema).toLowerCase();
       steps.push({ kind: 'aiSummary', phase: 'ai-summaries', label: `row summary ${logical}`, target: { entityLogicalName: logical } });
@@ -777,6 +976,10 @@ function planTeardown(spec) {
   for (const e of topoOrderEntities(spec).slice().reverse()) {
     steps.push({ kind: 'table', phase: 'tables', label: `table ${e.schemaName}`, target: { logical: e.schemaName.toLowerCase(), schemaName: e.schemaName, existing: e.existing === true } });
   }
+  // Self-referencing relationships, deferred from the relationships phase above — see the reasoning
+  // there. After the tables: gone with a deleted table (tolerated not-found), still deletable on a
+  // table this run retained.
+  for (const step of selfRefRelSteps) steps.push(step);
   // Web resources AFTER tables (see the order note in the file header): a form's JS is referenced
   // by its form (deleted in the forms phase), but a table's vector/raster ICON web resource is
   // referenced by the TABLE — Dataverse rejects the delete with "referenced by N other components"
@@ -799,7 +1002,7 @@ function planTeardown(spec) {
   // app.icon is set — that image is a declared webResources[] entry handled by the loop above.
   // ALSO skipped when the derived name collides with a DECLARED webResources[] entry: if that entry is
   // `external:true` the loop deliberately protected it (a shared nav icon named `<appUnique>_icon`), so
-  // this derived delete must not clobber the skip and delete a shared resource (Sol review, High); if it
+  // this derived delete must not clobber the skip and delete a shared resource; if it
   // is a normal declared entry the loop already scheduled it, so skipping here just avoids a duplicate.
   if (spec.app && spec.solution && !spec.app.icon) {
     const generatedIcon = `${appUniqueName(spec)}_icon`;

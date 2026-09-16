@@ -1,0 +1,109 @@
+# Agent interaction contract — agents are headless
+
+Every file under `agents/` is dispatched as a `Task` subagent, and a subagent has
+**no user on the other end**. `AskUserQuestion`, `EnterPlanMode` and
+`ExitPlanMode` do not reach anyone from inside one: the question is never
+answered and the approval is never given. An agent that declares or calls them is
+specifying a flow that cannot complete.
+
+This is not theoretical. `/genpage` Phase 1 was specified to run its entire
+interactive flow — prerequisites, auth, the "create new / edit existing" question
+and plan-mode approval — inside the `genpage-planner` subagent, while the same
+plugin's `AGENTS.md` documented that subagents are headless and `/app-builder`
+enforced the opposite rule. There was no compliant path through Phase 1, so
+create flows could not complete. It survived roughly two and a half months
+because nothing checked: agent frontmatter is prose to every test in the repo.
+`scripts/validate-agent-interactivity.js` now fails the build on a declaration.
+
+## The rule
+
+**Interaction belongs to the main conversation loop.** An agent that needs a
+decision returns a structured request; the orchestrator asks, records it, and
+re-invokes the agent with the answer.
+
+This applies to **every phase that dispatches an agent**, not just the first one.
+Each dispatch site is its own loop: a phase that waits for an agent and then
+proceeds on a `needs_input` return silently discards the decision, and the agent
+never runs the step that depended on it. The rule is easy to satisfy in the phase
+where interaction is obviously expected and easy to forget in the ones where the
+agent is "just doing work" — `/genpage` Phase 2b dispatched the entity-builder,
+which asks about sample data this way, and simply waited for it. Treat it as part
+of the dispatch, like passing the working directory.
+
+The same holds for plan approval: a headless agent cannot see an `ExitPlanMode`
+result, so an agent whose final step is gated on approval must be **re-invoked
+with the outcome**. Check for the artifact it was supposed to write before moving
+on; its absence is the only signal you get that the loop did not close.
+
+## The `needs_input` request
+
+```json
+{ "action": "needs_input",
+  "why": "<one line: what is blocked without this>",
+  "questions": [
+    { "id": "<stable-id>",
+      "question": "<the question, verbatim>",
+      "options": [ { "label": "<short>", "description": "<what it means>", "default": true } ],
+      "multiSelect": false } ] }
+```
+
+Return everything already discovered alongside the request, so the re-invocation
+does not repeat the reads it has already paid for.
+
+Mark at most one option per question `"default": true`. It is what an **unattended**
+run uses — Copilot autopilot and Claude auto-accept have no user to ask, so a
+question with no marked default halts the run rather than being answered by
+whoever guesses first. Mark a default only where proceeding without a human is
+genuinely safe: the field is how an agent says "this one is safe to assume", and
+omitting it is the correct answer for anything destructive or irreversible.
+
+## Tool names must be portable across hosts
+
+Tool names are **host-specific**, and every host silently **ignores** a name it
+does not recognize instead of reporting it. A capability named only in a scheme
+the running host does not know is therefore simply absent: the agent launches,
+then cannot run `node` or track progress, with nothing in any log saying why.
+
+Copilot publishes a compatible-alias table — `Bash`→`execute`, `Read`→`read`,
+`Write`/`Edit`→`edit`, `Grep`/`Glob`→`search`, case-insensitively — so those
+Claude Code names already carry across.
+`TaskCreate`, `TaskUpdate` and `TaskList` do **not**: they appear in no published
+alias table, so on a Copilot host they are dropped and the agent loses progress
+tracking. The portable name for that capability is `todo`.
+
+The rule is therefore: **declare every capability in both naming schemes.**
+Listing both is safe precisely because unrecognized names are ignored, and it
+removes the dependency on a given host implementing the alias table at all.
+
+```yaml
+tools:
+  - Read
+  - Write
+  - Bash
+  - TaskCreate
+  - TaskUpdate
+  - TaskList
+  - read
+  - edit
+  - execute
+  - todo
+```
+
+`scripts/validate-agent-interactivity.js` fails the build on a one-sided
+declaration, in either direction.
+
+References:
+[Copilot tool aliases](https://docs.github.com/en/copilot/reference/custom-agents-configuration#tool-aliases)
+· [Claude Code ignores unknown tool names](https://github.com/anthropics/claude-code/issues/93171)
+
+## Logging is unchanged
+
+The orchestrator records the exchange in `workflow-log.md` in the documented
+format — `AskUserQuestion: <question> → <answer>`, and `EnterPlanMode called`
+followed by the response. The log records what was **asked**, not which loop
+asked it, so the eval harness contract is unaffected by where the call is made.
+
+## What agents keep
+
+Read-only discovery, code generation, file writes, and shell work are all
+unchanged. Only the act of *prompting a human* moves to the parent.

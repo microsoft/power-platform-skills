@@ -33,6 +33,7 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 // this list is the living contract of what a re-vendored bundle MUST keep exposing.
 const SKILL_SDK_SURFACE = [
   'addElement',
+  'addEntityPrivilegesToRole',
   'addSolutionComponent',
   'associateRecords',
   'configureRowSummary',
@@ -66,6 +67,7 @@ const SKILL_SDK_SURFACE = [
   'getAiReadiness',
   'getArtifact',
   'getColumnVisualization',
+  'getEntityPrivileges',
   'getSolution',
   'initWorkspace',
   'insertStatusValue',
@@ -98,6 +100,10 @@ const SKILL_SDK_SURFACE = [
   'updateRecord',
   'updateTable',
   'updateWebResource',
+  // The business-rule designer's OWN completeness validator. Nothing on the push path runs it, and a
+  // rule the compiler could not understand deploys as an EMPTY rule with HTTP 204 — so losing this
+  // method silently re-opens a trap that has no other detector.
+  'validateBusinessRule',
 ];
 
 function realSdk() {
