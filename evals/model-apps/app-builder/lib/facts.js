@@ -254,7 +254,7 @@ function downloadFacts(spec) {
     const primary = lc(e.primaryAttribute.schemaName);
     const attrs = [];
     const shadows = [];
-    const attr = (o) => attrs.push(Object.assign({ IsCustomAttribute: true, IsLogical: false, AttributeOf: null, IsValidForCreate: true }, o));
+    const attr = (o) => attrs.push(Object.assign({ IsCustomAttribute: true, IsLogical: false, AttributeOf: null }, o));
     attr({ SchemaName: e.primaryAttribute.schemaName, LogicalName: primary, AttributeType: 'String' });
 
     // `polymorphic` picks the IsLogical value Dataverse reports, and gates the third shadow: only a
@@ -279,12 +279,12 @@ function downloadFacts(spec) {
       attr({ SchemaName: col.schemaName, LogicalName: lc(col.schemaName), AttributeType: DATAVERSE_ATTRIBUTE_TYPE[type] || 'String' });
       if (type === 'Customer' || type === 'Lookup') addShadows(lc(col.schemaName), type === 'Customer');
       // A Money column gets a base-currency twin, and it is the awkward case: no `AttributeOf`, not
-      // logical, and `IsCustomAttribute: true`, so every shadow rule is blind to it. The ONE fact
-      // that separates it from an authored column is that the API refuses to create it. Modelled
-      // here so a Money column anywhere in the corpus guards that rule.
+      // logical, and `IsCustomAttribute: true`, so every shadow rule is blind to it. `IsBaseCurrency`
+      // is the only unambiguous signal — deliberately NOT the write-capability flag, which this spec
+      // supports on authored read-only columns and which would turn a round-trip into a deletion.
       if (type === 'Money') {
         const twin = `${lc(col.schemaName)}_base`;
-        attr({ SchemaName: twin, LogicalName: twin, AttributeType: 'Money', IsValidForCreate: false });
+        attr({ SchemaName: twin, LogicalName: twin, AttributeType: 'Money', IsBaseCurrency: true });
         shadows.push(twin);
       }
     }

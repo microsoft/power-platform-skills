@@ -460,6 +460,47 @@ test('form layout: a non-array sections inside a form-column is rejected', () =>
   assert.ok(errs.some((e) => /non-array 'sections'/.test(e)), `expected a non-array sections error; got ${JSON.stringify(errs)}`);
 });
 
+// The compiler dereferences every tab/column/section entry. Tabs and sections had partial pre-existing
+// guards; a malformed FORM-COLUMN was entirely unguarded and reached compileFormIntent, which reads
+// `c.width`/`c.sections`, as a raw TypeError.
+test('form layout: a non-object tab, form-column or section is rejected, not dereferenced', () => {
+  assert.ok(errsFor([null]).some((e) => /tabs\[0\] must be an object/.test(e)), 'a null tab is rejected');
+  assert.ok(errsFor(['nope']).some((e) => /tab #1 must be an object/.test(e)), 'a primitive tab is rejected');
+  assert.ok(errsFor([{ label: 'G', sections: [null] }]).some((e) => /sections\[0\] must be an object/.test(e)), 'a null section is rejected');
+  // The gap this closes:
+  assert.ok(errsFor([{ label: 'G', columns: [null] }]).some((e) => /column #1 must be an object, got null/.test(e)), 'a null form-column is rejected');
+  assert.ok(errsFor([{ label: 'G', columns: ['x'] }]).some((e) => /column #1 must be an object/.test(e)), 'a primitive form-column is rejected');
+});
+
+// compileFormIntent only truth-tests these (`!== false`), so a STRING "false" compiles as true and
+// deploys the opposite of what was authored.
+test('form layout: expanded / visible / showLabel must be real booleans', () => {
+  assert.ok(errsFor([{ label: 'G', expanded: 'false', sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /has expanded 'false' — it must be true or false/.test(e)));
+  assert.ok(errsFor([{ label: 'G', visible: 0, sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /has visible '0'/.test(e)));
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', showLabel: 'false', fields: [] }] }])
+    .some((e) => /has showLabel 'false'/.test(e)));
+  // A real boolean still passes.
+  assert.ok(!errsFor([{ label: 'G', expanded: false, sections: [{ label: 'S', showLabel: true, fields: [] }] }])
+    .some((e) => /must be true or false/.test(e)));
+});
+
+// A name is the container's IDENTITY on a rebuild — the topology reconcile matches deployed
+// containers by name and keys its placement targets by name — so duplicates make two authored
+// declarations resolve to the same deployed container.
+test('form layout: duplicate tab or section names are rejected (a name is identity on rebuild)', () => {
+  assert.ok(errsFor([
+    { name: 'tab_a', label: 'A', sections: [{ label: 'S1', fields: [] }] },
+    { name: 'TAB_A', label: 'B', sections: [{ label: 'S2', fields: [] }] },
+  ]).some((e) => /reuses the tab name 'TAB_A'/.test(e)), 'duplicate tab names are caught case-insensitively');
+
+  assert.ok(errsFor([{ label: 'G', sections: [
+    { name: 'sec_x', label: 'S1', fields: [] },
+    { name: 'sec_x', label: 'S2', fields: [] },
+  ] }]).some((e) => /reuses the section name 'sec_x'/.test(e)));
+});
+
 test('form layout: a tab columns that is a NUMBER is rejected and points at the section key', () => {
   const errs = errsFor([{ label: 'G', columns: 2, sections: [{ label: 'S', fields: [] }] }]);
   assert.ok(errs.some((e) => /has columns \x272\x27/.test(e)), `expected a tab-columns error; got ${JSON.stringify(errs)}`);
@@ -504,6 +545,14 @@ test('sampleData: duplicate primary-name values are rejected at author time, not
   keyed.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
   keyed.sampleData = { contoso_order: [{ contoso_name: 'X', contoso_code: '1' }, { contoso_name: 'X', contoso_code: '2' }] };
   assert.ok(!validateAppSpec(keyed, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)), 'a safe alternate key makes the primary irrelevant');
+
+  // A safe alternate key is what matchOn USES, so duplicates in it break the same way — and used to
+  // pass this gate and fail during sample-data provisioning instead.
+  const dupKey = base();
+  dupKey.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+  dupKey.sampleData = { contoso_order: [{ contoso_name: 'A', contoso_code: 'DUP' }, { contoso_name: 'B', contoso_code: 'DUP' }] };
+  assert.ok(validateAppSpec(dupKey, { profile: 'plan' }).errors.some((e) => /duplicate contoso_code value 'DUP'/.test(e)),
+    'duplicates in the alternate key that matchOn selects must be caught at author time');
 
   // A partially/entirely empty primary means matchOn is omitted altogether, so there is no wrong-row
   // resolve to guard against.

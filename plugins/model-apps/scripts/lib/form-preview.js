@@ -99,7 +99,9 @@ function renderFormWireframe(spec, f) {
   for (const tab of def.tabs) {
     // `expanded: false` is a real authored state, so show it — the wireframe IS the approval gate,
     // and a preview that renders every tab open promises a layout the build does not deploy.
-    if (tabLabels.length > 1) lines.push(row(`${tab.expanded === false ? '▸' : '▾'} ${tab.label || 'General'}${tab.visible === false ? '   (hidden)' : ''}${tab.expanded === false ? '   (collapsed)' : ''}`));
+    // A hidden tab must be shown even when it is the ONLY tab: the wireframe is the approval gate,
+    // and a preview that silently omits "this tab is hidden" approves a different form.
+    if (tabLabels.length > 1 || tab.visible === false) lines.push(row(`${tab.expanded === false ? '▸' : '▾'} ${tab.label || 'General'}${tab.visible === false ? '   (hidden)' : ''}${tab.expanded === false ? '   (collapsed)' : ''}`));
     // New topology inserts a FormColumn layer between tab and section.
     const cols = tab.columns || [];
     for (let ci = 0; ci < cols.length; ci++) {
@@ -115,7 +117,9 @@ function renderFormWireframe(spec, f) {
           lines.push(row('   (activity timeline + notes — type to add a note)'));
           continue;
         }
-        lines.push(rule(`${sec.label || 'Details'}${sec.visible === false ? '  (hidden)' : ''}`));
+        // `showLabel: false` means Dataverse renders NO section heading, so showing one here would
+        // have the approval preview promise a heading the deployed form does not have.
+        lines.push(rule(`${sec.showLabel === false ? '(no heading)' : (sec.label || 'Details')}${sec.visible === false ? '  (hidden)' : ''}`));
         for (const r of sec.rows || []) {
           // A bound field cell has control.fieldName; the notes control has none.
           const cells = (r.cells || []).filter((c) => c.control && c.control.fieldName);

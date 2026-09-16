@@ -1205,21 +1205,23 @@ function entityFromMetadata(meta, logical) {
     // Absent KEEPS the attribute, matching every other rule here: when the label read fails no
     // attribute carries `AttributeOf`, and "we could not look" must not become a column deletion.
     if (a.AttributeOf) return false;
-    // NOT CREATABLE. The platform generates companion columns that carry no `AttributeOf`, are not
-    // logical, and report `IsCustomAttribute: true` — so every rule above is blind to them. The one
-    // fact that separates them from an authored column is that the API refuses to create them.
+    // BASE-CURRENCY TWIN. Dataverse generates a `<money>_base` column beside every Money column. It
+    // carries no `AttributeOf`, is not logical, and reports `IsCustomAttribute: true`, so every rule
+    // above is blind to it — and emitting it meant a rebuild tried to CREATE a column the platform
+    // generates for itself.
     //
-    // LIVE-MEASURED on a Money column `cfo_budget`:
-    //   cfo_budget       AttributeOf=null  IsLogical=false  IsCustomAttribute=true  IsValidForCreate=TRUE
-    //   cfo_budget_base  AttributeOf=null  IsLogical=false  IsCustomAttribute=true  IsValidForCreate=FALSE
-    // `<money>_base` is the base-currency twin Dataverse creates for every Money column. Emitting it
-    // as a spec column meant a rebuild into a fresh environment tried to CREATE `cfo_budget_base`,
-    // colliding with the twin the platform generates for that table's own Money column — the same
-    // invented-column failure as the shadow rule above, reached by a different route.
+    // `IsBaseCurrency` is the ONLY unambiguous signal. `IsValidForCreate: false` is NOT a substitute:
+    // it is a per-column write capability this spec deliberately supports on authored columns
+    // (`isValidForCreate` in app-spec-schema.md), so filtering on it turns a round-trip into a
+    // deletion of a legitimately read-only column. LIVE-MEASURED on stock `opportunity`:
+    //   estimatedvalue       IsBaseCurrency=false  IsValidForCreate=true
+    //   estimatedvalue_base  IsBaseCurrency=TRUE   IsValidForCreate=false
+    //   totalamount          IsBaseCurrency=false  IsValidForCreate=FALSE  <- real column, must KEEP
+    // `totalamount` is exactly the column the capability flag would have wrongly deleted.
     //
-    // Absent KEEPS the attribute, like every other rule here: when the label read fails no attribute
-    // carries `IsValidForCreate`, and "we could not look" must not become a column deletion.
-    if (a.IsValidForCreate === false) return false;
+    // Absent KEEPS the attribute, like every other rule here: `IsBaseCurrency` only rides along when
+    // the Money cast read succeeded, and "we could not look" must never become a column deletion.
+    if (a.IsBaseCurrency === true) return false;
     // Keep only attribute types the App Spec can declare (see the map above), PLUS any attribute the
     // option-set read matched, PLUS any attribute `AttributeTypeName` proves is a choice. That last
     // clause is what keeps a MultiChoice when the cast read failed or came back empty: its
@@ -1396,12 +1398,7 @@ async function readEntityWithDescriptions(sdk, logical) {
     // `AttributeOf` rides along for the same filter and is the STRONGER signal: it names the
     // attribute a shadow belongs to, and a POLYMORPHIC lookup's shadows report `IsLogical: false`
     // (live-measured), so `IsLogical` alone cannot see them.
-    // `IsValidForCreate` catches the rest: a platform-generated companion the API refuses to create.
-    // LIVE-MEASURED on a Money column `cfo_budget`, whose auto-generated base-currency twin
-    // `cfo_budget_base` reports AttributeOf null, IsLogical false AND IsCustomAttribute true — so it
-    // slips past every other rule — while `IsValidForCreate` is false. See the filter for why that
-    // matters on a rebuild.
-    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName,IsValidForCreate`);
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName`);
     if (!res || res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res && res.status}`);
     if (!res.body || !Array.isArray(res.body.value)) throw new Error('the response carried no value[] array');
     const rows = res.body.value;
@@ -1409,7 +1406,7 @@ async function readEntityWithDescriptions(sdk, logical) {
     meta.attributes = (meta.attributes || []).map((a) => {
       const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
       const row = byLogical.get(key);
-      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeOf: row.AttributeOf, AttributeTypeName: row.AttributeTypeName, IsValidForCreate: row.IsValidForCreate } : a;
+      return row ? { ...a, Description: row.Description, DisplayName: row.DisplayName, IsLogical: row.IsLogical, AttributeOf: row.AttributeOf, AttributeTypeName: row.AttributeTypeName } : a;
     });
   } catch (err) {
     // Recorded, not swallowed — and it does NOT overwrite a table-level failure already recorded
@@ -1418,6 +1415,33 @@ async function readEntityWithDescriptions(sdk, logical) {
     if (!meta.labelReadFailed) {
       meta.labelReadFailed = (err && err.message) ? String(err.message).slice(0, 200) : 'read failed';
     }
+  }
+  try {
+    // Base-currency twins. `IsBaseCurrency` lives on MoneyAttributeMetadata, not on the base
+    // attribute type, so it needs its own CAST read — the same shape the option-set reads below use.
+    //
+    // This is the only unambiguous way to recognise the `<money>_base` column Dataverse generates
+    // beside every Money column. It reports no `AttributeOf`, is not logical, and is
+    // `IsCustomAttribute: true`, so nothing else in the projection distinguishes it from a column the
+    // author wrote — and emitting it made a rebuild try to create a column the platform owns.
+    //
+    // Best-effort on purpose: a failure leaves `IsBaseCurrency` absent on every attribute, and the
+    // filter KEEPS an attribute whose flag it could not read. The cost of a failed read is the twin
+    // reappearing, never a real column disappearing.
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes/Microsoft.Dynamics.CRM.MoneyAttributeMetadata?$select=LogicalName,IsBaseCurrency`);
+    if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+      const baseCurrency = new Set(res.body.value
+        .filter((r) => r && r.LogicalName && r.IsBaseCurrency === true)
+        .map((r) => String(r.LogicalName).toLowerCase()));
+      if (baseCurrency.size) {
+        meta.attributes = (meta.attributes || []).map((a) => {
+          const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
+          return baseCurrency.has(key) ? { ...a, IsBaseCurrency: true } : a;
+        });
+      }
+    }
+  } catch {
+    /* best-effort: absent IsBaseCurrency keeps the column, which is the safe direction */
   }
   try {
     // Choice / MultiChoice option sets (#564). A SEPARATE read from the attribute one above, and it

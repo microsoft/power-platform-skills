@@ -106,6 +106,21 @@ test('the wireframe shows a multi-column tab as columns, and a collapsed tab as 
   assert.match(out, /Extra.*\(collapsed\)/, `collapsed state not shown:\n${out}`);
 });
 
+// The wireframe IS the layout approval gate, so anything it omits is something the user approves
+// without seeing. Two states were invisible: a hidden tab when it is the ONLY tab (the banner was
+// gated on tab count), and a section whose heading Dataverse will not render at all.
+test('the wireframe shows a hidden single tab, and a showLabel:false section as having no heading', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Only', visible: false,
+      sections: [{ name: 'a', label: 'Suppressed Heading', showLabel: false, columns: 1, fields: ['new_status'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  assert.match(out, /\(hidden\)/, `a hidden tab must be shown even as the only tab:\n${out}`);
+  assert.ok(!/Suppressed Heading/.test(out), `a showLabel:false section must not promise a heading:\n${out}`);
+  assert.match(out, /no heading/, 'and the preview should say so explicitly');
+});
+
 test('a single-column tab shows no column banner (the common case stays clean)', () => {
   const s = spec();
   s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [

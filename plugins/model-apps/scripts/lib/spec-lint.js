@@ -205,6 +205,13 @@ function lintAppSpec(spec) {
     if (isExplicit) {
       if (!Array.isArray(f.tabs) || f.tabs.length === 0) E(`Form ${f.entity} uses an explicit layout but declares no tabs — add at least one tab with a section, or use layout:'auto'`);
       else for (const t of f.tabs) {
+        // A malformed entry (`tabs: [null]`, a string, an array) would throw from this linter rather
+        // than be reported as a lint error — the validator rejects it, but the standalone lint has to
+        // survive the same input.
+        if (!t || typeof t !== 'object' || Array.isArray(t)) {
+          E(`Form ${f.entity} has a tab entry that is not an object — each tab must be { label, sections|columns }`);
+          continue;
+        }
         // A tab holds sections either directly (the single-full-width-column shorthand) or inside
         // `columns[]` (the multi-column form). Checking only `t.sections` reported every
         // multi-column tab as empty, which is the exact silent-disagreement this lint exists to

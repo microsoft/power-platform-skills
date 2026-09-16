@@ -1935,6 +1935,13 @@ async function runSdkBuild(spec, opts = {}) {
             continue;
           }
           if (local) claimedHere.add(local.index);
+          else if (global && global.pointer.startsWith(columnPointer + '/sections/')) {
+            // A form-wide NAME hit inside THIS column still consumes that index. Without this, a
+            // later want in the same column could match the very section the name hit already took
+            // (by label or position), routing two authored sections onto one deployed section.
+            const idx = Number(global.pointer.slice((columnPointer + '/sections/').length));
+            if (Number.isInteger(idx)) claimedHere.add(idx);
+          }
           const pointer = global ? global.pointer : columnPointer + '/sections/' + local.index;
           const live = global ? global.section : local.item;
           sectionTargets[wantSection.name] = { pointer, name: live.name };

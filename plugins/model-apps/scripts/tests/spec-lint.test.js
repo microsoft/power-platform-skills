@@ -441,6 +441,23 @@ test('accepts a command bound to a declared web resource + function', () => {
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
 
+test('lint: a malformed tab entry is reported, not thrown on', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'T', layout: 'explicit', tabs: [null] }];
+  // The linter dereferences each tab (`t.columns`/`t.sections`). Through the public entry point
+  // migrateAppSpec normalises a null entry to `{}` first, so the crash is not reachable there — but
+  // the loop now guards the entry anyway, because lintAppSpec is also called on raw specs.
+  let r;
+  assert.doesNotThrow(() => { r = lintAppSpec(s); }, 'lintAppSpec must not throw on a malformed tab');
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((m) => /tab/i.test(m)), `expected a structural tab error; got ${JSON.stringify(r.errors)}`);
+
+  // And a genuinely raw null tab, bypassing migration, is reported rather than thrown on.
+  const raw = { ...base(), forms: [{ entity: 'new_ticket', name: 'T', layout: 'explicit', tabs: [null] }] };
+  raw.schemaVersion = undefined;
+  assert.doesNotThrow(() => lintAppSpec(raw));
+});
+
 test('errors on a dashboard tile referencing an unknown view', () => {
   const s = base();
   s.views = [{ entity: 'new_ticket', name: 'Active', columns: ['new_name'] }];

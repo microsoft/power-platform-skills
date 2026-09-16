@@ -1773,6 +1773,24 @@ test('form topology: two unlabeled tabs do not collapse onto the same live tab',
 // The field pass places only BOUND fields. A notes/timeline section holds one non-field control, so
 // creating it with `rows: []` like an ordinary section deployed a visible "Notes" header promising a
 // timeline that nothing ever adds — and the build was green.
+// A form-wide NAME hit resolves a section that may sit anywhere on the form. If its index is not
+// claimed, a LATER want in the same column can match that very section by label or position, so two
+// authored sections converge on one and fields are routed to the wrong target.
+test('form topology: a section matched globally by name claims its index, so a later section cannot reuse it', async () => {
+  const spec = makeSpec();
+  // Two sections: the first names the deployed section explicitly (a form-wide name hit), the second
+  // is unlabeled/unnamed and would otherwise fall through to the same index positionally.
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'Details', columns: 1, fields: ['new_name'] },
+    { columns: 1, fields: ['new_tier'] },
+  ] }]);
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const added = find(calls, 'addElement').filter((c) => /\/sections$/.test(String(c.args[2])));
+  assert.strictEqual(added.length, 1, `the second section must be CREATED, not resolved onto the globally named one; saw ${added.map((c) => JSON.stringify(c.args[3] && c.args[3].name)).join(', ')}`);
+});
+
 test('form topology: a created notes section keeps its timeline row instead of deploying empty', async () => {
   const spec = makeSpec();
   spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [

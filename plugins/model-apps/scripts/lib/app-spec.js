@@ -1164,9 +1164,43 @@ function validateFormLayoutKeys(f, errors) {
       if (!Number.isInteger(v) || v < 1) errors.push(`${label}: ${where} has ${key} '${v}' — it must be a whole number of ${key === 'colspan' ? 'columns' : 'rows'}, 1 or greater`);
     }
   };
+  // A tab/section/form-column entry the compiler will DEREFERENCE. `unknown` deliberately ignores a
+  // non-object, so `tabs: [null]` used to reach compileFormIntent — which reads `t.columns` — as a raw
+  // TypeError instead of a structural validation error.
+  const mustBeObject = (where, v) => {
+    if (v && typeof v === 'object' && !Array.isArray(v)) return true;
+    errors.push(`${label}: ${where} must be an object, got ${Array.isArray(v) ? 'an array' : JSON.stringify(v)}`);
+    return false;
+  };
+  // `expanded`/`visible`/`showLabel` are only ever truth-tested by the compiler (`!== false`), so a
+  // STRING "false" compiles as true and silently deploys the opposite of what was authored — the same
+  // silent-no-op class the allow-list exists to end.
+  const checkBooleans = (where, o, keys) => {
+    for (const k of keys) {
+      if (o[k] === undefined) continue;
+      if (typeof o[k] !== 'boolean') errors.push(`${label}: ${where} has ${k} '${o[k]}' — it must be true or false, not a ${typeof o[k]}`);
+    }
+  };
+  // Names are IDENTITY for the build's topology reconcile (it matches a deployed container by name,
+  // and keys its placement targets by name), so two containers sharing one name make both
+  // declarations resolve to the same live container.
+  const seenTabNames = new Map();
+  const seenSectionNames = new Map();
+  const checkUniqueName = (where, name, seen, kind) => {
+    if (name === undefined || name === null || name === '') return;
+    const key = String(name).toLowerCase();
+    if (seen.has(key)) {
+      errors.push(`${label}: ${where} reuses the ${kind} name '${name}', already used by ${seen.get(key)} — a ${kind} name is its identity on a rebuild, so duplicates make both declarations target the same deployed ${kind}.`);
+      return;
+    }
+    seen.set(key, where);
+  };
   f.tabs.forEach((t, ti) => {
     const where = `tab ${t && t.label ? `'${t.label}'` : `#${ti + 1}`}`;
+    if (!mustBeObject(where, t)) return;
     unknown(where, t, FORM_TAB_KEYS);
+    checkBooleans(where, t, ['expanded', 'visible']);
+    checkUniqueName(where, t.name, seenTabNames, 'tab');
     // A tab is EITHER the single-full-width-column shorthand or the explicit multi-column shape.
     // Accepting both would leave the compiler to pick one and silently discard the other's sections.
     if (t && Array.isArray(t.columns) && Array.isArray(t.sections)) {
@@ -1182,7 +1216,9 @@ function validateFormLayoutKeys(f, errors) {
     }
     const columns = (t && Array.isArray(t.columns)) ? t.columns : [];
     columns.forEach((c, ci) => {
-      unknown(`${where} column #${ci + 1}`, c, FORM_TAB_COLUMN_KEYS);
+      const cwhere = `${where} column #${ci + 1}`;
+      if (!mustBeObject(cwhere, c)) return;
+      unknown(cwhere, c, FORM_TAB_COLUMN_KEYS);
       // Dataverse omits an undefined width from columnToRaw and then rejects the push, and a width
       // that is not a percentage does not lay out at all.
       if (c && c.width !== undefined && !/^\d{1,3}%$/.test(String(c.width))) {
@@ -1196,7 +1232,10 @@ function validateFormLayoutKeys(f, errors) {
     });
     const sections = formSectionsOf(t);
     sections.forEach((s, si) => {      const swhere = `${where} section ${s && s.label ? `'${s.label}'` : `#${si + 1}`}`;
+      if (!mustBeObject(swhere, s)) return;
       unknown(swhere, s, FORM_SECTION_KEYS);
+      checkBooleans(swhere, s, ['showLabel', 'visible']);
+      checkUniqueName(swhere, s.name, seenSectionNames, 'section');
       if (s && s.columns !== undefined && (!Number.isInteger(s.columns) || s.columns < 1 || s.columns > 4)) {
         errors.push(`${label}: ${swhere} has columns '${s.columns}' — a section may span 1 to 4 columns`);
       }
@@ -2531,13 +2570,20 @@ function validateAppSpec(spec, opts = {}) {
           // An alternate key is enforced-unique by Dataverse, so it is preferred and makes the
           // primary-name fallback irrelevant.
           const hasSafeKey = (ent.alternateKeys || []).some((key) => (key.columns || []).length === 1 && filled(key.columns[0]));
-          const primaryCol = ent.primaryAttribute.schemaName;
-          if (!hasSafeKey && filled(primaryCol)) {
+          // Whichever column becomes `matchOn` is the one duplicates break, so check THAT column.
+          // Checking only the primary-name fallback left `{ code: 'A' }, { code: 'A' }` passing the
+          // gate and then failing during sample-data provisioning — after tables, forms and views
+          // were already deployed, which is the whole failure this gate exists to move earlier.
+          const altKeyCol = (ent.alternateKeys || [])
+            .map((key) => ((key.columns || []).length === 1 ? key.columns[0] : null))
+            .find((c) => c && filled(c));
+          const matchOnCol = altKeyCol || (!hasSafeKey && filled(ent.primaryAttribute.schemaName) ? ent.primaryAttribute.schemaName : null);
+          if (matchOnCol) {
             const seen = new Set();
             for (const r of v) {
-              const val = String(valueOf(r, primaryCol));
+              const val = String(valueOf(r, matchOnCol));
               if (seen.has(val)) {
-                errors.push(`sampleData['${k}']: duplicate ${String(primaryCol).toLowerCase()} value '${val}'. With no single-column alternate key, ${String(primaryCol).toLowerCase()} is used as matchOn and Dataverse could resolve or deduplicate the wrong row. Add a single-column alternate key with unique values, or make ${String(primaryCol).toLowerCase()} unique across the sample rows.`);
+                errors.push(`sampleData['${k}']: duplicate ${String(matchOnCol).toLowerCase()} value '${val}'. ${altKeyCol ? `${String(matchOnCol).toLowerCase()} is the single-column alternate key used as matchOn` : `With no single-column alternate key, ${String(matchOnCol).toLowerCase()} is used as matchOn`}, so Dataverse could resolve or deduplicate the wrong row. Make ${String(matchOnCol).toLowerCase()} unique across the sample rows.`);
                 break;
               }
               seen.add(val);
