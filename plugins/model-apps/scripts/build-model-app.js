@@ -46,12 +46,12 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 //                  (findTables/findColumns/fetchEntityMetadata) and every artifact
 //                  (views/charts/forms/app) lands here, so the app folder accumulates the
 //                  metadata for reuse/edits. Construction is offline (no token until first call).
-function makeSdk(env, spec, workspaceDir, languageCode) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env, spec, workspaceDir, languageCode) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
   const sdk = createMakerSdk({
-    workspacePath: sdkTempDir, // unused (no workspace ops)
+    workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
     instanceUrl: env,
     httpClient,
     solutionUniqueName: spec.solution && spec.solution.uniqueName,
@@ -62,7 +62,7 @@ function makeSdk(env, spec, workspaceDir, languageCode) {
   });
   fs.mkdirSync(workspaceDir, { recursive: true });
   const provisionSdk = createMakerSdk({
-    workspacePath: workspaceDir,
+    workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
     instanceUrl: env,
     httpClient,
     // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
@@ -70,7 +70,7 @@ function makeSdk(env, spec, workspaceDir, languageCode) {
     // instances at different LCIDs would make every push of a fetched artifact fail.
     ...(languageCode ? { languageCode } : {}),
   });
-  provisionSdk.initWorkspace();
+  await provisionSdk.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
@@ -582,7 +582,7 @@ async function main() {
   opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir, authoringLanguageCode);
+  const { sdk, provisionSdk, cleanup } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply

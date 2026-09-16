@@ -271,7 +271,11 @@ function loadTeardownCli({
       };
     }
     if (id === './vendor/cds-maker-sdk.cjs') {
-      return {
+        return {
+          // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
+          // must expose it too. The marker carries the root so the assertions below can still
+          // check WHERE the throwaway workspace was placed.
+          createNodeWorkspaceStorage: (root) => ({ __mockWorkspaceRoot: root }),
         createMakerSdk: (cfg) => {
           events.push({ type: 'createMakerSdk', cfg });
           if (sdkThrows) throw sdkThrows;
@@ -336,7 +340,7 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
   const sdkCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp);
   const workspaceCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === workspaceDir);
 
-  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspacePath === harness.sdkTemp));
+  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === harness.sdkTemp));
   assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === true));
   assert.ok(harness.events.some((e) => e.type === 'tombstoneSnapshot' && e.workspaceDir === workspaceDir));
   assert.ok(harness.events.some((e) => e.type === 'deleteSnapshot' && e.workspaceDir === workspaceDir));

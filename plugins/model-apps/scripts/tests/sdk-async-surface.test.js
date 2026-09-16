@@ -555,7 +555,7 @@ test('a STALE_ARTIFACT from the async surface HALTS the build (fails closed, wit
   // do, rather than continuing and shipping a half-applied artifact. This pins that, so a future
   // refactor of the error path cannot quietly downgrade it to a warning.
   const { makeRunner, BuildHalt } = require(path.resolve(SCRIPTS_DIR, 'lib', 'entity-provision.js'));
-  const { SdkError } = require(BUNDLE);
+  const { SdkError, createNodeWorkspaceStorage } = require(BUNDLE);
 
   const events = [];
   const runner = makeRunner({ emit: (e) => events.push(e), total: 1 });
@@ -757,7 +757,7 @@ test('sanitizeSubject output can NEVER match a merge prefix (the actual contract
 });
 
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'async-surface-'));
   try {
     const httpClient = {
@@ -767,9 +767,9 @@ test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either
       delete: async () => ({ status: 204, headers: {}, body: {} }),
       put: async () => ({ status: 204, headers: {}, body: {} }),
     };
-    const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-    sdk.initWorkspace();
-    const art = sdk.createArtifact('form', { name: 'F', entityLogicalName: 'account', formType: 'main', status: 'draft' });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+    await sdk.initWorkspace();
+    const art = await sdk.createArtifact('form', { name: 'F', entityLogicalName: 'account', formType: 'main', status: 'draft' });
 
     for (const method of ASYNC_SDK_METHODS) {
       assert.strictEqual(typeof sdk[method], 'function', `${method} exists on the bundle`);
@@ -796,7 +796,7 @@ test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either
     // satisfied. A review pointed out this test proved only one direction; this is the other.
     assert.ok(!(art && typeof art.then === 'function'),
       'createArtifact is still synchronous — the plugin uses its return value directly');
-    const ws = sdk.initWorkspace();
+    const ws = await sdk.initWorkspace();
     assert.ok(!(ws && typeof ws.then === 'function'),
       'initWorkspace is still synchronous — every engine calls it un-awaited before any other work; '
       + 'if it became async, the workspace could be unready when the first artifact call runs');

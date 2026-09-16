@@ -19,12 +19,12 @@ const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 
-function makeProvision(env, workspaceDir) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeProvision(env, workspaceDir) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+  await sdk.initWorkspace();
   // Only the SDK is returned. The raw `httpClient` used to come back with it because the role
   // privilege check had no SDK surface to read `EntityDefinitions(...)?$select=Privileges`; the
   // vendored bundle now exposes `getEntityPrivileges`, so that escape hatch is gone. Handing the
@@ -366,7 +366,7 @@ async function main() {
   const v = validateAppSpec(spec, { profile: 'deploy' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const sdk = makeProvision(env, workspaceDir);
+  const sdk = await makeProvision(env, workspaceDir);
   const genpageCli = makeGenpageCli(env);
   const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)

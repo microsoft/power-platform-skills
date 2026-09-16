@@ -306,6 +306,10 @@ function solutionHarness({ argv, sdkFactoryThrows = null, initThrows = null, rmT
       },
       './lib/sdk-http-client': { createAzHttpClient: () => ({}) },
       './vendor/cds-maker-sdk.cjs': {
+        // The CLI builds its store explicitly via the /node adapter, so the mocked bundle must
+        // expose it. The marker carries the root so assertions can still check WHERE the throwaway
+        // workspace was placed.
+        createNodeWorkspaceStorage: (root) => ({ __mockWorkspaceRoot: root }),
         createMakerSdk: () => {
           if (sdkFactoryThrows) throw new Error(sdkFactoryThrows);
           return {

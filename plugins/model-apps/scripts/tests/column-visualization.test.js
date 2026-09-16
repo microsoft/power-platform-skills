@@ -259,11 +259,11 @@ test('the shipped SDK exposes the visualization surface the build calls', () => 
   // not exported, so a `prototype` check would only ever prove the export shape.
   const os = require('node:os');
   const fs = require('node:fs');
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cv-surface-'));
   try {
     const sdk = createMakerSdk({
-      workspacePath: dir,
+      workspaceStorage: createNodeWorkspaceStorage(dir),
       instanceUrl: 'https://contoso.crm.dynamics.com',
       httpClient: {
         get: async () => ({ status: 200, headers: {}, body: { value: [] } }),

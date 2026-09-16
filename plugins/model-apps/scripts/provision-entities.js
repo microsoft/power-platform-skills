@@ -19,20 +19,20 @@ const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, read
 //                  solution via the MSCRM.SolutionUniqueName header).
 //   provision    — header-less; used for discovery reads (findTables/findColumns/
 //                  fetchEntityMetadata/queryRecords).
-function makeSdk(env, input) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env, input) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
   const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
   const sdk = createMakerSdk({
-    workspacePath: sdkTempDir,
+    workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
     instanceUrl: env,
     httpClient,
     solutionUniqueName: input.solution && input.solution.uniqueName,
   });
-  sdk.initWorkspace();
-  const provision = createMakerSdk({ workspacePath: provisionTempDir, instanceUrl: env, httpClient });
-  provision.initWorkspace();
+  await sdk.initWorkspace();
+  const provision = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(provisionTempDir), instanceUrl: env, httpClient });
+  await provision.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });
@@ -316,7 +316,7 @@ async function main() {
   };
   
   // Construct SDK clients (offline until first call)
-  const { sdk, provision, cleanup } = makeSdk(env, input);
+  const { sdk, provision, cleanup } = await makeSdk(env, input);
 
   let r;
   try {

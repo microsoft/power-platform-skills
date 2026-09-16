@@ -1530,7 +1530,7 @@ async function runSdkBuild(spec, opts = {}) {
     // `description` is new on forms in this SDK uptake (dashboards, rows in the same systemform
     // table, always had it). Passed only when the spec sets one: omitted on push it is not written,
     // so an existing server-side description survives an edit that did not set one.
-    const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
+    const art = await provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
     const tabs = def.tabs || [];
     // Sequential (not Promise.all): tab ORDER is the on-form order, and addElement appends.
     for (const tab of tabs) await provision.addElement('form', art.id, '/tabs', tab);
@@ -2238,10 +2238,10 @@ async function runSdkBuild(spec, opts = {}) {
       // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
       // instead handled by making our form the entity's default (see promoteDefaultForm below).
       const existingId = await resolveExistingFormId(provision, def);
-      if (existingId) return reconcileForm(existingId, def);
+      if (existingId) return await reconcileForm(existingId, def);
     } else if (type === 'view') {
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
-      if (existingId) return reconcileView(existingId, def, !!(meta && meta.authoredQuery));
+      if (existingId) return await reconcileView(existingId, def, !!(meta && meta.authoredQuery));
     }
     // A form cannot be created from a full authored definition (the adapter's createDefault
     // serializes authored tabs BEFORE minting ids and throws on the id-less cells); build its body
@@ -2252,7 +2252,7 @@ async function runSdkBuild(spec, opts = {}) {
       id = await createFormShell(def);
       await addSubgrids(id, def.__subgrids);
     } else {
-      id = provision.createArtifact(type, def).id;
+      id = (await provision.createArtifact(type, def)).id;
     }
     const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
@@ -2367,7 +2367,7 @@ async function runSdkBuild(spec, opts = {}) {
         return existingId;
       }
       return runner.run('charts', `chart "${def.name}"`, async () => {
-        const art = provision.createArtifact('chart', def);
+        const art = await provision.createArtifact('chart', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         // Created here, so it IS workspace-resident and publishable.
@@ -2694,45 +2694,29 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
         const def = businessRuleDef(rule);
-        const art = provision.createArtifact('businessRule', def);
+        const art = await provision.createArtifact('businessRule', def);
         // The condition tree is a nested object, so it goes on through the generic element surface
         // rather than the create payload — mirroring how the SDK's own workflow test authors one.
         await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
         // The push CANNOT tell you a rule is wrong. A mis-shaped condition tree is MERGED onto the
         // node, ignored by the serializer, and written as a rule with no clauses and no actions:
         // HTTP 204, activated, and it never fires. That trap is pinned in sdk-uptake-contract.test.js
-        // ("a wrongly-shaped condition produces an EMPTY rule rather than erroring") and, until this
-        // SDK, the spec gate was the only thing standing in front of it.
+        // ("a wrongly-shaped condition produces an EMPTY rule rather than erroring").
         //
-        // The SDK now exposes the business-rule designer's OWN completeness validator — the same one
-        // the designer gates its Save button on — and states plainly that nothing on the push path
-        // runs it, so run it here, BEFORE the write.
+        // ⚠ The explicit validation call that used to sit HERE is gone, and its removal is a
+        // TIGHTENING rather than a loss of coverage. It invoked the SDK's old business-rule
+        // validator method, which no longer exists: the SDK now runs the designer's own
+        // completeness validator internally on EVERY save — create and update, Active and Draft —
+        // so an incomplete rule is refused by `pushArtifact` below instead of by an opt-in check.
         //
-        // Strict about FINDINGS, best-effort about the VALIDATOR. Findings halt: a rule that reports
-        // success and never fires is exactly the silent-wrong-artifact class this engine exists to
-        // prevent, and it is invisible afterwards. But a bundle without the method, or a validator
-        // that throws, must not block a build it cannot judge.
+        // That is strictly stronger. The old call was best-effort by design (a bundle without the
+        // method must not block a build it cannot judge), so it silently degraded to NO validation
+        // whenever the vendored bundle predated it. Re-adding a defensive `typeof ... === 'function'`
+        // block would now be dead code that never runs and implies coverage living elsewhere.
         //
-        // Field metadata is deliberately NOT passed: without it the SDK SUPPRESSES the
-        // metadata-dependent checks (Clear eligibility, value-type compatibility, max length) rather
-        // than failing them, and the structural checks are the ones that close the trap above.
-        // Passing them would cost an attribute read per rule for checks the spec gate already covers.
-        //
-        // MEASURED against this bundle: every shape this spec surface can author — all 16 operators,
-        // all 4 action types, every scope and status, multi-condition and multi-action — reports zero
-        // issues, so this cannot reject a rule that was previously buildable.
-        if (typeof provision.validateBusinessRule === 'function') {
-          let issues = null;
-          try {
-            issues = provision.validateBusinessRule(Object.assign({}, art, { rootCondition: def.rootCondition }));
-          } catch { /* a diagnostic that cannot run must never fail the build */ }
-          if (Array.isArray(issues) && issues.length) {
-            const detail = issues.map((i) => `${(i && i.rule) || 'issue'}: ${(i && i.message) || ''}`.trim()).join('; ');
-            throw new BuildHalt(
-              `business rule "${rule.name}" on ${rule.entity} is incomplete and would deploy as a rule that never fires — ${detail}`,
-              { phase: 'business-rules', code: 'business-rule-incomplete', recoverable: false });
-          }
-        }
+        // NOTE: the method name is deliberately NOT written in call form anywhere in this file.
+        // `sdk-surface-contract.test.js` scans engine source for `sdk.<method>(` and would read a
+        // mention in prose as a live call, then demand it back on the vendored bundle.
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
@@ -2928,7 +2912,7 @@ async function runSdkBuild(spec, opts = {}) {
         // The whole flow — including its stages and steps — is carried on the CREATE payload. The
         // adapter normalizes and id-stamps the stage/step tree there, so unlike a business rule's
         // condition tree there is no element-surface follow-up to make.
-        const art = provision.createArtifact('bpf', bpfDef(flow));
+        const art = await provision.createArtifact('bpf', bpfDef(flow));
         const pushed = requireSuccessfulPush(await provision.pushArtifact('bpf', art.id), `business process flow ${flow.name}`, opts.warn);
         result.created.businessProcessFlows[key] = pushed.id;
         // On the CREATE path the derivation is authoritative: the build supplied `flow.name`, the
@@ -2961,7 +2945,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
-        const art = provision.createArtifact('command', def);
+        const art = await provision.createArtifact('command', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('command', art.id), `command ${entityLogical}`, opts.warn);
         result.created.commands[entityLogical] = pushed.id;
       });
@@ -2988,7 +2972,7 @@ async function runSdkBuild(spec, opts = {}) {
         continue;
       }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
-        const art = provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
+        const art = await provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
         // for..of, not forEach: addElement is async, and a forEach callback would fire the adds
         // without awaiting them — the push below could then race an unfinished tile insert.
         const tiles = dash.tiles || [];
@@ -3066,7 +3050,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
-      const art = provision.createArtifact('app', def);
+      const art = await provision.createArtifact('app', def);
       const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`, opts.warn);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does

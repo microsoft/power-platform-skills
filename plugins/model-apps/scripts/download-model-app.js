@@ -308,12 +308,12 @@ function relationshipsSkippedWarning(skipped) {
   return `${lines.join('\n')}\n`;
 }
 
-function makeProvision(env, workspaceDir) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeProvision(env, workspaceDir) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+  await sdk.initWorkspace();
   return sdk;
 }
 
@@ -2111,7 +2111,7 @@ async function main() {
   // the one the download itself uses, so a transient 5xx here would otherwise fail a run that would
   // have succeeded. Surface it and continue.
   if (auth.inconclusive) process.stderr.write(`⚠ ${auth.error}\n`);
-  const sdk = makeProvision(env, path.join(outDir, '.maker-workspace'));
+  const sdk = await makeProvision(env, path.join(outDir, '.maker-workspace'));
   const resolved = await resolveAppId(sdk, appArg);
   if (resolved.error) { emitResult(false, { ok: false, error: resolved.error }); return; }
   const appId = resolved.appId;

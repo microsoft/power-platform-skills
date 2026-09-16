@@ -50,8 +50,8 @@ const tempDirs = [];
 test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 /** A real SDK over a fake Dataverse holding {@link DEPLOYED_SITEMAP_XML}. */
-function freshSdk() {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sitemap-icon-'));
   tempDirs.push(dir);
   const posted = [];
@@ -91,8 +91,8 @@ function freshSdk() {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, lastSitemapXml: () => posted[posted.length - 1] || '' };
 }
 
@@ -100,7 +100,7 @@ function freshSdk() {
 const subAreaTag = (xml) => (/<SubArea\b[^>]*>/.exec(xml) || [''])[0];
 
 test('REAL BUNDLE: the plugin\u2019s whole-/siteMap replace cannot carry a dropped Icon forward', async () => {
-  const { sdk, lastSitemapXml } = freshSdk();
+  const { sdk, lastSitemapXml } = await freshSdk();
   const deployed = await sdk.fetchArtifact('app', APP_ID);
   assert.strictEqual(deployed.siteMap.areas[0].groups[0].subAreas[0].icon, 'contoso_legacy.png',
     'precondition: the deployed app really does carry the legacy raster icon');
@@ -130,7 +130,7 @@ test('REAL BUNDLE: an IN-PLACE reconcile drops a removed Icon while keeping the 
   // The shape that actually regressed. Before the fix this serialized BOTH `Icon="contoso_legacy.png"`
   // and the new `VectorIcon`, and the deployed app went on rendering the stale raster — MEASURED
   // against the pre-uptake bundle, which fails this test.
-  const { sdk, lastSitemapXml } = freshSdk();
+  const { sdk, lastSitemapXml } = await freshSdk();
   const art = await sdk.fetchArtifact('app', APP_ID);
   const sub = art.siteMap.areas[0].groups[0].subAreas[0];
   delete sub.icon;

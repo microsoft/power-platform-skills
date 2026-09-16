@@ -23,8 +23,8 @@ test.after(() => { for (const d of tempDirs) fs.rmSync(d, { recursive: true, for
 
 // A real SDK bound to a capturing httpClient. `meta` maps a logical entity name -> attribute-type map
 // so the adapter's push-time metadata defaulting (T4) resolves a field's control classId.
-function freshSdk(capture, meta) {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk(capture, meta) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h2-real-'));
   tempDirs.push(dir);
   const httpClient = {
@@ -42,15 +42,15 @@ function freshSdk(capture, meta) {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return sdk;
 }
 
 // Mirror the engine's createFormShell sequence: minimal create, append each compiled tab (ids minted
 // by addElement), drop the seed tab. Returns the form id.
 async function buildFormShell(sdk, intent) {
-  const art = sdk.createArtifact('form', { name: intent.name, entityLogicalName: intent.entityLogicalName, formType: intent.formType, status: intent.status });
+  const art = await sdk.createArtifact('form', { name: intent.name, entityLogicalName: intent.entityLogicalName, formType: intent.formType, status: intent.status });
   for (const tab of intent.tabs) await sdk.addElement('form', art.id, '/tabs', tab);
   await sdk.removeElement('form', art.id, '/tabs/0');
   return art.id;
@@ -67,7 +67,7 @@ const custSpec = {
 test('PARITY: the rewired form path reproduces the pre-swap golden facts (fields, order, required, notes)', async () => {
   const golden = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'parity-golden.json'), 'utf8')).form;
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
@@ -87,7 +87,7 @@ test('multi-tab / multi-section explicit layout serializes every tab, section an
     ] }],
   };
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(spec, spec.forms[0], { notesClassId: NOTES_CLASS_ID });
   assert.strictEqual(intent.tabs.length, 2, 'two tabs compiled');
   const id = await buildFormShell(sdk, intent);
@@ -118,7 +118,7 @@ test('#8 authored column width: a synthesized form column with NO explicit width
     ] }],
   };
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(spec, spec.forms[0], { notesClassId: NOTES_CLASS_ID });
   // Remove the plugin-set width from every tab column so ONLY the SDK default can supply it.
   for (const tab of intent.tabs) for (const col of (tab.columns || [])) delete col.width;
@@ -137,7 +137,7 @@ test('metadata-derived control types: passing only fieldName lets the adapter cl
   const spec = { entities: [{ schemaName: 'new_customer', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
     forms: [{ entity: 'new_customer', name: 'M', tabs: [{ label: 'G', sections: [{ label: 'S', columns: 1, fields: ['new_name', 'new_ownerid'] }] }] }] };
   const cap = [];
-  const sdk = freshSdk(cap, meta);
+  const sdk = await freshSdk(cap, meta);
   const intent = ai.compileFormIntent(spec, spec.forms[0], {});
   const id = await buildFormShell(sdk, intent);
   await sdk.pushArtifact('form', id);
@@ -154,7 +154,7 @@ test('metadata-derived control types: passing only fieldName lets the adapter cl
 
 test('#5 sub-grid is added as its OWN full-width section and serializes relationship, target, view id + title', async () => {
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   // The engine now appends a whole sub-grid SECTION to a column's /sections (not a cell into an
@@ -171,7 +171,7 @@ test('#5 sub-grid is added as its OWN full-width section and serializes relation
 
 test('events author + MERGE at /bag/c: appending to an existing <events> region adds a second handler without a duplicate root', async () => {
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   // First handler -> new region.
@@ -191,7 +191,7 @@ test('events author + MERGE at /bag/c: appending to an existing <events> region 
 
 test('field removal: removeElement on the cell pointer drops the field from the pushed formxml', async () => {
   const cap = [];
-  const sdk = freshSdk(cap);
+  const sdk = await freshSdk(cap);
   const intent = ai.compileFormIntent(custSpec, custSpec.forms[0], { notesClassId: NOTES_CLASS_ID });
   const id = await buildFormShell(sdk, intent);
   const ptr = ai.findFieldCellPointer(await sdk.getArtifact('form', id), 'new_tier');
@@ -204,7 +204,7 @@ test('field removal: removeElement on the cell pointer drops the field from the 
 });
 
 test('412 conflict: pushArtifact resolves to { success:false, error } (the signal requireSuccessfulPush halts on)', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h2-412-'));
   tempDirs.push(dir);
   const FID = '22222222-2222-2222-2222-222222222222';
@@ -216,8 +216,8 @@ test('412 conflict: pushArtifact resolves to { success:false, error } (the signa
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   await sdk.fetchArtifact('form', FID);
   await sdk.updateElement('form', FID, '/tabs/0', { expanded: false });
   const result = await sdk.pushArtifact('form', FID);
@@ -238,7 +238,7 @@ const fcell = (fn) => ({ control: { fieldName: fn, isRequired: false } });
 const META3 = { new_customer: { new_name: 'String', new_tier: 'Picklist', new_note: 'Memo', new_amt: 'Money' } };
 
 async function seedTwoSectionForm(sdk) {
-  const art = sdk.createArtifact('form', { name: 'T', entityLogicalName: 'new_customer', formType: 'Main' });
+  const art = await sdk.createArtifact('form', { name: 'T', entityLogicalName: 'new_customer', formType: 'Main' });
   await sdk.addElement('form', art.id, '/tabs', { name: 'tab_general', label: 'General', expanded: true, visible: true,
     columns: [{ width: '100%', sections: [
       secIntent('section_general', 'General', 1, [fcell('new_name'), fcell('new_tier')]),
@@ -249,7 +249,7 @@ async function seedTwoSectionForm(sdk) {
 }
 
 test('REAL BUNDLE topology: an existing form gains a tab and a section, and a section widens in place', async () => {
-  const sdk = freshSdk(null, META3);
+  const sdk = await freshSdk(null, META3);
   const id = await seedTwoSectionForm(sdk);
   await sdk.addElement('form', id, '/tabs', { name: 'tab_audit', label: 'Audit', expanded: true, visible: true,
     columns: [{ width: '100%', sections: [secIntent('section_audit', 'Audit', 2, [])] }] });
@@ -265,7 +265,7 @@ test('REAL BUNDLE topology: an existing form gains a tab and a section, and a se
 
 test('REAL BUNDLE topology: a field cell moves between sections and serializes under the new one', async () => {
   const cap = [];
-  const sdk = freshSdk(cap, META3);
+  const sdk = await freshSdk(cap, META3);
   const id = await seedTwoSectionForm(sdk);
   // section_more is deployed EMPTY, so a row must be seeded before a cell can move into it.
   await sdk.addElement('form', id, '/tabs/0/columns/0/sections/1/rows', { cells: [] });
@@ -285,8 +285,8 @@ test('REAL BUNDLE topology: a field cell moves between sections and serializes u
 
 test('REAL BUNDLE layout: multi-column tabs and cell spans reach the serialized formxml', async () => {
   const cap = [];
-  const sdk = freshSdk(cap, META3);
-  const art = sdk.createArtifact('form', { name: 'W', entityLogicalName: 'new_customer', formType: 'Main' });
+  const sdk = await freshSdk(cap, META3);
+  const art = await sdk.createArtifact('form', { name: 'W', entityLogicalName: 'new_customer', formType: 'Main' });
   await sdk.addElement('form', art.id, '/tabs', { name: 'tab_w', label: 'W', expanded: true, visible: true, columns: [
     { width: '60%', sections: [secIntent('sec_l', 'L', 2, [Object.assign(fcell('new_name'), { colspan: 2 }), fcell('new_tier')])] },
     { width: '40%', sections: [secIntent('sec_r', 'R', 1, [Object.assign(fcell('new_note'), { rowspan: 2 })])] },
