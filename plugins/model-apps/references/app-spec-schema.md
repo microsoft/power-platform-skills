@@ -680,6 +680,15 @@ would promise a layout Dataverse never renders. The SDK refuses these too, but t
 them at **author time** — before any workspace or network call — and names the real mechanism rather
 than reporting a JSON pointer into the compiled form.
 
+**`minimumPluginVersion`** (top level, optional) declares the oldest plugin that can build this spec —
+`"minimumPluginVersion": "2.9.0"`. A plugin older than that refuses the spec instead of mis-compiling
+it, naming both versions.
+
+⚠ It protects **forward only**. Measured against the shipped 2.8.0 validator, an unknown top-level
+key, `schemaVersion: 3` and even `schemaVersion: 99` are all accepted — it validates none of them —
+so no marker can make an already-released consumer reject a spec. What stops an older plugin
+damaging a richer form today is the destructive preflight: reducing a multi-column form to an empty
+field set surfaces as a plan to remove every non-primary field, which needs authorization.
 **Names are identity, and a field is placed once per form.** Two tabs — or two sections — on one
 form may not share a `name`, and a column may not be placed twice, whether in two different sections
 or twice in the same one (matching is case-insensitive, and applies to both the string and the

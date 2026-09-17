@@ -743,3 +743,66 @@ test('form layout: a non-array fields inside columns[] is caught, not thrown on'
   const errs = validateAppSpec(s, { profile: 'plan' }).errors;
   assert.ok(errs.some((e) => /fields must be an array/.test(e)), `got ${JSON.stringify(errs)}`);
 });
+
+// --- #584 item 5: the minimumPluginVersion capability gate --------------------------------------
+//
+// ⚠ This gate protects FORWARD only, and the test records that honestly because it is easy to
+// over-claim. MEASURED against the shipped 2.8.0 validator: an unknown top-level key,
+// `schemaVersion: 3` and `schemaVersion: 99` are ALL accepted with ok:true, because it validates
+// none of them. No marker can make an already-released consumer reject a spec. What this buys is a
+// machine-checkable requirement from here on, inherited by every future consumer.
+test('minimumPluginVersion refuses a spec that needs a newer plugin than the one running', () => {
+  const { version } = require('../../.plugin/plugin.json');
+  const bump = (v, by) => { const p = String(v).split('.').map((n) => parseInt(n, 10) || 0); p[0] += by; return p.join('.'); };
+  const spec = (v) => Object.assign(base(), v === undefined ? {} : { minimumPluginVersion: v });
+  const gateErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /requires model-apps|minimumPluginVersion/.test(e));
+
+  assert.deepStrictEqual(gateErrors(spec(undefined)), [], 'a spec that declares no requirement is unaffected');
+  assert.deepStrictEqual(gateErrors(spec(version)), [], 'the exact running version satisfies the requirement');
+  assert.deepStrictEqual(gateErrors(spec(bump(version, -1))), [], 'an older requirement is satisfied');
+
+  const tooNew = gateErrors(spec(bump(version, 1)));
+  assert.strictEqual(tooNew.length, 1, `a newer requirement must be refused; got ${JSON.stringify(tooNew)}`);
+  assert.match(tooNew[0], new RegExp(`requires model-apps ${bump(version, 1).replace(/\./g, '\\.')}`), 'the message names the required version');
+  assert.match(tooNew[0], new RegExp(`running plugin is ${String(version).replace(/\./g, '\\.')}`), 'and the version actually running');
+  assert.match(tooNew[0], /upgrade the plugin/, 'and tells the author to upgrade rather than delete the line');
+
+  // Pre-release and build-metadata suffixes compare on the release CORE. Astra review caught the
+  // first attempt splitting on dots BEFORE stripping the suffix, which turned `2.8.0-beta.1` into
+  // [2,8,0,1] — so the running release compared as OLDER than its own pre-release and refused to
+  // build. A dotted suffix is the case a single-token `-beta` test cannot catch.
+  for (const suffix of ['-beta', '-beta.1', '+build.1', '-rc.2']) {
+    assert.deepStrictEqual(gateErrors(spec(`${version}${suffix}`)), [],
+      `a '${suffix}' requirement is satisfied by the corresponding release — comparing the core is the safe direction`);
+  }
+
+  // A malformed value is rejected on its own terms rather than silently treated as 0.0.0, which
+  // would make every requirement vacuously satisfied.
+  const bad = gateErrors(spec('next'));
+  assert.strictEqual(bad.length, 1);
+  assert.match(bad[0], /dotted version string/);
+
+  // FAIL CLOSED when this plugin cannot read its own version. Astra review caught the first attempt
+  // downgrading that to a warning, which let an incompatible install reach the write path with the
+  // requirement neither satisfied nor overridden. Driven by making BOTH manifest reads throw.
+  const fs = require('node:fs');
+  const realRead = fs.readFileSync;
+  delete require.cache[require.resolve('../lib/app-spec.js')];
+  fs.readFileSync = function (p, ...rest) {
+    if (String(p).includes('plugin.json')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
+    return realRead.call(this, p, ...rest);
+  };
+  try {
+    const isolated = require('../lib/app-spec.js');
+    const r = isolated.validateAppSpec(Object.assign(base(), { minimumPluginVersion: '99.0.0' }), { profile: 'plan' });
+    assert.strictEqual(r.ok, false, 'an unreadable manifest must not satisfy a declared minimum');
+    assert.ok(r.errors.some((e) => /could not be read/.test(e)),
+      `the refusal must say the version was unreadable; got ${JSON.stringify(r.errors)}`);
+    // …and a spec that declares NO minimum is unaffected, so this cannot break an existing spec.
+    assert.strictEqual(isolated.validateAppSpec(base(), { profile: 'plan' }).ok, true,
+      'a spec with no minimumPluginVersion must still validate when the manifest is unreadable');
+  } finally {
+    fs.readFileSync = realRead;
+    delete require.cache[require.resolve('../lib/app-spec.js')];
+  }
+});

@@ -1904,7 +1904,11 @@ async function runSdkBuild(spec, opts = {}) {
     // fields, so a notes/timeline section created empty would deploy a visible section header
     // promising a control that nothing ever adds.
     const stripRows = (section) => (isEngineOwnedSection(section) ? Object.assign({}, section) : Object.assign({}, section, { rows: [] }));
-    const sectionTargets = {};
+    // Null-prototype, because this map is keyed by AUTHOR-CONTROLLED section names. On a plain
+    // object a section legitimately named `__proto__` would mutate the prototype instead of becoming
+    // an own enumerable property, so it would be invisible to `Object.values` — and the
+    // vacated-section sweep would then treat a section the layout explicitly claimed as unclaimed.
+    const sectionTargets = Object.create(null);
     const wantTabs = def.tabs || [];
     // Indices already taken by an earlier want, so two wants can never converge on one container.
     const claimedTabs = new Set();
@@ -2063,7 +2067,7 @@ async function runSdkBuild(spec, opts = {}) {
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
   };
 
-  const placeFieldInSection = async (formId, logical, wantCell, target) => {
+  const placeFieldInSection = async (formId, logical, wantCell, target, vacated) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
     const existing = findFieldCellLocation(form, logical);
@@ -2089,6 +2093,12 @@ async function runSdkBuild(spec, opts = {}) {
 
     // Misplaced: relocate the CELL rather than delete-and-recreate it, so its id and any
     // adapter-derived or maker-edited control state survive the move.
+    //
+    // Record the section this cell is LEAVING. That is what makes the vacated-section sweep precise:
+    // "empty" alone cannot distinguish a section this run emptied from one a maker created empty and
+    // may reference from a form script.
+    const sourceSection = sectionAt(form, existing.sectionPointer);
+    if (vacated && sourceSection && sourceSection.name) vacated.add(String(sourceSection.name).toLowerCase());
     //
     // The destination ROW is chosen by the same packing rule the create path uses, not simply the
     // last one: appending every relocated field to `rows.length - 1` piled four fields into a single
@@ -2142,13 +2152,21 @@ async function runSdkBuild(spec, opts = {}) {
     // and no authored structure to honor, so it keeps the additive first-section behavior —
     // reshaping a form a maker built by hand is not something an auto layout ever asked for.
     let declaredSection = {};
-    let sectionTargets = {};
+    // Null-prototype: keyed by AUTHOR-CONTROLLED section names, so a section legitimately named
+    // `__proto__` must land as an own enumerable property. On a plain object that assignment mutates
+    // the prototype instead, leaving the claimed-set lookup below blind to it — and the sweep then
+    // deleted a section the layout had explicitly asked for.
+    let sectionTargets = Object.create(null);
+    // Sections this run EMPTIED, by deployed name. The vacated-section sweep considers only these:
+    // "holds no cells" cannot tell a section we just emptied from one a maker created empty and may
+    // show/hide from a form script, and deleting the latter is invisible to the destructive preflight.
+    const vacatedSections = new Set();
     if (def.__explicitLayout) {
       declaredSection = declaredSectionByField(def.tabs);
       sectionTargets = await reconcileFormTopology(formId, def);
     }
     for (const logical of want) {
-      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]]);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
@@ -2175,8 +2193,71 @@ async function runSdkBuild(spec, opts = {}) {
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
-        const ptr = findFieldCellPointer(await provision.getArtifact('form', formId) || {}, logical);
+        const pruneForm = await provision.getArtifact('form', formId) || {};
+        const loc = findFieldCellLocation(pruneForm, logical);
+        // Pruning can empty a section too, so it feeds the vacated set on the same terms as a move.
+        if (loc) {
+          const sec = sectionAt(pruneForm, loc.sectionPointer);
+          if (sec && sec.name) vacatedSections.add(String(sec.name).toLowerCase());
+        }
+        const ptr = loc ? loc.cellPointer : findFieldCellPointer(pruneForm, logical);
         if (ptr) await provision.removeElement('form', formId, ptr);
+      }
+    }
+    // Reclaim a section the layout VACATED (#581). A generated section name encodes position
+    // (`section_<tab>[_<column>]_<index>`), so moving a section between form-columns or tabs under a
+    // generated name changes its identity: the topology pass creates a new one and the old one is
+    // never matched again. The field pass then empties it, leaving a deployed form with two sections
+    // headed the same thing, one of them blank — stable across rebuilds and permanently wrong.
+    //
+    // Runs LAST, after the field placement and prune passes, because only then is a vacated section
+    // actually empty. Four conditions, each load-bearing:
+    //   · explicit layout + prune ON — the same gate the field prune uses. An `auto` layout has no
+    //     authored shape to vacate, and `prune: false` means "leave what I did not re-declare".
+    //   · THIS RUN emptied it. `vacatedSections` records every section a cell was moved or pruned
+    //     out of. Without this the sweep deleted a section a maker had created empty and may
+    //     show/hide from a form script — an unchanged layout would silently destroy it, and the
+    //     destructive preflight cannot see it because that compares fields, not containers.
+    //   · the section is NOT one the authored layout claimed (by pointer or by deployed name).
+    //   · it holds NO cells at all — not merely no bound fields. A section can carry a spacer or a
+    //     control this reader does not model, and an empty-LOOKING section is not an empty one.
+    //
+    // That last test is also what protects the ENGINE's own sections. An explicit
+    // `isEngineOwnedSection` check was written here first and then removed as dead: that predicate is
+    // `cells.length > 0 && every cell unbound`, so anything it calls engine-owned already has cells
+    // and is spared above. Mutation testing proved it unkillable, and a guard that cannot fail
+    // implies coverage that does not exist.
+    if (def.__explicitLayout && def.__prune !== false) {
+      const claimedPointers = new Set();
+      const claimedNames = new Set();
+      for (const t of Object.values(sectionTargets || {})) {
+        if (!t) continue;
+        if (t.pointer) claimedPointers.add(t.pointer);
+        if (t.name) claimedNames.add(String(t.name).toLowerCase());
+      }
+      // Collected from a single read and removed from the BACK, because removeElement shifts the
+      // indices of later siblings — deleting front-first would silently target the wrong section.
+      const orphans = [];
+      const live = await provision.getArtifact('form', formId) || {};
+      (live.tabs || []).forEach((tab, ti) => {
+        (tab.columns || []).forEach((col, ci) => {
+          (col.sections || []).forEach((sec, si) => {
+            const pointer = `/tabs/${ti}/columns/${ci}/sections/${si}`;
+            if (claimedPointers.has(pointer)) return;
+            const secName = sec && sec.name ? String(sec.name).toLowerCase() : null;
+            if (secName && claimedNames.has(secName)) return;
+            if (!secName || !vacatedSections.has(secName)) return;
+            const cells = ((sec && sec.rows) || []).flatMap((r) => (r && r.cells) || []);
+            if (cells.length) return;
+            orphans.push({ pointer, name: (sec && sec.name) || '(unnamed)', label: (sec && sec.label) || '' });
+          });
+        });
+      });
+      for (const o of orphans.slice().reverse()) {
+        await provision.removeElement('form', formId, o.pointer);
+        if (typeof opts.warn === 'function') {
+          opts.warn(`form ${def.name}: removed the now-empty section '${o.name}'${o.label ? ` ("${o.label}")` : ''} — the layout no longer places anything in it. Give a section an explicit \`name\` if you intend to move it between tabs or form-columns.`);
+        }
       }
     }
     requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);

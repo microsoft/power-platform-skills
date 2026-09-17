@@ -4230,3 +4230,180 @@ test('form topology: packing counts colspan, not cell count', async () => {
   const rowAdds = find(calls, 'addElement').filter((c) => String(c.args[2]) === sec + '/rows');
   assert.strictEqual(rowAdds.length, 1, 'so the next field opens a new row');
 });
+
+// --- #581 item 2: a section the layout VACATED is reclaimed, not left as an empty twin ----------
+//
+// A generated section name encodes POSITION (`section_<tab>[_<column>]_<index>`), so moving a
+// section between form-columns or tabs under a generated name changes its identity: the topology
+// pass creates a new section and never matches the old one again. The field pass then empties it,
+// and the deployed form ends up with two sections headed the same thing, one blank — stable across
+// rebuilds and permanently wrong. Reported in #581 as: two sections headed "B", one empty.
+
+const vacateSpec = () => {
+  const spec = makeSpec();
+  // One tab, TWO form-columns. The authored section carrying new_tier now lives in column 1; the
+  // deployed form has it in column 0 under the generated name column 0 would have produced.
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', columns: [
+    { width: '60%', sections: [{ label: 'A', columns: 1, fields: ['new_name'] }] },
+    { width: '40%', sections: [{ label: 'B', columns: 1, fields: ['new_tier'] }] },
+  ] }]);
+  return spec;
+};
+const vacatedForm = () => ({ id: 'f1', tabs: [
+  { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [
+    { width: '60%', sections: [
+      { id: 's0', name: 'section_0_0', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      // Deployed in column 0 under the name column 0 generates; the spec now wants it in column 1,
+      // where the generated name is `section_0_1_0`. Different identity -> new section created.
+      { id: 's1', name: 'section_0_1', label: 'B', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_tier' } }] }] },
+    ] },
+    { width: '40%', sections: [] },
+  ] },
+], bag: { a: [], c: [] } });
+
+test('form topology: a section emptied by a layout move is removed, not left as a blank twin', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: vacatedForm() });
+  const warnings = [];
+  await runSdkBuild(vacateSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(m) });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.strictEqual(removedSections.length, 1,
+    `exactly one vacated section should be reclaimed; saw ${removedSections.map((c) => c.args[2]).join(', ')}`);
+  assert.ok(warnings.some((w) => /removed the now-empty section/.test(w) && /section_0_1/.test(w)),
+    `the removal must be reported and name the section; got ${JSON.stringify(warnings)}`);
+});
+
+// The sweep must never touch a section that still holds anything, nor one the engine owns.
+test('form topology: the vacated-section sweep spares populated, claimed and engine-owned sections', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_name', 'new_tier'] },
+  ] }]);
+  // section_more still holds new_obsolete (pruned below), section_extra is EMPTY but engine-owned
+  // via a control with no fieldName, and tab_extra's section carries a sub-grid.
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      { id: 's1', name: 'section_grid_x', label: 'Related', visible: true, showLabel: true, columns: 1,
+        rows: [{ cells: [{ control: { parameters: { RelationshipName: 'r' } } }] }] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'an engine-owned sub-grid section, and the section the layout claims, must both survive');
+});
+
+// `prune: false` means "leave what I did not re-declare" — the sweep honours the same opt-out the
+// field prune does, so a partial layout edit cannot silently delete containers.
+test('form topology: prune:false leaves a vacated section alone', async () => {
+  const spec = vacateSpec();
+  spec.forms[0].prune = false;
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: vacatedForm() });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [], 'prune:false must not remove containers either');
+});
+
+// The zero-cells guard, exercised where it actually decides. The PRIMARY field is never pruned, so
+// an unclaimed section holding it still has a cell when the sweep runs — and deleting that section
+// would take the record's title off the form. (The earlier "spares populated" test does not reach
+// this guard: its surviving sections are spared by the claimed-name and engine-owned checks first,
+// which mutation testing exposed.)
+test('form topology: an UNCLAIMED section that still holds a cell is never removed', async () => {
+  const spec = makeSpec();
+  // The layout claims only section_general/new_tier. new_name is the primary, so the field prune
+  // leaves it where it is — in a section the layout does not claim.
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'General', columns: 1, fields: ['new_tier'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'General', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_tier' } }] }] },
+      { id: 's1', name: 'section_leftover', label: 'Leftover', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'a section still holding the primary field must survive — removing it would take the record title off the form');
+});
+
+// Astra review, HIGH: "zero cells" does not establish that THIS reconcile vacated the section. A
+// maker-added section that was ALREADY empty — one a form script may show/hide by name — would be
+// deleted by an otherwise no-op rebuild, and the destructive preflight cannot see it because that
+// compares fields and sitemap targets, not containers.
+test('form topology: a pre-existing EMPTY section the layout never touched is not deleted', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'A', columns: 1, fields: ['new_name'] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      // Added by a maker, deliberately empty, never mentioned by the spec. This reconcile does not
+      // vacate it — it was already like this.
+      { id: 's9', name: 'maker_script_target', label: 'Maker Panel', visible: true, showLabel: true, columns: 1, rows: [] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'only a section THIS run emptied may be reclaimed; a pre-existing empty section is the maker\'s, not ours');
+});
+
+// Same rule from the other side: a section named `__proto__` must still be claimable. `sectionTargets`
+// is keyed by section name, and a plain object turns that assignment into a prototype mutation rather
+// than an own property — so the claimed-set lookup missed it and the sweep deleted a section the
+// layout explicitly asked for.
+test('form topology: a section named __proto__ is claimed like any other', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'A', columns: 1, fields: ['new_name'] },
+    { name: '__proto__', label: 'Odd', columns: 1, fields: [] },
+  ] }]);
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      { id: 's1', name: '__proto__', label: 'Odd', visible: true, showLabel: true, columns: 1, rows: [] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'an explicitly authored section must be claimed whatever its name');
+});
+
+// The `__proto__` claim, exercised where it actually decides. The previous test passes even with a
+// plain-object `sectionTargets`, because the vacated-set check spares the section first — a test
+// that passes for the wrong reason. Here the section IS vacated (its field moves out), so the ONLY
+// thing standing between it and deletion is whether the claimed-set saw it.
+test('form topology: a vacated section named __proto__ is still claimed, not reclaimed', async () => {
+  const spec = makeSpec();
+  spec.forms = explicitForm([{ name: 'tab_general', label: 'General', sections: [
+    { name: 'section_general', label: 'A', columns: 1, fields: ['new_name', 'new_tier'] },
+    { name: '__proto__', label: 'Odd', columns: 1, fields: [] },
+  ] }]);
+  // new_tier is deployed inside `__proto__` and the spec moves it to section_general, so the sweep
+  // sees `__proto__` vacated AND empty. It must survive because the layout still declares it.
+  const deployed = { id: 'f1', tabs: [
+    { id: 't0', name: 'tab_general', label: 'General', expanded: true, visible: true, columns: [{ width: '100%', sections: [
+      { id: 's0', name: 'section_general', label: 'A', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_name' } }] }] },
+      { id: 's1', name: '__proto__', label: 'Odd', visible: true, showLabel: true, columns: 1, rows: [{ cells: [{ control: { fieldName: 'new_tier' } }] }] },
+    ] }] },
+  ], bag: { a: [], c: [] } };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const removedSections = find(calls, 'removeElement').filter((c) => /\/sections\/\d+$/.test(String(c.args[2])));
+  assert.deepStrictEqual(removedSections.map((c) => c.args[2]), [],
+    'a section the layout claims must never be reclaimed, whatever its name');
+});

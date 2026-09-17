@@ -1175,6 +1175,46 @@ function formColumnsOf(tab) {
   return [{ width: '100%', sections: Array.isArray(tab.sections) ? tab.sections : [] }];
 }
 
+// The plugin's own version, read from its manifest, for the `minimumPluginVersion` capability gate.
+//
+// Cached and fail-soft: a spec must never fail to validate because the manifest could not be read.
+// When the version is unknown the gate SKIPS rather than guesses — a wrong comparison would either
+// block a valid spec or wave through one this build cannot honour, and both are worse than not
+// checking. Callers surface the skip, so it is not silent.
+let cachedPluginVersion;
+function pluginVersion() {
+  if (cachedPluginVersion !== undefined) return cachedPluginVersion;
+  cachedPluginVersion = null;
+  for (const rel of [['..', '..', '.plugin', 'plugin.json'], ['..', '..', '.claude-plugin', 'plugin.json']]) {
+    try {
+      const manifest = JSON.parse(require('node:fs').readFileSync(path.join(__dirname, ...rel), 'utf8'));
+      if (manifest && typeof manifest.version === 'string') { cachedPluginVersion = manifest.version; break; }
+    } catch { /* try the next location */ }
+  }
+  return cachedPluginVersion;
+}
+
+// Compare two dotted versions numerically. Returns <0, 0 or >0.
+//
+// Deliberately NOT a semver library: this repo vendors nothing for it, and the only versions being
+// compared are this plugin's own `major.minor.patch` manifest values.
+//
+// The `-`/`+` suffix is stripped BEFORE splitting on dots, not after. Splitting first turned
+// `2.8.0-beta.1` into `[2, 8, 0, 1]`, so a running `2.8.0` compared as OLDER than a `2.8.0-beta.1`
+// requirement and refused to build — the opposite of the intended behaviour, and my earlier comment
+// claiming the suffix "sorts by its numeric prefix" was only true for a suffix with no dot in it.
+// Comparing the release CORE means a pre-release or build-metadata requirement is satisfied by the
+// corresponding release, which is the safe direction: it cannot spuriously block a build.
+function compareVersions(a, b) {
+  const core = (v) => String(v || '').split(/[-+]/)[0].split('.').map((n) => parseInt(n, 10) || 0);
+  const [pa, pb] = [core(a), core(b)];
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
 // Keys an author reasonably reaches for that FormXml has no place for. Naming the real mechanism is
 // the difference between an actionable error and a scavenger hunt — the SDK's own refusal reports a
 // JSON pointer into the compiled intent, which an author who wrote a spec cannot map back to a key.
@@ -1569,6 +1609,38 @@ function validateAppSpec(spec, opts = {}) {
   const shape = normalizeSpecShape(spec);
   errors.push(...shape.errors);
   spec = shape.spec;
+  // CAPABILITY GATE (#584 item 5). A spec may declare the minimum plugin version that can build it;
+  // an older plugin refuses rather than mis-compiling it.
+  //
+  // ⚠ MEASURED LIMITATION, stated here because it is easy to over-promise: this gate protects
+  // FORWARD only. Consumers already shipped cannot be made to reject anything — the 2.8.0 validator
+  // accepts an unknown top-level key, `schemaVersion: 3` and even `schemaVersion: 99`, all with
+  // `ok: true`, because it validates none of them. So this does NOT retroactively protect a maker
+  // running an older plugin; it makes the requirement explicit and machine-checkable from here on,
+  // and every future consumer inherits it.
+  //
+  // What DOES protect the reported harm today is the destructive preflight: the failure mode in
+  // #584 (an old compiler reducing a columns-only form to an empty field set) surfaces as a plan to
+  // remove every non-primary field, which requires authorization before it can be written.
+  if (spec.minimumPluginVersion !== undefined) {
+    const want = spec.minimumPluginVersion;
+    if (typeof want !== 'string' || !/^\d+(\.\d+)*/.test(want)) {
+      errors.push(`minimumPluginVersion must be a dotted version string like '2.9.0', got ${JSON.stringify(want)}`);
+    } else {
+      const have = pluginVersion();
+      if (!have) {
+        // FAIL CLOSED. The spec has explicitly declared a floor, so "we could not read our own
+        // version" must not become "requirement satisfied" — that would let an incompatible install
+        // reach the write path with no check and no override. A spec that declares NO minimum is
+        // unaffected, so this cannot break any existing spec.
+        errors.push(`this spec requires model-apps ${want} or newer, but this plugin's own manifest version could not be read, `
+          + 'so the requirement cannot be checked. Reinstall or repair the plugin rather than removing this line.');
+      } else if (compareVersions(have, want) < 0) {
+        errors.push(`this spec requires model-apps ${want} or newer, but the running plugin is ${have}. `
+          + 'It declares capabilities this version would not build correctly — upgrade the plugin rather than removing this line.');
+      }
+    }
+  }
   if (!spec.solution || !spec.solution.uniqueName) {
     errors.push('solution.uniqueName is required');
   }
