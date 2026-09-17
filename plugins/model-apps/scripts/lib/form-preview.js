@@ -71,12 +71,35 @@ function labelFor(entity, fn, lang) {
   return (c && (labelText(c.displayName, lang) || c.schemaName)) || fn;
 }
 
-// "Label * [widget]" for one field cell.
-function fieldLabel(entity, cell, lang) {
+// "Label * (state)  [widget]" for one field cell.
+//
+// State is placed BEFORE the widget deliberately, and `avail` (the cell's rendered width) lets this
+// protect the state further. Cells are clipped to the column width — about 30 columns in a
+// two-column section — and `clip()` truncates the END, so an annotation appended after the widget
+// is exactly what gets cut. Ordering alone is still not enough: with a long display name the
+// annotation itself is what gets cut, producing "(read-o…" — a half-printed state flag, which is
+// the silent-state failure this annotation exists to prevent. A truncated LABEL stays recognisable;
+// a truncated state does not. So the decorative widget hint is surrendered first, the name is
+// truncated after that, and the state is never truncated.
+//
+// `compileFormIntent` writes only the NON-default state (see artifact-intent.js): a hidden cell gets
+// `cell.visible = false` and a read-only one `control.isReadOnly = true`; the visible/editable
+// defaults are never emitted. So presence of the flag is the signal, and `isReadOnly: false` never
+// appears to be mistaken for an authored read-write intent.
+function fieldLabel(entity, cell, lang, avail) {
   const fn = cell.control.fieldName;
   const req = cell.control.isRequired ? ' *' : '';
   const widget = WIDGET[fieldType(entity, fn)] || WIDGET.Text;
-  return `${cell.control.label || labelFor(entity, fn, lang)}${req}  ${widget}`;
+  const state = [];
+  if (cell.visible === false) state.push('hidden');
+  if (cell.control.isReadOnly) state.push('read-only');
+  const tag = state.length ? ` (${state.join(', ')})` : '';
+  const name = cell.control.label || labelFor(entity, fn, lang);
+  const full = `${name}${req}${tag}  ${widget}`;
+  if (!tag || !avail || vwidth(full) <= avail) return full;
+  const noWidget = `${name}${req}${tag}`;
+  if (vwidth(noWidget) <= avail) return noWidget;
+  return `${clip(name, Math.max(1, avail - vwidth(`${req}${tag}`)))}${req}${tag}`;
 }
 
 // Render one form to an ASCII wireframe string.
@@ -126,7 +149,9 @@ function renderFormWireframe(spec, f) {
           const cells = (r.cells || []).filter((c) => c.control && c.control.fieldName);
           if (!cells.length) continue;
           const colW = Math.floor((INNER - 3) / Math.max(1, cells.length));
-          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode)}`, colW), colW));
+          // `colW - 2` is the room left after the two-space cell indent below, and is what
+          // fieldLabel needs in order to protect the state annotation from being clipped.
+          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode, colW - 2)}`, colW), colW));
           lines.push(row(parts.join('')));
         }
       }

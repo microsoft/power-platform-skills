@@ -510,8 +510,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   prompts. The `ai` block in the App Spec configures the full set; see
   [`references/app-spec-schema.md`](references/app-spec-schema.md) → `## ai`.
 - **`scripts/preview-form.js` → `scripts/lib/form-preview.js`** — renders an ASCII **form
-  wireframe** (tabs, sections, fields with widget hints, the Notes/timeline block, sub-grids, form
-  JS) from the App Spec, so the user can review a form visually during authoring before approving.
+  wireframe** (tabs, sections, fields with widget hints and authored `hidden`/`readOnly` state, the
+  Notes/timeline block, sub-grids, form JS) from the App Spec, so the user can review a form
+  visually during authoring before approving. A hidden field is annotated rather than omitted, and
+  state is never truncated — the widget hint and then the label give way first, because a
+  half-printed `(read-on…` is the silent-state failure the annotation exists to prevent.
   **`scripts/preview-app.js` → `scripts/lib/app-preview.js`** — renders the WHOLE app design
   (data model + sitemap tree + views/charts + per-form wireframes + page-intents + design contract)
   as a single ASCII preview — the design gate #2 / plan-mode approval artifact.

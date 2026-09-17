@@ -38,6 +38,12 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **The form wireframe now shows authored `hidden` and `readOnly` field state** ([#591]). The
+  preview is the layout approval gate, but it drew every bound field as visible and editable — so a
+  maker could approve an apparently editable field that deploys read-only, or one they believe is
+  visible that deploys hidden. A hidden field is annotated rather than dropped, so the approval
+  still shows it exists, and the state is never truncated: in a narrow column the widget hint and
+  then the label give way first.
 - **The vendored SDK is refreshed to pick up upstream wire-correctness fixes.** Two joins on one
   table no longer collapse into one, a join type the typed layer does not model is no longer
   silently rewritten as an inner join, `addElement` no longer re-keys a node when handed a property
@@ -222,6 +228,7 @@ downloads that round-trip Choice columns.
 [#574]: https://github.com/microsoft/power-platform-skills/issues/574
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
+[#591]: https://github.com/microsoft/power-platform-skills/issues/591
 
 ## [2.7.1]
 

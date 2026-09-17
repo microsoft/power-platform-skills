@@ -451,7 +451,8 @@ the layout that lands.
 
 **Show the form wireframe.** After writing the proposed forms to `app-spec.json`, render an
 ASCII wireframe so the user can *see* each form's tabs, sections, fields, the Notes block, and
-sub-grids before approving — then ask for changes:
+sub-grids before approving — then ask for changes. Fields carry their authored state, so a
+`(hidden)` or `(read-only)` annotation in the wireframe is part of what is being approved:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json [--entity <schemaName>]

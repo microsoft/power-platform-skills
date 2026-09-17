@@ -155,3 +155,88 @@ test('a single-column tab shows no column banner (the common case stays clean)',
   ] }];
   assert.doesNotMatch(renderFormWireframe(s, s.forms[0]), /column 1 of/);
 });
+
+// #591 — the wireframe is the form APPROVAL gate, but every bound cell rendered as an ordinary
+// visible, editable field regardless of authored state. A maker could approve an apparently
+// editable required field that deploys read-only, or a field they believe is visible that deploys
+// hidden. Hidden tabs and sections were already annotated for exactly this reason; cells were not.
+//
+// Hidden cells are annotated rather than OMITTED, deliberately: the approval artifact should show
+// that the field exists and is intentionally hidden, which dropping it cannot convey.
+function stateSpec(fields, fieldOptions) {
+  const s = spec();
+  s.forms = [{
+    entity: 'new_wo', name: 'WO', layout: 'explicit',
+    tabs: [{ name: 't1', label: 'Main', columns: [{ sections: [{ name: 'a', label: 'Order', columns: 1, fields }] }] }],
+  }];
+  if (fieldOptions) s.forms[0].fieldOptions = fieldOptions;
+  return s;
+}
+const render = (s) => renderFormWireframe(s, s.forms[0]);
+
+test('the wireframe annotates a read-only field, a hidden field, and one that is both', () => {
+  const plain = render(stateSpec(['new_status']));
+  assert.match(plain, /Status/);
+  assert.doesNotMatch(plain, /read-only|hidden/, `an ordinary field must carry NO state annotation:\n${plain}`);
+
+  const ro = render(stateSpec([{ name: 'new_status', readOnly: true }]));
+  assert.match(ro, /Status.*\(read-only\)/, `a read-only field must be annotated:\n${ro}`);
+
+  const hid = render(stateSpec([{ name: 'new_status', hidden: true }]));
+  assert.match(hid, /Status.*\(hidden\)/, `a hidden field must be annotated:\n${hid}`);
+  assert.match(hid, /Status/, 'and must still be LISTED — omitting it hides the field from the approval');
+
+  const both = render(stateSpec([{ name: 'new_status', hidden: true, readOnly: true }]));
+  assert.match(both, /Status.*\(hidden, read-only\)/, `both states must be reported together:\n${both}`);
+});
+
+// The same state can be authored inline on the field entry OR through the form's `fieldOptions`
+// map. They compile to the same cell, so the preview must not depend on which one the author used.
+test('the wireframe annotates field state authored through fieldOptions as well as inline', () => {
+  const viaOptions = render(stateSpec(['new_status', 'new_cost'], {
+    new_status: { readOnly: true },
+    new_cost: { hidden: true },
+  }));
+  assert.match(viaOptions, /Status.*\(read-only\)/, `fieldOptions readOnly must be shown:\n${viaOptions}`);
+  assert.match(viaOptions, /Total Cost.*\(hidden\)/, `fieldOptions hidden must be shown:\n${viaOptions}`);
+});
+
+// The annotation sits BEFORE the widget hint on purpose. Cells are clipped to the column width —
+// about 30 columns in a two-column section — so an annotation appended after the widget is exactly
+// what `clip()` truncates away, and the approval gate would go back to hiding the state while
+// looking like it reports it. Ordering by importance makes truncation degrade the widget instead.
+test('field state survives clipping in a narrow two-column section', () => {
+  const s = stateSpec([{ name: 'new_cost', readOnly: true }, { name: 'new_when', hidden: true }]);
+  s.forms[0].tabs[0].columns[0].sections[0].columns = 2;
+  const out = render(s);
+  assert.match(out, /\(read-only\)/, `read-only state must survive a narrow column:\n${out}`);
+  assert.match(out, /\(hidden\)/, `hidden state must survive a narrow column:\n${out}`);
+});
+
+// Putting the state before the widget is necessary but NOT sufficient. With a long display name in
+// a two-column section the annotation itself is what `clip()` cuts, producing "(read-o…" or
+// "(hidden, read-on…" — a half-printed state flag, which is precisely the silent-state failure the
+// annotation exists to prevent. A truncated LABEL is still recognisable; a truncated state is not.
+//
+// So the renderer gives up the decorative widget hint first, and truncates the NAME after that,
+// but never the state.
+test('a long field name never truncates the state annotation', () => {
+  const s = spec();
+  s.entities[0].columns.push({
+    schemaName: 'new_verylongfieldname',
+    displayName: 'Extremely Long Inspection Field Name For Clipping',
+    type: 'Money',
+  });
+  s.forms = [{
+    entity: 'new_wo', name: 'WO', layout: 'explicit',
+    tabs: [{ name: 't1', label: 'Main', columns: [{ sections: [{
+      name: 'a', label: 'Order', columns: 2,
+      fields: [{ name: 'new_verylongfieldname', hidden: true, readOnly: true }, { name: 'new_cost', readOnly: true }],
+    }] }] }],
+  }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  assert.match(out, /\(hidden, read-only\)/, `the full state must survive a long name:\n${out}`);
+  assert.match(out, /\(read-only\)/, `the second cell's state must survive too:\n${out}`);
+  // And the guarantee stated positively: no rendered line may contain a state tag that was cut off.
+  assert.doesNotMatch(out, /\((?:hidden|read-only)[^)]*…/, `a state tag was truncated mid-word:\n${out}`);
+});
