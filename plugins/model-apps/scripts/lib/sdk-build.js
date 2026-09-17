@@ -1033,6 +1033,12 @@ function formIdentityKey(f) {
 // fallback for the same field is `'14'`. Note this hit EVERY rule, not only ones that authored a
 // `dataType`, because the default below is the token `'String'` rather than the enum value.
 //
+// LIVE-MEASURED that this fails SILENTLY rather than loudly: a build carrying the raw tokens
+// deployed all four probe rules with 0 failures and activated them. The platform does not reject the
+// value, so nothing upstream of a user noticing the rule never fires would surface it — and
+// `--verify` cannot, because it checks existence, duplicate count and statecode, never the rule's
+// WFOM.
+//
 // The ACTION path still types every literal as String on the SDK side, so it is unaffected — the
 // asymmetry is deliberate and pinned in business-rules.test.js.
 const WORKFLOW_ATTRIBUTE_TYPE = {
