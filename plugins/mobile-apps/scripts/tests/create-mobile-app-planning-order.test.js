@@ -239,6 +239,47 @@ test('screen specs use the canonical plan and never rewrite graph scratch', () =
   assert.doesNotMatch(deferred, /writes only `_screens_section\.md`/i);
 });
 
+test('screen completeness repair belongs to graph planning before approval', () => {
+  const phases = section(screenPlanner, '## Two-phase mode', '**The scaffolded project');
+  const graphRow = phases.split(/\r?\n/).find((line) => line.startsWith('| `graph` |'));
+  assert.match(graphRow, /Step 5b \(repair\)/);
+  const audit = section(screenPlanner, '### Step 5b', '## Step 6');
+  assert.match(audit, /`phase: specs`[\s\S]*read-only[\s\S]*before any[\s\S]*write/);
+  assert.match(audit, /NEEDS_CONTEXT: graph missing <thing>/);
+  assert.match(audit, /`phase: graph`[\s\S]*repair[\s\S]*Gate 3/);
+  assert.doesNotMatch(audit, /add the missing screens NOW/);
+  const graphDispatch = section(planner, '#### 5b.1', '#### Gate 3');
+  assert.match(graphDispatch, /Step 5b[\s\S]*before[\s\S]*return/);
+  assert.doesNotMatch(graphDispatch, /Stop after Step 3\.5 and return/);
+});
+
+test('missing screen graph context returns to approval instead of retrying specs', () => {
+  const specsDispatch = section(planner, '#### 5b.2', '#### Gate 4');
+  assert.match(specsDispatch, /NEEDS_CONTEXT: graph missing[\s\S]*before the generic/);
+  assert.match(specsDispatch, /phase: graph[\s\S]*Gate 3[\s\S]*user approval/);
+  const fallback = section(createSkill, '#### 3.0a', '#### 3.0 —');
+  assert.match(fallback, /NEEDS_CONTEXT: graph missing[\s\S]*Gate 3[\s\S]*user approval/);
+});
+
+test('screen specs retries replace owned sections without changing the approved graph', () => {
+  const write = section(screenPlanner, '**Write target by phase:**', 'Section format');
+  assert.match(write, /replace[\s\S]*all prior copies/i);
+  for (const heading of ['Per-Screen Specs', 'Open Questions', 'Open Questions for the User', 'Screen Graph', 'JavaScript Dependencies']) {
+    assert.ok(write.includes(`### ${heading}`), `missing owned subsection: ${heading}`);
+  }
+  assert.match(write, /Navigation Pattern[\s\S]*Screen Map[\s\S]*Navigation Contracts[\s\S]*Shared\s+Conventions[\s\S]*unchanged/);
+  assert.match(write, /one[\s\S]*Edit[\s\S]*Write/);
+  assert.match(write, /omits an optional subsection[\s\S]*remove/i);
+  assert.match(write, /at most one[\s\S]*outside[\s\S]*unchanged/);
+  const preview = section(screenPlanner, '## Step 6', '**Otherwise (`skip_preview`');
+  assert.match(preview, /same single[\s\S]*replacement/);
+  assert.doesNotMatch(preview, /Then append the markdown block/);
+  assert.doesNotMatch(screenPlanner, /only the append into `plan_path` is allowed/);
+  const specsDispatch = section(planner, '#### 5b.2', '#### Gate 4');
+  assert.match(specsDispatch, /replace[\s\S]*phase-owned/i);
+  assert.doesNotMatch(specsDispatch, /Append per-screen specs and Open Questions only/);
+});
+
 test('architecture result is validated before generic missing-context retry routing', () => {
   const routing = section(createSkill, '#### 3.0 — Sub-agent return-status switch',
     '**Data-model exact-name expansion:**');

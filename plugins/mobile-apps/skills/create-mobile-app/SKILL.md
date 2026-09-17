@@ -721,18 +721,26 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    renders a preview. Keep any explicitly selected legacy preview policy for
    the specs phase separate from its canonical-plan write target.
    - Spawn `mobile-app:screen-planner` with `phase: graph` first. Present its
-     navigation, screen map, and shared conventions as Gate 3; wait for approval.
+     navigation, screen map, and shared conventions as Gate 3 after its Step 5b
+     completeness repair; wait for approval.
    - Embed the approved graph from `_screens_section.md` into `## Screens` in
      `native-app-plan.md` and record Gate 3 acceptance before proceeding.
    - Verify that the canonical plan contains the locked graph, then spawn
      `mobile-app:screen-planner` with `phase: specs`. It reads that plan and
-     appends specs there only, without rewriting the graph scratch file.
+     replaces only the phase-owned subsections using its Step 5 single-write
+     contract, without rewriting the approved graph or graph scratch file.
+   - On `NEEDS_CONTEXT: graph missing <thing>` from specs, leave the failed
+     specs output uncommitted, mark the screen approvals pending, and rerun
+     `phase: graph` with the missing items and approved context. Reopen Gate 3
+     and require fresh user approval before merging the corrected graph and
+     resuming specs. Do not retry specs against the same incomplete graph.
    - Present the expanded canonical plan as Gate 4. On rejection revise only
-     specs unless the user changes the graph, which requires Gate 3 again.
+     specs using replacement, not append, unless the user changes the graph,
+     which requires Gate 3 again.
    Print each phase and its ETA before dispatch. Design picking remains at
    Step 6.75 via `/design-system`; do not generate a default-design preview.
 4. **Finalize the existing `native-app-plan.md`**, preserving the approved graph
-   and appended specs. Update `## Approvals` with each actual user acceptance
+  and current specs. Update `## Approvals` with each actual user acceptance
    and timestamp; do not rebuild it from `_screens_section.md`.
 
    **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${PLUGIN_ROOT}/agents/native-app-planner.md) Step 6):**
@@ -791,6 +799,13 @@ and continue to deferred publisher/snapshot work only for `required`. This
 does not consume the generic retry budget and must not re-present Gate 1.
 In `complete` phase or from any other agent, that signal is malformed; do not
 let it change an already approved data platform.
+
+**Screen-graph recovery (handle before generic retries).** A `screen-planner`
+dispatched with `phase: specs` may return `NEEDS_CONTEXT: graph missing <thing>`.
+Follow the graph-repair and Gate 3 approval loop in Step 3.0a above (or the same
+loop inside `native-app-planner`). Preserve other approved sections, invalidate
+the affected screen approvals, and require fresh user acceptance before specs
+resume. This does not authorize a specs pass to modify the approved graph.
 
 For all other first lines, use the plugin-wide protocol in
 [`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #12 for every `Task` return.

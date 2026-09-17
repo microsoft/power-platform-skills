@@ -527,7 +527,7 @@ Follow your agent file. In `phase: graph`, you write ONLY:
   - Screen Map (table)
   - Navigation Contracts (table)
   - Shared Conventions (Step 3.5)
-Do NOT write per-screen specs, Open Questions, Standard Imports, or any preview. Stop after Step 3.5 and return.
+Do NOT write per-screen specs, Open Questions, Standard Imports, or any preview. Run Step 5b's graph-only completeness repair after Step 3.5 and before Step 5 writes the graph; only then return for Gate 3 approval.
 
 Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your one-line summary.
 ```
@@ -561,7 +561,7 @@ phase: specs
 plan_path: <working_dir>/native-app-plan.md
 skip_preview: <true for deferred/skip design; false only for the explicitly selected legacy preview mode>
 
-The screen graph + shared conventions are already locked in plan_path's ## Screens section. Read that section and treat it as immutable. Do NOT add, remove, or rename screens. Do NOT change shared conventions. Append per-screen specs and Open Questions only into plan_path; do not update _screens_section.md.
+The screen graph + shared conventions are already locked in plan_path's ## Screens section. Read that section and treat it as immutable. Do NOT add, remove, or rename screens, change routes, or change shared conventions. Run the read-only completeness check before writing; missing graph requirements return NEEDS_CONTEXT: graph missing <thing>. Replace only the phase-owned subsections in plan_path using screen-planner Step 5, including any Step 6 summary in the same update. On retries remove stale owned sections rather than appending duplicates; do not update _screens_section.md.
 
 Requirements: [paste $ARGUMENTS]
 Approved data model: [paste ## Data Model section verbatim]
@@ -581,7 +581,15 @@ Style-picker + preview rules unchanged — honour the same `skip_preview` policy
 Return per AGENTS.md rule #10.
 ```
 
-Wait for return; apply the Step 3.0 status switch. The planner writes specs only into `plan_path`.
+On `NEEDS_CONTEXT: graph missing <thing>`, handle graph recovery before the generic
+Step 3.0 retry: mark the screen graph and specs approvals pending, preserving the
+other approved sections. Re-dispatch `phase: graph` with the previous graph, approved
+requirements, and missing items. Reopen Gate 3 and require fresh user approval;
+merge the newly approved graph, then re-dispatch `phase: specs` and review Gate 4.
+Do not retry specs against the unchanged incomplete graph or reuse the old screen
+approval records for a changed graph.
+
+For other returns, apply the Step 3.0 status switch. The planner writes specs only into `plan_path`.
 Keep the approved graph and `_screens_section.md` unchanged. Any explicitly
 selected legacy HTML preview is a separate preview artifact, never a reason
 to write specifications to the graph scratch file.
@@ -599,7 +607,7 @@ conventions, in which case return to Gate 3.
 
 Branch on the orchestrator's `Design vibe opt-in:` value:
 
-- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — pass **`skip_preview: true`** to the specs dispatch above. It appends only to `native-app-plan.md`; the approved graph scratch remains unchanged and no `_plan_preview.html` is written. Do not dispatch the completed specs phase a second time merely to review it. The foreground design-system phase owns the later visual preview. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
+- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — pass **`skip_preview: true`** to the specs dispatch above. It replaces only specs-owned content in `native-app-plan.md`; the approved graph scratch remains unchanged and no `_plan_preview.html` is written. Do not dispatch the completed specs phase a second time merely to review it. The foreground design-system phase owns the later visual preview. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
 
 - **`Design vibe opt-in: done`** — the orchestrator has already written `## Design Direction` into the plan via the legacy text picker (only happens when `/design-system` is NOT installed). Spawn `screen-planner` WITHOUT `skip_preview`. It generates the HTML preview as before. Continue to Step A.
 

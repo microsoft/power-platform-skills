@@ -41,19 +41,19 @@ The planner gives you:
 - Features the user listed
 - **`phase`** — one of `graph` | `specs` | unset (back-compat = full run, equivalent to `specs` after an inline graph)
 
-## Two-phase mode (Gate 4 split — PREFERRED)
+## Two-phase mode (Gates 3 and 4 — PREFERRED)
 
-The orchestrator splits Gate 4 into two cheaper gates so the user can edit the screen *list* before any per-screen specs are generated. Behaviour by phase:
+The orchestrator uses separate graph and specs gates so the user can edit the screen *list* before any per-screen specs are generated. Behaviour by phase:
 
 | `phase` | What you do | What you write | What you skip | Gate that follows |
 |---|---|---|---|---|
-| `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions** ONLY | Steps 4, 5, 5b, 6 | Gate 3 (graph approval) |
-| `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Do NOT touch `_screens_section.md` — it is scratch from `phase: graph` and not read by anyone after Gate 3. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4 (specs approval) |
+| `graph` | Steps 0, 0b, 1, 2, 3, 3.5, then Step 5b (repair) before Step 5 writes the graph | `_screens_section.md` containing **Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions** ONLY | Steps 4 and 6 | Gate 3 (graph approval) |
+| `specs` | Steps 0, 0b, then Step 5b (read-only preflight), followed by Steps 4, 5, 6 | **Replace the phase-owned subsections in `plan_path` once, following Step 5.** Preserve the approved graph; do NOT touch `_screens_section.md`. | Steps 1–3 and 3.5; a missing locked graph requires `NEEDS_CONTEXT`, never inline regeneration | Gate 4 (specs approval) |
 | unset / legacy | All steps end-to-end | Full `_screens_section.md` in one pass | nothing | single Gate 4 (back-compat) |
 
-**`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 3).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
+**`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 3).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add, remove, or rename screens or change routes, navigation contracts, or shared conventions during `phase: specs`. If the graph is incomplete, return `NEEDS_CONTEXT: graph missing <thing>` before writing the plan or preview so the orchestrator re-runs `phase: graph` and obtains fresh Gate 3 approval before retrying specs.
 
-**Hard rule — single-write in `phase: specs`.** The previous behaviour of writing both `plan_path` and `_screens_section.md` doubles wall-clock time during Gate 4 (full file rewrite of a ~12 KB plan happens twice for an 8-screen app). The duplicate `_screens_section.md` write is forbidden in `phase: specs` — only the append into `plan_path` is allowed.
+**Hard rule — single-write in `phase: specs`.** Assemble the complete replacement, including the Step 6 markdown summary when requested, before one update to `plan_path`. A retry replaces the previous specs-owned output; it never adds a second copy. Do not write `_screens_section.md` or delete old sections in a separate operation before inserting their replacements.
 
 **The scaffolded project IS available at `<working_dir>/`.** The orchestrator's Step 2d background pipeline finishes the full template scaffold (clone → fixes → npm install → `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive` → schemas → tsc smoke) in parallel with your run. By the time you start, `<working_dir>/` is populated with the complete template tree. Safe to `Glob` and `Read`:
 
@@ -64,7 +64,7 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 **Hard rule — read-only on the scaffolded files.** You may NEVER write to anything outside this allow-list:
 
-- `<working_dir>/native-app-plan.md` (your `phase: specs` append target)
+- `<working_dir>/native-app-plan.md` (your `phase: specs` replacement target)
 - `<working_dir>/_screens_section.md` (your `phase: graph` write target)
 - `<working_dir>/_plan_preview.html` (only when `skip_preview` is unset/false)
 - `<working_dir>/.tmp/*` (scratch)
@@ -92,7 +92,7 @@ Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase
 | After Step 0 + 0b loaded | `echo "→ [screen-planner] loaded patterns + design direction"` |
 | Before Step 2 (graph) or before Step 4 (specs) | `echo "→ [screen-planner] phase=<phase>, N=<screen_count> screens, est ~$((N * 60))s"` |
 | Per screen during Step 4 (specs phase only) | `echo "→ [screen-planner] spec <i>/<N>: <screen_name>"` |
-| Before Step 5 write | `echo "→ [screen-planner] writing ${phase == 'graph' ? '_screens_section.md' : 'plan.md ## Screens append'}"` |
+| Before Step 5 write | `echo "→ [screen-planner] writing ${phase == 'graph' ? '_screens_section.md' : 'plan.md ## Screens replacement'}"` |
 | Before Step 6 preview (if not skipped) | `echo "→ [screen-planner] rendering _plan_preview.html"` |
 
 These are pure progress signals — never block on or check echo output. Use a single `Bash` call per milestone, not batched at the end (defeats the point).
@@ -462,7 +462,7 @@ For each screen the user adds, provide this compact shape:
 - **Restrained or expressive** (override only) — omit unless the screen is one of the 1–2 designated expressive screens (completion states, empty onboarding). Default is `restrained` for everything else; do not emit it.
 - **Refresh trigger** (override only) — List screens default to `useFocusEffect` (hard rule in screen-builder). Omit unless the screen needs a different refresh strategy (timer, websocket, manual-only).
 
-**Differentiation check (mandatory before writing the section):** read back your per-screen specs. If 3+ screens have identical domain decisions, row/hero overrides, and visual emphasis descriptions — the specs are too generic. Revise the domain decisions or Shared Conventions overrides until each screen has at least one layout decision that is domain-specific and different from its siblings. Do not fix this by adding repeated design boilerplate.
+**Differentiation check (mandatory before writing the section):** read back your per-screen specs. If 3+ screens have identical domain decisions, row/hero overrides, and visual emphasis descriptions — the specs are too generic. Revise the per-screen domain decisions or permitted per-screen overrides until each screen has at least one layout decision that is domain-specific and different from its siblings. In `phase: specs`, do not rewrite the locked Shared Conventions; a required graph-level change returns `NEEDS_CONTEXT: graph missing <thing>`. Do not fix this by adding repeated design boilerplate.
 
 ---
 
@@ -525,11 +525,31 @@ Reference data-model entities by name as the data architect proposed them — do
 > "→ Assembling the ## Screens markdown section…"
 
 **Write target by phase:**
-- `phase: specs` — read `plan_path`, locate the existing `## Screens` section (the locked graph from Gate 3), and append the **Per-Screen Specs** + **Open Questions** subsections immediately before `## Approvals`. **Do NOT also write `_screens_section.md`** — single-write rule (see phase table above). Use one `Edit` (insert before `## Approvals`) or one `Write` of the full updated `plan_path`. Pick whichever is one operation.
+- `phase: specs` — read the complete `plan_path` and replace the phase-owned subsections inside its existing `## Screens` section as described below. Do not regenerate the approved graph or write `_screens_section.md`.
 - `phase: graph` — write to `<working_dir>/_screens_section.md` as scratch for Gate 3; orchestrator merges the approved graph into `plan_path` after Gate 3 passes.
 - legacy / unset — write to `<working_dir>/_screens_section.md` as before.
 
-Section format (same in all phases):
+**Idempotent specs replacement:** prepare the final content in memory before writing.
+Remove all prior copies of the phase-owned `### Per-Screen Specs`,
+`### Open Questions` (including `### Open Questions for the User`),
+`### JavaScript Dependencies`, and the Step 6-generated `### Screen Graph` summary
+inside `## Screens`, then insert their regenerated content immediately before `## Approvals`.
+If the new pass omits an optional subsection, remove its old copy too. Match real
+Markdown headings outside fenced code blocks; each subsection ends at the next
+heading of the same or higher level. Preserve all other content, including the
+approved Navigation Pattern, Screen Map, Navigation Contracts, and Shared
+Conventions, unchanged. The derived `### Screen Graph` summary is not the locked
+Screen Map and must be regenerated from that approved map, not used to revise it.
+
+Complete Step 5b and prepare any Step 6 markdown summary before this update. Use
+one `Edit` replacing the old owned content with the final result, or one `Write`
+of the complete updated plan; never delete and insert in separate operations.
+Before committing, verify exactly one Per-Screen Specs subsection and at most one
+of each optional phase-owned subsection (the Open Questions names are alternatives),
+with the approved graph and everything outside these owned subsections unchanged.
+On a malformed or ambiguous section boundary, return `NEEDS_CONTEXT` without writing.
+
+Section format (emit only the subsections owned by the current phase):
 
 ```markdown
 ## Screens
@@ -670,26 +690,42 @@ Do NOT write `### Standard Imports` or `#### Resolved Imports` blocks. The orche
 
 What you DO emit per screen: the `**Data**` field listing service+method calls (e.g. cursor list: `Cr3e9_inspectionsService.getAll({ maxPageSize: 50, orderBy: ['createdon desc', 'cr3e9_inspectionid asc'], select: [...] })`; bounded lookup: `Cr3e9_categoriesService.getAll({ top: 50, orderBy: ['name asc'], select: ['name'] })`). For cursor screens, also mark `Pagination: cursor` so the orchestrator generates the cursor skeleton.
 
-### Step 5b — Gate 4 completeness check (MANDATORY before return)
+### Step 5b — Phase-aware completeness check (MANDATORY before writing)
 
-Before writing the section (to `plan_path` in `phase: specs`, or to `_screens_section.md` in `phase: graph` / legacy) and returning to the planner, verify the screen graph is complete. Build a coverage matrix in your head (or scratch buffer):
+**`phase: specs`: read-only validation before any plan or preview write.** Check the
+approved graph before generating specs and again before committing the Step 5
+replacement. If a required screen, route, navigation contract, or shared convention
+is missing or needs changing, leave the canonical plan and graph scratch unchanged
+and return `NEEDS_CONTEXT: graph missing <thing>`. Do not repair the graph in this
+phase. The orchestrator must obtain fresh Gate 3 approval before specs resume.
 
-1. **Features** — every feature listed in the requirements brief MUST map to at least one screen (or to a documented exception under "Open Questions"). Walk the brief feature-by-feature and confirm.
+**`phase: graph`: repair before Gate 3.** Run this check after Step 3.5 and before
+Step 5 writes graph scratch. Add missing screens and reconcile routes, navigation
+contracts, and shared conventions within the approved requirements. The repaired
+graph is still a proposal until the user accepts Gate 3. Legacy/unset mode keeps
+its full-run completeness repair before its single screen-plan approval gate.
+
+Build a coverage matrix in memory or scratch, respecting documented user-approved
+exceptions rather than silently restoring intentionally excluded screens:
+
+1. **Features** — every feature listed in the requirements brief MUST map to at least one screen (or to a documented exception in Screen Map notes, or Open Questions in legacy mode). Walk the brief feature-by-feature and confirm.
 2. **Primary entities** — every entity from the data-model architect's `## Data Model` section MUST have at least a List + Detail pair (or a documented exception, e.g. lookup-only entities like `User`, `Status`, `Category`).
 3. **User actions** — every verb in the brief (create, edit, assign, approve, capture, export, …) MUST have a target screen or a Form/Sheet that hosts it. A verb with no host = a missing screen.
 
-If the matrix has gaps, add the missing screens NOW — do not return a partial plan and let Gate 4 catch it (the iteration loop after Gate 4 rejection is the most expensive in the whole flow). Only after the matrix is fully covered (or every gap is justified under Open Questions) may you proceed to Step 6.
+Only a complete graph (including documented exceptions) may proceed to specs output.
+Unresolved gaps return `NEEDS_CONTEXT`; they do not authorize silently changing an
+approved graph, accepting an exception on the user's behalf, or skipping approval.
 
 Emit a one-line confirmation in your final summary so the orchestrator can verify:
 > "Coverage: <F> features / <E> entities / <V> actions all mapped to screens."
 
 ## Step 6 — Generate Plan-Time Preview
 
-**If the planner passed `skip_preview: true` in your prompt, do NOT generate `_plan_preview.html`** — instead, append a markdown **Screen Graph** subsection to the same write target as Step 5 (`plan_path` in `phase: specs`, `_screens_section.md` otherwise) so the planner has structural content to show at Gate 4. Then jump to Return.
+**If the planner passed `skip_preview: true` in your prompt, do NOT generate `_plan_preview.html`.** In `phase: specs`, prepare a markdown **Screen Graph** summary from the locked graph and include it in the same single Step 5 replacement as the specs and Open Questions. Do not perform a later append. In legacy mode, include it in the full scratch section write. `phase: graph` skips this step entirely. Then jump to Return.
 
 The markdown screen graph replaces the HTML preview's role at Gate 4 in `skip_preview` mode. It communicates *structure* (screen list, archetype, navigation hierarchy) without misleading visuals — the real branded HTML preview gets rendered later at Step 6.75 by the orchestrator after `/design-system` locks the brand tokens.
 
-**Markdown screen-graph format** (append after the per-screen specs in the same write target as Step 5):
+**Markdown screen-graph format** (include after the per-screen specs in the staged Step 5 output):
 
 ```markdown
 ### Screen Graph
@@ -719,7 +755,7 @@ The Hierarchy block should reflect the actual nav pattern — for `Stack`, rende
 **Print before starting (`skip_preview: true` branch):**
 > "→ Skipping HTML preview (Step 6.75 will render it with locked brand). Writing markdown screen-graph for Gate 4 structural review."
 
-Then append the markdown block to the Step 5 write target (`plan_path` in `phase: specs`, `_screens_section.md` otherwise — NEVER both) and **return — do NOT generate any HTML**.
+Commit the complete Step 5 output once (`plan_path` in `phase: specs`, `_screens_section.md` in legacy mode — NEVER both) and **return — do NOT generate any HTML**. If Step 5 already committed this composed output, do not write it again.
 
 ---
 
@@ -728,7 +764,7 @@ Then append the markdown block to the Step 5 write target (`plan_path` in `phase
 **Print before starting:**
 > "→ Generating _plan_preview.html so you can see each screen visually before code is written…"
 
-After writing `_screens_section.md`, generate a `preview.html` from the plan specs — before any TSX exists. This gives the planner a visual to show the user at Gate 4.
+After committing the Step 5 output, generate the HTML from the current plan specs (`plan_path` in `phase: specs`, `_screens_section.md` in legacy mode) before any TSX exists. This gives the planner a visual to show the user at Gate 4 without reading stale graph scratch in specs mode.
 
 Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md` Section 4. Then for each screen in the Screen Map (excluding baseline screens marked "keep"), synthesize representative HTML using the per-screen spec:
 
@@ -775,4 +811,4 @@ If `skip_preview: true` was set, write instead:
 
 If `phase: specs` was set, write instead (note: target is `plan_path`, not `_screens_section.md`):
 
-> Per-screen specs appended to `<plan_path>` (`## Screens` section, before `## Approvals`). `_screens_section.md` left untouched per single-write rule. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
+> Per-screen specs replaced in `<plan_path>` (`## Screens` section, before `## Approvals`). Approved graph preserved; no duplicate specs-owned sections. `_screens_section.md` left untouched per single-write rule. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
