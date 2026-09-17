@@ -38,6 +38,18 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A field added or moved on an existing form now packs to the section's grid.** Placement ignored
+  `section.columns`, so a two-column section that a fresh build lays out two-per-row came back as one
+  long row on a rebuild — the same spec producing a different form depending only on whether it
+  already existed.
+- **`--verify` now proves the deployed form LAYOUT, not just that a form exists.** Every wrong-layout
+  failure previously finished with an unqualified PASS. It checks the authored tabs, sections and
+  field placement, tolerates containers the spec never declared, and reports a layout it could not
+  read as unverified rather than correct.
+- **A download carries an N:N relationship's deployed name when it differs from the generated one.**
+  Otherwise a rebuild into the same environment created a second intersect relationship beside the
+  existing one.
+
 - **A business rule's `dataType` now reaches Dataverse as a real type.** The new SDK forwards the
   type hint verbatim instead of ignoring it, and the plugin was sending the App Spec's word
   (`Money`, `Picklist`, and `String` by default) where Dataverse expects a numeric
