@@ -136,8 +136,12 @@ test('businessRuleDef maps onto the SDK node shape (clauses + trueBranch), not t
   assert.strictEqual(rc.logic, 'AND');
   // The keys that matter. `thenActions`/`lhs`/`rhs` would be merged and ignored.
   assert.deepStrictEqual(Object.keys(rc).sort(), ['clauses', 'displayName', 'falseBranch', 'id', 'logic', 'trueBranch']);
+  // `valueWorkflowType` is the SDK's WorkflowAttributeType ENUM VALUE, not the App Spec's token:
+  // 'Picklist' -> '10'. The SDK forwards this field verbatim into the serialized expression, and the
+  // enum has no 'Picklist' member, so emitting the token would put an out-of-domain value on the
+  // wire. See workflowAttributeType() in sdk-build.js.
   assert.deepStrictEqual(rc.clauses, [{
-    id: 'c1', field: 'new_status', operator: 'Equals', valueType: 'Value', value: '100000001', valueWorkflowType: 'Picklist',
+    id: 'c1', field: 'new_status', operator: 'Equals', valueType: 'Value', value: '100000001', valueWorkflowType: '10',
   }]);
   assert.deepStrictEqual(rc.trueBranch.map((a) => [a.type, a.field, a.visible ?? a.lock ?? a.required ?? a.value]), [
     ['SetVisibility', 'new_notes', false],
@@ -248,29 +252,34 @@ test('REAL BUNDLE: a valueless operator emits an EMPTY operand list and the IsNu
 
 // --- peer-review findings: verified and fixed ---------------------------------------------------
 
-test('REAL BUNDLE: dataType is honoured on CONDITIONS but ignored on SetFieldValue ACTIONS', async () => {
-  // ⚠ THIS TEST WAS REWRITTEN BY MEASUREMENT, which is precisely why it existed.
+test('REAL BUNDLE: dataType maps to a WorkflowAttributeType on CONDITIONS and is ignored on SetFieldValue ACTIONS', async () => {
+  // ⚠ THIS TEST WAS REWRITTEN TWICE BY MEASUREMENT, which is precisely why it existed.
   //
-  // It used to assert that `dataType` was DECORATIVE everywhere, because the JSON path that
-  // replaced the deleted XAML compiler typed every literal as WorkflowAttributeType String ("14").
-  // Its own comment said: "if the SDK begins emitting a real type, this fails and whoever sees it
-  // must re-read the surface rather than discover the change in production." That happened on this
-  // re-vendor, so the surface claim is re-read here rather than repinned.
+  // Originally it asserted `dataType` was DECORATIVE everywhere, because the JSON path that replaced
+  // the deleted XAML compiler typed every literal as WorkflowAttributeType String ("14"). Its own
+  // comment said: "if the SDK begins emitting a real type, this fails and whoever sees it must
+  // re-read the surface rather than discover the change in production." That happened on the
+  // injected-storage re-vendor.
   //
-  // MEASURED across every token the spec accepts plus a deliberately invalid one:
+  // The FIRST rewrite pinned what it saw — the authored token reaching the wire verbatim — and read
+  // that as "dataType is honoured". It was not: `WorkflowAttributeType` is a NUMERIC-STRING enum
+  // (`{ Boolean:'0' … Money:'7', Picklist:'10', String:'14' … }`), so `"String"` and even
+  // `"NotAWorkflowType"` were OUT-OF-DOMAIN values, and the SDK's own fallback for the same field is
+  // `'14'`. Pinning pass-through of a non-member value is the opposite of honoured; it froze a
+  // silent wrong write. `businessRuleDef` now maps the spec token through the enum.
   //
-  //   CONDITION path  — `conditionExpression.right[0].type` echoes the authored token EXACTLY
-  //                     (`String`, `Memo`, … and even `NotAWorkflowType`). dataType IS honoured.
-  //   ACTION path     — the SetFieldValue step still emits "14" for EVERY token. dataType is
-  //                     ignored, exactly as it was before.
+  // MEASURED against this bundle after the mapping:
+  //
+  //   CONDITION path  — `conditionExpression.right[0].type` is the ENUM VALUE for the authored
+  //                     token ('Money' -> '7', 'Picklist' -> '10'), and '14' when none is authored,
+  //                     which is what the previous bundle hard-coded for every literal.
+  //   ACTION path     — the SetFieldValue step still emits "14" for EVERY token, so dataType really
+  //                     is ignored there.
   //
   // The two paths therefore DISAGREE, and that asymmetry is the thing worth pinning: an author who
   // sets `dataType: 'Integer'` on a SetFieldValue action gets a String literal on the wire, while
-  // the same token on a condition is carried through. Do not "simplify" this test by asserting one
-  // rule for both paths — that would re-hide the difference.
-  //
-  // Consequence: because the condition token reaches Dataverse VERBATIM, the spec's CLOSED list is
-  // load-bearing rather than cosmetic. An unvalidated token would ship as-is.
+  // the same token on a condition is typed. Do not "simplify" this test by asserting one rule for
+  // both paths — that would re-hide the difference.
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-dt-'));
   dirs.push(dir);
@@ -280,9 +289,14 @@ test('REAL BUNDLE: dataType is honoured on CONDITIONS but ignored on SetFieldVal
   // What the SetFieldValue action path emits for every token: WorkflowAttributeType.String.
   const ACTION_STRING_TOKEN = '14';
   const { BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
-  // Every token the spec accepts, plus one that is not a type at all — if the SDK ever starts
-  // consulting the field, a made-up value is the case most likely to behave differently.
-  const TOKENS = [...BUSINESS_RULE_DATA_TYPES, 'NotAWorkflowType'];
+  // The enum the SDK serializes into, restated here INDEPENDENTLY of the engine's own table so this
+  // is an oracle rather than a restatement of `workflowAttributeType`.
+  const EXPECTED_ENUM = {
+    String: '14', Memo: '14', Boolean: '0', DateTime: '2', Decimal: '3', Double: '4', Float: '4',
+    Integer: '5', Money: '7', Picklist: '10', State: '12', Status: '13', Lookup: '6', Customer: '1',
+    Owner: '8', UniqueIdentifier: '15', MultiSelectPicklist: '23',
+  };
+  const TOKENS = [...BUSINESS_RULE_DATA_TYPES];
 
   const push = async (def) => {
     const calls = [];
@@ -317,9 +331,13 @@ test('REAL BUNDLE: dataType is honoured on CONDITIONS but ignored on SetFieldVal
     // authored token (rather than from the field) shows up as a failure.
     assert.strictEqual(expr.type, UNTYPED_TOKEN,
       `condition dataType '${dataType}': the EXPRESSION type should stay metadata-derived, got ${expr.type}`);
-    // The LITERAL operand type now echoes the authored token exactly.
-    assert.strictEqual(expr.right[0].type, dataType,
-      `condition dataType '${dataType}' should reach the wire verbatim, got ${expr.right[0].type}`);
+    // The LITERAL operand type is the ENUM VALUE for the authored token, never the token itself.
+    // `WorkflowAttributeType` has no `String`/`Money` members — only '14'/'7' — so a raw token here
+    // would be an out-of-domain value that Dataverse either rejects or coerces.
+    const want = EXPECTED_ENUM[dataType];
+    assert.ok(want, `test gap: no expected enum value recorded for accepted token '${dataType}'`);
+    assert.strictEqual(expr.right[0].type, want,
+      `condition dataType '${dataType}' should serialize as WorkflowAttributeType ${want}, got ${expr.right[0].type}`);
 
     // 2. the SetFieldValue ACTION path, a DIFFERENT field on a different code path — and the one
     //    that does NOT honour the token. Asserted explicitly so the asymmetry is pinned rather
@@ -338,11 +356,34 @@ test('REAL BUNDLE: dataType is honoured on CONDITIONS but ignored on SetFieldVal
       `action dataType '${dataType}' must NOT reach the wire verbatim — that would make the two paths agree, and this test would need rewriting`);
   }
 
-  // Because the CONDITION token now reaches Dataverse verbatim, the spec-level list being closed is
-  // load-bearing: it is the only thing standing between a typo and an invalid type on the wire.
+  // The DEFAULT, which is the case that actually hit every rule. `businessRuleDef` defaults the
+  // token to 'String', and before the enum mapping that put the literal "String" on the wire for
+  // every business rule this plugin has ever written — not just ones that authored a dataType.
+  // '14' is what the PREVIOUS bundle hard-coded, so this pins the restoration of that behaviour.
+  const defaultWfom = await push(businessRuleDef({
+    ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1' }],
+  }));
+  assert.strictEqual(defaultWfom.steps.list[0].steps.list[0].conditionExpression.right[0].type, '14',
+    'a condition with NO authored dataType must serialize as String (14), the value the previous bundle hard-coded');
+
+  // An unmapped token must FALL BACK to String rather than be forwarded. The spec gate makes this
+  // unreachable from a valid spec, but forwarding would reopen the out-of-domain write, so the
+  // fallback is asserted rather than assumed.
+  const bogusWfom = await push(businessRuleDef({
+    ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1', dataType: 'NotAWorkflowType' }],
+  }));
+  const bogusType = bogusWfom.steps.list[0].steps.list[0].conditionExpression.right[0].type;
+  assert.strictEqual(bogusType, '14',
+    `an unmapped dataType must fall back to String (14), not reach the wire as '${bogusType}'`);
+
+  // The spec-level list being closed is load-bearing: it is what keeps a typo from reaching the
+  // mapping at all, and every accepted token must have an enum value to map to.
   assert.ok(Array.isArray(BUSINESS_RULE_DATA_TYPES) && BUSINESS_RULE_DATA_TYPES.length > 0);
+  for (const t of BUSINESS_RULE_DATA_TYPES) {
+    assert.ok(EXPECTED_ENUM[t], `accepted dataType '${t}' has no WorkflowAttributeType mapping`);
+  }
   assert.ok(!BUSINESS_RULE_DATA_TYPES.includes('DateTime'),
-    'DateTime stays out: it was never exercised, and is now MORE dangerous to promise than before, because the condition token is no longer ignored');
+    'DateTime stays out: it was never exercised on this path');
 });
 
 test('a DateTime dataType is rejected at the spec gate, not mid-build', () => {

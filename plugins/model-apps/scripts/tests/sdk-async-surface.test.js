@@ -55,8 +55,10 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 // test fails if the bundle disagrees with this list, in either direction.
 const ASYNC_SDK_METHODS = [
   'addElement',
+  'createArtifact',
   'findElements',
   'getArtifact',
+  'initWorkspace',
   'moveElement',
   'queryTree',
   'removeElement',
@@ -789,17 +791,30 @@ test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either
       await Promise.resolve(returned).catch(() => {});
     }
 
-    // The counter-examples that make "in either direction" true rather than a slogan. These are
-    // called SYNCHRONOUSLY throughout the plugin, in many places, without `await`. If the SDK ever
-    // makes one of them async, every one of those call sites becomes the same silent-corruption bug
-    // — and nothing else in the suite would notice, because the async list above would still be
-    // satisfied. A review pointed out this test proved only one direction; this is the other.
-    assert.ok(!(art && typeof art.then === 'function'),
-      'createArtifact is still synchronous — the plugin uses its return value directly');
-    const ws = await sdk.initWorkspace();
-    assert.ok(!(ws && typeof ws.then === 'function'),
-      'initWorkspace is still synchronous — every engine calls it un-awaited before any other work; '
-      + 'if it became async, the workspace could be unready when the first artifact call runs');
+    // `createArtifact` and `initWorkspace` MOVED into this list on the injected-storage re-vendor.
+    // They are the two methods the uptake had to re-await at ~10 call sites, so leaving them out
+    // would have left the tripwire blind exactly where the risk had just moved: a future
+    // `provision.createArtifact(type, def).id` lands as `undefined` with no error.
+    //
+    // They also used to be the "still synchronous" counter-examples below, asserted as
+    // `!(await x).then` — which `await` makes unfalsifiable, so both assertions passed while their
+    // messages stated the opposite of the truth. The counter-example is now a genuinely
+    // synchronous method, probed WITHOUT `await`.
+    // The counter-example that makes "in either direction" true rather than a slogan, probed WITHOUT
+    // `await` so the check can actually fail. `assignMissingIds` is one of only three genuinely
+    // synchronous methods left on the bundle (with `assertLanguageMatches`/`assertStructurallyValid`)
+    // — measured by calling every SDK method and classifying the return.
+    //
+    // Asserted to EXIST rather than guarded with `typeof`: a guarded probe silently becomes a no-op
+    // the moment the method is renamed, which is exactly how the previous version of this check
+    // rotted.
+    const stillSync = 'assignMissingIds';
+    assert.strictEqual(typeof sdk[stillSync], 'function',
+      `${stillSync} must exist on the bundle — this counter-example is the only thing proving the async list is not just "everything"`);
+    const syncReturn = sdk[stillSync]({ tabs: [] });
+    assert.ok(!(syncReturn && typeof syncReturn.then === 'function'),
+      `${stillSync} is still synchronous. If it became async, its un-awaited call sites become the same `
+      + 'silent-corruption bug the list above exists to prevent — add it to ASYNC_SDK_METHODS and await it.');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

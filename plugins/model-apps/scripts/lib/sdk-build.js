@@ -1017,9 +1017,36 @@ function formIdentityKey(f) {
 // `valueType` is always `'Value'`: the SDK's other axes (`Field`, `Lookup`, `Expression`, `Clear`)
 // need shapes the App Spec does not model, so exposing the name would offer authors a choice they
 // cannot use. The App Spec calls the type hint `dataType` rather than the SDK's `valueWorkflowType`,
-// because `valueType` already means that other thing here — and note it is currently DECORATIVE:
-// measured across every accepted token, on both the condition and the action path, the SDK types
-// every literal as String. See BUSINESS_RULE_DATA_TYPES in app-spec.js.
+// because `valueType` already means that other thing here. See BUSINESS_RULE_DATA_TYPES in
+// app-spec.js.
+//
+// `dataType` is NO LONGER decorative on the CONDITION path, and that changed under us in the SDK
+// uptake. The previous bundle consulted `valueWorkflowType` only for `valueType: 'Clear'` and
+// hard-typed every ordinary literal as `WorkflowAttributeType.String`; the current bundle uses the
+// field for ALL value types, VERBATIM, with no name -> enum mapping of its own
+// (`… : e.valueWorkflowType ?? WorkflowAttributeType.String`).
+//
+// `WorkflowAttributeType` is a NUMERIC-STRING enum — `{ Boolean:'0' … Money:'7', Picklist:'10',
+// String:'14' … }` — so passing the App Spec's human token would put an out-of-domain value on the
+// wire. MEASURED against the vendored bundle before this mapping existed, the condition literal
+// carried `"String"`, `"Money"`, and even `"NotAWorkflowType"` straight through, while the SDK's own
+// fallback for the same field is `'14'`. Note this hit EVERY rule, not only ones that authored a
+// `dataType`, because the default below is the token `'String'` rather than the enum value.
+//
+// The ACTION path still types every literal as String on the SDK side, so it is unaffected — the
+// asymmetry is deliberate and pinned in business-rules.test.js.
+const WORKFLOW_ATTRIBUTE_TYPE = {
+  boolean: '0', customer: '1', datetime: '2', decimal: '3', float: '4', double: '4', integer: '5',
+  lookup: '6', money: '7', owner: '8', partylist: '9', picklist: '10', key: '11', state: '12',
+  status: '13', string: '14', memo: '14', uniqueidentifier: '15', entitynamereference: '16',
+  entity: '17', entitycollection: '18', multiselectpicklist: '23',
+};
+// Unknown tokens fall back to String rather than being forwarded. The spec gate already restricts
+// `dataType` to BUSINESS_RULE_DATA_TYPES, so this is unreachable from a valid spec; forwarding an
+// unmapped token would reopen exactly the out-of-domain write this mapping exists to close.
+function workflowAttributeType(dataType) {
+  return WORKFLOW_ATTRIBUTE_TYPE[String(dataType || 'String').toLowerCase()] || '14';
+}
 function businessRuleDef(rule) {
   const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
   const clauseId = ids('c');
@@ -1043,14 +1070,14 @@ function businessRuleDef(rule) {
         field: String(c.field).toLowerCase(),
         operator: c.operator,
         valueType: 'Value',
-        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: c.dataType || 'String' }),
+        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: workflowAttributeType(c.dataType) }),
       })),
       trueBranch: (rule.actions || []).map((a) => {
         const node = { id: actionId(), type: a.type, displayName: a.label || `${a.type} ${a.field}`, field: String(a.field).toLowerCase() };
         if (a.type === 'SetVisibility') node.visible = a.visible;
         else if (a.type === 'LockUnlock') node.lock = a.lock;
         else if (a.type === 'SetBusinessRequired') node.required = a.required;
-        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = a.dataType || 'String'; }
+        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = workflowAttributeType(a.dataType); }
         return node;
       }),
       falseBranch: [],
