@@ -6,7 +6,7 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 - Node.js 24 LTS.
 - npm 10 or newer.
-- The Power Apps Developer app from the Apple App Store or Google Play.
+- The Power Apps Mobile Preview app from the Apple App Store or Google Play.
 
 ## Setup
 
@@ -108,11 +108,10 @@ connector wiring.
     The Metro config removes sensitive lines before writing logs. The complete
     `.powernative/` folder is ignored by the template's `.gitignore`.
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-    - Play store: (coming soon)
-    - App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+    - Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
 
 ## License and notices
 

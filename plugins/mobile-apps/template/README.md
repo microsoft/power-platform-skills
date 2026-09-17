@@ -8,7 +8,7 @@ iOS, Android, or hosted web app that connects to Power Platform data through
 
 - Node.js 24 LTS.
 - npm 10 or newer.
-- The Power Apps Developer app from the Apple App Store or Google Play.
+- The Power Apps Mobile Preview app from the Apple App Store or Google Play.
 
 ## Setup
 
@@ -111,11 +111,10 @@ connector wiring.
 	```
 
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
 	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-	- Play store: (coming soon)
-	- App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+	- Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
 
 ## Upgrade the Native Host
 
