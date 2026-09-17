@@ -460,6 +460,7 @@ Enables, disables, or checks the status of usage telemetry. Per-user and per-plu
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
 - When PAC is signed in, events include organization and tenant IDs; they can also include the signed-in user's Entra object ID when PAC exposes it
+- Records approved create-site/localization choices, canonical locales, public package names/versions, and stable validation outcomes; never records site names, prompts, paths, free-text requirements, credentials, private-use locale subtags, or raw errors
 - Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
@@ -569,7 +570,8 @@ This plugin sends usage telemetry by default to help Microsoft improve it.
 Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
 When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
 When you are working in a Power Pages code site, the site's SPA framework (`react`, `vue`, `angular`, or `astro`) is recorded under `eventInfo.framework`; that field is omitted otherwise. It names the scaffold only, never your site or its location.
-Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
+It also records approved create-site and localization choices, canonical locales, public localization package/version choices, stable validation failure codes, and localization completion data.
+Events do not include file paths, prompts, tool inputs, site names, free-text requirements, Dataverse URLs, credentials, usernames, hostnames, private-use locale subtags, evidence URLs, or raw errors.
 
 **Turn it on or off (per-user, applies to every project):**
 
