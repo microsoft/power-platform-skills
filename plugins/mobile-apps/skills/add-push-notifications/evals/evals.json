@@ -172,15 +172,15 @@
     {
       "id": 28,
       "coverage": "worker-contract-preflight-plan-paths-and-ios-fallback",
-      "prompt": "Exercise the bounded worker contract with an existing dedicated Entra identity that needs WIF repair plus iOS prerequisites, then assume Task preflight is unavailable.",
+      "prompt": "Exercise the bounded worker contract with a selected same-tenant existing Entra registration that needs WIF repair plus iOS prerequisites, then assume Task preflight is unavailable.",
       "expected_output": "Every Task preflight carries operation: preflight in the prompt and accepts only a mutation-free capability result. Existing-identity WIF first returns a read-only proposed diff, then executes only the unchanged explicitly approved plan and echoes all pinned identities, route, mutation/API lists, role decisions, and approvals. The parent resolves project-relative result paths against the absolute project root before checking exclusive files. The deterministic iOS fallback invokes setup-apns exactly once as the combined Apple-first/APNs owner and accepts one final WORKER_RESULT rather than separate Apple and APNs results.",
       "files": []
     },
     {
       "id": 29,
       "coverage": "cold-wif-identity-bootstrap-reapproval",
-      "prompt": "Configure push through delivery flows with WIF, but the exact dedicated Entra sender identity is genuinely absent and no client ID exists yet. Keep unrelated runtime and iOS work safe.",
-      "expected_output": "The parent accepts a null Entra client ID only for initial read-only absence inventory. It asks first for only the exact Entra identity/credential and secret-safe Key Vault bootstrap, runs identity-bootstrap serially outside the execution wave, validates the safe server-generated client ID receipt, and does not accept sender-auth.json or Google mutations from that stage. It then requires a fresh claim-driven sender-auth plan using that client ID, presents the exact remaining Google/API/RBAC actions for a second explicit approval, and only then allows final WIF execute to join eligible independent runtime/iOS work. The parent accepts identity-bootstrap-plan, identity-bootstrap, sender-auth-plan, and sender-auth results only in order, preserves the same run ID, never silently falls back or replays an uncertain mutating bootstrap, and writes memory only once after final join and SHA validation.",
+      "prompt": "Configure push through delivery flows with WIF. I explicitly choose create-dedicated-registration, but the exact dedicated Entra sender identity is genuinely absent and no client ID exists yet. Keep unrelated runtime and iOS work safe.",
+      "expected_output": "The parent accepts a null Entra client ID only for the explicit create-dedicated-registration initial read-only absence inventory. It asks first for only the exact Entra identity/credential and secret-safe Key Vault bootstrap, runs identity-bootstrap serially outside the execution wave, validates the safe server-generated client ID receipt, and does not accept sender-auth.json or Google mutations from that stage. It then requires a fresh claim-driven sender-auth plan using that client ID, presents the exact remaining Google/API/RBAC actions for a second explicit approval, and only then allows final WIF execute to join eligible independent runtime/iOS work. The parent accepts identity-bootstrap-plan, identity-bootstrap, sender-auth-plan, and sender-auth results only in order, preserves the same run ID, never silently falls back or replays an uncertain mutating bootstrap, and writes memory only once after final join and SHA validation.",
       "files": []
     },
     {
@@ -195,6 +195,27 @@
       "coverage": "noninteractive-stopping-point-and-links",
       "prompt": "Add push notifications for iOS.",
       "expected_output": "The skill does not ask for a stopping point and defaults to Create delivery flows because no build or physical-verification intent is explicit. It does not ask whether Universal Links or App Links are wanted and passes an approved HTTPS origin of null unless the prompt or existing approved plan already contains an explicit exact origin.",
+      "files": []
+    },
+    {
+      "id": 32,
+      "coverage": "wif-registration-choice",
+      "prompt": "Add push notifications and use WIF. I have not chosen which Entra registration should authenticate the sender.",
+      "expected_output": "The parent asks once for reuse-app-registration, use-existing-registration, or create-dedicated-registration, freezes that choice before WIF planning, and never lets a worker infer or switch the registration source.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "coverage": "existing-registration-fast-path",
+      "prompt": "Add push with WIF using a different existing same-tenant client ID.",
+      "expected_output": "The parent validates the supplied ID without editing auth.config.json and uses preflight -> sender-auth-plan -> approval -> sender-auth. It does not dispatch identity-bootstrap and requires every plan and result to echo use-existing-registration and the same client ID.",
+      "files": []
+    },
+    {
+      "id": 34,
+      "coverage": "create-new-only-bootstrap",
+      "prompt": "Add push with WIF and create a new dedicated sender registration.",
+      "expected_output": "Only the explicit create-dedicated-registration choice may use null-client-ID inventory and the identity-bootstrap-plan -> identity-bootstrap -> sender-auth-plan -> sender-auth sequence with two approvals.",
       "files": []
     }
   ]

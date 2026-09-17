@@ -228,10 +228,13 @@ Each bounded worker first completes a no-read/no-write capability preflight.
 Workers receive fixed identities and files, never write the memory bank, and
 return project-relative paths that the parent checks against its absolute
 allowlist. WIF reuse/repair requires a read-only plan and approval before
-execution. Truly cold WIF uses two approvals: first only for creating the
-absent dedicated Entra identity/credential and storing it safely in Key Vault,
-then—after a fresh claim-driven plan using the generated client ID—for the
-remaining Google/API/RBAC work and final proof. The bootstrap never writes
+execution. WIF setup asks the user to reuse the app registration, provide another
+same-tenant existing client ID, or create a new dedicated registration. The
+two existing-registration routes use a read-only plan followed by approval and
+execution. The create-new route uses two approvals: first only for creating
+the absent dedicated Entra identity/credential and storing it safely in Key
+Vault, then—after a fresh claim-driven plan using the generated client ID—for
+the remaining Google/API/RBAC work and final proof. The bootstrap never writes
 `sender-auth.json`. If iOS worker dispatch is unavailable, one combined
 `/setup-apns` fallback validates Apple setup first and returns one Apple/APNs
 result.
@@ -360,8 +363,10 @@ uncertain, use Microsoft Learn docs rather than guessed contracts.
 - **Common:** a Firebase project, matching wrapped physical-device runtime,
   Dataverse environment, Power Automate access, and licensing for Dataverse
   plus the premium connectors/actions selected by FlowAgent.
-- **WIF (Recommended):** a dedicated Entra app/service principal and
-  credential, Azure Key Vault with data-plane RBAC for the Power Automate
+- **WIF (Recommended):** an explicitly selected same-tenant Entra registration
+  (reuse the app registration, provide another existing client ID, or create a
+  new dedicated registration), a confidential credential stored in Azure Key
+  Vault with data-plane RBAC for the Power Automate
   connection identity, a Google Workload Identity Pool/Provider, a dedicated
   least-privilege Google sender service account/FCM role, and Power Automate
   Dataverse, Key Vault, and HTTP connections/actions.
@@ -369,14 +374,16 @@ uncertain, use Microsoft Learn docs rather than guessed contracts.
   connections/actions plus the customer's chosen Google credential and secret
   storage approach. The plugin authors both flows stopped but does not inspect
   or validate the configured authentication.
-- **Azure/Entra:** an Azure subscription; permission to create or validate the
-  dedicated Entra applications/service principals and connection identities;
-  and Azure Key Vault with data-plane RBAC. Contributor alone does not grant
-  secret read/write access.
+- **Azure/Entra:** an Azure subscription; permission to validate and prepare
+  the selected same-tenant Entra application/service principal, or create a
+  new dedicated registration when selected; and Azure Key Vault with
+  data-plane RBAC. Contributor alone does not grant secret read/write access.
 - **WIF (preferred):** Google Cloud IAM/WIF administration, a dedicated Google
-  sender service account, an Entra sender credential stored in Key Vault, and
-  Power Automate connections for Key Vault and the discovered premium HTTP
-  actions.
+  sender service account, a credential for the selected Entra registration
+  stored in Key Vault, and Power Automate connections for Key Vault and the
+  discovered premium HTTP actions. Reusing an existing registration broadens
+  its responsibility and credential-rotation impact; creating a new one gives
+  stronger isolation.
 - **iOS configuration:** Apple Developer access and manual APNs `.p8` key or
   `.p12` certificate upload to Firebase. `/setup-apple-ios` provides manual
   Apple Developer/Xcode guidance with Yes/No confirmations; `/setup-apns`

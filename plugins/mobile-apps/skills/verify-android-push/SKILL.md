@@ -113,7 +113,7 @@ Capture only the validator's safe returned build evidence:
 and every later case to that returned `inputs.digest`. Do not read or reproduce
 the full embedded proof bytes as test evidence.
 
-The validator owns the version 1 schema and all freshness decisions. It rejects
+The validator owns the version 2 schema and all freshness decisions. It rejects
 unknown/credential-shaped fields, expired proof, unsafe paths/symlinks, APK
 path/size/SHA-256 drift, high-resolution mtime/ctime plus device/inode identity
 drift, signing or metadata proof drift, project/Firebase/auth/tooling identity

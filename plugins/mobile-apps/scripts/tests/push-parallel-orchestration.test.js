@@ -197,12 +197,20 @@ test('cold WIF stages absent Entra identity before the remaining approval', () =
 
   assert.ok(bootstrapPlan, 'worker publishes an absent-identity bootstrap plan');
   assert.strictEqual(bootstrapPlan.identities.entraSenderClientId, null);
+  assert.strictEqual(
+    bootstrapPlan.decisions.registrationMode,
+    'create-dedicated-registration',
+  );
   assert.strictEqual(bootstrapPlan.identityBootstrapPlan.route, 'identity-bootstrap');
   assert.deepStrictEqual(bootstrapPlan.identityBootstrapPlan.googleMutations, []);
   assert.deepStrictEqual(bootstrapPlan.identityBootstrapPlan.apiEnablement, []);
   assert.ok(!Object.hasOwn(bootstrapPlan, 'proposedPlan'));
 
   assert.ok(bootstrap, 'worker publishes an identity-bootstrap result');
+  assert.strictEqual(
+    bootstrap.decisions.registrationMode,
+    'create-dedicated-registration',
+  );
   assert.deepStrictEqual(bootstrap.changedFiles, []);
   assert.deepStrictEqual(bootstrap.validatedFiles, []);
   assert.deepStrictEqual(bootstrap.memoryPatch, { sections: [] });
@@ -214,6 +222,10 @@ test('cold WIF stages absent Entra identity before the remaining approval', () =
 
   assert.ok(remainingPlan, 'worker publishes a fresh post-bootstrap remaining plan');
   assert.strictEqual(remainingPlan.decisions.planPhase, 'post-identity-bootstrap');
+  assert.strictEqual(
+    remainingPlan.decisions.registrationMode,
+    'create-dedicated-registration',
+  );
   assert.ok(remainingPlan.validations.some(({ name, ok }) => name === 'fresh-entra-claims' && ok));
   assert.deepStrictEqual(
     Object.keys(remainingPlan.proposedPlan.claimContract),
@@ -221,7 +233,8 @@ test('cold WIF stages absent Entra identity before the remaining approval', () =
   );
 
   for (const content of [worker, owner, reference]) {
-    assert.match(content, /server-generated\s+client ID/i);
+    assert.match(content, /create-dedicated-registration/);
+    assert.match(content, /server-generated\s+client\s+ID/i);
     assert.match(content, /fresh (?:app-only token|read-only plan)/i);
     assert.match(
       content,
@@ -232,6 +245,7 @@ test('cold WIF stages absent Entra identity before the remaining approval', () =
   assert.match(parent, /approval #2/);
   assert.match(parent, /only accepted\s+transitions are `preflight -> sender-auth-plan -> sender-auth`/i);
   assert.match(parent, /identity-bootstrap-plan -> identity-bootstrap ->\s+sender-auth-plan -> sender-auth/i);
+  assert.match(parent, /registration_mode/);
   assert.match(parent, /never retry or replay that\s+mutation stage/i);
 });
 

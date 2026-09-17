@@ -252,6 +252,41 @@
       "prompt": "new_recipientid is a fixed single-target systemuser lookup. Require the lookuplogicalname annotation to equal systemuser before resolving the recipient.",
       "expected_output": "The skill rejects the optional annotation dependency for the metadata-proven fixed lookup, validates the lookup GUID, and resolves the known systemuser target. It retains logical-name annotation checks only for genuinely polymorphic lookups.",
       "files": []
+    },
+    {
+      "id": 58,
+      "coverage": "reuse-app-registration",
+      "prompt": "Use the same Entra app registration already configured for this mobile app when setting up the WIF push sender.",
+      "expected_output": "The skill selects reuse-app-registration, validates auth.config.json against the resolved environment tenant and live Entra application/service principal, explains the confidential credential and Key Vault impact, and invokes setup-push-wif without creating another Entra application or changing Wrap-managed redirects and delegated permissions.",
+      "files": []
+    },
+    {
+      "id": 59,
+      "coverage": "use-existing-registration",
+      "prompt": "Use this different existing Entra client ID for Power Automate push authentication, but keep the app login registration unchanged.",
+      "expected_output": "The skill selects use-existing-registration, requests and GUID-validates the client ID, validates it in the same resolved tenant with live application and service-principal read-back, never writes it to auth.config.json, and passes the immutable registration choice to setup-push-wif.",
+      "files": []
+    },
+    {
+      "id": 60,
+      "coverage": "reject-cross-tenant-registration",
+      "prompt": "Use an existing sender app registration from another tenant for WIF.",
+      "expected_output": "The skill rejects the cross-tenant registration before mutation because alternate existing client IDs must belong to the app environment tenant. It does not silently create a replacement or switch registration modes.",
+      "files": []
+    },
+    {
+      "id": 61,
+      "coverage": "missing-app-registration-options",
+      "prompt": "auth.config.json has no client ID. Set up WIF push authentication.",
+      "expected_output": "The skill marks reuse-app-registration unavailable, explains that set-app-registration-native can configure it, and still offers a different same-tenant existing client ID or explicit creation of a new dedicated registration.",
+      "files": []
+    },
+    {
+      "id": 62,
+      "coverage": "create-dedicated-registration",
+      "prompt": "Create a new registration just for the push sender instead of reusing either existing registration.",
+      "expected_output": "The skill selects create-dedicated-registration and preserves the separately approved identity-bootstrap, safe Key Vault credential write, fresh claim-driven remaining plan, second approval, and final version-2 sender-auth proof.",
+      "files": []
     }
   ]
 }

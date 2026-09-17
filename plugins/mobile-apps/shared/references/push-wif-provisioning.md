@@ -3,7 +3,7 @@
 Canonical inventory, validate/reuse, repair, provisioning, proof, and handoff
 workflow for:
 
-`dedicated Entra sender app -> Google STS -> sender service account -> FCM`
+`selected same-tenant Entra registration -> Google STS -> dedicated sender service account -> FCM`
 
 Read `official-mcp-servers.md`, `sender-auth-contract.md`, and this reference
 before any cloud operation. Never create or download a Google service-account
@@ -41,6 +41,7 @@ For `operation: plan`, also require this exact read-only inventory envelope:
 ```yaml
 plan_envelope:
   plan_phase: initial|post-identity-bootstrap
+  registration_mode: reuse-app-registration|use-existing-registration|create-dedicated-registration
   firebase_project_id: <exact>
   google_project_id: <exact>
   google_execution_mode: mcp|approved-allowlisted-cli
@@ -50,7 +51,7 @@ plan_envelope:
   wif_pool_id: <exact>
   wif_provider_id: <exact>
   sender_service_account: <exact>
-  entra_sender_display_name: <exact>
+  entra_sender_display_name: <exact|null>
   entra_sender_client_id: <exact|null>
   key_vault_uri: <safe URI>
   key_vault_secret_name: <safe name>
@@ -62,10 +63,15 @@ plan_envelope:
 fresh claim inspection required by this workflow. It must not mutate cloud
 state, enable an API, create/rotate a credential, acquire file ownership,
 access `memory-bank.md`, or write any file. It returns a complete safe
-plan; it does not approve that plan. `plan_phase: initial` requires a null
-bootstrap receipt and may accept a null Entra client ID only to prove the exact
-named dedicated identity is absent. `plan_phase: post-identity-bootstrap`
-requires the exact server-generated client ID and unchanged accepted receipt.
+plan; it does not approve that plan. `plan_phase: initial` requires a null bootstrap receipt. The two
+existing-registration modes require a non-null client ID validated in the
+exact resolved Azure tenant. `reuse-app-registration` must equal the validated
+`auth.config.json` identity; `use-existing-registration` must not modify that
+file. Only `create-dedicated-registration` may accept a null client ID to prove
+the exact named dedicated identity is absent. `plan_phase:
+post-identity-bootstrap` is valid only for
+`create-dedicated-registration` and requires the exact server-generated client
+ID and unchanged accepted receipt.
 
 When an initial plan proves that exact identity is absent, it returns only an
 `identityBootstrapPlan`. The parent must approve that narrow stage before
@@ -78,7 +84,8 @@ decision_envelope:
   approved_identity_bootstrap_plan: <exact unchanged identityBootstrapPlan>
 ```
 
-The bootstrap plan may contain only exact dedicated Entra
+The bootstrap plan is valid only for `create-dedicated-registration` and may
+contain only exact dedicated Entra
 app/service-principal/application-ID-URI creation, one credential creation
 with direct secret-safe storage in the pinned existing Key Vault, exact
 temporary secret-writer RBAC required for that write, cleanup, and safe
@@ -110,7 +117,7 @@ broaden, normalize, or fill it from discovered defaults. Resolve `working_dir`
 with `realpath` and require it to equal the current project root. Require
 Firebase and Google project IDs to match exactly, and live Azure
 tenant/subscription, active Google context, pool/provider, sender account,
-Entra app, Key Vault URI/secret name, resource group, runtime connection
+registration mode and Entra app, Key Vault URI/secret name, resource group, runtime connection
 principal, route, Google execution mode, mutation list, API-enablement list,
 and role decisions to match the pinned plan. A convenient active subscription,
 project, same-name resource, account, or remembered value is never a
@@ -128,7 +135,7 @@ Worker-mode rules:
 2. Identity mismatch or live drift from the pinned project/environment stops
    before mutation and returns `BLOCKED: <safe identity mismatch>`. Do not
    switch context or manufacture a corrected envelope.
-3. `plan` either returns the narrow cold `identityBootstrapPlan` or one exact
+3. `plan` either returns the narrow create-new `identityBootstrapPlan` or one exact
    `reuse`, `repair`, or `provision` route with the complete ordered remaining
    mutation/API-enablement lists. The parent owns each approval separately.
    Bootstrap approval does not authorize Google/provider/IAM, runtime RBAC,
@@ -177,13 +184,14 @@ DONE
 WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"preflight","stage":"preflight","status":"done","capabilities":{"supportedOperations":["preflight","plan","identity-bootstrap","execute"],"preflightRequiresExecutionEnvelope":false,"preflightCloudCalls":false,"preflightFileReads":false,"preflightFileWrites":false,"mayPrompt":false,"mayDelegate":false,"memoryWrites":false,"planSupported":true,"planCloudReads":true,"planMutations":false,"planFileWrites":false,"identityBootstrapSupported":true,"identityBootstrapCloudMutations":true,"identityBootstrapFileWrites":false,"executeSupported":true,"executeWriteScope":"sender-auth.json-only"},"identities":{},"decisions":{},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"capability-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Push WIF worker capability preflight succeeded."}
 ```
 
-When initial inventory proves the exact dedicated Entra identity is absent, a
+When initial `create-dedicated-registration` inventory proves the exact
+dedicated Entra identity is absent, a
 successful read-only `plan` uses this exact bootstrap-plan shape:
 
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"identity-bootstrap-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":null},"decisions":{"planPhase":"initial","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":null},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"entra-identity-absent","ok":true},{"name":"identity-bootstrap-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Read-only inventory found no dedicated Entra sender identity and proposed only the bootstrap stage.","identityBootstrapPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"identity-bootstrap","mutations":[{"resource":"<safe exact Entra or Key Vault resource>","operation":"<exact allowlisted bootstrap operation>"}],"googleMutations":[],"apiEnablement":[],"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":null},"decisions":{"planPhase":"initial","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":null}}}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"identity-bootstrap-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":null},"decisions":{"registrationMode":"create-dedicated-registration","planPhase":"initial","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":null},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"entra-identity-absent","ok":true},{"name":"identity-bootstrap-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Read-only inventory found no dedicated Entra sender identity and proposed only the bootstrap stage.","identityBootstrapPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"identity-bootstrap","mutations":[{"resource":"<safe exact Entra or Key Vault resource>","operation":"<exact allowlisted bootstrap operation>"}],"googleMutations":[],"apiEnablement":[],"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":null},"decisions":{"registrationMode":"create-dedicated-registration","planPhase":"initial","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":null}}}
 ```
 
 The parent displays and approves only this plan, then passes it unchanged.
@@ -192,7 +200,7 @@ A successful `identity-bootstrap` uses this exact shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"identity-bootstrap","stage":"identity-bootstrap","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>","entraSenderAppObjectId":"<server-generated id>","entraSenderServicePrincipalObjectId":"<server-generated id>"},"decisions":{"approved":true,"planPhase":"initial","route":"identity-bootstrap","mutations":[{"resource":"<safe exact Entra or Key Vault resource>","operation":"<exact approved bootstrap operation>"}],"googleMutations":[],"apiEnablement":[],"googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":null,"inventoryObservedAt":"<UTC timestamp>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"approved-bootstrap-plan-equality","ok":true},{"name":"entra-identity-readback","ok":true},{"name":"credential-stored-secret-safe","ok":true},{"name":"key-vault-metadata-readback","ok":true},{"name":"no-google-mutations","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Dedicated Entra sender identity was created and its credential was stored without disclosure; remaining WIF work still requires a fresh plan and approval.","identityBootstrapReceipt":{"bootstrapCompletedAt":"<UTC timestamp>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>","entraSenderAppObjectId":"<server-generated id>","entraSenderServicePrincipalObjectId":"<server-generated id>","applicationIdUri":"<safe exact URI>","credentialExpiresAt":"<UTC timestamp>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>"}}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"identity-bootstrap","stage":"identity-bootstrap","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>","entraSenderAppObjectId":"<server-generated id>","entraSenderServicePrincipalObjectId":"<server-generated id>"},"decisions":{"approved":true,"registrationMode":"create-dedicated-registration","planPhase":"initial","route":"identity-bootstrap","mutations":[{"resource":"<safe exact Entra or Key Vault resource>","operation":"<exact approved bootstrap operation>"}],"googleMutations":[],"apiEnablement":[],"googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":null,"inventoryObservedAt":"<UTC timestamp>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"approved-bootstrap-plan-equality","ok":true},{"name":"entra-identity-readback","ok":true},{"name":"credential-stored-secret-safe","ok":true},{"name":"key-vault-metadata-readback","ok":true},{"name":"no-google-mutations","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Dedicated Entra sender identity was created and its credential was stored without disclosure; remaining WIF work still requires a fresh plan and approval.","identityBootstrapReceipt":{"bootstrapCompletedAt":"<UTC timestamp>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<server-generated id>","entraSenderAppObjectId":"<server-generated id>","entraSenderServicePrincipalObjectId":"<server-generated id>","applicationIdUri":"<safe exact URI>","credentialExpiresAt":"<UTC timestamp>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>"}}
 ```
 
 That success is not sender-auth completion. The parent must validate the
@@ -202,7 +210,7 @@ A successful post-bootstrap or reuse/repair plan uses this shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"sender-auth-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"fresh-entra-claims","ok":true},{"name":"safe-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Read-only WIF inventory and exact remaining proposal completed.","proposedPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"}}}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"plan","stage":"sender-auth-plan","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact|null>","entraSenderClientId":"<id>"},"decisions":{"registrationMode":"reuse-app-registration|use-existing-registration|create-dedicated-registration","planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"},"changedFiles":[],"validatedFiles":[],"validations":[{"name":"live-inventory","ok":true},{"name":"fresh-entra-claims","ok":true},{"name":"safe-plan-complete","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"Read-only WIF inventory and exact remaining proposal completed.","proposedPlan":{"inventoryObservedAt":"<UTC timestamp>","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact|null>","entraSenderClientId":"<id>"},"decisions":{"registrationMode":"reuse-app-registration|use-existing-registration|create-dedicated-registration","planPhase":"initial|post-identity-bootstrap","googleExecutionMode":"mcp","resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>"}}}
 ```
 
 Use explicit empty `mutations: []` and `apiEnablement: []` lists when no
@@ -214,7 +222,7 @@ A successful `execute` uses this exact shape:
 ```text
 DONE
 
-WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"execute","stage":"sender-auth","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact>","entraSenderClientId":"<id>"},"decisions":{"approved":true,"planPhase":"initial|post-identity-bootstrap","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"googleExecutionMode":"mcp","leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>","inventoryObservedAt":"<UTC timestamp>"},"changedFiles":["sender-auth.json"],"validatedFiles":["sender-auth.json"],"validations":[{"name":"live-inventory","ok":true},{"name":"approved-plan-equality","ok":true},{"name":"four-stage-proof","ok":true},{"name":"sender-auth-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","senderAuthPath":"sender-auth.json","senderAuthMode":"wif","verifiedAt":"<UTC timestamp>","validUntil":"<UTC timestamp>","proofComplete":true}
+WORKER_RESULT: {"contractVersion":1,"worker":"mobile-app:push-wif-worker","runId":"<id>","operation":"execute","stage":"sender-auth","status":"done","capabilities":null,"identities":{"firebaseProjectId":"<id>","googleProjectId":"<id>","azureTenantId":"<id>","azureSubscriptionId":"<id>","wifPoolId":"<id>","wifProviderId":"<id>","senderServiceAccount":"<safe id>","entraSenderDisplayName":"<exact|null>","entraSenderClientId":"<id>"},"decisions":{"approved":true,"registrationMode":"reuse-app-registration|use-existing-registration|create-dedicated-registration","planPhase":"initial|post-identity-bootstrap","route":"repair","mutations":[{"resource":"<safe exact remaining resource id>","operation":"<exact remaining operation>"}],"apiEnablement":["<exact API>"],"googleExecutionMode":"mcp","leastPrivilegeRole":"<exact role>","claimContract":{"iss":"<observed issuer>","aud":"<observed audience>","appid":"<observed id|null>","azp":"<observed id|null>","selectedAppClaim":"appid|azp","applicationId":"<same client ID>","googleProviderIssuer":"<observed normalized issuer>"},"resourceGroup":"<exact>","keyVaultUri":"<safe URI>","keyVaultSecretName":"<safe name>","runtimeConnectionPrincipal":"<exact>","identityBootstrapReceipt":"<null|exact accepted safe receipt>","inventoryObservedAt":"<UTC timestamp>"},"changedFiles":["sender-auth.json"],"validatedFiles":["sender-auth.json"],"validations":[{"name":"live-inventory","ok":true},{"name":"approved-plan-equality","ok":true},{"name":"four-stage-proof","ok":true},{"name":"sender-auth-contract","ok":true}],"memoryPatch":{"sections":[]},"contextRequests":[],"concerns":[],"blockers":[],"summary":"<one safe sentence>","senderAuthPath":"sender-auth.json","senderAuthMode":"wif","verifiedAt":"<UTC timestamp>","validUntil":"<UTC timestamp>","proofComplete":true}
 ```
 
 All safe identities, route, execution mode, resource group, Key Vault
@@ -298,22 +306,33 @@ node "${PLUGIN_ROOT}/scripts/run-allowlisted-gcloud.js" -- \
   config list account --format=json
 ```
 
-Collect tenant ID, subscription, Key Vault and secret names, Firebase/Google
-project ID and number, pool/provider IDs, proposed sender service-account name,
-and the object ID of the **actual Power Automate Key Vault connection
-principal**. Never assume the maker, flow owner, or sender app is that principal.
+Collect the approved registration mode, tenant ID, selected client ID when
+existing, subscription, Key Vault and secret names, Firebase/Google project ID
+and number, pool/provider IDs, proposed sender service-account name, and the
+object ID of the **actual Power Automate Key Vault connection principal**.
+Never assume the maker, flow owner, or selected Entra app is that principal.
+
+For `reuse-app-registration`, read `auth.config.json`, require GUID-shaped
+`msal.clientId` and `msal.tenantId`, and require both to match the pinned
+client ID and resolved environment tenant. For `use-existing-registration`,
+accept only the explicitly supplied client ID in that same tenant and never
+write it to `auth.config.json`. For both modes, read back the exact live Entra
+application and service principal before planning any mutation. A missing,
+cross-tenant, inaccessible, or ambiguous identity is a blocker; it never
+silently becomes a create-new route.
 
 If `sender-auth.json` exists, validate it and use only its non-secret IDs as
 inventory candidates. It is not proof of live compatibility.
 
-Inventory the Entra app/service principal, credential metadata, Key Vault
+Inventory the selected Entra app/service principal, credential metadata, Key Vault
 secret metadata, runtime RBAC, pool/provider, sender service account and its
 keys/IAM policy, Firebase project IAM policy, and custom FCM role. An initial
-worker plan may carry `entra_sender_client_id: null`; in that case, inventory
-the exact pinned display name and prove absence rather than inventing a client
-ID. Acquire a fresh Entra app-only token through the referenced secret and
-inspect it as in Section 5 only when an exact existing or just-bootstrapped
-client ID is available.
+worker plan may carry `entra_sender_client_id: null` only for
+`create-dedicated-registration`; in that case, inventory the exact pinned
+display name and prove absence rather than inventing a client ID. Acquire a
+fresh Entra app-only token through the referenced secret and inspect it as in
+Section 5 only when an exact existing or just-bootstrapped client ID is
+available.
 
 When a custom FCM role is created successfully but FCM authorization still
 returns `PERMISSION_DENIED`, use the read-only
@@ -331,7 +350,7 @@ Require all of this compatible state:
 | Sender account | Exists, enabled, dedicated, no integration-created user-managed keys, and no Owner, Editor, or Service Account Token Creator. |
 | FCM | Only the sender account is bound to the approved custom role, whose enabled permission set is exactly `cloudmessaging.messages.create`. Broader Firebase roles are incompatible with this WIF flow. |
 | Key Vault | Exact URI/name, enabled and unexpired metadata; runtime connection principal has `Key Vault Secrets User` at the secret or narrowest supported vault scope. Contributor is insufficient. |
-| Live claims | Fresh helper output has the expected tenant issuer, exact audience, and `appid`/`azp` equal to the dedicated client ID. |
+| Live claims | Fresh helper output has the expected tenant issuer, exact audience, and `appid`/`azp` equal to the selected client ID. |
 
 Enumerate relevant IAM/RBAC bindings so a broad grant cannot hide behind the
 required narrow one. Normalize only documented representation differences,
@@ -354,7 +373,7 @@ resources/settings/RBAC affected, security impact, and rollback. Obtain
 explicit approval before the first repair or provisioning mutation.
 
 In worker `operation: plan`, return the discovered state and exactly one
-complete safe plan. A genuinely absent dedicated Entra identity returns
+complete safe plan. A genuinely absent explicitly requested new Entra identity returns
 `identityBootstrapPlan` with only the narrow identity/credential and
 secret-safe Key Vault stage. Existing identity paths, and the mandatory fresh
 plan after bootstrap, return `proposedPlan` with the exact remaining
@@ -374,12 +393,16 @@ orchestration or first-stage approval as blanket approval.
 
 - **Validate/reuse:** every comparison is compatible and no mutation is
   needed. Reuse remains provisional until the fresh proof succeeds.
-- **Repair:** intended dedicated resources exist but settings/bindings/RBAC
+- **Repair:** intended selected resources exist but settings/bindings/RBAC
   drifted. Present a field-level diff. After approved changes, reread the
   entire inventory, not only changed fields.
-- **Provision:** required dedicated resources do not exist or the user chooses
-  isolation. Present the complete plan and confirm IDs. In worker mode, a
-  missing Entra identity is first split into the narrow bootstrap stage; only
+- **Provision:** required resources do not exist. For either
+  existing-registration mode, provisioning may add only approved
+  application-ID-URI, credential, Key Vault, RBAC, Google, and IAM state to the
+  selected live registration; it must not create or replace the Entra app.
+  For `create-dedicated-registration`, present the complete identity-isolated
+  plan and confirm IDs. In worker mode, a missing Entra identity is first split
+  into the narrow bootstrap stage; only
   its fresh post-bootstrap plan may classify and propose the remaining Google,
   API, IAM, runtime RBAC, proof, and handoff work. If an expected ID exists,
   return to reuse/repair; never overwrite or silently rename.
@@ -393,14 +416,21 @@ substitute a broader FCM role.
 
 ## 4. Entra identity and Key Vault
 
-Create or repair a dedicated app registration/service principal and dedicated
-application ID URI. For approved creation/rotation, use
+Use the exact selected app registration/service principal and an application
+ID URI dedicated to the sender trust. For existing-registration modes, do not
+change public-client settings, Wrap-managed redirect URIs, or delegated Power
+Platform permissions. Treat a required change to those surfaces as a blocker,
+not as an inferred repair.
+
+For `create-dedicated-registration`, create or repair the dedicated app and
+service principal only through the approved bootstrap path. For approved
+credential creation/rotation in any mode, use
 `az ad app credential reset`, capture the password directly into a shell
 variable, write it immediately to Key Vault, and unset it in the same shell
 process. Do not append credentials indefinitely; record the expiry and rotation
 owner.
 
-For a truly absent identity in orchestrated mode, this work is an explicit
+For a truly absent create-new identity in orchestrated mode, this work is an explicit
 serial `identity-bootstrap` stage. Freshly reread absence before the first
 mutation, execute only the unchanged approved bootstrap list, and return only
 the safe server-generated client/app/service-principal IDs, application ID
@@ -537,8 +567,9 @@ provider creation alone is never sufficient.
 
 ## 8. Handoff and final validation
 
-Only after proof succeeds, write version-1 mode-`wif` `sender-auth.json` from
-live read-back values and current claims. Set verifier `setup-push-wif`, all
+Only after proof succeeds, write version-2 mode-`wif` `sender-auth.json` from
+live read-back values and current claims, including the exact approved
+`wif.entra.registrationMode`. Set verifier `setup-push-wif`, all
 four proof steps true, canonical UTC `verifiedAt`, `validUntil` no more than 24
 hours later, and only the Key Vault URI/secret name—not value or payload
 version. Never create or overwrite the handoff after partial/failed proof.

@@ -60,8 +60,8 @@
     {
       "id": 56,
       "coverage": "orchestrated-cold-identity-bootstrap",
-      "prompt": "Run truly cold WIF provisioning. The exact dedicated Entra sender app does not exist, so the initial inventory has a null client ID; Google WIF/provider/IAM resources and sender-auth.json also do not exist.",
-      "expected_output": "The initial read-only plan proves the exact named Entra identity absent and returns only an identityBootstrapPlan with ordered Entra identity/credential and secret-safe Key Vault actions plus explicit empty Google mutation and API lists. After the parent approves only that stage, identity-bootstrap returns the server-generated client ID and safe identityBootstrapReceipt, writes no local file or memory, performs no Google/API/runtime-RBAC mutation, and does not create sender-auth.json. A fresh post-bootstrap plan uses that client ID and a new app-only token to observe iss, aud, and actual appid/azp, proposes the exact remaining Google/API/RBAC diff, and requires a second explicit approval. Final execute consumes only that unchanged second plan, rereads all state, completes the four-stage proof, and only then writes and validates sender-auth.json.",
+      "prompt": "Run truly cold WIF provisioning after I explicitly choose create-dedicated-registration. The exact dedicated Entra sender app does not exist, so the initial inventory has a null client ID; Google WIF/provider/IAM resources and sender-auth.json also do not exist.",
+      "expected_output": "The initial read-only plan echoes create-dedicated-registration, proves the exact named Entra identity absent, and returns only an identityBootstrapPlan with ordered Entra identity/credential and secret-safe Key Vault actions plus explicit empty Google mutation and API lists. After the parent approves only that stage, identity-bootstrap returns the server-generated client ID and safe identityBootstrapReceipt, writes no local file or memory, performs no Google/API/runtime-RBAC mutation, and does not create sender-auth.json. A fresh post-bootstrap plan uses that client ID and a new app-only token to observe iss, aud, and actual appid/azp, proposes the exact remaining Google/API/RBAC diff, and requires a second explicit approval. Final execute consumes only that unchanged second plan, rereads all state, completes the four-stage proof, and only then writes and validates version-2 sender-auth.json.",
       "files": []
     },
     {
@@ -69,6 +69,41 @@
       "coverage": "no-broader-fcm-role-question",
       "prompt": "Set up WIF for the Power Automate FCM HTTP v1 sender. Should I enable a broader Firebase role for Firebase Admin SDK use?",
       "expected_output": "The skill does not ask for or offer broader Firebase role or Firebase Admin SDK access because the WIF sender uses FCM HTTP v1 and needs only cloudmessaging.messages.create. It plans and approves the exact custom least-privilege role without a separate broader-role field. If organization policy prevents that custom role, it stops with wif-custom-role-policy-blocked rather than granting roles/firebasecloudmessaging.admin.",
+      "files": []
+    },
+    {
+      "id": 63,
+      "coverage": "reuse-app-registration",
+      "prompt": "Set up WIF using the client ID and tenant already present in auth.config.json.",
+      "expected_output": "The skill requires registration_mode reuse-app-registration, validates the app registration and service principal in the resolved tenant, plans only approved confidential sender additions, leaves Wrap-managed public-client settings unchanged, and writes a version-2 handoff that records the registration mode.",
+      "files": []
+    },
+    {
+      "id": 64,
+      "coverage": "use-existing-registration",
+      "prompt": "Set up WIF with a different existing same-tenant client ID and do not change mobile sign-in configuration.",
+      "expected_output": "The skill requires registration_mode use-existing-registration, validates the supplied client ID and service principal in the app environment tenant, never edits auth.config.json, and binds the claim-driven provider and version-2 handoff to that exact ID.",
+      "files": []
+    },
+    {
+      "id": 65,
+      "coverage": "existing-registration-not-found",
+      "prompt": "The supplied existing client ID cannot be found in the app environment tenant. Create whatever is needed.",
+      "expected_output": "The skill blocks the selected existing-registration route and requests a new explicit registration choice. It does not silently enter identity-bootstrap or manufacture a replacement client ID.",
+      "files": []
+    },
+    {
+      "id": 66,
+      "coverage": "existing-registration-approved-mutations",
+      "prompt": "The selected existing app has no application ID URI or credential yet, but I want WIF configured.",
+      "expected_output": "The skill inventories the live registration, presents application-ID-URI and credential-to-Key-Vault changes as explicit approved mutations, does not alter redirects or delegated permissions, then rereads claims and completes the four-stage proof before writing sender-auth.json.",
+      "files": []
+    },
+    {
+      "id": 67,
+      "coverage": "registration-mode-drift",
+      "prompt": "The parent approved use-existing-registration, but the worker found it easier to create a new registration.",
+      "expected_output": "The worker rejects registration-mode drift and returns NEEDS_CONTEXT or BLOCKED without creating an application, changing the client ID, or writing sender-auth.json.",
       "files": []
     }
   ]

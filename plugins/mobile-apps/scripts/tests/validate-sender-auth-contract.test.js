@@ -34,7 +34,7 @@ function proof(overrides = {}) {
 
 function wifContract() {
   return {
-    version: 1,
+    version: 2,
     mode: 'wif',
     firebaseProjectId: 'contoso-mobile-prod',
     wif: {
@@ -43,6 +43,7 @@ function wifContract() {
       workloadIdentityProviderId: 'entra-push',
       serviceAccountEmail: 'fcm-sender@contoso-mobile-prod.iam.gserviceaccount.com',
       entra: {
+        registrationMode: 'reuse-app-registration',
         tenantId: TENANT,
         clientId: CLIENT,
         audience: 'api://contoso-push-sender',
@@ -75,6 +76,16 @@ test('accepts a complete wif contract', () => {
   assert.deepStrictEqual(codes(wifContract()), []);
 });
 
+test('requires an explicit supported Entra registration mode', () => {
+  const missing = wifContract();
+  delete missing.wif.entra.registrationMode;
+  assert.ok(codes(missing).includes('missing-field'));
+
+  const invalid = wifContract();
+  invalid.wif.entra.registrationMode = 'cross-tenant-registration';
+  assert.ok(codes(invalid).includes('invalid-registration-mode'));
+});
+
 test('requires the setup-push-wif proof verifier', () => {
   const wif = wifContract();
   wif.proof.verifier = 'other-setup-skill';
@@ -83,7 +94,7 @@ test('requires the setup-push-wif proof verifier', () => {
 
 test('rejects unknown versions, modes, and fields', () => {
   const unknown = wifContract();
-  unknown.version = 2;
+  unknown.version = 1;
   unknown.mode = 'service-account';
   assert.ok(codes(unknown).includes('unsupported-version'));
   assert.ok(codes(unknown).includes('unsupported-mode'));
@@ -193,7 +204,10 @@ test('CLI emits structured JSON and uses exit 0/2 for valid/invalid contracts', 
     '--now', NOW.toISOString(),
   ], { encoding: 'utf8' });
   assert.strictEqual(valid.status, 0);
-  assert.strictEqual(JSON.parse(valid.stdout).status, 'valid');
+  const validResult = JSON.parse(valid.stdout);
+  assert.strictEqual(validResult.status, 'valid');
+  assert.strictEqual(validResult.version, 2);
+  assert.strictEqual(validResult.registrationMode, 'reuse-app-registration');
 
   const invalidContract = wifContract();
   invalidContract.proof.steps.fcmValidateOnly = false;

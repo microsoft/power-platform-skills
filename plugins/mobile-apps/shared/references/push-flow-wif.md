@@ -32,13 +32,16 @@ Before discovery or authoring:
 
 1. Validate `sender-auth.json` with
    `validate-sender-auth-contract.js --expected-firebase-project`.
-2. Require version `1`, mode `wif`, verifier `setup-push-wif`, a current proof,
-   and all four proof steps true.
-3. Derive tenant/client/application-ID URI, Key Vault URI/secret name, project
+2. Require version `2`, mode `wif`, verifier `setup-push-wif`, one supported
+   `wif.entra.registrationMode`, a current proof, and all four proof steps
+   true. Reject legacy version-1 handoffs rather than inferring registration
+   provenance.
+3. Derive registration mode, tenant/client/application-ID URI, Key Vault URI/secret name, project
    number, pool/provider IDs, sender service-account email, Firebase project,
    audience, issuer, and selected `appid`/`azp` claim only from the validated
    handoff.
-4. Never rediscover or substitute another sender, translate another auth mode,
+4. Never rediscover or substitute another Entra registration or sender,
+   translate another auth mode,
    or author from a stale/project-mismatched contract.
 
 ## Runtime HTTP sequence

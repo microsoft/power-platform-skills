@@ -66,7 +66,8 @@ test('canonical push lifecycle defines ordered resumable ownership', () => {
   assert.match(lifecycle, /recompute the SHA-256 and stop on drift/);
   assert.match(lifecycle, /Every `Task` capability check carries `operation: preflight` in the prompt/);
   assert.match(lifecycle, /Preflight is mutation-free/);
-  assert.match(lifecycle, /existing dedicated Entra identity:\s+read-only `plan` -> explicit approval -> final `execute`/);
+  assert.match(lifecycle, /app\s+registration or another same-tenant existing registration:[\s\S]*read-only `plan` -> explicit approval -> final `execute`/i);
+  assert.match(lifecycle, /Only an explicitly\s+selected new dedicated registration uses the staged path/i);
   assert.match(lifecycle, /fresh claim-driven read-only plan -> second explicit approval/);
   assert.match(lifecycle, /first approval never authorizes the remaining plan/);
   assert.match(lifecycle, /resolves them against the canonical absolute project root/);
@@ -139,7 +140,7 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
 
   assert.deepStrictEqual(
     addPush.evals.map(({ id }) => id),
-    Array.from({ length: 31 }, (_, index) => index + 1),
+    Array.from({ length: 34 }, (_, index) => index + 1),
   );
   assert.match(addPush.evals[14].expected_output, /invokes build-android/);
   assert.match(addPush.evals[14].expected_output, /invokes verify-android-push/);
@@ -176,6 +177,14 @@ test('lifecycle eval IDs append locally and cover guided orchestration', () => {
   assert.strictEqual(addPush.evals[30].coverage, 'noninteractive-stopping-point-and-links');
   assert.match(addPush.evals[30].expected_output, /does not ask for a stopping point/);
   assert.match(addPush.evals[30].expected_output, /does not ask whether Universal Links or App Links are wanted/);
+  assert.strictEqual(addPush.evals[31].coverage, 'wif-registration-choice');
+  assert.match(addPush.evals[31].expected_output, /reuse-app-registration/);
+  assert.match(addPush.evals[31].expected_output, /use-existing-registration/);
+  assert.match(addPush.evals[31].expected_output, /create-dedicated-registration/);
+  assert.strictEqual(addPush.evals[32].coverage, 'existing-registration-fast-path');
+  assert.match(addPush.evals[32].expected_output, /does not dispatch identity-bootstrap/);
+  assert.strictEqual(addPush.evals[33].coverage, 'create-new-only-bootstrap');
+  assert.match(addPush.evals[33].expected_output, /Only the explicit create-dedicated-registration choice/);
 
   assert.deepStrictEqual(
     verifyIos.evals.map(({ id }) => id),

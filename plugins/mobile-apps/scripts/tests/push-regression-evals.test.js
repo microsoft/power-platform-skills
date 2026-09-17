@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
@@ -22,7 +23,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   ));
   const ids = evals.map(({ id }) => id).sort((left, right) => left - right);
 
-  assert.deepStrictEqual(ids, Array.from({ length: 57 }, (_, index) => index + 1));
+  assert.deepStrictEqual(ids, Array.from({ length: 67 }, (_, index) => index + 1));
   for (const evaluation of evals) {
     assert.ok(evaluation.prompt.trim(), `scenario ${evaluation.id} needs a prompt`);
     assert.ok(evaluation.expected_output.trim(), `scenario ${evaluation.id} needs expected output`);
@@ -110,7 +111,10 @@ test('push flow presents informed managed and customer-owned sender auth choices
 
   assert.match(flow, /Workload Identity Federation \(Recommended\)/);
   assert.match(flow, /Create Power Automate flows; configure FCM authentication manually/);
-  assert.match(flow, /two-option comparison/);
+  assert.match(flow, /choose managed WIF or customer-configured authentication/);
+  assert.match(flow, /Reuse this app registration/);
+  assert.match(flow, /Use a different existing registration/);
+  assert.match(flow, /Create a new dedicated registration/);
   assert.doesNotMatch(flow, /Managed Azure Function compatibility/);
   assert.doesNotMatch(flow, /non-Flow endpoint/);
   assert.match(
@@ -136,8 +140,10 @@ test('push flow presents informed managed and customer-owned sender auth choices
   assert.doesNotMatch(authoring, /Non-Flow blocked handoff/);
 
   assert.match(options, /Workload Identity Federation \(Recommended\)/);
-  assert.match(options, /Dedicated Entra app\/service principal and credential/);
-  assert.match(options, /Azure Key Vault secret plus data-plane RBAC/);
+  assert.match(options, /reuse the app registration, provide another existing client ID, or create a new dedicated registration/i);
+  assert.match(options, /Cross-tenant IDs are unsupported/);
+  assert.match(options, /Never overwrite the mobile app's `auth\.config\.json`/);
+  assert.match(options, /credential stored in Azure Key Vault; data-plane RBAC/);
   assert.match(options, /Google Workload Identity Pool and Provider/);
   assert.match(options, /Create Power Automate flows; configure FCM authentication manually/);
   assert.match(options, /authors the flows stopped/i);
@@ -147,6 +153,11 @@ test('push flow presents informed managed and customer-owned sender auth choices
   assert.match(options, /authentication not plugin-validated/);
 
   assert.match(contract, /covers only the plugin-managed `wif` mode/i);
+  assert.match(contract, /Common envelope \(version 2\)/);
+  assert.match(contract, /reuse-app-registration/);
+  assert.match(contract, /use-existing-registration/);
+  assert.match(contract, /create-dedicated-registration/);
+  assert.match(contract, /Version 1 handoffs are intentionally rejected/);
   assert.match(contract, /Do not create a manual\s+mode/i);
   assert.match(
     orchestration,
@@ -214,7 +225,9 @@ test('push flow recovery keeps the tool surface non-destructive', () => {
   assert.match(authoring, /use `disable_flow`[\s\S]*disabled\/`Stopped`/i);
   assert.match(authoring, /make cleanup explicitly user-owned/i);
   assert.match(flow, /leave cleanup explicitly user-owned; do not delete it/i);
-  assert.deepStrictEqual(evals.slice(-8, -5).map(({ id }) => id), [46, 47, 48]);
+  assert.ok(evals.find(({ id }) => id === 46));
+  assert.ok(evals.find(({ id }) => id === 47));
+  assert.ok(evals.find(({ id }) => id === 48));
   assert.match(evals.find(({ id }) => id === 46).expected_output, /exact producer and sender IDs\/states/i);
   assert.match(evals.find(({ id }) => id === 47).expected_output, /does not use delete_flow/i);
   assert.match(
@@ -328,6 +341,7 @@ test('WIF worker plans read-only and executes only the unchanged approved diff',
   }
   for (const key of [
     'approved',
+    'registrationMode',
     'route',
     'mutations',
     'apiEnablement',
@@ -342,6 +356,7 @@ test('WIF worker plans read-only and executes only the unchanged approved diff',
     assert.ok(Object.hasOwn(executeLine.decisions, key), `execute echoes decision ${key}`);
   }
   assert.strictEqual(executeLine.decisions.approved, true);
+  assert.match(executeLine.decisions.registrationMode, /registration/);
   assert.ok(!Object.hasOwn(executeLine.decisions, 'broaderFcmRoleApproved'));
   assert.ok(!Object.hasOwn(executeLine.decisions, 'broaderFcmRoleRequired'));
   assert.match(evaluation.expected_output, /cloudmessaging\.messages\.create/);
@@ -407,17 +422,28 @@ test('WIF worker separates truly cold identity bootstrap from final execution', 
   assert.ok(evaluation, 'setup-push-wif covers a genuinely absent Entra app');
   assert.ok(bootstrapPlan, 'worker defines the initial bootstrap plan result');
   assert.strictEqual(bootstrapPlan.identities.entraSenderClientId, null);
+  assert.strictEqual(
+    bootstrapPlan.decisions.registrationMode,
+    'create-dedicated-registration',
+  );
   assert.deepStrictEqual(bootstrapPlan.identityBootstrapPlan.googleMutations, []);
   assert.deepStrictEqual(bootstrapPlan.identityBootstrapPlan.apiEnablement, []);
   assert.ok(bootstrap, 'worker defines the identity-bootstrap result');
+  assert.strictEqual(
+    bootstrap.decisions.registrationMode,
+    'create-dedicated-registration',
+  );
   assert.ok(bootstrap.identityBootstrapReceipt.entraSenderClientId);
   assert.deepStrictEqual(bootstrap.changedFiles, []);
   assert.ok(!Object.hasOwn(bootstrap, 'senderAuthPath'));
 
   for (const content of [worker, reference]) {
+    assert.match(content, /create-dedicated-registration/);
+    assert.match(content, /reuse-app-registration/);
+    assert.match(content, /use-existing-registration/);
     assert.match(content, /operation: identity-bootstrap/);
     assert.match(content, /fresh (?:app-only token|read-only plan)/i);
-    assert.match(content, /server-generated\s+client ID/i);
+    assert.match(content, /server-generated\s+client\s+ID/i);
   }
   assert.match(parent, /first approval does \*\*not\*\* authorize/);
   assert.match(parent, /approval #2/);
@@ -427,12 +453,51 @@ test('WIF worker separates truly cold identity bootstrap from final execution', 
   assert.match(evaluation.expected_output, /second explicit approval/);
 });
 
+test('WIF registration choice is immutable and same-tenant', () => {
+  const flow = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/SKILL.md'),
+    'utf8',
+  );
+  const owner = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
+    'utf8',
+  );
+  const worker = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'agents/push-wif-worker.md'),
+    'utf8',
+  );
+  const parent = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
+    'utf8',
+  );
+  const reference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-wif-provisioning.md'),
+    'utf8',
+  );
+  const contract = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/sender-auth-contract.md'),
+    'utf8',
+  );
+
+  for (const content of [flow, owner, worker, parent, reference, contract]) {
+    assert.match(content, /reuse-app-registration/);
+    assert.match(content, /use-existing-registration/);
+    assert.match(content, /create-dedicated-registration/);
+  }
+  assert.match(flow, /never write this sender-only ID to `auth\.config\.json`/i);
+  assert.match(reference, /same (?:resolved )?tenant/i);
+  assert.match(reference, /never\s+write it to `auth\.config\.json`/i);
+  assert.match(worker, /Only\s+`create-dedicated-registration` may use a null client ID/i);
+  assert.match(parent, /Never silently switch modes/i);
+  assert.match(contract, /registrationMode/);
+});
+
 test('push orchestration documents independent resumable setup tracks', () => {
   const orchestration = require(ORCHESTRATION_EVAL_PATH);
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
   assert.deepStrictEqual(
     orchestration.evals.map(({ id }) => id),
-    Array.from({ length: 31 }, (_, index) => index + 1),
+    Array.from({ length: 34 }, (_, index) => index + 1),
   );
 
   const skill = require('node:fs').readFileSync(

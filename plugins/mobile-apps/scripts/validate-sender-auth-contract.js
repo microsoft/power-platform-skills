@@ -9,7 +9,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const CONTRACT_VERSION = 1;
+const CONTRACT_VERSION = 2;
 const MAX_FILE_BYTES = 256 * 1024;
 const MAX_PROOF_AGE_MS = 24 * 60 * 60 * 1000;
 const FUTURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -261,11 +261,22 @@ function validateWif(contract, now, issues) {
 
   if (checkKeys(
     wif.entra,
-    ['tenantId', 'clientId', 'audience'],
-    ['tenantId', 'clientId', 'audience'],
+    ['registrationMode', 'tenantId', 'clientId', 'audience'],
+    ['registrationMode', 'tenantId', 'clientId', 'audience'],
     'wif.entra',
     issues,
   )) {
+    if (![
+      'reuse-app-registration',
+      'use-existing-registration',
+      'create-dedicated-registration',
+    ].includes(wif.entra.registrationMode)) {
+      issues.push(issue(
+        'invalid-registration-mode',
+        'wif.entra.registrationMode',
+        'Registration mode must identify the approved Entra registration source.',
+      ));
+    }
     requiredString(wif.entra.tenantId, 'wif.entra.tenantId', GUID_RE, issues);
     requiredString(wif.entra.clientId, 'wif.entra.clientId', GUID_RE, issues);
     validateAudience(wif.entra.audience, 'wif.entra.audience', issues);
@@ -445,6 +456,7 @@ function main(argv = process.argv.slice(2), cwd = process.cwd()) {
       version: contract?.version,
       mode: contract?.mode,
       firebaseProjectId: contract?.firebaseProjectId,
+      registrationMode: contract?.wif?.entra?.registrationMode,
       issues,
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

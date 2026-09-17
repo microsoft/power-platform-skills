@@ -64,17 +64,41 @@ Read active native Firebase configs and require one project. Do not rerun
 active.
 
 Validate a project-local `sender-auth.json` before WIF sender discovery. If
-absent or invalid, read the sender-auth choices reference and show its
-two-option comparison, then ask the customer to choose:
+absent or invalid, read the sender-auth choices reference and first ask the
+customer to choose managed WIF or customer-configured authentication:
 
-1. **Workload Identity Federation (Recommended):** invoke `/setup-push-wif`.
+1. **Workload Identity Federation (Recommended):** collect one explicit Entra
+   registration choice before invoking `/setup-push-wif`:
+   - **Reuse this app registration** (`reuse-app-registration`) — read
+     `auth.config.json`; require
+     GUID-shaped `msal.clientId` and `msal.tenantId`, exact tenant agreement
+     with the resolved Power Platform environment, and live Entra
+     application/service-principal read-back.
+   - **Use a different existing registration**
+     (`use-existing-registration`) — ask for its Application
+     (client) ID only; use the resolved app-environment tenant as authority;
+     require the same GUID, tenant, application, and service-principal proof;
+     never write this sender-only ID to `auth.config.json`.
+   - **Create a new dedicated registration**
+     (`create-dedicated-registration`) — let `/setup-push-wif` use its
+     separately approved identity-bootstrap path.
 2. **Create Power Automate flows; configure FCM authentication manually:**
    create both flows stopped without credentials or `sender-auth.json`. The
    customer completes the sender's authentication before publication.
 
+Do not silently select an Entra registration. If `auth.config.json` has no
+valid client ID, explain that `/set-app-registration-native` can configure it
+and leave only that reuse choice unavailable; the customer may still provide a
+different same-tenant client ID or choose new registration creation. Reject a
+different-tenant or nonexistent supplied registration before cloud mutation.
+Do not change Wrap-managed redirect URIs or delegated Power Platform
+permissions while preparing its registration for confidential WIF use.
+
 After an owner skill returns, revalidate against the exact client Firebase
-project. Never construct the WIF handoff here or add another authentication
-mode as a fallback.
+project and require version 2 to echo the exact approved registration mode,
+tenant, and client ID. Never construct the WIF handoff here, overwrite
+`auth.config.json` with a sender-only client ID, switch registration modes, or
+add another authentication mode as a fallback.
 
 In manual-auth mode, FlowAgent authors the complete non-secret producer,
 outbox, idempotency, routing, payload, and sender action structure. The sender

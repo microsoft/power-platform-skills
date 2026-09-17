@@ -101,6 +101,14 @@ choices:
   flow handoff may establish the manual choice. Otherwise ask once. For
   **Configure app**, record the choice for resumability but do not make
   sender-auth cloud work eligible;
+- when WIF is selected and no fresh matching handoff already fixes the choice,
+  ask the user to select exactly one Entra registration mode:
+  `reuse-app-registration`, `use-existing-registration`, or
+  `create-dedicated-registration`. For app reuse, validate the
+  `auth.config.json` tenant/client ID. For another existing registration, ask
+  only for its client ID and require it in the same resolved tenant without
+  editing `auth.config.json`. For create-new, pin the proposed display name.
+  Never silently switch modes when one identity cannot be validated;
 - inspect the approved screen plan and current source to fix the semantic
   destination registry, exact settings/profile surface, exact existing
   navigation-sender files that need conversion, and the Android channel ID.
@@ -119,14 +127,16 @@ choices:
   in Step 3. Do not request a credential, credential path, account identity,
   device identifier, signing-asset identifier, screenshot, or portal output.
 
-For cold WIF setup, collect and pin the exact Firebase/Google project, Google
+For cold WIF setup, collect and pin the exact registration mode,
+Firebase/Google project, Google
 execution mode, Azure tenant/subscription/resource group, pool/provider,
-sender service account, exact Entra sender display name, Key Vault URI and
-secret name, and runtime connection principal. Pin the Entra sender client ID
-when it exists; otherwise pass `null` rather than inventing one. Do not guess
+sender service account, selected Entra client ID, optional create-new display
+name, Key Vault URI and secret name, and runtime connection principal. Both
+existing-registration modes require a non-null same-tenant client ID.
+Only `create-dedicated-registration` may pass `null` rather than inventing one. Do not guess
 the route, diff, mutation list, or API enablement list.
 Those are live facts produced by the read-only WIF planning phase in Step 4.
-If initial inventory proves the exact dedicated Entra identity is absent, the
+If create-new initial inventory proves the exact dedicated Entra identity is absent, the
 parent first displays and approves only the minimal
 identity/credential/secret-safe Key Vault bootstrap plan. After that stage
 returns the server-generated client ID, the parent requires a fresh read-only
@@ -237,9 +247,9 @@ Evaluate the three tracks independently:
    `mobile-app:push-wif-worker`, eligible only for WIF when the stopping point
    is **Create delivery flows** or later and no fresh matching plugin-managed
    handoff exists. Cold WIF work first requires the read-only
-   `operation: plan` phase in Step 4.3. Existing identity reuse/repair may move
+   `operation: plan` phase in Step 4.3.    existing registration reuse/repair may move
    directly from its exact approved plan to final `operation: execute`. A
-   truly absent Entra identity must instead complete the separately approved
+   explicitly requested new but absent Entra identity must instead complete the separately approved
    serial `operation: identity-bootstrap`, then a fresh claim-driven plan and
    second approval, before final execute is eligible. Manual authentication
    never dispatches this worker, never requires or fabricates
@@ -343,6 +353,7 @@ worker_name: mobile-app:push-wif-worker
 operation: plan
 plan_envelope:
   plan_phase: initial
+  registration_mode: reuse-app-registration|use-existing-registration|create-dedicated-registration
   firebase_project_id: <exact>
   google_project_id: <exact>
   google_execution_mode: mcp|approved-allowlisted-cli
@@ -352,7 +363,7 @@ plan_envelope:
   wif_pool_id: <exact>
   wif_provider_id: <exact>
   sender_service_account: <exact>
-  entra_sender_display_name: <exact>
+  entra_sender_display_name: <exact|null>
   entra_sender_client_id: <exact|null>
   key_vault_uri: <safe URI>
   key_vault_secret_name: <safe name>
@@ -364,10 +375,11 @@ This operation may make bounded cloud reads but must not mutate cloud state,
 enable APIs, acquire file ownership, read or write memory, or write any file.
 Validate one of only two exact successful plan stages under Step 4.5:
 
-1. `stage: "sender-auth-plan"` for the existing-identity reuse/repair fast
+1. `stage: "sender-auth-plan"` for either existing-registration reuse/repair fast
    path. It must echo the non-null client ID and return the complete exact
    remaining `proposedPlan`.
-2. `stage: "identity-bootstrap-plan"` only when the initial client ID is null
+2. `stage: "identity-bootstrap-plan"` only for
+   `create-dedicated-registration` when the initial client ID is null
    and read-only inventory proves the exact named dedicated identity absent.
    It must return `identityBootstrapPlan` with only ordered Entra
    identity/credential and secret-safe Key Vault mutations, explicit
@@ -412,6 +424,7 @@ only:
 
 ```yaml
 plan_phase: post-identity-bootstrap
+registration_mode: create-dedicated-registration
 entra_sender_client_id: <exact generated client ID>
 identity_bootstrap_receipt: <exact unchanged accepted safe receipt>
 ```
@@ -426,7 +439,8 @@ mutations. Require its safe `claimContract` to contain the observed `iss`,
 `aud`, selected `appid|azp`, application ID equal to the generated client ID,
 and normalized Google provider issuer.
 
-For either the fast path's first `sender-auth-plan` or the cold path's fresh
+For either existing-registration path's first `sender-auth-plan` or the
+create-new path's fresh
 post-bootstrap `sender-auth-plan`, use a separate parent `AskUserQuestion`
 call to display the safe pinned identities, Google execution mode, route,
 resource group, Key Vault URI/secret name, runtime connection principal,
@@ -481,7 +495,8 @@ Use each already-defined worker contract without renaming fields:
   immutable Android/iOS app IDs. Its exclusive list may contain only the
   expected Steps 5-9 files named by the runtime worker contract;
 - WIF receives only the exact approval envelope above. All Firebase/Google,
-  Azure, pool/provider, sender-account, Entra, Google execution mode, route,
+  Azure, pool/provider, sender-account, Entra registration mode and identity,
+  Google execution mode, route,
   resource-group, Key Vault, runtime-principal, mutation, API-enablement, and
   role decisions come from the unchanged `approved_plan`. Its exclusive list
   is exactly `<working_dir>/sender-auth.json`;
@@ -543,8 +558,8 @@ accepting any claimed progress:
   prompt, raw output, path-to-credential, or unknown field.
 
 Maintain an explicit WIF stage state for the shared `run_id`. The only accepted
-transitions are `preflight -> sender-auth-plan -> sender-auth` for reuse/repair,
-or `preflight -> identity-bootstrap-plan -> identity-bootstrap ->
+transitions are `preflight -> sender-auth-plan -> sender-auth` for either
+existing-registration mode, or `preflight -> identity-bootstrap-plan -> identity-bootstrap ->
 sender-auth-plan -> sender-auth` for a truly absent identity. Parent approvals
 sit between each mutating transition. Reject an out-of-order, repeated,
 different-run, or skipped result as `BLOCKED`; never infer a missing stage from
@@ -554,7 +569,8 @@ For WIF `operation: plan`, additionally require `capabilities: null`, empty
 changed/validated files and memory patch, and exact top-level
 identity/decision echoes. Accept only:
 
-- initial `stage: "identity-bootstrap-plan"` when the requested client ID and
+- initial `stage: "identity-bootstrap-plan"` only when
+  `registration_mode` is `create-dedicated-registration`, the requested client ID and
   receipt are null and the exact named identity was proven absent. Require no
   `proposedPlan`, one exact `identityBootstrapPlan`, exact equality to its
   identity/decision echoes, ordered bootstrap-only mutations, and explicit
@@ -597,7 +613,8 @@ Require the unchanged safe `claimContract` from the approved plan and
 project-relative `sender-auth.json`, and resolve each against `working_dir`
 before comparing it with the absolute exclusive path. Require all four
 execution validations, `proofComplete: true`, and safe current `verifiedAt`
-and `validUntil`. Never compare an absolute prompt path directly with a
+and `validUntil`. Require exact `registrationMode` equality throughout.
+Never compare an absolute prompt path directly with a
 project-relative result path.
 
 A missing, duplicate, malformed, wrong-worker, wrong-run, wrong-stage,

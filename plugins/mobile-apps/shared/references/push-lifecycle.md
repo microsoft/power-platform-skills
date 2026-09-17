@@ -54,9 +54,12 @@ ownership release on every return. Result paths remain project-relative; the
 parent resolves them against the canonical absolute project root before
 comparing them with absolute exclusive files.
 
-Cold WIF preserves the short path for an existing dedicated Entra identity:
-read-only `plan` -> explicit approval -> final `execute`. A truly absent
-identity uses a staged path: initial read-only inventory with a null client ID
+Cold WIF preserves the short path when the user selects either the app
+registration or another same-tenant existing registration:
+read-only `plan` -> explicit approval -> final `execute`. The selected client
+ID is pinned before planning and cannot switch sources. Only an explicitly
+selected new dedicated registration uses the staged path: initial read-only
+inventory with a null client ID
 -> approval for only the minimal Entra identity/credential and secret-safe Key
 Vault bootstrap -> serial `identity-bootstrap` returning the server-generated
 client ID -> fresh claim-driven read-only plan -> second explicit approval for
@@ -88,7 +91,7 @@ verification remain sequential owner boundaries in canonical lifecycle order.
 | 1. Firebase client | Each selected platform has an active client config matching evaluated Expo identity, an immutable Firebase app ID, and the same Firebase project. | `/setup-fcm` |
 | 2. Platform credentials and capabilities | Platform-specific identifiers, entitlements, capabilities, and user-managed signing prerequisites required before wrapping are configured for the exact app identity. iOS uses `/setup-apple-ios` for manual Apple Developer/Xcode guidance with Yes/No confirmations, followed by the `/setup-apns` manual Firebase Console upload of a selected `.p8` authentication key or `.p12` certificate; completion remains pending physical verification. Android may report `not applicable` when the selected runtime requires no separate external handoff. | Current iOS owners are `/setup-apple-ios` and `/setup-apns`. Neither automates Apple configuration or emits an Apple proof artifact. Do not invent an Android credential workflow when no owner is bundled. |
 | 3. Runtime integration | The selected platform runtime contains the required native modules, and the app implements consent/permissions, registration-token lifecycle, exact topic transitions, foreground/background/response listeners, and one typed semantic navigation contract shared by in-app, custom-scheme, HTTPS, and push entry points. | `/add-push-notifications` |
-| 4. Sender authentication | The Power Automate sender uses either a valid keyless WIF handoff or customer-configured FCM authentication that remains plugin-unvalidated. | `/setup-push-wif` or the customer's manual configuration in the plugin-created sender |
+| 4. Sender authentication | The Power Automate sender uses either a valid keyless WIF handoff bound to the explicitly selected same-tenant Entra registration (app registration, another existing registration, or a newly created dedicated registration), or customer-configured FCM authentication that remains plugin-unvalidated. | `/setup-push-wif` or the customer's manual configuration in the plugin-created sender |
 | 5. Power Automate flows | The exact producer and sender flow IDs are recorded, published, and read back from the live environment. | `/create-push-notification-flow` |
 | 6. Wrapped build | A fresh platform artifact is created from the current app and push inputs and recorded by the platform build owner. For iOS, signing assets and Xcode configuration are user-managed; `/build-ios` runs the direct Wrap command only after exact confirmation. It captures a deterministic declared-input snapshot before `npm run build:ios`, preserves it through the external build, requires current inputs to equal that snapshot before writing strict project-local `ios-build.json`, and records the fresh IPA's project-relative path/hash/size/mtime plus safe app/Firebase/auth/mode/Team/export/APNs/tooling identity and a validity window no longer than 24 hours. This proves pre/post-build project-input continuity plus artifact identity/freshness. It is not signing/profile/certificate/entitlement/IPA-signature attestation, does not cryptographically embed the input digest in the IPA, and never inspects signing assets or embedded profiles. Artifact creation does not include installation or delivery proof. | iOS: `/build-ios`. Android: `/build-android`. |
 | 7. Physical delivery | The exact current wrapped artifact is installed on a supported physical device and end-to-end delivery is correlated through the live flows, provider, device states, topic transitions, and validated semantic navigation intents. HTTPS App Link/Universal Link activation is verified separately on an installed build. | iOS: `/verify-ios-push`. Android: `/verify-android-push`. |
@@ -116,6 +119,9 @@ define those details.
    authenticated sender uses the exact plugin-created Power Automate flow and
    safe handoff below; never fabricate `sender-auth.json`, inspect credentials,
    or claim its authentication design was validated.
+   Version 2 WIF handoffs must record the exact approved registration mode.
+   Version 1 handoffs are ambiguous and must be regenerated rather than
+   inferred from a matching client ID.
 6. Route to a build owner only after the requested platform's stages 1-3 and
    the shared sender-auth/flow stages 4-5 are ready. Route to physical
    verification only after that platform's exact current build is ready and

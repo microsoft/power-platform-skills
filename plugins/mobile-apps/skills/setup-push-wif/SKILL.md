@@ -1,6 +1,6 @@
 ---
 name: setup-push-wif
-description: Use when provisioning, validating, reusing, or repairing the keyless Entra-to-Google Workload Identity Federation sender-auth stage for a Power Automate FCM sender, including JWT claim discovery, Google STS, sender service-account impersonation, or Azure Key Vault RBAC. Owns only the non-secret sender-auth handoff, not Firebase client setup, flow authoring, wrapped builds, installation, or delivery.
+description: Use when provisioning, validating, reusing, or repairing the keyless Entra-to-Google Workload Identity Federation sender-auth stage for a Power Automate FCM sender, including selecting the app registration, another same-tenant existing registration, or a new dedicated registration; JWT claim discovery; Google STS; sender service-account impersonation; or Azure Key Vault RBAC. Owns only the non-secret sender-auth handoff, not Firebase client setup, flow authoring, wrapped builds, installation, or delivery.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__gcloud__run_gcloud_command, mcp__azure__subscription, mcp__azure__group, mcp__azure__role
 model: opus
@@ -24,9 +24,24 @@ use the `/setup-push-wif` row as a hard preflight.
 
 Provision or prove:
 
-`dedicated Entra sender app -> Google STS -> sender service account -> FCM`
+`selected same-tenant Entra registration -> Google STS -> dedicated sender service account -> FCM`
 
 Never create or download a Google service-account key.
+
+Require one explicit immutable `registration_mode`:
+
+- `reuse-app-registration` — use the validated client ID and tenant from
+  `auth.config.json`;
+- `use-existing-registration` — use a user-supplied client ID validated in the
+  same resolved tenant without editing `auth.config.json`;
+- `create-dedicated-registration` — create a new sender registration through
+  the separately approved identity-bootstrap path.
+
+Never silently substitute one mode for another. Existing-registration modes
+must start with a non-null client ID and may plan approved application ID URI,
+credential, Key Vault, and RBAC mutations, but they must not create another
+Entra application. Only `create-dedicated-registration` may start with a null
+client ID or enter `identity-bootstrap`.
 
 ## Internal orchestrated worker mode
 
@@ -59,16 +74,16 @@ In that mode:
 
 - pin and echo the canonical project root, Firebase/Google project, Azure
   tenant/subscription/resource group, Google execution mode, pool/provider,
-  sender service account, Entra sender app, Key Vault URI/secret name, runtime
+  sender service account, Entra registration mode and client ID, Key Vault URI/secret name, runtime
   connection principal, route, ordered mutation/API-enablement approval lists,
   and the exact least-privilege role, and stop on any mismatch;
 - never call `AskUserQuestion`; return
   `NEEDS_CONTEXT: <exact missing or newly required parent decision>` when an
-  approval, route, mutation, API enablement, fallback, installation, rotation,
+  approval, registration selection, route, mutation, API enablement, fallback, installation, rotation,
   or replacement was not pre-approved;
 - keep `preflight` entirely inert and `plan` read-only. Planning never grants
-  mutation permission. If initial inventory proves the named dedicated Entra
-  identity is absent, the parent must display and approve only the bootstrap
+  mutation permission.   If `create-dedicated-registration` initial inventory proves the named
+  dedicated Entra identity is absent, the parent must display and approve only the bootstrap
   plan, run `identity-bootstrap`, validate its safe receipt, and then request a
   fresh read-only plan using the server-generated client ID and a fresh
   app-only token. The parent separately displays and approves that complete
@@ -197,15 +212,17 @@ guarded official CLI fallback, plus `@azure/mcp@2.0.5`:
    Azure identity and Google execution context. Gather or validate the exact
    tenant/subscription/resource group, Firebase and Google project IDs,
    pool/provider, dedicated sender account, Key Vault URI/secret name, and the
-   **actual Power Automate Key Vault connection principal**. The initial
-   worker plan also pins an exact Entra sender display name and may carry a
-   null client ID only while proving that identity is absent.
+   **actual Power Automate Key Vault connection principal**. Pin the exact
+   registration mode. Existing-registration modes require a non-null client ID
+   validated in the resolved tenant. Only `create-dedicated-registration`
+   pins a sender display name and may carry a null client ID while proving that
+   identity is absent.
 3. Inventory every live resource and binding in the reference. When the exact
    Entra sender identity exists, acquire a fresh Entra app-only token and pass
    it only on stdin to `inspect-entra-wif-jwt.js`; provider trust follows
    observed `iss`, `aud`, and actual `appid`/`azp`, never portal assumptions.
-   If the initial worker plan proves the identity is absent, stop before token
-   acquisition and return only the exact safe bootstrap proposal.
+   If the create-new worker plan proves the identity is absent, stop before
+   token acquisition and return only the exact safe bootstrap proposal.
 4. Classify exactly one route: validate/reuse, approved repair, or approved new
    provisioning. Show the full state/diff, resource and RBAC mutations,
    security impact, and rollback. Obtain explicit confirmation before every
@@ -237,8 +254,9 @@ guarded official CLI fallback, plus `@azure/mcp@2.0.5`:
    FCM HTTP v1 `validateOnly: true`. Do not report success from resource
    existence or an old proof.
 8. Only in direct mode or worker final `execute`, and only after all four stages
-   succeed, write and validate version-1 mode-`wif` `sender-auth.json` from
-   live values. The Key Vault handoff contains URI and secret name only.
+   succeed, write and validate version-2 mode-`wif` `sender-auth.json` from
+   live values, including the exact approved registration mode. The Key Vault
+   handoff contains URI and secret name only.
    Record only non-secret state and validate every changed local file. In
    orchestrated worker mode, this is the only permitted local write; return
    safe fields in `WORKER_RESULT.memoryPatch.sections` instead of writing

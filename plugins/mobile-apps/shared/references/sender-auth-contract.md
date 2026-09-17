@@ -23,17 +23,17 @@ mode or credential-bearing escape hatch in `sender-auth.json`; report it as
 customer-owned and not plugin-validated instead. See
 [push-sender-auth-options.md](./push-sender-auth-options.md).
 
-## Common envelope (version 1)
+## Common envelope (version 2)
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "mode": "wif",
   "firebaseProjectId": "contoso-mobile-prod",
   "proof": {
     "firebaseProjectId": "contoso-mobile-prod",
-    "verifiedAt": "2026-08-18T08:00:00.000Z",
-    "validUntil": "2026-08-19T08:00:00.000Z",
+    "verifiedAt": "2026-09-17T06:00:00.000Z",
+    "validUntil": "2026-09-18T06:00:00.000Z",
     "verifier": "setup-push-wif",
     "steps": {}
   }
@@ -54,7 +54,7 @@ URLs with embedded credentials anywhere in the document.
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "mode": "wif",
   "firebaseProjectId": "contoso-mobile-prod",
   "wif": {
@@ -63,6 +63,7 @@ URLs with embedded credentials anywhere in the document.
     "workloadIdentityProviderId": "entra-push",
     "serviceAccountEmail": "fcm-sender@contoso-mobile-prod.iam.gserviceaccount.com",
     "entra": {
+      "registrationMode": "reuse-app-registration",
       "tenantId": "11111111-2222-3333-4444-555555555555",
       "clientId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
       "audience": "api://contoso-push-sender"
@@ -81,8 +82,8 @@ URLs with embedded credentials anywhere in the document.
   },
   "proof": {
     "firebaseProjectId": "contoso-mobile-prod",
-    "verifiedAt": "2026-08-18T08:00:00.000Z",
-    "validUntil": "2026-08-19T08:00:00.000Z",
+    "verifiedAt": "2026-09-17T06:00:00.000Z",
+    "validUntil": "2026-09-18T06:00:00.000Z",
     "verifier": "setup-push-wif",
     "steps": {
       "entraTokenIssued": true,
@@ -97,6 +98,19 @@ URLs with embedded credentials anywhere in the document.
 The observed audience must equal the configured Entra audience, and the
 observed `appid`/`azp` value must equal the Entra client ID. The Key Vault entry
 is a reference only; never add a secret value or version payload.
+
+`wif.entra.registrationMode` is required and is exactly one of:
+
+- `reuse-app-registration` — the client ID is the mobile app's validated
+  `auth.config.json` registration;
+- `use-existing-registration` — the client ID is another user-supplied
+  existing registration validated in the same tenant as the app environment;
+- `create-dedicated-registration` — `/setup-push-wif` created the dedicated
+  sender registration after explicit approval.
+
+Version 1 handoffs are intentionally rejected because they do not record which
+registration source was approved. Re-run `/setup-push-wif` to produce a fresh
+version 2 proof; never infer provenance from a matching client ID.
 
 `setup-push-wif` may write this handoff after compatible-resource reuse,
 approved repair, or approved new provisioning. In all three cases it must first
