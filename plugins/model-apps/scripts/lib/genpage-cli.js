@@ -215,7 +215,8 @@ function makeGenpageCli(env, deps = {}) {
     //   newIds.length > 1   → THROW (ambiguous; concurrent creates or noise — never guess)
     // NO name matching anywhere in recovery (names are unreliable — app-scoped list misses
     // pre-sitemap pages; env-wide names drift with sitemap titles). Any enumerateEnv failure → THROW.
-    async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources }) {
+    async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
+      addToSitemap, model, connectors, actions }) {
       // pac REQUIRES both a prompt and an agent-message for a new page. Resolve the effective text
       // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
       // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
@@ -246,7 +247,23 @@ function makeGenpageCli(env, deps = {}) {
           // prompt/agent-message round-trips intact instead of being newline-collapsed.
           args.push('--prompt-file', promptFile);
           args.push('--agent-message-file', agentMessageFile);
-          if (dataSources && dataSources.length) args.push('--data-sources', dataSources.join(','));
+          // Accept an ARRAY (how the build passes it) or a CSV STRING (how a CLI caller does).
+          // `dataSources.join` on a string would throw, and a bare `.length` check passes for both,
+          // so the shape has to be normalized rather than assumed.
+          const ds = Array.isArray(dataSources) ? dataSources.join(',') : String(dataSources || '');
+          if (ds) args.push('--data-sources', ds);
+          // OPT-IN extras, for the standalone /genpage skill (#589). They default to absent because
+          // /app-builder must NOT send them: `--add-to-sitemap` in particular is deliberately omitted
+          // there, since the SDK owns the sitemap and writes the GenPage subareas itself — letting pac
+          // add one too would produce a duplicate subarea. Unlike the prompt these are short,
+          // caller-controlled values (a model id, file paths, a bare switch), so they are safe inline.
+          if (model) args.push('--model', model);
+          if (connectors) args.push('--connectors', connectors);
+          if (actions) args.push('--actions', actions);
+          // Only ever on a CREATE. pac rejects the combination, and the skills' own rule is
+          // "use --page-id, omit --add-to-sitemap" — enforcing it here keeps every caller honest
+          // instead of repeating the rule in prose at each call site.
+          if (addToSitemap && !pid) args.push('--add-to-sitemap');
           return run(args);
         };
         let pid = pageId;

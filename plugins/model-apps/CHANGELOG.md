@@ -38,6 +38,14 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **`/genpage` deploys through the same quoting-safe upload path as `/app-builder`** ([#589]). The
+  standalone skill still told the orchestrator to compose a raw `pac model genpage upload
+  --prompt "<text>"` command line, so a prompt containing quotes, newlines, `%VAR%` or non-ASCII
+  could fail to deploy — and the tempting workaround, editing the approved prompt until it parses,
+  builds the page from text the user never approved. Both create and edit now call
+  `scripts/genpage-upload.js`, which hands the prompt and agent-message to pac **by file**.
+  `--add-to-sitemap` is additionally refused alongside `--page-id`, so an update cannot add a
+  second sitemap entry.
 - **The form wireframe now shows authored `hidden` and `readOnly` field state** ([#591]). The
   preview is the layout approval gate, but it drew every bound field as visible and editable — so a
   maker could approve an apparently editable field that deploys read-only, or one they believe is
@@ -228,6 +236,7 @@ downloads that round-trip Choice columns.
 [#574]: https://github.com/microsoft/power-platform-skills/issues/574
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
+[#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591
 
 ## [2.7.1]

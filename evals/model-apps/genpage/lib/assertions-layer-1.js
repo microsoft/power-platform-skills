@@ -602,8 +602,15 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
-    if (!/pac\s+model\s+genpage\s+upload/.test(log)) return fail('no upload invocation recorded');
-    if (!/--prompt/.test(log)) return fail('upload lacks --prompt flag');
+    // BOTH transports count as "an upload was recorded", deliberately. New runs deploy through
+    // `scripts/genpage-upload.js`, which hands the prompt to pac BY FILE so a shell cannot
+    // reinterpret quotes/newlines (#589); the fixtures checked in here are captured transcripts
+    // from before that change and show the raw `pac model genpage upload` form. Rewriting a
+    // captured transcript to match today's skill would be falsifying the evidence it exists to be.
+    if (!/pac\s+model\s+genpage\s+upload|genpage-upload\.js/.test(log)) return fail('no upload invocation recorded');
+    // `--prompt` also matches `--prompt-file`, which is the intent: what is asserted is that a
+    // prompt was recorded and scoped, not which flag carried it.
+    if (!/--prompt/.test(log)) return fail('upload lacks a --prompt/--prompt-file flag');
     return pass();
   }
 );

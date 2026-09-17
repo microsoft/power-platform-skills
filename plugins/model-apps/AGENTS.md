@@ -617,6 +617,7 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)

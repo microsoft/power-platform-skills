@@ -761,20 +761,36 @@ Custom API deployment follows the **identical matrix** as connectors, substituti
 when bindings changed/added/removed (full replace); omit it on an unrelated edit (pac preserves
 existing); write `[]` and pass it to clear all `actionBindings`.
 
-**Copy the upload commands below exactly — `--app-id`, `--code-file`, `--prompt`, `--agent-message` are all required and must use these exact flag names.**
+**Deploy through `scripts/genpage-upload.js`, never by composing a raw `pac model genpage upload` command.** The script is a thin wrapper over the same upload path `/app-builder` uses: it hands the prompt and agent-message to pac **by file** (`--prompt-file`/`--agent-message-file`). A prompt is arbitrary user text — quotes, newlines, `%VAR%`, `&`, `|`, non-ASCII — and putting it on a command line means the shell gets to reinterpret it. That failed live with:
 
-**Log the full command verbatim into `workflow-log.md` under a `## Phase 6 — Deploy` section before invoking it.** Including `--prompt` and all other flags. The eval harness greps the log for these tokens — a terse summary like `Command: pac model genpage upload --add-to-sitemap` will fail the `--prompt scoping` assertion. Format:
+```text
+Error: Not a valid command.
+Parse failed on: Inspection
+Was it quote wrapped? No, be sure to wrap values that contain spaces.
+```
+
+…for a prompt containing an ASCII-quoted multiword page name. **Never "fix" that by editing the approved prompt** (for example swapping in typographic quotes): the page would then be built from text the user never approved.
+
+**Write the prompt and agent-message to files first**, then pass the paths:
+
+```powershell
+Set-Content -Path "<working-dir>/prompt.txt"        -Value $prompt        -Encoding UTF8 -NoNewline
+Set-Content -Path "<working-dir>/agent-message.txt" -Value $agentMessage  -Encoding UTF8 -NoNewline
+```
+
+**Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `pac model genpage upload --app-id <id> --code-file <path> --data-sources '<entities>' --prompt "<full prompt>" --model <model-id> --name "<page name>" --agent-message "<description>" --add-to-sitemap`
+- Command: `node scripts/genpage-upload.js --app-id <id> --code-file <path> --data-sources '<entities>' --prompt-file <working-dir>/prompt.txt --model <model-id> --name "<page name>" --agent-message-file <working-dir>/agent-message.txt --add-to-sitemap`
+- Prompt scope: full page description from plan's `## User Requirements` (create) — or the delta only (update)
 - Result: page-id = <returned-id>, status = success
 ```
 
 When present, the logged command must also include `--connectors "<working-dir>/connectors.json"`
 and/or `--actions "<working-dir>/actions.json"`.
 
-#### `--prompt` semantics
+#### Prompt semantics
 
 - **First upload** (`--add-to-sitemap`, no `--page-id`): full page description
   from plan's `## User Requirements`.
@@ -782,22 +798,26 @@ and/or `--actions "<working-dir>/actions.json"`.
   the changes in this upload, written like a commit message, never a
   re-statement of the original.
 
+`--add-to-sitemap` is refused together with `--page-id` by the wrapper itself, so an
+update cannot add a second sitemap entry even if the flag is passed by mistake.
+
 Applies in Phase 6 updates, Phase 6.5 PAGEREF re-uploads, Phase 7.5 fix
 re-deploys, and the entire edit flow.
 
 #### For Dataverse entity pages (first upload — create):
 
 ```powershell
-pac model genpage upload `
+node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
+  --env <org-url> `
   --app-id <app-id> `
   --code-file <working-dir>/<file>.tsx `
   --name "Page Display Name" `
   --data-sources "entity1,entity2" `
   --connectors "<working-dir>/connectors.json" `
   --actions "<working-dir>/actions.json" `
-  --prompt "<Full page description from plan's ## User Requirements>" `
+  --prompt-file "<working-dir>/prompt.txt" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was built and any relevant details" `
+  --agent-message-file "<working-dir>/agent-message.txt" `
   --add-to-sitemap
 ```
 
@@ -808,19 +828,20 @@ Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`, and
 
 #### For updating existing pages (subsequent upload):
 
-Use `--page-id`, omit `--add-to-sitemap`, and **scope `--prompt` to the delta only**:
+Use `--page-id`, omit `--add-to-sitemap`, and **scope the prompt to the delta only**:
 
 ```powershell
-pac model genpage upload `
+node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
+  --env <org-url> `
   --app-id <app-id> `
   --page-id <page-id> `
   --code-file <working-dir>/<file>.tsx `
   --data-sources "entity1,entity2" `
   --connectors "<working-dir>/connectors.json" `
   --actions "<working-dir>/actions.json" `
-  --prompt "<Only the changes in this upload, e.g. 'Add a search box and sort by company name'>" `
+  --prompt-file "<working-dir>/prompt.txt" `
   --model "<current-model-id>" `
-  --agent-message "Description of what was changed in this upload"
+  --agent-message-file "<working-dir>/agent-message.txt"
 ```
 
 For updates, include the `--connectors` line only when this upload intentionally
@@ -846,19 +867,25 @@ phase substitutes the real GUIDs.
 4. If a placeholder doesn't match any map key (typo, missing sibling), stop
    and report — never silently ship the literal string.
 5. Re-upload only the files that had at least one replacement. Use the update form
-   of `pac model genpage upload` (`--page-id`, no `--add-to-sitemap`). Per the
-   "`--prompt` semantics" rule in Phase 6, this is an **update**, so `--prompt`
+   of `scripts/genpage-upload.js` (`--page-id`, no `--add-to-sitemap`). Per the
+   "Prompt semantics" rule in Phase 6, this is an **update**, so the prompt
    describes the delta only — not the original page description:
 
    ```powershell
-   pac model genpage upload `
+   Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
+     -Value "Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)"
+   Set-Content -Path "<working-dir>/agent-message.txt" -Encoding UTF8 -NoNewline `
+     -Value "Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6"
+
+   node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
+     --env <org-url> `
      --app-id <app-id> `
      --page-id <page-id-from-Phase-6> `
      --code-file <working-dir>/<file>.tsx `
      --data-sources "entity1,entity2" `
-     --prompt "Resolve cross-page navigation placeholders to real page GUIDs (post-deploy fix-up)" `
+     --prompt-file "<working-dir>/prompt.txt" `
      --model "<current-model-id>" `
-     --agent-message "Replaced PAGEREF_<name> tokens with actual page IDs returned by Phase 6"
+     --agent-message-file "<working-dir>/agent-message.txt"
    ```
 
 Pages with no `PAGEREF_` strings need no second upload.
