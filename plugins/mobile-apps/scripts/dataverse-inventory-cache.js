@@ -44,7 +44,12 @@ function readInventoryCache(file, context, {
   } catch {
     return { hit: false, reason: 'invalid-json', inventory: null };
   }
-  if (cache.schemaVersion !== CACHE_SCHEMA_VERSION || !Array.isArray(cache.inventory)) {
+  if (!cache || typeof cache !== 'object' || Array.isArray(cache)
+    || cache.schemaVersion !== CACHE_SCHEMA_VERSION || !Array.isArray(cache.inventory)
+    || cache.inventory.some((item) => !item || typeof item !== 'object' || Array.isArray(item)
+      || ['logicalName', 'schemaName', 'entitySetName', 'primaryIdAttribute'].some(
+        (field) => typeof item[field] !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*$/.test(item[field]),
+      ))) {
     return { hit: false, reason: 'invalid-shape', inventory: null };
   }
   if (!sameIdentity(cache.identity || {}, identity(context))) {

@@ -17,6 +17,10 @@ function snapshot() {
   const table = {
     logicalName: 'new_goodsreception',
     schemaName: 'new_GoodsReception',
+    entitySetName: 'new_goodsreceptions',
+    primaryIdAttribute: 'new_goodsreceptionid',
+    detailLevel: 'full',
+    missingDetailClasses: [],
     columns: [{ logicalName: 'new_name', type: 'String' }],
     manyToOneRelationships: [],
     oneToManyRelationships: [],

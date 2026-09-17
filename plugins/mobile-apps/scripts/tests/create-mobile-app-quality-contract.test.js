@@ -1,9 +1,13 @@
 'use strict';
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const test = require('node:test');
+const { createSnapshot } = require('../create-dataverse-snapshot');
+const { loadAndValidateArchitectEvidence } = require('../render-dataverse-architect-evidence');
 
 const skillPath = path.resolve(
   __dirname,
@@ -23,6 +27,96 @@ test('foreground Dataverse planning bypasses cached environment resolution', () 
     skill.slice(planningStart, planningEnd),
     /resolve-environment\.js" "\$ACTIVE_ENV_ID" --no-cache/,
   );
+});
+
+test('foreground planning returns failed attempts to recovery and resumes with fresh validated evidence', async (testContext) => {
+  const match = skill.match(/```bash\n(SNAPSHOT_PATH=[\s\S]*?\nrun_dataverse_planning_attempt)\n```/);
+  assert.ok(match, 'foreground snapshot commands must expose one recoverable attempt');
+  const pluginRoot = path.resolve(__dirname, '../..');
+  const bashPaths = process.platform === 'win32'
+    ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
+    : [];
+  const bash = bashPaths.find((entry) => /[\\/]Git[\\/]/i.test(entry)) || 'bash';
+  const snapshot = await createSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com', tenantId: 'tenant-1',
+    request: async () => ({ status: 200, data: { value: [] } }),
+  });
+  const stub = `
+node() {
+  case "$1" in
+    */create-dataverse-snapshot.js)
+      if [ "$FAILURE_STAGE" = snapshot ]; then
+        printf 'injected snapshot failure\\n' >&2
+        return 1
+      fi
+      "$REAL_NODE" -e 'require("node:fs").writeFileSync(process.argv[1], process.env.FIXTURE_SNAPSHOT)' "$SNAPSHOT_PATH"
+      ;;
+    */render-dataverse-architect-evidence.js)
+      if [ "$FAILURE_STAGE" = evidence ]; then
+        printf 'injected evidence failure\\n' >&2
+        return 1
+      fi
+      "$REAL_NODE" "$@"
+      ;;
+    *) "$REAL_NODE" "$@" ;;
+  esac
+}
+`;
+  for (const failureStage of ['snapshot', 'evidence']) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'planning recovery '));
+    testContext.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const temporary = path.join(directory, '.tmp');
+    fs.mkdirSync(temporary);
+    const snapshotFile = path.join(temporary, 'dataverse-foreground-planning-snapshot.json');
+    const evidenceFile = path.join(temporary, 'dataverse-architect-evidence.json');
+    const timingsFile = path.join(temporary, 'mobile-planning-timings.json');
+    fs.writeFileSync(snapshotFile, '{"stale":true}');
+    fs.writeFileSync(evidenceFile, '{"stale":true}');
+    const block = match[1].replaceAll('<working_dir>', directory.replaceAll('\\', '/'));
+    const env = {
+      ...process.env, PLUGIN_ROOT: pluginRoot.replaceAll('\\', '/'), REAL_NODE: process.execPath.replaceAll('\\', '/'),
+      FIXTURE_SNAPSHOT: JSON.stringify(snapshot), FAILURE_STAGE: failureStage,
+      PLANNING_TIMINGS_PATH: timingsFile.replaceAll('\\', '/'),
+      POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
+    };
+    const failed = spawnSync(bash, ['-s'], {
+      input: `${stub}\n${block}\nresult=$?\nprintf 'CONTROLLER_READY:%s\\n' "$result"\nexit "$result"`,
+      env, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(failed.status, 2, failed.stderr);
+    assert.match(failed.stderr, /NEEDS_RECOVERY: dataverse-(snapshot|evidence)/);
+    assert.match(failed.stdout, /CONTROLLER_READY:2/);
+    assert.doesNotMatch(failed.stdout, /Dataverse inventory:/);
+    assert.equal(fs.readFileSync(evidenceFile, 'utf8'), '{"stale":true}');
+    const failedTimings = JSON.parse(fs.readFileSync(timingsFile, 'utf8'));
+    const stage = failureStage === 'snapshot' ? 'metadataSnapshot' : 'artifactValidation';
+    assert.equal(failedTimings.stages[stage].status, 'failed');
+    if (failureStage === 'snapshot') {
+      assert.equal(fs.readFileSync(snapshotFile, 'utf8'), '{"stale":true}');
+      assert.equal(failedTimings.stages.artifactValidation, undefined);
+    }
+
+    const recovered = spawnSync(bash, ['-s'], {
+      input: `${stub}\n${block.replace(/run_dataverse_planning_attempt$/, 'run_dataverse_planning_attempt --retry')}`,
+      env: { ...env, FAILURE_STAGE: '' }, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(recovered.status, 0, recovered.stderr);
+    assert.match(recovered.stdout, /Dataverse inventory:/);
+    loadAndValidateArchitectEvidence(snapshotFile, evidenceFile);
+    const timings = JSON.parse(fs.readFileSync(timingsFile, 'utf8'));
+    assert.deepEqual(timings.stages[stage].history.map((attempt) => attempt.status), ['failed', 'done']);
+    assert.equal(timings.stages[stage].retryCount, 1);
+    if (failureStage === 'snapshot') assert.equal(timings.stages.artifactValidation.retryCount, 0);
+  }
+});
+
+test('planning recovery keeps the agent active without weakening approval or metadata checks', () => {
+  assert.match(skill, /Foreground recovery, not agent termination/);
+  assert.match(skill, /at most two repair-and-retry attempts per failing stage/);
+  assert.match(skill, /rerun `run_dataverse_planning_attempt --retry`/);
+  assert.match(skill, /Never substitute stale\s+evidence, invent metadata/);
+  assert.match(skill, /Ask the user only when recovery needs interactive sign-in/);
+  assert.match(skill, /Individual table-detail failures do not stop planning/);
 });
 
 test('offline setup follows materialized Dataverse data and never infers connector-only from absence', () => {

@@ -17,6 +17,8 @@ function table(logicalName, detailLevel = 'full') {
   return {
     logicalName,
     schemaName: logicalName,
+    entitySetName: `${logicalName}s`,
+    primaryIdAttribute: `${logicalName}id`,
     detailLevel,
     missingDetailClasses: detailLevel === 'full' ? [] : ['typed-constraints'],
     columns: [],
@@ -24,6 +26,7 @@ function table(logicalName, detailLevel = 'full') {
     oneToManyRelationships: [],
     manyToManyRelationships: [],
     alternateKeys: [],
+    facts: { columnCount: 0, relationshipCount: 0, keyCount: 0 },
   };
 }
 
@@ -252,4 +255,72 @@ test('attempted unavailable detail metadata must be deferred', () => {
     contextNames: [],
     proposedContextNames: [],
   });
+});
+
+function computedFixture(decision = 'reuse') {
+  const source = contract({ new_item: decision });
+  const column = {
+    logicalName: 'new_total', schemaName: 'new_Total', type: 'computed',
+    attributeType: 'Decimal', sourceType: 1, sourceTypeMask: 0,
+    formulaDefinition: 'new_quantity * new_price', plannedDecision: 'reuse',
+  };
+  source.tables[0].columns.push(column);
+  const evidence = table('new_item');
+  evidence.columns.push({
+    logicalName: column.logicalName, type: 'Decimal', sourceType: 1,
+    computed: {
+      metadataStatus: 'available', sourceType: 1, sourceTypeMask: 0,
+      formulaDefinition: column.formulaDefinition,
+    },
+  });
+  evidence.facts.columnCount = 1;
+  const checks = decision === 'adapt'
+    ? [{ logicalName: 'new_itemv2', status: 'missing', existing: null }]
+    : [];
+  return { source, evidence, checks };
+}
+
+test('required computed metadata must be available before an existing-table decision', () => {
+  for (const decision of ['reuse', 'extend', 'adapt']) {
+    const { source, evidence, checks } = computedFixture(decision);
+    evidence.columns[0].computed.metadataStatus = 'unavailable';
+    const result = validatePlanningDecisions(source, snapshot([evidence], checks));
+    assert.equal(result.valid, false, decision);
+    assert.deepEqual(result.contextNames, []);
+    assert.match(getRevisionErrors(result).join('; '), /new_item.new_total.*defer the column/);
+  }
+});
+
+test('computed evidence must match the contract and cannot claim availability with missing facts', () => {
+  const { source, evidence } = computedFixture();
+  assert.equal(validatePlanningDecisions(source, snapshot([evidence])).valid, true);
+  for (const updates of [
+    { sourceTypeMask: null }, { sourceTypeMask: 32 }, { sourceType: null },
+    { formulaDefinition: '' }, { formulaDefinition: 'new_quantity + new_price' },
+  ]) {
+    const changed = structuredClone(evidence);
+    Object.assign(changed.columns[0].computed, updates);
+    const result = validatePlanningDecisions(source, snapshot([changed]));
+    assert.equal(result.valid, false, JSON.stringify(updates));
+    assert.ok(getRevisionErrors(result).length > 0);
+  }
+});
+
+test('unused and explicitly deferred computed columns do not prevent reuse', () => {
+  const { source, evidence } = computedFixture();
+  evidence.columns[0].computed.metadataStatus = 'unavailable';
+  source.tables[0].columns[0].plannedDecision = 'defer';
+  assert.equal(validatePlanningDecisions(source, snapshot([evidence])).valid, true);
+  source.tables[0].columns = [];
+  assert.equal(validatePlanningDecisions(source, snapshot([evidence])).valid, true);
+});
+
+test('required computed columns on core tables request expansion before deferral', () => {
+  const { source, evidence } = computedFixture();
+  evidence.detailLevel = 'core';
+  evidence.missingDetailClasses = ['computed-metadata'];
+  evidence.columns[0].computed = null;
+  const result = validatePlanningDecisions(source, snapshot([evidence]));
+  assert.deepEqual(result.contextNames, ['new_item']);
+  assert.deepEqual(getRevisionErrors(result), []);
 });

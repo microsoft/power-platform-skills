@@ -558,7 +558,10 @@ ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
 PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
 INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
 
-node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
+run_dataverse_planning_attempt() {
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage metadataSnapshot --action start "$@" || return 2
+if ! node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --output "$SNAPSHOT_PATH" \
@@ -570,15 +573,31 @@ node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --read-concurrency 1 \
   --inventory-cache "$INVENTORY_CACHE_PATH" \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"
+  --planning-timings-output "$PLANNING_TIMINGS_PATH"; then
+  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+    --project-root "<working_dir>" --stage metadataSnapshot \
+    --action fail --reason snapshot-command-failed
+  printf 'NEEDS_RECOVERY: dataverse-snapshot\n' >&2
+  return 2
+fi
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage metadataSnapshot --action finish || return 2
 
 node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action start
-node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+  --project-root "<working_dir>" --stage artifactValidation --action start "$@" || return 2
+if ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
-  --output "$ARCHITECT_EVIDENCE_PATH"
+  --output "$ARCHITECT_EVIDENCE_PATH" \
+  || ! node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+    --snapshot "$SNAPSHOT_PATH" --output "$ARCHITECT_EVIDENCE_PATH" --validate-only; then
+  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
+    --project-root "<working_dir>" --stage artifactValidation \
+    --action fail --reason evidence-command-failed
+  printf 'NEEDS_RECOVERY: dataverse-evidence\n' >&2
+  return 2
+fi
 node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action finish
+  --project-root "<working_dir>" --stage artifactValidation --action finish || return 2
 
 node -e '
   const s=require(process.argv[1]);
@@ -589,10 +608,15 @@ node -e '
   console.log(`✓ Detail loading: ${d.loadedCandidates} loaded (${d.coreCandidates || 0} core, ${d.fullCandidates || 0} full), ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
   console.log(`✓ Exact names: requested [${s.exactNameResolution.requestedTables.join(", ")}], loaded [${s.exactNameResolution.loadedTables.join(", ")}], unavailable [${s.exactNameResolution.unavailableTables.join(", ")}]`);
   console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
-' "$SNAPSHOT_PATH"
+' "$SNAPSHOT_PATH" || return 2
 echo "✓ Compact architect evidence: $ARCHITECT_EVIDENCE_PATH"
 echo "✓ Request telemetry: $PLANNING_TELEMETRY_PATH"
+}
+run_dataverse_planning_attempt
 ```
+
+`metadataSnapshotWallMs` records whole snapshot attempts, including failed ones.
+It overlaps the metadata component timings; do not add it to their sum.
 
 `--combined-base-read` loads attributes, three relationship collections, and
 alternate keys through one entity-definition GET per selected table, following
@@ -605,15 +629,32 @@ only, has a five-minute TTL, fails open on corruption or identity mismatch, and
 is never read by `--reconcile-exact`. After any metadata publish, invalidate it
 with `dataverse-inventory-cache.js --file "$INVENTORY_CACHE_PATH" --invalidate`.
 
-If environment resolution, token acquisition, terminal transport access, broad
-inventory, exact-name identity resolution, parsing, or evidence rendering
-fails, surface the exact failure and **do not** treat an unreadable response as
-an empty inventory:
+**Foreground recovery, not agent termination.** A nonzero command result or
+`NEEDS_RECOVERY` returns control to the foreground agent. Keep working on the
+failure; only dependent summaries, architect dispatch, approval, and mutation
+wait for trustworthy evidence. This also applies to environment resolution,
+token acquisition, transport access, broad inventory, exact-name identity
+resolution, parsing, and evidence validation failures in this step.
 
-- These failures prevent creation of a trustworthy foreground snapshot. Stop
-  before architect dispatch and ask only for the user action that can resolve
-  the problem, such as signing in, selecting another environment, or retrying
-  after access is restored. Do not proceed toward Dataverse mutation.
+- Diagnose the actual error, then repair recoverable project-local command,
+  path, or concept-input mistakes. Let the request executor handle its bounded
+  transient retries; do not launch parallel retry loops or repeat an unchanged
+  permanent error. Invalid cached or old-format metadata is regenerated from
+  live reads, never edited into apparent validity.
+- After a targeted repair, rerun `run_dataverse_planning_attempt --retry` (or
+  rerun the block with that invocation if the shell function is unavailable).
+  Allow at most two repair-and-retry attempts per failing stage. Re-resolve the
+  selected environment first if resolution failed. Preserve failure history
+  and include `--retry` on restarted environment timing stages as well.
+- Resume automatically only after the current attempt succeeds and its fresh
+  snapshot and matching evidence validate. File existence is not success:
+  prior artifacts can survive a failed atomic write. Never substitute stale
+  evidence, invent metadata, change the selected account/environment, relax
+  validation, or downgrade a requirement to make the check pass.
+- Ask the user only when recovery needs interactive sign-in, missing privileges,
+  an explicit scope decision, or the bounded repairs are exhausted. Preserve
+  the working context and resume this stage after that blocker is resolved;
+  a recoverable command failure alone is not terminal `BLOCKED`.
 - Individual table-detail failures do not stop planning. Keep the snapshot,
   record each failure in `detailLoadFailures`, list it in the evidence
   appendix, and classify the affected exact or advisory table as `Defer` at

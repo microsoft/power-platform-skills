@@ -101,6 +101,8 @@ function table(logicalName, columns, overrides = {}) {
     canBePrimaryEntityInRelationship: true,
     canBeRelatedEntityInRelationship: true,
     canBeInManyToMany: true,
+    detailLevel: 'full',
+    missingDetailClasses: [],
     columns,
     manyToOneRelationships: [],
     oneToManyRelationships: [],
@@ -147,6 +149,15 @@ function snapshot({
   exactUnavailable = [],
   generatedAt = SNAPSHOT_AT,
 } = {}) {
+  tables = tables.map((item) => ({
+    ...item,
+    facts: {
+      columnCount: item.columns.length,
+      relationshipCount: item.manyToOneRelationships.length
+        + item.oneToManyRelationships.length + item.manyToManyRelationships.length,
+      keyCount: item.alternateKeys.length,
+    },
+  }));
   const exactLoaded = tables.map((item) => item.logicalName);
   const requested = [...new Set([
     ...exactLoaded,
@@ -2061,7 +2072,7 @@ test('collision checkpoint roll-forward preserves prior writes and rebinds revis
   );
 });
 
-function imageCollisionRecoveryFixture({ adaptedImage = false, existingSize = 10240 } = {}) {
+function imageCollisionRecoveryFixture({ adaptedImage = false, existingSize = 10240, existingPrimaryImage = false } = {}) {
   const { contract, existing } = imageRepairFixture();
   const item = contract.tables[0];
   const image = item.columns.find((value) => value.type === 'image');
@@ -2071,7 +2082,8 @@ function imageCollisionRecoveryFixture({ adaptedImage = false, existingSize = 10
   liveImage.imageUpdateDefinition.DisplayName = {
     LocalizedLabels: [{ Label: 'Existing localized image label', LanguageCode: 1033 }],
   };
-  liveImage.imageUpdateDefinition.IsPrimaryImage = false;
+  liveImage.isPrimaryImage = existingPrimaryImage;
+  liveImage.imageUpdateDefinition.IsPrimaryImage = existingPrimaryImage;
   if (adaptedImage) {
     image.plannedDecision = 'adapt';
     image.adaptedLogicalName = 'cr1_photov2';
@@ -2233,6 +2245,27 @@ test('image checkpoint roll-forward rejects incompatible or removed completed im
       /completed metadata component configure-image:cr1_item:cr1_photo was removed or changed/,
       name,
     );
+  }
+});
+
+test('image checkpoint recovery verifies explicitly approved primary-image semantics', () => {
+  for (const existingPrimaryImage of [false, true]) {
+    const fixture = imageCollisionRecoveryFixture({ existingPrimaryImage });
+    const matching = fixture.revisionInputs((item) => {
+      item.columns.find((column) => column.type === 'image').isPrimaryImage = existingPrimaryImage;
+    });
+    const rolled = fixture.rollForward(matching);
+    const manifest = buildManifest({ ...matching, publishCheckpoint: rolled });
+    assert.equal(manifest.executable, true);
+    assert.equal(manifest.execution.phases.flatMap((phase) => phase.operations)
+      .some((operation) => operation.id.startsWith('configure-image:')), false);
+
+    const changed = fixture.revisionInputs((item) => {
+      item.columns.find((column) => column.type === 'image').isPrimaryImage = !existingPrimaryImage;
+    });
+    assert.throws(() => fixture.rollForward(changed),
+      /completed metadata component configure-image:cr1_item:cr1_photo was removed or changed/);
+    assert.equal(buildManifest(changed).executable, false);
   }
 });
 

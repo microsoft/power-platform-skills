@@ -8,6 +8,7 @@ const { atomicWriteJson } = require('./lib/dataverse-planning-telemetry');
 const STAGES = new Set([
   'environmentResolution',
   'publisherPrefixDetection',
+  'metadataSnapshot',
   'metadataInventory',
   'metadataCandidateSelection',
   'metadataDetailLoading',
@@ -91,7 +92,7 @@ function updatePlanningTiming(artifact, {
     : 0;
   if (action === 'start') {
     current.attempts += 1;
-    if (retry) current.retryCount += 1;
+    if (retry && current.attempts > 1) current.retryCount += 1;
     current.startedAt = nowIso();
     current.startedAtMs = nowMs();
     current.completedAt = null;
@@ -167,6 +168,7 @@ function summarizePlanningTimings(artifact) {
   return {
     environmentResolutionMs: stageDuration(artifact, 'environmentResolution'),
     publisherPrefixDetectionMs: stageDuration(artifact, 'publisherPrefixDetection'),
+    metadataSnapshotWallMs: stageDuration(artifact, 'metadataSnapshot'),
     dataverseMetadataNetworkMs: stageDuration(artifact, 'metadataInventory')
       + stageDuration(artifact, 'metadataDetailLoading')
       + stageDuration(artifact, 'metadataExpansion'),

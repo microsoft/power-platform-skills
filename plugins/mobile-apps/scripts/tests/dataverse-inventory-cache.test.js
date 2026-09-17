@@ -16,7 +16,9 @@ const {
 const {
   cacheablePlanningInventory,
   createSnapshot,
+  expandSnapshot,
 } = require('../create-dataverse-snapshot');
+const { createFixtureRequest, createScaleScenario } = require('../benchmark-dataverse-planning');
 
 const context = {
   environmentUrl: 'https://example.crm.dynamics.com/',
@@ -32,9 +34,16 @@ function tempFile(testContext) {
   return path.join(directory, 'inventory.json');
 }
 
+function inventoryItem() {
+  return {
+    logicalName: 'new_item', schemaName: 'new_Item',
+    entitySetName: 'new_items', primaryIdAttribute: 'new_itemid',
+  };
+}
+
 test('fresh matching inventory cache is reused', (testContext) => {
   const file = tempFile(testContext);
-  writeInventoryCache(file, context, [{ logicalName: 'new_item' }], {
+  writeInventoryCache(file, context, [inventoryItem()], {
     nowMs: () => 100,
     nowIso: () => '2026-08-28T00:00:00.000Z',
   });
@@ -44,7 +53,7 @@ test('fresh matching inventory cache is reused', (testContext) => {
   }), {
     hit: true,
     reason: 'fresh',
-    inventory: [{ logicalName: 'new_item' }],
+    inventory: [inventoryItem()],
     ageMs: 50,
     cachedAt: '2026-08-28T00:00:00.000Z',
   });
@@ -93,7 +102,7 @@ test('a corrupt cache is replaced atomically without temporary siblings', (testC
   const file = tempFile(testContext);
   fs.writeFileSync(file, '{invalid');
   assert.equal(readInventoryCache(file, context).reason, 'invalid-json');
-  writeInventoryCache(file, context, [{ logicalName: 'new_item' }]);
+  writeInventoryCache(file, context, [inventoryItem()]);
   assert.equal(readInventoryCache(file, context).hit, true);
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['inventory.json']);
 });
@@ -190,7 +199,8 @@ test('live and cached inventory produce identical ranking and selected table evi
     CanCreateAttributes: { Value: true },
   };
   const makeRequest = (liveInventory) => async (_method, apiPath) => {
-    if (liveInventory && apiPath.includes('IsCustomizable/Value eq true')) {
+    if ((liveInventory && apiPath.includes('IsCustomizable/Value eq true'))
+      || apiPath.includes("LogicalName eq 'new_item'")) {
       return { status: 200, data: { value: [rawEntity] } };
     }
     return { status: 200, data: { value: [] } };
@@ -212,6 +222,89 @@ test('live and cached inventory produce identical ranking and selected table evi
   assert.deepEqual(cached.candidateRanking, live.candidateRanking);
   assert.deepEqual(cached.selectedCandidateEvidence, live.selectedCandidateEvidence);
   assert.deepEqual(cached.tables, live.tables);
+});
+
+test('malformed cached inventories recover through a live read instead of an empty or crashed discovery', async (testContext) => {
+  const file = tempFile(testContext);
+  const valid = writeInventoryCache(file, context, [inventoryItem()]);
+  const invalidInventories = [null, {}, [null], [[]], ['invalid'], [{}],
+    [{ logicalName: 'new_item' }], [{ ...inventoryItem(), logicalName: 'bad name' }]];
+  for (const body of [null, [], 'invalid', ...invalidInventories.map((inventory) => ({ ...valid, inventory }))]) {
+    fs.writeFileSync(file, JSON.stringify(body));
+    const cache = readInventoryCache(file, context);
+    assert.equal(cache.hit, false);
+    assert.equal(cache.reason, 'invalid-shape');
+    assert.equal(cache.inventory, null);
+    let liveReads = 0;
+    const snapshot = await createSnapshot({
+      ...context, inventory: cache.inventory,
+      request: async (_method, apiPath) => {
+        assert.match(apiPath, /IsCustomizable\/Value eq true/);
+        liveReads += 1;
+        return { status: 200, data: { value: [] } };
+      },
+    });
+    assert.equal(liveReads, 1);
+    assert.deepEqual(snapshot.inventory, []);
+  }
+});
+
+test('cached advisory tables refresh live identity flags without broad discovery or duplicate exact reads', async () => {
+  const fixture = createScaleScenario(6, 'all-reuse');
+  const options = { ...context, concepts: [fixture.concepts[0]], combinedBaseRead: true };
+  const baseline = await createSnapshot({ ...options, request: createFixtureRequest(fixture, []) });
+  const target = fixture.entities[0];
+  target.CanCreateAttributes = { Value: false };
+  target.OwnershipType = 'OrganizationOwned';
+  for (const exact of [{}, { tableNames: [target.LogicalName] }, { proposedTableNames: [target.LogicalName] }]) {
+    const calls = [];
+    const snapshot = await createSnapshot({
+      ...options, ...exact, inventory: baseline.inventory, inventorySource: 'cache',
+      request: createFixtureRequest(fixture, calls),
+    });
+    const selected = snapshot.tables.find((item) => item.logicalName === target.LogicalName);
+    assert.equal(selected.detailLevel, 'full');
+    assert.equal(selected.canCreateAttributes, false);
+    assert.equal(selected.ownershipType, 'OrganizationOwned');
+    const currentInventory = snapshot.inventory.find((item) => item.logicalName === target.LogicalName);
+    assert.equal(currentInventory.canCreateAttributes, false);
+    assert.equal(currentInventory.ownershipType, 'OrganizationOwned');
+    assert.equal(calls.filter((apiPath) => apiPath.startsWith('EntityDefinitions?')).length, 1);
+    assert.equal(calls.some((apiPath) => apiPath.includes('IsCustomizable/Value eq true')), false);
+    assert.ok(snapshot.liveRefreshedExactNames.includes(target.LogicalName));
+  }
+  target.IsCustomizable = { Value: false };
+  const changed = await createSnapshot({
+    ...options, inventory: baseline.inventory, inventorySource: 'cache',
+    request: createFixtureRequest(fixture, []),
+  });
+  assert.equal(changed.tables[0].customizable, false);
+  assert.equal(changed.inventoryFacts.customizableTables, baseline.inventory.length - 1);
+  const expanded = await expandSnapshot({
+    snapshot: changed, proposedTableNames: [target.LogicalName],
+    request: async () => assert.fail('already refreshed identity must not be loaded again'),
+  });
+  assert.equal(expanded.proposedNameChecks.collisions[0].existing.customizable, false);
+});
+
+test('deleted cached candidates are unavailable and malformed identity responses remain errors', async () => {
+  const fixture = createScaleScenario(6, 'all-reuse');
+  const options = { ...context, concepts: [fixture.concepts[0]] };
+  const baseline = await createSnapshot({ ...options, request: createFixtureRequest(fixture, []) });
+  const cached = { ...options, inventory: baseline.inventory, inventorySource: 'cache' };
+  const snapshot = await createSnapshot({
+    ...cached, request: async (_method, apiPath) => {
+      assert.ok(apiPath.startsWith('EntityDefinitions?'));
+      return { status: 200, data: { value: [] } };
+    },
+  });
+  assert.deepEqual(snapshot.tables, []);
+  assert.equal(snapshot.detailLoadFailures[0].status, 404);
+  assert.equal(snapshot.candidateRanking[0].candidates[0].detailStatus, 'unavailable');
+  assert.equal(snapshot.inventory.some((item) => item.logicalName === fixture.entities[0].LogicalName), false);
+  await assert.rejects(createSnapshot({
+    ...cached, request: async () => ({ status: 200, data: {} }),
+  }), /OData collection/);
 });
 
 test('execution reconciliation explicitly bypasses the planning inventory cache', () => {

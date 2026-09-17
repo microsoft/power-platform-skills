@@ -1652,8 +1652,17 @@ function validateSnapshot(snapshot, expected = {}) {
   if (!Array.isArray(snapshot?.tables)) errors.push('tables must be an array');
   if (Array.isArray(snapshot?.tables)) {
     for (const [index, table] of snapshot.tables.entries()) {
-      const detailLevel = table?.detailLevel || 'full';
-      const missingDetailClasses = table?.missingDetailClasses || [];
+      if (!isObject(table)) {
+        errors.push(`tables[${index}] must be an object`);
+        continue;
+      }
+      for (const field of ['logicalName', 'schemaName', 'entitySetName', 'primaryIdAttribute']) {
+        if (typeof table[field] !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*$/.test(table[field])) {
+          errors.push(`tables[${index}].${field} must be a metadata identifier`);
+        }
+      }
+      const detailLevel = table.detailLevel;
+      const missingDetailClasses = table.missingDetailClasses;
       if (!['core', 'full'].includes(detailLevel)) {
         errors.push(`tables[${index}].detailLevel must be core or full`);
       }
@@ -1667,6 +1676,29 @@ function validateSnapshot(snapshot, expected = {}) {
       }
       if (snapshot.purpose === 'execution-reconciliation' && detailLevel !== 'full') {
         errors.push(`tables[${index}] execution reconciliation requires full detail`);
+      }
+      for (const field of [
+        'columns', 'manyToOneRelationships', 'oneToManyRelationships',
+        'manyToManyRelationships', 'alternateKeys',
+      ]) {
+        if (!Array.isArray(table[field]) || table[field].some((item) => !isObject(item))) {
+          errors.push(`tables[${index}].${field} must be an object array`);
+        }
+      }
+      if (!isObject(table.facts)) {
+        errors.push(`tables[${index}].facts must be an object`);
+      } else {
+        const counts = {
+          columnCount: table.columns?.length,
+          relationshipCount: relationshipCount(table),
+          keyCount: table.alternateKeys?.length,
+        };
+        for (const [field, count] of Object.entries(counts)) {
+          if (!Number.isInteger(table.facts[field]) || table.facts[field] < 0
+            || table.facts[field] !== count) {
+            errors.push(`tables[${index}].facts.${field} must match its metadata collections`);
+          }
+        }
       }
     }
   }
@@ -1818,7 +1850,7 @@ function validateSnapshot(snapshot, expected = {}) {
         if (typeof failure.error !== 'string' || !failure.error.trim()) {
           errors.push(`${prefix}.error must be a non-empty string`);
         }
-        const hasRequiredReason = failure.selectionReasons?.some(
+        const hasRequiredReason = Array.isArray(failure.selectionReasons) && failure.selectionReasons.some(
           (reason) => reason === 'explicit-table' || reason === 'explicit-expansion',
         );
         if (typeof failure.required !== 'boolean') {
@@ -1919,6 +1951,7 @@ async function createSnapshot({
   // Required exact-name discovery and proposed-name collision checks share one
   // bounded query, but only required names participate in detail loading.
   const allExactCheckNames = uniqueLogicalNames([...requiredNames, ...proposedNames]);
+  const liveRefreshedExactNames = [...allExactCheckNames];
   const exactResolution = await resolveExactNameEntities(
     request,
     customizableEntities,
@@ -1931,7 +1964,7 @@ async function createSnapshot({
   const boundedExactDiscoveryTables = exactResolution.discoveredTables.filter(
     (name) => !customizableInventoryKeys.has(name.toLowerCase()),
   );
-  const entities = exactResolution.entities;
+  let entities = exactResolution.entities;
   const availableEntityNames = new Set(
     entities.map((entity) => logicalNameOf(entity).toLowerCase()),
   );
@@ -1948,7 +1981,7 @@ async function createSnapshot({
     (name) => !availableEntityNames.has(name.toLowerCase()),
   );
   const proposedNameChecks = analyzeProposedNames(entities, proposedNames);
-  const finalCustomizableEntities = entities.filter(
+  let finalCustomizableEntities = entities.filter(
     (entity) => managedValue(entity.IsCustomizable) === true,
   );
   const inventoryCompletedAt = nowMs();
@@ -1990,6 +2023,27 @@ async function createSnapshot({
   const selectedEvidenceByName = new Map(
     selection.selectedEvidence.map((item) => [item.logicalName.toLowerCase(), item]),
   );
+  const selectedIdentities = new Map(
+    selection.selectedEntities.map((entity) => [logicalNameOf(entity).toLowerCase(), entity]),
+  );
+  if (inventorySource === 'cache') {
+    const refreshedNames = new Set(allExactCheckNames.map((name) => name.toLowerCase()));
+    const pendingNames = [...selectedIdentities.keys()].filter((name) => !refreshedNames.has(name));
+    if (pendingNames.length > 0) {
+      // Cached inventory nominates candidates; only live table identities may supply
+      // the capability flags and names in their full detail evidence.
+      const refreshed = await resolveExactNameEntities(request, entities, pendingNames, {
+        refreshRequested: true,
+      });
+      entities = refreshed.entities;
+      finalCustomizableEntities = entities.filter((entity) => managedValue(entity.IsCustomizable));
+      const freshByName = new Map(
+        refreshed.entities.map((entity) => [logicalNameOf(entity).toLowerCase(), entity]),
+      );
+      for (const name of pendingNames) selectedIdentities.set(name, freshByName.get(name) || null);
+      liveRefreshedExactNames.push(...pendingNames);
+    }
+  }
   const adaptiveRead = adaptiveReadRequest(request, readConcurrency);
   let outcomes;
   try {
@@ -1998,8 +2052,14 @@ async function createSnapshot({
       parseReadConcurrency(readConcurrency),
       async (entity) => {
         try {
+          const currentEntity = selectedIdentities.get(logicalNameOf(entity).toLowerCase());
+          if (!currentEntity) {
+            const error = new Error('Selected cached table was not returned by live exact-name discovery');
+            error.status = 404;
+            throw error;
+          }
           return {
-            table: await loadDetailedEntity(adaptiveRead.request, entity, {
+            table: await loadDetailedEntity(adaptiveRead.request, currentEntity, {
               detailLevel: selection.detailLevels?.get(entity.LogicalName) || 'full',
               combinedBaseRead,
             }),
@@ -2083,7 +2143,7 @@ async function createSnapshot({
     missingProposedTables: proposedNameChecks.missing,
     exactNameDiscoveryTables: boundedExactDiscoveryTables,
     ...(inventorySource === 'cache'
-      ? { liveRefreshedExactNames: allExactCheckNames }
+      ? { liveRefreshedExactNames: uniqueLogicalNames(liveRefreshedExactNames) }
       : {}),
     exactNameResolution: {
       requestedTables: requiredNames,

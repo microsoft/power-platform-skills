@@ -860,6 +860,39 @@ test('snapshot validation rejects missing decision evidence', () => {
   }
 });
 
+test('snapshot validation requires explicit table detail and complete metadata collections', async () => {
+  const loaded = await loadDetailedEntity(
+    async () => ({ status: 200, data: { value: [] } }),
+    entity('new_product', 'Product'),
+  );
+  const snapshot = validSnapshotBase({ tables: [loaded] });
+  assert.equal(validateSnapshot(snapshot).valid, true);
+
+  for (const field of [
+    'logicalName', 'schemaName', 'entitySetName', 'primaryIdAttribute',
+    'detailLevel', 'missingDetailClasses', 'columns', 'manyToOneRelationships',
+    'oneToManyRelationships', 'manyToManyRelationships', 'alternateKeys', 'facts',
+  ]) {
+    const malformed = structuredClone(snapshot);
+    delete malformed.tables[0][field];
+    assert.equal(validateSnapshot(malformed).valid, false, field);
+  }
+  for (const value of [null, [], 'invalid', { logicalName: 'new_product' }]) {
+    assert.equal(validateSnapshot({ ...snapshot, tables: [value] }).valid, false);
+  }
+  for (const field of [
+    'columns', 'manyToOneRelationships', 'oneToManyRelationships',
+    'manyToManyRelationships', 'alternateKeys',
+  ]) {
+    const malformed = structuredClone(snapshot);
+    malformed.tables[0][field] = [null];
+    assert.equal(validateSnapshot(malformed).valid, false, field);
+  }
+  const inconsistent = structuredClone(snapshot);
+  inconsistent.tables[0].facts.columnCount = 1;
+  assert.equal(validateSnapshot(inconsistent).valid, false);
+});
+
 test('exact-name expansion reuses inventory and performs no broad discovery request', async () => {
   const calls = [];
   const base = validSnapshotBase({
@@ -1299,6 +1332,11 @@ test('evidence renderer emits compact deterministic planning facts', () => {
     }],
     tables: [{
       logicalName: 'wr_animal',
+      schemaName: 'wr_animal',
+      entitySetName: 'wr_animals',
+      primaryIdAttribute: 'wr_animalid',
+      detailLevel: 'full',
+      missingDetailClasses: [],
       customEntity: true,
       managed: false,
       customizable: true,
@@ -1307,6 +1345,7 @@ test('evidence renderer emits compact deterministic planning facts', () => {
       oneToManyRelationships: [],
       manyToManyRelationships: [],
       alternateKeys: [],
+      facts: { columnCount: 1, relationshipCount: 1, keyCount: 0 },
     }],
     proposedNameChecks: {
       checked: [
@@ -1459,7 +1498,7 @@ test('planning contracts require snapshot-only and monotonic incremental expansi
   assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
   assert.doesNotMatch(createSkill, /legacy-unverified/);
   assert.match(createSkill, /unresolved\s+metadata never authorizes a write/s);
-  assert.match(createSkill, /ask only for the user action that can resolve\s+the problem/s);
+  assert.match(createSkill, /Ask the user only when recovery needs interactive sign-in/);
   assert.match(createSkill, /classify the affected exact or advisory table as `Defer`/);
   assert.match(createSkill, /10–15 minute target/);
   assert.doesNotMatch(snapshotScript, /execFileSync/);

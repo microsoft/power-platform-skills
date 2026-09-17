@@ -134,6 +134,7 @@ test('planning timing summary keeps outer wall, model, and approval durations se
   const artifact = {
     schemaVersion: 1,
     stages: {
+      metadataSnapshot: { history: [{ durationMs: 80 }] },
       metadataInventory: { history: [{ durationMs: 20 }] },
       metadataCandidateSelection: { history: [{ durationMs: 3 }] },
       metadataDetailLoading: { history: [{ durationMs: 40 }] },
@@ -148,6 +149,7 @@ test('planning timing summary keeps outer wall, model, and approval durations se
   assert.deepEqual(summarizePlanningTimings(artifact), {
     environmentResolutionMs: 0,
     publisherPrefixDetectionMs: 0,
+    metadataSnapshotWallMs: 80,
     dataverseMetadataNetworkMs: 70,
     localDeterministicProcessingMs: 5,
     outerPlannerWallMs: 100,

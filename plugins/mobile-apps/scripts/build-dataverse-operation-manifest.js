@@ -1090,6 +1090,10 @@ function expectedColumnConstraints(column) {
       ['canStoreFullImage', column.canStoreFullImage !== false, 'CanStoreFullImage',
         (actual, expected) => Boolean(actual) === expected],
     );
+    if (hasOwn(column, 'isPrimaryImage')) {
+      constraints.push(['isPrimaryImage', Boolean(column.isPrimaryImage), 'IsPrimaryImage',
+        (actual, expected) => actual === expected]);
+    }
   } else if (type === 'file') {
     constraints.push(
       ['maxSizeInKB', Number(column.maxSizeInKB ?? 32768), 'MaxSizeInKB',
@@ -1944,6 +1948,7 @@ function revisedEquivalentOperation(previousOperation, previousManifest, normali
         primaryName: Boolean(definition.IsPrimaryName),
         maxSizeInKB: definition.MaxSizeInKB,
         canStoreFullImage: definition.CanStoreFullImage,
+        isPrimaryImage: definition.IsPrimaryImage,
       });
       if (!comparison.compatible) return null;
 
@@ -3940,6 +3945,8 @@ module.exports = {
   contractApprovalContent,
   createPublishCheckpoint,
   declaredServiceRequiredTableNames,
+  derivedExpected,
+  isComputedColumn,
   normalizeColumnType,
   normalizedContract,
   parseArgs,

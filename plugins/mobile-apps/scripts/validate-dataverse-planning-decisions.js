@@ -3,7 +3,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateContract } = require('./build-dataverse-operation-manifest');
+const { derivedExpected, isComputedColumn, validateContract } = require('./build-dataverse-operation-manifest');
+const { compareDerivedColumn } = require('./lib/derived-metadata');
 const { validateSnapshot } = require('./create-dataverse-snapshot');
 
 const FULL_DETAIL_DECISIONS = new Set(['reuse', 'extend', 'adapt']);
@@ -72,9 +73,32 @@ function validatePlanningDecisions(contract, snapshot) {
     }
     if (FULL_DETAIL_DECISIONS.has(decision)) {
       const evidence = detailed.get(normalize(table.logicalName));
-      if (!evidence || (evidence.detailLevel || 'full') !== 'full') {
+      if (!evidence || evidence.detailLevel !== 'full') {
         contextNames.add(table.logicalName);
         fullDetailContextNames.add(table.logicalName);
+      } else {
+        for (const column of table.columns || []) {
+          if (!isComputedColumn(column) || normalize(column.plannedDecision) === 'defer') continue;
+          const liveColumn = evidence.columns.find(
+            (item) => normalize(item.logicalName) === normalize(column.logicalName),
+          );
+          const computed = liveColumn?.computed;
+          const label = `required computed column ${table.logicalName}.${column.logicalName}`;
+          if (computed?.metadataStatus !== 'available'
+            || !Number.isInteger(computed.sourceType) || ![1, 2, 3].includes(computed.sourceType)
+            || !Number.isInteger(computed.sourceTypeMask) || computed.sourceTypeMask < 0
+            || typeof computed.formulaDefinition !== 'string' || !computed.formulaDefinition.trim()) {
+            errors.push(`${label} has unavailable metadata; defer the column or revise the requirement`);
+            continue;
+          }
+          const comparison = compareDerivedColumn(derivedExpected(table.logicalName, column), {
+            ...computed,
+            type: liveColumn.type,
+          });
+          if (!comparison.compatible) {
+            errors.push(`${label} does not match its metadata: ${comparison.reasons.join('; ')}`);
+          }
+        }
       }
     }
     if (decision === 'create' || decision === 'adapt') {
