@@ -4,83 +4,115 @@
 // The danger is the timing: cleanup happens after a SUCCESSFUL teardown, which is the moment an
 // operator is least expecting data loss. A mistyped path, or a shell variable that expanded to a
 // repo root or home directory, was recursively removed with `force: true`.
+//
+// The first fix keyed on the directory NAME, and a live run caught that being wrong: every CLI here
+// accepts `--workspace <any-dir>`, so `--workspace lvws` — a genuine workspace the build had just
+// written 20 files into — was refused. Identity is therefore established by CONTENT: the SDK's own
+// workspace manifest. These tests pin BOTH directions, because a guard that refuses everything is
+// as broken as one that permits everything.
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
 
-const { WORKSPACE_DIR_NAME, checkWorkspaceClearable } = require('../lib/workspace-paths.js');
+const { WORKSPACE_DIR_NAME, WORKSPACE_MANIFEST, checkWorkspaceClearable } = require('../lib/workspace-paths.js');
 
-// A real directory on disk, so the ordinary accept path is not proved with a stub.
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
-function realWorkspace() {
+
+// Real directories on disk, so the accept path is never proved with a stub alone.
+function makeDir(name, manifest) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'wsclear-'));
   dirs.push(base);
-  const ws = path.join(base, 'app', WORKSPACE_DIR_NAME);
-  fs.mkdirSync(ws, { recursive: true });
-  return ws;
+  const d = path.join(base, 'app', name);
+  fs.mkdirSync(d, { recursive: true });
+  if (manifest !== undefined) fs.writeFileSync(path.join(d, WORKSPACE_MANIFEST), manifest, 'utf8');
+  return d;
 }
+const SDK_MANIFEST = JSON.stringify({ instanceUrl: 'https://contoso.crm.dynamics.com/', artifacts: [] });
 
-test('a real .maker-workspace under a spec folder is clearable', () => {
-  const ws = realWorkspace();
-  const r = checkWorkspaceClearable(ws);
-  assert.strictEqual(r.ok, true, `expected a genuine workspace to be clearable, got ${JSON.stringify(r)}`);
+test('the conventionally-named workspace is clearable', () => {
+  const r = checkWorkspaceClearable(makeDir(WORKSPACE_DIR_NAME));
+  assert.strictEqual(r.ok, true, `a genuine workspace must be clearable, got ${JSON.stringify(r)}`);
   assert.strictEqual(path.basename(r.target), WORKSPACE_DIR_NAME);
 });
 
-// The core of the bug: any other path was deleted just as readily.
-test('a path that is not a workspace directory is refused', () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'wsclear-src-'));
-  dirs.push(base);
-  for (const candidate of [base, path.join(base, 'src'), path.join(base, 'node_modules'), os.homedir()]) {
-    const r = checkWorkspaceClearable(candidate);
-    assert.strictEqual(r.ok, false, `${candidate} must not be clearable`);
-    assert.match(r.reason, new RegExp(`only a directory named '\\${WORKSPACE_DIR_NAME}'`));
+// The regression a LIVE run caught: `--workspace lvws` is supported by every CLI here, and the
+// first version of this guard refused it — breaking cleanup for anyone using a custom name.
+test('a CUSTOM-named directory carrying the SDK workspace manifest is clearable', () => {
+  const d = makeDir('lvws', SDK_MANIFEST);
+  const r = checkWorkspaceClearable(d);
+  assert.strictEqual(r.ok, true,
+    `--workspace <custom-dir> is supported, so a real workspace must clear: ${JSON.stringify(r)}`);
+});
+
+test('a custom-named directory with no manifest is refused', () => {
+  const r = checkWorkspaceClearable(makeDir('src'));
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /neither named|not an SDK workspace/);
+});
+
+// Identity is the manifest's CONTENT, not its filename — otherwise any npm package or bundler
+// output directory would qualify, and the original bug returns wearing a different hat.
+test('a manifest.json belonging to something else does not make a directory clearable', () => {
+  for (const foreign of [
+    JSON.stringify({ name: 'my-pkg', version: '1.0.0' }),        // npm
+    JSON.stringify({ artifacts: [] }),                            // no instanceUrl
+    JSON.stringify({ instanceUrl: 'https://x/' }),                // no artifacts
+    JSON.stringify([{ instanceUrl: 'https://x/', artifacts: [] }]), // array, not an object
+    'not json at all',
+  ]) {
+    const r = checkWorkspaceClearable(makeDir('build', foreign));
+    assert.strictEqual(r.ok, false, `${foreign.slice(0, 40)} must not qualify`);
   }
 });
 
-test('empty, blank and missing paths are refused rather than resolved to the cwd', () => {
+test('a BOM-prefixed manifest is still recognised', () => {
+  // pac and some editors write UTF-8 with a BOM; JSON.parse throws on it, so it is stripped.
+  const r = checkWorkspaceClearable(makeDir('ws2', '\uFEFF' + SDK_MANIFEST));
+  assert.strictEqual(r.ok, true, `a BOM must not make a real workspace unrecognisable: ${JSON.stringify(r)}`);
+});
+
+test('empty, blank and non-string paths are refused rather than resolved to the cwd', () => {
   // `path.resolve('')` is the CWD — so an unset shell variable used to mean "delete the directory
   // the command happens to be running in".
   for (const bad of ['', '   ', undefined, null, 42]) {
-    const r = checkWorkspaceClearable(bad);
-    assert.strictEqual(r.ok, false, `${JSON.stringify(bad)} must not be clearable`);
+    assert.strictEqual(checkWorkspaceClearable(bad).ok, false, `${JSON.stringify(bad)} must not be clearable`);
   }
 });
 
 test('a filesystem root, and a workspace directly inside one, are refused', () => {
   const root = path.parse(process.cwd()).root;
-  const atRoot = checkWorkspaceClearable(root);
-  assert.strictEqual(atRoot.ok, false);
-
+  assert.strictEqual(checkWorkspaceClearable(root).ok, false);
   const wsAtRoot = checkWorkspaceClearable(path.join(root, WORKSPACE_DIR_NAME));
   assert.strictEqual(wsAtRoot.ok, false, 'a workspace directly inside a root is a truncated path, not a project');
   assert.match(wsAtRoot.reason, /filesystem root/);
 });
 
 // Junctions need elevation on Windows, so the filesystem answers are injected. The RULES are what
-// is under test here, not node's fs.
+// is under test, not node's fs.
 test('a symlinked or junctioned workspace is refused', () => {
   const ws = path.join(os.tmpdir(), 'proj', WORKSPACE_DIR_NAME);
   const r = checkWorkspaceClearable(ws, {
     lstatSync: () => ({ isSymbolicLink: () => true, isDirectory: () => true }),
     realpathSync: () => ws,
+    readFileSync: () => SDK_MANIFEST,
   });
   assert.strictEqual(r.ok, false);
   assert.match(r.reason, /symlink\/junction/);
 });
 
-// The escape rule 1 alone cannot catch: the LEXICAL name is right, but it resolves elsewhere.
-test('a workspace name that resolves somewhere else is refused', () => {
+// The escape a name check alone cannot catch: the lexical name is right, but it resolves elsewhere.
+test('a workspace name that resolves to a non-workspace is refused', () => {
   const ws = path.join(os.tmpdir(), 'proj', WORKSPACE_DIR_NAME);
   const r = checkWorkspaceClearable(ws, {
     lstatSync: () => ({ isSymbolicLink: () => false, isDirectory: () => true }),
     realpathSync: () => path.join(os.homedir(), 'Documents'),
+    readFileSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
   });
-  assert.strictEqual(r.ok, false, 'resolving outside a workspace must be refused');
-  assert.match(r.reason, /which is not a/);
+  assert.strictEqual(r.ok, false, 'identity must be tested on the RESOLVED path');
+  assert.match(r.reason, /neither named|not an SDK workspace/);
 });
 
 test('a file wearing the workspace name is refused', () => {
@@ -88,6 +120,7 @@ test('a file wearing the workspace name is refused', () => {
   const r = checkWorkspaceClearable(ws, {
     lstatSync: () => ({ isSymbolicLink: () => false, isDirectory: () => false }),
     realpathSync: () => ws,
+    readFileSync: () => SDK_MANIFEST,
   });
   assert.strictEqual(r.ok, false);
   assert.match(r.reason, /not a directory/);

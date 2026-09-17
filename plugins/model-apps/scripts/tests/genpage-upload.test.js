@@ -107,8 +107,43 @@ test('passing both an inline prompt and a prompt file is refused rather than sil
   assert.strictEqual(cli.calls.length, 0, 'nothing may be uploaded when the prompt is ambiguous');
 });
 
-test('an unreadable prompt file fails closed instead of deploying a default prompt', async () => {
+// LIVE-VERIFICATION FINDING, not a hypothetical. Deploying a page for real and then running
+// `pac model genpage download` showed pac writes the recovered `prompt.txt` with a UTF-8 BOM
+// (measured: first bytes `ef bb bf`). The documented edit flow re-feeds exactly that file through
+// `--prompt-file`, and Node's 'utf8' decode does NOT strip a BOM — so the prompt handed to pac
+// began with an invisible U+FEFF. That silently alters the first character of a prompt the user
+// approved, which is the same prompt-provenance failure this whole path exists to prevent.
+test('a BOM written by `pac genpage download` is stripped, not sent as part of the prompt', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  const body = 'Create a read-only overview page named "Live Check Overview".';
+  fs.writeFileSync(pf, '\uFEFF' + body, 'utf8');
+  // The fixture really is BOM-prefixed on disk, so this cannot pass by writing a plain file.
+  assert.deepStrictEqual([...fs.readFileSync(pf).slice(0, 3)], [0xef, 0xbb, 0xbf]);
+
   const cli = capturingCli();
+  const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+    '--prompt-file', pf, '--agent-message', 'm'], cli);
+
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(cli.calls[0].prompt.charCodeAt(0) !== 0xFEFF, true,
+    'the prompt must not start with a BOM');
+  assert.strictEqual(cli.calls[0].prompt, body, 'and the rest must be untouched');
+});
+
+// A BOM in the MIDDLE is content, not an encoding marker, so it must survive — stripping every
+// U+FEFF would be a different bug in the same place.
+test('a U+FEFF inside the prompt body is preserved', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  const body = 'Line one\nmid\uFEFFdle\nLine three';
+  fs.writeFileSync(pf, body, 'utf8');
+  const cli = capturingCli();
+  await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx', '--prompt-file', pf], cli);
+  assert.strictEqual(cli.calls[0].prompt, body, 'only a LEADING BOM is an encoding marker');
+});
+
+test('an unreadable prompt file fails closed instead of deploying a default prompt', async () => {  const cli = capturingCli();
   const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
     '--prompt-file', path.join(tmp(), 'missing.txt')], cli);
   assert.strictEqual(r.ok, false);
