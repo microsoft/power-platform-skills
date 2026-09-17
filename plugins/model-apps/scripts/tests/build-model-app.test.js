@@ -1252,3 +1252,29 @@ test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated on
     'and must NOT blame the environment, which is working fine');
   assert.deepStrictEqual(r.verify.phaseSkipped, ['business-rule:new_ticket.Lock notes']);
 });
+
+// #587 item 3 — a plain `--apply` called invalidateSnapshot but DISCARDED its `{ ok, reason }`
+// result and swallowed any throw, under a "never block a build" rationale. That is not cosmetic:
+// the snapshot is what a later `--changed-only` run trusts to decide what it may SKIP, so an
+// eligible snapshot surviving a full apply lets that run certify pre-apply state and skip work this
+// apply just made necessary. Halting costs a retry; continuing costs a silently incomplete deploy.
+//
+// ⚠ This is a SOURCE-LEVEL guard, and it is honest about that. The call lives inside the CLI's
+// `main()`, which is not exported and has no test harness (unlike teardown's), so there is no seam
+// to drive it through without building one. It pins the two things that actually went wrong —
+// discarding the result and swallowing the throw — rather than asserting behaviour it cannot reach.
+// `apply-snapshot-store.test.js` covers what invalidateSnapshot itself returns.
+test('#587 a plain --apply refuses to mutate when the changed-only snapshot cannot be invalidated', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const call = src.slice(src.indexOf('if (opts.apply) {', src.indexOf('applySnapshotStore.invalidateSnapshot') - 2000));
+  const block = call.slice(0, call.indexOf('r = await buildModelApp'));
+
+  assert.ok(/invalidateSnapshot\(workspaceDir\)/.test(block), 'the invalidate call must still happen before the apply');
+  assert.ok(!/try \{ applySnapshotStore\.invalidateSnapshot\([^)]*\); \} catch/.test(block),
+    'the result must not be discarded by a one-line try/catch again');
+  assert.ok(/inv\.ok !== true|!inv\.ok/.test(block),
+    'the { ok } result must be checked, not ignored');
+  assert.ok(/throw new Error\(/.test(block),
+    'an un-invalidatable snapshot must halt the apply rather than warn');
+  assert.ok(/refusing to apply/.test(block), 'and say so in the operator-facing message');
+});

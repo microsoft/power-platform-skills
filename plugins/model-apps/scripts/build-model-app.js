@@ -689,11 +689,33 @@ async function main() {
     } else {
       // Invariant: EVERY state-changing apply must invalidate the changed-only snapshot BEFORE it writes
       // (design core invariant). A plain `--apply` (or `--stage data --apply`) mutates the app outside the
-      // changed-only flow, so a stale eligible snapshot would otherwise describe pre-apply state. Best-effort
-      // + fail-safe: if a snapshot exists it is marked ineligible (the next `--changed-only` re-baselines via
-      // a full build); no snapshot ⇒ a harmless no-op. Never blocks the build.
+      // changed-only flow, so a stale eligible snapshot would otherwise describe pre-apply state.
+      //
+      // FAIL CLOSED (#587 item 3). This used to be best-effort: the `{ ok, reason }` result was discarded
+      // and a throw was swallowed with "never block a build". But "the snapshot could not be invalidated"
+      // is not cosmetic — the snapshot is exactly what a later `--changed-only` run trusts to decide what
+      // it may SKIP. If a full apply mutates the environment while an ELIGIBLE snapshot survives (lease
+      // contention from a concurrent run, an unwritable workspace), that later run certifies pre-apply
+      // state and can skip work this apply just made necessary. Halting costs a retry; continuing costs a
+      // silently incomplete deployment.
+      //
+      // A MISSING snapshot is still fine — invalidateSnapshot reports ok for that, so an ordinary first
+      // build is unaffected.
       if (opts.apply) {
-        try { applySnapshotStore.invalidateSnapshot(workspaceDir); } catch { /* best-effort — never block a build */ }
+        let inv;
+        try {
+          inv = applySnapshotStore.invalidateSnapshot(workspaceDir);
+        } catch (e) {
+          inv = { ok: false, reason: e && e.message ? e.message : String(e) };
+        }
+        if (!inv || inv.ok !== true) {
+          throw new Error(
+            `refusing to apply: the changed-only snapshot in ${workspaceDir} could not be invalidated `
+            + `(${(inv && inv.reason) || 'unknown reason'}). A later --changed-only run would trust it and `
+            + 'skip work this apply is about to make necessary. Retry once any concurrent run has finished, '
+            + 'or delete the snapshot to re-baseline.'
+          );
+        }
       }
       r = await buildModelApp(spec, opts, deps);
     }

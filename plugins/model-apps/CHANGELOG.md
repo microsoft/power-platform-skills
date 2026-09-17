@@ -38,6 +38,11 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **A plain `--apply` halts when the changed-only snapshot cannot be invalidated** ([#587]). The
+  result was discarded and a throw swallowed, so a full apply could mutate the environment while an
+  *eligible* snapshot survived — and a later `--changed-only` run would then trust it and skip work
+  this apply had just made necessary. A missing snapshot is still fine; only a real failure (lease
+  contention from a concurrent run, an unwritable workspace) now stops the build.
 - **Teardown stops instead of stripping a live app when the app delete fails** ([#587]). The app
   module is the dependency root — tables, forms, views and charts are its components — so continuing
   past a failed app delete removed everything a still-live app renders and left it broken. This
