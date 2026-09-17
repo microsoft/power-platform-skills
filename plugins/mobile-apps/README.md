@@ -111,8 +111,7 @@ connector wiring.
 6. Preview the app by scanning the QR code with the Power Apps Developer app
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
-    - Play store: (coming soon)
-    - App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+    - Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
 
 ## License and notices
 
