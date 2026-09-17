@@ -234,6 +234,13 @@ works through.
 - Built after views/charts (it references their ids). The dashboard is **global** (not entity-scoped)
   and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
   that also auto-pins it as an app component.
+- **ID-passthrough tiles (what a download emits).** A tile may instead carry the *deployed* ids —
+  `viewId` (+ `visualizationId` for a chart) and the target `entity` — with no `chart`/`view` name.
+  That form binds to artifacts that **already exist**, which is what a downloaded app needs: its
+  views and charts are not reconstructed into `views[]`/`charts[]`, so a name could not resolve.
+  An id-based chart tile needs `viewId` **and** `entity` (a visualization with no view has nothing
+  to plot); an id-based list tile needs `viewId` and `entity`. Author specs by name; let downloads
+  use ids.
 
 ## roleGrants[] (optional — extend a role you did NOT author)
 

@@ -52,6 +52,30 @@ async function appIdFor(sdk, appUnique) {
   return rows && rows[0] && rows[0].appmoduleid;
 }
 
+async function appRoleIdsFor(sdk, appUnique) {
+  try {
+    const appId = await appIdFor(sdk, appUnique);
+    if (!appId) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
+    if (!sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'SDK dataverse reader is unavailable' };
+    // The SDK has associate/disassociate helpers for `appmoduleroles_association`, but no modeled
+    // read for that N:N membership. Read the relationship navigation property directly so verify
+    // proves the deployed app<->role rows the model-driven app launcher uses, rather than inferring
+    // access from role existence or from the build result.
+    // See appmodule relationships: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
+    const res = await sdk.dataverse.get(`/appmodules(${appId})/appmoduleroles_association?$select=roleid`);
+    if (!res || res.status < 200 || res.status >= 300) return { ok: false, reason: `HTTP ${res && res.status}` };
+    return {
+      ok: true,
+      roleIds: ((res.body && res.body.value) || [])
+        .map((r) => r && r.roleid)
+        .filter(Boolean)
+        .map((id) => String(id).toLowerCase()),
+    };
+  } catch (err) {
+    return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
+  }
+}
+
 // Which of `wanted` (table logical names) are real TABLE components of the app
 // (`appmodulecomponent` componenttype 1), plus whether the app carries an `entity` PLACEHOLDER row.
 //
@@ -197,6 +221,20 @@ function readerFor(sdk, appUnique, opts) {
     // feature and reports the read failure as a not-present check, which is the fail-closed direction —
     // a verify that cannot prove a feature is in effect must not claim it is.
     retrieveSetting: async (name, opts) => sdk.retrieveSetting(name, opts || {}),
+    // formDefaultState(entity, formId): the selected Main form's actual default flag. The identity
+    // check in verify-spec proves the form row exists; this separate read proves the platform state
+    // that chooses which form opens by default. Errors propagate to verify-spec as a fail-closed
+    // finding, because a missing proof is not evidence that promotion succeeded.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
+    formDefaultState: async (_entity, formId) => {
+      const rows = await sdk.queryRecords('systemform', {
+        select: ['formid', 'isdefault'],
+        filter: `formid eq ${formId}`,
+        top: 1,
+      });
+      const row = rows && rows[0];
+      return row ? { isDefault: row.isdefault === true } : null;
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
@@ -207,6 +245,7 @@ function readerFor(sdk, appUnique, opts) {
       if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
       return appComponentsP.get(key);
     },
+    appRoleIds: () => appRoleIdsFor(sdk, appUnique),
   };
 
   // entityPrivileges(logical): the privilege set a table exposes, as [{ PrivilegeId, PrivilegeType, ... }].
@@ -344,4 +383,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { sitemapXmlFor, readerFor, appIdFor };
+module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor };

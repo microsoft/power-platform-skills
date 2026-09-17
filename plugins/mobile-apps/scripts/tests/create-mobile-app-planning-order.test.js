@@ -50,6 +50,12 @@ function section(source, start, end) {
   return source.slice(startIndex, endIndex);
 }
 
+test('planning contracts contain no unresolved merge markers', () => {
+  for (const source of [createSkill, planner, architect, screenPlanner, screenBuilder]) {
+    assert.doesNotMatch(source, /^(?:<{7}|={7}|>{7})(?: |$)/m);
+  }
+});
+
 test('connectivity wording is owned by the post-materialization offline flow', () => {
   const classification = section(
     createSkill,
@@ -172,6 +178,105 @@ test('inline fallback preserves architecture-first conditional modeling', () => 
   assert.ok(architecture > 0 && architecture < architect);
   assert.match(fallback, /connector-only[\s\S]*zero-table\/no-Dataverse/i);
   assert.match(fallback, /Approved native capabilities:[\s\S]*Approved connectors:/i);
+});
+
+test('inline screen planning persists the approved graph before requesting specs', () => {
+  const fallback = section(createSkill, '#### 3.0a — Inline-gate fallback',
+    '#### 3.0 — Sub-agent return-status switch');
+  const skeleton = fallback.indexOf('Create the `native-app-plan.md` skeleton');
+  const graph = fallback.indexOf('`phase: graph`');
+  const embedded = fallback.indexOf('Embed the approved graph');
+  const specs = fallback.indexOf('`phase: specs`');
+  assert.ok(skeleton >= 0 && skeleton < graph);
+  assert.ok(graph < embedded && embedded < specs);
+  assert.match(fallback, /plan_path: <working_dir>\/native-app-plan\.md/);
+  assert.match(fallback, /both screen dispatches[\s\S]*skip_preview: true/);
+  assert.match(fallback, /missing or malformed, return to the Architecture gate/);
+});
+
+test('screen specs use the canonical plan and never rewrite graph scratch', () => {
+  const specs = section(planner, '#### 5b.2 — Spawn planner', '#### Gate 4 — Screen Specs');
+  assert.match(specs, /plan_path: <working_dir>\/native-app-plan\.md/);
+  assert.match(specs, /read its `## Screens` section/);
+  assert.match(specs, /writes specs only into `plan_path`/);
+  assert.doesNotMatch(specs, /locked[^.\n]*_screens_section\.md/);
+  const deferred = section(planner, '- **`Design vibe opt-in: deferred`',
+    '- **`Design vibe opt-in: done`');
+  assert.match(deferred, /native-app-plan\.md/);
+  assert.doesNotMatch(deferred, /writes only `_screens_section\.md`/i);
+});
+
+test('architecture result is validated before generic missing-context retry routing', () => {
+  const routing = section(createSkill, '#### 3.0 — Sub-agent return-status switch',
+    '**Data-model exact-name expansion:**');
+  const special = routing.indexOf('**Architecture-gate result');
+  const generic = routing.indexOf('For all other first lines');
+  assert.ok(special >= 0 && generic > special);
+  assert.match(routing, /Architecture phase: gate-only/);
+  assert.match(routing, /approved-architecture\.md/);
+  assert.match(routing, /does not consume the generic retry budget/);
+  assert.match(routing, /mode must match/);
+});
+
+test('planner permissions allow required planning artifacts only in their owning phase', () => {
+  const permissions = planner.slice(planner.indexOf('## Tool Permissions'));
+  assert.match(permissions, /`gate-only`: write `\.tmp\/approved-architecture\.md` only after actual Gate 1/);
+  assert.match(permissions, /`complete`: write `native-app-plan\.md`[\s\S]*\.tmp\/mobile-plan-status\.json/);
+  assert.match(permissions, /normalization[\s\S]*\.tmp\/dataverse-schema-contract\.json/);
+  assert.match(permissions, /No app source, app configuration, generated services/);
+  assert.doesNotMatch(permissions, /`Write` only to create `native-app-plan\.md`/);
+});
+
+test('post-specs cross-entity audit reads the canonical plan and belongs to Gate 2', () => {
+  const audit = section(architect, '## Step 6a — Cross-entity Read Audit',
+    '2. **Per entry, branch on');
+  assert.match(audit, /mode: cross-entity-audit[\s\S]*native-app-plan\.md/);
+  assert.match(audit, /graph-only scratch[\s\S]*not a substitute/);
+  assert.doesNotMatch(architect, /addendum to Gate 1|Gate 1 view/);
+});
+
+test('architecture revalidates storage and native dependencies without silently dropping requirements', () => {
+  const gate = section(planner, '### Gate 1 — Data Platform', '## Step 5 — Build Data Model');
+  assert.match(gate, /Before accepting Gate 1[\s\S]*revalidate every native capability/);
+  assert.match(gate, /whenever either choice changes/);
+  assert.match(gate, /`geolocation` requires Dataverse/);
+  assert.match(gate, /One-shot `location` is not an automatic replacement/);
+  assert.match(gate, /Do not silently remove capabilities/);
+  assert.match(gate, /Write the approved artifact only after the compatible combination is accepted/);
+  const capabilities = section(planner, 'Control planning gate:', '## Step 4 — Plan Connectors');
+  assert.match(capabilities, /connector-owned storage[\s\S]*supported upload\/write operation/);
+  assert.match(capabilities, /connector name alone is not a storage implementation/);
+  assert.doesNotMatch(capabilities, /missing Dataverse storage for a persisted artifact/);
+});
+
+test('architecture owns connector confirmation without changing the shared standalone workflow', () => {
+  const connectors = section(planner, '## Step 4 — Plan Connectors', '### Gate 1 — Data Platform');
+  assert.match(connectors, /Skip its Step 2 standalone confirmation/);
+  const shared = fs.readFileSync(path.join(pluginRoot, 'shared/references/connector-planning.md'), 'utf8');
+  assert.match(shared, /## Step 2 — Present to User for Confirmation/);
+  assert.match(shared, /present using `AskUserQuestion`/);
+});
+
+test('reuse-only apps retain a verified materialized inventory without replaying schema writes', () => {
+  const addDataverse = fs.readFileSync(path.join(pluginRoot, 'skills/add-dataverse/SKILL.md'), 'utf8');
+  const verification = section(addDataverse, '### Step 6c — Verify tables exist', '### Step 6d — Write');
+  const materialized = section(addDataverse, '### Step 6d — Write', '### Step 7 — Inspect generated files');
+  assert.match(verification, /every table in `SERVICE_REQUIRED_TABLES`, including reused-as-is tables/);
+  assert.match(materialized, /reuse-only app must still have a populated manifest/);
+  assert.match(materialized, /Include every service-required table[\s\S]*status: "reused"/);
+  assert.match(materialized, /Exclude deferred or unverified tables/);
+  assert.match(materialized, /not by replaying successful schema writes/);
+  assert.match(materialized, /standard-system-table exclusions still apply/);
+  assert.doesNotMatch(materialized, /Do NOT include tables reused/);
+
+  const seeding = section(createSkill, '### Step 8.5 — Seed sample data', '### Offline profile');
+  assert.ok(seeding.indexOf('Rebuild the local manifest') < seeding.indexOf('Invoke skill: /add-sample-data'));
+  assert.match(seeding, /Zero schema writes is a valid reuse-only result/);
+  assert.match(seeding, /service.requiredTables/);
+  assert.match(seeding, /verify-dataverse-services\.js/);
+  const offline = section(createSkill, '### Offline profile', '### Step 9 — Apply native capabilities');
+  assert.match(offline, /including reused tables/);
+  assert.match(offline, /read-only manifest\s+recovery in Step 8\.5/);
 });
 
 test('offline profile opt-in runs after Dataverse materialization and before native wiring', () => {

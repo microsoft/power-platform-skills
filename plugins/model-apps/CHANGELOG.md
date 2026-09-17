@@ -12,6 +12,12 @@ downloads that round-trip Choice columns.
 
 ### Added
 
+- **Richer form layouts: multi-column tabs, cell spans, and per-container visibility.** A tab can
+  now hold several form-columns (`tabs[].columns[]` with a `width`), a field entry can set
+  `colspan`/`rowspan`, and `expanded`/`visible`/`showLabel` are author-controlled. Layout keys are
+  allow-listed, so a typo — or a key the SDK's serializer would discard — fails instead of silently
+  vanishing. The form wireframe renders the new structure, since that preview is the approval gate.
+
 - **The dry run resolves create-vs-reuse against the live environment** ([#559]). Without `--apply`
   the plan was a static echo of the spec, identical whether every artifact already existed or none
   did — the one question a dry run exists to answer. Each item is now `+ create` or `= reuse`, with
@@ -27,6 +33,80 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **Editing a form with an explicit layout reshapes it, instead of flattening it** ([#575]). Every
+  field was appended to the first section of the first tab, nothing was ever created or resized, and
+  declaring explicit `tabs` simultaneously switched **pruning** on — so an author moving a deployed
+  form to a two-column layout got the old layout, minus any field they had not re-declared, and a
+  green build. Tabs, form-columns and sections are now created when missing, patched in place when
+  they differ, and a field in the wrong section is **moved** rather than duplicated. Containers match
+  by `name`, then `label`, then position, so a form built by an earlier `auto` layout converges
+  instead of gaining a duplicate tab on every rebuild; sections the engine owns (a sub-grid host, the
+  notes/timeline section) are matched by name only.
+- **`--verify` no longer demands a default form the build never promotes.** The build refuses to
+  re-point the default form of a reused or stock table, but the verifier asserted it anyway — so any
+  spec with a Main form on `account`, `contact`, or an `existing: true` table failed verify
+  permanently. Verify now applies the build's own guard.
+- **A tab's `columns` must be a list of form-columns.** `columns` is an integer grid width on a
+  *section* and an array of form-columns on a *tab* — the schema's most confusable key. `"columns": 2`
+  on a tab validated clean and was then discarded by the compiler, silently shipping a one-column
+  form. It is now an error that names the fix.
+- **Duplicate sample-data names fail at author time, not halfway through the build.** The loader
+  refuses to use a duplicated value as its `matchOn` key — a refusal that landed after tables, forms
+  and views were already deployed. Two tickets both called "Printer issue" is ordinary sample data;
+  it is now caught by `validateAppSpec`, with the same escape hatches the loader honours, and the
+  rule now also covers a single-column alternate key when that is what `matchOn` selects.
+- **Cell spans converge on an existing form, and are clamped where they are written.** `colspan`/
+  `rowspan` were create-only, so widening a field on a deployed form produced a green build and an
+  unchanged cell. A declared span is now written to the deployed cell, while an undeclared one is
+  still never sent, so a cell a maker widened by hand survives. A `colspan` wider than its section is
+  now clamped in the emitted cell, not only in the row arithmetic. A `rowspan` is rejected unless it
+  is the last field in its section — a compiler limitation, tracked in [#581].
+- **A build no longer reports a default form it failed to set.** `result.created.defaultForms`
+  recorded the entity even when the `isdefault` write threw.
+- **`--verify` proves sort PRECEDENCE, not just membership.** Each authored order was checked for
+  existence anywhere in the deployed query, so a deployed `[name asc, createdon desc]` satisfied an
+  authored `[createdon desc, name asc]` — two views that return rows in different orders. Authored
+  orders must now appear in their declared relative order; extra platform orders are still tolerated.
+- **Dashboard id-passthrough tiles are validated per tile type.** One shared test covered both
+  shapes, so a list tile carrying a stray `visualizationId` skipped the `viewId` requirement and a
+  chart tile with only a `viewId` passed with no visualization to render. The download was made
+  consistent in the same change.
+- **A downloaded relationship that is renamed is no longer reported as lost.** A relationship carried
+  into the spec under a generated name was also recorded as skipped, so the summary claimed it was
+  absent. It is now reported as a rename, and a parent table whose metadata could not be read is
+  reported as undetermined rather than diagnosed wrongly.
+- **Two silent no-ops now report themselves.** A failed default-form promotion was swallowed
+  entirely; it now warns with the reason, and `--verify` proves the deployed `systemform.isdefault`
+  independently. An **existing** view's authored filters/sort are still not reapplied — only columns
+  and description converge — and that is now said out loud instead of reported as success.
+- **`_seedKey` in `sampleData` is rejected instead of being sent to Dataverse.** It was never a
+  loader sentinel, so it reached the API as an attribute no table has. The error names the real
+  mechanism: a single-column alternate key. Ambiguous parent binds are rejected for the same reason
+  rather than binding to an arbitrary row.
+- **`--verify` gained three oracles**: the deployed default Main form, a view's authored
+  filters/sort parsed from `fetchxml`, and app-role associations. Each fails closed when its proof
+  cannot be read.
+- **A download no longer invents text columns from a polymorphic lookup** ([#574]). A polymorphic
+  lookup's shadow attributes are stored physically, so unlike a single-target lookup's they slipped
+  past the filter that catches the rest: `<lookup>name` and `<lookup>yominame` were emitted as real
+  `Text` columns, and a rebuild into a fresh environment gained two invented text fields where a
+  lookup used to be. The filter now keys on `AttributeOf`, which names the attribute a shadow belongs
+  to; an unreadable value keeps the column rather than deleting it.
+- **A download no longer invents a Money column's base-currency twin either.** Found by live
+  round-trip after the fix above. Dataverse generates a `<money>_base` column beside every `Money`
+  column, and it carries no `AttributeOf`, so the rule above is blind to it — the downloaded spec
+  declared it as an authored column, and a rebuild would try to create a column the platform owns.
+  Recognised by `IsBaseCurrency`, which is the only unambiguous signal; an unreadable value keeps the
+  column.
+- **A download reconstructs `relationships[]`** ([#567]). The block was absent entirely and nothing
+  said so, so a downloaded spec looked complete while a rebuild produced tables with no lookups and
+  no hierarchy, reporting success. 1:N and N:N relationships are now read from live metadata, and any
+  the App Spec cannot express — a polymorphic lookup, a parent outside the app — are named with a
+  reason instead of vanishing.
+- **A downloaded spec no longer fails its own lint** ([#572]). A downloaded dashboard carries
+  id-passthrough tiles, which `validateAppSpec` and the build accept but the lint did not — so
+  `lint-app-spec.js` rejected a freshly downloaded spec with six errors reporting a chart literally
+  named `'undefined'`. The lint now understands them and reports a missing reference as missing.
 - **A download round-trips Choice and MultiChoice columns** ([#564]). They were emitted with no
   `type`, so rebuilding into a **fresh** environment created single-line Text while Memo, Money and
   DateTime survived — an asymmetry harder to notice than an outright failure. Option sets are now
@@ -84,12 +164,26 @@ downloads that round-trip Choice columns.
   mean" suggestion cannot drift between commands.
 - **Deeper tests on the paths connectors GA just made live**, including a connector *edit* eval and
   a contract test pinning the dispatch fields the skills hand to the page-builder.
+- **A form layout may no longer place the same field twice, or reuse a tab/section `name`.** Both
+  are now rejected at author time: a duplicated field deployed two cells on a fresh build and one on
+  the next, so the spec did not survive its own rebuild. Remove the duplicate placement. Identity is
+  per form — a second form on the same table may still place the same column.
+- **A download now reports every dashboard tile it drops** instead of discarding it in silence,
+  naming the parameter the tile lacks.
+- **An explicit form layout with no tabs, or a tab with no sections, is rejected at author time.** It
+  previously passed the build gate — only the standalone lint caught it — and silently dropped every
+  field the form declared.
 
 [#541]: https://github.com/microsoft/power-platform-skills/issues/541
 [#544]: https://github.com/microsoft/power-platform-skills/issues/544
 [#559]: https://github.com/microsoft/power-platform-skills/issues/559
 [#564]: https://github.com/microsoft/power-platform-skills/issues/564
 [#565]: https://github.com/microsoft/power-platform-skills/issues/565
+[#567]: https://github.com/microsoft/power-platform-skills/issues/567
+[#572]: https://github.com/microsoft/power-platform-skills/issues/572
+[#574]: https://github.com/microsoft/power-platform-skills/issues/574
+[#575]: https://github.com/microsoft/power-platform-skills/issues/575
+[#581]: https://github.com/microsoft/power-platform-skills/issues/581
 
 ## [2.7.1]
 

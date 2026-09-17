@@ -50,6 +50,7 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   connectors, and persistence in `gate-only` phase. In `complete` phase, build
   the Dataverse model only when required, then spawn `screen-planner` with every
   approved dependency.
+- **Application Insights is outside the plan gates.** Treat requests to enable telemetry for the generated app as host/runtime configuration owned by the `/setup-app-insights` skill (standalone or via `/edit-app`). Do not model Application Insights in the data model, native-capability matrix, connector list, or as a telemetry-specific screen. In particular, never propose the deprecated Azure Application Insights connector or a custom connector for telemetry ingestion. When the user explicitly names custom events, preserve them as `Custom events` annotations on the corresponding normal business-screen specs; this records behavior without turning telemetry into a planning gate or data source.
 - **Dataverse planning forwarding is verbatim.** In `complete` phase, for every `required`
   `data-model-architect` dispatch and revision, pass the planning mode and both
   planning-snapshot/evidence absolute paths unchanged. Never dispatch the
@@ -184,15 +185,16 @@ PDF fallback order:
 
 Control planning gate:
 - Classify the intent, resolve the exact package/control from the allowlist, confirm it is not runtime-banned, and record storage/output plus add path (`/add-native <capability>` or host File/Image control).
-- If any required gate is false — missing package/control, runtime-banned package, unsupported URL/output type, or missing Dataverse storage for a persisted artifact — do not propose that native capability; write a transparency note instead.
+- If any required gate is false — missing package/control, runtime-banned package, unsupported URL/output type, or no supported storage/output target — flag the capability and resolve its requirement at Gate 1 before approval.
+- For a persisted artifact, record either an appropriate Dataverse target when Dataverse is selected or connector-owned storage with the exact connector, supported upload/write operation, and target library/container/field. Verify that the operation accepts the captured file or image representation; a connector name alone is not a storage implementation. On-device/share-only output is valid only when the confirmed requirement does not need server retention.
 - Do not use Power Apps extensions as generic replacements: PDF viewer opens HTTPS and local file PDFs, pen input is ink/signature capture, generated reports are `expo-print`.
 - The table is not closed. For unlisted native hints, use the exact relevant package when present and safe; otherwise drop the capability. Multi-part asks must update every affected surface.
 
 PDF/pen inference rules:
 - `document-picker` means user-selected local files only: pick/import/upload PDF/document/attachment.
-- `pdf-report` means app-generated PDFs. Local output is shared with `expo-sharing` only when that package is present, or uploaded to a Dataverse File column if retained.
+- `pdf-report` means app-generated PDFs. Local output is shared with `expo-sharing` only when that package is present. Retention uses an approved Dataverse File column or a supported connector-owned storage operation; do not force a Dataverse model for a connector-owned PDF.
 - `native-pdf-viewer` means opening an HTTPS PDF URL or local `file://` URI with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+. It does not support `content://`, `blob:`, or `http://`.
-- `pen-input` means signature/ink capture with `@microsoft/power-apps-native-pen-input`. It returns PNG data URI and needs a Dataverse Image/File/child-row target when persisted.
+- `pen-input` means signature/ink capture with `@microsoft/power-apps-native-pen-input`. It returns a PNG data URI. When retained, use an approved Dataverse Image/File/child-row target or a supported connector-owned storage operation with an explicit conversion/upload path; use on-device/share-only only when retention is not required.
 - `geolocation` means continuous/background GPS tracking with durable storage and inline Dataverse sync via `@microsoft/power-apps-native-bglocation`. Auth is MSAL-only; native uploads each fix to an existing Dataverse table (default entity set `msdyn_locationrecords`). It is distinct from one-shot `location` (`expo-location`). Plan it only for continuous tracking or durable upload, require `/add-native geolocation` to verify the target table exists before use, and never propose the `GeolocationExtension`/HostingSDK path.
 - The Power Apps extensions are use-case-specific, not generic replacements for Expo modules. For other native needs, choose the relevant Expo module or dependency already present in `template/package.json` and still enforce the allowlist.
 
@@ -220,7 +222,7 @@ For each capability the app needs **AND is in the allowlist**:
 | Expo module | `expo-camera` |
 | Required by workflow | `Capture receipts`, `Update profile photo` |
 | Justification | One-sentence rationale tied to a user need ("Capture receipts attached to expense reports") |
-| Storage/output target | `n/a`, `Dataverse Image`, `Dataverse File`, `child Evidence table`, `on-device/share-only`, `local file URI`, or `HTTPS URL` |
+| Storage/output target | `n/a`, `Dataverse Image`, `Dataverse File`, `child Evidence table`, `connector-owned storage` (connector + operation + destination), `on-device/share-only`, `local file URI`, or `HTTPS URL` |
 | Add via | `/add-native camera` |
 
 If the app needs zero allowlisted native capabilities, include a `## Native Capabilities` section that says "None — this app uses only standard React Native components and Power Platform connectors." Transparency notes for dropped caps still appear under this header — "None proposed" is not the same as "nothing was considered."
@@ -231,7 +233,10 @@ If the app needs zero allowlisted native capabilities, include a `## Native Capa
 > "→ [3/4] Inferring connector needs from requirements…"
 
 Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md)
-for inference and connector metadata. Gate 1 owns the only user interaction:
+only for Step 1 inference, Step 3 section formatting, and connector metadata.
+Skip its Step 2 standalone confirmation in this workflow. Gate 1 owns the only
+user interaction; the shared reference's confirmation remains unchanged for
+other callers:
 
 1. **Infer** — scan requirements and wizard answers for connector keywords.
 2. **Draft** — build the candidate `## Connectors` section (table or "None"
@@ -240,6 +245,8 @@ for inference and connector metadata. Gate 1 owns the only user interaction:
    reviewing the complete architecture.
 
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
+
+Application Insights telemetry is also NOT a connector. Exclude it from Gate 1 and allow planning to proceed with the actual business connectors. The customer-owned Application Insights resource is configured separately through the `/setup-app-insights` skill (standalone or via `/edit-app`).
 
 Store the Gate 1-approved connector list for the data-model and screen planners.
 
@@ -264,16 +271,40 @@ first user-visible data-platform decision:
 Approve this architecture before data modeling?
 ```
 
+**Before accepting Gate 1**, revalidate every native capability and storage/output
+target against the final data-platform choice and connector list. Repeat this
+check whenever either choice changes, before writing the approved artifact:
+
+- `geolocation` requires Dataverse for its durable background upload contract
+  and an existing target verified later by `/add-native geolocation`. A
+  connector-only selection cannot satisfy that contract. Resolve the choice
+  with the user in Gate 1: retain Dataverse or explicitly revise the tracking
+  requirement. One-shot `location` is not an automatic replacement.
+- For retained photos, signatures, documents, and generated PDFs without
+  Dataverse, require a supported write path in an approved connector and record
+  its storage destination. Do not substitute transient local output for required
+  persistence. Local viewing, generation, or sharing alone does not require
+  Dataverse.
+- Do not silently remove capabilities, change data platforms, or discard a
+  persistence requirement. Keep incompatible rows pending, explain the specific
+  mismatch, revise the affected architecture with the user, and revalidate.
+  Write the approved artifact only after the compatible combination is accepted.
+
 - **Approved:** write the exact selected mode, native-capability section, and
   connector section to `<working_dir>/.tmp/approved-architecture.md`, then
   return `NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>`.
+  Include the selected data-platform label, `Dataverse planning mode: required`
+  or `Dataverse planning mode: connector-only`, the unchanged
+  `## Native Capabilities` and `## Connectors` sections, and the actual user
+  acceptance as `Approved by: user` plus `Approved at: <ISO timestamp>`.
   The foreground creates Dataverse evidence only for `required` and
   re-dispatches with `Architecture phase: complete`.
 - **Rejected capabilities:** revise only the capability matrix and re-present
   Gate 1.
 - **Rejected connectors:** revise only the connector list and re-present Gate 1.
-- **Changed data platform during review:** update the selection in the same
-  gate before writing the approved artifact.
+- **Changed data platform or connector list during review:** update the selection
+  in the same gate, rerun the capability/storage checks above, and obtain
+  acceptance of the resulting compatible architecture before writing the artifact.
 
 ## Step 5 — Build Data Model
 
@@ -471,6 +502,8 @@ Pass the data model + connectors + design + an explicit `phase: graph`:
 You are the screen-planner agent. PHASE 1 OF 2 — graph only.
 
 phase: graph
+plan_path: <working_dir>/native-app-plan.md
+skip_preview: true
 
 Requirements: [paste $ARGUMENTS]
 Wizard answers: [target users & device, target platforms, aesthetic, features]
@@ -517,14 +550,18 @@ Reject loop = re-spawn with `phase: graph` and the user's feedback. Approve = pr
 **Print before spawning:**
 > "→ [4/4] Spawning screen-planner (phase 2/2: per-screen specs)…"
 
-Re-spawn the planner. The locked graph is already in `_screens_section.md`; the planner reads it as input and only appends:
+Re-spawn the planner with the canonical `native-app-plan.md`; read its `## Screens` section
+as the locked graph. `_screens_section.md` remains graph-only scratch and is
+not the specs input or output.
 
 ```
 You are the screen-planner agent. PHASE 2 OF 2 — specs only.
 
 phase: specs
+plan_path: <working_dir>/native-app-plan.md
+skip_preview: <true for deferred/skip design; false only for the explicitly selected legacy preview mode>
 
-The screen graph + shared conventions are already locked in <working_dir>/_screens_section.md — read them and treat them as immutable. Do NOT add, remove, or rename screens. Do NOT change shared conventions.
+The screen graph + shared conventions are already locked in plan_path's ## Screens section. Read that section and treat it as immutable. Do NOT add, remove, or rename screens. Do NOT change shared conventions. Append per-screen specs and Open Questions only into plan_path; do not update _screens_section.md.
 
 Requirements: [paste $ARGUMENTS]
 Approved data model: [paste ## Data Model section verbatim]
@@ -544,7 +581,10 @@ Style-picker + preview rules unchanged — honour the same `skip_preview` policy
 Return per AGENTS.md rule #10.
 ```
 
-Wait for return; apply the Step 3.0 status switch. The planner appends specs + (optional) markdown screen-graph or HTML preview to `_screens_section.md` and `native-app-plan.md`.
+Wait for return; apply the Step 3.0 status switch. The planner writes specs only into `plan_path`.
+Keep the approved graph and `_screens_section.md` unchanged. Any explicitly
+selected legacy HTML preview is a separate preview artifact, never a reason
+to write specifications to the graph scratch file.
 
 #### Gate 4 — Screen Specs
 
@@ -559,7 +599,7 @@ conventions, in which case return to Gate 3.
 
 Branch on the orchestrator's `Design vibe opt-in:` value:
 
-- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — spawn `screen-planner` with **`skip_preview: true`**. It writes only `_screens_section.md` (specs + markdown screen-graph) — no `_plan_preview.html`. The orchestrator's Step 6.75 will spawn screen-planner again WITHOUT `skip_preview` after `/design-system` locks the brand, so the single HTML preview gets rendered with real tokens. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
+- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — pass **`skip_preview: true`** to the specs dispatch above. It appends only to `native-app-plan.md`; the approved graph scratch remains unchanged and no `_plan_preview.html` is written. Do not dispatch the completed specs phase a second time merely to review it. The foreground design-system phase owns the later visual preview. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
 
 - **`Design vibe opt-in: done`** — the orchestrator has already written `## Design Direction` into the plan via the legacy text picker (only happens when `/design-system` is NOT installed). Spawn `screen-planner` WITHOUT `skip_preview`. It generates the HTML preview as before. Continue to Step A.
 
@@ -788,6 +828,22 @@ Next steps for the orchestrator:
 
 ## Tool Permissions
 
-You have `Bash` only to run read-only file/HTTP/helper checks such as `node scripts/resolve-environment.js <environment-id-or-url>` when needed for context. You MUST NOT run mutating Power Apps CLI commands such as `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive`, `npx power-apps add-data-source ...`, `npx power-apps add-flow --flow-id <flow-guid> --non-interactive`, `npx power-apps push --non-interactive`, `npm install`, or any other mutation command.
+Use `Bash` for the documented read-only checks and local planning-artifact
+normalization/validation only. Dataverse discovery stays foreground-owned;
+`gate-only` never performs it. Do not run app initialization, data-source or
+flow generation, dependency installation, deployment, or tenant mutations.
 
-You have `Write` only to create `native-app-plan.md`. You MUST NOT write any other file in the project.
+`Write` permissions are phase-scoped beneath `<working_dir>`:
+
+- `gate-only`: write `.tmp/approved-architecture.md` only after actual Gate 1
+  acceptance, using the artifact contract above. Do not write a schema contract,
+  data-model receipt, or completed plan in this phase.
+- `complete`: write `native-app-plan.md` and update `.tmp/mobile-plan-status.json`
+  only from the corresponding user approvals. The documented normalization
+  helper may rewrite the architect-produced `.tmp/dataverse-schema-contract.json`;
+  validation scratch is limited to `.tmp/`. Leaf agents retain ownership of
+  their section outputs under their own contracts.
+
+No app source, app configuration, generated services, memory-bank, dependency,
+or out-of-project writes are allowed. A planning-artifact permission never
+grants approval or authorizes tenant mutation.

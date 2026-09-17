@@ -248,6 +248,8 @@ If `npx power-apps list-codeapps` is unavailable in the installed CLI version, s
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
 
+**Application Insights requirement normalization:** If the user's description asks for Application Insights, telemetry, app analytics, diagnostics, traces, or monitoring of this generated app, note it for a post-creation `/setup-app-insights` run (Application Insights is no longer configured during creation) and explicitly tell the planner that it is host/runtime configuration, not a data connector or planning constraint. The planner must not propose the Azure Application Insights connector, a custom telemetry connector, telemetry tables, or telemetry screens unless the user separately asked to build an in-app analytics dashboard. If the user names specific custom events (for example `OrderSubmitted` or `InspectionCompleted`), preserve those event names and their approved scalar properties in the corresponding per-screen specs so screen builders can emit them through `getCustomEventsLogger()`; do not convert them into connectors or data-model artifacts.
+
 ### Step 2b — Requirements discovery
 
 > **Goal:** Turn the user's thin prompt into a confirmed feature brief before the planner runs. The planner agent receives this brief verbatim — richer input means better data model inference, accurate connector detection, and correct screen specs.
@@ -477,10 +479,12 @@ data-platform choice in Gate 1. On approval it writes
 `NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>`.
 
 Treat that signal as the successful architecture result, set
-`<dataverse_planning_mode>` to the selected value, and continue. Any other
-terminal status follows the canonical status switch. If the nested planner is
-unavailable, build those two sections inline, run the same Gate 1, write the
-same artifact, and continue without adding another approval.
+`<dataverse_planning_mode>` only after the architecture-result checks in the
+canonical status switch below pass, and continue. Any other terminal status
+follows that switch. If the nested planner is unavailable, prepare and approve
+all three architecture decisions inline: native capabilities, connectors, and
+the data-platform choice. Use the planner's Gate 1 dependency checks, write
+the same approved artifact, and continue without adding another approval.
 
 Now execute the deferred Step 1.7 publisher-prefix detection for `required`.
 For `connector-only`, set `$DETECTED_PUBLISHER_PREFIX = ""`, print
@@ -617,7 +621,7 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 **Planner preflight (silent).** Before the full Task spawn, do a no-op `Task` probe for `mobile-app:native-app-planner` (same pattern as Step 11.0). If the probe fails with `Agent type … not found`, `tool unavailable`, or the host clearly cannot route nested agents, fall through to **inline-gate mode** (described below) without prompting. The orchestrator has the full tool surface itself — it can run the gates directly. Do not retry, do not ask the user.
 
 **Announce the handoff before the Task call** (so the user isn't staring at a blank screen while the planner spins up):
-- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Gate 1/data-model readiness is quality-first with a 10–15 minute target. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands."
+- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Gate 2/data-model readiness is quality-first with a 10–15 minute target. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands."
 - `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
 
 Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
@@ -675,9 +679,12 @@ When the preflight fails OR the planner returns `BLOCKED: tool surface missing <
 
 Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
-1. Read `<working_dir>/.tmp/approved-architecture.md`. If it is missing or
-   malformed, return `BLOCKED`; the architecture gate must complete before
-   Dataverse discovery or this completion fallback.
+1. Read `<working_dir>/.tmp/approved-architecture.md`. If it is missing or malformed, return to the Architecture gate
+  above and recover the artifact from recorded user acceptance, or run that
+  gate inline when approval is absent. Do not invent approval or infer the
+  data platform from missing artifacts. Only then perform the conditional
+  foreground snapshot step and resume here; retain a valid existing approval
+  without re-asking it.
 2. Restore the approved native capabilities, connectors, and data-platform
    mode without re-presenting Gate 1:
    - In `connector-only`, write an explicit zero-table/no-Dataverse
@@ -689,13 +696,6 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
      snapshot/evidence paths. Present its result as Gate 2 and require approval
      before screen planning.
 
-   Then spawn `mobile-app:screen-planner` with `phase: graph` and
-  `phase: specs` per the two-phase screen-planning split.
-
-   **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
-  - Before `phase: graph`: `> "→ [Gate 3] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
-  - Before `phase: specs`: `> "→ [Gate 4] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
-
   **MUST forward the approved architecture in the direct architect prompt.**
   Include the exact Gate 1-approved native capabilities and connectors. In
   `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and do
@@ -706,19 +706,36 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
   In `required`, also require the direct architect to write and normalize
   `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
-  A draft Markdown section without that sidecar is not an executable Gate 1
+  A draft Markdown section without that sidecar is not an executable Gate 2
   result.
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
-3. **Run the remaining gates yourself** — use `EnterPlanMode` in this order:
-  Data Model when Dataverse is selected → Gate 3 screen graph → Gate 4 screen
-  specs. Gate 1 is already recorded in the approved architecture artifact.
-  The screen gates are structural; design picking happens at Step 6.75 via
-  `/design-system`.
-4. **Write the final approved `native-app-plan.md`** with an `## Approvals` block at the bottom listing each gate, who approved (user), and a timestamp.
+3. **Prepare and approve screens in order.** Create the `native-app-plan.md` skeleton
+   from the planner's Step 6 template, including the approved architecture,
+   approved or not-applicable Data Model, an empty `## Screens`, and
+   `## Approvals` containing only approvals actually received.
+   For both screen dispatches, pass `plan_path: <working_dir>/native-app-plan.md`
+   and the approved model, native capabilities, and connectors verbatim. Pass
+   `skip_preview: true` for deferred or skipped design; graph generation never
+   renders a preview. Keep any explicitly selected legacy preview policy for
+   the specs phase separate from its canonical-plan write target.
+   - Spawn `mobile-app:screen-planner` with `phase: graph` first. Present its
+     navigation, screen map, and shared conventions as Gate 3; wait for approval.
+   - Embed the approved graph from `_screens_section.md` into `## Screens` in
+     `native-app-plan.md` and record Gate 3 acceptance before proceeding.
+   - Verify that the canonical plan contains the locked graph, then spawn
+     `mobile-app:screen-planner` with `phase: specs`. It reads that plan and
+     appends specs there only, without rewriting the graph scratch file.
+   - Present the expanded canonical plan as Gate 4. On rejection revise only
+     specs unless the user changes the graph, which requires Gate 3 again.
+   Print each phase and its ETA before dispatch. Design picking remains at
+   Step 6.75 via `/design-system`; do not generate a default-design preview.
+4. **Finalize the existing `native-app-plan.md`**, preserving the approved graph
+   and appended specs. Update `## Approvals` with each actual user acceptance
+   and timestamp; do not rebuild it from `_screens_section.md`.
 
-   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${PLUGIN_ROOT}/agents/native-app-planner.md) Step 4):**
+   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${PLUGIN_ROOT}/agents/native-app-planner.md) Step 6):**
    - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
    - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
@@ -761,7 +778,27 @@ be treated as `BLOCKED`.
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
-Use the plugin-wide protocol in [`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+**Architecture-gate result (handle before generic retries).** Only a planner
+dispatched with `Architecture phase: gate-only` may return exactly
+`NEEDS_CONTEXT: dataverse-planning-mode:required` or
+`NEEDS_CONTEXT: dataverse-planning-mode:connector-only` as success. Read
+`.tmp/approved-architecture.md`: its mode must match the returned value, it
+must contain the exact approved Native Capabilities and Connectors sections,
+the data-platform choice, and a user-approval timestamp. A missing or malformed
+artifact returns to the Architecture gate recovery path, not to metadata
+discovery. On success, restore those inputs, set `<dataverse_planning_mode>`,
+and continue to deferred publisher/snapshot work only for `required`. This
+does not consume the generic retry budget and must not re-present Gate 1.
+In `complete` phase or from any other agent, that signal is malformed; do not
+let it change an already approved data platform.
+
+For all other first lines, use the plugin-wide protocol in
+[`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #12 for every `Task` return.
+`DONE` continues after output validation; `DONE_WITH_CONCERNS:` surfaces and
+queues concerns for the memory bank; `NEEDS_CONTEXT:` re-dispatches with missing
+context, capped at 2 retries; `BLOCKED:` reports the blocker. Unknown first
+lines are malformed. Recoverable artifact/input failures return to their
+owning phase for repair; they never authorize skipping an applicable gate.
 
 **Data-model exact-name expansion:** when the planner or direct architect
 returns exactly
@@ -1140,6 +1177,7 @@ Key points:
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
 - **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. Each route must use `SafeAreaView` or explicit insets for its own visible edges.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
+- Import `app.json` and pass it through the `appConfig` prop. `PowerAppsProvider` reads `expo.extra.appInsightsConfig` and enforces its `enabled` opt-in; this explicit app-config boundary is required because the fixed Dev Player does not expose the loaded app's extras through `Constants.expoConfig`. Never print the connection string, copy it to `memory-bank.md`, or include it in a summary.
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
 **Fix 4 — Shared TypeScript configuration**
@@ -1261,7 +1299,7 @@ Arguments:
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
-- `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
+- `DONE` → continue to Step 6.85. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
@@ -1293,7 +1331,7 @@ The user skipped the design system but still deserves to see their screens befor
 
 4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
 
-  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
+  > `→ Preview rendered with default styling. Continuing to Step 6.85. (Interrupt and re-run /design-system or /edit-app to revise.)`
 
 This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
 
@@ -1564,6 +1602,21 @@ If this fails, do not continue to native capabilities, connectors, navigation, o
 
 ### Step 8.5 — Seed sample data (auto)
 
+Before sample data or offline setup, require the materialized table inventory
+from `/add-dataverse` Step 6d, including verified reused tables. Compare its
+coverage with the validated operation manifest's `service.requiredTables` and
+run `verify-dataverse-services.js --project-root "<working_dir>" --manifest "$OPERATION_MANIFEST"`.
+Zero schema writes is a valid reuse-only result, not failed materialization.
+If an older run produced an empty or partial table inventory, recover through
+`/add-dataverse` Steps 6c–6d using the approved service list and verified live
+metadata. Rebuild the local manifest without replaying successful metadata
+writes, then rerun coverage/service verification.
+
+If `.datamodel-manifest.json` is missing, malformed, or contains no Dataverse
+tables after that recovery, return `BLOCKED: Dataverse materialization did not
+produce a usable .datamodel-manifest.json` with the remaining verification
+failure. Do not seed or offer offline setup from unverified table names.
+
 **Print before starting:**
 > "→ [Step 8.5/13] Checking existing record counts and seeding sample data into tables with fewer than 5 records."
 
@@ -1577,11 +1630,6 @@ Arguments:
 ```
 
 `/add-sample-data` reads `.datamodel-manifest.json`, queries the current record count for each table, skips any table that already has ≥5 records, and seeds the rest with contextually appropriate rows in dependency-tier order. Inserted GUIDs are tracked in `memory-bank.md` for idempotent re-runs.
-
-If `.datamodel-manifest.json` is missing, malformed, or contains no Dataverse
-tables, return `BLOCKED: Dataverse materialization did not produce a usable
-.datamodel-manifest.json`. Retry or repair Step 8 before sample data or offline
-profile setup.
 
 If the seeding step fails (network drop, permission error, etc.), surface the
 failure but continue to the offline-profile phase — the app is still usable,
@@ -1598,8 +1646,11 @@ when connectivity is unavailable and synchronize queued changes later. This phas
 [`shared/references/connectivity-intent-ownership.md`](${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md).
 
 Before asking, parse `.datamodel-manifest.json` and require at least one
-Dataverse table. A missing, malformed, or empty manifest is
-`BLOCKED: offline setup requires the materialized Dataverse manifest from Step 8`.
+verified Dataverse table, including reused tables. If the manifest is missing,
+malformed, empty, or missing a service-required table, use the read-only manifest
+recovery in Step 8.5 before asking. If verification still fails, report
+`BLOCKED: offline setup requires the materialized Dataverse manifest from Step 8`
+with the specific remaining failure.
 Do not infer connector-only from a missing manifest.
 
 Skip only when `memory-bank.md` `## Offline profile` already records
@@ -2456,7 +2507,7 @@ When the user is ready to deploy:
 
 ### Step 13 — Summary
 
-Print a compact status block, then present exactly 4 options with no explanation. Do not add prose, tips, or "you might want to" text — keep it concise.
+Print a compact status block, then present exactly 6 options with no explanation. Do not add prose, tips, or "you might want to" text — keep it concise.
 
 ```
 ✅ Native code app created
@@ -2468,6 +2519,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+App Insights  : <enabled for selected customer-owned resource | disabled>
 Dev server    : Metro running on port <port>
 Debug logs    : .powernative/metro-logs/
 ─────────────────────────────────────────────
@@ -2475,7 +2527,7 @@ Debug logs    : .powernative/metro-logs/
 
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
 
-Then present exactly these 4 options:
+Then present exactly these 6 options:
 
 ```
 What now?
@@ -2485,6 +2537,7 @@ What now?
 3. Edit the app                (/edit-app)
 4. Add more capabilities       (/add-dataverse, /add-connector, /add-native)
 5. Configure auth later        (/set-app-registration-native)
+6. Set up Application Insights (/setup-app-insights)
 
 Which option? (or "none — I'll keep iterating locally")
 ```

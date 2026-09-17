@@ -398,3 +398,348 @@ test('#537 review follow-up: a NON-STRING schemaName is an error, not a crash', 
 // means resolving the name ONCE into a local and threading it through every site, which is its own
 // change with its own tests. Unlike the non-string case above, this shape cannot come from
 // `JSON.parse` — only a programmatic caller can build it — so it is not on any real input path.
+
+// --- explicit form layout: unknown/unserializable keys (#575 follow-on) ---
+// tabs[]/sections[] had NO allow-list, so an invented key validated clean and vanished. Several
+// plausible keys are also accepted by the SDK normalizers and then dropped by its serializer.
+
+function withForm(tabs) {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', type: 'Text' }];
+  s.forms = [{ entity: 'contoso_order', name: 'Order', layout: 'explicit', tabs }];
+  return s;
+}
+const errsFor = (tabs) => validateAppSpec(withForm(tabs), { profile: 'plan' }).errors;
+
+test('form layout: an unknown key on a tab, section or field entry is rejected', () => {
+  assert.ok(errsFor([{ label: 'G', bogusTabKey: 1, sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /unknown key \x27bogusTabKey\x27 on tab/.test(e)), 'tab key');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', bogusSectionKey: 1, fields: [] }] }])
+    .some((e) => /unknown key \x27bogusSectionKey\x27 on tab .* section/.test(e)), 'section key');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', bogusFieldKey: 1 }] }] }])
+    .some((e) => /unknown key \x27bogusFieldKey\x27 on tab .* field/.test(e)), 'field entry key');
+});
+
+test('form layout: keys the SDK serializer DROPS are rejected with the real mechanism named', () => {
+  // Measured against the vendored bundle: a tab serializes only name/expanded/visible + label.
+  const tabShowLabel = errsFor([{ label: 'G', showLabel: true, sections: [{ label: 'S', fields: [] }] }]);
+  assert.ok(tabShowLabel.some((e) => /unknown key \x27showLabel\x27 on tab/.test(e)));
+  assert.ok(tabShowLabel.some((e) => /a TAB has no label toggle in FormXml/.test(e)), 'names what to use instead');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', labelPosition: 'Top', fields: [] }] }])
+    .some((e) => /unknown key \x27labelPosition\x27 on tab .* section/.test(e)));
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', locked: true, fields: [] }] }])
+    .some((e) => /unknown key \x27locked\x27/.test(e)));
+});
+
+test('form layout: a tab cannot declare both sections and columns', () => {
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'A', fields: [] }], columns: [{ sections: [{ label: 'B', fields: [] }] }] }])
+    .some((e) => /declares both \x27sections\x27 and \x27columns\x27/.test(e)));
+});
+
+// `columns` is an INTEGER grid width on a section but an ARRAY of form-columns on a tab. A non-array
+// tab `columns` used to validate clean and then be dropped by the compiler (which reads
+// `Array.isArray(t.columns)`), so `"columns": 2` on a tab silently shipped a one-column form — the
+// exact silent no-op this allow-list exists to end, on the schema's most confusable key. The
+// "declares both" rule above cannot catch it: that too requires Array.isArray.
+// A cell that spans DOWN reserves its column in the rows beneath it, and FormXml fills a row's cells
+// left to right with no way to skip a reserved slot. Measured on the stock account/contact Main
+// forms: every section using rowspan puts it on the LAST cell, precisely because nothing can be
+// positioned beside it.
+test('form layout: a rowspan is rejected unless it is the last field in its section', () => {
+  const bad = errsFor([{ label: 'G', sections: [{ label: 'S', columns: 2, fields: [{ name: 'a', rowspan: 2 }, 'b'] }] }]);
+  assert.ok(bad.some((e) => /rowspan 2 but is not the last field in its section/.test(e)), `expected a rowspan placement error; got ${JSON.stringify(bad)}`);
+
+  const ok = errsFor([{ label: 'G', sections: [{ label: 'S', columns: 2, fields: ['b', { name: 'a', rowspan: 2 }] }] }]);
+  assert.ok(!ok.some((e) => /rowspan/.test(e)), `a terminal rowspan must stay valid; got ${JSON.stringify(ok)}`);
+});
+
+// formSectionsOf treats a non-array `sections` as absent, so a typo silently dropped the whole
+// form-column's layout instead of failing.
+test('form layout: a non-array sections inside a form-column is rejected', () => {
+  const errs = errsFor([{ label: 'G', columns: [{ width: '50%', sections: {} }] }]);
+  assert.ok(errs.some((e) => /non-array 'sections'/.test(e)), `expected a non-array sections error; got ${JSON.stringify(errs)}`);
+});
+
+// The compiler dereferences every tab/column/section entry. Tabs and sections had partial pre-existing
+// guards; a malformed FORM-COLUMN was entirely unguarded and reached compileFormIntent, which reads
+// `c.width`/`c.sections`, as a raw TypeError.
+test('form layout: a non-object tab, form-column or section is rejected, not dereferenced', () => {
+  assert.ok(errsFor([null]).some((e) => /tabs\[0\] must be an object/.test(e)), 'a null tab is rejected');
+  assert.ok(errsFor(['nope']).some((e) => /tab #1 must be an object/.test(e)), 'a primitive tab is rejected');
+  assert.ok(errsFor([{ label: 'G', sections: [null] }]).some((e) => /sections\[0\] must be an object/.test(e)), 'a null section is rejected');
+  // The gap this closes:
+  assert.ok(errsFor([{ label: 'G', columns: [null] }]).some((e) => /column #1 must be an object, got null/.test(e)), 'a null form-column is rejected');
+  assert.ok(errsFor([{ label: 'G', columns: ['x'] }]).some((e) => /column #1 must be an object/.test(e)), 'a primitive form-column is rejected');
+});
+
+// compileFormIntent only truth-tests these (`!== false`), so a STRING "false" compiles as true and
+// deploys the opposite of what was authored.
+test('form layout: expanded / visible / showLabel must be real booleans', () => {
+  assert.ok(errsFor([{ label: 'G', expanded: 'false', sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /has expanded 'false' — it must be true or false/.test(e)));
+  assert.ok(errsFor([{ label: 'G', visible: 0, sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /has visible '0'/.test(e)));
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', showLabel: 'false', fields: [] }] }])
+    .some((e) => /has showLabel 'false'/.test(e)));
+  // A real boolean still passes.
+  assert.ok(!errsFor([{ label: 'G', expanded: false, sections: [{ label: 'S', showLabel: true, fields: [] }] }])
+    .some((e) => /must be true or false/.test(e)));
+});
+
+// A name is the container's IDENTITY on a rebuild — the topology reconcile matches deployed
+// containers by name and keys its placement targets by name — so duplicates make two authored
+// declarations resolve to the same deployed container.
+test('form layout: duplicate tab or section names are rejected (a name is identity on rebuild)', () => {
+  assert.ok(errsFor([
+    { name: 'tab_a', label: 'A', sections: [{ label: 'S1', fields: [] }] },
+    { name: 'TAB_A', label: 'B', sections: [{ label: 'S2', fields: [] }] },
+  ]).some((e) => /reuses the tab name 'TAB_A'/.test(e)), 'duplicate tab names are caught case-insensitively');
+
+  assert.ok(errsFor([{ label: 'G', sections: [
+    { name: 'sec_x', label: 'S1', fields: [] },
+    { name: 'sec_x', label: 'S2', fields: [] },
+  ] }]).some((e) => /reuses the section name 'sec_x'/.test(e)));
+});
+
+test('form layout: a tab columns that is a NUMBER is rejected and points at the section key', () => {
+  const errs = errsFor([{ label: 'G', columns: 2, sections: [{ label: 'S', fields: [] }] }]);
+  assert.ok(errs.some((e) => /has columns \x272\x27/.test(e)), `expected a tab-columns error; got ${JSON.stringify(errs)}`);
+  assert.ok(errs.some((e) => /put \x27columns\x27: 2 on the section instead/.test(e)), 'the message must name the fix');
+});
+
+test('form layout: out-of-range spans, section columns and column widths are rejected', () => {
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', columns: 9, fields: [] }] }])
+    .some((e) => /may span 1 to 4 columns/.test(e)), 'section columns');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', colspan: 0 }] }] }])
+    .some((e) => /has colspan \x270\x27/.test(e)), 'colspan 0');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', rowspan: 1.5 }] }] }])
+    .some((e) => /has rowspan \x271.5\x27/.test(e)), 'fractional rowspan');
+  assert.ok(errsFor([{ label: 'G', columns: [{ width: '60px', sections: [{ label: 'S', fields: [] }] }] }])
+    .some((e) => /width \x2760px\x27 .* must be a percentage/.test(e)), 'non-percentage width');
+});
+
+test('form layout: a valid explicit layout with spans and multi-column tabs passes clean', () => {
+  const errs = errsFor([{ name: 'tab_g', label: 'G', expanded: false, visible: true, columns: [
+    { width: '60%', sections: [{ name: 's1', label: 'S1', columns: 2, showLabel: true, visible: true, fields: [{ name: 'contoso_amount', colspan: 2 }] }] },
+    { width: '40%', sections: [{ name: 's2', label: 'S2', columns: 1, fields: ['contoso_name'] }] },
+  ] }]);
+  assert.deepStrictEqual(errs.filter((e) => /unknown key|must be a percentage|may span|has colspan|has rowspan/.test(e)), []);
+});
+
+// A field placed twice on one form is a CREATE-vs-REBUILD divergence, not a cosmetic slip: the
+// compiler emits one cell per entry, so a fresh build deploys two cells, while every reconcile path
+// keys placement by logical name and takes the first (`declaredSectionByField`, `findFieldCellPointer`,
+// and `formFieldLogicals`, which de-duplicates). The second cell would appear on create and vanish on
+// the next build. MEASURED before this gate existed: the same spec compiled to 2 bound cells while
+// declaredSectionByField resolved the field to the first section only.
+test('form layout: a field placed twice is rejected, because create and rebuild would disagree', () => {
+  const mk = (secA, secB) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amount', type: 'Decimal' }];
+    s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs: [{ label: 'General', sections: [
+      { label: 'A', name: 'sec_a', fields: secA },
+      { label: 'B', name: 'sec_b', fields: secB },
+    ] }] }];
+    return s;
+  };
+  const dupErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /places field/.test(e));
+
+  assert.strictEqual(dupErrors(mk(['contoso_name', 'contoso_amount'], ['contoso_name'])).length, 1,
+    'the same field in two sections must be rejected');
+  assert.strictEqual(dupErrors(mk(['contoso_name', 'contoso_name'], ['contoso_amount'])).length, 1,
+    'the same field twice in ONE section must be rejected too');
+  // Dataverse logical names are case-insensitive, so a casing difference is the same cell.
+  assert.strictEqual(dupErrors(mk([{ name: 'contoso_name' }], [{ name: 'CONTOSO_NAME' }])).length, 1,
+    'duplicate detection must be case-insensitive and must see field-entry objects');
+  assert.strictEqual(dupErrors(mk(['contoso_name'], [{ name: 'contoso_name' }])).length, 1,
+    'a string entry and an object entry naming the same field are still one field twice');
+
+  // The gate must not fire on an ordinary form — that would make every explicit layout unbuildable.
+  assert.deepStrictEqual(dupErrors(mk(['contoso_name'], ['contoso_amount'])), [],
+    'distinct fields must stay valid');
+
+  // Identity is per FORM, so two forms on the same table may each place the same column.
+  const twoForms = mk(['contoso_name'], ['contoso_amount']);
+  twoForms.forms.push({ entity: 'contoso_order', name: 'Second', layout: 'explicit', tabs: [{ label: 'General', sections: [
+    { label: 'A', name: 'other_a', fields: ['contoso_name'] },
+  ] }] });
+  assert.deepStrictEqual(dupErrors(twoForms), [], 'a second form may place the same field');
+});
+
+// The gate exists only to move the loader's refusal earlier, so the two must agree EXACTLY. The
+// loader keys on `JSON.stringify([typeof v, v])`, so `1` and `'1'` are distinct rows; a plain
+// `String(...)` key here made them collide and rejected, at author time, a spec that builds. Both
+// sides now call the shared `sampleKeyIdentity`, so they cannot drift apart again.
+test('sampleData: duplicate detection keys values exactly the way the loader does', () => {
+  const withKey = (rows) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Text' }];
+    s.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+    s.sampleData = { contoso_order: rows };
+    return validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /duplicate contoso_code/.test(e));
+  };
+
+  assert.deepStrictEqual(withKey([{ contoso_name: 'A', contoso_code: 1 }, { contoso_name: 'B', contoso_code: '1' }]), [],
+    'the loader treats 1 and "1" as distinct, so this gate must not reject them');
+  assert.strictEqual(withKey([{ contoso_name: 'A', contoso_code: '1' }, { contoso_name: 'B', contoso_code: '1' }]).length, 1,
+    'two identical strings are still a duplicate');
+  assert.strictEqual(withKey([{ contoso_name: 'A', contoso_code: 1 }, { contoso_name: 'B', contoso_code: 1 }]).length, 1,
+    'and so are two identical numbers');
+});
+
+// A generated fallback name is a REAL identity, not a placeholder: the reconcile matches a deployed
+// container by name. So an unnamed section and an explicit `name: "section_0_0"` are the same
+// container to every rebuild path, while create emits two. MEASURED before this gate: the compiled
+// intent carried two sections both named `section_0_0`, and declaredSectionByField routed both
+// sections' fields to that one target. Uniqueness is therefore checked on the EFFECTIVE name.
+test('form layout: an explicit name that collides with a generated one is rejected', () => {
+  const form = (tabs) => { const s = base(); s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }]; s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs }]; return s; };
+  const nameErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /reuses the (tab|section) name/.test(e));
+
+  const secCollision = form([{ label: 'G', sections: [
+    { label: 'A', fields: ['contoso_name'] },                              // unnamed -> section_0_0
+    { label: 'B', name: 'section_0_0', fields: ['contoso_amount'] },       // explicit, same identity
+  ] }]);
+  assert.strictEqual(nameErrors(secCollision).length, 1, 'an unnamed section and an explicit section_0_0 are one container');
+  assert.match(nameErrors(secCollision)[0], /generated name/, 'the message must explain where the other name came from');
+
+  const tabCollision = form([
+    { label: 'A', sections: [{ label: 'S', name: 's1', fields: ['contoso_name'] }] },      // unnamed -> tab_0
+    { label: 'B', name: 'tab_0', sections: [{ label: 'T', name: 's2', fields: ['contoso_amount'] }] },
+  ]);
+  assert.strictEqual(nameErrors(tabCollision).length, 1, 'tabs collide the same way');
+
+  // The generated section name carries its FORM-COLUMN index for ci > 0, so the gate has to walk
+  // columns rather than the flattened section list to compute it.
+  const multiColumn = form([{ label: 'G', columns: [
+    { width: '50%', sections: [{ label: 'L', name: 'section_0_1_0', fields: ['contoso_name'] }] },
+    { width: '50%', sections: [{ label: 'R', fields: ['contoso_amount'] }] },   // -> section_0_1_0
+  ] }]);
+  assert.strictEqual(nameErrors(multiColumn).length, 1, 'a collision with a column-scoped generated name must be caught');
+
+  // Ordinary multi-column layouts generate distinct names and must stay valid.
+  const ok = form([{ label: 'G', columns: [
+    { width: '50%', sections: [{ label: 'L', fields: ['contoso_name'] }] },
+    { width: '50%', sections: [{ label: 'R', fields: ['contoso_amount'] }] },
+  ] }]);
+  assert.deepStrictEqual(nameErrors(ok), [], 'unnamed sections in different form-columns are distinct');
+});
+
+// Reserving the generated namespace instead would break the round trip: a DOWNLOADED spec carries
+// the real deployed names, which for an app this compiler built are exactly the generated ones. They
+// must stay valid when they are the only declaration of that container.
+test('form layout: a downloaded spec that names its containers explicitly stays valid', () => {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }];
+  s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs: [
+    { label: 'General', name: 'tab_0', sections: [
+      { label: 'A', name: 'section_0_0', fields: ['contoso_name'] },
+      { label: 'B', name: 'section_0_1', fields: ['contoso_amount'] },
+    ] },
+  ] }];
+  assert.deepStrictEqual(
+    validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /reuses the (tab|section) name/.test(e)),
+    [], 'round-tripping a built app must not be rejected by its own generated names');
+});
+
+// An explicit layout that supplies no structure used to pass `validateAppSpec` — and that is the
+// gate that matters, because `build-model-app.js` runs the validator and never the standalone lint.
+// MEASURED before this check, every one with `validate.ok === true`: `tabs: []` compiled to 0 tabs /
+// 0 sections / 0 bound cells, and a tab with empty `sections`/`columns` compiled to 1 tab and 0
+// sections — every declared field silently dropped. With notes enabled, `tabs: []` did not even
+// fail cleanly: the compiler threw `Cannot read properties of undefined (reading 'columns')`.
+test('form layout: an explicit layout with no place to put a field is rejected', () => {
+  const form = (tabs) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }];
+    s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs }];
+    return s;
+  };
+  const emptyErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /no tabs|has no sections/.test(e));
+
+  assert.strictEqual(emptyErrors(form([])).length, 1, 'tabs: [] declares no structure at all');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', sections: [] }])).length, 1, 'a tab with no sections has nowhere to place a field');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', columns: [] }])).length, 1, 'nor does a tab with no form-columns');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', columns: [{ width: '100%', sections: [] }] }])).length, 1,
+    'nor one whose only form-column is empty');
+
+  // The emptiness test is on the FLATTENED section list, so an empty form-column BESIDE a populated
+  // one is still a legitimate layout — checking `t.sections` alone would have reported every
+  // multi-column tab as empty, the same silent disagreement in the other direction.
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', columns: [
+    { width: '50%', sections: [] },
+    { width: '50%', sections: [{ label: 'S', fields: ['contoso_name'] }] },
+  ] }])), [], 'an empty form-column beside a populated one is allowed');
+
+  // A section with no fields is NOT rejected: a section may legitimately carry only a sub-grid or a
+  // quick-view, neither of which is declared in `fields[]`.
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', sections: [{ label: 'S', fields: [] }] }])), [],
+    'an empty section is legal — it may host a sub-grid or quick-view');
+
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', sections: [{ label: 'S', fields: ['contoso_name'] }] }])), [],
+    'an ordinary layout stays valid');
+});
+
+// The seeder refuses to use a duplicated primary name as `matchOn` (Dataverse could resolve or
+// deduplicate the wrong row). That refusal happens in the sample-data phase — after tables, forms and
+// views are already deployed — so ordinary sample data used to validate clean and then stop the build
+// halfway. The gate mirrors chooseMatchOn exactly, including both of its escape hatches.
+test('sampleData: duplicate primary-name values are rejected at author time, not mid-build', () => {
+  const dup = base();
+  dup.sampleData = { contoso_order: [{ contoso_name: 'Printer issue' }, { contoso_name: 'Printer issue' }] };
+  assert.ok(validateAppSpec(dup, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name value 'Printer issue'/.test(e)));
+
+  const unique = base();
+  unique.sampleData = { contoso_order: [{ contoso_name: 'A' }, { contoso_name: 'B' }] };
+  assert.ok(!validateAppSpec(unique, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)), 'unique names must stay valid');
+
+  // A single-column alternate key is enforced-unique by Dataverse, so it is what matchOn uses and
+  // the primary name never comes into it.
+  const keyed = base();
+  keyed.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+  keyed.sampleData = { contoso_order: [{ contoso_name: 'X', contoso_code: '1' }, { contoso_name: 'X', contoso_code: '2' }] };
+  assert.ok(!validateAppSpec(keyed, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)), 'a safe alternate key makes the primary irrelevant');
+
+  // A safe alternate key is what matchOn USES, so duplicates in it break the same way — and used to
+  // pass this gate and fail during sample-data provisioning instead.
+  const dupKey = base();
+  dupKey.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+  dupKey.sampleData = { contoso_order: [{ contoso_name: 'A', contoso_code: 'DUP' }, { contoso_name: 'B', contoso_code: 'DUP' }] };
+  assert.ok(validateAppSpec(dupKey, { profile: 'plan' }).errors.some((e) => /duplicate contoso_code value 'DUP'/.test(e)),
+    'duplicates in the alternate key that matchOn selects must be caught at author time');
+
+  // A partially/entirely empty primary means matchOn is omitted altogether, so there is no wrong-row
+  // resolve to guard against.
+  const empty = base();
+  empty.sampleData = { contoso_order: [{ contoso_name: '' }, { contoso_name: '' }] };
+  assert.ok(!validateAppSpec(empty, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)));
+});
+
+test('sampleData: _seedKey is rejected because it reaches Dataverse as an unknown attribute', () => {
+  const s = base();
+  s.sampleData = { contoso_order: [{ contoso_name: 'A', _seedKey: 'order-1' }] };
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors;
+  assert.ok(errs.some((e) => /_seedKey. is not a supported sample-record key/.test(e)));
+  assert.ok(errs.some((e) => /single-column alternate key/.test(e)), 'points at the real mechanism');
+});
+
+// A multi-column tab nests its sections inside columns[]. Every raw-spec reader must see them, or
+// section-level validation silently stops running for exactly the richer layouts it should police.
+test('form layout: sections nested in columns[] are still validated', () => {
+  const badKey = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', locked: true, fields: [] }] }] }]);
+  assert.ok(badKey.some((e) => /unknown key .locked./.test(e)), `nested section keys must be checked; got ${JSON.stringify(badKey)}`);
+  const badCols = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', columns: 9, fields: [] }] }] }]);
+  assert.ok(badCols.some((e) => /may span 1 to 4 columns/.test(e)), 'nested section column counts must be checked');
+  const badSpan = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', colspan: 0 }] }] }] }]);
+  assert.ok(badSpan.some((e) => /has colspan .0./.test(e)), 'nested field spans must be checked');
+});
+
+test('form layout: a non-array fields inside columns[] is caught, not thrown on', () => {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', type: 'Text' }];
+  s.forms = [{ entity: 'contoso_order', name: 'O', layout: 'explicit',
+    tabs: [{ label: 'G', columns: [{ width: '100%', sections: [{ label: 'S', fields: 'contoso_amount' }] }] }] }];
+  // A string is ITERABLE, so a naive per-entry loop would walk its characters instead of failing.
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors;
+  assert.ok(errs.some((e) => /fields must be an array/.test(e)), `got ${JSON.stringify(errs)}`);
+});

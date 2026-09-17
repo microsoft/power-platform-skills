@@ -249,7 +249,7 @@ test('readEntityWithDescriptions reads descriptions through the RAW dataverse cl
   // The $select also carries the DISPLAY labels now, so a table/column labelled in more than one
   // language round-trips (AB#6686428). The SDK's flattened `displayName` keeps only one.
   assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description,DisplayName,DisplayCollectionName$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
-  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description,DisplayName,IsLogical,AttributeOf,AttributeTypeName$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
   assert.strictEqual(e.description, 'Order table purpose.');
   const status = e.columns.find((c) => c.schemaName === 'new_status');
   assert.strictEqual(status.description, 'State shown to dispatchers.');
@@ -651,8 +651,122 @@ test('readDashboards reconstructs supported tile shapes and skips unreadable das
   ]);
 });
 
-test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {
+// A chart tile renders a visualization OVER a view. A deployed component that carries a ViewId but no
+// VisualizationId therefore has nothing to plot, and emitting it anyway hands back a spec that fails
+// its own lint ("id-based chart tile with viewId also needs visualizationId") — the exact #572 defect
+// class this download path exists to prevent.
+test('readDashboards omits a chart tile with no VisualizationId (and says so) rather than emitting a half-tile', async () => {
+  const warnings = [];
   const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'chart', name: 'Plotless', parameters: { TargetEntityType: 'account', ViewId: '{11111111-0000-4000-8000-000000000001}' } },
+      { type: 'list', name: 'Open', parameters: { TargetEntityType: 'account', ViewId: '{33333333-0000-4000-8000-000000000003}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'list', name: 'Open', entity: 'account', viewId: '33333333-0000-4000-8000-000000000003' },
+  ], 'the plotless chart tile must not be emitted');
+  assert.ok(warnings.some((w) => /VisualizationId/.test(w)), `the omission must be reported; got ${JSON.stringify(warnings)}`);
+});
+
+// `entity` is required by BOTH spec gates for any id-passthrough tile, so a component with no
+// TargetEntityType produces `entity: undefined` — which JSON drops — and the downloaded spec then
+// fails its own lint. Same class as the missing-VisualizationId case above.
+test('readDashboards omits an id-passthrough tile with no TargetEntityType (and says so)', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'chart', name: 'NoEntity', parameters: { ViewId: '{11111111-0000-4000-8000-000000000001}', VisualizationId: '{22222222-0000-4000-8000-000000000002}' } },
+      { type: 'list', name: 'AlsoNoEntity', parameters: { ViewId: '{33333333-0000-4000-8000-000000000003}' } },
+      { type: 'list', name: 'Good', parameters: { TargetEntityType: 'account', ViewId: '{44444444-0000-4000-8000-000000000004}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'list', name: 'Good', entity: 'account', viewId: '44444444-0000-4000-8000-000000000004' },
+  ], 'only the tile carrying an entity may be emitted');
+  assert.strictEqual(warnings.filter((w) => /TargetEntityType/.test(w)).length, 2, `both omissions must be reported; got ${JSON.stringify(warnings)}`);
+});
+
+// The silent-drop hole the two tests above did NOT cover. `chart`/`list` used to be matched with an
+// `&& viewId` guard, so a component of a supported type carrying no ViewId matched no branch at all
+// and vanished with nothing said — and the dashboard-level "no recognizable tiles" warning cannot
+// catch it, because that only fires when EVERY tile fails. Same untraceability as #572, reached from
+// the one direction the omission warnings missed.
+test('readDashboards reports a supported tile dropped for a missing ViewId instead of dropping it silently', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'chart', name: 'NoView', parameters: { TargetEntityType: 'account', VisualizationId: '{22222222-0000-4000-8000-000000000002}' } },
+      { type: 'list', name: 'AlsoNoView', parameters: { TargetEntityType: 'account' } },
+      { type: 'list', name: 'Good', parameters: { TargetEntityType: 'account', ViewId: '{44444444-0000-4000-8000-000000000004}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'list', name: 'Good', entity: 'account', viewId: '44444444-0000-4000-8000-000000000004' },
+  ], 'only the tile carrying a ViewId may be emitted');
+  assert.ok(/NoView/.test(warnings.join('\n')) && /AlsoNoView/.test(warnings.join('\n')),
+    `both ViewId-less tiles must be named; got ${JSON.stringify(warnings)}`);
+  assert.strictEqual(warnings.filter((w) => /ViewId/.test(w)).length, 2, `both omissions must cite ViewId; got ${JSON.stringify(warnings)}`);
+});
+
+// A component missing SEVERAL required parameters must say so once, naming each — reporting only the
+// first would send a maker back for a second round trip to discover the rest.
+test('readDashboards names every missing parameter on one tile in a single warning', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [{ type: 'chart', name: 'Empty', parameters: {} }] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  const tileWarning = warnings.find((w) => /Empty/.test(w));
+  assert.ok(tileWarning, `the tile omission must be reported; got ${JSON.stringify(warnings)}`);
+  for (const param of ['TargetEntityType', 'ViewId', 'VisualizationId']) {
+    assert.ok(tileWarning.includes(param), `'${param}' must be named in "${tileWarning}"`);
+  }
+});
+
+// An unsupported component type is a silent drop too, for the same reason: a dashboard with one good
+// tile never reaches the dashboard-level catch-all.
+test('readDashboards reports a tile type the App Spec cannot express', async () => {
+  const warnings = [];
+  const sdk = {
+    fetchArtifact: async () => ({ components: [
+      { type: 'organizationinsights', name: 'Insights', parameters: {} },
+      { type: 'iframe', name: 'NoUrl', parameters: {} },
+      { type: 'list', name: 'Good', parameters: { TargetEntityType: 'account', ViewId: '{44444444-0000-4000-8000-000000000004}' } },
+    ] }),
+    queryRecords: async () => [{ name: 'Operations', description: null }],
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  }, (m) => warnings.push(m));
+
+  assert.strictEqual(dashboards[0].tiles.length, 1, 'only the rebuildable tile may be emitted');
+  assert.ok(warnings.some((w) => /Insights/.test(w) && /organizationinsights/.test(w)),
+    `the unsupported type must be named; got ${JSON.stringify(warnings)}`);
+  assert.ok(warnings.some((w) => /NoUrl/.test(w) && /Url/.test(w)),
+    `the iframe missing its Url must be reported; got ${JSON.stringify(warnings)}`);
+});
+
+test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {  const sdk = {
     fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
     queryRecords: async (_set, opts) => {
       assert.ok(opts.select.includes('description'), 'dashboard name lookup also requests description');
@@ -2209,4 +2323,174 @@ test('REVIEW-B cast membership still keeps a column when the ATTRIBUTE read also
   const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'pp_t'), 'pp_t');
   assert.ok(e.columns.find((c) => c.schemaName === 'pp_tags'), 'cast membership must keep the column when nothing else can');
   assert.deepStrictEqual(untypedColumnNames([e]), ['pp_t.pp_tags']);
+});
+
+test('#574 a POLYMORPHIC lookup shadow is filtered out via AttributeOf, even though IsLogical is false', async () => {
+  // LIVE-MEASURED on a Customer-type lookup `cfo_billto` targeting account + contact. Dataverse
+  // creates THREE shadows for it, and unlike a single-target lookup they are physically stored:
+  //   cfo_billtoname      AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=String
+  //   cfo_billtoyominame  AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=String
+  //   cfo_billtoidtype    AttributeOf=cfo_billto  IsLogical=FALSE  AttributeType=EntityName
+  // vs a single-target lookup, whose shadow IS logical:
+  //   cfo_customeridname  AttributeOf=cfo_customerid  IsLogical=TRUE
+  // So the IsLogical rule cannot see the polymorphic ones: they were emitted as real Text columns
+  // and a fresh-environment rebuild invented two text fields where a lookup used to be.
+  const e = entityFromMetadata({
+    schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { logicalName: 'cfo_name', attributeType: 'String', IsCustomAttribute: true },
+      { logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true },
+      { logicalName: 'cfo_billtoname', attributeType: 'String', IsCustomAttribute: true, IsLogical: false, AttributeOf: 'cfo_billto' },
+      { logicalName: 'cfo_billtoyominame', attributeType: 'String', IsCustomAttribute: true, IsLogical: false, AttributeOf: 'cfo_billto' },
+      { logicalName: 'cfo_customeridname', attributeType: 'String', IsCustomAttribute: true, IsLogical: true, AttributeOf: 'cfo_customerid' },
+    ],
+  }, 'cfo_workorder');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref'],
+    `only the authored column survives; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
+});
+
+test('#574 a REAL column is never dropped by the AttributeOf rule (AttributeOf is null on authored columns)', async () => {
+  // The lookup itself, and every ordinary column, report AttributeOf: null -- so nothing authored
+  // is at risk. Guards the rule against becoming a silent column deletion.
+  const e = entityFromMetadata({
+    schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true, AttributeOf: null },
+      { logicalName: 'cfo_resolution', attributeType: 'Memo', IsCustomAttribute: true, AttributeOf: null },
+      { logicalName: 'cfo_onsiteduration', attributeType: 'Integer', IsCustomAttribute: true },
+    ],
+  }, 'cfo_workorder');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref', 'cfo_resolution', 'cfo_onsiteduration']);
+});
+
+test('#574 an attribute whose AttributeOf could not be read is KEPT, not dropped', async () => {
+  // When the label read fails NO attribute carries AttributeOf. Dropping on absent would empty the
+  // table\u0027s columns[] entirely -- the same direction every other rule here takes: "we could not
+  // look" must never become a deletion.
+  const e = entityFromMetadata({
+    schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+    attributes: [{ logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true }],
+  }, 'cfo_workorder');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_intakeref']);
+});
+
+test('#574 AttributeOf survives the description merge, so the shadow is dropped through the REAL read path', async () => {
+  // The unit tests above hand AttributeOf straight to entityFromMetadata. This one drives the
+  // integration seam: the SDK metadata has NO AttributeOf (it is not in its projection), so the
+  // value only reaches the filter if readEntityWithDescriptions merges it off the label read.
+  // Dropping that one field from the merge silently re-enables the leak.
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'cfo_workorder', displayName: 'Work Order', primaryNameAttribute: 'cfo_name',
+      attributes: [
+        { logicalName: 'cfo_intakeref', attributeType: 'String', IsCustomAttribute: true },
+        { logicalName: 'cfo_billtoname', attributeType: 'String', IsCustomAttribute: true },
+        { logicalName: 'cfo_billtoyominame', attributeType: 'String', IsCustomAttribute: true },
+      ],
+    }),
+    queryRecords: async (set) => { throw new Error(`queryRecords must not be used for metadata paths (got \u0027${set}\u0027)`); },
+    dataverse: {
+      get: async (url) => {
+        if (/\/Attributes\?/.test(url)) {
+          // Exactly the live shape: polymorphic shadows are NOT logical, so only AttributeOf marks them.
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'cfo_intakeref', IsLogical: false, AttributeOf: null },
+            { LogicalName: 'cfo_billtoname', IsLogical: false, AttributeOf: 'cfo_billto' },
+            { LogicalName: 'cfo_billtoyominame', IsLogical: false, AttributeOf: 'cfo_billto' },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+  const meta574 = await readEntityWithDescriptions(sdk, 'cfo_workorder');
+  const e574 = entityFromMetadata(meta574, 'cfo_workorder');
+  assert.deepStrictEqual(e574.columns.map((c) => c.schemaName), ['cfo_intakeref'],
+    `the polymorphic shadows must not survive the real read path; got ${JSON.stringify(e574.columns.map((c) => c.schemaName))}`);
+});
+
+// A platform-generated companion that carries NO AttributeOf, is not logical, and reports
+// IsCustomAttribute true slips past every rule above. `<money>_base` is the canonical case.
+test('#574 follow-up: the base-currency twin is dropped via IsBaseCurrency, and the real Money column is kept', async () => {
+  // LIVE-MEASURED on stock `opportunity`:
+  //   estimatedvalue       IsBaseCurrency=false IsValidForCreate=true
+  //   estimatedvalue_base  IsBaseCurrency=TRUE  IsValidForCreate=false
+  const e = entityFromMetadata({
+    primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { SchemaName: 'cfo_name', LogicalName: 'cfo_name', AttributeType: 'String', IsCustomAttribute: true, IsLogical: false, AttributeOf: null },
+      { SchemaName: 'cfo_budget', LogicalName: 'cfo_budget', AttributeType: 'Money', IsCustomAttribute: true, IsLogical: false, AttributeOf: null },
+      { SchemaName: 'cfo_budget_base', LogicalName: 'cfo_budget_base', AttributeType: 'Money', IsCustomAttribute: true, IsLogical: false, AttributeOf: null, IsBaseCurrency: true },
+    ],
+  }, 'cfo_rtproject');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget'],
+    `the base-currency twin must not be emitted as an authored column; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
+});
+
+// The capability flag is NOT a substitute for IsBaseCurrency. This spec deliberately supports
+// authored columns with `isValidForCreate: false` (app-spec-schema.md), so filtering on it turns a
+// round-trip into a DELETION of a legitimately read-only column. Live-measured counter-example:
+// stock `opportunity.totalamount` has IsValidForCreate=false and IsBaseCurrency=false.
+test('#574 follow-up: a real column that is merely NOT CREATABLE is kept, not mistaken for a generated twin', async () => {
+  const e = entityFromMetadata({
+    primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { SchemaName: 'cfo_name', LogicalName: 'cfo_name', AttributeType: 'String', IsCustomAttribute: true },
+      { SchemaName: 'cfo_rollup', LogicalName: 'cfo_rollup', AttributeType: 'Money', IsCustomAttribute: true, IsValidForCreate: false, IsBaseCurrency: false },
+    ],
+  }, 'cfo_rtproject');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_rollup'],
+    'a read-only authored column must survive a download');
+});
+
+test('#574 follow-up: an attribute whose IsBaseCurrency could not be read is KEPT, not dropped', async () => {
+  // Same fail-open direction as every other rule: when the Money cast read fails, no attribute
+  // carries IsBaseCurrency, and "we could not look" must never become a column deletion.
+  const e = entityFromMetadata({
+    primaryNameAttribute: 'cfo_name',
+    attributes: [
+      { SchemaName: 'cfo_name', LogicalName: 'cfo_name', AttributeType: 'String', IsCustomAttribute: true },
+      { SchemaName: 'cfo_budget', LogicalName: 'cfo_budget', AttributeType: 'Money', IsCustomAttribute: true },
+    ],
+  }, 'cfo_rtproject');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget']);
+});
+
+test('#574 follow-up: IsBaseCurrency is read through the Money CAST and drops the twin on the REAL read path', async () => {
+  // IsBaseCurrency lives on MoneyAttributeMetadata, not the base attribute type, so it needs its own
+  // cast read. Dropping that read silently re-enables the leak.
+  let castRequested = false;
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'cfo_rtproject', displayName: 'RT Project', primaryNameAttribute: 'cfo_name',
+      attributes: [
+        { logicalName: 'cfo_budget', attributeType: 'Money', IsCustomAttribute: true },
+        { logicalName: 'cfo_budget_base', attributeType: 'Money', IsCustomAttribute: true },
+      ],
+    }),
+    queryRecords: async (set) => { throw new Error(`queryRecords must not be used for metadata paths (got \u0027${set}\u0027)`); },
+    dataverse: {
+      get: async (url) => {
+        if (/MoneyAttributeMetadata/.test(url)) {
+          castRequested = true;
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'cfo_budget', IsBaseCurrency: false },
+            { LogicalName: 'cfo_budget_base', IsBaseCurrency: true },
+          ] } };
+        }
+        if (/\/Attributes\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'cfo_budget', IsLogical: false, AttributeOf: null },
+            { LogicalName: 'cfo_budget_base', IsLogical: false, AttributeOf: null },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: {} };
+      },
+    },
+  };
+  const meta = await readEntityWithDescriptions(sdk, 'cfo_rtproject');
+  assert.ok(castRequested, 'the Money cast read must be issued');
+  const e = entityFromMetadata(meta, 'cfo_rtproject');
+  assert.deepStrictEqual(e.columns.map((c) => c.schemaName), ['cfo_budget'],
+    `the base-currency twin must not survive the real read path; got ${JSON.stringify(e.columns.map((c) => c.schemaName))}`);
 });

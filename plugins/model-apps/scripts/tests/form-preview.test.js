@@ -88,3 +88,70 @@ test('renderFormWireframe shows multi-tab forms, truncates wide labels, and fall
   assert.match(w, /\[text area\]/, 'Memo columns keep their multiline widget hint');
   assert.match(w, /new_missinglookupid\s+\[lookup\]/, 'unknown fields are treated as relationship lookups');
 });
+
+test('the wireframe shows a multi-column tab as columns, and a collapsed tab as collapsed', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Main', columns: [
+      { width: '65%', sections: [{ name: 'a', label: 'Left', columns: 1, fields: ['new_status'] }] },
+      { width: '35%', sections: [{ name: 'b', label: 'Right', columns: 1, fields: ['new_cost'] }] },
+    ] },
+    { name: 't2', label: 'Extra', expanded: false, sections: [{ name: 'c', label: 'More', columns: 1, fields: ['new_number'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  // The wireframe IS the approval gate: showing two form-columns stacked as one, or a collapsed
+  // tab as open, promises a layout the build does not deploy.
+  assert.match(out, /column 1 of 2.*65%/, `multi-column split not shown:\n${out}`);
+  assert.match(out, /column 2 of 2.*35%/);
+  assert.match(out, /Extra.*\(collapsed\)/, `collapsed state not shown:\n${out}`);
+});
+
+// The wireframe IS the layout approval gate, so anything it omits is something the user approves
+// without seeing. Two states were invisible: a hidden tab when it is the ONLY tab (the banner was
+// gated on tab count), and a section whose heading Dataverse will not render at all.
+test('the wireframe shows a hidden single tab, and a showLabel:false section as having no heading', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Only', visible: false,
+      sections: [{ name: 'a', label: 'Suppressed Heading', showLabel: false, columns: 1, fields: ['new_status'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  assert.match(out, /\(hidden\)/, `a hidden tab must be shown even as the only tab:\n${out}`);
+  assert.ok(!/Suppressed Heading/.test(out), `a showLabel:false section must not promise a heading:\n${out}`);
+  assert.match(out, /no heading/, 'and the preview should say so explicitly');
+});
+
+// The same hole as the hidden-single-tab case above, reached through the OTHER state flag: the
+// banner was gated on `tabLabels.length > 1 || tab.visible === false`, so a lone COLLAPSED tab
+// rendered no banner at all and previewed exactly like an ordinary open one — even though the
+// comment above the line said collapsed state must be shown because this is the approval gate.
+test('the wireframe shows a collapsed tab even when it is the only tab', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Only', expanded: false,
+      sections: [{ name: 'a', label: 'Details', columns: 1, fields: ['new_status'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  assert.match(out, /\(collapsed\)/, `a collapsed tab must be shown even as the only tab:\n${out}`);
+  assert.match(out, /▸/, 'and it must render with the collapsed marker, not the open one');
+});
+
+// The negative half of the rule: a lone tab in its DEFAULT state still gets no banner, so the
+// common case stays uncluttered. Without this, "always show the banner" would pass the two tests
+// above while making every single-tab wireframe noisier.
+test('the wireframe still omits the banner for a single tab in its default state', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Only', sections: [{ name: 'a', label: 'Details', columns: 1, fields: ['new_status'] }] },
+  ] }];
+  const out = renderFormWireframe(s, s.forms[0]);
+  assert.ok(!/▾ Only/.test(out), `an ordinary single tab needs no state banner:\n${out}`);
+});
+
+test('a single-column tab shows no column banner (the common case stays clean)', () => {
+  const s = spec();
+  s.forms = [{ entity: 'new_wo', name: 'WO', layout: 'explicit', tabs: [
+    { name: 't1', label: 'Main', sections: [{ name: 'a', label: 'Only', columns: 1, fields: ['new_status'] }] },
+  ] }];
+  assert.doesNotMatch(renderFormWireframe(s, s.forms[0]), /column 1 of/);
+});

@@ -234,6 +234,18 @@ agent later inspects an app it did not build — to extend it, debug it, or answ
 Good: `"Severity 1-5; drives the escalation rule and the SLA clock."`
 Weak: `"The priority column."` (restates the name and adds nothing)
 
+**`app.description` additionally has to ROUTE.** It is the one field an orchestrator reads to decide
+whether *this* app is the right place to send a request, and there is no separate "AI description"
+field — the SDK's app surface has nowhere to put one, so anything extra would be silently dropped.
+Write the routing signal into `app.description` itself: who the app is for, the tasks it covers,
+what it deliberately **excludes**, and — when two apps expose the same tables — how to tell them
+apart. Sibling apps over the same data are precisely where a purpose-only description fails.
+
+Good: `"Project-manager and portfolio work: planning projects, assigning and reprioritizing work,
+and managing sprints, budgets, risks and releases. Prefer the My Work app when the request is about
+the signed-in contributor's own assigned items."`
+Weak: `"An app for managing projects."` (no persona, no scope boundary, nothing to disambiguate)
+
 **Rules:** must be a non-empty string, max 2000 characters (the Dataverse ceiling — the platform
 truncates silently past it, so it is rejected at author time instead). Omit the field entirely rather
 than setting `""`; every write site omits an absent description, so **a rebuild never blanks one a
@@ -480,6 +492,24 @@ run the lint, so an unlinted spec hits the failure at build time instead).
   the junction. Sample rows then bind **both** parents via `$parents` (see sampleData). This is the
   recommended pattern for "Technician ↔ Work Order with a Role".
 
+**What a download reconstructs.** `download-model-app.js` rebuilds `relationships[]` from live
+metadata, keeping the lookup's deployed casing (`new_CustomerId`, not `new_customerid`) and its
+label. It emits an explicit `schemaName` only when the deployed name differs from the generated
+default, so a rebuild into the **same** environment matches the existing relationship instead of
+creating a second one beside it. Three cases it **cannot** express are reported by name and reason
+rather than silently dropped:
+- a **polymorphic** lookup — one column targeting several tables (Dataverse surfaces it as several
+  relationships sharing one lookup attribute), where `relationships[]` declares exactly one
+  `referenced` table per lookup;
+- a parent that is a **custom table the app does not include**, which a rebuild target would not
+  have (a bridge to a *standard* table like `systemuser`/`account` is kept — every org has one);
+- an **N:N whose partner table is outside the app**.
+
+A polymorphic lookup's **shadow attributes** (`<lookup>name`, `<lookup>yominame`) are excluded from
+`columns[]` along with it, so a rebuild does not gain invented Text columns where the lookup used to
+be. Every lookup has shadows; a polymorphic one's are physically stored rather than logical, which is
+why they need naming here at all.
+
 ## views[]
 ```jsonc
 { "entity": "new_ticket", "name": "Active Tickets", "columns": ["new_subject","new_priority"],
@@ -537,6 +567,19 @@ run the lint, so an unlinted spec hits the failure at build time instead).
   "tabs": [ { "label": "General", "sections": [
     { "label": "Details", "columns": 2, "fields": ["new_name","new_budget","new_status"] } ] } ] }
 
+// explicit layout, richer: multi-column tabs, per-cell spans, visibility
+{ "entity": "new_project", "type": "main", "name": "Project",
+  "tabs": [
+    { "name": "tab_delivery", "label": "Delivery", "expanded": true, "columns": [
+      { "width": "65%", "sections": [
+        { "name": "sec_scope", "label": "Scope", "columns": 2, "fields": [
+          { "name": "new_summary", "colspan": 2 },     // span the whole 2-column section
+          "new_startdate", "new_targetdate" ] } ] },
+      { "width": "35%", "sections": [
+        { "name": "sec_status", "label": "Status", "columns": 1, "fields": ["new_status","new_owner"] } ] } ] },
+    { "name": "tab_audit", "label": "Audit", "expanded": false,
+      "sections": [ { "name": "sec_audit", "label": "Audit", "columns": 2, "fields": ["createdon","modifiedon"] } ] } ] }
+
 // per-field control options: read-only, hidden, and targeted positioning
 { "entity": "new_workitem", "name": "Work Item", "layout": "auto",
   "fieldOptions": {
@@ -589,6 +632,12 @@ run the lint, so an unlinted spec hits the failure at build time instead).
   default and only ever applies to a table THIS build owns (a custom, publisher-prefixed, non-`existing`
   table); it never touches a reused/system table. Teardown reactivates the stock form before deleting
   ours, so a torn-down table is left clean.
+- **`isDefault`** *(optional, boolean, Main forms only)* — which Main form the table **opens with**.
+  Exactly one Main form per table may set it; the fallback is the first Main form in spec order, so
+  selection is order-independent either way (it is applied once, after every form exists, rather than
+  each form racing to promote itself). A promotion the environment refuses is reported as a warning
+  and fails `--verify`, which proves the deployed `systemform.isdefault` independently — so a build
+  can no longer record a default it did not actually set.
 - **Form resolution is by `(entity, name, formType)`** — a Dataverse form name is unique only per
   `(entity, type)`, so a table's auto-created **Main**, **Quick View**, and **Card** forms can all be
   named "Information" without colliding. A `formType:"Main"` edit reconciles **only** the Main form;
@@ -605,6 +654,77 @@ run the lint, so an unlinted spec hits the failure at build time instead).
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
   The build fetches the pushed form, injects the handlers, then publishes it.
+
+### Explicit layout — tabs, form-columns, sections
+
+| Level | Key | Meaning |
+|---|---|---|
+| tab | `name` | Stable identity. Emitted as `tab_<i>` when omitted — see *editing an existing form* below. |
+| tab | `label` | Tab title. |
+| tab | `expanded` | `false` collapses the tab on open (default `true`). |
+| tab | `visible` | `false` hides the tab (default `true`). |
+| tab | `sections[]` | Shorthand for **one full-width form-column**. |
+| tab | `columns[]` | The multi-column form: each entry is `{ "width": "60%", "sections": [...] }`. |
+| form-column | `width` | Percentage string (`"60%"`). Omitted widths split evenly (3 columns → 34/33/33). |
+| section | `name` | Stable identity, `section_<tab>_<i>` when omitted. |
+| section | `label`, `showLabel`, `visible` | Section heading, whether it renders, whether the section shows. |
+| section | `columns` | `1`–`4` grid columns. |
+| section | `fields[]` | Column logical names, or `{ "name": …, … }` entries. |
+| field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it — the clamp reaches the deployed cell, not just the row packing. `rowspan` is valid only on the **last** field of a section (see below). |
+
+A tab declares **either** `sections` **or** `columns`, never both. `columns` on a **tab** is the list
+of form-columns; `columns` on a **section** is its 1–4 grid width — a number on a tab is rejected
+rather than silently discarded. Any other key is **rejected** — including `showLabel`/`labelPosition`
+on a tab and `labelPosition`/`locked` on a section, which the SDK's serializer silently discards, so
+accepting them would promise a layout Dataverse never renders.
+
+**Names are identity, and a field is placed once per form.** Two tabs — or two sections — on one
+form may not share a `name`, and a column may not be placed twice, whether in two different sections
+or twice in the same one (matching is case-insensitive, and applies to both the string and the
+`{ "name": … }` entry shape). All three are rejected at author time.
+
+The reason is that create and rebuild would otherwise disagree. The compiler emits **one cell per
+entry**, so a fresh build deploys a duplicated field twice, while every reconcile path resolves a
+field to its **first** placement — the second cell would appear on the initial create and then vanish
+on the next build of the same spec. Duplicate container names fail the same way: `name` is what the
+build matches a deployed tab or section by, so two declarations sharing one would target the same
+live container. A second form on the same table may of course place the same column — identity is
+per form.
+
+**`rowspan` must be the last field in its section.** A cell that spans down reserves its column in
+the rows beneath it, and the cells of the following row fill the section left to right — so a field
+declared after a spanning one would land in the reserved slot. Every stock Dataverse form that uses
+`rowspan` puts it on the last cell of its section, so that is the shape this plugin emits.
+
+This is a **compiler limitation, not a platform one.** Positioning a field beside a vertical span
+requires emitting an empty *spacer* cell to occupy the reserved slot, which the SDK serializes
+correctly; the compiler does not emit one yet. The restriction can be lifted once it does — tracked
+in [#581](https://github.com/microsoft/power-platform-skills/issues/581).
+
+**Editing an existing form.** An explicit layout is converged onto the deployed form rather than
+flattened into its first section: missing tabs, form-columns and sections are **created**, a
+section's `columns`/`label`/`showLabel`/`visible` are **updated in place**, and a field sitting in
+the wrong section is **moved** (never duplicated — the cell keeps its id and any control state a
+maker edited). Containers are matched by `name`, then `label`, then position, so a form built by an
+earlier `auto` layout — or by hand in Maker — converges instead of gaining a duplicate tab. Nothing
+is renamed, because form scripts and business rules can reference a section by name.
+
+Two rules keep that matching from claiming the wrong container. An index an earlier tab or section
+already matched is **not reused**, because an unlabeled container compiles to a default label
+(`General` for a tab, `Details` for a section) and several of them would otherwise all match the
+first one. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
+matched only by `name`: a label or a position is not evidence about what a container *is*, and
+matching one positionally would relabel a sub-grid and place fields in the row holding its grid.
+
+⚠ Containers are only ever added or updated, never removed. Moving a section between form-columns or
+tabs while letting its `name` be generated therefore leaves the original behind as an **empty
+section with the same label** — generated names encode position (`section_<tab>_<column>_<index>`),
+so the moved section is a different identity. Give a section an explicit `name` when you intend to
+move it, and delete a section you no longer want in Maker.
+
+⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
+layout does not list is removed (never the primary field). Set `"prune": false` to restyle or
+reorder a subset without re-declaring every other field.
 
 ### Per-field control options — `readOnly`, `hidden`, `after`
 

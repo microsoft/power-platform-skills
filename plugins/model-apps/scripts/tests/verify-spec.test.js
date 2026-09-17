@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { verifySpec, hasElement } = require('../lib/verify-spec.js');
+const { verifySpec, hasElement, parseFetchXml } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
 
@@ -471,6 +471,276 @@ test('verifySpec: view-columns check is SKIPPED when the reader gives no layoutx
   assert.ok(!r.checks.some((c) => c.kind === 'view-columns'), 'no layoutxml -> no view-columns check (best-effort)');
 });
 
+// Sort PRECEDENCE decides what a view returns, so proving each authored order merely EXISTS
+// somewhere is not proof: a deployed [name asc, createdon desc] would satisfy an authored
+// [createdon desc, name asc] under a per-order membership test.
+test('verifySpec: view-sort fails when the deployed sort has the authored orders in the WRONG precedence', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, entities: [], charts: [], appShell: { areas: [] }, forms: [],
+    views: [{ entity: 'new_ticket', name: 'Ordered', columns: ['new_name'], activeOnly: false,
+      sort: [{ attr: 'createdon', dir: 'desc' }, { attr: 'new_name', dir: 'asc' }] }] };
+  const fetchxml = '<fetch><entity name="new_ticket">'
+    + '<order attribute="new_name" descending="false"/>'
+    + '<order attribute="createdon" descending="true"/>'
+    + '</entity></fetch>';
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery'
+      ? [{ savedqueryid: 'v1', layoutxml: '<grid><row><cell name="new_name"/></row></grid>', fetchxml }]
+      : []),
+  };
+
+  const r = await verifySpec(spec, read);
+  const c = r.checks.find((x) => x.kind === 'view-sort');
+  assert.ok(c, 'a view-sort check must be emitted');
+  assert.strictEqual(c.present, false, 'reversed precedence must not pass');
+  assert.match(c.detail, /precedence/i);
+});
+
+test('verifySpec: view-sort passes when the authored orders keep their relative order among extras', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, entities: [], charts: [], appShell: { areas: [] }, forms: [],
+    views: [{ entity: 'new_ticket', name: 'Ordered', columns: ['new_name'], activeOnly: false,
+      sort: [{ attr: 'createdon', dir: 'desc' }, { attr: 'new_name', dir: 'asc' }] }] };
+  // A platform-owned order appended after the authored ones must still pass (subset semantics).
+  const fetchxml = '<fetch><entity name="new_ticket">'
+    + '<order attribute="createdon" descending="true"/>'
+    + '<order attribute="new_name" descending="false"/>'
+    + '<order attribute="modifiedon" descending="true"/>'
+    + '</entity></fetch>';
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery'
+      ? [{ savedqueryid: 'v1', layoutxml: '<grid><row><cell name="new_name"/></row></grid>', fetchxml }]
+      : []),
+  };
+
+  const r = await verifySpec(spec, read);
+  const c = r.checks.find((x) => x.kind === 'view-sort');
+  assert.ok(c && c.present === true, `authored precedence preserved must pass; got ${JSON.stringify(c)}`);
+});
+
+test('verifySpec: default-form — the selected Main form must read back systemform.isdefault=true', async () => {
+  // The owning table must be declared, and declared as one this solution OWNS: the build only
+  // promotes a default form for its own custom tables, so verify only asserts it for those.
+  const spec = { solution: { publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', columns: [] }], views: [], charts: [], appShell: { areas: [] },
+    forms: [
+      { entity: 'new_ticket', name: 'Agent Form', formType: 'Main' },
+      { entity: 'new_ticket', name: 'Manager Form', formType: 'Main', isDefault: true },
+    ] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (/name eq 'Agent Form'/.test(opts.filter)) return [{ formid: 'agent-form-id' }];
+      if (/name eq 'Manager Form'/.test(opts.filter)) return [{ formid: 'manager-form-id' }];
+      return [];
+    },
+    formDefaultState: async (entity, formId) => ({ isDefault: formId === 'agent-form-id' }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(r.checks.some((c) => c.kind === 'form' && c.name === 'Manager Form' && c.present), 'the selected form exists');
+  const c = r.checks.find((x) => x.kind === 'form-default' && x.name === 'new_ticket.Manager Form');
+  assert.ok(c && c.present === false, 'the actual isdefault flag, not form existence, decides the default-form check');
+  assert.match(c.detail, /isdefault is false/);
+  assert.strictEqual(r.ok, false);
+});
+
+// The build refuses to re-point the default form of a reused or stock table (sdk-build.js
+// `isOwnCustomTable`) because that is an environment-wide side effect on a table the spec does not
+// own. A verifier that asserts `isdefault` anyway makes --verify permanently unsatisfiable: the
+// author is told the build failed to do something it deliberately never attempts.
+test('verifySpec: no default-form check is emitted for a reused or stock table the build never promotes', async () => {
+  const spec = { solution: { publisherPrefix: 'new' },
+    entities: [{ schemaName: 'account', existing: true, columns: [] }, { schemaName: 'new_ticket', columns: [] }],
+    views: [], charts: [], appShell: { areas: [] },
+    forms: [
+      { entity: 'account', name: 'Account Main', formType: 'Main' },
+      { entity: 'new_ticket', name: 'Ticket Main', formType: 'Main' },
+    ] };
+  const read = {
+    findTable: async (l) => ({ logicalName: l }), findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (/name eq 'Account Main'/.test(opts.filter)) return [{ formid: 'account-form-id' }];
+      if (/name eq 'Ticket Main'/.test(opts.filter)) return [{ formid: 'ticket-form-id' }];
+      return [];
+    },
+    // Dataverse's own stock Account form holds the default slot, so the reused table reads false.
+    formDefaultState: async (entity, formId) => ({ isDefault: formId === 'ticket-form-id' }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(!r.checks.some((c) => c.kind === 'form-default' && /^account\./.test(c.name)),
+    'a reused table must not be asserted to hold the default form');
+  assert.ok(r.checks.some((c) => c.kind === 'form-default' && c.name === 'new_ticket.Ticket Main' && c.present),
+    "the solution's own custom table is still checked");
+});
+
+test('verifySpec: default-form check is reader-gated for existence-only callers', async () => {  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
+    forms: [{ entity: 'new_ticket', name: 'Agent Form', formType: 'Main', isDefault: true }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'agent-form-id' }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(r.checks.some((c) => c.kind === 'form' && c.present));
+  assert.ok(!r.checks.some((c) => c.kind === 'form-default'), 'no formDefaultState reader -> no content check');
+  assert.strictEqual(r.ok, true);
+});
+
+test('verifySpec: view-filters — every authored condition must be present in deployed fetchxml', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'My Open', columns: ['new_subject'], activeOnly: true,
+      filters: [
+        { attr: 'ownerid', op: 'eq-userid' },
+        { attr: 'new_priority', op: 'not-in', values: ['100000000'] },
+        { attr: 'modifiedon', op: 'this-week' },
+      ],
+      sort: [{ attr: 'createdon', dir: 'desc' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: '<fetch><entity name="new_ticket"><attribute name="new_subject"/>' +
+        '<filter type="and"><condition attribute="statecode" operator="eq" value="0"/>' +
+        '<condition attribute="ownerid" operator="eq-userid"/>' +
+        '<condition attribute="modifiedon" operator="this-week"/>' +
+        '<filter type="and"><condition attribute="new_priority" operator="ne" value="100000000"/></filter>' +
+        '</filter><order attribute="createdon" descending="true"/></entity></fetch>',
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(r.checks.some((c) => c.kind === 'view-filters' && c.present), JSON.stringify(r.missing));
+  assert.ok(r.checks.some((c) => c.kind === 'view-sort' && c.present), JSON.stringify(r.missing));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+});
+
+test('verifySpec: view-filters — value-less operators missing value are correct, missing operator is a failure', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'This Week', columns: ['new_subject'], activeOnly: false,
+      filters: [{ attr: 'modifiedon', op: 'this-week' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="createdon" operator="this-week"/></filter></entity></fetch>',
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'view-filters');
+  assert.ok(c && c.present === false, 'omitting value is fine; the wrong attribute is not');
+  assert.match(c.detail, /modifiedon this-week/);
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: view-sort — a missing authored order fails without demanding FetchXML byte equality', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'Sorted', columns: ['new_subject'], activeOnly: false,
+      sort: [{ attr: 'createdon', dir: 'desc' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="ownerid" operator="eq-userid"/></filter><order attribute="new_subject" descending="false"/></entity></fetch>',
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.ok(!r.checks.some((c) => c.kind === 'view-filters'), 'platform-added undeclared filters are tolerated');
+  const c = r.checks.find((x) => x.kind === 'view-sort');
+  assert.ok(c && c.present === false);
+  assert.match(c.detail, /createdon desc/);
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: view-filters fail closed when the reader supplied an unreadable fetchxml value', async () => {
+  const spec = { entities: [], charts: [], forms: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'Mine', columns: ['new_subject'], activeOnly: false,
+      filters: [{ attr: 'ownerid', op: 'eq-userid' }] }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'savedquery' ? [{
+      savedqueryid: 'v1',
+      layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+      fetchxml: null,
+    }] : []),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'view-filters');
+  assert.ok(c && c.present === false);
+  assert.match(c.detail, /could not read deployed savedquery.fetchxml/);
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: app-role association — app access personas must be linked to the app module', async () => {
+  const spec = {
+    entities: [{ schemaName: 'new_ticket', columns: [] }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    personas: [
+      { persona: 'Agent', jobs: [{ name: 'work', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+      { persona: 'Auditor', appAccess: false, jobs: [{ name: 'audit', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+    ],
+  };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_ticket' }),
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, opts) => {
+      if (set === 'businessunit') return [{ businessunitid: '00000000-0000-0000-0000-000000000001' }];
+      if (set === 'role' && /Agent/.test(opts.filter)) return [{ roleid: 'role-agent', description: SDK_ROLE_MARKER, ismanaged: false }];
+      if (set === 'role' && /Auditor/.test(opts.filter)) return [{ roleid: 'role-auditor', description: SDK_ROLE_MARKER, ismanaged: false }];
+      return [];
+    },
+    appRoleIds: async () => ({ ok: true, roleIds: ['role-other'] }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'app-role' && x.name === 'Agent');
+  assert.ok(c && c.present === false, 'existing role is not enough; the actual association row must exist');
+  assert.ok(!r.checks.some((x) => x.kind === 'app-role' && x.name === 'Auditor'), 'appAccess:false personas should not require an app association');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: app-role association read failures fail closed', async () => {
+  const spec = {
+    entities: [{ schemaName: 'new_ticket', columns: [] }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    personas: [{ persona: 'Agent', jobs: [{ name: 'work', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] }],
+  };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_ticket' }),
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set) => (set === 'businessunit'
+      ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
+      : [{ roleid: 'role-agent', description: SDK_ROLE_MARKER, ismanaged: false }]),
+    appRoleIds: async () => ({ ok: false, reason: 'HTTP 403' }),
+  };
+
+  const r = await verifySpec(spec, read);
+
+  const c = r.checks.find((x) => x.kind === 'app-role');
+  assert.ok(c && c.present === false);
+  assert.match(c.detail, /could not read.*403/);
+  assert.strictEqual(r.ok, false);
+});
+
 test('verifySpec: relationship existence — a declared relationship absent from the child metadata FAILS (F5)', async () => {
   const spec = { entities: [{ schemaName: 'new_o' }], views: [], charts: [], forms: [], appShell: { areas: [] },
     relationships: [{ type: 'OneToMany', referenced: 'new_customer', referencing: 'new_o', lookup: { schemaName: 'new_CustomerId' } }] };
@@ -886,4 +1156,59 @@ test('app table membership: only SITEMAP-visible tables are required to be compo
   const res = await verifySpec(spec, membershipRead(async () => ({ ok: true, present: ['new_order', 'new_line'] })));
   assert.strictEqual(checkFor(res, 'new_audit'), undefined, 'a table with no subarea must not be required');
   assert.ok(res.checks.filter((c) => c.kind === 'app-table-component').every((c) => c.present));
+});
+
+// --- parseFetchXml scoping and multi-operand conditions ---------------------------------------
+//
+// This parser is a verifier ORACLE, so a false PASS is its worst failure: it would report that a
+// deployed view filters the way the spec says when it does not.
+
+// FetchXML puts a joined table's predicates inside <link-entity>. Collecting conditions from the
+// whole document let a condition on the JOINED table satisfy an authored base-entity condition by
+// attribute/operator coincidence — the two read identically (`statecode eq 0`) but constrain
+// different tables.
+test('parseFetchXml ignores conditions and orders that belong to a link-entity', () => {
+  const xml = `<fetch><entity name="account">`
+    + `<link-entity name="contact"><filter><condition attribute="statecode" operator="eq" value="0"/></filter>`
+    + `<order attribute="fullname"/></link-entity></entity></fetch>`;
+  const r = parseFetchXml(xml);
+  assert.deepStrictEqual(r.conditions, [], 'a linked table predicate is not the base entity one');
+  assert.deepStrictEqual(r.orders, [], 'and a linked table sort is not the base entity one either');
+});
+
+// link-entities NEST, and a join used only for projection is self-closing. A non-greedy regex would
+// stop at the first </link-entity> and let the outer subtree leak back in, so the scanner tracks
+// depth. Base-entity content on BOTH sides of the subtree has to survive.
+test('parseFetchXml keeps base-entity content around nested and self-closing link-entities', () => {
+  const nested = `<fetch><entity name="a"><condition attribute="base" operator="eq" value="1"/>`
+    + `<link-entity name="b"><link-entity name="c"><condition attribute="deep" operator="eq" value="9"/>`
+    + `</link-entity></link-entity><order attribute="baseorder"/></entity></fetch>`;
+  const n = parseFetchXml(nested);
+  assert.deepStrictEqual(n.conditions.map((c) => c.attribute), ['base'], 'a doubly-nested condition must not leak');
+  assert.deepStrictEqual(n.orders.map((o) => o.attribute), ['baseorder'], 'the base order after the subtree must survive');
+
+  const selfClosing = `<fetch><entity name="a"><link-entity name="b" from="x" to="y" />`
+    + `<condition attribute="base" operator="eq" value="1"/><order attribute="o1"/></entity></fetch>`;
+  const s = parseFetchXml(selfClosing);
+  assert.deepStrictEqual(s.conditions.map((c) => c.attribute), ['base'], 'a self-closing join opens no subtree');
+  assert.deepStrictEqual(s.orders.map((o) => o.attribute), ['o1']);
+});
+
+// `in`/`not-in`/`between` serialize their operands as sibling <value> elements. Reading only the
+// first made an authored `in 2` unprovable against a view that really does filter on it.
+test('parseFetchXml reads every <value> of a multi-operand condition', () => {
+  const xml = `<fetch><entity name="a"><filter><condition attribute="statuscode" operator="in">`
+    + `<value>1</value><value>2</value><value>3</value></condition></filter></entity></fetch>`;
+  assert.deepStrictEqual(parseFetchXml(xml).conditions.map((c) => c.value), ['1', '2', '3']);
+});
+
+// The single-operand shape (a `value` ATTRIBUTE) still wins over any child element, and an operator
+// that takes no operand at all stays `undefined` — that is how conditionMatches knows the authored
+// claim is just attribute+operator.
+test('parseFetchXml keeps the value attribute authoritative, and no-operand operators undefined', () => {
+  const attrWins = `<fetch><entity name="a"><condition attribute="x" operator="eq" value="7"><value>ignored</value></condition></entity></fetch>`;
+  assert.deepStrictEqual(parseFetchXml(attrWins).conditions.map((c) => c.value), ['7']);
+
+  const noOperand = `<fetch><entity name="a"><condition attribute="ownerid" operator="eq-userid"/></entity></fetch>`;
+  assert.deepStrictEqual(parseFetchXml(noOperand).conditions, [{ attribute: 'ownerid', operator: 'eq-userid', value: undefined }]);
 });
