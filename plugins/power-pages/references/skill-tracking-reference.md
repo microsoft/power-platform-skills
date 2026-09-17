@@ -27,6 +27,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | Skill | PascalCase (`--skillName`) | Setting Name |
 |-------|---------------------------|--------------|
 | create-site | CreateSite | Site/AI/Skills/CreateSite |
+| sharepoint-to-power-pages | SharePointToPowerPages | Site/AI/Skills/SharePointToPowerPages |
 | deploy-site | DeploySite | Site/AI/Skills/DeploySite |
 | setup-datamodel | SetupDatamodel | Site/AI/Skills/SetupDatamodel |
 | add-sample-data | AddSampleData | Site/AI/Skills/AddSampleData |

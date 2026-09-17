@@ -48,3 +48,17 @@ test('renderTemplate encodes each placeholder for its declared output context', 
   const nonce = html.match(/<script nonce="([^"]+)">/)[1];
   assert.match(nonce, /^[A-Za-z0-9+/]{22}==$/);
 });
+
+test('renderTemplate can suppress its staging-path status for wrapper renderers', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'render-template-status-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const templatePath = path.join(tempDir, 'template.html');
+  fs.writeFileSync(templatePath, '<title>__TITLE__</title>');
+  const log = t.mock.method(console, 'log', () => {});
+  const options = { templatePath, dataObject: { TITLE: 'Report' }, requiredKeys: ['TITLE'] };
+  renderTemplate({ ...options, outputPath: path.join(tempDir, 'quiet.html'), emitStatus: false });
+  assert.equal(log.mock.calls.length, 0);
+  renderTemplate({ ...options, outputPath: path.join(tempDir, 'default.html') });
+  assert.equal(log.mock.calls.length, 1);
+  assert.equal(JSON.parse(log.mock.calls[0].arguments[0]).output, path.join(tempDir, 'default.html'));
+});

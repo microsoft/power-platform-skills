@@ -57,6 +57,8 @@ skills/
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
     references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
     scripts/validate-site.js   ← Node script validating generated sites
+  sharepoint-to-power-pages/
+    SKILL.md                   ← Suitability assessment, scoped SharePoint intake, React preview, and approved backend integration
   deploy-site/
     SKILL.md                   ← Deployment skill definition
   setup-datamodel/
@@ -144,6 +146,10 @@ Auto-triggered by the main conversation when relevant:
 
 User-invocable via `/power-pages:<skill-name>`:
 
+- `sharepoint-to-power-pages`: For SharePoint portal assessment or authenticated React portal creation, use [`skills/sharepoint-to-power-pages/SKILL.md`](skills/sharepoint-to-power-pages/SKILL.md).
+  It owns intake, early live-preview launch, HTML records, and approvals, then delegates end-of-build deployment and conditional activation to the existing skills.
+  Source discovery and backend integration use its branch-specific references.
+  Report changes must use `scripts/render-sharepoint-artifact.js`; read `references/sharepoint-artifacts.md` and `references/sharepoint-report-schema.md` before changing generation or update behavior.
 - `create-site`: 6-step workflow — gather requirements (including design direction), plan (with explicit scaffold prerequisites), scaffold from template, build pages/components/routing with design applied from the start using `skills/create-site/references/design-aesthetics.md` and live Playwright preview, review, deploy
 - `deploy-site`: 6-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, verify deployment (confirm `.powerpages-site` folder, commit, offer activation), handle blocked JS attachments
 - `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.

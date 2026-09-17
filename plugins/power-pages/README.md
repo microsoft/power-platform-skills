@@ -38,7 +38,8 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 35 skills that cover the full lifecycle of a Power Pages site - scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations.
+Each skill is invoked conversationally - just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -52,6 +53,33 @@ Scaffolds a complete code site from a framework template, applies your design di
 - Real images from Unsplash (no placeholders)
 - Live browser preview during development
 - Git commits at each milestone
+
+#### `/sharepoint-to-power-pages`
+
+> "Turn selected SharePoint content into a branded, sign-in-required portal for our external partners"
+
+First checks whether an external Power Pages site is the right fit, or whether SharePoint guest sharing, rules, Power Automate, or a static website would meet the need with less work.
+For a suitable scenario, gathers the content, audience, theme, identity, freshness, and project-folder requirements upfront.
+It immediately launches the React scaffold and shares the live-preview URL, then inspects the approved source and builds the website while that preview stays running.
+Currently supports authenticated external audiences only; anonymous and mixed public/private experiences are outside its scope.
+
+- Choose a new theme, supplied brand assets, or branding extracted from an authorized SharePoint site.
+- Records requirements, SharePoint findings, mappings, decisions, and progress as continuously updated HTML artifacts in the generated site's `docs/` folder, using the plugin's Power Pages report template and guarded renderer.
+- Leads each report with a self-contained summary, decisions and next actions; reconciles stale answers across reports and keeps detailed history in an expandable supporting record.
+- Inspects SharePoint only through the signed-in browser UI, without requiring application API scopes for discovery.
+- Opens SharePoint's sign-in page when needed and pauses for you to complete login and MFA in that same browser session.
+- Shows each page and component as it is built through hot reload, with source sign-in and report review kept in separate tabs.
+- Approve the exact lists, fields, records, document folders, and audiences before data is copied or exposed.
+- Import selected list data into Dataverse and use the Power Pages Web API with table permissions.
+- Keep documents in SharePoint, using document-location and parent-record permissions; custom SPA document transport requires runtime verification.
+- Keep local previews, private pilots, and external publication separate; a list import is not ongoing synchronization.
+- After you review the built site, offers deployment through `/deploy-site`; that skill offers `/activate-site` only when needed and reuses an already active site.
+
+The workflow reuses `/create-site` and the existing authentication, integration, and deployment skills.
+Some source access, list imports, and document-management setup require maker or administrator interaction.
+The referenced list importer is documented as preview, and the document-management guide does not define a public SPA transport API.
+The skill keeps those paths pilot-only unless current production support is established.
+Working artifacts remain local and outside the site build, with credentials and raw private content excluded.
 
 #### `/deploy-site`
 
@@ -466,6 +494,7 @@ The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAU
 A common end-to-end workflow looks like this:
 
 ```
+    /sharepoint-to-power-pages  →  Optional SharePoint entry point: assess fit, launch preview, build live, offer deploy/activation
 1.  /create-site            →  Scaffold + design + build pages
 2.  /deploy-site            →  Upload to Power Pages environment
 3.  /activate-site          →  Provision a public URL
@@ -485,6 +514,9 @@ A common end-to-end workflow looks like this:
 17. /setup-pipeline         →  Set up the Power Platform pipeline
 18. /deploy-pipeline        →  Promote through staging → production (run per stage)
 ```
+
+For a SharePoint-based portal, start with `/sharepoint-to-power-pages` instead of repeating `/create-site`.
+It coordinates the applicable steps and keeps external sharing behind explicit approval.
 
 > Steps 16–18 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
 
