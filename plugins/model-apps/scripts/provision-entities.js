@@ -30,13 +30,24 @@ async function makeSdk(env, input) {
     httpClient,
     solutionUniqueName: input.solution && input.solution.uniqueName,
   });
-  await sdk.initWorkspace();
-  const provision = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(provisionTempDir), instanceUrl: env, httpClient });
-  await provision.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });
   };
+  // `cleanup` is defined BEFORE the first fallible call and the initialization is guarded, because
+  // the caller's `finally { cleanup() }` only becomes reachable once this function RETURNS. An
+  // `initWorkspace` that fails would otherwise strand both temp directories for the life of the
+  // machine. The window has always existed, but it widened when `initWorkspace` became async: a
+  // rejected I/O promise is far more reachable than the sync throw it replaced.
+  let provision;
+  try {
+    await sdk.initWorkspace();
+    provision = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(provisionTempDir), instanceUrl: env, httpClient });
+    await provision.initWorkspace();
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
   return { sdk, provision, cleanup };
 }
 

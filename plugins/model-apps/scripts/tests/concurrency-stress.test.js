@@ -69,7 +69,9 @@ test('STRESS: 40 concurrent artifact mutations all survive in the shared manifes
   const { sdk, dir } = await freshSdk();
   const N = 40;
 
-  // Create first (createArtifact is synchronous), so the concurrent phase is pure async mutation.
+  // Create SEQUENTIALLY first, awaiting each, so the concurrent phase below is pure async mutation
+  // rather than a mix of creates and updates. (`createArtifact` became async in the injected-storage
+  // uptake; the await is what makes this setup ordered, not a claim about the SDK being sync.)
   const ids = [];
   for (let i = 0; i < N; i++) {
     ids.push((await sdk.createArtifact('view', { name: `View ${i}`, entityLogicalName: 'account', columns: [] })).id);

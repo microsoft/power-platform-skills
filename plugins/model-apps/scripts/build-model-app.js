@@ -70,10 +70,21 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
     // instances at different LCIDs would make every push of a fetched artifact fail.
     ...(languageCode ? { languageCode } : {}),
   });
-  await provisionSdk.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
+  // `cleanup` is defined BEFORE the fallible init and the init is guarded, because the caller's
+  // `finally { cleanup() }` only becomes reachable once this function RETURNS. An `initWorkspace`
+  // that fails would otherwise strand the temp directory for the life of the machine. The window
+  // has always existed, but it widened when `initWorkspace` became async: a rejected I/O promise is
+  // far more reachable than the sync throw it replaced. `workspaceDir` is deliberately NOT removed
+  // — it is the caller's durable workspace, not a throwaway.
+  try {
+    await provisionSdk.initWorkspace();
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
   // Only the two SDK instances and the cleanup are returned. The raw `httpClient` used to come back
   // with them so the caller could wire verify's role-privilege reader — that read had no SDK surface
   // and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request itself. The

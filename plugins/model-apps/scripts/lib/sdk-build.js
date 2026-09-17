@@ -2731,21 +2731,25 @@ async function runSdkBuild(spec, opts = {}) {
         // The condition tree is a nested object, so it goes on through the generic element surface
         // rather than the create payload — mirroring how the SDK's own workflow test authors one.
         await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
-        // The push CANNOT tell you a rule is wrong. A mis-shaped condition tree is MERGED onto the
-        // node, ignored by the serializer, and written as a rule with no clauses and no actions:
-        // HTTP 204, activated, and it never fires. That trap is pinned in sdk-uptake-contract.test.js
-        // ("a wrongly-shaped condition produces an EMPTY rule rather than erroring").
+        // The push USED to be unable to tell you a rule was wrong: a mis-shaped condition tree was
+        // MERGED onto the node, ignored by the serializer, and written as a rule with no clauses and
+        // no actions — HTTP 204, activated, and it never fired.
         //
-        // ⚠ The explicit validation call that used to sit HERE is gone, and its removal is a
-        // TIGHTENING rather than a loss of coverage. It invoked the SDK's old business-rule
-        // validator method, which no longer exists: the SDK now runs the designer's own
-        // completeness validator internally on EVERY save — create and update, Active and Draft —
-        // so an incomplete rule is refused by `pushArtifact` below instead of by an opt-in check.
+        // That trap is CLOSED at the source as of the injected-storage re-vendor. The SDK now runs
+        // the business-rule designer's own completeness validator internally on EVERY save — create
+        // and update, Active and Draft — so an incomplete or mis-shaped rule is REFUSED by
+        // `pushArtifact` below, naming the offending clause, and nothing reaches the wire.
+        // Measured and pinned in sdk-uptake-contract.test.js ("a wrongly-shaped condition is now
+        // REFUSED at push, closing the empty-rule trap"), which asserts both the refusal and that no
+        // request was made.
         //
-        // That is strictly stronger. The old call was best-effort by design (a bundle without the
-        // method must not block a build it cannot judge), so it silently degraded to NO validation
-        // whenever the vendored bundle predated it. Re-adding a defensive `typeof ... === 'function'`
-        // block would now be dead code that never runs and implies coverage living elsewhere.
+        // ⚠ The explicit validation call that used to sit HERE is therefore gone, and its removal is
+        // a TIGHTENING rather than a loss of coverage. It invoked the SDK's old business-rule
+        // validator method, which no longer exists. The old call was best-effort by design (a bundle
+        // without the method must not block a build it cannot judge), so it silently degraded to NO
+        // validation whenever the vendored bundle predated it. Re-adding a defensive
+        // `typeof ... === 'function'` block would now be dead code that never runs and implies
+        // coverage living elsewhere.
         //
         // NOTE: the method name is deliberately NOT written in call form anywhere in this file.
         // `sdk-surface-contract.test.js` scans engine source for `sdk.<method>(` and would read a
