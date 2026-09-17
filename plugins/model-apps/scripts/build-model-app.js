@@ -50,36 +50,44 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
-  const sdk = createMakerSdk({
-    workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
-    instanceUrl: env,
-    httpClient,
-    solutionUniqueName: spec.solution && spec.solution.uniqueName,
-    // #455: the App, Form and Dashboard adapters bake this in at construction, so it is the ONLY
-    // way to stop sitemap titles and FormXML labels being written at a hardcoded 1033. Omitted
-    // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
-    ...(languageCode ? { languageCode } : {}),
-  });
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const provisionSdk = createMakerSdk({
-    workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
-    instanceUrl: env,
-    httpClient,
-    // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
-    // language disagrees with the SDK performing it (for language-sensitive registrations), so two
-    // instances at different LCIDs would make every push of a fetched artifact fail.
-    ...(languageCode ? { languageCode } : {}),
-  });
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
-  // `cleanup` is defined BEFORE the fallible init and the init is guarded, because the caller's
-  // `finally { cleanup() }` only becomes reachable once this function RETURNS. An `initWorkspace`
-  // that fails would otherwise strand the temp directory for the life of the machine. The window
-  // has always existed, but it widened when `initWorkspace` became async: a rejected I/O promise is
-  // far more reachable than the sync throw it replaced. `workspaceDir` is deliberately NOT removed
-  // — it is the caller's durable workspace, not a throwaway.
+  // Everything fallible after the directory exists runs INSIDE this guard, because the caller's
+  // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
+  // throws before the return strands the throwaway workspace for the life of the machine.
+  //
+  // That deliberately includes the `createMakerSdk` CONSTRUCTORS, not just `initWorkspace`: the
+  // constructor now builds the injected-storage adapter (`createNodeWorkspaceStorage`), so it
+  // touches the filesystem and can fail on its own. Guarding only the init left both constructions
+  // outside the net. Matches provision-solution.js and ai-preflight.js, which already keep
+  // construction inside their protected region for this exact reason.
+  //
+  // `workspaceDir` is deliberately NOT removed — it is the caller's durable workspace, not a
+  // throwaway, so a failed run must leave it exactly as it found it.
+  let sdk;
+  let provisionSdk;
   try {
+    sdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
+      instanceUrl: env,
+      httpClient,
+      solutionUniqueName: spec.solution && spec.solution.uniqueName,
+      // #455: the App, Form and Dashboard adapters bake this in at construction, so it is the ONLY
+      // way to stop sitemap titles and FormXML labels being written at a hardcoded 1033. Omitted
+      // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
+      ...(languageCode ? { languageCode } : {}),
+    });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    provisionSdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
+      instanceUrl: env,
+      httpClient,
+      // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
+      // language disagrees with the SDK performing it (for language-sensitive registrations), so two
+      // instances at different LCIDs would make every push of a fetched artifact fail.
+      ...(languageCode ? { languageCode } : {}),
+    });
     await provisionSdk.initWorkspace();
   } catch (err) {
     cleanup();

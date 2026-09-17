@@ -24,23 +24,28 @@ async function makeSdk(env, input) {
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
   const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
-  const sdk = createMakerSdk({
-    workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
-    instanceUrl: env,
-    httpClient,
-    solutionUniqueName: input.solution && input.solution.uniqueName,
-  });
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });
   };
-  // `cleanup` is defined BEFORE the first fallible call and the initialization is guarded, because
-  // the caller's `finally { cleanup() }` only becomes reachable once this function RETURNS. An
-  // `initWorkspace` that fails would otherwise strand both temp directories for the life of the
-  // machine. The window has always existed, but it widened when `initWorkspace` became async: a
-  // rejected I/O promise is far more reachable than the sync throw it replaced.
+  // Everything fallible after the directories exist runs INSIDE this guard, because the caller's
+  // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
+  // throws before the return strands both temp directories for the life of the machine.
+  //
+  // That deliberately includes the `createMakerSdk` CONSTRUCTORS, not just `initWorkspace`: the
+  // constructor now builds the injected-storage adapter (`createNodeWorkspaceStorage`), so it
+  // touches the filesystem and can fail on its own. Guarding only the init left the first
+  // construction outside the net. Matches provision-solution.js and ai-preflight.js, which already
+  // keep construction inside their protected region for this exact reason.
+  let sdk;
   let provision;
   try {
+    sdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
+      instanceUrl: env,
+      httpClient,
+      solutionUniqueName: input.solution && input.solution.uniqueName,
+    });
     await sdk.initWorkspace();
     provision = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(provisionTempDir), instanceUrl: env, httpClient });
     await provision.initWorkspace();

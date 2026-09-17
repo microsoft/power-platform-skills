@@ -844,3 +844,44 @@ test('an unparseable file is REPORTED, never silently skipped', () => {
   const hits = findUnawaitedCalls('const x = ;;;(');
   assert.ok(hits.some((h) => h.kind === 'parse error'), 'a parse failure must surface as a finding');
 });
+
+// --- temp-workspace lifecycle: SDK CONSTRUCTION must sit inside the cleanup guard ---------------
+//
+// Every CLI entry point mints a throwaway workspace directory and hands the caller a `cleanup`
+// callback. The caller's `finally { cleanup() }` only becomes reachable once the factory RETURNS, so
+// anything that throws before the return strands the directory for the life of the machine.
+//
+// Guarding only `initWorkspace` is NOT enough, and that was a real (caught-in-review) miss: since the
+// injected-storage uptake the `createMakerSdk` CONSTRUCTOR builds the filesystem adapter
+// (`createNodeWorkspaceStorage`), so it touches disk and can fail on its own. Two entry points had
+// the constructor outside the net while their comments claimed otherwise.
+//
+// Checked by SOURCE SCAN because the factories are CLI-internal — none is exported, so there is no
+// seam to drive a construction failure through. The property checked is the one that matters
+// (construction happens inside a guarded region that cleans up), not a brittle line-order heuristic:
+// an earlier attempt compared `const cleanup` and `initWorkspace` offsets and wrongly flagged
+// teardown-model-app.js, which declares cleanup after the init but inside a try whose catch removes
+// the directory.
+test('every CLI that mints a throwaway workspace constructs the SDK INSIDE its cleanup guard', () => {
+  const dir = path.join(__dirname, '..');
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js'));
+  const checked = [];
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(dir, file), 'utf8');
+    const mk = src.indexOf('mkdtempSync');
+    if (mk < 0 || !/createMakerSdk\(/.test(src)) continue;
+    const tryAt = src.indexOf('try {', mk);
+    const ctorAt = src.indexOf('createMakerSdk(', mk);
+    assert.ok(tryAt >= 0 && tryAt < ctorAt,
+      `${file}: the createMakerSdk construction after mkdtempSync must be inside a try — the constructor builds the `
+      + 'filesystem adapter and can throw, and the caller\'s finally is unreachable until this function returns');
+    // …and the guard must actually reclaim the directory, not merely swallow the error.
+    const after = src.slice(tryAt);
+    assert.ok(/catch[\s\S]{0,200}?(cleanup\(\)|rmSync)/.test(after) || /finally[\s\S]{0,200}?(cleanup\(\)|rmSync)/.test(after),
+      `${file}: the guard around SDK construction must remove the throwaway directory (cleanup()/rmSync) before rethrowing`);
+    checked.push(file);
+  }
+  // A scan that matches nothing "passes" forever. These are the five entry points that own a
+  // throwaway workspace today; if one is renamed the count changes and this fails loudly.
+  assert.ok(checked.length >= 5, `expected to scan at least 5 entry points, scanned ${checked.length}: ${checked.join(', ')}`);
+});
