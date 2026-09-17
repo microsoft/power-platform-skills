@@ -52,7 +52,7 @@ When a skill deploys a site or audits permissions across many tables, the termin
 
 ### The Solution
 
-Every skill must implement **task-based progress tracking** using `TaskCreate` and `TaskUpdate`. Tasks are created upfront at Phase 1, one per phase, and marked `in_progress` / `completed` as the skill progresses.
+Every skill must implement **task-based progress tracking** using `TaskCreate` and `TaskUpdate`. Tasks are created upfront at Phase 1, one per phase, and marked `in_progress` / `completed` as the skill progresses. **Local styling exception:** `style-site` shows **Inspect/propose → Approve → Apply → Independently verify → Report** status without mandatory task-tool calls; expanded work may use tasks when useful. Do not add seven task creates/updates to routine CSS changes.
 
 ### Implementation Pattern
 
@@ -83,7 +83,7 @@ For skills that process multiple entities (e.g., audit-permissions auditing many
 | `/audit-permissions` | 7 phases (prereqs → discover → analyze → audit → cross-check → report → present) | Per-table tasks in Phase 4 (checklist A-K) |
 | `/create-site` | 8 phases (prereqs → gather → plan → scaffold → implement → validate → deploy → summarize) | None |
 
-> **Acceptance criterion:** Every skill must create all phase tasks upfront at Phase 1 start. Each task must have `subject`, `activeForm`, and `description`. Tasks must be marked `in_progress` when starting and `completed` when done.
+> **Acceptance criterion:** Every skill except the documented `style-site` local workflow must create all phase tasks upfront at Phase 1 start. Each task must have `subject`, `activeForm`, and `description`. Tasks must be marked `in_progress` when starting and `completed` when done. `style-site` must expose equivalent visible status, not mandatory task bookkeeping.
 
 ---
 
@@ -119,6 +119,8 @@ After implementation, always run a standalone verification phase that:
 **Hook-based validation** — Skills tracked in `hooks/hooks.json` get automatic validation when they complete. The `PostToolUse` hook on `Skill` dispatches to per-skill validator scripts via `run-skill-posttool-validation.js`. Validators use `approve()` / `block(reason)` from `scripts/lib/validation-helpers.js`.
 
 > **Acceptance criterion:** No skill that creates, modifies, or deletes files may ship without a dedicated verification phase. Verification must use a different code path than creation (e.g., run validators, glob for files, build the project — don't just trust the write succeeded).
+
+For `style-site`, keep the **independent verification step** even though its coordinator invokes the separate validator in the apply command. Require that result and independently re-read changed files/diffs, including reconstructed inline/class markup. Report desktop/mobile rendering, effective computed values, accessibility and Studio save/reopen as pending separately authorized live checks. Do not generate HTML previews, start a server, require browser review or deploy to manufacture evidence. Static validation and supplied-color math do not establish runtime behavior or Studio editability.
 
 ---
 
@@ -268,6 +270,8 @@ Every skill pauses for user approval at three junctures:
 2. **After planning** — Present the proposed plan (HTML visualization, permissions matrix, integration list). Ask the user to approve before implementing.
 3. **Before deployment** — Present what was created. Ask "Ready to deploy?" and invoke `/deploy-site` if yes.
 
+**`style-site` local-only exception:** Ordinary broad declarations on one localized page, at most 3 components/10 style groups in one section, inline-only/stylesheet-only/inline+CSS with at most one existing stylesheet and guarded same-page class additions can use the small-change route when Bootstrap/source/cascade are known. Any raw `style.css`, `global: true`, nonempty `externalResources` or `importantReason`, shared templates/metadata, new files, Studio-only/source-free descriptors or broader/ambiguous scope needs expanded review. True blockers, including generated-source work, need local next steps, not successful handoffs. Only expanded/ambiguous work asks `3.scope`; small changes review scope at exact-hash `5.approve`. Runtime consent (`2.runtime`) is separate; drift/revisions (`6.reapprove`) require new diff/hash approval. No final-completion/deployment questions, unattended approval or HTML/browser prerequisite.
+
 Between checkpoints, skills work **autonomously** — no mid-analysis questions.
 
 > **Approval Gates — canonical catalog.** Every individual `AskUserQuestion` that meets the gate test (would Cancel leave partial or complete-but-wrong state behind?) is an **Approval Gate**. See `references/approval-gates.md` for the canonical terminology, the six categories (`intent` / `plan` / `progress` / `consent` / `final` / `pause`), the marker syntax (`<!-- gate: skill:phase | category=X | cancel-leaves=Y -->` + human-readable `> 🚦 **Gate (...)**` block), the per-skill catalog, and the seven gate-related lint rules: `GATE-must-have-marker`, `GATE-id-must-be-unique`, `GATE-must-be-in-catalog`, `GATE-intent-must-call-helper`, `GATE-cancel-leaves-known-vocab`, `GATE-prose-block-required` (marker followed by 🚦 prose block within 10 lines, outside any code fence), and `CATALOG-row-must-have-marker` (every `kind: gate` catalog row must have a corresponding marker in some SKILL.md — the reverse of `GATE-must-be-in-catalog`). **Every skill in this plugin** is enforced at `severity: 'error'` — there is no ALM vs non-ALM carve-out. When you add a new skill that introduces an `AskUserQuestion`, you must extend `references/approval-gates.md` §6 with the new gate-id(s) in the same PR; CI will block otherwise. Data-gathering prompts (free-text fallbacks, configuration sub-prompts) take a `<!-- not-a-gate: <reason> -->` comment instead.
@@ -301,7 +305,41 @@ their own contacts and create new ones, but cannot modify or delete existing rec
 | **Environment changes** | Enabling JS attachments, changing site settings |
 | **Destructive operations** | Deleting permissions, removing web roles |
 
-> **Acceptance criterion:** Every skill must implement the three-point approval pattern. No approval-gated action may proceed without explicit user confirmation via `AskUserQuestion`. Skills must work autonomously between checkpoints — no mid-analysis questions.
+> **Acceptance criterion:** Every skill must implement the three-point approval pattern or the documented `style-site` local-only gates. No approval-gated action may proceed without explicit user confirmation via `AskUserQuestion`. Skills must work autonomously between checkpoints — no mid-analysis questions.
+
+### Lean classic styling guidance
+
+Keep `style-site/SKILL.md` plus its mandatory `references/quick-start.md` within **12,000 UTF-8 bytes**, with SKILL.md at most **6,000 characters** as the target. The quick start contains one validated request and typical properties, not duplicated schema/allowlists. Load policy/version/deep request/CLI references only when applicable. Routine CSS uses bundled verified guidance; web documentation is for unknown/conflicting/stale guidance or explicit requests. Reuse the unchanged version-check script's result once per installed plugin version in the current conversation.
+
+Use bounded inspector summaries with full evidence on disk, then one coordinator prepare command per fresh external revision directory, producing only plan/review JSON. Review the full exact-diff artifact before approval if its summary is truncated. Coordinator apply retains guarded preflights and independent verification; do not prescribe additional routine validate/dry-run/validate calls. Keep individual commands for diagnostics, external receipts for recovery, and the no-args hook as a backstop only. Record normal `StyleSite` usage after verified local or explicitly requested instructions-only completion, preserving supported-directory no-op and separate tracking diffs; canceled drafts/blocked local work do not track. Do not change the model or weaken approval/integrity checks to optimize this workflow.
+
+Use the bundled component Design-panel map for availability, **not exclusive ownership**. Both listed and unlisted properties default to local `owner: "custom"` authoring. Prefer the actual static inline declaration; otherwise use effective CSS at the locale sidecar or protected `theme.css < custom < portalbasictheme.css` Web File band. Preserve native source/Liquid/IDs/accessibility/Studio markers and default assets/order. Existing exact-property inline importance may remain; authored `!important` needs nonempty `importantReason` and expanded review. Never blindly raise priority/specificity to avoid local inline edits, rewrite DOM or replace native components. Raw CSS cannot bypass root conflicts; native colors are local dependencies, not Studio prerequisites.
+
+General declarations use pinned bundled css-tree structural parsing, not fixed property/value/part or gradient allowlists. Support standard CSS custom properties, font stacks, sizing/layout/functions, shadows, transforms, transitions and all gradient kinds. Unknown or semantic-grammar-unverified values yield explicit warnings; malformed/injected/legacy executable CSS fails. Fix actual invalid values or verify newer browser support before approving. Parser support is not Power Pages/browser/Studio rendering proof; missing parser grammar is not a Power Pages prohibition.
+
+Preserve authored/insertion declaration order, never alphabetize: shorthands can reset earlier longhands. Pinned mdn-data provides shorthand effects with logical-side safety. This remains conflict protection, not a new property allowlist.
+Alternative `style.css` accepts full local stylesheet text instead of declarations, with no `part`: responsive `@media`/`@supports`/`@container`, keyframes/reduced motion, fonts, tokens, `@property` and layers. Default all selectors stay in the verified `pp-*` component subtree; arbitrary stable descendant/state/pseudo-element parts are allowed. Raw `global: true` intentionally enables global rules in the existing placement scope with expanded review of **all matching elements**. Source-free descriptors are allowed only for global raw stylesheets or user-requested Studio handoffs; global needs no fake class/source. Namespace new keyframe/font/property/layer names with `pp-`/`--pp-`, or review shared naming under explicit global scope.
+
+Exact external HTTPS URL references require `externalResources` and hashed warnings; relative/root-relative/fragment Web File URLs need no declaration. Reject protocol-relative, JavaScript/file schemes, unreviewed external tracking/font/image URLs and data payloads (use Web Files). Review CSP, availability, licensing/privacy. Imports require raw global scope, declared external URLs and valid beginning-of-stylesheet placement; a new custom file may avoid late imports. Never fetch imports automatically or make browser/network access a prerequisite.
+
+Keep deep inline/source contracts conditional: optional `location` is `stylesheet` (default) or `inline`; inline requires exact static `inlineTarget`, with no nonempty `part` or raw/global/stylesheet/handoff placement fields. Inline-only components may omit `className`; scoped stylesheets need verified hooks/guarded additions. Supplied inline classes identify actual tags. Shared-template inline edits require site scope, potentially every page; Page Copy requires the selected locale. Original exact tags/contexts compose as reconstructed `kind: "markup"` writes; class-only stays `kind: "class"`. Safely parse/encode quoted fonts, HTML entities, CSS comments/escapes, preserving unrelated source/attributes. Ambiguous/malformed edits and conflicting important shorthands still block with local remediation.
+
+Only inline declarations may use `null` to remove that exact existing property; removal-only groups are valid. Null is a request directive, not a CSS value, and stylesheet/Studio groups reject it. Combine removal and scoped CSS in the same approved plan to enable responsive/state rules without ineffective overrides. Preserve other inline properties/priority and native attributes/markers. Shorthand removal removes the entire declaration: retain needed longhands in planned styles and review the actual diff. This is general authoring, not a gradient-specific path.
+
+Real rendered source tags (including input, textarea, SVG and outer local iframe/embedded elements) are eligible, not a fixed wrapper list; only class/style attributes change, never embedded contents. Static tags and CSS values may span lines; preserve exact whitespace/newline matching, size/unique-context guards and the no-Liquid target rule. The source tokenizer skips iframe/noembed/noframes/xmp contents like textarea/script/style contents; tag-shaped text there is not a local DOM target. Runtime-discovery exclusions are unchanged. The entities codec decodes/encodes the style attribute; only that attribute can normalize entity spelling. Preserve the rest of the tag/document exactly, apart from approved class additions.
+Reserve `owner: "studio"` for explicitly requested instructions-only work, requiring `handoffReason: "user-requested"` plus `studioAction`; native support alone is not a reason. Retain plan schema 2: old zero-write Studio requests missing the explicit reason need regeneration/new approval, never hand-edited plans or inherited consent. Microsoft's Studio recommendation is not a VS Code prohibition. Keep unlisted/unknown/conditional support warnings in review, approval and final report, without promising local values populate native controls. Theme controls remain separate from the map. Batch only requested lookups and do not load the complete catalog for every small change. Retain source-level readability checks and supplied-color math; rendering and Studio round trips remain pending.
+
+### Maintaining the bundled CSS parser
+
+The pinned parser lives in `scripts/vendor/css-tools`, including `package.json`, `package-lock.json`, `css-tools.cjs` and bundled licenses, including the mdn-data license. Users need **no npm installs** in their plugin or site. Maintainers reproduce the bundle from the repository root with:
+
+```powershell
+Set-Location plugins\power-pages\scripts\vendor\css-tools
+npm ci --ignore-scripts
+npm run build
+```
+
+Keep the manifests, lockfile, generated bundle and licenses together when updating the parser. These are maintainer build dependencies, not runtime installation instructions. Do not replace documented general CSS support with bespoke gradient/property/selector grammars.
 
 ---
 

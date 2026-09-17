@@ -20,6 +20,10 @@ node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_R
 
 The script exits silently if `.powerpages-site/site-settings/` does not exist, so it is safe to call unconditionally.
 
+For the classic-site `style-site` workflow, preserve this existing contract: never create `.powerpages-site`, invent classic tracking records, or broaden telemetry just to record usage. Run tracking only as part of normal completion, not on canceled drafts. Where the supported tracking directory exists, disclose and summarize any tracking diff separately from the approved styling patch; otherwise accept the no-op. Tracking does not authorize an upload.
+
+The styling inspector excludes only the known `site-settings/Site-AI-Skills-*.sitesetting.yml` and `site-settings/Site-AI-Tools-*.sitesetting.yml` files from styling input hashes/inventory. This keeps final usage recording from invalidating a successfully verified proposal/receipt; other site settings and styling inputs remain subject to drift checks. It does not change tracking behavior or grant authority to edit unrelated files.
+
 If the tracking script creates or updates site setting YAML files, include those tracking changes in the next git commit for the current phase or final summary commit.
 
 ## Skill Name Mapping
@@ -32,6 +36,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | add-sample-data | AddSampleData | Site/AI/Skills/AddSampleData |
 | activate-site | ActivateSite | Site/AI/Skills/ActivateSite |
 | add-seo | AddSeo | Site/AI/Skills/AddSeo |
+| style-site | StyleSite | Site/AI/Skills/StyleSite |
 | create-webroles | CreateWebroles | Site/AI/Skills/CreateWebroles |
 | integrate-webapi | IntegrateWebApi | Site/AI/Skills/IntegrateWebApi |
 | setup-auth | SetupAuth | Site/AI/Skills/SetupAuth |
