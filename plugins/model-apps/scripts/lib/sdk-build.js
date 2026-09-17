@@ -1017,9 +1017,42 @@ function formIdentityKey(f) {
 // `valueType` is always `'Value'`: the SDK's other axes (`Field`, `Lookup`, `Expression`, `Clear`)
 // need shapes the App Spec does not model, so exposing the name would offer authors a choice they
 // cannot use. The App Spec calls the type hint `dataType` rather than the SDK's `valueWorkflowType`,
-// because `valueType` already means that other thing here — and note it is currently DECORATIVE:
-// measured across every accepted token, on both the condition and the action path, the SDK types
-// every literal as String. See BUSINESS_RULE_DATA_TYPES in app-spec.js.
+// because `valueType` already means that other thing here. See BUSINESS_RULE_DATA_TYPES in
+// app-spec.js.
+//
+// `dataType` is NO LONGER decorative on the CONDITION path, and that changed under us in the SDK
+// uptake. The previous bundle consulted `valueWorkflowType` only for `valueType: 'Clear'` and
+// hard-typed every ordinary literal as `WorkflowAttributeType.String`; the current bundle uses the
+// field for ALL value types, VERBATIM, with no name -> enum mapping of its own
+// (`… : e.valueWorkflowType ?? WorkflowAttributeType.String`).
+//
+// `WorkflowAttributeType` is a NUMERIC-STRING enum — `{ Boolean:'0' … Money:'7', Picklist:'10',
+// String:'14' … }` — so passing the App Spec's human token would put an out-of-domain value on the
+// wire. MEASURED against the vendored bundle before this mapping existed, the condition literal
+// carried `"String"`, `"Money"`, and even `"NotAWorkflowType"` straight through, while the SDK's own
+// fallback for the same field is `'14'`. Note this hit EVERY rule, not only ones that authored a
+// `dataType`, because the default below is the token `'String'` rather than the enum value.
+//
+// LIVE-MEASURED that this fails SILENTLY rather than loudly: a build carrying the raw tokens
+// deployed all four probe rules with 0 failures and activated them. The platform does not reject the
+// value, so nothing upstream of a user noticing the rule never fires would surface it — and
+// `--verify` cannot, because it checks existence, duplicate count and statecode, never the rule's
+// WFOM.
+//
+// The ACTION path still types every literal as String on the SDK side, so it is unaffected — the
+// asymmetry is deliberate and pinned in business-rules.test.js.
+const WORKFLOW_ATTRIBUTE_TYPE = {
+  boolean: '0', customer: '1', datetime: '2', decimal: '3', float: '4', double: '4', integer: '5',
+  lookup: '6', money: '7', owner: '8', partylist: '9', picklist: '10', key: '11', state: '12',
+  status: '13', string: '14', memo: '14', uniqueidentifier: '15', entitynamereference: '16',
+  entity: '17', entitycollection: '18', multiselectpicklist: '23',
+};
+// Unknown tokens fall back to String rather than being forwarded. The spec gate already restricts
+// `dataType` to BUSINESS_RULE_DATA_TYPES, so this is unreachable from a valid spec; forwarding an
+// unmapped token would reopen exactly the out-of-domain write this mapping exists to close.
+function workflowAttributeType(dataType) {
+  return WORKFLOW_ATTRIBUTE_TYPE[String(dataType || 'String').toLowerCase()] || '14';
+}
 function businessRuleDef(rule) {
   const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
   const clauseId = ids('c');
@@ -1043,14 +1076,14 @@ function businessRuleDef(rule) {
         field: String(c.field).toLowerCase(),
         operator: c.operator,
         valueType: 'Value',
-        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: c.dataType || 'String' }),
+        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: workflowAttributeType(c.dataType) }),
       })),
       trueBranch: (rule.actions || []).map((a) => {
         const node = { id: actionId(), type: a.type, displayName: a.label || `${a.type} ${a.field}`, field: String(a.field).toLowerCase() };
         if (a.type === 'SetVisibility') node.visible = a.visible;
         else if (a.type === 'LockUnlock') node.lock = a.lock;
         else if (a.type === 'SetBusinessRequired') node.required = a.required;
-        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = a.dataType || 'String'; }
+        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = workflowAttributeType(a.dataType); }
         return node;
       }),
       falseBranch: [],
@@ -1530,7 +1563,7 @@ async function runSdkBuild(spec, opts = {}) {
     // `description` is new on forms in this SDK uptake (dashboards, rows in the same systemform
     // table, always had it). Passed only when the spec sets one: omitted on push it is not written,
     // so an existing server-side description survives an edit that did not set one.
-    const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
+    const art = await provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
     const tabs = def.tabs || [];
     // Sequential (not Promise.all): tab ORDER is the on-form order, and addElement appends.
     for (const tab of tabs) await provision.addElement('form', art.id, '/tabs', tab);
@@ -2238,10 +2271,10 @@ async function runSdkBuild(spec, opts = {}) {
       // parent lookups to an un-deletable form and strand references that block teardown. Gap 2 is
       // instead handled by making our form the entity's default (see promoteDefaultForm below).
       const existingId = await resolveExistingFormId(provision, def);
-      if (existingId) return reconcileForm(existingId, def);
+      if (existingId) return await reconcileForm(existingId, def);
     } else if (type === 'view') {
       const existingId = await provision.findArtifact('view', { name: def.name, entity: def.entityLogicalName });
-      if (existingId) return reconcileView(existingId, def, !!(meta && meta.authoredQuery));
+      if (existingId) return await reconcileView(existingId, def, !!(meta && meta.authoredQuery));
     }
     // A form cannot be created from a full authored definition (the adapter's createDefault
     // serializes authored tabs BEFORE minting ids and throws on the id-less cells); build its body
@@ -2252,7 +2285,7 @@ async function runSdkBuild(spec, opts = {}) {
       id = await createFormShell(def);
       await addSubgrids(id, def.__subgrids);
     } else {
-      id = provision.createArtifact(type, def).id;
+      id = (await provision.createArtifact(type, def)).id;
     }
     const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
@@ -2367,7 +2400,7 @@ async function runSdkBuild(spec, opts = {}) {
         return existingId;
       }
       return runner.run('charts', `chart "${def.name}"`, async () => {
-        const art = provision.createArtifact('chart', def);
+        const art = await provision.createArtifact('chart', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         // Created here, so it IS workspace-resident and publishable.
@@ -2694,45 +2727,33 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
         const def = businessRuleDef(rule);
-        const art = provision.createArtifact('businessRule', def);
+        const art = await provision.createArtifact('businessRule', def);
         // The condition tree is a nested object, so it goes on through the generic element surface
         // rather than the create payload — mirroring how the SDK's own workflow test authors one.
         await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
-        // The push CANNOT tell you a rule is wrong. A mis-shaped condition tree is MERGED onto the
-        // node, ignored by the serializer, and written as a rule with no clauses and no actions:
-        // HTTP 204, activated, and it never fires. That trap is pinned in sdk-uptake-contract.test.js
-        // ("a wrongly-shaped condition produces an EMPTY rule rather than erroring") and, until this
-        // SDK, the spec gate was the only thing standing in front of it.
+        // The push USED to be unable to tell you a rule was wrong: a mis-shaped condition tree was
+        // MERGED onto the node, ignored by the serializer, and written as a rule with no clauses and
+        // no actions — HTTP 204, activated, and it never fired.
         //
-        // The SDK now exposes the business-rule designer's OWN completeness validator — the same one
-        // the designer gates its Save button on — and states plainly that nothing on the push path
-        // runs it, so run it here, BEFORE the write.
+        // That trap is CLOSED at the source as of the injected-storage re-vendor. The SDK now runs
+        // the business-rule designer's own completeness validator internally on EVERY save — create
+        // and update, Active and Draft — so an incomplete or mis-shaped rule is REFUSED by
+        // `pushArtifact` below, naming the offending clause, and nothing reaches the wire.
+        // Measured and pinned in sdk-uptake-contract.test.js ("a wrongly-shaped condition is now
+        // REFUSED at push, closing the empty-rule trap"), which asserts both the refusal and that no
+        // request was made.
         //
-        // Strict about FINDINGS, best-effort about the VALIDATOR. Findings halt: a rule that reports
-        // success and never fires is exactly the silent-wrong-artifact class this engine exists to
-        // prevent, and it is invisible afterwards. But a bundle without the method, or a validator
-        // that throws, must not block a build it cannot judge.
+        // ⚠ The explicit validation call that used to sit HERE is therefore gone, and its removal is
+        // a TIGHTENING rather than a loss of coverage. It invoked the SDK's old business-rule
+        // validator method, which no longer exists. The old call was best-effort by design (a bundle
+        // without the method must not block a build it cannot judge), so it silently degraded to NO
+        // validation whenever the vendored bundle predated it. Re-adding a defensive
+        // `typeof ... === 'function'` block would now be dead code that never runs and implies
+        // coverage living elsewhere.
         //
-        // Field metadata is deliberately NOT passed: without it the SDK SUPPRESSES the
-        // metadata-dependent checks (Clear eligibility, value-type compatibility, max length) rather
-        // than failing them, and the structural checks are the ones that close the trap above.
-        // Passing them would cost an attribute read per rule for checks the spec gate already covers.
-        //
-        // MEASURED against this bundle: every shape this spec surface can author — all 16 operators,
-        // all 4 action types, every scope and status, multi-condition and multi-action — reports zero
-        // issues, so this cannot reject a rule that was previously buildable.
-        if (typeof provision.validateBusinessRule === 'function') {
-          let issues = null;
-          try {
-            issues = provision.validateBusinessRule(Object.assign({}, art, { rootCondition: def.rootCondition }));
-          } catch { /* a diagnostic that cannot run must never fail the build */ }
-          if (Array.isArray(issues) && issues.length) {
-            const detail = issues.map((i) => `${(i && i.rule) || 'issue'}: ${(i && i.message) || ''}`.trim()).join('; ');
-            throw new BuildHalt(
-              `business rule "${rule.name}" on ${rule.entity} is incomplete and would deploy as a rule that never fires — ${detail}`,
-              { phase: 'business-rules', code: 'business-rule-incomplete', recoverable: false });
-          }
-        }
+        // NOTE: the method name is deliberately NOT written in call form anywhere in this file.
+        // `sdk-surface-contract.test.js` scans engine source for `sdk.<method>(` and would read a
+        // mention in prose as a live call, then demand it back on the vendored bundle.
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
@@ -2928,7 +2949,7 @@ async function runSdkBuild(spec, opts = {}) {
         // The whole flow — including its stages and steps — is carried on the CREATE payload. The
         // adapter normalizes and id-stamps the stage/step tree there, so unlike a business rule's
         // condition tree there is no element-surface follow-up to make.
-        const art = provision.createArtifact('bpf', bpfDef(flow));
+        const art = await provision.createArtifact('bpf', bpfDef(flow));
         const pushed = requireSuccessfulPush(await provision.pushArtifact('bpf', art.id), `business process flow ${flow.name}`, opts.warn);
         result.created.businessProcessFlows[key] = pushed.id;
         // On the CREATE path the derivation is authoritative: the build supplied `flow.name`, the
@@ -2961,7 +2982,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
-        const art = provision.createArtifact('command', def);
+        const art = await provision.createArtifact('command', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('command', art.id), `command ${entityLogical}`, opts.warn);
         result.created.commands[entityLogical] = pushed.id;
       });
@@ -2988,7 +3009,7 @@ async function runSdkBuild(spec, opts = {}) {
         continue;
       }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
-        const art = provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
+        const art = await provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
         // for..of, not forEach: addElement is async, and a forEach callback would fire the adds
         // without awaiting them — the push below could then race an unfinished tile insert.
         const tiles = dash.tiles || [];
@@ -3066,7 +3087,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
-      const art = provision.createArtifact('app', def);
+      const art = await provision.createArtifact('app', def);
       const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`, opts.warn);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does

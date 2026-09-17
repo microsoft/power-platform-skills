@@ -28,19 +28,19 @@ const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dat
 const snapStore = require('./lib/apply-snapshot-store.js');
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
-function makeSdk(env) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
   // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teardown-'));
   try {
     const sdk = createMakerSdk({
-      workspacePath: sdkTempDir,
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
       instanceUrl: env,
       httpClient,
     });
-    sdk.initWorkspace();
+    await sdk.initWorkspace();
     const cleanup = () => {
       fs.rmSync(sdkTempDir, { recursive: true, force: true });
     };
@@ -146,7 +146,7 @@ async function main() {
   const apply = flags.apply === true;
   const allowDestructive = flags['allow-destructive'] === true;
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const { sdk, cleanup } = makeSdk(env);
+  const { sdk, cleanup } = await makeSdk(env);
   let r;
   let thrown = null;
   try {

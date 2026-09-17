@@ -41,8 +41,8 @@ test.after(() => {
   }
 });
 
-function freshSdk(capture) {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk(capture) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const ws = mkTempWorkspace('sdk-smoke-');
   const httpClient = {
     get: async () => ({ status: 200, headers: {}, body: {} }),
@@ -54,8 +54,8 @@ function freshSdk(capture) {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(ws), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return sdk;
 }
 
@@ -66,23 +66,23 @@ test('vendored bundle exports createMakerSdk', () => {
   assert.strictEqual(typeof mod.createMakerSdk, 'function');
 });
 
-test('createArtifact serializes every artifact type headlessly (no browser)', () => {
-  const sdk = freshSdk();
+test('createArtifact serializes every artifact type headlessly (no browser)', async () => {
+  const sdk = await freshSdk();
   for (const [type, def] of [
     ['view', { entityLogicalName: 'account', name: 'Smoke View' }],
     ['chart', { entityLogicalName: 'account', name: 'Smoke Chart' }],
     ['form', { entityLogicalName: 'account', name: 'Smoke Form' }],
     ['app', { name: 'Smoke App' }],
   ]) {
-    const a = sdk.createArtifact(type, def);
+    const a = await sdk.createArtifact(type, def);
     assert.ok(a && a.id, `${type} artifact should have an id`);
   }
 });
 
 test('pushArtifact builds a real FormXML payload headlessly', async () => {
   const capture = [];
-  const sdk = freshSdk(capture);
-  const form = sdk.createArtifact('form', { entityLogicalName: 'account', name: 'Push Test Form' });
+  const sdk = await freshSdk(capture);
+  const form = await sdk.createArtifact('form', { entityLogicalName: 'account', name: 'Push Test Form' });
   const result = await sdk.pushArtifact('form', form.id);
   // The SDK renamed PushResult.success -> saved to force call sites to distinguish "the write
   // committed" from "the runtime serves it" (`shipped`, true only on a VERIFIED publish). Accept
@@ -96,7 +96,7 @@ test('pushArtifact builds a real FormXML payload headlessly', async () => {
 
 test('createWebResource posts base64 content + the right webresourcetype (Tier 2)', async () => {
   const capture = [];
-  const sdk = freshSdk(capture);
+  const sdk = await freshSdk(capture);
   await sdk.createWebResource({ name: 'new_smoke.js', displayName: 'Smoke', type: 'js', content: 'function f(){return 1;}', publish: false });
   const post = capture.find((c) => /webresourceset/.test(c.url));
   assert.ok(post, 'a POST to /webresourceset was issued');
@@ -107,23 +107,23 @@ test('createWebResource posts base64 content + the right webresourcetype (Tier 2
 });
 
 test('vendored SDK exposes the AI methods', () => {
-  const { createMakerSdk } = require(BUNDLE);
-  const sdk = createMakerSdk({ workspacePath: require('os').tmpdir(), instanceUrl: 'https://x/', httpClient: { get: async () => ({}), post: async () => ({}), patch: async () => ({}), delete: async () => ({}), put: async () => ({}) } });
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(require('os').tmpdir()), instanceUrl: 'https://x/', httpClient: { get: async () => ({}), post: async () => ({}), patch: async () => ({}), delete: async () => ({}), put: async () => ({}) } });
   for (const m of ['retrieveSetting', 'saveSettingValue', 'getAiReadiness', 'setAppAiFeatures', 'configureRowSummary', 'removeRowSummary']) {
     assert.strictEqual(typeof sdk[m], 'function', `sdk.${m} should be a function`);
   }
 });
 
 test('vendored SDK exposes the consolidation methods', () => {
-  const { createMakerSdk } = require('../vendor/cds-maker-sdk.cjs');
-  const sdk = createMakerSdk({ workspacePath: require('os').tmpdir(), instanceUrl: 'https://x/', httpClient: { get: async () => ({}), post: async () => ({}), patch: async () => ({}), delete: async () => ({}), put: async () => ({}) } });
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('../vendor/cds-maker-sdk.cjs');
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(require('os').tmpdir()), instanceUrl: 'https://x/', httpClient: { get: async () => ({}), post: async () => ({}), patch: async () => ({}), delete: async () => ({}), put: async () => ({}) } });
   for (const m of ['resolveArtifact', 'findArtifact', 'deleteAppCascade', 'seedRecordGraph', 'enrichDefaultViews']) {
     assert.strictEqual(typeof sdk[m], 'function', `sdk.${m} should be a function`);
   }
 });
 
-test('CONTRACT: a canonical /bag/c <events> region wires a handler into the retained FormXML headlessly (Tier 2)', () => {
-  const { createMakerSdk } = require(BUNDLE);
+test('CONTRACT: a canonical /bag/c <events> region wires a handler into the retained FormXML headlessly (Tier 2)', async () => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const ws = mkTempWorkspace('sdk-evt-');
   const FID = '22222222-2222-2222-2222-222222222222';
   const formXml = '<form><tabs><tab name="general"><columns><column><sections><section><rows /></section></sections></column></columns></tab></tabs></form>';
@@ -135,8 +135,8 @@ test('CONTRACT: a canonical /bag/c <events> region wires a handler into the reta
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(ws), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return sdk.fetchArtifact('form', FID).then(async (fetched) => {
     assert.ok(fetched, 'form fetched');
     // The engine wires form JS by adding the root-bag <events> region via the generic surface (the
@@ -151,7 +151,7 @@ test('CONTRACT: a canonical /bag/c <events> region wires a handler into the reta
 });
 
 test('CONTRACT: removeElement drops a bound field from a fetched form (reconcile can DELETE a field, not only add)', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const ws = mkTempWorkspace('sdk-rmfield-');
   const FID = '22222222-2222-2222-2222-222222222222';
   // A fetched form whose retained formxml carries two bound fields (name + tier). The skill's form
@@ -171,8 +171,8 @@ test('CONTRACT: removeElement drops a bound field from a fetched form (reconcile
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(ws), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   await sdk.fetchArtifact('form', FID);
   const ptr = findFieldCellPointer(await sdk.getArtifact('form', FID), 'new_tier');
   assert.ok(ptr, 'the cell hosting the dropped field is located in the canonical tree');
@@ -210,11 +210,11 @@ function captureClient() {
   };
   return { client, reqs };
 }
-function sdkWith(client) {
-  const { createMakerSdk } = require(BUNDLE);
+async function sdkWith(client) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const ws = mkTempWorkspace('sdk-contract-');
-  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient: client });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(ws), instanceUrl: 'https://example.crm.dynamics.com', httpClient: client });
+  await sdk.initWorkspace();
   return sdk;
 }
 // The wire $filter, decoded exactly once by URLSearchParams. Equals the raw OData filter whether the
@@ -226,7 +226,7 @@ function filterOf(url) {
 
 test('CONTRACT: queryRecords transmits a raw quoted-string OData filter that round-trips (raw filters stay supported; no double-encoding)', async () => {
   const { client, reqs } = captureClient();
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   const raw = `uniquename eq 'new_a b' and ismanaged eq false`;
   await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'name'], filter: raw, top: 1 });
   const get = reqs.find((r) => r.method === 'GET' && /appmodules\?/.test(r.url));
@@ -236,7 +236,7 @@ test('CONTRACT: queryRecords transmits a raw quoted-string OData filter that rou
 
 test('CONTRACT: queryRecords transmits an UNQUOTED GUID-literal filter unchanged (the solutioncomponent/sitemap pattern the skill uses)', async () => {
   const { client, reqs } = captureClient();
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   const raw = `objectid eq 11111111-1111-1111-1111-111111111111`;
   await sdk.queryRecords('solutioncomponent', { select: ['_solutionid_value'], filter: raw, top: 1 });
   const get = reqs.find((r) => r.method === 'GET' && /solutioncomponents\?/.test(r.url));
@@ -245,7 +245,7 @@ test('CONTRACT: queryRecords transmits an UNQUOTED GUID-literal filter unchanged
 
 test('CONTRACT: name-based SDK methods accept logical/unique names verbatim (never forced through GUID validation)', async () => {
   const { client, reqs } = captureClient();
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   // The skill passes NAMES (not GUIDs) to these — a GUID normalizer applied here would reject them.
   await sdk.resolveArtifact('app', { uniqueName: 'new_app' });           // teardown/verify resolve-by-name
   await sdk.setEntityIcon('contoso_widget', { vector: 'contoso_icon', publish: false }); // table icon by logical name
@@ -265,7 +265,7 @@ test('CONTRACT: name-based SDK methods accept logical/unique names verbatim (nev
 });
 
 test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a safe DOM factory must escape VALUES, only validate NAMES)', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const { appDef } = require('../lib/sdk-build.js');
   const spec = {
     solution: { uniqueName: 'EscA', publisherPrefix: 'new' },
@@ -301,9 +301,9 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
-  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(ws), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
+  const art = await sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'special-char titles/URLs must serialize, not throw');
   assert.ok(sitemapXml, 'the sitemap was serialized and posted');
   assert.match(sitemapXml, /&amp;/, 'ampersands in titles/URLs are escaped');
@@ -370,7 +370,7 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
     },
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   const result = await sdk.deleteAppCascade(APP_ID, APP_UNIQUE);
   assert.ok(result && typeof result === 'object', 'deleteAppCascade returns a structured result (not void)');
   assert.ok(Array.isArray(result.deleted) && result.deleted.some((d) => d.type === 'app'), 'the primary app delete is reported in deleted[]');
@@ -408,7 +408,7 @@ test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids]
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   const group = {
     entityLogical: 'new_widget',
     matchOn: 'new_name',
@@ -443,7 +443,7 @@ test('CONTRACT: seedRecordGraph resolves a bind against options.createdIds BY IN
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   const selfBind = { navProperty: 'new_ParentOrgId', parentEntity: 'new_org', parentIndex: 0 };
 
   // (1) A self-bind whose parent is in the SAME group cannot resolve — the ids are published only
@@ -480,7 +480,7 @@ test('CONTRACT: updateTable({ quickCreateEnabled }) PUTs IsQuickCreateEnabled on
   // "Allow quick create" so an authored Quick Create form is reachable from the inline "+ New". The SDK
   // GET-then-PUTs the full EntityDefinitions row with IsQuickCreateEnabled set (a plain Edm.Boolean flag).
   const { client, reqs } = captureClient();
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   await sdk.updateTable('contoso_widget', { quickCreateEnabled: true });
   const put = reqs.find((r) => r.method === 'PUT' && /EntityDefinitions\(/i.test(r.url));
   assert.ok(put, 'updateTable issues a PUT to EntityDefinitions');
@@ -504,7 +504,7 @@ test('CONTRACT: queryRecords({ paginate:true }) follows @odata.nextLink to compl
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], paginate: true });
   assert.deepStrictEqual(rows.map((r) => r.appmoduleid), ['a1', 'a2'], 'both pages are returned (nextLink was followed)');
   assert.strictEqual(reqs.filter((u) => /appmodules/.test(u)).length, 2, 'exactly two data pages were fetched');
@@ -515,7 +515,7 @@ test('CONTRACT: queryRecords rejects paginate combined with top or fetchXml (bot
   // @odata.nextLink. Either combined with paginate would silently return one page, so the SDK throws
   // BEFORE any request — the scan must never pass top alongside paginate.
   const { client } = captureClient();
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   await assert.rejects(() => sdk.queryRecords('appmodule', { paginate: true, top: 1 }), /paginate.*top/i, 'paginate + top is rejected');
   await assert.rejects(() => sdk.queryRecords('appmodule', { paginate: true, fetchXml: '<fetch/>' }), /paginate.*fetchXml|fetchXml.*paginate/i, 'paginate + fetchXml is rejected');
 });
@@ -536,21 +536,21 @@ test('CONTRACT: queryRecords({ paginate:true }) THROWS on a malformed page inste
     },
     post: async () => ({ status: 204, headers: {}, body: {} }), patch: async () => ({ status: 204, headers: {}, body: {} }), delete: async () => ({ status: 204, headers: {}, body: {} }), put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  await assert.rejects(() => sdkWith(midClient).queryRecords('appmodule', { paginate: true }), /malformed page|value/i, 'a null mid-pagination value throws, not a silent page-1-only result');
+  await assert.rejects(async () => (await sdkWith(midClient)).queryRecords('appmodule', { paginate: true }), /malformed page|value/i, 'a null mid-pagination value throws, not a silent page-1-only result');
 
   // (b) bare-string `value` on the FIRST page → THROW (never fabricate single-char "rows" via for..of).
   const strClient = {
     get: async (url) => { if (/EntityDefinitions\(LogicalName=/i.test(url)) return meta(url); return { status: 200, headers: {}, body: { value: 'abc' } }; },
     post: async () => ({ status: 204, headers: {}, body: {} }), patch: async () => ({ status: 204, headers: {}, body: {} }), delete: async () => ({ status: 204, headers: {}, body: {} }), put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  await assert.rejects(() => sdkWith(strClient).queryRecords('appmodule', { paginate: true }), /malformed page|value/i, 'a bare-string value throws (no char-row fabrication)');
+  await assert.rejects(async () => (await sdkWith(strClient)).queryRecords('appmodule', { paginate: true }), /malformed page|value/i, 'a bare-string value throws (no char-row fabrication)');
 
   // (c) the single-page (non-paginate) path is UNCHANGED — a missing value is leniently treated as empty.
   const lenientClient = {
     get: async (url) => { if (/EntityDefinitions\(LogicalName=/i.test(url)) return meta(url); return { status: 200, headers: {}, body: {} }; },
     post: async () => ({ status: 204, headers: {}, body: {} }), patch: async () => ({ status: 204, headers: {}, body: {} }), delete: async () => ({ status: 204, headers: {}, body: {} }), put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const rows = await sdkWith(lenientClient).queryRecords('appmodule', {});
+  const rows = await (await sdkWith(lenientClient)).queryRecords('appmodule', {});
   assert.deepStrictEqual(rows, [], 'the non-paginate single-page path stays lenient (missing value → empty)');
 });
 
@@ -570,7 +570,7 @@ test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existi
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const reuseSdk = sdkWith(existingClient);
+  const reuseSdk = await sdkWith(existingClient);
   const reused = await reuseSdk.createGlobalOptionSet({ name: 'new_sev', displayName: 'Sev', options: [{ value: 100000000, label: 'Low' }] });
   assert.strictEqual(reused.metadataId, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'the existing set MetadataId is returned');
   assert.strictEqual(reqs.filter((r) => r.method === 'POST').length, 0, 'no duplicate-Name POST is issued when the set already exists');
@@ -584,7 +584,7 @@ test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existi
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const freshSdk2 = sdkWith(absentClient);
+  const freshSdk2 = await sdkWith(absentClient);
   await freshSdk2.createGlobalOptionSet({ name: 'new_sev', displayName: 'Sev', options: [{ value: 100000000, label: 'Low' }] });
   assert.strictEqual(created.length, 1, 'an absent set (404 probe) is created with one POST');
   assert.ok(/GlobalOptionSetDefinitions/i.test(created[0].url), 'the create POSTs to GlobalOptionSetDefinitions');
@@ -592,8 +592,8 @@ test('CONTRACT: createGlobalOptionSet is idempotent by Name — reuses an existi
 
 // --- Security authoring surface (Group N P1) -----------------------------------------------
 
-test('CONTRACT: the vendored facade exposes the security-authoring methods the engine calls', () => {
-  const sdk = freshSdk();
+test('CONTRACT: the vendored facade exposes the security-authoring methods the engine calls', async () => {
+  const sdk = await freshSdk();
   for (const m of ['createPersonaRole', 'createSecurityRole', 'deleteSecurityRole', 'associateRecords']) {
     assert.strictEqual(typeof sdk[m], 'function', `facade must expose ${m}()`);
   }
@@ -614,7 +614,7 @@ test('CONTRACT: the vendored bundle still carries the exact SDK role-ownership m
 // surviving serialization onto an ENTITY subarea. Reading the minified bundle cannot prove that; only
 // the serialized payload can, so assert the bytes the SDK would POST.
 test('CONTRACT: a platform-ref VectorIcon on an Entity subarea reaches the serialized sitemap XML', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const { appDef } = require('../lib/sdk-build.js');
   const { buildSmokeSpec } = require('../smoke-eval.js');
   const spec = buildSmokeSpec('t');
@@ -644,9 +644,9 @@ test('CONTRACT: a platform-ref VectorIcon on an Entity subarea reaches the seria
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: mkTempWorkspace('sdk-vecicon-'), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
-  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_vecapp', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(mkTempWorkspace('sdk-vecicon-')), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
+  const art = await sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_vecapp', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'the smoke spec must push without a component-verification refusal');
 
   assert.ok(sitemapXml, 'the sitemap was serialized and posted');
@@ -662,7 +662,7 @@ test('CONTRACT: a platform-ref VectorIcon on an Entity subarea reaches the seria
 // drop cannot be delegated to the bundle. If a future re-vendor ADDS a guard, this test fails and
 // tells us the defense moved, rather than silently leaving two layers that both assume the other.
 test('CONTRACT: the vendored SDK does NOT filter a bare Fluent VectorIcon — appDef is the only guard', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   let sitemapXml = '';
   const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
   const httpClient = {
@@ -681,12 +681,12 @@ test('CONTRACT: the vendored SDK does NOT filter a bare Fluent VectorIcon — ap
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: mkTempWorkspace('sdk-vecraw-'), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(mkTempWorkspace('sdk-vecraw-')), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   const siteMap = { areas: [{ id: 'area_0', title: 'Main', groups: [{ id: 'g0', title: 'G', subAreas: [
     { id: 's0', title: 'Orders', type: 'Entity', entity: 'new_torder', vectorIcon: 'Grid' },
   ] }] }] };
-  const art = sdk.createArtifact('app', { name: 'Raw Token', uniqueName: 'new_rawtoken', description: '', siteMap, components: { forms: [], views: [], charts: [] }, iconWebResourceId: APP_ICON_ID });
+  const art = await sdk.createArtifact('app', { name: 'Raw Token', uniqueName: 'new_rawtoken', description: '', siteMap, components: { forms: [], views: [], charts: [] }, iconWebResourceId: APP_ICON_ID });
   await sdk.pushArtifact('app', art.id);
   assert.match(sitemapXml, /<SubArea[^>]*Entity="new_torder"[^>]*VectorIcon="Grid"/, 'the bundle serializes a bare token when handed one — so the plugin must not hand it one');
 });
@@ -718,7 +718,7 @@ test('CONTRACT: vendored publishArtifact RESOLVES with publish.kind on failure �
     postRaw: async () => ({ status: 200, headers: {}, body: '' }),
   };
   const FID = '11111111-1111-1111-1111-111111111111';
-  const sdk = sdkWith(client);
+  const sdk = await sdkWith(client);
   await sdk.fetchArtifact('form', FID);
 
   let threw = null;

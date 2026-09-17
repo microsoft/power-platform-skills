@@ -349,7 +349,11 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
       };
     }
     if (id === './vendor/cds-maker-sdk.cjs') {
-      return {
+        return {
+          // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
+          // must expose it too. The marker carries the root so the assertions below can still
+          // check WHERE the throwaway workspace was placed.
+          createNodeWorkspaceStorage: (root) => ({ __mockWorkspaceRoot: root }),
         createMakerSdk: (cfg) => {
           events.push({ type: 'createMakerSdk', cfg });
           if (sdkThrows) throw sdkThrows;
@@ -472,7 +476,7 @@ test('verify CLI accepts a positional spec, uses the default workspace, and prin
   assert.match(stderr, /✓ verify PASS \(1\/1 present\)/);
   assert.strictEqual(emitted.ok, true);
   assert.deepStrictEqual(emitted.payload.missing, []);
-  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspacePath === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
+  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
 });
 
 test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {
@@ -549,7 +553,7 @@ test('entityPrivileges REAL BUNDLE: the SDK method exists and returns the shape 
   // The seam that matters. A hand-written SDK stub proves only that the mapping is self-consistent;
   // it would stay green if `getEntityPrivileges` were renamed or dropped by a re-vendor, or if it
   // returned a different shape. Drive the actual bundle over a fake Dataverse instead.
-  const { createMakerSdk } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'entpriv-real-'));
   const urls = [];
   const httpClient = {
@@ -572,8 +576,8 @@ test('entityPrivileges REAL BUNDLE: the SDK method exists and returns the shape 
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
 
   const privs = await readerFor(sdk, 'app', {}).entityPrivileges('CO_Ticket');
 

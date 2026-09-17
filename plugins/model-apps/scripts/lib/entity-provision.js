@@ -663,7 +663,7 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
 async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, readOrg, provisionedLanguages }) {
   const readOrgLcid = readOrg || ((url) => readOrgLanguageCode(url));
   const probe = provisionedLanguages || (() => readProvisionedLanguages(envUrl));
-  return resolveLanguageCode({
+  return await resolveLanguageCode({
     // resolveLanguageCode only needs `.queryRecords('organization', …)`; adapt the transport read to
     // that shape rather than duplicating the precedence ladder, so the two paths cannot drift.
     provision: {

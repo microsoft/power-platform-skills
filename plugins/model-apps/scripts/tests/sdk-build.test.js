@@ -3768,7 +3768,7 @@ test('pages: app-shell-only run (pages EXCLUDED) HALTS rather than orphan live g
       'a page-less app-shell-only rewrite over an app with live genpages must HALT without --allow-destructive',
     );
     // With --allow-destructive it proceeds (detaches by writing the page-less sitemap).
-    const { sdk, calls } = mk();
+    const { sdk, calls } = await mk();
     await runSdkBuild(spec, { sdk, apply: true, allowDestructive: true, env: 'https://x', appDir, phases: ['solution', 'data-model', 'app-shell'] });
     assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'with --allow-destructive the page-less sitemap is written (detach)');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }

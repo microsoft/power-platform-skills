@@ -31,12 +31,27 @@ if (!argSdk) {
   process.exit(2);
 }
 const SDK_ENTRY = path.join(argSdk, 'packages/cds-maker-sdk/lib/index.js');
+/**
+ * The optional filesystem adapter, a SEPARATE entry point since the SDK made injected storage
+ * mandatory (`@maker-studio/cds-maker-sdk/node`).
+ *
+ * This vendored bundle is `platform: 'node'`, so pulling `fs` in is correct here — the plugin runs
+ * in Node and needs a real workspace on disk. It is bundled ALONGSIDE the core rather than instead
+ * of it, so a single `require('./vendor/cds-maker-sdk.cjs')` still yields everything the plugin
+ * uses: `createMakerSdk` plus `createNodeWorkspaceStorage`.
+ */
+const SDK_NODE_ENTRY = path.join(argSdk, 'packages/cds-maker-sdk/lib/node/index.js');
 const OUTFILE = path.resolve(__dirname, '../vendor/cds-maker-sdk.cjs');
 const PROVENANCE = path.resolve(__dirname, '../vendor/PROVENANCE.json');
 const esbuild = require('esbuild');
 
 if (!fs.existsSync(SDK_ENTRY)) {
   console.error('SDK entry not found:', SDK_ENTRY);
+  process.exit(2);
+}
+if (!fs.existsSync(SDK_NODE_ENTRY)) {
+  console.error('SDK /node adapter entry not found:', SDK_NODE_ENTRY);
+  console.error('The SDK requires an injected workspaceStorage; the plugin builds one from this.');
   process.exit(2);
 }
 
@@ -198,7 +213,16 @@ const stubPlugin = {
 
 esbuild
   .build({
-    entryPoints: [SDK_ENTRY],
+    // A virtual entry that re-exports BOTH published entry points, so the vendored artifact keeps
+    // its single-`require` shape. `resolveDir` is the SDK's lib directory, so the two relative
+    // specifiers below resolve exactly as they would from inside the package.
+    stdin: {
+      contents:
+        "export * from './index.js';\n" + "export * from './node/index.js';\n",
+      resolveDir: path.dirname(SDK_ENTRY),
+      sourcefile: 'vendor-entry.js',
+      loader: 'js',
+    },
     bundle: true,
     platform: 'node',
     format: 'cjs',

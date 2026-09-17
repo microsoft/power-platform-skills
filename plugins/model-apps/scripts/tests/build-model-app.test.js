@@ -612,7 +612,9 @@ test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement'
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   const returned = /return \{ ([^}]*) \};/.exec(src.slice(src.indexOf('function makeSdk')));
   assert.ok(returned, 'expected makeSdk to return an object literal');
-  const destructured = /const \{ ([^}]*) \} = makeSdk\(/.exec(src);
+  // `await` is optional in the pattern: `makeSdk` became async when the SDK's workspace calls did,
+  // and this guard is about the KEY SETS agreeing, not about how the promise is unwrapped.
+  const destructured = /const \{ ([^}]*) \} = (?:await\s+)?makeSdk\(/.exec(src);
   assert.ok(destructured, 'expected main to destructure makeSdk()');
   const names = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).sort();
   assert.deepStrictEqual(names(destructured[1]), names(returned[1]),
