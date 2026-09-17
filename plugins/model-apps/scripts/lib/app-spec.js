@@ -1114,10 +1114,18 @@ function validateFormSecurityRoles(f, spec, errors) {
 //
 // `tabs[]`/`sections[]` had no allow-list at all, so an invented or misspelled key validated clean
 // and then vanished — the same class of silent loss that let `entities[].localizedLabels` ship as a
-// no-op. Worse here, several plausible keys are accepted by the SDK's normalizers and then DROPPED
-// by its serializer: measured against the vendored bundle, a tab emits only name/expanded/visible
-// + label, and a section only name/showlabel/visible/columns + label. Anything else never reaches
-// the FormXml, so accepting it would promise a layout Dataverse will not render.
+// no-op. A tab reaches FormXml with only name/expanded/visible + label, and a section with only
+// name/showlabel/visible/columns + label; anything else would promise a layout Dataverse will not
+// render.
+//
+// The SDK now REFUSES an unrecognised tab/section key rather than dropping it — measured against the
+// vendored bundle, `addElement` throws `'<key>' is not a tab property, and would be SILENTLY DROPPED
+// at serialization` for `showLabel`/`labelPosition` on a tab and `labelPosition`/`locked` on a
+// section. That is the upstream half of this rule, and it did NOT make this gate redundant: this one
+// fails at AUTHOR time, before any workspace or network call, and names the real mechanism in
+// FORM_LAYOUT_KEY_HINTS instead of pointing at a JSON pointer. Keeping both means a typo is caught
+// at the earliest point that can see it, and a re-vendor that loses the upstream check cannot
+// silently reopen the hole.
 const FORM_TAB_KEYS = new Set(['name', 'label', 'expanded', 'visible', 'sections', 'columns']);
 const FORM_TAB_COLUMN_KEYS = new Set(['width', 'sections']);
 const FORM_SECTION_KEYS = new Set(['name', 'label', 'columns', 'showLabel', 'visible', 'fields']);
@@ -1167,8 +1175,9 @@ function formColumnsOf(tab) {
   return [{ width: '100%', sections: Array.isArray(tab.sections) ? tab.sections : [] }];
 }
 
-// Keys an author reasonably reaches for that the serializer silently discards. Naming the real
-// mechanism is the difference between an actionable error and a scavenger hunt.
+// Keys an author reasonably reaches for that FormXml has no place for. Naming the real mechanism is
+// the difference between an actionable error and a scavenger hunt — the SDK's own refusal reports a
+// JSON pointer into the compiled intent, which an author who wrote a spec cannot map back to a key.
 const FORM_LAYOUT_KEY_HINTS = {
   showLabel: " — a TAB has no label toggle in FormXml; use the tab's `label`, or move the toggle to a section's `showLabel`",
   labelPosition: ' — label position is not expressible per tab/section through this SDK',

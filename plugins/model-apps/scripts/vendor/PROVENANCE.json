@@ -1,14 +1,14 @@
 {
-  "commit": "0d59c3c9e3b38bd63d12d599b6ce029d75244aec",
-  "subject": "feat(cds-maker-sdk)!: require injected storage and move the filesystem behind /node",
+  "commit": "9719a713a0e9cec3353ff042a1bf22c34c7ce6ed",
+  "subject": "Fix Monitoring Hub time-series routing",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-16T18:20:02.475Z",
-  "newestSrcAt": "2026-09-16T18:16:51.564Z",
+  "libBuiltAt": "2026-09-17T00:49:27.419Z",
+  "newestSrcAt": "2026-09-16T22:30:59.712Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-16T18:35:24.466Z",
-  "bundleSha256": "82a68d426cd5dd574e5dbba29bd1b893ed08878df0027efc8da066d3f434fb7b",
-  "bundleBytes": 695618
+  "builtAt": "2026-09-17T00:49:41.071Z",
+  "bundleSha256": "7b3394af03f9cb701e5ac23dcd5064fbf9e31870712d642872aff0b9d0fd442b",
+  "bundleBytes": 702409
 }

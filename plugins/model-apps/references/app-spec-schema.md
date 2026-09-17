@@ -675,8 +675,10 @@ why they need naming here at all.
 A tab declares **either** `sections` **or** `columns`, never both. `columns` on a **tab** is the list
 of form-columns; `columns` on a **section** is its 1–4 grid width — a number on a tab is rejected
 rather than silently discarded. Any other key is **rejected** — including `showLabel`/`labelPosition`
-on a tab and `labelPosition`/`locked` on a section, which the SDK's serializer silently discards, so
-accepting them would promise a layout Dataverse never renders.
+on a tab and `labelPosition`/`locked` on a section, which FormXml has no place for, so accepting them
+would promise a layout Dataverse never renders. The SDK refuses these too, but this plugin rejects
+them at **author time** — before any workspace or network call — and names the real mechanism rather
+than reporting a JSON pointer into the compiled form.
 
 **Names are identity, and a field is placed once per form.** Two tabs — or two sections — on one
 form may not share a `name`, and a column may not be placed twice, whether in two different sections

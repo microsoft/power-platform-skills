@@ -301,3 +301,46 @@ test('REAL BUNDLE layout: multi-column tabs and cell spans reach the serialized 
   assert.ok(nameCell, 'an authored colspan reaches the cell attribute');
   assert.ok(/<cell[^>]*rowspan="2"[^>]*>[\s\S]*?datafieldname="new_note"/.test(formxml), 'an authored rowspan reaches the cell attribute');
 });
+
+// ---------------------------------------------------------------------------
+// UNKNOWN FORM KEYS. The SDK now REFUSES a tab/section property it does not recognise instead of
+// dropping it at serialization. `validateFormLayoutKeys` (app-spec.js) rejects the same keys at
+// author time, and the two are deliberately kept BOTH: the spec gate fails before any workspace or
+// network call and names the real mechanism, while this upstream check is the backstop for anything
+// that reaches the SDK by another route.
+//
+// Pinned here because the refusal lives in the VENDORED BUNDLE: a re-vendor that lost it would
+// silently reopen the silent-drop hole, and every spec-level test would still pass.
+// ---------------------------------------------------------------------------
+
+test('REAL BUNDLE: an unrecognised tab or section property is refused, not silently dropped', async () => {
+  const baseSection = { name: 's0', label: 'S', visible: true, showLabel: true, columns: 1, rows: [] };
+  const attempt = async (tabExtra, sectionExtra) => {
+    const sdk = await freshSdk(null, META3);
+    const art = await sdk.createArtifact('form', { name: 'K', entityLogicalName: 'new_customer', formType: 'Main' });
+    try {
+      await sdk.addElement('form', art.id, '/tabs', Object.assign(
+        { name: 't0', label: 'T', visible: true, columns: [{ width: '100%', sections: [Object.assign({}, baseSection, sectionExtra)] }] },
+        tabExtra));
+      return null;
+    } catch (e) { return String(e && e.message); }
+  };
+
+  // The four keys app-spec.js names in FORM_LAYOUT_KEY_HINTS, i.e. the ones an author actually
+  // reaches for. Each must be refused rather than accepted-and-dropped.
+  for (const [what, tabExtra, sectionExtra] of [
+    ['tab showLabel', { showLabel: false }, null],
+    ['tab labelPosition', { labelPosition: 'top' }, null],
+    ['section labelPosition', null, { labelPosition: 'top' }],
+    ['section locked', null, { locked: true }],
+  ]) {
+    const err = await attempt(tabExtra, sectionExtra);
+    assert.ok(err, `${what}: the SDK must refuse it, not accept and drop it`);
+    assert.match(err, /not a (tab|section) property/, `${what}: refusal should name the offending property — got ${err}`);
+  }
+
+  // And the converse, which is what keeps the plugin's allow-list from being over-restrictive: every
+  // key the compiler actually emits is still accepted.
+  assert.strictEqual(await attempt({ expanded: true }, { columns: 2 }), null,
+    'the properties the compiler emits must remain accepted');
+});
