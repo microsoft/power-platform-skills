@@ -781,6 +781,26 @@ test('minimumPluginVersion refuses a spec that needs a newer plugin than the one
   const bad = gateErrors(spec('next'));
   assert.strictEqual(bad.length, 1);
   assert.match(bad[0], /dotted version string/);
+  // The grammar is ANCHORED, and the anchoring is the point. The reviewer caught a prefix-only
+  // pattern: `2..9` matched on its leading `2` alone, and compareVersions' `parseInt(n, 10) || 0`
+  // then turned the empty component into 0 and enforced **2.0.9** — a DIFFERENT floor than the
+  // author wrote, with no error at all. The evident intent `2.9` IS refused by this plugin, so the
+  // typo silently inverted the outcome. Trailing junk is the same class (`2.9.0garbage` -> 2.9.0).
+  for (const malformed of ['2..9', '2.9.0garbage', '2.9.0 ', ' 2.9.0', '2.', '.9', '2.9.0-', '1.2.3++x']) {
+    const e = gateErrors(spec(malformed));
+    assert.strictEqual(e.length, 1, `${JSON.stringify(malformed)} must be refused, got ${JSON.stringify(e)}`);
+    assert.match(e[0], /dotted version string/,
+      `${JSON.stringify(malformed)} must be reported as malformed rather than compared as a version`);
+  }
+
+  // …while every shape an author legitimately writes still passes the grammar. A version that is
+  // merely NEWER than this plugin is a different outcome from one that is malformed, so accept
+  // either "no error" or the too-new refusal here — this asserts well-formedness, not the floor.
+  for (const good of ['2', '2.9', '2.9.0', '2.9.0.1', '2.9.0-beta.1', '2.9.0+build.1']) {
+    const e = gateErrors(spec(good));
+    assert.ok(e.length === 0 || /requires model-apps/.test(e[0]),
+      `${JSON.stringify(good)} must be accepted as well-formed, got ${JSON.stringify(e)}`);
+  }
 
   // FAIL CLOSED when this plugin cannot read its own version. Astra review caught the first attempt
   // downgrading that to a warning, which let an incompatible install reach the write path with the

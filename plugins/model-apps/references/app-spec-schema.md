@@ -682,7 +682,10 @@ than reporting a JSON pointer into the compiled form.
 
 **`minimumPluginVersion`** (top level, optional) declares the oldest plugin that can build this spec —
 `"minimumPluginVersion": "2.9.0"`. A plugin older than that refuses the spec instead of mis-compiling
-it, naming both versions.
+it, naming both versions. The value must be a plain dotted version (`2`, `2.9`, `2.9.0`) with an
+optional `-pre` or `+build` suffix, which compares on the release core. Anything else — `2..9`, a
+trailing typo, stray whitespace — is rejected as malformed rather than quietly reinterpreted as a
+different floor.
 
 ⚠ It protects **forward only**. Measured against the shipped 2.8.0 validator, an unknown top-level
 key, `schemaVersion: 3` and even `schemaVersion: 99` are all accepted — it validates none of them —

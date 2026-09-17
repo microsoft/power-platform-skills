@@ -1624,7 +1624,11 @@ function validateAppSpec(spec, opts = {}) {
   // remove every non-primary field, which requires authorization before it can be written.
   if (spec.minimumPluginVersion !== undefined) {
     const want = spec.minimumPluginVersion;
-    if (typeof want !== 'string' || !/^\d+(\.\d+)*/.test(want)) {
+    // ANCHORED at BOTH ends on purpose. A prefix-only pattern accepted `2..9` on its leading `2`,
+    // and compareVersions' `parseInt(n, 10) || 0` then read the empty component as 0 and enforced
+    // 2.0.9 — a different floor than the author wrote, with no error. The optional `-pre`/`+build`
+    // suffix is permitted because compareVersions deliberately compares the release CORE.
+    if (typeof want !== 'string' || !/^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(want)) {
       errors.push(`minimumPluginVersion must be a dotted version string like '2.9.0', got ${JSON.stringify(want)}`);
     } else {
       const have = pluginVersion();

@@ -44,7 +44,8 @@ downloads that round-trip Choice columns.
   uses, and never touches a section that still holds anything.
 - **`minimumPluginVersion` lets a spec declare the oldest plugin that can build it**, so a newer spec
   is refused by an older plugin rather than mis-compiled. It protects forward only — already-shipped
-  consumers validate no such marker.- **A field added or moved on an existing form now packs to the section's grid.** Placement ignored
+  consumers validate no such marker.
+- **A field added or moved on an existing form now packs to the section's grid.** Placement ignored
   `section.columns`, so a two-column section that a fresh build lays out two-per-row came back as one
   long row on a rebuild — the same spec producing a different form depending only on whether it
   already existed.
