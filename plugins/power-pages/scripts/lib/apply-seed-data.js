@@ -247,7 +247,7 @@ function validateAttachmentFile(filePath, deps = {}) {
   const ext = path.extname(filePath).toLowerCase();
   if (!ALLOWED_ATTACHMENT_EXTENSIONS.has(ext)) return `Attachment extension is not allowed: ${ext || '(none)'}`;
   if (!fsImpl.existsSync(filePath)) return `Attachment file not found: ${filePath}`;
-  const stat = fsImpl.statSync(filePath);
+  const stat = fsImpl.lstatSync(filePath);
   if (!stat.isFile()) return `Attachment path is not a file: ${filePath}`;
   // Git LFS pointer files start with:
   //   version https://git-lfs.github.com/spec/v1

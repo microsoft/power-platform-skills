@@ -13,6 +13,7 @@ const {
   isDuplicateConflict,
   createTokenProvider,
   validateSeedLookupContract,
+  validateAttachmentFile,
 } = require('../lib/apply-seed-data');
 const { parseArgs, run } = require('../apply-seed-data');
 
@@ -356,7 +357,8 @@ test('applySeedData posts Dataverse export seed tables and uploads fileExports',
       }
       return fileBuffer;
     },
-    statSync: () => ({ isFile: () => true, size: fileBuffer.length }),
+    lstatSync: () => ({ isFile: () => true }),
+    statSync: () => ({ size: fileBuffer.length }),
   };
   const requests = [];
   const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
@@ -441,7 +443,8 @@ test('applySeedData strips __files, requires primaryKey, and uploads file-column
       }
       return fileBuffer;
     },
-    statSync: () => ({ isFile: () => true, size: fileBuffer.length }),
+    lstatSync: () => ({ isFile: () => true }),
+    statSync: () => ({ size: fileBuffer.length }),
   };
   const requests = [];
   const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
@@ -495,6 +498,25 @@ test('applySeedData records attachment validation failures without blocking othe
   assert.equal(result.inserted, 0);
   assert.equal(result.failed, 1);
   assert.match(result.errors[0].message, /primaryKey/);
+});
+
+test('validateAttachmentFile rejects symbolic links without reading their targets', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const targetPath = path.join(dir, 'outside.pdf');
+  const linkPath = path.join(dir, 'attachment.pdf');
+  fs.writeFileSync(targetPath, 'sensitive content');
+  try {
+    fs.symlinkSync(targetPath, linkPath);
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.match(validateAttachmentFile(linkPath), /not a file/);
 });
 
 test('applySeedData rejects non-object __files before posting', async () => {
@@ -580,7 +602,8 @@ test('applySeedData uploads file attachments when the explicit-guid record alrea
       }
       return fileBuffer;
     },
-    statSync: () => ({ isFile: () => true, size: fileBuffer.length }),
+    lstatSync: () => ({ isFile: () => true }),
+    statSync: () => ({ size: fileBuffer.length }),
   };
   const requests = [];
   const result = await applySeedData({ seedDir, envUrl: 'https://org.crm.dynamics.com' }, {
@@ -622,7 +645,8 @@ test('applySeedData rejects disallowed attachment extensions and Git LFS pointer
       }
       return Buffer.from('version https://git-lfs.github.com/spec/v1\n');
     },
-    statSync: () => ({ isFile: () => true, size: 42 }),
+    lstatSync: () => ({ isFile: () => true }),
+    statSync: () => ({ size: 42 }),
   };
   const requests = [];
   const result = await applySeedData({ seedDir: '/virtual/seed', envUrl: 'https://org.crm.dynamics.com' }, {
