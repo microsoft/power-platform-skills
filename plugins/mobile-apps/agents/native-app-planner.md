@@ -395,7 +395,7 @@ the later screen-planning gates.
 ## Screens
 <!-- populated after Gate 3 approval -->
 
-## Approval Status
+## Approvals
 - [ ] Data model approved
 - [ ] Native capabilities approved
 - [ ] Design approved (during `/design-system`, or at Gate 4 only when HTML preview rendering is enabled)

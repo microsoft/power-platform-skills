@@ -150,6 +150,12 @@ test('data platform and integrations are approved before Dataverse modeling', ()
   );
 });
 
+test('screen specs use the canonical approvals heading as their insertion anchor', () => {
+  assert.match(planner, /^## Approvals$/m);
+  assert.doesNotMatch(planner, /^## Approval Status$/m);
+  assert.match(screenPlanner, /immediately before `## Approvals`/);
+});
+
 test('deferred design does not create an extra industry question', () => {
   assert.match(planner, /Design vibe opt-in` is `yes`, `done`, `deferred`, or `skip`/i);
   assert.doesNotMatch(planner, /design is reviewed visually at Gate 4/i);
