@@ -661,6 +661,7 @@ scripts/
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
     apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/tombstone/delete
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
+    workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)

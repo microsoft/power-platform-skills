@@ -345,22 +345,40 @@ const KIND_HANDLERS = {
       // loss: teardown deletes the app FIRST, so if the role is STILL associated with any app module, that
       // association belongs to ANOTHER app that shares this (same name+BU) persona — deleting the role
       // would break that app. Skip those; delete only roles no app still uses (this app's link is already
-      // gone, or a data-only role). Best-effort: if the association check can't run, fall back to the
-      // BU+marker decision (delete) — the extra guard only ever REMOVES candidates, never adds them.
+      // gone, or a data-only role).
+      //
+      // The guard FAILS CLOSED (#587 item 7). It used to be best-effort — an unreadable association fell
+      // back to "not shared", i.e. delete — which is the wrong direction for a destructive decision and
+      // was inconsistent with this same function, where a failure to resolve the business unit already
+      // returns [] and deletes nothing. Costs are asymmetric: retaining a role an operator can delete by
+      // hand, versus silently stripping permissions from a DIFFERENT app that shares the persona.
       const owned = (rows || []).filter((r) => r.ismanaged !== true && (r.description || '') === SDK_ROLE_MARKER && r.roleid);
       const kept = [];
       for (const r of owned) {
         const id = String(r.roleid);
-        let sharedWithAnotherApp = false;
+        // Starts FALSE: a role is deletable only once the check has actually PROVED no app still
+        // references it. Every path that cannot produce that proof leaves it false.
+        let provedUnused = false;
         if (FORM_GUID_RE.test(id)) {
           try {
             // OData `any()` over the appmodule<->role N:N (live-verified). id is a Dataverse GUID (Edm.Guid,
             // unquoted) validated above, so interpolation is injection-safe.
             const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `appmoduleroles_association/any(x:x/roleid eq ${id})`, top: 1 });
-            sharedWithAnotherApp = Array.isArray(apps) && apps.length > 0;
-          } catch { sharedWithAnotherApp = false; }
+            provedUnused = Array.isArray(apps) && apps.length === 0;
+          } catch {
+            // Unreadable association (403, transient 5xx, an old bundle): treat exactly like "still in
+            // use". We did not learn that it is unused, so we have not earned the right to delete it.
+            provedUnused = false;
+          }
+        } else {
+          // FORM_GUID_RE is an INJECTION guard on the OData filter, not an existence check. Every
+          // Dataverse `roleid` is an Edm.Guid, so an id that fails it did not come from the platform;
+          // it has no app association to protect, and `deleteSecurityRole` would reject it anyway.
+          // Treating it as a FAILED check was considered and rejected: it adds no safety on any real
+          // row while making ownership resolution depend on id formatting.
+          provedUnused = true;
         }
-        if (!sharedWithAnotherApp) kept.push({ id, name: target.name });
+        if (provedUnused) kept.push({ id, name: target.name });
       }
       return kept;
     },

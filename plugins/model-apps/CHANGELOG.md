@@ -38,6 +38,16 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **`--clear-workspace` no longer recursively deletes whatever `--workspace` named** ([#587]). The
+  cleanup ran `rm -rf` on the caller-supplied path with no check that it was a workspace at all, and
+  it runs immediately after a *successful* teardown — the moment an operator is least expecting data
+  loss. A mistyped path, or a shell variable that expanded to a repo root, was destroyed. Cleanup
+  now requires a real `.maker-workspace` directory, rejects filesystem roots and
+  symlink/junction escapes, and reports a refusal instead of failing the teardown.
+- **A security role whose sharing check cannot be read is retained, not deleted** ([#587]). Teardown
+  skips a role another app still references, but a failed read of that association counted as "not
+  shared" and left the role deletable — silently stripping permissions from the other app. It now
+  fails closed, matching the business-unit check in the same function.
 - **`/genpage` deploys through the same quoting-safe upload path as `/app-builder`** ([#589]). The
   standalone skill still told the orchestrator to compose a raw `pac model genpage upload
   --prompt "<text>"` command line, so a prompt containing quotes, newlines, `%VAR%` or non-ASCII
@@ -236,6 +246,7 @@ downloads that round-trip Choice columns.
 [#574]: https://github.com/microsoft/power-platform-skills/issues/574
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
+[#587]: https://github.com/microsoft/power-platform-skills/issues/587
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591
 

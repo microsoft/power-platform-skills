@@ -23,6 +23,7 @@ const os = require('node:os');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { runTeardown } = require('./lib/sdk-teardown.js');
 const { classifyOps } = require('./lib/op-diff.js');
+const { checkWorkspaceClearable } = require('./lib/workspace-paths.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const snapStore = require('./lib/apply-snapshot-store.js');
@@ -156,9 +157,18 @@ async function main() {
     // Clear the local workspace only after a clean apply — stale metadata there would make a
     // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
     if (apply && flags['clear-workspace'] && r && r.ok && !r.dryRun) {
-      if (fs.existsSync(workspaceDir)) {
-        fs.rmSync(workspaceDir, { recursive: true, force: true });
-        process.stderr.write(`\ncleared workspace ${workspaceDir}\n`);
+      // VALIDATE BEFORE DELETING. `--workspace` is caller-supplied and this runs immediately
+      // after a SUCCESSFUL teardown — the moment an operator is least expecting data loss — so an
+      // unguarded `rmSync(dir, { recursive: true, force: true })` on a mistyped path, or on a
+      // shell variable that expanded to a repo root, destroyed real work. Refusal is a WARNING,
+      // not a failure: the teardown itself already succeeded, and the cost of refusing is only a
+      // stale cache directory the operator can remove by hand.
+      const clearable = checkWorkspaceClearable(workspaceDir);
+      if (clearable.ok) {
+        fs.rmSync(clearable.target, { recursive: true, force: true });
+        process.stderr.write(`\ncleared workspace ${clearable.target}\n`);
+      } else {
+        process.stderr.write(`\nskipped --clear-workspace: ${clearable.reason}\n`);
       }
     }
   } catch (err) {

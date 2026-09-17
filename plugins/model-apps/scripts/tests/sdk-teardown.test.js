@@ -1701,3 +1701,57 @@ test('the teardown filter does NOT depend on businessRuleFilter\'s spelling', as
   assert.strictEqual(importLine.includes('businessRuleFilter'), false,
     `teardown must not import businessRuleFilter; got: ${importLine.trim().slice(0, 160)}`);
 });
+
+// #587 item 7 — the role resolver read the appmodule<->role association to avoid deleting a role
+// ANOTHER app still uses, but a failed read set `sharedWithAnotherApp = false`, i.e. "not shared",
+// leaving the role eligible for deletion. That is the wrong direction for a destructive decision,
+// and it was inconsistent with the very same function: a failure to resolve the business unit
+// already returns [] and deletes nothing.
+//
+// Cost of being wrong each way: fail-closed leaves a role behind that an operator can delete by
+// hand; fail-open silently strips permissions from a DIFFERENT app that shares the persona.
+test('#587 a role whose sharing check cannot be read is retained, not deleted', async () => {
+  const ROLE_ID = '11111111-2222-4333-8444-555555555555';
+  const sdkWith = (appmodule) => ({
+    deleteSecurityRole: async () => {},
+    queryRecords: async (set) => {
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') return [{ roleid: ROLE_ID, name: 'Dispatcher', description: SDK_ROLE_MARKER, ismanaged: false }];
+      if (set === 'appmodule') return appmodule();
+      return [];
+    },
+  });
+
+  // CONTROLS first, so a blanket "never delete anything" regression cannot pass this test.
+  const deletable = await KIND_HANDLERS.role.resolve(sdkWith(() => []), { name: 'Dispatcher' });
+  assert.deepStrictEqual(deletable, [{ id: ROLE_ID, name: 'Dispatcher' }],
+    'a role no app still references must remain deletable');
+
+  const shared = await KIND_HANDLERS.role.resolve(sdkWith(() => [{ appmoduleid: 'other-app' }]), { name: 'Dispatcher' });
+  assert.deepStrictEqual(shared, [], 'a role another app still references must be retained');
+
+  // The fix: an UNREADABLE sharing check must behave like "shared", not like "not shared".
+  const unreadable = await KIND_HANDLERS.role.resolve(
+    sdkWith(() => { throw new Error('403 read denied'); }), { name: 'Dispatcher' });
+  assert.deepStrictEqual(unreadable, [],
+    'an unreadable sharing check must fail CLOSED and retain the role');
+});
+
+// The OTHER branch, pinned so it is not "fixed" later without thinking it through. A roleid that
+// is not a GUID skips the association query entirely — and that is deliberate: FORM_GUID_RE is an
+// injection guard on the OData filter, not an existence check. Every Dataverse `roleid` is an
+// Edm.Guid, so an id failing it never came from the platform and has no app association to protect.
+// Making it fail closed was considered and rejected: no real row benefits, and role ownership would
+// start depending on id formatting.
+test('#587 a non-GUID role id still resolves — the GUID test is an injection guard, not a safety check', async () => {
+  const sdk = {
+    deleteSecurityRole: async () => {},
+    queryRecords: async (set) => {
+      if (set === 'businessunit') return [{ businessunitid: '44444444-4444-4444-4444-444444444444' }];
+      if (set === 'role') return [{ roleid: 'r1', name: 'Dispatcher', description: SDK_ROLE_MARKER, ismanaged: false }];
+      return [];
+    },
+  };
+  assert.deepStrictEqual(await KIND_HANDLERS.role.resolve(sdk, { name: 'Dispatcher' }),
+    [{ id: 'r1', name: 'Dispatcher' }]);
+});

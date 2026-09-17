@@ -199,6 +199,9 @@ function loadTeardownCli({
   workspaceExists = true,
   invokeAsMain = false,
   emitThrows = false,
+  // #587 item 8 — lets a test drive the destructive-cleanup guard both ways. `null` means the
+  // guard accepts (the ordinary case); a string is the refusal reason.
+  clearRefusedBecause = null,
 }) {
   const scriptPath = path.join(__dirname, '..', 'teardown-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
@@ -242,6 +245,17 @@ function loadTeardownCli({
     }
     if (id === './lib/op-diff.js') {
       return { classifyOps: () => ({ hasDestructive: false, destructive: [] }) };
+    }
+    if (id === './lib/workspace-paths.js') {
+      return {
+        WORKSPACE_DIR_NAME: '.maker-workspace',
+        checkWorkspaceClearable: (dir) => {
+          events.push({ type: 'checkWorkspaceClearable', dir });
+          return clearRefusedBecause
+            ? { ok: false, reason: clearRefusedBecause }
+            : { ok: true, target: dir };
+        },
+      };
     }
     if (id === './lib/sdk-http-client.js') {
       return { createAzHttpClient: (env) => ({ env }) };
@@ -348,6 +362,42 @@ test('teardown CLI applies, clears the local workspace only after a clean run, a
   assert.ok(sdkCleanupIndex > -1 && sdkCleanupIndex < emitIndex, 'emitResult exits, so SDK cleanup must happen first');
   assert.match(harness.stderr.join(''), /cleared workspace/);
   assert.strictEqual(harness.events[emitIndex].ok, true);
+});
+
+// #587 item 8 — the destructive half of the same flag. Cleanup runs right after a SUCCESSFUL
+// teardown, so an unguarded recursive delete on a caller-supplied `--workspace` destroys data at
+// the moment an operator is least expecting it. When the guard refuses, NOTHING may be removed —
+// and the teardown must still report success, because the teardown itself did succeed and failing
+// it would push the operator to re-run a destructive command.
+test('teardown CLI does not delete a workspace the safety guard refuses', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\not-a-workspace';
+  const harness = loadTeardownCli({
+    clearRefusedBecause: "refusing to delete 'D:\\src': only a directory named '.maker-workspace' may be cleared",
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main();
+
+  assert.ok(harness.events.some((e) => e.type === 'checkWorkspaceClearable' && e.dir === workspaceDir),
+    'the guard must be consulted before any delete');
+  assert.ok(!harness.events.some((e) => e.type === 'rmSync' && e.dir === workspaceDir),
+    'a refused workspace must NOT be removed');
+  const err = harness.stderr.join('');
+  assert.match(err, /skipped --clear-workspace/, 'the refusal must be reported, not silent');
+  assert.doesNotMatch(err, /cleared workspace/, 'and it must not claim to have cleared anything');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.strictEqual(emitted.ok, true,
+    'the teardown succeeded; refusing an unsafe cleanup must not turn it into a failure');
 });
 
 test('teardown CLI dry-runs a positional spec with the default workspace and no destructive cleanup', async () => {
