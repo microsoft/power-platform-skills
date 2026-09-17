@@ -1,0 +1,89 @@
+{
+  "name": "valid Dataverse webhook and action naming",
+  "expected": {
+    "valid": true,
+    "reasons": []
+  },
+  "contract": {
+    "triggerEntityName": "new_pushnotification",
+    "actionEntityNames": {
+      "Mark_As_Sending": "new_pushnotifications"
+    }
+  },
+  "requested": {
+    "state": "Started",
+    "connectionReferences": {
+      "shared_commondataserviceforapps": "shared_commondataserviceforapps"
+    },
+    "definition": {
+      "triggers": {
+        "When_a_push_notification_is_queued": {
+          "type": "OpenApiConnectionWebhook",
+          "inputs": {
+            "host": {
+              "operationId": "SubscribeWebhookTrigger"
+            },
+            "parameters": {
+              "subscriptionRequest/entityname": "new_pushnotification",
+              "subscriptionRequest/message": 1
+            }
+          }
+        }
+      },
+      "actions": {
+        "Mark_As_Sending": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "operationId": "UpdateOnlyRecord"
+            },
+            "parameters": {
+              "entityName": "new_pushnotifications",
+              "recordId": "@triggerBody()?['new_pushnotificationid']",
+              "item/new_status": 100000002
+            }
+          },
+          "runAfter": {}
+        }
+      }
+    }
+  },
+  "live": {
+    "state": "Started",
+    "connectionReferences": {
+      "shared_commondataserviceforapps": "shared_commondataserviceforapps"
+    },
+    "definition": {
+      "triggers": {
+        "When_a_push_notification_is_queued": {
+          "type": "OpenApiConnectionWebhook",
+          "inputs": {
+            "host": {
+              "operationId": "SubscribeWebhookTrigger"
+            },
+            "parameters": {
+              "subscriptionRequest/entityname": "new_pushnotification",
+              "subscriptionRequest/message": 1
+            }
+          }
+        }
+      },
+      "actions": {
+        "Mark_As_Sending": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "operationId": "UpdateOnlyRecord"
+            },
+            "parameters": {
+              "entityName": "new_pushnotifications",
+              "recordId": "@triggerBody()?['new_pushnotificationid']",
+              "item/new_status": 100000002
+            }
+          },
+          "runAfter": {}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "status": "success",
+  "result": [
+    {
+      "projectId": "field-ops-prod",
+      "displayName": "Field Operations"
+    },
+    {
+      "projectId": "inventory-sandbox",
+      "displayName": "Inventory Sandbox"
+    }
+  ]
+}

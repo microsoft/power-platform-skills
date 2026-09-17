@@ -1,0 +1,17 @@
+{
+  "status": "success",
+  "result": [
+    {
+      "appId": "1:123456789:android:shared",
+      "displayName": "Field Operations Android",
+      "platform": "ANDROID",
+      "packageName": "com.contoso.fieldops"
+    },
+    {
+      "appId": "1:123456789:android:shared",
+      "displayName": "Conflicting Android Record",
+      "platform": "ANDROID",
+      "packageName": "com.contoso.other"
+    }
+  ]
+}

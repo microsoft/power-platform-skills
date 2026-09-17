@@ -7,6 +7,17 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 - Node.js 24 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
+- For wrapped Android push delivery: a physical Android 8/API 26+ device and
+  the local Wrap/Android SDK toolchain, including `apksigner` for signature
+  verification. Direct-test APK signing remains customer-managed; AAB and
+  Google Play distribution are not included in the preview.
+- For wrapped iOS push delivery: macOS with the installed Wrap/Xcode toolchain,
+  Apple Developer team access, and a physical iPhone or iPad registered to that
+  team. The preview supports registered-device `development` and `ad-hoc`
+  builds only—not simulator, TestFlight, App Store, or enterprise distribution.
+  Apple Developer and Xcode configuration, signing assets, device registration,
+  and credentials remain user-managed; `/build-ios` runs the direct Wrap
+  command only after exact confirmation.
 
 ## Setup
 
@@ -202,7 +213,202 @@ For other capabilities (only those actually shipped by the template):
 > /add-native sharing           # expo-sharing wrapper
 ```
 
-Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present and not runtime-banned, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `expo-notifications`; if the template does not ship it, notifications cannot be added until the upstream template includes it.
+Native modules are allowlist-bound by the current template `package.json`.
+Push notifications use one guided entry point:
+
+```text
+> /add-push-notifications
+```
+
+The skill detects existing progress, asks for the target platform and stopping
+point only when they are unclear, and resumes the required owner workflows.
+Choose whether to stop after app configuration, Power Automate delivery flows,
+a wrapped device build, or end-to-end physical-device verification. You do not
+need to remember or manually chain the individual push commands.
+
+Setup is faster when independent work is available: Firebase project setup
+stays serial, then Android and iOS client configuration may run together.
+After Firebase joins, independent runtime, WIF, and iOS-prerequisite work may
+also run in a bounded wave. The workflow falls back to one worker or serial
+execution when needed. Flow authoring, wrapped builds, installation handoffs,
+and physical verification still run in their required order, so not every
+push step runs concurrently.
+
+Each bounded worker first completes a no-read/no-write capability preflight.
+Workers receive fixed identities and files, never write the memory bank, and
+return project-relative paths that the parent checks against its absolute
+allowlist. WIF reuse/repair requires a read-only plan and approval before
+execution. WIF setup asks the user to reuse the app registration, provide another
+same-tenant existing client ID, or create a new dedicated registration. The
+two existing-registration routes use a read-only plan followed by approval and
+execution. The create-new route uses two approvals: first only for creating
+the absent dedicated Entra identity/credential and storing it safely in Key
+Vault, then—after a fresh claim-driven plan using the generated client ID—for
+the remaining Google/API/RBAC work and final proof. The bootstrap never writes
+`sender-auth.json`. If iOS worker dispatch is unavailable, one combined
+`/setup-apns` fallback validates Apple setup first and returns one Apple/APNs
+result.
+
+The workflow configures `expo-notifications`, React Native Firebase Messaging,
+permission UX, auth/topic lifecycle, and a typed semantic navigation contract.
+That contract uses Expo Router and is shared by in-app actions, the configured
+custom scheme, approved HTTPS App Links/Universal Links, and notification taps.
+See
+[`push-notifications.md`](./shared/references/push-notifications.md) for the
+runtime architecture, [`push-lifecycle.md`](./shared/references/push-lifecycle.md)
+for stage ownership, [`navigation-link-contract.md`](./shared/references/navigation-link-contract.md)
+for unified navigation, and
+[`push-flow-wif.md`](./shared/references/push-flow-wif.md) for the WIF sender
+sequence.
+
+Notification delivery must be tested on matching wrapped physical-device
+builds. Native client setup, sender authentication, and Power Automate flow
+authoring are independent resumable stages. Each platform then adds a wrapped
+build and physical delivery-verification stage. `/add-push-notifications`
+invokes the first incomplete owner and continues to the selected stopping
+point. The individual commands remain available as advanced repair or resume
+entry points.
+
+Push cloud setup is **official MCP-first**. `/setup-fcm` is the only supported
+owner for Firebase project/app selection and requires the vendor-official
+Firebase MCP; do not fall back to `firebase-tools` or other CLI/browser
+automation when that MCP path is unavailable. Android package names and iOS
+bundle identifiers are resolved from Expo config, so matching Firebase apps are
+reused and only missing registrations are created. One exact match is reused
+automatically; multiple safe exact matches require an explicit Android/iOS
+app-ID choice, which is revalidated before client-config download.
+
+Validated client files are stored as
+`firebase/google-services.json` and
+`firebase/GoogleService-Info.plist`. These client configurations are intended
+to be committed, and the template discovers them automatically; project-relative
+environment overrides remain available when needed. For iOS,
+`/setup-apple-ios` provides manual Apple Developer and Xcode guidance for the
+exact Team, explicit bundle identifier, Push Notifications capability,
+registered test devices, and the selected `development` or `ad-hoc` path. Each portal or Xcode step is presented separately and confirmed with a Yes/No
+choice; the skill does not automate Apple configuration or generate an Apple
+proof artifact. `/setup-apns` then lets the user choose a manual Apple APNs
+authentication-key (`.p8`, recommended) or APNs certificate (`.p12`) upload in
+Firebase Console. Browser automation, undocumented endpoints, and agent access
+to either credential are prohibited. Completion is recorded as **configured,
+device verification pending** until `/verify-ios-push` passes on the matching
+physical-device build.
+
+After APNs configuration, the guided workflow can continue through native
+client integration, sender auth/flows, and `/build-ios` to create either a `development`
+IPA (`aps-environment=development`) or a registered-device `ad-hoc` IPA
+(`aps-environment=production`) through the template's `npm run build:ios`
+Wrap path. The user directly manages Xcode signing, registered devices,
+profiles, and credentials, confirms the exact Team, bundle, and selected mode
+before building, and keeps all signing assets and secrets outside the
+repository. After explicit confirmation, `/build-ios` runs the direct Wrap
+command but does not inspect, generate, stage, or attest signing assets.
+
+The guided workflow invokes `/verify-ios-push` only after the exact IPA is
+installed and sender auth plus both Power Automate flows are ready. It verifies the physical-device
+foreground, background, terminated/cold-start deep-link, signed-out
+`allUsers`, signed-in lowercase-OID, sign-out, opt-out, and re-registration
+cases. Firebase acceptance, a `Sent` outbox row, simulator, Expo Go, Metro, or
+configuration checks alone do not prove delivery.
+
+For Android, the guided workflow invokes `/build-android` to produce and
+validate a direct-test APK through the template's `npm run build:android` Wrap
+path. Android v1 does not
+cover AAB or Google Play distribution. The plugin never creates a keystore or
+handles signing passwords: customers provide an existing signing setup and run
+credential-bearing signing in their own uncaptured terminal or approved
+external signing system. The skill records only non-secret artifact identity
+and `apksigner verify` evidence in `android-build.json`.
+
+The guided workflow invokes `/verify-android-push` only after that exact APK
+is installed and sender auth plus both Power Automate flows are ready. It verifies permission and
+notification-channel behavior, foreground/background/terminated delivery,
+exactly-once deep links, signed-out `allUsers`, signed-in lowercase-OID account
+transitions, opt-out, and token refresh or exact-APK re-registration recovery
+on a physical Android 8+ device. Emulator, Expo Go, Metro/browser preview,
+Firebase acceptance, and an outbox `Sent` state alone do not prove delivery.
+
+When the Google trust is not already verified, the flow owner offers
+`/setup-push-wif` as the preferred sender mode. It uses the official gcloud MCP and
+Azure MCP where its current coverage applies, inspects a real Entra app-only
+token, configures the provider from the observed issuer and application claim,
+and proves the Google STS and service-account impersonation exchange without
+storing a Google private key. Azure MCP GA `2.0.5` is used here for covered
+read-back operations; RBAC mutations, Entra resource work, and secret-safe
+provisioning gaps remain explicit `az` work owned by the sender-auth skill.
+
+Customers may instead choose **Create Power Automate flows; configure FCM
+authentication manually**. The plugin creates the producer/outbox and sender
+flow structure stopped, then identifies the exact FCM action the customer must
+configure. It does not accept credentials or mark the customer's
+authentication validated.
+
+The flow stage shows an informed comparison of two choices—**WIF (Recommended)**
+or customer-configured FCM authentication in the plugin-created Power Automate
+sender. The producer defaults to a Dataverse
+row-created trigger and resolves the row owner to a lowercase Entra OID topic.
+It warns about lock-screen/device exposure but lets the user choose title and
+body mappings. Based on the trigger table, it suggests a matching detail or
+list destination and lets the user change it or choose no deep link. The flow
+does not solicit arbitrary extra FCM data. When Microsoft-side semantics are
+uncertain, use Microsoft Learn docs rather than guessed contracts.
+
+#### Push notification cloud prerequisites
+
+- **Required MCP servers:** vendor-official Firebase MCP for Firebase
+  project/app work, gcloud MCP for `/setup-push-wif` Google Cloud operations,
+  Azure MCP for covered WIF read-back, and FlowAgent for Power Automate
+  mutation/read-back. The separate `power-automate@power-platform-skills`
+  plugin is not installed automatically; `/create-push-notification-flow`
+  provides the exact manual install, restart, setup, and MCP verification steps
+  when FlowAgent is unavailable. The gcloud MCP requires Node.js 20+ and the Google Cloud
+  CLI. `/setup-push-wif` can install the CLI only after explicit approval and
+  only through a supported package manager already present. Azure MCP GA
+  `2.0.5` currently covers the WIF subscription/group/RBAC read-back used by
+  this plugin. This plugin
+  intentionally does not expose the `keyvault` namespace because its available
+  secret operations can return or accept secret values.
+  Azure CLI remains the explicit gap path for RBAC mutations, Entra resource
+  work, secret-safe writes, plus narrow local identity checks.
+  Microsoft Learn MCP/docs remain the authoritative source for
+  Microsoft-platform behavior. Tested stable package baselines for this path
+  are Firebase MCP package `firebase-tools` **15.27.0** (`15.28.1` is
+  main/unpublished), gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.
+- **Common:** a Firebase project, matching wrapped physical-device runtime,
+  Dataverse environment, Power Automate access, and licensing for Dataverse
+  plus the premium connectors/actions selected by FlowAgent.
+- **WIF (Recommended):** an explicitly selected same-tenant Entra registration
+  (reuse the app registration, provide another existing client ID, or create a
+  new dedicated registration), a confidential credential stored in Azure Key
+  Vault with data-plane RBAC for the Power Automate
+  connection identity, a Google Workload Identity Pool/Provider, a dedicated
+  least-privilege Google sender service account/FCM role, and Power Automate
+  Dataverse, Key Vault, and HTTP connections/actions.
+- **Manual FCM authentication:** Power Automate Dataverse and HTTP
+  connections/actions plus the customer's chosen Google credential and secret
+  storage approach. The plugin authors both flows stopped but does not inspect
+  or validate the configured authentication.
+- **Azure/Entra:** an Azure subscription; permission to validate and prepare
+  the selected same-tenant Entra application/service principal, or create a
+  new dedicated registration when selected; and Azure Key Vault with
+  data-plane RBAC. Contributor alone does not grant secret read/write access.
+- **WIF (preferred):** Google Cloud IAM/WIF administration, a dedicated Google
+  sender service account, a credential for the selected Entra registration
+  stored in Key Vault, and Power Automate connections for Key Vault and the
+  discovered premium HTTP actions. Reusing an existing registration broadens
+  its responsibility and credential-rotation impact; creating a new one gives
+  stronger isolation.
+- **iOS configuration:** Apple Developer access and manual APNs `.p8` key or
+  `.p12` certificate upload to Firebase. `/setup-apple-ios` provides manual
+  Apple Developer/Xcode guidance with Yes/No confirmations; `/setup-apns`
+  guides the selected manual Firebase Console upload. The agent never handles
+  the credential, password, private key, or local path and does not automate
+  Apple configuration.
+- **iOS build and verification:** macOS Wrap/Xcode tooling, a registered
+  physical device, and Apple signing assets retained outside the repository.
+  The user directly manages signing; `/build-ios` runs the confirmed Wrap
+  command and performs safe artifact checks. Only development and ad-hoc
+  registered-device IPA workflows are supported.
 
 ### 4. Add a connector
 
@@ -261,12 +467,22 @@ Example edit flows:
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
+| `/add-push-notifications` | 🟡 preview | **Recommended push entry point.** Resumes existing progress and guides Firebase, Apple/APNs, app runtime, sender auth, Power Automate flows, wrapped builds, and physical verification to one selected stopping point. Directly owns permission UX, FCM topic lifecycle, and the shared typed navigation contract. |
+| `/setup-fcm` | 🟡 preview | Advanced resume/repair owner for exact-identity Firebase Android/iOS app registration and validated client configs through the vendor-official Firebase MCP. No CLI fallback. |
+| `/setup-apns` | 🟡 preview | Advanced iOS resume/repair owner for the manual APNs `.p8` or `.p12` Firebase Console handoff; the agent never handles the credential. |
+| `/setup-apple-ios` | 🟡 preview | Advanced iOS resume/repair owner for manual Apple Developer and Xcode prerequisites for the exact Team, bundle, device, and development/ad-hoc scope. |
+| `/build-android` | 🟡 preview | Advanced direct build owner for a customer-signed test APK. Normally invoked by `/add-push-notifications` when the selected stopping point includes a device build. |
+| `/verify-android-push` | 🟡 preview | Advanced direct verification owner for the exact installed APK and physical Android delivery matrix. Normally invoked by `/add-push-notifications`. |
+| `/build-ios` | 🟡 preview | Advanced direct build owner for a registered-device development or ad-hoc IPA with user-managed signing. Normally invoked by `/add-push-notifications`. |
+| `/verify-ios-push` | 🟡 preview | Advanced direct verification owner for the exact installed IPA and physical iOS delivery matrix. Normally invoked by `/add-push-notifications`. |
+| `/setup-push-wif` | 🟡 preview | Advanced sender-auth resume/repair owner for keyless Entra-to-Google Workload Identity Federation. Normally invoked after the guided flow stage selects WIF. |
+| `/create-push-notification-flow` | 🟡 preview | Advanced flow resume/repair owner for sender-auth selection and Power Automate producer/sender authoring. Normally invoked by `/add-push-notifications`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
-| `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
+| `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. Keeps general JS/bundle diagnostics local, but routes wrapped Android/iOS notification delivery verification to `/verify-android-push` or `/verify-ios-push`. |
 | `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
-| `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
+| `/deploy` | ✅ v0 | Power Platform web deployment — `npm run build` then `npx power-apps push` to the env in `power.config.json`. Routes native push builds to `/build-android` or `/build-ios`; it does not run `expo run:ios` or `expo run:android`. |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |
@@ -290,6 +506,10 @@ Example edit flows:
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
+| `firebase-platform-worker` | Bounded Android-or-iOS Firebase client worker; `/setup-fcm` may run at most two after serial project activation |
+| `push-runtime-worker` | Bounded runtime integration worker with exclusive app-file ownership |
+| `push-wif-worker` | Bounded staged WIF worker; cold identity bootstrap writes no local file, and only final execute may write `sender-auth.json` |
+| `push-ios-prerequisites-worker` | Read-only validator for parent-collected Apple/APNs confirmations |
 
 ## Telemetry and privacy
 

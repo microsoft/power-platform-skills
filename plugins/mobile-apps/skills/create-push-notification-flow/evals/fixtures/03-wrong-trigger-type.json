@@ -1,0 +1,31 @@
+{
+  "name": "wrong OpenApiConnection trigger",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "trigger-must-use-open-api-connection-webhook"
+    ]
+  },
+  "contract": {
+    "triggerEntityName": "new_pushnotification"
+  },
+  "requested": {
+    "state": "Stopped",
+    "definition": {
+      "triggers": {
+        "When_a_row_is_added": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "operationId": "SubscribeWebhookTrigger"
+            },
+            "parameters": {
+              "subscriptionRequest/entityname": "new_pushnotification"
+            }
+          }
+        }
+      },
+      "actions": {}
+    }
+  }
+}

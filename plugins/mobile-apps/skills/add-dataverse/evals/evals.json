@@ -1,0 +1,23 @@
+{
+  "skill_name": "add-dataverse",
+  "evals": [
+    {
+      "id": 8,
+      "prompt": "The Dataverse metadata POST returned 429, but GET by logical name now finds the fully matching table.",
+      "expected_output": "The skill treats the throttled POST as an ambiguous create, verifies ownership, primary name, required columns and types, offline flags, and change tracking, then reports success without retrying the entity create.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "The first metadata create timed out and the retry returned a duplicate schema-name error.",
+      "expected_output": "The skill does not rename or blindly retry. It reads the original logical name, verifies the complete planned schema, adds only genuinely missing columns with per-column preflight, and re-verifies.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "Create this table as explicitly online-only even though an offline profile exists in the project.",
+      "expected_output": "The skill preserves IsAvailableOffline false, does not re-enable offline or change-tracking flags during recovery, leaves the local offline profile removed or unreconciled, and verifies the live table remains online-only.",
+      "files": []
+    }
+  ]
+}

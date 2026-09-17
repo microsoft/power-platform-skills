@@ -1,0 +1,17 @@
+{
+  "status": "success",
+  "result": [
+    {
+      "appId": "1:123456789:android:first",
+      "displayName": "Field Operations Android A",
+      "platform": "ANDROID",
+      "packageName": "com.contoso.fieldops"
+    },
+    {
+      "appId": "1:123456789:android:second",
+      "displayName": "Field Operations Android B",
+      "platform": "ANDROID",
+      "packageName": "com.contoso.fieldops"
+    }
+  ]
+}

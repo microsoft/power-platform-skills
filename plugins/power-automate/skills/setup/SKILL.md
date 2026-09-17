@@ -127,9 +127,9 @@ if the bundle can't be found.
 Verify everything works end-to-end by listing the user's environments:
 
 - **Preferred**: call the `list_environments` tool.
-- **If MCP tools aren't available**: run `node <path-to-plugin>/server/mcp.mjs`
-  to confirm the bundled MCP server starts cleanly, then fix the plugin install
-  or `.mcp.json` wiring before retrying.
+- **If MCP tools aren't available**: return to Step 4 and classify the state as
+  plugin missing, restart required, or MCP disconnected. Do not launch the
+  bundled server directly.
 
 - **If it returns environments**: Success! Tell them:
   - "Everything is working! Here are your Power Automate environments:"
@@ -144,6 +144,11 @@ Verify everything works end-to-end by listing the user's environments:
 - **If it fails**: Check the error. Common issues:
   - Auth error → go back to Step 3
   - Tools not found → go back to Step 4
+  - **Connector connection unavailable** → the plugin and MCP are working; this
+    is not an installation problem. Use `list_connections` to inspect available
+    connections and `pick_or_create_connection` for the required connector.
+    Explain that the user may need to sign in to or create that connector
+    connection before the flow can use it.
   - Network error → ask if they're behind a corporate proxy/VPN
 
 ## Tone Guidelines

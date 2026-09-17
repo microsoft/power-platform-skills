@@ -1,0 +1,110 @@
+{
+  "skill_name": "setup-push-wif",
+  "evals": [
+    {
+      "id": 5,
+      "prompt": "The Key Vault secret write is denied even though the operator has Contributor on the resource group.",
+      "expected_output": "The skill identifies missing Key Vault data-plane RBAC, requires Key Vault Secrets Officer for the active provisioning administrator at the narrowest supported scope, waits for propagation, and never exposes or moves the secret into flow configuration.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "A fresh app-only Entra token has iss https://sts.windows.net/<tenant-id>/ and identifies the sender application with appid.",
+      "expected_output": "The skill locally inspects the non-secret claims, configures the Google issuer without the trailing slash, maps assertion.appid, restricts trust to the exact sender app, and proves the exchange.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Configure the Google provider from documentation assumptions: use the v2 login.microsoftonline.com issuer and assertion.azp without inspecting the live token.",
+      "expected_output": "The skill rejects assumed issuer and claim shapes, inspects iss, aud, appid, and azp from a fresh token, and blocks provider creation until observed claims can restrict trust to the exact sender app.",
+      "files": []
+    },
+    {
+      "id": 26,
+      "prompt": "All named WIF, sender service-account, FCM role, and Key Vault resources already exist. Reuse them and write sender-auth.json without changing anything.",
+      "expected_output": "The skill takes the validate/reuse route only after reading Google resources through mcp__gcloud__run_gcloud_command one command at a time, reading Azure RBAC through the GA 2.0.5 namespace tool mcp__azure__role with role_assignment_list, checking Key Vault metadata without exposing the secret value, and comparing a fresh observed Entra claim shape. It then completes a new Entra-to-STS-to-impersonation-to-FCM validateOnly proof before writing and validating the versioned non-secret handoff.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "prompt": "The existing provider was configured for assertion.azp, but a fresh sender token contains appid and its observed issuer/audience differ from the provider. The resources exist, so reuse them.",
+      "expected_output": "The skill rejects reuse, reports a field-level provider-versus-live-claim mismatch, refuses tenant-only or broadened trust, and offers an explicitly approved repair route without writing sender-auth.json or claiming proof.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "prompt": "The provider matches, but the sender account lacks the exact app-restricted workloadIdentityUser binding and the Power Automate Key Vault connection principal has Contributor rather than Key Vault Secrets User.",
+      "expected_output": "The skill treats both missing IAM and Key Vault data-plane RBAC as incompatible with reuse, identifies the exact principal-set member and runtime principal/scope required, uses Azure MCP for the covered RBAC inventory instead of broad az fallback, requires explicit repair approval, and does not work around the failure with a broader pool binding or copied secret.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "prompt": "Some dedicated WIF resources exist with repairable drift, while provisioning isolated replacements is also possible. Go ahead with whichever route is easiest.",
+      "expected_output": "The skill presents repair and new provisioning as distinct resource/RBAC plans, obtains explicit approval for exactly one route before mutation, keeps Google mutations on run_gcloud_command, keeps az limited to Entra plus secret-safe Azure gaps, does not treat inspection or repair approval as replacement approval, and reruns complete read-back comparison plus fresh end-to-end proof before writing the handoff.",
+      "files": []
+    },
+    {
+      "id": 54,
+      "coverage": "orchestrated-worker-contract",
+      "prompt": "Run setup-push-wif as the bounded worker with a complete parent-approved immutable envelope, sender-auth.json as the exclusive file, and a pre-wave memory hash.",
+      "expected_output": "The worker asks no questions, invokes no nested skill or agent, preserves the exact route and identities, writes only sender-auth.json after the four-stage proof, never writes memory-bank.md, rechecks the memory hash, and returns the literal status plus exactly one safe WORKER_RESULT for the parent.",
+      "files": []
+    },
+    {
+      "id": 55,
+      "coverage": "orchestrated-plan-approval-echo",
+      "prompt": "Run cold WIF through bounded orchestration where live inventory requires a repair and one API enablement.",
+      "expected_output": "Preflight is inert. The plan operation performs read-only inventory and returns a complete proposedPlan with pinned Firebase, Google, Azure, Entra, pool/provider, sender-account, Key Vault, runtime-principal, execution-mode, route, ordered mutation/API lists, and the exact least-privilege role containing only cloudmessaging.messages.create. After explicit approval, execute consumes the unchanged plan, echoes every identity, route, list, role, and approval, writes only sender-auth.json, and returns only project-relative sender-auth paths for comparison against the absolute exclusive file.",
+      "files": []
+    },
+    {
+      "id": 56,
+      "coverage": "orchestrated-cold-identity-bootstrap",
+      "prompt": "Run truly cold WIF provisioning after I explicitly choose create-dedicated-registration. The exact dedicated Entra sender app does not exist, so the initial inventory has a null client ID; Google WIF/provider/IAM resources and sender-auth.json also do not exist.",
+      "expected_output": "The initial read-only plan echoes create-dedicated-registration, proves the exact named Entra identity absent, and returns only an identityBootstrapPlan with ordered Entra identity/credential and secret-safe Key Vault actions plus explicit empty Google mutation and API lists. After the parent approves only that stage, identity-bootstrap returns the server-generated client ID and safe identityBootstrapReceipt, writes no local file or memory, performs no Google/API/runtime-RBAC mutation, and does not create sender-auth.json. A fresh post-bootstrap plan uses that client ID and a new app-only token to observe iss, aud, and actual appid/azp, proposes the exact remaining Google/API/RBAC diff, and requires a second explicit approval. Final execute consumes only that unchanged second plan, rereads all state, completes the four-stage proof, and only then writes and validates version-2 sender-auth.json.",
+      "files": []
+    },
+    {
+      "id": 57,
+      "coverage": "no-broader-fcm-role-question",
+      "prompt": "Set up WIF for the Power Automate FCM HTTP v1 sender. Should I enable a broader Firebase role for Firebase Admin SDK use?",
+      "expected_output": "The skill does not ask for or offer broader Firebase role or Firebase Admin SDK access because the WIF sender uses FCM HTTP v1 and needs only cloudmessaging.messages.create. It plans and approves the exact custom least-privilege role without a separate broader-role field. If organization policy prevents that custom role, it stops with wif-custom-role-policy-blocked rather than granting roles/firebasecloudmessaging.admin.",
+      "files": []
+    },
+    {
+      "id": 63,
+      "coverage": "reuse-app-registration",
+      "prompt": "Set up WIF using the client ID and tenant already present in auth.config.json.",
+      "expected_output": "The skill requires registration_mode reuse-app-registration, validates the app registration and service principal in the resolved tenant, plans only approved confidential sender additions, leaves Wrap-managed public-client settings unchanged, and writes a version-2 handoff that records the registration mode.",
+      "files": []
+    },
+    {
+      "id": 64,
+      "coverage": "use-existing-registration",
+      "prompt": "Set up WIF with a different existing same-tenant client ID and do not change mobile sign-in configuration.",
+      "expected_output": "The skill requires registration_mode use-existing-registration, validates the supplied client ID and service principal in the app environment tenant, never edits auth.config.json, and binds the claim-driven provider and version-2 handoff to that exact ID.",
+      "files": []
+    },
+    {
+      "id": 65,
+      "coverage": "existing-registration-not-found",
+      "prompt": "The supplied existing client ID cannot be found in the app environment tenant. Create whatever is needed.",
+      "expected_output": "The skill blocks the selected existing-registration route and requests a new explicit registration choice. It does not silently enter identity-bootstrap or manufacture a replacement client ID.",
+      "files": []
+    },
+    {
+      "id": 66,
+      "coverage": "existing-registration-approved-mutations",
+      "prompt": "The selected existing app has no application ID URI or credential yet, but I want WIF configured.",
+      "expected_output": "The skill inventories the live registration, presents application-ID-URI and credential-to-Key-Vault changes as explicit approved mutations, does not alter redirects or delegated permissions, then rereads claims and completes the four-stage proof before writing sender-auth.json.",
+      "files": []
+    },
+    {
+      "id": 67,
+      "coverage": "registration-mode-drift",
+      "prompt": "The parent approved use-existing-registration, but the worker found it easier to create a new registration.",
+      "expected_output": "The worker rejects registration-mode drift and returns NEEDS_CONTEXT or BLOCKED without creating an application, changing the client ID, or writing sender-auth.json.",
+      "files": []
+    }
+  ]
+}

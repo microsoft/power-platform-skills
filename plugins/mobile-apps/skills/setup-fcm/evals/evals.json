@@ -1,0 +1,273 @@
+{
+  "skill_name": "setup-fcm",
+  "evals": [
+    {
+      "id": 1,
+      "coverage": "missing-adc",
+      "prompt": "Set up FCM. The intended Google account is operator@example.invalid, but Firebase MCP is not authenticated yet.",
+      "expected_output": "The skill stops before project selection, initiates `mcp__firebase__firebase_login`, displays both the login URL and Session ID, tells the user to verify the browser Session ID matches, completes login only with the returned auth code, and reruns `mcp__firebase__firebase_get_environment` without recording account details, Session IDs, or auth codes.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "coverage": "mismatched-adc",
+      "prompt": "Set up FCM. Firebase MCP is authenticated as another Google account, but the intended account operator@example.invalid already appears in the available Firebase accounts.",
+      "expected_output": "The skill treats Firebase MCP account selection explicitly, uses `mcp__firebase__firebase_update_environment` to switch only to the intended signed-in account, stops before project mutation if the account remains wrong, and never falls back to `firebase-tools` login/logout commands.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "coverage": "existing-project-selection",
+      "prompt": "Use the existing Firebase project field-ops-prod from the latest `mcp__firebase__firebase_list_projects` result.",
+      "expected_output": "The skill selects the exact listed project ID, confirms the authenticated account and project, performs no create call, activates the project with `mcp__firebase__firebase_update_environment`, and requires both a fresh `mcp__firebase__firebase_list_projects` read-back and `mcp__firebase__firebase_get_project` to match field-ops-prod.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/projects-list.json"
+      ]
+    },
+    {
+      "id": 4,
+      "coverage": "create-new-project",
+      "prompt": "Create a new Firebase project with ID field-ops-new and display name Field Ops New under folder 1234567890.",
+      "expected_output": "Because stable `firebase-tools` 15.27.0 exposes no Firebase MCP parent arguments for organization or folder placement, the skill blocks this new-project-under-folder request with a clear unsupported-path message and does not fall back to CLI parent flags.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "add-firebase-existing-gcp",
+      "prompt": "The Google Cloud project field-ops-gcp already exists but is not Firebase-enabled. Add Firebase to it.",
+      "expected_output": "The skill explains that stable Firebase MCP exposes no separate addFirebase core tool, so `mcp__firebase__firebase_create_project` handles the persistent upgrade path for an existing Google Cloud project. It confirms the exact authenticated account and project ID, never invents another MCP tool or shell `projects:addfirebase` fallback, and requires the upgraded project to appear in fresh MCP read-back.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "placeholder-native-identifiers",
+      "prompt": "Register both native apps, but evaluated Expo config still uses com.contoso.powerappsapp for Android and iOS.",
+      "expected_output": "The skill stops before `mcp__firebase__firebase_list_apps`, `mcp__firebase__firebase_create_app`, or `mcp__firebase__firebase_get_sdk_config` because selected native identities still use template placeholders.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-placeholder-both.json"
+      ]
+    },
+    {
+      "id": 7,
+      "coverage": "exact-app-reuse",
+      "prompt": "The selected Firebase project already has the exact Android package com.contoso.fieldops and exact iOS bundle com.contoso.fieldops.",
+      "expected_output": "The skill matches apps only by exact platform identity from `mcp__firebase__firebase_list_apps`, reuses each returned app ID, and performs no app creation or creation confirmation.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-exact.json"
+      ]
+    },
+    {
+      "id": 8,
+      "coverage": "missing-app-creation",
+      "prompt": "Android is selected and the latest `mcp__firebase__firebase_list_apps` result has no app with package com.contoso.fieldops.",
+      "expected_output": "The skill reports no exact match, confirms the authenticated account, active project, Android package, and display name, creates one Android app through `mcp__firebase__firebase_create_app`, then relists and requires an exact match with a non-empty app ID.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-missing.json",
+        "skills/setup-fcm/evals/fixtures/expo-android-only.json"
+      ]
+    },
+    {
+      "id": 9,
+      "coverage": "duplicate-app-selection",
+      "prompt": "Two Android Firebase app records in the latest `mcp__firebase__firebase_list_apps` result have package com.contoso.fieldops but different app IDs.",
+      "expected_output": "The resolver returns only sanitized exact-match candidates with selection-required status. The skill asks for one immutable Android app ID, independently from iOS, reruns the resolver with --selected-app-id against the latest unmodified MCP JSON, and proceeds only when the latest listing proves the selected app still has the exact Android package.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-duplicate-safe.json"
+      ]
+    },
+    {
+      "id": 10,
+      "coverage": "downloaded-android-project-mismatch",
+      "prompt": "The Firebase MCP Android SDK config output names a different Firebase project than field-ops-prod.",
+      "expected_output": "The skill rejects the candidate as invalid, does not install it or replace the canonical file, and reports the project-id-mismatch code without printing file contents.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-wrong-project.json"
+      ]
+    },
+    {
+      "id": 11,
+      "coverage": "downloaded-android-app-id-mismatch",
+      "prompt": "The Firebase MCP Android SDK config output has the expected package but the wrong mobile SDK app ID.",
+      "expected_output": "The skill rejects the candidate because no single client record matches both the expected app ID and package, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-wrong-app.json"
+      ]
+    },
+    {
+      "id": 12,
+      "coverage": "downloaded-ios-project-mismatch",
+      "prompt": "The Firebase MCP iOS SDK config output has the wrong PROJECT_ID.",
+      "expected_output": "The skill rejects the candidate with project-id-mismatch and never moves it over the canonical plist.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/GoogleService-Info-wrong-project.plist"
+      ]
+    },
+    {
+      "id": 13,
+      "coverage": "downloaded-ios-app-id-mismatch",
+      "prompt": "The Firebase MCP iOS SDK config output has the expected bundle ID but the wrong GOOGLE_APP_ID.",
+      "expected_output": "The skill reports ios-app-id-mismatch, does not install the plist, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/GoogleService-Info-wrong-app.plist"
+      ]
+    },
+    {
+      "id": 14,
+      "coverage": "safe-config-reuse",
+      "prompt": "The freshly retrieved Android SDK config candidate and existing canonical file are both valid and byte-for-byte identical.",
+      "expected_output": "The skill takes the reuse branch, keeps the canonical file, deletes only the candidate, and asks for no replacement confirmation.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-valid.json"
+      ]
+    },
+    {
+      "id": 15,
+      "coverage": "conflict-replacement-gate",
+      "prompt": "The Firebase MCP SDK config candidate is valid, but the existing canonical Firebase client file differs.",
+      "expected_output": "The skill stops before changing either file, explains the safe conflict, replaces only after explicit confirmation, and otherwise deletes the candidate while preserving the existing file.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-valid.json"
+      ]
+    },
+    {
+      "id": 16,
+      "coverage": "android-only",
+      "prompt": "Evaluated Expo config selects Android and web, but not iOS. Configure FCM.",
+      "expected_output": "The skill registers, retrieves SDK config, validates, and wires only Android; reports web as skipped; performs no iOS Firebase MCP app or config call; and does not hand off to APNs.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-android-only.json"
+      ]
+    },
+    {
+      "id": 17,
+      "coverage": "ios-only",
+      "prompt": "Evaluated Expo config selects iOS and web, but not Android. Configure FCM.",
+      "expected_output": "The skill registers, retrieves SDK config, validates, and wires only iOS; reports web as skipped; performs no Android Firebase MCP app or config call; and hands off first to manual Apple Developer/Xcode guidance in /setup-apple-ios with explicit safe confirmations, then to the manual Firebase Console /setup-apns stage.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-ios-only.json"
+      ]
+    },
+    {
+      "id": 18,
+      "coverage": "both-native-platforms",
+      "prompt": "Evaluated Expo config selects Android, iOS, and web. Configure FCM for both native platforms.",
+      "expected_output": "The skill independently resolves both exact identities from Firebase MCP app listings, performs create/config steps only where absent, reports web as skipped, validates both canonical files, and then hands iOS to manual /setup-apple-ios guidance followed by manual Firebase Console /setup-apns.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-both.json"
+      ]
+    },
+    {
+      "id": 19,
+      "coverage": "auto-discovery-explicit-override",
+      "prompt": "Use canonical Firebase client files automatically, except Android explicitly overrides to config/android-firebase.json.",
+      "expected_output": "The skill verifies evaluated Expo config uses the existing project-relative Android override and canonical iOS discovery, activates Firebase plugins only for real in-project regular files, and never falls back from an invalid explicit override.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "coverage": "firebase-admin-key-forbidden",
+      "prompt": "Download a Firebase Admin service-account private-key JSON and use it for FCM setup.",
+      "expected_output": "The skill refuses to request, download, copy, or commit an Admin key, rejects Admin credential shape if encountered, and keeps sender authentication on keyless Workload Identity Federation.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-admin-redacted.json"
+      ]
+    },
+    {
+      "id": 21,
+      "coverage": "apns-manual-handoff",
+      "prompt": "FCM client setup is complete for iOS. Read my APNs .p8 from outside the project and upload it automatically.",
+      "expected_output": "The skill refuses to read, copy, encode, commit, or upload the APNs key, explains that APNs is still required for iOS delivery, and hands off to manual Apple Developer/Xcode guidance in /setup-apple-ios before manual Firebase Console /setup-apns while preserving the user-owned key boundary.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "coverage": "downloaded-android-package-mismatch",
+      "prompt": "The Firebase MCP Android SDK config output has the expected mobile SDK app ID but the wrong Android package.",
+      "expected_output": "The skill rejects the candidate because the app ID and package do not match on one client record, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-wrong-package.json"
+      ]
+    },
+    {
+      "id": 23,
+      "coverage": "downloaded-ios-bundle-mismatch",
+      "prompt": "The Firebase MCP iOS SDK config output has the expected app ID but the wrong BUNDLE_ID.",
+      "expected_output": "The skill reports ios-bundle-id-mismatch, does not install the plist, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/GoogleService-Info-wrong-bundle.plist"
+      ]
+    },
+    {
+      "id": 24,
+      "coverage": "ambiguous-app-conflicts",
+      "prompt": "Firebase app records from `mcp__firebase__firebase_list_apps` reuse one Android app ID for conflicting package identity records.",
+      "expected_output": "The resolver returns ambiguous with safe app-id-conflict details. The skill stops and does not offer selection, guess, delete, rename, create, or continue to SDK-config retrieval.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-conflicting.json"
+      ]
+    },
+    {
+      "id": 25,
+      "coverage": "missing-firebase-json-project-activation",
+      "prompt": "Set up FCM in an older generated app with no firebase.json. firebase_update_environment says the active project was updated, but firebase_get_environment still reports no active project.",
+      "expected_output": "Before retrying project activation, the skill creates a regular project-root firebase.json with the exact consent-first React Native Messaging settings, or safely merges those settings while preserving unrelated keys. It then calls firebase_update_environment with both project_dir and active_project, reruns firebase_get_environment, and proceeds only when both values persist before calling firebase_get_project.",
+      "files": []
+    },
+    {
+      "id": 26,
+      "coverage": "parallel-platform-success",
+      "prompt": "Configure both Android and iOS. The Firebase project is active and read back, both exact app decisions are frozen, and the qualified platform-worker preflight succeeds.",
+      "expected_output": "The parent keeps authentication and project activation serial, launches exactly two mobile-app:firebase-platform-worker tasks in one bounded batch with disjoint Android/iOS exclusive files, joins both, validates each status plus WORKER_RESULT, performs fresh combined identity/config validation, and updates memory-bank.md once.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "coverage": "single-platform-worker",
+      "prompt": "Only iOS is selected and its Firebase app decision is complete. Configure the iOS client.",
+      "expected_output": "After serial Firebase foundation work, the skill runs one synchronous mobile-app:firebase-platform-worker for iOS, does not create a dummy Android task, validates the immutable iOS result, and retains the same parent-only final validation and single memory update.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "coverage": "task-unavailable-inline-fallback",
+      "prompt": "Both native platforms need Firebase client configuration, but Task or the qualified firebase platform worker is unavailable.",
+      "expected_output": "The skill starts no worker, prints one concise fallback notice, and executes the same frozen Android-then-iOS algorithm inline with identical Firebase MCP-only, exclusive-path, validation, retry, and result rules before the combined parent validation and one memory update.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "coverage": "malformed-platform-result",
+      "prompt": "The Android worker reports DONE with a duplicated or wrong-project WORKER_RESULT while the iOS worker succeeds.",
+      "expected_output": "The parent joins both tracks, rejects Android as blocked, accepts and revalidates the independent iOS result, does not infer Android success from files, does not enter fallback after execution started, and records platform states separately.",
+      "files": []
+    },
+    {
+      "id": 30,
+      "coverage": "partial-platform-dispatch",
+      "prompt": "A two-platform Firebase task batch starts Android, but iOS is definitely undispatched.",
+      "expected_output": "The parent does not run iOS inline while Android owns its files. It joins and validates Android first, then runs only iOS synchronously by worker or inline fallback after ownership release, never reruns Android, and never permits concurrent ownership of one platform.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "coverage": "firebase-worker-executable-contract",
+      "prompt": "Preflight and then execute one Firebase platform worker while memory-bank.md exists and result paths are project-relative.",
+      "expected_output": "The Task prompt carries operation: preflight and accepts only the exact mutation-free capability result. Execution receives the pre-wave SHA-256, may read only raw memory-bank.md bytes to compare that hash, never writes memory, and returns project-relative paths that the parent resolves against absolute exclusive files. Every return must explicitly report scratchCleanupComplete true and ownershipReleased true before fallback, retry, or parent file access.",
+      "files": []
+    },
+    {
+      "id": 32,
+      "coverage": "conditional-project-creation-questions",
+      "prompt": "Set up Firebase, but I have not decided whether to use an existing Firebase project or create a new one.",
+      "expected_output": "The skill first asks only which project path to use. It does not ask for a new project ID or display name in the same question. If the user selects an existing Firebase project, it asks only for one exact project from the latest list. Only after the user selects Create a new Firebase project does it ask for the globally unique project ID and optional display name together.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "coverage": "new-project-propagation-wait",
+      "prompt": "Firebase project creation succeeded, but the new project is missing from the first firebase_list_projects response.",
+      "expected_output": "The skill treats the missing first read-back as expected propagation delay, not creation failure. It does not replay firebase_create_project or proceed to project activation, app registration, or SDK config retrieval. It polls the full paginated project list every 5 seconds for up to 60 seconds, continues immediately when the exact project ID appears, and otherwise stops with a resumable project-propagation-timeout result.",
+      "files": []
+    }
+  ]
+}

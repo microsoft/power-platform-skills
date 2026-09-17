@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>PROJECT_ID</key>
+  <string>field-ops-prod</string>
+  <key>GOOGLE_APP_ID</key>
+  <string>1:123456789:ios:d4e5f6</string>
+  <key>BUNDLE_ID</key>
+  <string>com.contoso.wrong</string>
+</dict>
+</plist>

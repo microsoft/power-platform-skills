@@ -1,0 +1,7 @@
+{
+  "name": "Field Operations",
+  "platforms": ["android", "web"],
+  "android": {
+    "package": "com.contoso.fieldops"
+  }
+}

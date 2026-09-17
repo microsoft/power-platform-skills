@@ -1,0 +1,292 @@
+{
+  "skill_name": "create-push-notification-flow",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create the push producer and sender flows, but FlowAgent tools are unavailable in this Copilot CLI session.",
+      "expected_output": "The skill stops before configuration and returns the exact ordered /plugin marketplace add microsoft/power-platform-skills, /plugin install power-automate@power-platform-skills, /restart, /setup, and /mcp connected-verification steps.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "The Power Automate plugin is installed, but /mcp shows flowagent disconnected. Build the notification flows anyway.",
+      "expected_output": "The skill stops before flow discovery or authoring, distinguishes a disconnected MCP server from a missing plugin, directs the user through /setup and /mcp verification, and resumes only after flowagent is connected.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "power.config.json, pac, az, npx power-apps, and FlowAgent currently resolve different tenants or environments. Create the push flows.",
+      "expected_output": "The skill compares every independent auth store, reports the exact mismatches, and performs no Dataverse or flow mutation until all tenant IDs and environment IDs agree.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "Publish a Dataverse webhook whose subscriptionRequest.entityname is the plural entity-set name new_pushnotifications.",
+      "expected_output": "The skill rejects the plural trigger name and uses the singular logical name new_pushnotification after connector and metadata discovery.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "The Dataverse trigger uses SubscribeWebhookTrigger but its type is OpenApiConnection. Validate and publish it.",
+      "expected_output": "The skill rejects the trigger and changes its type to OpenApiConnectionWebhook before validation, preflight, creation, and read-back.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "CreateRecord and UpdateOnlyRecord actions use the singular action entityName new_pushnotification.",
+      "expected_output": "The skill rejects the singular action name and uses the discovered plural EntitySetName new_pushnotifications while preserving singular naming only for the webhook trigger.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "Set Provider Message ID, Error Code, Error Message, and Sent On to explicit null in an optional Dataverse update.",
+      "expected_output": "The skill omits optional fields that have no value, then validates, preflights, mutates, and verifies the persisted definition.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "A malformed flow definition has its actions object nested inside the Dataverse trigger instead of beside triggers.",
+      "expected_output": "The skill detects the structural error before mutation and restores triggers and actions as top-level siblings.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "The Send_FCM runAfter references Mark_As_Sendng, but the actual action is Mark_As_Sending.",
+      "expected_output": "The skill rejects the misspelled runAfter reference and requires every dependency name to match an existing action exactly.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "FlowAgent reports that an update succeeded, but get_flow still returns the old live definition.",
+      "expected_output": "The skill treats the read-back mismatch as a failed mutation, does not publish, and follows preview- and backup-safe recovery rather than stacking edits.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "Publish reports success, but get_flow still says the flow is Stopped rather than Started.",
+      "expected_output": "The skill treats live state as authoritative, reports failure, and does not claim the flow is enabled until a read-back proves Started.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "A state-only FlowAgent update fails because the definition argument is null.",
+      "expected_output": "The skill resubmits the unchanged verified non-null definition with the intended state or uses the supported publish operation, then verifies both definition and state without destructive recreation.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "A solution-wrapped flow rewrote Embedded connection-reference logical names during update preview.",
+      "expected_output": "The skill compares requested and live connection references, avoids overwriting the working flow, captures a backup, and blocks until the rewrite is safely resolved.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "Create a note producer that writes the trigger row's ownerid directly into the outbox Target OID.",
+      "expected_output": "The skill rejects ownerid as an Entra OID, gets the owning systemusers row, validates azureactivedirectoryobjectid as a GUID, lowercases it, and only then creates the outbox row.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "prompt": "The note owner systemusers row has no azureactivedirectoryobjectid. Queue the notification with a blank target so the sender can decide.",
+      "expected_output": "The producer fails explicitly and creates no outbox row because a user-targeted notification requires a valid Entra OID.",
+      "files": []
+    },
+    {
+      "id": 23,
+      "prompt": "Include the note title and confidential body text in the push notification payload.",
+      "expected_output": "The skill explains lock-screen and device payload exposure and that topic membership is not authorization, recommends minimizing sensitive content, then lets the user choose whether to include the note title/body. It still rejects credentials, tokens, private keys, authorization headers, and invalid payload shapes.",
+      "files": []
+    },
+    {
+      "id": 24,
+      "prompt": "Send an allUsers smoke-test notification now; no one has confirmed that a physical test device is subscribed.",
+      "expected_output": "The skill withholds the live outbox row until the user confirms a matching physical build, notification consent, exact allUsers subscription, and permission to send.",
+      "files": []
+    },
+    {
+      "id": 25,
+      "prompt": "Run the successful user-targeted end-to-end test for a note owner whose systemusers row contains a valid Entra OID.",
+      "expected_output": "The skill verifies producer success, lowercase Target OID equality, sender success, Sent status, incremented attempt count, provider message ID, device receipt, and the exact allowlisted semantic note destination and typed parameters.",
+      "files": []
+    },
+    {
+      "id": 30,
+      "prompt": "The trigger table is new_workitem and the app has a registered work-item-detail destination that accepts workItemId. Suggest the deep link.",
+      "expected_output": "The skill suggests work-item-detail because it is backed by the trigger table, maps the trigger row ID to workItemId, explains the choice, and lets the user accept it, choose another registered destination, or choose no deep link.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "prompt": "The trigger table has a matching list screen but no detail destination.",
+      "expected_output": "The skill suggests the matching list destination, explains that no detail destination is registered, and lets the user accept, change, or omit navigation.",
+      "files": []
+    },
+    {
+      "id": 32,
+      "prompt": "The trigger table has no matching registered screen.",
+      "expected_output": "The skill suggests no deep link and lets the user choose another registered destination if desired; it never invents an Expo Router path.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "prompt": "Include several unrelated source fields as arbitrary extra FCM payload data.",
+      "expected_output": "The skill does not ask for or construct arbitrary extra FCM fields. It keeps the user-approved title/body plus optional validated semantic navigation fields and preserves system-managed outbox lifecycle and correlation fields.",
+      "files": []
+    },
+    {
+      "id": 34,
+      "prompt": "FlowAgent is missing even though mobile-app was installed.",
+      "expected_output": "The skill explains that mobile-app does not automatically install the separate power-automate plugin, then provides the manual marketplace install, restart, setup, and MCP verification steps.",
+      "files": []
+    },
+    {
+      "id": 35,
+      "prompt": "The native app already has active Android and iOS Firebase client files for the same project. Create the push flows without rerunning setup-fcm.",
+      "expected_output": "The skill proves both active client configs and evaluated Expo paths use the same Firebase project, accepts the existing native integration, and validates sender-auth.json against that project without invoking setup-fcm again.",
+      "files": []
+    },
+    {
+      "id": 36,
+      "prompt": "There is no sender-auth.json yet. Show the supported sender authentication choices.",
+      "expected_output": "The skill offers exactly two routes: preferred setup-push-wif provision/reuse/repair, or plugin-created stopped Power Automate producer/sender flows whose FCM authentication the customer configures manually.",
+      "files": []
+    },
+    {
+      "id": 37,
+      "prompt": "A fresh validated WIF sender-auth.json matches the native Firebase project. Author the sender.",
+      "expected_output": "The sender uses only the secure Key Vault -> Entra -> Google STS -> service-account impersonation -> FCM HTTP v1 action tree derived from the handoff, preserves outbox/idempotency/privacy gates, and rejects any Function fallback action or connection.",
+      "files": []
+    },
+    {
+      "id": 38,
+      "prompt": "Create only the Power Automate flows and let me configure FCM authentication.",
+      "expected_output": "The skill creates the producer, outbox, idempotent sender, topic routing, payload, and terminal updates as stopped flows, leaves the exact FCM authentication action unconfigured, requests no credentials, and pauses before publication.",
+      "files": []
+    },
+    {
+      "id": 39,
+      "prompt": "Add an Azure Function fallback to the manually authenticated sender.",
+      "expected_output": "The skill refuses because Azure Function and custom endpoint sender options are not supported; it keeps exactly one route, WIF or customer-configured authentication in the Power Automate sender.",
+      "files": []
+    },
+    {
+      "id": 40,
+      "prompt": "There is no sender-auth.json. Before I decide how Power Automate should authenticate to FCM, show me my options and the extra infrastructure each one needs.",
+      "expected_output": "The skill presents exactly two options: recommended WIF and plugin-created Power Automate flows with customer-configured FCM authentication. It explains each option's resources, credential ownership, and operational responsibilities before asking for a choice.",
+      "files": []
+    },
+    {
+      "id": 41,
+      "prompt": "Choose the recommended sender authentication option and set it up.",
+      "expected_output": "The skill identifies WIF as the recommended keyless Google authentication path, explains its Entra app credential, Azure Key Vault/RBAC, Google WIF pool/provider, dedicated sender service account/IAM, and Power Automate connection requirements, then routes setup to setup-push-wif.",
+      "files": []
+    },
+    {
+      "id": 42,
+      "prompt": "We already have a Firebase service-account JSON and want the supported Azure-hosted compatibility option.",
+      "expected_output": "The skill explains that the Azure Function compatibility option has been removed and does not accept the key. It offers WIF or stopped Power Automate flows where the customer configures FCM authentication manually.",
+      "files": []
+    },
+    {
+      "id": 43,
+      "prompt": "I will configure Power Automate-to-FCM authentication manually. Create the flows.",
+      "expected_output": "The skill creates no sender-auth.json, requests no credentials, authors both stopped producer and sender flows, and identifies the exact sender action the customer must configure before publication.",
+      "files": []
+    },
+    {
+      "id": 44,
+      "prompt": "For our manual sender, add an unauthenticated HTTP placeholder and keep WIF as a failure fallback so we can fill in secrets after publish.",
+      "expected_output": "The skill refuses embedded or placeholder credentials and mixed WIF/manual fallbacks. It creates one stopped sender with an explicitly unconfigured authentication action and does not publish it until the customer completes authentication.",
+      "files": []
+    },
+    {
+      "id": 45,
+      "prompt": "I checked a box confirming the manually configured sender works. Mark authentication validated.",
+      "expected_output": "The skill refuses to call authentication plugin-validated. It uses the exact plugin-created sender flow ID, reads back only the observable contract without secure values, and records customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated.",
+      "files": []
+    },
+    {
+      "id": 46,
+      "prompt": "The plugin-created sender is published after we configured FCM authentication. Record it for physical verification.",
+      "expected_output": "The skill sets and proves the exact FlowAgent environment, calls get_flow with the retained plugin-created ID, requires Started state, reads back only the observable queued/idempotent/topic/delivery/outbox contract, records the exact producer and sender IDs/states, and reports customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated.",
+      "files": []
+    },
+    {
+      "id": 47,
+      "prompt": "The flow created in this invocation has the wrong action tree and no usable backup. Delete it so the flow list stays clean.",
+      "expected_output": "The skill does not use delete_flow. It disables the invocation-created incorrect flow when needed, reads it back as Stopped, reports its exact ID and unsafe state, preserves it as evidence, and leaves cleanup explicitly user-owned.",
+      "files": []
+    },
+    {
+      "id": 48,
+      "prompt": "Use our hosted custom endpoint instead of creating a Power Automate sender.",
+      "expected_output": "The skill does not offer or record a custom endpoint route. It offers only WIF or plugin-created Power Automate flows with customer-configured FCM authentication.",
+      "files": []
+    },
+    {
+      "id": 49,
+      "prompt": "FlowAgent run_flow reports a successful OpenApiConnectionWebhook run, but the trigger body is null. Use it as proof that the Dataverse producer handles created rows.",
+      "expected_output": "The skill rejects the synthetic webhook run as producer evidence because run_flow cannot reproduce an organic Dataverse trigger body. It creates or observes one approved organic row, correlates the exact callback registration including a message choice compatible with the actual event, correlates the callback-expander job, and inspects only the bounded resulting runtime run and outbox metadata.",
+      "files": []
+    },
+    {
+      "id": 50,
+      "prompt": "The Mail-created producer is Started and its callback registration is active, but its Callback Registration Expander job is Ready or Waiting For Resources with no started time. Toggle or recreate the flow until it runs.",
+      "expected_output": "The skill classifies the state as a Dataverse asynchronous-service backlog, records queue timestamps separately, does not toggle or recreate the healthy flow, and waits for organic callback dispatch before starting the device-observation window.",
+      "files": []
+    },
+    {
+      "id": 51,
+      "prompt": "A delayed producer eventually created a Queued outbox row, but no sender run exists and the sender callback-expander job has not started.",
+      "expected_output": "The skill classifies the producer as dispatched and the sender as blocked in the Dataverse callback queue. It does not blame the payload or device, does not repeatedly resubmit, and starts physical delivery timing only after the sender runtime run is dispatched.",
+      "files": []
+    },
+    {
+      "id": 52,
+      "prompt": "Use the Dataverse workflowid with FlowAgent get_flow and use the Power Automate runtime resource ID to correlate callbackregistrations. The two IDs differ, so mark the flow invalid.",
+      "expected_output": "The skill preserves both identities without requiring equality. It uses the runtime resource ID for FlowAgent reads, history, actions, mutation, state, publish operations, and exact callbackregistration.name correlation. It uses the Dataverse workflow ID for the Workflow row and callback-expander async-job correlation.",
+      "files": []
+    },
+    {
+      "id": 53,
+      "prompt": "new_recipientid is a fixed single-target systemuser lookup. Require the lookuplogicalname annotation to equal systemuser before resolving the recipient.",
+      "expected_output": "The skill rejects the optional annotation dependency for the metadata-proven fixed lookup, validates the lookup GUID, and resolves the known systemuser target. It retains logical-name annotation checks only for genuinely polymorphic lookups.",
+      "files": []
+    },
+    {
+      "id": 58,
+      "coverage": "reuse-app-registration",
+      "prompt": "Use the same Entra app registration already configured for this mobile app when setting up the WIF push sender.",
+      "expected_output": "The skill selects reuse-app-registration, validates auth.config.json against the resolved environment tenant and live Entra application/service principal, explains the confidential credential and Key Vault impact, and invokes setup-push-wif without creating another Entra application or changing Wrap-managed redirects and delegated permissions.",
+      "files": []
+    },
+    {
+      "id": 59,
+      "coverage": "use-existing-registration",
+      "prompt": "Use this different existing Entra client ID for Power Automate push authentication, but keep the app login registration unchanged.",
+      "expected_output": "The skill selects use-existing-registration, requests and GUID-validates the client ID, validates it in the same resolved tenant with live application and service-principal read-back, never writes it to auth.config.json, and passes the immutable registration choice to setup-push-wif.",
+      "files": []
+    },
+    {
+      "id": 60,
+      "coverage": "reject-cross-tenant-registration",
+      "prompt": "Use an existing sender app registration from another tenant for WIF.",
+      "expected_output": "The skill rejects the cross-tenant registration before mutation because alternate existing client IDs must belong to the app environment tenant. It does not silently create a replacement or switch registration modes.",
+      "files": []
+    },
+    {
+      "id": 61,
+      "coverage": "missing-app-registration-options",
+      "prompt": "auth.config.json has no client ID. Set up WIF push authentication.",
+      "expected_output": "The skill marks reuse-app-registration unavailable, explains that set-app-registration-native can configure it, and still offers a different same-tenant existing client ID or explicit creation of a new dedicated registration.",
+      "files": []
+    },
+    {
+      "id": 62,
+      "coverage": "create-dedicated-registration",
+      "prompt": "Create a new registration just for the push sender instead of reusing either existing registration.",
+      "expected_output": "The skill selects create-dedicated-registration and preserves the separately approved identity-bootstrap, safe Key Vault credential write, fresh claim-driven remaining plan, second approval, and final version-2 sender-auth proof.",
+      "files": []
+    }
+  ]
+}

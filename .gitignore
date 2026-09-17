@@ -33,6 +33,7 @@ ENV/
 
 # Logs
 *.log
+**/fastlane/report.xml
 
 # IDE
 .idea/
