@@ -55,8 +55,8 @@ test('refuses Windows/POSIX traversal and outputs in the upload tree', (t) => {
   for (const unsafe of ['../outside.css', '..\\outside.css', '/root.css', 'C:\\root.css', 'file.css:stream', 'a/../b.css']) {
     assert.throws(() => safePath(f.root, unsafe), /path|Path/i);
   }
-  assert.throws(() => assertOutsideSite(f.root, path.join(f.root, 'preview.html')), /outside/);
-  assert.equal(assertOutsideSite(f.root, path.join(f.work, 'preview.html')), path.join(f.work, 'preview.html'));
+  assert.throws(() => assertOutsideSite(f.root, path.join(f.root, 'plan.json')), /outside/);
+  assert.equal(assertOutsideSite(f.root, path.join(f.work, 'plan.json')), path.join(f.work, 'plan.json'));
 });
 
 test('CLI argument parsing rejects unknown, duplicate, or missing values', () => {

@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validatePlan } = require('../../../scripts/lib/style-site-plan');
-const { safePath, readText, hash, inspectSite, parseArgs, assertOutsideSite } = require('../../../scripts/lib/classic-site-style-context');
+const { readText, inspectSite, parseArgs, assertOutsideSite } = require('../../../scripts/lib/classic-site-style-context');
 const { runValidation, approve, block } = require('../../../scripts/lib/validation-helpers');
 
 function verify(plan, receipt) {
@@ -16,17 +16,16 @@ function verify(plan, receipt) {
   const writes = new Map(plan.writes.map((write) => [write.path, write]));
   const expectedPaths = new Set([...plan.inputs.map((input) => input.path), ...(receipt ? plan.writes.map((write) => write.path) : [])]);
   const current = inspectSite(plan.siteRoot);
+  const hashes = new Map(current.files.map((file) => [file.path, file.hash]));
   if (current.siteId !== plan.siteId || current.files.length !== expectedPaths.size || current.files.some((file) => !expectedPaths.has(file.path))) {
-    throw new Error('Styling input inventory changed; regenerate the proposal instead of relying on the old preview.');
+    throw new Error('Styling input inventory changed; regenerate the proposal instead of relying on the old review.');
   }
   for (const input of plan.inputs) {
-    const file = safePath(plan.siteRoot, input.path);
     const expected = receipt && writes.has(input.path) ? writes.get(input.path).afterHash : input.hash;
-    if (!fs.existsSync(file) || hash(readText(file)) !== expected) throw new Error(`Input differs from the ${receipt ? 'applied' : 'reviewed'} snapshot: ${input.path}`);
+    if (hashes.get(input.path) !== expected) throw new Error(`Input differs from the ${receipt ? 'applied' : 'reviewed'} snapshot: ${input.path}`);
   }
   for (const write of plan.writes) {
-    const file = safePath(plan.siteRoot, write.path);
-    const actual = fs.existsSync(file) ? hash(readText(file)) : null;
+    const actual = hashes.get(write.path) ?? null;
     if (actual !== (receipt ? write.afterHash : write.beforeHash)) throw new Error(`Unexpected target content: ${write.path}`);
   }
   return {

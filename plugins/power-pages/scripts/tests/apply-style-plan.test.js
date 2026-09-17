@@ -110,3 +110,30 @@ test('normal final skill usage tracking does not invalidate the styling receipt'
   f.put('site-settings/Site-AI-Skills-StyleSite.sitesetting.yml', 'name: Site/AI/Skills/StyleSite\nvalue: 1\n');
   assert.equal(applyPlan(plan).status, 'already-applied');
 });
+
+for (const addition of [false, true]) {
+  test(`post-staging preflight still rejects concurrent ${addition ? 'inventory additions' : 'same-size edits'}`, (t) => {
+    const f = fixture(t);
+    const plan = preparePlan(f.root, f.request);
+    const receipt = path.join(f.work, 'receipt.json');
+    const theme = path.join(f.root, f.assets['theme.css'].path);
+    const original = fs.readFileSync(theme, 'utf8');
+    const stat = fs.statSync(theme);
+    const writeFile = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (file, content, ...args) => {
+      const result = writeFile(file, content, ...args);
+      if (String(file).endsWith('.tmp')) {
+        if (addition) f.put('web-files/new-inherited.css', '.pp-card { margin: 0; }');
+        else {
+          writeFile(theme, original.replace('theme', 'other'));
+          fs.utimesSync(theme, stat.atime, stat.mtime);
+        }
+      }
+      return result;
+    });
+    assert.throws(() => applyPlan(plan, { apply: true, approvedHash: plan.planHash, receipt }), /Source changed|does not match/);
+    assert.equal(fs.readFileSync(path.join(f.root, f.cssPath), 'utf8'), plan.writes[0].before);
+    assert.equal(JSON.parse(fs.readFileSync(receipt)).status, 'failed');
+    assert.deepEqual(JSON.parse(fs.readFileSync(receipt)).completed, []);
+  });
+}

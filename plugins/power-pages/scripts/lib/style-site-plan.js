@@ -3,38 +3,18 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const generateUuid = require('../generate-uuid');
+const { studioSupport, requestWarnings } = require('./studio-style-capabilities');
+const { editInlineDeclarations, inlineOverrides, canonicalProperty } = require('./inline-style-edits');
+const { analyzeStyle, validateStylesheetOrder } = require('./style-site-css');
+const { decodeHTMLAttribute, escapeAttribute } = require('../vendor/css-tools/css-tools.cjs');
+const { sourceContext, resolveSourceTarget } = require('./style-site-source-target');
 const {
-  inspectSite, safePath, readText, hash, DEFAULT_CSS, assertOutsideSite,
+  captureSite, assertSnapshot, snapshotText, safePath, readText, hash, DEFAULT_CSS, assertOutsideSite,
 } = require('./classic-site-style-context');
 
-const KINDS = ['section', 'text', 'button', 'image', 'navigation', 'form', 'list', 'card'];
-const PARTS = [
-  '', ':hover', ':focus', ':focus-visible', ':active', ':disabled',
-  ' .btn', ' .btn:hover', ' .btn:focus-visible', ' .btn:disabled',
-  ' .form-control', ' .form-control:focus', ' .table', ' th', ' td', ' label', ' img',
-];
 const ID = /^[a-z][a-z0-9-]{0,63}$/;
 const CLASS = /^pp-[a-z][a-z0-9-]{0,60}$/;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const COLOR = /^(?:#[0-9a-f]{3}(?:[0-9a-f]{3})?|transparent|currentColor|inherit|var\(--[a-zA-Z][a-zA-Z0-9_-]*\))$/i;
-const LENGTH = /^(?:0|(?:\d{1,3}(?:\.\d{1,3})?)(?:px|rem|em|%))$/;
-const SPACING = /^(?:0|\d{1,3}(?:\.\d{1,3})?(?:px|rem|em|%))(?: (?:0|\d{1,3}(?:\.\d{1,3})?(?:px|rem|em|%))){0,3}$/;
-const VALUES = {
-  color: COLOR, 'background-color': COLOR, 'border-color': COLOR, 'outline-color': COLOR,
-  'border-radius': SPACING, 'border-width': SPACING, padding: SPACING, margin: SPACING,
-  gap: LENGTH, width: /^(?:auto|100%|0|\d{1,3}(?:\.\d{1,3})?(?:px|rem|em|%))$/,
-  'max-width': /^(?:none|100%|0|\d{1,3}(?:\.\d{1,3})?(?:px|rem|em|%))$/,
-  'min-height': LENGTH, 'font-size': LENGTH, 'letter-spacing': LENGTH,
-  'font-family': /^(?:inherit|serif|sans-serif|monospace|Georgia, serif)$/,
-  'font-weight': /^(?:normal|bold|[1-9]00)$/, 'line-height': /^(?:normal|[1-3](?:\.\d{1,3})?)$/,
-  'text-align': /^(?:start|end|left|right|center)$/, 'border-style': /^(?:none|solid|dashed|dotted)$/,
-  'object-fit': /^(?:cover|contain)$/,
-  'outline-width': LENGTH, 'outline-offset': LENGTH, 'outline-style': /^(?:solid|dashed|dotted)$/,
-  opacity: /^(?:0(?:\.\d{1,3})?|1(?:\.0{1,3})?)$/,
-  // Small explicit choices avoid turning a preview input into arbitrary CSS
-  // (url(), @import, !important and declaration injection are never values).
-  'box-shadow': /^(?:none|0 2px 8px #0000001a|0 8px 24px #00000026|0 12px 32px #00000033)$/,
-};
 
 function requireString(value, label, max = 240) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new Error(`${label} must be non-empty text (maximum ${max} characters).`);
@@ -56,28 +36,55 @@ function validateRequest(request) {
   for (const component of request.components) {
     assertKeys(component, ['id', 'label', 'kind', 'className', 'sourcePath'], 'component');
     if (!ID.test(component.id) || componentIds.has(component.id)) throw new Error('Component IDs must be unique kebab-case identifiers.');
-    if (!CLASS.test(component.className) || classNames.has(component.className)) throw new Error('Components require distinct pp-* classes.');
-    if (!KINDS.includes(component.kind)) throw new Error(`Unsupported component kind: ${component.kind}`);
+    if (component.className !== undefined) {
+      if (typeof component.className !== 'string' || !CLASS.test(component.className) || classNames.has(component.className)) throw new Error('Components require distinct pp-* classes.');
+      classNames.add(component.className);
+    }
+    requireString(component.kind, 'component kind', 120);
     requireString(component.label, 'component label');
     if (component.sourcePath !== undefined) requireString(component.sourcePath, 'sourcePath');
     componentIds.add(component.id);
-    classNames.add(component.className);
   }
   const ids = new Set();
   for (const style of request.styles) {
-    assertKeys(style, ['id', 'componentId', 'owner', 'scope', 'targetId', 'fileName', 'parentPageId', 'part', 'declarations', 'rationale', 'studioAction'], 'style');
+    assertKeys(style, ['id', 'componentId', 'owner', 'scope', 'targetId', 'fileName', 'parentPageId', 'part', 'declarations', 'css', 'global', 'externalResources', 'importantReason', 'rationale', 'studioAction', 'handoffReason', 'studioComponent', 'studioFlex', 'location', 'inlineTarget', 'inlineContext'], 'style');
     if (!ID.test(style.id) || ids.has(style.id)) throw new Error('Style IDs must be unique kebab-case identifiers.');
     ids.add(style.id);
     if (!componentIds.has(style.componentId)) throw new Error(`Unknown component: ${style.componentId}`);
-    if (!['custom', 'studio'].includes(style.owner)) throw new Error('Each style requires custom or studio ownership.');
+    if (!['custom', 'studio'].includes(style.owner)) throw new Error('Each style requires custom (local authoring) or explicitly requested studio handoff ownership.');
     if (!['page', 'site', 'section'].includes(style.scope)) throw new Error('Scope must be page, site, or section.');
-    if (!PARTS.includes(style.part ?? '')) throw new Error('Unsupported component part; use a documented stable hook.');
+    if (style.part !== undefined && typeof style.part !== 'string') throw new Error('Component part must be a CSS selector suffix.');
     requireString(style.rationale, 'styling ownership/placement rationale', 2000);
-    if (style.owner === 'studio') requireString(style.studioAction, 'Studio action', 2000);
-    assertKeys(style.declarations, Object.keys(VALUES), 'declarations');
-    if (!Object.keys(style.declarations).length) throw new Error('A style group needs at least one declaration.');
-    for (const [property, value] of Object.entries(style.declarations)) {
-      if (typeof value !== 'string' || !VALUES[property].test(value)) throw new Error(`Unsupported or unsafe ${property} value: ${value}`);
+    if (style.owner === 'studio') {
+      requireString(style.studioAction, 'Studio action', 2000);
+      if (style.handoffReason !== 'user-requested') {
+        throw new Error('Studio support does not require a handoff. Use local custom authoring; instructions-only requests require handoffReason: user-requested.');
+      }
+      if (style.location !== undefined || style.inlineTarget !== undefined || style.inlineContext !== undefined) throw new Error('Studio handoffs cannot request local placement.');
+    } else {
+      if (style.studioAction !== undefined || style.handoffReason !== undefined) throw new Error('Local styles must not include Studio handoff fields.');
+      if (style.location !== undefined && !['stylesheet', 'inline'].includes(style.location)) throw new Error('Local location must be stylesheet or inline.');
+      const component = request.components.find((entry) => entry.id === style.componentId);
+      if (style.location === 'inline') {
+        requireString(style.inlineTarget, 'inlineTarget', 8000);
+        sourceContext(style.inlineContext, style.inlineTarget);
+        requireString(component.sourcePath, 'inline component sourcePath');
+        if (style.part || ['targetId', 'fileName', 'parentPageId'].some((key) => style[key] !== undefined)) {
+          throw new Error('Inline styles target an exact component tag, not a part or stylesheet destination.');
+        }
+      } else {
+        if (!component.className && style.global !== true) throw new Error('Scoped stylesheet components require a pp-* class hook; global themes require explicit global: true.');
+        if (style.inlineTarget !== undefined || style.inlineContext !== undefined) throw new Error('inlineTarget/inlineContext require location: inline.');
+      }
+    }
+    if (style.studioComponent !== undefined) requireString(style.studioComponent, 'Studio component', 120);
+    if (style.studioFlex !== undefined && (!style.studioComponent || !['available', 'unavailable'].includes(style.studioFlex))) {
+      throw new Error('studioFlex requires studioComponent and confirmed available/unavailable status.');
+    }
+    analyzeStyle(style, request.components.find((entry) => entry.id === style.componentId));
+    if (style.owner === 'studio' && style.studioComponent &&
+        studioSupport.assessStyle(style).properties.some((property) => property.status === 'unsupported')) {
+      throw new Error('This component Design panel does not expose a requested property. Use custom CSS with its warning, or assess a different Studio surface separately.');
     }
     if (style.fileName !== undefined && (!/^[a-z][a-z0-9-]{0,60}\.css$/.test(style.fileName) || DEFAULT_CSS.test(style.fileName))) {
       throw new Error('New stylesheets need a unique, non-default kebab-case .css filename.');
@@ -85,22 +92,20 @@ function validateRequest(request) {
   }
   if (request.classEdits !== undefined && (!Array.isArray(request.classEdits) || request.classEdits.length > 60)) throw new Error('classEdits must contain at most 60 edits.');
   for (const edit of request.classEdits || []) {
-    assertKeys(edit, ['path', 'match', 'className'], 'class edit');
+    assertKeys(edit, ['path', 'match', 'className', 'context'], 'class edit');
     requireString(edit.path, 'class edit path');
     requireString(edit.match, 'class edit match', 8000);
+    sourceContext(edit.context, edit.match);
     if (!classNames.has(edit.className)) throw new Error('Class edits must refer to a requested component class.');
   }
   return request;
 }
 
-function compileStyles(request, owner = 'custom') {
+function compileStyles(request) {
   validateRequest(request);
-  return request.styles.filter((style) => style.owner === owner).map((style) => {
+  return request.styles.filter((style) => style.owner === 'custom' && style.location !== 'inline').map((style) => {
     const component = request.components.find((entry) => entry.id === style.componentId);
-    const selector = `.${component.className}${style.part || ''}`;
-    const declarations = Object.keys(style.declarations).sort()
-      .map((property) => `  ${property}: ${style.declarations[property]};`).join('\n');
-    return { id: style.id, css: `${selector} {\n${declarations}\n}` };
+    return { id: style.id, css: analyzeStyle(style, component).css };
   });
 }
 
@@ -113,7 +118,7 @@ function replaceBlock(before, id, css) {
     throw new Error(`Ambiguous managed CSS block: ${id}`);
   }
   const eol = before.includes('\r\n') ? '\r\n' : '\n';
-  const block = `${start}${eol}${css.replace(/\n/g, eol)}${eol}${end}`;
+  const block = `${start}${eol}${css.replace(/\r\n|\r|\n/g, eol)}${eol}${end}`;
   if (starts) return before.slice(0, before.indexOf(start)) + block + before.slice(before.indexOf(end) + end.length);
   return before + (before && !before.endsWith('\n') ? eol : '') + block + eol;
 }
@@ -167,24 +172,48 @@ function maskLiquidComments(source) {
 function sourceTags(source) {
   source = maskLiquidComments(source);
   const tags = [];
-  let index = 0;
-  while ((index = source.indexOf('<', index)) !== -1) {
+  const boundary = /<|\{\{|\{%/g;
+  let token;
+  while ((token = boundary.exec(source))) {
+    let index = token.index;
+    if (token[0] !== '<') {
+      // {% assign example = '<div class="col-md-4">' %} is Liquid code,
+      // not a DOM target. Skip the whole expression, including quoted delimiters;
+      // markup BETWEEN conditional/loop expressions remains eligible.
+      const close = token[0] === '{{' ? '}}' : '%}';
+      let quote = null;
+      index += 2;
+      for (; index < source.length; index += 1) {
+        if (quote) {
+          if (source[index] === '\\') index += 1;
+          else if (source[index] === quote) quote = null;
+        } else if (['"', "'"].includes(source[index])) quote = source[index];
+        else if (source.startsWith(close, index)) { index += 2; break; }
+      }
+      boundary.lastIndex = index;
+      continue;
+    }
     if (source.startsWith('<!--', index)) {
       const end = source.indexOf('-->', index + 4);
-      index = end < 0 ? source.length : end + 3;
+      boundary.lastIndex = end < 0 ? source.length : end + 3;
       continue;
     }
     const tag = openingTag(source.slice(index));
     if (tag) {
       if (!['script', 'style', 'title'].includes(tag.name)) tags.push({ ...tag, start: index, end: index + tag.end });
       index += tag.end;
-      if (['script', 'style', 'textarea', 'title'].includes(tag.name)) {
+      // An iframe's outer element can be styled, but its fallback/raw text is
+      // not a local DOM subtree. Never discover hooks or edit tag-shaped text
+      // inside embedded browsing contexts or other HTML raw-text elements.
+      // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inbody
+      if (['script', 'style', 'textarea', 'title', 'iframe', 'noembed', 'noframes', 'xmp'].includes(tag.name)) {
         const closing = new RegExp(`</${tag.name}\\s*>`, 'ig');
         closing.lastIndex = index;
         const end = closing.exec(source);
         index = end ? closing.lastIndex : source.length;
       }
     } else index += 1;
+    boundary.lastIndex = index;
   }
   return tags;
 }
@@ -194,35 +223,105 @@ function classHooks(source) {
     .flatMap((attribute) => attribute.value.split(/\s+/).filter((value) => CLASS.test(value))));
 }
 
-function addClass(before, edit) {
-  // Only add a class to one exact opening tag. All other source bytes (including
-  // Studio editing markers and Liquid elsewhere) stay untouched.
-  const tag = openingTag(edit.match);
-  if (!tag || tag.end !== edit.match.length || !/^(?:div|section|article|p|h[1-6]|a|button|img|nav|ul|table|span)$/.test(tag.name) ||
-      /[{][{%]|[%}][}]|<!--|[\r\n]/.test(edit.match)) throw new Error('Class edit needs one static opening tag, with no Liquid.');
+function staticTag(match, operation) {
+  const tag = openingTag(match);
+  if (!tag || tag.end !== match.length || /^(?:script|style|head|title|meta|link|base|template|object|embed)$/.test(tag.name) ||
+      /[{][{%]|[%}][}]|<!--/.test(match)) throw new Error(`${operation} needs one static opening tag, with no Liquid.`);
+  return tag;
+}
+
+function classTag(match, className) {
+  const tag = staticTag(match, 'Class edit');
+  if (typeof className !== 'string' || !CLASS.test(className)) throw new Error('Class edits require a pp-* class name.');
   const classes = tag.attributes.filter((attribute) => attribute.name === 'class');
   if (classes.length > 1) throw new Error('Duplicate class attributes.');
   const attribute = classes[0];
   if (attribute && !attribute.quoted) throw new Error('Use an existing quoted static class attribute.');
-  const tags = sourceTags(before);
-  const matches = tags.filter((entry) => before.slice(entry.start, entry.end) === edit.match);
-  let replacement;
   if (attribute) {
     const names = attribute.value.split(/\s+/);
-    if (names.includes(edit.className)) {
-      if (matches.length !== 1) throw new Error(`Class edit must match exactly one opening tag in ${edit.path}.`);
-      return before;
-    }
-    replacement = edit.match.slice(0, attribute.start) + `${attribute.value} ${edit.className}`.trim() + edit.match.slice(attribute.end);
-  } else {
-    replacement = edit.match.replace(/(\s*\/?>)$/, ` class="${edit.className}"$1`);
+    if (names.includes(className)) return match;
+    return match.slice(0, attribute.start) + `${attribute.value} ${className}`.trim() + match.slice(attribute.end);
   }
-  if (matches.length === 0 && tags.filter((entry) => before.slice(entry.start, entry.end) === replacement).length === 1) return before;
-  if (matches.length !== 1) throw new Error(`Class edit must match exactly one opening tag in ${edit.path}.`);
-  return before.slice(0, matches[0].start) + replacement + before.slice(matches[0].end);
+  return match.replace(/(\s*\/?>)$/, ` class="${className}"$1`);
 }
 
-function reachableTemplates(context, page) {
+function addClass(before, edit) {
+  const replacement = classTag(edit.match, edit.className);
+  const tag = resolveSourceTarget(before, sourceTags(before), edit.match, edit.context, replacement, `Class edit in ${edit.path}`);
+  return before.slice(0, tag.start) + replacement + before.slice(tag.end);
+}
+
+function inlineTag(match, declarations, components) {
+  const tag = staticTag(match, 'Inline edit');
+  const attributes = tag.attributes.filter((entry) => entry.name === 'style');
+  const classes = tag.attributes.filter((entry) => entry.name === 'class');
+  if (attributes.length > 1 || classes.length > 1) throw new Error('Duplicate style/class attributes are not safe inline targets.');
+  if (components.some((component) => component.className && !classHooks(match).includes(component.className))) {
+    throw new Error('inlineTarget must identify its component class hook; describe a child as a separate component.');
+  }
+  const attribute = attributes[0];
+  if (attribute && !attribute.quoted) throw new Error('Inline styles require a quoted static style attribute.');
+  // Page Copy is HTML, not a CSS file. Decode only this style attribute before
+  // parsing; encode the replacement for its ORIGINAL quote delimiter. Never
+  // interpolate font names, content strings or URLs into raw HTML attributes.
+  // https://html.spec.whatwg.org/multipage/syntax.html#attributes-2
+  const before = decodeHTMLAttribute(attribute?.value || '');
+  const css = editInlineDeclarations(before, declarations);
+  if (css === before) return match;
+  let after = escapeAttribute(css);
+  if (attribute && match[attribute.start - 1] === "'") after = after.replace(/'/g, '&#39;');
+  return attribute
+    ? match.slice(0, attribute.start) + after + match.slice(attribute.end)
+    : match.replace(/(\s*\/?>)$/, ` style="${after}"$1`);
+}
+
+function applyMarkup(before, request, relative) {
+  const groups = new Map();
+  function group(match, context) {
+    const guard = sourceContext(context, match);
+    const key = JSON.stringify([match, guard]);
+    if (!groups.has(key)) groups.set(key, { match, context: guard || undefined, classes: [], styles: [], properties: new Set() });
+    return groups.get(key);
+  }
+  for (const edit of request.classEdits || []) {
+    if (edit.path.split('\\').join('/') === relative) group(edit.match, edit.context).classes.push(edit);
+  }
+  for (const style of request.styles.filter((entry) => entry.owner === 'custom' && entry.location === 'inline')) {
+    const component = request.components.find((entry) => entry.id === style.componentId);
+    if (component.sourcePath.split('\\').join('/') !== relative) continue;
+    const target = group(style.inlineTarget, style.inlineContext);
+    for (const name of Object.keys(style.declarations)) {
+      const property = canonicalProperty(name);
+      if (target.properties.has(property)) throw new Error('Inline groups on one tag must not overlap properties.');
+      target.properties.add(property);
+    }
+    target.styles.push({ style, component });
+  }
+  const tags = sourceTags(before);
+  const replacements = new Map();
+  for (const edits of groups.values()) {
+    const { match, context } = edits;
+    let after = match;
+    for (const edit of edits.classes) after = classTag(after, edit.className);
+    // Merge disjoint groups before the property edit so declaration ordering and
+    // idempotency are independent of how the user split a component's styles.
+    const declarations = Object.assign(Object.create(null), ...edits.styles.map(({ style }) => style.declarations));
+    if (edits.styles.length) after = inlineTag(after, declarations, edits.styles.map(({ component }) => component));
+    const tag = resolveSourceTarget(before, tags, match, context, after, `Markup edit in ${relative}`);
+    if (replacements.has(tag.start)) throw new Error('Overlapping markup targets; use the same original tag/context to compose its changes.');
+    replacements.set(tag.start, { ...tag, after });
+  }
+  let result = before;
+  for (const edit of [...replacements.values()].sort((a, b) => b.start - a.start)) {
+    result = result.slice(0, edit.start) + edit.after + result.slice(edit.end);
+  }
+  return result;
+}
+
+function reachableTemplates(context, page, readSource = (relative) => {
+  const absolute = safePath(context.siteRoot, relative);
+  return fs.existsSync(absolute) ? readText(absolute) : null;
+}) {
   const parentPage = page.rootId ? context.pages.find((entry) => entry.id === page.rootId) : page;
   const pageTemplate = context.pageTemplates.find((entry) => entry.id === (page.templateId || parentPage?.templateId));
   const queue = [page.copyPath];
@@ -237,9 +336,9 @@ function reachableTemplates(context, page) {
     const relative = queue.shift();
     if (visited.has(relative)) continue;
     visited.add(relative);
-    const absolute = safePath(context.siteRoot, relative);
-    if (!fs.existsSync(absolute)) continue;
-    const text = maskLiquidComments(readText(absolute)).replace(/<!--[\s\S]*?-->/g, '');
+    const source = readSource(relative);
+    if (source === null) continue;
+    const text = maskLiquidComments(source).replace(/<!--[\s\S]*?-->/g, '');
     for (const match of text.matchAll(/\{%-?\s*(?:include|extends)\s+(['"])(.*?)\1/gi)) {
       const candidates = context.templates.filter((entry) => entry.name === match[2]);
       if (candidates.length > 1) throw new Error(`Ambiguous included web template: ${match[2]}`);
@@ -333,18 +432,21 @@ function planHash(plan) {
 }
 
 function preparePlan(siteRoot, input, allocatedIds = {}) {
+  return preparePlanFromSnapshot(captureSite(siteRoot), input, allocatedIds);
+}
+
+function preparePlanFromSnapshot(snapshot, input, allocatedIds = {}) {
   const request = validateRequest(JSON.parse(JSON.stringify(input)));
-  const context = inspectSite(siteRoot);
+  const { context } = assertSnapshot(snapshot);
   if (!context.bootstrap.major) throw new Error(context.warnings.find((warning) => warning.startsWith('Bootstrap')));
   const page = context.pages.find((entry) => entry.id === request.pageId);
-  if (!page) throw new Error('Select an existing preview pageId.');
+  if (!page) throw new Error('Select an existing pageId for the proposal.');
   const writes = new Map();
   const newFiles = new Map();
   function getWrite(relative, kind) {
     const normalized = relative.split('\\').join('/');
     if (!writes.has(normalized)) {
-      const absolute = safePath(context.siteRoot, normalized);
-      const before = fs.existsSync(absolute) ? readText(absolute) : null;
+      const before = snapshotText(snapshot, normalized);
       writes.set(normalized, { path: normalized, kind, before, after: before || '', beforeHash: before === null ? null : hash(before) });
     }
     const write = writes.get(normalized);
@@ -355,7 +457,21 @@ function preparePlan(siteRoot, input, allocatedIds = {}) {
   const placements = [];
   for (const style of request.styles) {
     if (style.owner === 'studio') {
-      placements.push({ styleId: style.id, owner: 'studio', action: style.studioAction, scope: style.scope });
+      placements.push({ styleId: style.id, owner: 'studio', action: style.studioAction, scope: style.scope, handoffReason: style.handoffReason });
+      continue;
+    }
+    if (style.location === 'inline') {
+      const component = request.components.find((entry) => entry.id === style.componentId);
+      const relative = component.sourcePath.split('\\').join('/');
+      const template = /\.webtemplate\.source\.html$/i.test(relative);
+      if (template ? style.scope !== 'site' : style.scope !== 'page') {
+        throw new Error('Inline page edits require page scope; shared-template inline edits require explicit site scope.');
+      }
+      placements.push({
+        styleId: style.id, owner: 'custom', location: 'inline', scope: style.scope, path: relative,
+        affectedPageIds: template ? context.pages.map((entry) => entry.id) : [page.id],
+        ...(template ? { scopeNote: 'Shared template: conservatively treat every page as potentially affected.' } : {}),
+      });
       continue;
     }
     let target;
@@ -396,9 +512,12 @@ function preparePlan(siteRoot, input, allocatedIds = {}) {
       if (style.scope === 'site' && parentId !== context.homePageId) throw new Error('Site-wide styles require a root-parented Web File.');
       if (style.scope === 'section' && (parentId === context.homePageId || (style.parentPageId && parentId !== style.parentPageId))) throw new Error('Section scope must match the selected non-root parent.');
       affectedPageIds = context.pages.filter((entry) => ancestry(context, entry.id).includes(parentId)).map((entry) => entry.id);
-      if (!affectedPageIds.includes(request.pageId)) throw new Error('The selected preview page is outside the CSS Web File scope.');
+      if (!affectedPageIds.includes(request.pageId)) throw new Error('The selected page is outside the CSS Web File scope.');
     }
     const write = getWrite(target, 'css');
+    // Validate before adding marker comments: their closing delimiters must not
+    // accidentally repair an unfinished source comment and hide an ignored rule.
+    validateStylesheetOrder(write.after);
     const sourceBase = target.replace(/\.css$/i, '');
     if (context.files.some((file) => [`${sourceBase}.scss`, `${sourceBase}.sass`, `${sourceBase}.less`].includes(file.path)) ||
         /sourceMappingURL\s*=|generated file|do not edit/i.test(write.before || '')) {
@@ -406,103 +525,134 @@ function preparePlan(siteRoot, input, allocatedIds = {}) {
     }
     write.after = replaceBlock(write.after, style.id, css.find((entry) => entry.id === style.id).css);
     if (Buffer.byteLength(write.after) > 1024 * 1024) throw new Error('Custom CSS exceeds the Studio 1 MB upload limit.');
-    placements.push({ styleId: style.id, owner: 'custom', scope: style.scope, path: target, affectedPageIds });
+    placements.push({ styleId: style.id, owner: 'custom', scope: style.scope, path: target, affectedPageIds,
+      ...(style.global ? { scopeNote: 'Global stylesheet: all matching elements in the listed pages may be affected, including native components.' } : {}) });
+  }
+  for (const write of writes.values()) {
+    if (write.kind === 'css') validateStylesheetOrder(write.after);
   }
   const allowedHtml = (relative) => /\.webpage\.copy\.html$|\.webtemplate\.source\.html$/i.test(relative) &&
     context.files.some((file) => file.path === relative);
+  const markupPaths = new Map();
   for (const edit of request.classEdits || []) {
     const relative = edit.path.split('\\').join('/');
     if (!allowedHtml(relative)) throw new Error('Class edits must target an existing page copy or web-template source.');
     const component = request.components.find((entry) => entry.className === edit.className);
-    if (!request.styles.some((style) => style.componentId === component.id && style.owner === 'custom')) {
-      throw new Error('Studio-only proposals must not add local markup classes.');
+    if (!request.styles.some((style) => style.componentId === component.id && style.owner === 'custom' && style.location !== 'inline')) {
+      throw new Error('Studio-only or inline-only proposals must not add unnecessary local markup classes.');
     }
     if (component.sourcePath?.split('\\').join('/') !== relative) throw new Error('Class edits must target their component sourcePath.');
-    const write = getWrite(relative, 'class');
-    write.after = addClass(write.after, edit);
+    markupPaths.set(relative, 'class');
   }
-  const layers = orderedCss(context, request.pageId).map((file) => {
-    if (!file.assetPresent) throw new Error(`Missing preview baseline CSS: ${file.assetPath}`);
-    if (!Number.isInteger(file.order)) throw new Error(`CSS display order is unknown: ${file.path}. Resolve ordering before preparing the preview.`);
-    return { path: file.assetPath, before: readText(safePath(context.siteRoot, file.assetPath)), parentId: file.parentId, order: file.order };
-  });
-  if (fs.existsSync(safePath(context.siteRoot, page.cssPath))) {
-    layers.push({ path: page.cssPath, before: readText(safePath(context.siteRoot, page.cssPath)), pageOnly: true });
+  for (const placement of placements.filter((entry) => entry.location === 'inline')) {
+    if (!allowedHtml(placement.path)) throw new Error('Inline edits require an existing page copy or web-template source.');
+    markupPaths.set(placement.path, 'markup');
   }
-  for (const created of newFiles.values()) {
-    const index = layers.findIndex((layer) => layer.pageOnly || Number(layer.order) > created.order);
-    layers.splice(index < 0 ? layers.length : index, 0, { path: created.assetPath, before: '', parentId: created.parentId, order: created.order });
+  for (const [relative, kind] of markupPaths) {
+    const write = getWrite(relative, kind);
+    // An explicit leading output banner identifies source-owned markup; text in
+    // page content or a nested script comment is not such a banner.
+    const banner = /^\s*<!--[\s\S]*?-->/.exec(write.before)?.[0] || '';
+    if (/generated file|do not edit/i.test(banner)) {
+      throw new Error(`Markup is generated or source-owned: ${relative}. Edit its source through the existing pipeline.`);
+    }
+    write.after = applyMarkup(write.before, request, relative);
   }
-  if (writes.has(page.cssPath) && !layers.some((layer) => layer.path === page.cssPath)) layers.push({ path: page.cssPath, before: '', pageOnly: true });
-  const reachable = reachableTemplates(context, page);
-  const components = request.components.map((component) => {
+  // A diff-only proposal still needs a complete, ordered CSS baseline. Removing
+  // rendering must not weaken the version/cascade checks used to choose a target.
+  for (const file of orderedCss(context, request.pageId)) {
+    if (!file.assetPresent) throw new Error(`Missing baseline CSS: ${file.assetPath}`);
+    if (!Number.isInteger(file.order)) throw new Error(`CSS display order is unknown: ${file.path}. Resolve ordering before preparing the proposal.`);
+  }
+  const reachable = reachableTemplates(context, page, (relative) => snapshotText(snapshot, relative));
+  for (const component of request.components) {
     const relative = component.sourcePath?.split('\\').join('/');
     if (relative && !allowedHtml(relative)) throw new Error('Component sourcePath must identify existing page copy or web-template source.');
     if (relative && /\.webpage\.copy\.html$/i.test(relative) && relative !== page.copyPath) {
-      throw new Error('Page components must use the selected localized preview page source.');
+      throw new Error('Page components must use the selected localized page source.');
     }
     const isTemplate = relative && /\.webtemplate\.source\.html$/i.test(relative);
     if (isTemplate && !reachable.has(relative)) {
       throw new Error('Component web template is not reachable from the selected page. Resolve its page-template/include relationship before applying styling.');
     }
-    const before = relative ? readText(safePath(context.siteRoot, relative)) : null;
+    const before = relative ? snapshotText(snapshot, relative) : null;
     const after = relative ? writes.get(relative)?.after ?? before : null;
-    if (after !== null && !classHooks(after).includes(component.className)) {
+    if (after !== null && component.className && !classHooks(after).includes(component.className)) {
       throw new Error(`Add or resolve the scoped class ${component.className} in its source before applying styles.`);
     }
-    return { ...component, before, after, simulation: before === null || Boolean(isTemplate) || /\{[{%]/.test(before) || ['form', 'list'].includes(component.kind) };
-  });
-  for (const style of request.styles.filter((entry) => entry.owner === 'custom')) {
-    const component = components.find((entry) => entry.id === style.componentId);
-    if (!component.sourcePath) throw new Error('Applied custom styling requires a real component sourcePath/class hook; sample-only components can preview Studio proposals.');
+    // Paintbrush declarations often serialize inline and beat a normal stylesheet.
+    // Check directly addressable roots/states instead of approving ineffective CSS.
+    // Descendant/runtime-generated targets still need explicit source/cascade review.
+    // https://learn.microsoft.com/power-pages/getting-started/customize-pages#edit-components
+    for (const style of request.styles.filter((entry) => entry.componentId === component.id &&
+      entry.owner === 'custom' && entry.location !== 'inline')) {
+      const roots = analyzeStyle(style, component).rootDeclarations;
+      if (!roots.length) continue;
+      for (const tag of sourceTags(after || '').filter((entry) =>
+        entry.attributes.some((attribute) => attribute.name === 'class' && attribute.value.split(/\s+/).includes(component.className)))) {
+        const attributes = tag.attributes.filter((entry) => entry.name === 'style');
+        if (attributes.length > 1 || tag.attributes.filter((entry) => entry.name === 'class').length > 1) {
+          throw new Error('Duplicate style/class attributes make the local component cascade ambiguous.');
+        }
+        const conflicts = [...new Set(roots.flatMap((declarations) =>
+          inlineOverrides(decodeHTMLAttribute(attributes[0]?.value || ''), declarations)))];
+        if (conflicts.length) {
+          throw new Error(`Inline ${conflicts.join(', ')} overrides stylesheet ${style.id}. Update the owning local declaration with a guarded inline edit; do not add ineffective CSS or blindly escalate priority.`);
+        }
+      }
+    }
+    if (!component.sourcePath && request.styles.some((style) => style.componentId === component.id && style.owner === 'custom' && !style.global)) {
+      throw new Error('Scoped custom styling requires a real component sourcePath/class hook; source-free descriptors require an explicit global stylesheet or Studio handoff.');
+    }
   }
   const plan = {
-    schemaVersion: 1, siteRoot: context.siteRoot, siteId: context.siteId, title: request.title,
-    request, allocatedIds, bootstrap: context.bootstrap, inputs: context.files, placements,
-    warnings: context.warnings, writes: [...writes.values()].map((write) => ({ ...write, afterHash: hash(write.after) })),
-    preview: {
-      components,
-      layers: layers.map((layer) => ({ ...layer, after: writes.get(layer.path)?.after ?? layer.before })),
-      studioCss: compileStyles(request, 'studio').map((entry) => entry.css).join('\n'),
-    },
+    schemaVersion: 2, siteRoot: context.siteRoot, siteId: context.siteId, title: request.title,
+    request, allocatedIds, bootstrap: structuredClone(context.bootstrap), inputs: structuredClone(context.files), placements,
+    warnings: [...context.warnings, ...requestWarnings(request), ...request.styles.flatMap((style) =>
+      analyzeStyle(style, request.components.find((entry) => entry.id === style.componentId)).warnings.map((warning) => `${style.id}: ${warning}`))],
+    writes: [...writes.values()].map((write) => ({ ...write, afterHash: hash(write.after) })),
   };
   plan.planHash = planHash(plan);
   return plan;
 }
 
 function validatePlan(plan) {
-  if (!plan || plan.schemaVersion !== 1 || plan.planHash !== planHash(plan)) throw new Error('Invalid or modified proposal; regenerate and approve the new revision.');
+  if (plan?.schemaVersion === 1) throw new Error('Legacy preview proposals cannot authorize writes. Regenerate from the request with --operation prepare and approve the new hash.');
+  if (!plan || plan.schemaVersion !== 2 || Object.hasOwn(plan, 'preview') || plan.planHash !== planHash(plan)) {
+    throw new Error('Invalid or modified proposal; regenerate and approve the new revision.');
+  }
   validateRequest(plan.request);
   if (![3, 5].includes(plan.bootstrap?.major) || !Array.isArray(plan.writes) || !Array.isArray(plan.inputs)) throw new Error('Invalid plan context.');
   const paths = new Set();
+  const compiled = compileStyles(plan.request);
   for (const write of plan.writes) {
     safePath(plan.siteRoot, write.path);
     if (paths.has(write.path)) throw new Error('Duplicate write target.');
     paths.add(write.path);
     if (DEFAULT_CSS.test(path.posix.basename(write.path).replace(/\.webfile\.yml$/, ''))) throw new Error('Default stylesheets and metadata are protected.');
-    if (!['css', 'class', 'webfile'].includes(write.kind) || typeof write.after !== 'string' ||
+    if (!['css', 'class', 'markup', 'webfile'].includes(write.kind) || typeof write.after !== 'string' ||
         (write.before !== null && typeof write.before !== 'string') ||
         write.afterHash !== hash(write.after) || write.beforeHash !== (write.before === null ? null : hash(write.before))) {
       throw new Error('Invalid change content or hashes.');
     }
     if ((write.kind === 'css' && !/\.css$/.test(write.path)) ||
-        (write.kind === 'class' && !/\.webpage\.copy\.html$|\.webtemplate\.source\.html$/.test(write.path)) ||
+        (['class', 'markup'].includes(write.kind) && (!/\.webpage\.copy\.html$|\.webtemplate\.source\.html$/.test(write.path) || write.before === null)) ||
         (write.kind === 'webfile' && (!/\.webfile\.yml$/.test(write.path) || write.before !== null))) {
       throw new Error('Unsupported write target.');
     }
     if (write.kind === 'css') {
       let expected = write.before || '';
-      for (const style of compileStyles(plan.request)) {
+      for (const style of compiled) {
         if (plan.placements.some((placement) => placement.styleId === style.id && placement.path === write.path && placement.owner === 'custom')) {
           expected = replaceBlock(expected, style.id, style.css);
         }
       }
       if (expected !== write.after) throw new Error('CSS write contains changes outside its declared managed blocks.');
+      validateStylesheetOrder(write.after);
     }
-    if (write.kind === 'class') {
-      let expected = write.before;
-      for (const edit of plan.request.classEdits || []) if (edit.path.split('\\').join('/') === write.path) expected = addClass(expected, edit);
-      if (expected !== write.after) throw new Error('Markup write contains changes beyond the approved class additions.');
+    if (['class', 'markup'].includes(write.kind)) {
+      const expected = applyMarkup(write.before, plan.request, write.path);
+      if (expected !== write.after) throw new Error('Markup write contains changes beyond the approved class/inline edits.');
     }
   }
   return plan;
@@ -516,7 +666,7 @@ function saveJson(output, data, siteRoot) {
 }
 
 module.exports = {
-  KINDS, PARTS, VALUES, validateRequest, compileStyles, replaceBlock, addClass, openingTag, sourceTags, classHooks,
+  validateRequest, compileStyles, replaceBlock, addClass, applyMarkup, openingTag, sourceTags, classHooks,
   reachableTemplates, assertKeys,
-  ancestry, orderedCss, preparePlan, validatePlan, planHash, saveJson,
+  ancestry, orderedCss, preparePlan, preparePlanFromSnapshot, validatePlan, planHash, saveJson,
 };

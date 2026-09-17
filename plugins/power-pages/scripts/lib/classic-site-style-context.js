@@ -9,6 +9,7 @@ const MAX_FILES = 10000;
 const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_CSS = /^(bootstrap(?:\.min)?|theme(?:\.min)?|portalbasictheme)\.css$/i;
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
+const snapshots = new WeakSet();
 
 function within(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -107,7 +108,7 @@ function resolveSiteRoot(input) {
   return fs.realpathSync(root);
 }
 
-function inspectSite(input) {
+function captureSite(input) {
   const siteRoot = resolveSiteRoot(input);
   const paths = ['website.yml'];
   for (const directory of ['web-pages', 'web-files', 'web-templates', 'page-templates', 'site-settings', 'basic-forms', 'lists']) {
@@ -204,7 +205,7 @@ function inspectSite(input) {
   ];
   if (!major) warnings.push('Bootstrap is missing, conflicting or unsupported. Resolve the asset/configuration evidence before preparing styling.');
   for (const file of webFiles.filter((entry) => entry.isCss && !entry.assetPresent)) warnings.push(`Missing CSS attachment: ${file.assetPath}`);
-  return {
+  const context = {
     schemaVersion: 1, siteRoot, siteId, homePageId: homePages[0].id,
     siteName: field(website, 'name'), pages, webFiles, templates, pageTemplates,
     headerTemplateId: field(website, 'headerwebtemplateid'), footerTemplateId: field(website, 'footerwebtemplateid'),
@@ -212,6 +213,37 @@ function inspectSite(input) {
     files: files.map(({ path: filePath, hash: fileHash }) => ({ path: filePath, hash: fileHash })),
     warnings,
   };
+  // A snapshot is private in-process evidence, never a deserialized cache that can
+  // authorize writes. Each preflight captures again, including after staging.
+  const snapshot = freeze({ context, contents: Object.fromEntries(files.map((file) => [file.path, file.content])) });
+  snapshots.add(snapshot);
+  return snapshot;
+}
+
+function freeze(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function assertSnapshot(snapshot) {
+  if (!snapshots.has(snapshot)) throw new Error('Expected a freshly captured in-process styling snapshot.');
+  return snapshot;
+}
+
+function snapshotText(snapshot, relative) {
+  assertSnapshot(snapshot);
+  const normalized = relative.split('\\').join('/');
+  safePath(snapshot.context.siteRoot, normalized);
+  return Object.hasOwn(snapshot.contents, normalized) ? snapshot.contents[normalized] : null;
+}
+
+function inspectSite(input) {
+  // Keep the existing public inspection object mutable (runtime evidence is added
+  // by the CLI), without exposing mutable aliases into a preparation snapshot.
+  return structuredClone(captureSite(input).context);
 }
 
 function assertOutsideSite(siteRoot, output) {
@@ -221,7 +253,7 @@ function assertOutsideSite(siteRoot, output) {
   let ancestor = absolute;
   while (!fs.existsSync(ancestor)) ancestor = path.dirname(ancestor);
   const resolved = path.join(fs.realpathSync(ancestor), path.relative(ancestor, absolute));
-  if (within(siteRoot, resolved)) throw new Error('Preview, proposal and receipt files must be outside the uploadable site tree.');
+  if (within(siteRoot, resolved)) throw new Error('Inspection, proposal and receipt files must be outside the uploadable site tree.');
   return absolute;
 }
 
@@ -233,7 +265,7 @@ function parseArgs(argv, allowed) {
       throw new Error(`Unknown or duplicate argument: ${key}`);
     }
     const name = key.slice(2);
-    if (name === 'apply') args[name] = true;
+    if (['apply', 'summary'].includes(name)) args[name] = true;
     else {
       if (!argv[index + 1] || argv[index + 1].startsWith('--')) throw new Error(`Missing value for ${key}`);
       args[name] = argv[++index];
@@ -242,4 +274,7 @@ function parseArgs(argv, allowed) {
   return args;
 }
 
-module.exports = { inspectSite, resolveSiteRoot, safePath, readText, hash, within, assertOutsideSite, parseArgs, DEFAULT_CSS };
+module.exports = {
+  inspectSite, captureSite, assertSnapshot, snapshotText,
+  resolveSiteRoot, safePath, readText, hash, within, assertOutsideSite, parseArgs, DEFAULT_CSS,
+};

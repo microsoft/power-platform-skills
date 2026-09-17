@@ -16,7 +16,10 @@ test('prepares exact localized page CSS without changing baseline or site files'
   assert.doesNotMatch(fs.readFileSync(path.join(f.root, f.cssPath), 'utf8'), /power-pages:style-site/);
   assert.equal(validatePlan(plan), plan);
   assert.equal(preparePlan(f.root, f.request).planHash, plan.planHash);
-  assert.deepEqual(plan.preview.layers.map((layer) => path.posix.basename(layer.path)), ['bootstrap.min.css', 'theme.css', 'custom.css', 'portalbasictheme.css', path.posix.basename(f.cssPath)]);
+  assert.equal(plan.schemaVersion, 2);
+  assert.equal(Object.hasOwn(plan, 'preview'), false);
+  assert.deepEqual(plan.placements[0].affectedPageIds, [ids.locale]);
+  assert.equal(JSON.stringify(plan).includes('<h2>'), false, 'Unchanged source HTML is not copied into proposals.');
 });
 
 test('reuses shared CSS and discloses inherited pages', (t) => {
@@ -25,8 +28,8 @@ test('reuses shared CSS and discloses inherited pages', (t) => {
   const plan = preparePlan(f.root, f.request);
   assert.equal(plan.writes[0].path, f.assets['custom.css'].path);
   assert.ok(plan.placements[0].affectedPageIds.includes(ids.sectionLocale));
-  const layer = plan.preview.layers.find((entry) => entry.path === f.assets['custom.css'].path);
-  assert.match(layer.after, /\.pp-card/);
+  assert.match(plan.writes[0].after, /\.pp-card/);
+  assert.equal(plan.writes.length, 1, 'Default stylesheets and page markup are unchanged.');
 });
 
 for (const options of [{ prefix: 'adx_' }, { prefix: '', nested: true, major: 5 }]) {
@@ -38,18 +41,20 @@ for (const options of [{ prefix: 'adx_' }, { prefix: '', nested: true, major: 5 
     assert.match(metadata.after, new RegExp(`^${options.prefix}displayorder: 3$`, 'm'));
     assert.match(metadata.after, /mimetype: text\/css/);
     assert.match(metadata.path, options.nested ? /service-cards\.css\/service-cards\.css\.webfile\.yml$/ : /^web-files\/service-cards\.css\.webfile\.yml$/);
-    assert.equal(plan.preview.layers[2].path, metadata.path.replace(/\.webfile\.yml$/, ''));
+    assert.equal(plan.writes.find((write) => write.kind === 'css').path, metadata.path.replace(/\.webfile\.yml$/, ''));
+    assert.match(metadata.after, new RegExp(`^${options.prefix}parentpageid: ${ids.home}$`, 'm'));
     assert.equal(preparePlan(f.root, f.request, plan.allocatedIds).planHash, plan.planHash);
   });
 }
 
-test('Studio-only proposal previews native values without local CSS writes', (t) => {
+test('Studio-only proposal preserves native values and handoff instructions without local CSS writes', (t) => {
   const f = fixture(t);
-  Object.assign(f.request.styles[0], { owner: 'studio', studioAction: 'Use the component paintbrush to set the corner radius.' });
+  Object.assign(f.request.styles[0], { owner: 'studio', handoffReason: 'user-requested', studioAction: 'Use the component paintbrush to set the corner radius.' });
   delete f.request.components[0].sourcePath;
   const plan = preparePlan(f.root, f.request);
   assert.deepEqual(plan.writes, []);
-  assert.match(plan.preview.studioCss, /border-radius: 12px/);
+  assert.equal(plan.request.styles[0].declarations['border-radius'], '12px');
+  assert.equal(plan.placements[0].action, f.request.styles[0].studioAction);
   assert.deepEqual(compileStyles(f.request), []);
 });
 
@@ -76,7 +81,7 @@ test('managed blocks preserve line endings and unrelated bytes', () => {
 test('refuses default CSS, root instead of localized page, unsafe values and unknown Bootstrap', (t) => {
   const f = fixture(t);
   f.request.styles[0].declarations.color = 'red; background: url(https://example.invalid)';
-  assert.throws(() => preparePlan(f.root, f.request), /unsafe/);
+  assert.throws(() => preparePlan(f.root, f.request), /CSS validation/);
   delete f.request.styles[0].declarations.color;
   f.request.pageId = ids.home;
   assert.throws(() => preparePlan(f.root, f.request), /localized/);
@@ -114,7 +119,7 @@ test('does not treat class text in scripts/comments as a component hook', (t) =>
 
 test('Studio-only changes cannot smuggle class edits into local source', (t) => {
   const f = fixture(t);
-  Object.assign(f.request.styles[0], { owner: 'studio', studioAction: 'Use Studio.' });
+  Object.assign(f.request.styles[0], { owner: 'studio', handoffReason: 'user-requested', studioAction: 'Use Studio.' });
   f.request.classEdits = [{ path: f.copyPath, match: '<section class="pp-card">', className: 'pp-card' }];
   assert.throws(() => preparePlan(f.root, f.request), /Studio-only/);
 });
@@ -128,8 +133,9 @@ test('section CSS stays in the custom priority band and discloses only its subtr
   Object.assign(f.request.styles[0], { scope: 'section', parentPageId: ids.section, fileName: 'contact-cards.css' });
   const plan = preparePlan(f.root, f.request);
   assert.deepEqual(plan.placements[0].affectedPageIds.sort(), [ids.section, ids.sectionLocale].sort());
-  assert.equal(plan.preview.layers[2].path, 'web-files/contact-cards.css');
-  assert.equal(plan.preview.layers.at(-1).path, f.assets['portalbasictheme.css'].path);
+  assert.equal(plan.placements[0].path, 'web-files/contact-cards.css');
+  assert.match(plan.writes.find((write) => write.kind === 'webfile').after, /adx_displayorder: 3/);
+  assert.ok(plan.writes.every((write) => !write.path.includes('portalbasictheme')));
 });
 
 test('new custom files receive distinct available display-order slots', (t) => {
@@ -188,7 +194,7 @@ test('class editing respects HTML attribute boundaries, including quoted > chara
     '{% comment %}<section>{% endcomment %}\n<section class="pp-card">Visible</section>');
 });
 
-test('unused templates fail, while reachable Liquid components are explicitly simulated', (t) => {
+test('unused templates fail while reachable components retain verified source identity', (t) => {
   const f = fixture(t);
   const source = 'web-templates/card/Card.webtemplate.source.html';
   f.put('web-templates/card/Card.webtemplate.yml', f.yml('webtemplate', { id: '88888888-8888-4888-8888-888888888888', name: 'Card' }));
@@ -197,7 +203,9 @@ test('unused templates fail, while reachable Liquid components are explicitly si
   assert.throws(() => preparePlan(f.root, f.request), /not reachable/);
   f.put(f.copyPath, '{% include "Card" %}');
   const plan = preparePlan(f.root, f.request);
-  assert.equal(plan.preview.components[0].simulation, true);
+  assert.equal(plan.request.components[0].sourcePath, source);
+  assert.match(plan.writes[0].after, /\.pp-card/);
+  assert.equal(plan.writes.length, 1, 'Template markup is not replaced with samples.');
 });
 
 test('page-template relationships establish reachability through the localized root page', (t) => {
@@ -210,5 +218,46 @@ test('page-template relationships establish reachability through the localized r
   f.put('page-templates/layout/Layout.pagetemplate.yml', f.yml('pagetemplate', { id: pageTemplateId, webtemplateid: templateId }));
   fs.appendFileSync(path.join(f.root, 'web-pages/home/Home.webpage.yml'), `adx_pagetemplateid: ${pageTemplateId}\n`);
   f.request.components[0].sourcePath = source;
-  assert.equal(preparePlan(f.root, f.request).preview.components[0].simulation, true);
+  assert.equal(preparePlan(f.root, f.request).request.components[0].sourcePath, source);
+});
+
+test('legacy preview plans and hash-rebuilt preview payloads require a new proposal', (t) => {
+  const f = fixture(t);
+  const plan = preparePlan(f.root, f.request);
+  plan.schemaVersion = 1;
+  plan.preview = { components: [], layers: [], studioCss: '' };
+  plan.planHash = planHash(plan);
+  assert.throws(() => validatePlan(plan), /Legacy preview proposals.*--operation prepare.*new hash/);
+  plan.schemaVersion = 2;
+  plan.planHash = planHash(plan);
+  assert.throws(() => validatePlan(plan), /Invalid or modified proposal/);
+});
+
+test('diff-only preparation retains missing-baseline and unknown-order blockers', (t) => {
+  const f = fixture(t);
+  const asset = path.join(f.root, f.assets['theme.css'].path);
+  const original = fs.readFileSync(asset);
+  fs.unlinkSync(asset);
+  assert.throws(() => preparePlan(f.root, f.request), /Missing baseline CSS/);
+  fs.writeFileSync(asset, original);
+  const metadata = path.join(f.root, `${f.assets['custom.css'].path}.webfile.yml`);
+  fs.writeFileSync(metadata, fs.readFileSync(metadata, 'utf8').replace('adx_displayorder: 5', 'adx_displayorder: unknown'));
+  assert.throws(() => preparePlan(f.root, f.request), /CSS display order is unknown/);
+});
+
+test('custom CSS still requires real hooks and scoped text parts after removing rendering', (t) => {
+  const f = fixture(t);
+  delete f.request.components[0].sourcePath;
+  assert.throws(() => preparePlan(f.root, f.request), /real component sourcePath/);
+  f.request.components[0].sourcePath = f.copyPath;
+  for (const part of [' h1', ' h2', ' h3', ' h4', ' h5', ' h6', ' p', ' small', ' .text-muted', ' a', ' a:hover', ' a:focus-visible',
+    ' *', ' [aria-current="page"]', ' > .btn::before']) {
+    f.request.styles[0].part = part;
+    f.request.styles[0].declarations = { color: '#ffffff' };
+    assert.ok(compileStyles(f.request)[0].css.startsWith(`.pp-card${part} {`));
+  }
+  for (const part of [' h2, body', ' h2 !important', ' + body', ' ~ h2']) {
+    f.request.styles[0].part = part;
+    assert.throws(() => compileStyles(f.request), /CSS validation/);
+  }
 });

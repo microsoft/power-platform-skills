@@ -2,7 +2,11 @@
 
 const { serializeJson } = require('./render-template');
 const { safePath, readText } = require('./classic-site-style-context');
-const { KINDS, assertKeys, sourceTags, reachableTemplates } = require('./style-site-plan');
+const { assertKeys, sourceTags, reachableTemplates } = require('./style-site-plan');
+
+// Imported runtime evidence accepts only collector-coded categories. Descriptive
+// authoring labels must not widen the privacy-bounded capture schema.
+const CAPTURE_KINDS = ['section', 'text', 'button', 'image', 'navigation', 'form', 'list', 'card'];
 
 const STYLE_PROPERTIES = [
   'display', 'color', 'background-color', 'font-family', 'font-size',
@@ -21,7 +25,8 @@ function normalizeRuntimeUrl(value) {
 }
 
 function runtimeOptions(options) {
-  if (!options || Object.keys(options).some((key) => !['url', 'selector', 'maxCandidates'].includes(key))) {
+  if (!options || typeof options !== 'object' || Array.isArray(options) ||
+      Object.keys(options).some((key) => !['url', 'selector', 'maxCandidates', 'mode', 'properties'].includes(key))) {
     throw new Error('Unsupported runtime inspection options.');
   }
   const url = normalizeRuntimeUrl(options.url);
@@ -31,7 +36,26 @@ function runtimeOptions(options) {
       !Number.isInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 100) {
     throw new Error('Use a nonempty root selector (maximum 500 characters) and 1-100 candidates.');
   }
-  return { url, selector, maxCandidates };
+  // Leave legacy options/snapshots unchanged. Explicit capture options carry their
+  // property selection so an imported partial capture cannot masquerade as a full one.
+  const capture = options.mode === undefined && options.properties === undefined ? {} :
+    runtimeCaptureOptions(options.mode === undefined ? 'styles' : options.mode, options.properties);
+  return { url, selector, maxCandidates, ...capture };
+}
+
+function runtimeCaptureOptions(mode, input) {
+  if (!['structure', 'styles'].includes(mode)) throw new Error('Runtime mode must be structure or styles.');
+  // CLI input is e.g. "color,background-color"; the JS API also accepts an array.
+  // Reject empty entries, duplicates, custom properties and non-allowlisted names
+  // rather than silently expanding the capture or collecting URL/content properties.
+  const properties = input === undefined ? (mode === 'structure' ? [] : [...STYLE_PROPERTIES]) :
+    typeof input === 'string' ? input.split(',').map((property) => property.trim()) : input;
+  if (!Array.isArray(properties) || [...properties].some((property) => !STYLE_PROPERTIES.includes(property)) ||
+      new Set(properties).size !== properties.length ||
+      (mode === 'structure' ? properties.length !== 0 : properties.length === 0)) {
+    throw new Error('Use no properties in structure mode, or a nonempty unique subset of the supported CSS properties in styles mode.');
+  }
+  return { mode, properties: [...properties] };
 }
 
 function inspectRuntimeDom(input) {
@@ -52,7 +76,11 @@ function inspectRuntimeDom(input) {
   const classToken = /^[a-zA-Z_][a-zA-Z0-9_-]{0,119}$/;
   const boundary = (node) => ['iframe', 'object', 'embed', 'script', 'style', 'template', 'noscript', 'svg'].includes(node.localName) ||
     node.localName.includes('-') || Boolean(node.shadowRoot);
-  if (boundary(root)) throw new Error('Select a native page wrapper, not an embedded/custom component boundary.');
+  // A narrow selector can match a native descendant inside a custom element;
+  // selecting that descendant must not bypass the traversal boundary.
+  for (let ancestor = root; ancestor; ancestor = ancestor.parentElement) {
+    if (boundary(ancestor)) throw new Error('Select a native page wrapper, not an embedded/custom component boundary.');
+  }
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
     acceptNode(node) {
       if (boundary(node)) {
@@ -91,8 +119,18 @@ function inspectRuntimeDom(input) {
     const allClasses = Array.from(node.classList);
     const domId = node.getAttribute('id');
     if (!candidateTags.has(node.localName) && !allClasses.length && !domId) continue;
-    const style = getComputedStyle(node);
-    if (style.display === 'none' || style.visibility === 'hidden' || node.getClientRects().length === 0) continue;
+    const structural = options.mode === 'structure';
+    // Structural discovery never calls getComputedStyle. Layout boxes (and the
+    // native visibility check where supported) filter non-visible candidates
+    // without reading text/attributes or collecting any computed CSS values.
+    // https://developer.mozilla.org/en-US/docs/Web/API/Element/checkVisibility
+    if (structural && (node.getClientRects().length === 0 ||
+        (typeof node.checkVisibility === 'function' && !node.checkVisibility({ checkVisibilityCSS: true })))) continue;
+    // Explicit narrow captures stop before computing styles for another candidate.
+    // Keep the legacy visibility/truncation behavior when no mode was requested.
+    if (options.mode && candidates.length === options.maxCandidates) { truncated = true; break; }
+    const style = structural ? null : getComputedStyle(node);
+    if (style && (style.display === 'none' || style.visibility === 'hidden' || node.getClientRects().length === 0)) continue;
     if (candidates.length === options.maxCandidates) { truncated = true; break; }
     const classes = allClasses.filter((name) => classToken.test(name)).slice(0, 30);
     // Only structural styling metadata is collected. Never read inner/outerHTML,
@@ -103,7 +141,8 @@ function inspectRuntimeDom(input) {
       domId: domId && domId.length <= 200 ? domId : null,
       classes, attributesOmitted: classes.length !== allClasses.length || Boolean(domId && domId.length > 200),
       locator: locatorFor(node),
-      computedStyles: Object.fromEntries(STYLE_PROPERTIES.map((property) => [property, style.getPropertyValue(property).slice(0, 250)])),
+      computedStyles: style ? Object.fromEntries((options.properties ?? STYLE_PROPERTIES)
+        .map((property) => [property, style.getPropertyValue(property).slice(0, 250)])) : {},
     });
   }
   const url = new URL(options.url);
@@ -111,6 +150,7 @@ function inspectRuntimeDom(input) {
     schemaVersion: 1, source: 'runtime-dom', pageUrl: url.origin + url.pathname,
     queryOmitted: Boolean(url.search), capturedAt: new Date().toISOString(),
     rootSelector: options.selector, scannedElements, truncated, omittedBoundaries, candidates,
+    ...(options.mode ? { mode: options.mode, properties: options.properties } : {}),
   };
 }
 
@@ -119,13 +159,18 @@ function buildRuntimeInspection(input) {
   // Feed this code-owned function to the host browser's evaluate tool. The Node
   // command itself never opens a browser, authenticates or makes network calls.
   return `() => {\nconst STYLE_PROPERTIES = ${serializeJson(STYLE_PROPERTIES)};\n` +
-    `${normalizeRuntimeUrl.toString()}\n${runtimeOptions.toString()}\n` +
+    `${normalizeRuntimeUrl.toString()}\n${runtimeCaptureOptions.toString()}\n${runtimeOptions.toString()}\n` +
     `return (${inspectRuntimeDom.toString()})(${serializeJson(options)});\n}`;
 }
 
 function validateRuntimeSnapshot(snapshot) {
   assertKeys(snapshot, ['schemaVersion', 'source', 'pageUrl', 'queryOmitted', 'capturedAt', 'rootSelector',
-    'scannedElements', 'truncated', 'omittedBoundaries', 'candidates'], 'runtime snapshot');
+    'scannedElements', 'truncated', 'omittedBoundaries', 'candidates', 'mode', 'properties'], 'runtime snapshot');
+  let properties = STYLE_PROPERTIES;
+  if (Object.hasOwn(snapshot, 'mode') || Object.hasOwn(snapshot, 'properties')) {
+    if (!Array.isArray(snapshot.properties)) throw new Error('Invalid runtime capture properties.');
+    properties = runtimeCaptureOptions(snapshot.mode, snapshot.properties).properties;
+  }
   const shortText = (value, max) => typeof value === 'string' && value.length <= max;
   const url = new URL(normalizeRuntimeUrl(snapshot.pageUrl));
   if (snapshot.schemaVersion !== 1 || snapshot.source !== 'runtime-dom' || snapshot.pageUrl !== url.origin + url.pathname ||
@@ -140,7 +185,7 @@ function validateRuntimeSnapshot(snapshot) {
   const ids = new Set();
   for (const candidate of snapshot.candidates) {
     assertKeys(candidate, ['id', 'kind', 'tag', 'domId', 'classes', 'attributesOmitted', 'locator', 'computedStyles'], 'runtime candidate');
-    if (!/^runtime-[1-9]\d{0,2}$/.test(candidate.id) || ids.has(candidate.id) || !KINDS.includes(candidate.kind) ||
+    if (!/^runtime-[1-9]\d{0,2}$/.test(candidate.id) || ids.has(candidate.id) || !CAPTURE_KINDS.includes(candidate.kind) ||
         !/^[a-z][a-z0-9]{0,30}$/.test(candidate.tag) || !(candidate.domId === null || shortText(candidate.domId, 200)) ||
         !Array.isArray(candidate.classes) || candidate.classes.length > 30 || new Set(candidate.classes).size !== candidate.classes.length ||
         candidate.classes.some((name) => typeof name !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_-]{0,119}$/.test(name)) ||
@@ -148,8 +193,8 @@ function validateRuntimeSnapshot(snapshot) {
       throw new Error('Invalid runtime component metadata.');
     }
     ids.add(candidate.id);
-    assertKeys(candidate.computedStyles, STYLE_PROPERTIES, 'computed styles');
-    if (Object.keys(candidate.computedStyles).length !== STYLE_PROPERTIES.length ||
+    assertKeys(candidate.computedStyles, properties, 'computed styles');
+    if (Object.keys(candidate.computedStyles).length !== properties.length ||
         Object.values(candidate.computedStyles).some((value) => !shortText(value, 250))) throw new Error('Invalid computed styles.');
   }
   return snapshot;
@@ -180,7 +225,7 @@ function attachRuntimeEvidence(context, pageId, input) {
     });
   });
   return {
-    ...snapshot, pageId,
+    ...snapshot, pageId, candidateCount: snapshot.candidates.length,
     candidates: snapshot.candidates.map((candidate) => {
       const matches = [];
       for (const tag of tags) {
@@ -199,6 +244,8 @@ function attachRuntimeEvidence(context, pageId, input) {
       'Runtime evidence is advisory and may describe a different deployment, language, role or data state. Confirm the URL-to-local-page mapping.',
       'Generated DOM IDs and positional locators are inspection-only. Confirm a stable local class/wrapper; runtime matches do not authorize source edits.',
       'Computed values are not the winning rule source. Inspect the relevant local CSS and native Studio settings before deciding ownership or precedence.',
+      ...(snapshot.properties && snapshot.properties.length < STYLE_PROPERTIES.length ?
+        ['Uncollected computed properties are absent evidence, not zero or default values. Capture only the needed properties on the chosen target.'] : []),
       ...(snapshot.truncated ? ['The DOM inventory is truncated. Narrow the root selector and capture again before selecting missing targets.'] : []),
     ],
   };

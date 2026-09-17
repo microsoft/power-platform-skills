@@ -1,0 +1,17 @@
+{
+  "name": "power-pages-style-css-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reproducible offline CSS parser and HTML attribute codec bundle for classic styling.",
+  "scripts": {
+    "build": "esbuild entry.js --bundle --platform=node --format=cjs --target=node20 --legal-comments=external --outfile=css-tools.cjs"
+  },
+  "dependencies": {
+    "css-tree": "3.2.1",
+    "entities": "8.1.0",
+    "mdn-data": "2.27.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

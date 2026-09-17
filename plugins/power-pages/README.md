@@ -382,17 +382,26 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 
 #### `/style-site`
 
-> "Style the new contact section and existing list on my classic Power Pages site; show me before and after first"
+> "Style the new contact section and existing list on my classic Power Pages site; show me the proposed changes first"
 
-Styles **classic, server-rendered sites only**, from a local download in **VS Code Desktop**. Shows the requested components in an interactive before/after preview with design controls and desktop/mobile widths, then applies only an explicitly approved local change set.
+Styles **classic, server-rendered sites only**, from a local download in **VS Code Desktop**. Reviews the exact CSS/source diff, scope and Studio-support warnings, then applies only an explicitly approved local change set. No HTML preview, local server or browser review is required.
 
-- Supports new/existing native sections, text, buttons, images, navigation, forms/lists, and Liquid/web-template components; labels Liquid and Dataverse simulations
+- Uses a lean **Inspect/propose → Approve → Apply → Independently verify → Report** workflow for broad declarations on one locale/section: at most 3 components/10 style groups, one existing stylesheet and guarded inline/class edits. Any raw `style.css`, global rules, nonempty `externalResources`/`importantReason`, new/shared files or broader scope uses expanded review
+- Reviews small-change scope together with the exact diff/hash; expanded work confirms scope first. Every revision needs host approval, with no final-completion confirmation or unattended approval
+- Supports styling new/existing native sections, text, buttons, images, navigation, forms/lists, and Liquid/web-template components already present in the local export
 - Optionally inspects a user-provided portal runtime URL, with permission, to discover rendered IDs/classes and compare them with local source; no form actions or automatic sign-in
-- Keeps supported theme/component properties in Design Studio; Studio-only requests produce a preview and guided handoff without competing CSS
-- Distinguishes exact-page, language-specific CSS from a CSS Web File's parent-and-descendant scope
+- Defaults to local authoring for **both listed and unlisted Studio properties**. The capability map describes Design-panel availability, not exclusive ownership. Unlisted/unknown/conditional support warnings remain visible; local values are not promised to populate native Studio controls
+- Authors general CSS properties/functions, font stacks, shadows, transforms, transitions, tokens and all gradient kinds through a pinned bundled parser, not a fixed skill allowlist. Raw stylesheets support responsive rules, animation/reduced motion, fonts, `@property` and layers; users need no npm installs
+- Edits the actual static inline declaration where appropriate; otherwise uses effective CSS in the locale sidecar or reusable Web File at `theme.css < custom < portalbasictheme.css`. Preserves inline importance; newly authored priority needs `importantReason` and expanded review, not blind escalation or DOM rewrites
+- Can explicitly remove an existing inline property with `null` and add scoped responsive/state CSS in the same approved plan. Null is inline-only, not a CSS value; other properties/markers/priority remain intact, and shorthand-removal effects require review
+- Keeps selectors in a verified component subtree by default. Explicit raw `global: true` themes need no fictitious source/class hook, but require expanded review of all matching elements and shared names within the placement scope
+- Requires exact external HTTPS CSS URLs in `externalResources`, with CSP/availability/licensing/privacy review; Web File URLs need no external declaration. No automatic resource/import fetching or browser/network prerequisite
+- Distinguishes exact-page, language-specific inline/CSS changes from a CSS Web File's parent-and-descendant scope; shared-template inline edits require explicit site scope, potentially affecting every page
+- Offers Studio instructions-only solely when explicitly requested (`owner: "studio"`, `handoffReason: "user-requested"`, `studioAction`). Native support alone never forces a handoff; ambiguous/unrepresentable local work stays blocked with a specific local next step
 - Preserves existing Bootstrap assets, default stylesheets, native behavior, and unrelated local edits
-- Uses a bounded safe CSS/part schema with real source/class hooks; component creation and unsupported styling require a separate reviewed authoring task
-- Leaves preview/proposal/recovery artifacts outside the uploadable site tree; **no upload, publishing, activation, remote writes, or cache clearing**
+- Independently validates local files, retaining source-level readability guidance and optional supplied-color contrast checks; actual desktop/mobile rendering, accessibility and Studio editability remain pending separate live verification
+- Uses exact source/context/hash guards on real rendered tags, including input/textarea/SVG and outer local iframe/embedded elements: only class/style attributes change, never embedded contents. Static tags/CSS values may span lines; whitespace/newline matching remains exact. Entity spelling may normalize only in the style attribute; other source stays intact. Declarations retain authored order and shorthand protection. Unknown parser semantics yield warnings, not blanket Power Pages rejection; malformed/injected/executable CSS fails
+- Leaves inspection/proposal/recovery artifacts outside the uploadable site tree; **no upload, publishing, activation, remote writes, or cache clearing**
 - Not for SPA/code sites, PCF/third-party internals, Bootstrap migration, or VS Code for the Web remote saves
 
 #### `/add-seo`

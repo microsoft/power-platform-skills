@@ -57,10 +57,49 @@ function fixture(t, { major = 3, prefix = 'adx_', nested = false, wrapped = fals
     styles: [{
       id: 'card-shape', componentId: 'service-card', owner: 'custom', scope: 'page',
       declarations: { 'border-radius': '12px', 'box-shadow': '0 8px 24px #00000026' },
-      rationale: 'The custom card has no Studio styling control for this reusable treatment.',
+      rationale: 'Maintain this reusable component treatment in the selected local page stylesheet.',
     }],
   };
   return { work, project, root, put, yml, request, pagePath, copyPath, cssPath, assets };
 }
 
-module.exports = { fixture, ids };
+function heroFixture(t, { major = 3, readable = false, studioText = false } = {}) {
+  const f = fixture(t, { major });
+  if (major === 3) {
+    const bootstrap = fs.readFileSync(path.join(f.root, f.assets['bootstrap.min.css'].path), 'utf8');
+    f.put(f.assets['bootstrap.min.css'].path, bootstrap +
+      '.row::before,.row::after,.container::before,.container::after{display:table;content:" "}' +
+      '.row::after,.container::after{clear:both}');
+  }
+  f.put(f.copyPath, '<div class="row sectionBlockLayout"><div class="container">' +
+    '<section class="pp-card"><h2>A place to get started</h2>' +
+    '<p>Find useful information and take your next step.</p>' +
+    '<button class="btn btn-primary">Explore services</button></section></div></div>');
+  // Keep a conventional installed font: classic styling must preserve the site's
+  // typography, not inherit the SPA workflow's font-download/replacement advice.
+  f.put(f.assets['theme.css'].path, 'body{font-family:Arial,sans-serif;font-size:16px;color:#222222}' +
+    '.pp-card{background-color:#f1f5f9;padding:24px}' +
+    'h2{font-size:28px;font-weight:700;line-height:1.2;margin:0 0 16px;color:#222222}' +
+    'p{font-size:16px;line-height:1.5;margin:0 0 24px;color:#222222}' +
+    '.btn{background-color:#2563eb;color:#ffffff;font:inherit;border:0;border-radius:6px}');
+  f.request.title = 'Welcome hero - readable styling';
+  f.request.components[0].kind = 'section';
+  f.request.components[0].label = 'Welcome hero';
+  f.request.styles = [{
+    id: 'hero-surface', componentId: 'service-card', owner: 'custom', scope: 'page',
+    declarations: { 'background-color': '#111827', color: '#f9fafb', padding: '28px', 'border-radius': '16px' },
+    rationale: 'The fixture has a verified custom-owned hero surface.',
+  }];
+  if (readable || studioText) {
+    for (const [part, color, id] of [[' h2', '#f9fafb', 'hero-heading'], [' p', '#d1d5db', 'hero-body']]) {
+      f.request.styles.push({
+        id, componentId: 'service-card', owner: studioText ? 'studio' : 'custom', scope: 'page', part,
+        declarations: { color }, rationale: 'Coordinate explicit heading/body foregrounds with the dark surface.',
+        ...(studioText ? { handoffReason: 'user-requested', studioAction: 'The user requested text-color instructions only; refresh the local export before the dependent surface change.' } : {}),
+      });
+    }
+  }
+  return f;
+}
+
+module.exports = { fixture, heroFixture, ids };

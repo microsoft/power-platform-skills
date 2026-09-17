@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 'use strict';
 
-const { inspectSite, parseArgs, assertOutsideSite, readText } = require('../../../scripts/lib/classic-site-style-context');
+const { captureSite, parseArgs, assertOutsideSite, readText } = require('../../../scripts/lib/classic-site-style-context');
 const { attachRuntimeEvidence } = require('../../../scripts/lib/runtime-style-context');
+const { saveJson } = require('../../../scripts/lib/style-site-plan');
+const { selectContext, inspectionSummary } = require('../../../scripts/lib/style-site-summary');
 
 function main(argv) {
-  const args = parseArgs(argv, ['siteRoot', 'runtimeSnapshot', 'pageId']);
-  const context = inspectSite(args.siteRoot);
+  const args = parseArgs(argv, ['siteRoot', 'runtimeSnapshot', 'pageId', 'page', 'target', 'summary', 'out']);
+  const snapshot = captureSite(args.siteRoot);
+  const context = structuredClone(snapshot.context);
+  const selection = selectContext(snapshot, args);
   if (args.runtimeSnapshot) {
     const file = assertOutsideSite(context.siteRoot, args.runtimeSnapshot);
     context.runtime = attachRuntimeEvidence(context, args.pageId, JSON.parse(readText(file)));
-  } else if (args.pageId) throw new Error('--pageId is used with --runtimeSnapshot.');
-  return context;
+  }
+  if (args.summary || args.pageId || args.page || args.target) context.selection = selection;
+  const artifact = args.out ? saveJson(args.out, context, context.siteRoot) : null;
+  return args.summary || args.out ? inspectionSummary(context, selection, artifact) : context;
 }
 
 if (require.main === module) {
