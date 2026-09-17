@@ -79,13 +79,15 @@ downloads that round-trip Choice columns.
   visible that deploys hidden. A hidden field is annotated rather than dropped, so the approval
   still shows it exists, and the state is never truncated: in a narrow column the widget hint and
   then the label give way first.
-- **The vendored SDK is refreshed to pick up upstream wire-correctness fixes.** Two joins on one
-  table no longer collapse into one, a join type the typed layer does not model is no longer
-  silently rewritten as an inner join, `addElement` no longer re-keys a node when handed a property
-  bag, and dashboard layout/control-id parsing is corrected. Measured against the previous bundle,
-  none of these changes this plugin's output today — it authors no view joins, and all its
-  `addElement` calls target array pointers — so this removes latent hazards rather than altering
-  behaviour.
+- **The vendored SDK is refreshed to pick up upstream wire-correctness fixes.** The bundle now
+  carries fixes for two joins on one table collapsing into one, a join type the typed layer does not
+  model being silently rewritten as an inner join, `addElement` re-keying a node handed a property
+  bag, dashboard layout/control-id parsing, and — from a later upstream round — a synchronous
+  storage throw escaping the concurrent workspace batch, duplicate sort attributes collapsing and
+  changing sort precedence, ordinary `uiname`/`uitype` lookup annotations freezing an editable
+  filter, and BPF updates issuing no `If-Match`. Measured against the previous bundle, none of this
+  changes this plugin's output today — it authors no view joins, and all its `addElement` calls
+  target array pointers — so this removes latent hazards rather than altering behaviour.
 - **A section emptied by a layout move is reclaimed instead of left as a blank twin.** Moving a
   section between tabs or form-columns under a generated name changed its identity, so the old one
   survived as an empty duplicate-labelled section. Gated on the same `prune` opt-out the field prune

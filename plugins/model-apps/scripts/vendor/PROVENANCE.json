@@ -1,14 +1,14 @@
 {
-  "commit": "d13d4786bea7919ca1a82114c8d362f2222b4712",
-  "subject": "fix(cds-maker-sdk): join reconciliation correctness (review round 2)",
+  "commit": "50a43bd3f570ec9ea5545dcc257fae1949f22aaa",
+  "subject": "fix(cds-maker-sdk): three regressions from the last two PRs, plus BPF concurrency tokens",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-17T18:32:29.699Z",
-  "newestSrcAt": "2026-09-17T18:10:05.634Z",
+  "libBuiltAt": "2026-09-17T23:34:42.907Z",
+  "newestSrcAt": "2026-09-17T23:33:11.099Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-17T18:33:21.671Z",
-  "bundleSha256": "99cdba63c44ac9156f68021ef7a195e22e271af4701ae061005e81905a4ed9ed",
-  "bundleBytes": 707164
+  "builtAt": "2026-09-17T23:35:33.267Z",
+  "bundleSha256": "609cfc9fda047b2a3f6cbea80823942e81e8b99b44a044a681ca98dcb6379467",
+  "bundleBytes": 708362
 }
