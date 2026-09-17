@@ -12,6 +12,12 @@ downloads that round-trip Choice columns.
 
 ### Added
 
+- **A persona can record what the app deliberately leaves out** ([#583]). `personas[].excludes[]`
+  captures scope decisions — "approving budgets is handled in the Finance app" — and renders them as
+  **Deliberately out of scope** beside the jobs→surfaces traceability table. Two apps built over the
+  same tables are told apart by what each declines to do, and an omission the reviewer was never
+  shown cannot be approved. Documentary only, like `jobs[].surfaces[]`; nothing reaches Dataverse.
+
 - **The vendored SDK moves to injected storage, and the plugin takes it up.** The SDK removed
   `workspacePath`; every call site now builds a store with `createNodeWorkspaceStorage(...)`. Nothing
   changes for authors — this is an internal uptake — but it is a breaking change for anything calling
@@ -257,6 +263,7 @@ downloads that round-trip Choice columns.
 [#574]: https://github.com/microsoft/power-platform-skills/issues/574
 [#575]: https://github.com/microsoft/power-platform-skills/issues/575
 [#581]: https://github.com/microsoft/power-platform-skills/issues/581
+[#583]: https://github.com/microsoft/power-platform-skills/issues/583
 [#587]: https://github.com/microsoft/power-platform-skills/issues/587
 [#589]: https://github.com/microsoft/power-platform-skills/issues/589
 [#591]: https://github.com/microsoft/power-platform-skills/issues/591

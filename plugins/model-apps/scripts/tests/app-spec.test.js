@@ -1273,3 +1273,42 @@ test('AB#6686426: one isDefault among several Main forms is valid', () => {
   const r = validateAppSpec(deskWithForms([mainForm('A'), mainForm('B', { isDefault: true }), mainForm('C')]), { profile: 'plan' });
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
 });
+
+// #583 Gap 1 — an app's scope is defined as much by what it deliberately leaves out as by what it
+// includes, and the exclusions are what let a reviewer tell two apps over the same tables apart.
+// Nothing recorded them, so they lived only in the authoring conversation.
+//
+// `excludes[]` is DOCUMENTARY, like `jobs[].surfaces`: personaRoleSpecFor() projects explicit fields
+// only, so it can never reach the SDK and be silently discarded there — the failure class #583 Gap 3
+// describes for `aiDescription`.
+function personaSpec(persona) {
+  return {
+    schemaVersion: 2,
+    solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Contoso' },
+    entities: [{ schemaName: 'contoso_order', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Main', subAreas: [] }] }] },
+    personas: [Object.assign({
+      persona: 'Dispatcher',
+      jobs: [{ name: 'Assign work', surfaces: ['Active Work'], privileges: [{ entity: 'contoso_order', access: ['read'] }] }],
+    }, persona)],
+  };
+}
+
+test('#583 a persona may record deliberate exclusions, and a malformed one is rejected', () => {
+  const ok = validateAppSpec(personaSpec({ excludes: ['Approving budgets — handled in the Finance app'] }), { profile: 'plan' });
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+
+  // A persona with no excludes is unaffected — this cannot break an existing spec.
+  assert.strictEqual(validateAppSpec(personaSpec({}), { profile: 'plan' }).ok, true);
+
+  const notArray = validateAppSpec(personaSpec({ excludes: 'Approving budgets' }), { profile: 'plan' });
+  assert.ok(notArray.errors.some((e) => /excludes must be an array of strings/.test(e)),
+    `a bare string must be rejected, not treated as a one-item list; got ${JSON.stringify(notArray.errors)}`);
+
+  for (const bad of [[''], ['   '], [42], [null]]) {
+    const r = validateAppSpec(personaSpec({ excludes: bad }), { profile: 'plan' });
+    assert.ok(r.errors.some((e) => /each excludes\[\] entry must be a non-empty string/.test(e)),
+      `${JSON.stringify(bad)} must be rejected — a blank exclusion documents nothing`);
+  }
+});

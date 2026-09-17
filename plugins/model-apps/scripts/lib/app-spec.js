@@ -3017,7 +3017,7 @@ function validateAppSpec(spec, opts = {}) {
       // defaulting to true → the persona wrongly gets app-module read + the app association. Same pattern
       // the `design` block uses. Allowlists mirror the vendored SDK's PersonaRoleSpec/JobToBeDone/
       // EntityPrivilege shapes exactly.
-      const PERSONA_KEYS = new Set(['persona', 'jobs', 'additionalPrivileges', 'appAccess', 'businessUnitId', 'assignTo']);
+      const PERSONA_KEYS = new Set(['persona', 'jobs', 'additionalPrivileges', 'appAccess', 'businessUnitId', 'assignTo', 'excludes']);
       const JOB_KEYS = new Set(['name', 'description', 'privileges', 'surfaces']);
       const PRIVILEGE_KEYS = new Set(['entity', 'access', 'scope']);
       const rejectUnknown = (obj, allowed, ctx) => {
@@ -3062,6 +3062,15 @@ function validateAppSpec(spec, opts = {}) {
         }
         const label = pname || '?';
         if (p.appAccess !== undefined && typeof p.appAccess !== 'boolean') errors.push(`persona "${label}": appAccess must be a boolean`);
+        // excludes[]: what this persona deliberately does NOT do in this app (#583). An app's scope is
+        // defined as much by what it leaves out as by what it includes, and the exclusions are what let a
+        // reviewer tell two apps over the same tables apart. Purely DOCUMENTARY — like jobs[].surfaces it
+        // is rendered into the design doc and never applied to Dataverse. `personaRoleSpecFor` projects
+        // explicit fields only, so this can never reach the SDK and be silently discarded there.
+        if (p.excludes !== undefined) {
+          if (!Array.isArray(p.excludes)) errors.push(`persona "${label}": excludes must be an array of strings`);
+          else for (const x of p.excludes) if (typeof x !== 'string' || !x.trim()) errors.push(`persona "${label}": each excludes[] entry must be a non-empty string`);
+        }
         if (p.businessUnitId !== undefined && (typeof p.businessUnitId !== 'string' || !FORM_GUID_RE.test(p.businessUnitId))) errors.push(`persona "${label}": businessUnitId must be a GUID`);
         if (!Array.isArray(p.jobs) || !p.jobs.length) {
           errors.push(`persona "${label}": at least one job (jobs[]) is required`);

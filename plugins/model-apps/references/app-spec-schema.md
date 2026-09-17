@@ -1183,6 +1183,13 @@ privilege removes it — the role converges to the spec).
 - `appAccess` (optional boolean, default `true`) — inject app-module read + associate the app to the role.
 - `businessUnitId` (optional GUID) — business unit to create the role in (defaults to the org root BU).
 - `assignTo` (optional) — `{ teams?: GUID[], users?: GUID[] }`, grant-only.
+- `excludes[]` (optional) — what this persona deliberately **does not** do in this app, e.g.
+  `"Approving budgets — handled in the Finance app"`. Never applied to Dataverse; like
+  `jobs[].surfaces[]` it is documentary, and it renders as a **Deliberately out of scope** list beside
+  the jobs→surfaces traceability table in `model-app-plan.md`. An app's scope is defined as much by
+  what it leaves out as by what it includes, and the exclusions are what let a reviewer tell two apps
+  built over the same tables apart — an omission nobody was shown cannot be approved. Entries must be
+  non-empty strings; a bare string instead of an array is rejected rather than read as a one-item list.
 
 **Idempotency & safety.** A role is identified by its **(trimmed name, business unit)** — the same
 identity the platform uses. A rebuild **reuses** only a role the builder itself authored (marked as
