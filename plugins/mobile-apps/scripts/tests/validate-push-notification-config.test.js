@@ -170,6 +170,33 @@ import { Linking, Platform } from 'react-native';
 import { parsePushNavigationIntent } from '../navigation/linkContract';
 
 const ANDROID_NOTIFICATION_CHANNEL_ID = 'default';
+const LOCAL_NOTIFICATION_SOURCE_KEY = '_appNotificationSource';
+const LOCAL_NOTIFICATION_SOURCE_VALUE = 'foreground-local-v1';
+
+function projectNavigationData(value: unknown) {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return Object.fromEntries(
+    ['schemaVersion', 'destination', 'params']
+      .filter((key) => key in source)
+      .map((key) => [key, source[key]]),
+  );
+}
+
+function isForegroundLocalResponse(response: Notifications.NotificationResponse) {
+  return response.notification.request.content.data?.[LOCAL_NOTIFICATION_SOURCE_KEY]
+    === LOCAL_NOTIFICATION_SOURCE_VALUE;
+}
+
+function parseRemoteNotificationEvent(message: { data?: Record<string, string | undefined> }) {
+  return parsePushNavigationIntent(projectNavigationData(message.data));
+}
+
+function parseForegroundLocalEvent(response: Notifications.NotificationResponse) {
+  if (!isForegroundLocalResponse(response)) return null;
+  return parsePushNavigationIntent(
+    projectNavigationData(response.notification.request.content.data),
+  );
+}
 
 export type PushResult =
   | { ok: true; value?: string }
@@ -263,13 +290,17 @@ export function registerNotificationHandlers(): () => void {
       }),
     });
     const unsubscribeForeground = messaging().onMessage(async (message) => {
-      parsePushNavigationIntent(message.data);
+      const projectedData = projectNavigationData(message.data);
+      parsePushNavigationIntent(projectedData);
       try {
         await Notifications.scheduleNotificationAsync({
           content: {
             title: message.notification?.title ?? 'Notification',
             body: message.notification?.body ?? '',
-            data: message.data ?? {},
+            data: {
+              ...projectedData,
+              [LOCAL_NOTIFICATION_SOURCE_KEY]: LOCAL_NOTIFICATION_SOURCE_VALUE,
+            },
           },
           trigger: Platform.OS === 'android'
             ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
@@ -282,12 +313,16 @@ export function registerNotificationHandlers(): () => void {
     const unsubscribeRefresh = messaging().onTokenRefresh(async () => {
       await syncPushTopic(null);
     });
+    const unsubscribeRemoteOpened = messaging().onNotificationOpenedApp((message) => {
+      parseRemoteNotificationEvent(message);
+    });
     const responseSubscription = Notifications.addNotificationResponseReceivedListener((response) => {
-      parsePushNavigationIntent(response.notification.request.content.data);
+      parseForegroundLocalEvent(response);
     });
     return () => {
       unsubscribeForeground();
       unsubscribeRefresh();
+      unsubscribeRemoteOpened();
       responseSubscription.remove();
     };
   } catch {
@@ -299,7 +334,7 @@ export async function handleBackgroundNotification(message: {
   data?: Record<string, string | undefined>;
 }): Promise<PushResult> {
   try {
-    return parsePushNavigationIntent(message.data);
+    return parsePushNavigationIntent(projectNavigationData(message.data));
   } catch {
     return { ok: false, reason: 'notification-error' };
   }
@@ -307,8 +342,11 @@ export async function handleBackgroundNotification(message: {
 
 export async function consumeInitialNotificationIntent(): Promise<PushResult> {
   try {
+    const message = await messaging().getInitialNotification();
+    if (message) return parseRemoteNotificationEvent(message);
     const response = await Notifications.getLastNotificationResponseAsync();
-    return parsePushNavigationIntent(response?.notification.request.content.data);
+    if (!response) return { ok: true };
+    return parseForegroundLocalEvent(response) ?? { ok: true };
   } catch {
     return { ok: false, reason: 'notification-error' };
   }
@@ -725,13 +763,23 @@ test('strict mode rejects every missing critical push integration category', () 
       );
     }],
     ['foreground response data preservation', (root) => {
-      replaceInFile(wrapperPath(root), 'data: message.data ?? {},', 'data: {},');
+      replaceInFile(wrapperPath(root), '...projectedData,', 'ignored: projectedData,');
     }],
     ['background handling', (root) => {
       replaceInFile(
         wrapperPath(root),
-        'return parsePushNavigationIntent(message.data);',
-        'return { ok: true };',
+        `export async function handleBackgroundNotification(message: {
+  data?: Record<string, string | undefined>;
+}): Promise<PushResult> {
+  try {
+    return parsePushNavigationIntent(projectNavigationData(message.data));
+  } catch {
+    return { ok: false, reason: 'notification-error' };
+  }
+}`,
+        `export async function handleBackgroundNotification(): Promise<PushResult> {
+  return { ok: true };
+}`,
       );
     }],
     ['warm response handling', (root) => {
@@ -741,11 +789,32 @@ test('strict mode rejects every missing critical push integration category', () 
         'Notifications.addResponseListener(',
       );
     }],
+    ['remote warm response handling', (root) => {
+      replaceInFile(
+        wrapperPath(root),
+        'messaging().onNotificationOpenedApp(',
+        'messaging().onRemoteInteraction(',
+      );
+    }],
+    ['foreground-local response marker', (root) => {
+      replaceInFile(
+        wrapperPath(root),
+        'if (!isForegroundLocalResponse(response)) return null;',
+        'if (false) return;',
+      );
+    }],
     ['cold-start handling', (root) => {
       replaceInFile(
         wrapperPath(root),
         'Notifications.getLastNotificationResponseAsync()',
         'readInitialResponse()',
+      );
+    }],
+    ['remote cold-start handling', (root) => {
+      replaceInFile(
+        wrapperPath(root),
+        'messaging().getInitialNotification()',
+        'readInitialRemoteNotification()',
       );
     }],
     ['shared navigation contract', (root) => {
@@ -798,12 +867,17 @@ test('strict mode rejects parse-only, unsafe, and mis-scoped foreground presenta
   completeClientIntegration(parseOnly);
   replaceInFile(
     path.join(parseOnly, 'src/native/pushNotifications.ts'),
-    `      try {
+    `      const projectedData = projectNavigationData(message.data);
+      parsePushNavigationIntent(projectedData);
+      try {
         await Notifications.scheduleNotificationAsync({
           content: {
             title: message.notification?.title ?? 'Notification',
             body: message.notification?.body ?? '',
-            data: message.data ?? {},
+            data: {
+              ...projectedData,
+              [LOCAL_NOTIFICATION_SOURCE_KEY]: LOCAL_NOTIFICATION_SOURCE_VALUE,
+            },
           },
           trigger: Platform.OS === 'android'
             ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
@@ -858,13 +932,17 @@ test('strict mode rejects parse-only, unsafe, and mis-scoped foreground presenta
   replaceInFile(
     path.join(misScoped, 'src/native/pushNotifications.ts'),
     `    const unsubscribeForeground = messaging().onMessage(async (message) => {
-      parsePushNavigationIntent(message.data);
+      const projectedData = projectNavigationData(message.data);
+      parsePushNavigationIntent(projectedData);
       try {
         await Notifications.scheduleNotificationAsync({
           content: {
             title: message.notification?.title ?? 'Notification',
             body: message.notification?.body ?? '',
-            data: message.data ?? {},
+            data: {
+              ...projectedData,
+              [LOCAL_NOTIFICATION_SOURCE_KEY]: LOCAL_NOTIFICATION_SOURCE_VALUE,
+            },
           },
           trigger: Platform.OS === 'android'
             ? { channelId: ANDROID_NOTIFICATION_CHANNEL_ID }
@@ -879,7 +957,7 @@ test('strict mode rejects parse-only, unsafe, and mis-scoped foreground presenta
       trigger: { channelId: ANDROID_NOTIFICATION_CHANNEL_ID },
     });
     const unsubscribeForeground = messaging().onMessage(async (message) => {
-      parsePushNavigationIntent(message.data);
+      parsePushNavigationIntent(projectNavigationData(message.data));
     });`,
   );
   assert.strictEqual(
@@ -917,8 +995,8 @@ test('strict mode rejects parse-only, unsafe, and mis-scoped foreground presenta
   completeClientIntegration(contentChannel);
   replaceInFile(
     path.join(contentChannel, 'src/native/pushNotifications.ts'),
-    '            data: message.data ?? {},',
-    '            data: message.data ?? {},\n            channelId: ANDROID_NOTIFICATION_CHANNEL_ID,',
+    '              [LOCAL_NOTIFICATION_SOURCE_KEY]: LOCAL_NOTIFICATION_SOURCE_VALUE,',
+    '              [LOCAL_NOTIFICATION_SOURCE_KEY]: LOCAL_NOTIFICATION_SOURCE_VALUE,\n              channelId: ANDROID_NOTIFICATION_CHANNEL_ID,',
   );
   replaceInFile(
     path.join(contentChannel, 'src/native/pushNotifications.ts'),

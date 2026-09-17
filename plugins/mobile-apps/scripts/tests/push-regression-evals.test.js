@@ -614,7 +614,8 @@ test('iOS push contract is consent-first and registers background handling befor
   );
   assert.match(contract, /permission.*registerDeviceForRemoteMessages.*setAutoInitEnabled.*getToken/s);
   assert.match(contract, /Never persist an FCM registration token/);
-  assert.match(contract, /getLastNotificationResponseAsync\(\).*once/s);
+  assert.match(contract, /onNotificationOpenedApp.*getInitialNotification\(\).*once/s);
+  assert.match(contract, /Expo.*foreground-local marker.*ignore unmarked Expo responses/is);
   assert.match(skill, /never call `getToken` before registration/);
   assert.match(skill, /never persist an FCM registration token/);
 });

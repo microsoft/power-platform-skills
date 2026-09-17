@@ -147,6 +147,24 @@ background handlers may validate data, but only a user notification response
 may dispatch navigation. Warm and cold responses share one parser and one
 deduplication/pending-intent guard.
 
+React Native Firebase Messaging owns remote FCM interactions on both platforms:
+use `onNotificationOpenedApp` for a warm/background tap and
+`getInitialNotification` for a terminated-state tap, then project
+`RemoteMessage.data` to a new object containing only `schemaVersion`,
+`destination`, and `params`.
+
+Expo Notifications owns only app-created foreground local presentation. Mark
+that local notification with an app-owned internal source field, accept its
+warm/cold Expo response only when the marker matches, and project the same
+three semantic fields from `notification.request.content.data`. Ignore every
+unmarked Expo response so one remote FCM tap cannot dispatch through both
+Firebase and Expo.
+
+The local marker is presentation metadata and is never part of the FCM sender
+contract. Projection does not weaken semantic validation: partial navigation
+fields remain invalid, and the parser still rejects unknown destinations,
+malformed canonical JSON, and every extra or invalid destination parameter.
+
 ## Authentication and exactly-once behavior
 
 Dispatch only after Expo Router is ready. If a validated destination requires
@@ -154,9 +172,10 @@ authentication and the user is signed out, retain exactly one pending intent,
 route to login, and resume it once after auth readiness. Never retain an
 invalid intent.
 
-Deduplicate external events by a bounded event identity: notification response
-identifier/message ID when available, otherwise a short-lived fingerprint of
-the canonical intent plus source. This guard applies to warm/cold notification
+Deduplicate external events by a bounded event identity: Firebase message ID
+for remote notification interactions, Expo request identifier for marked
+foreground-local interactions, otherwise a short-lived fingerprint of the
+canonical intent plus source. This guard applies to warm/cold notification
 responses and initial/live URL delivery. A later deliberate in-app call is a
 new event and is not globally suppressed.
 

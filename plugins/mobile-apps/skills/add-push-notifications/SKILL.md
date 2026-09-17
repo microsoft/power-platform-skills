@@ -718,8 +718,8 @@ types from the push contract. It must:
   immediate local foreground presentation; use an Android trigger whose
   top-level `channelId` is the shared app-owned channel and which has no time or
   calendar fields, keep the schedule inside a non-throwing `try`/`catch`, and
-  preserve `message.data ?? {}` in notification content for later response
-  navigation
+  project only the three semantic fields into notification content and add the
+  exact app-owned foreground-local marker for later Expo response navigation
 - configure `Notifications.setNotificationHandler` and `messaging().onMessage`
   on Android-reachable paths; the handler must return both
   `shouldShowBanner: true` and `shouldShowList: true` to allow banner/heads-up
@@ -730,6 +730,15 @@ types from the push contract. It must:
   point; it validates data and never navigates
 - parse every notification navigation intent through
   `src/navigation/linkContract.ts` before returning it
+- use React Native Firebase `onNotificationOpenedApp` and
+  `getInitialNotification` as the only remote FCM warm/cold interaction
+  sources on Android and iOS; project only `schemaVersion`, `destination`, and
+  `params` from `RemoteMessage.data` before semantic parsing
+- use Expo Notifications response APIs only for app-created foreground local
+  notifications carrying an exact app-owned source marker. Ignore every
+  unmarked Expo response so a remote FCM tap cannot dispatch through both
+  libraries. The marker is presentation metadata and must never be emitted by
+  the FCM sender or accepted as a semantic parameter
 - never throw into a screen
 
 Assign and await every value-returning native operation, then use that value in
@@ -777,6 +786,11 @@ sign-in/OID changes, sign-out, consent, and token refresh. Mount it once inside
 provider owns foreground, token-refresh, and response subscriptions only;
 background registration remains in the early entry point.
 
+Those response subscriptions comprise React Native Firebase remote
+interactions and Expo responses gated to app-marked foreground local
+notifications; Expo must not independently dispatch an unmarked remote FCM
+response.
+
 The generated lifecycle owner must call both `registerNotificationHandlers()`
 and `syncPushTopic(...)`, export a named push/notification hook or Provider,
 and be mounted exactly once under `app/`. Strict validation rejects direct
@@ -785,13 +799,15 @@ mounts.
 
 ### 8. Wire navigation sources
 
-Register one warm response listener and consume the Expo Notifications
-cold-start response once. Also consume initial and live custom-scheme/approved
-HTTPS URLs. Funnel all external sources through the shared parser, source-aware
+Register React Native Firebase remote-interaction listeners and consume its
+initial notification once. Register one Expo warm response listener and
+consume its cold response only for the app-marked foreground local
+notification path. Also consume initial and live custom-scheme/approved HTTPS
+URLs. Funnel all external sources through the shared parser, source-aware
 deduplication, and pending-intent guard. Use Expo Router only after contract
 validation and router/auth readiness; never navigate from the background
-message handler. Invalid or stale intents are rejected without fallback
-navigation.
+message handler. Invalid, stale, unmarked, or duplicate intents are rejected
+without fallback navigation.
 
 Expose the typed in-app helper from the same module. Existing screen actions
 that target registered semantic destinations must use it rather than

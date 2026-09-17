@@ -157,9 +157,15 @@ validation guarantees.
 5. Keep Android channel identity exact across `firebase.json`, channel
    creation, and foreground scheduling. Preserve exact `allUsers` and
    lowercase validated OID topic semantics without outputting an OID.
-6. Make edits idempotently. Do not append duplicate listeners, mounts, routes,
+6. Use React Native Firebase for remote FCM warm/cold interactions on Android
+   and iOS. Use Expo response APIs only for app-created foreground local
+   notifications carrying the exact app-owned marker, and project only
+   `schemaVersion`, `destination`, and `params` before semantic parsing. Ignore
+   unmarked Expo responses and preserve the closed destination/parameter
+   contract.
+7. Make edits idempotently. Do not append duplicate listeners, mounts, routes,
    intent filters, associated domains, or UI controls.
-7. Run `npx tsc --noEmit`, strict push-client validation, and
+8. Run `npx tsc --noEmit`, strict push-client validation, and
    `validate-mobile-files.js` with every changed file explicitly listed.
    Repair only files you exclusively own.
 

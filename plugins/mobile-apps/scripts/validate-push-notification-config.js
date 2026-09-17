@@ -1398,8 +1398,12 @@ function validateStrictClientIntegration(root) {
     { pattern: /\bmessaging\s*\(\s*\)\.onMessage\s*\(/, description: 'foreground message listener' },
     { pattern: /\bmessaging\s*\(\s*\)\.onTokenRefresh\s*\(/, description: 'token-refresh listener' },
     {
+      pattern: /\bmessaging\s*\(\s*\)\.onNotificationOpenedApp\s*\(/,
+      description: 'warm remote FCM interaction listener',
+    },
+    {
       pattern: /\bNotifications\.addNotificationResponseReceivedListener\s*\(/,
-      description: 'warm notification-response listener',
+      description: 'warm foreground-local notification-response listener',
     },
     { pattern: /\breturn\s*\(\s*\)\s*=>\s*\{/, description: 'listener cleanup function' },
   ], 'registerNotificationHandlers');
@@ -1408,20 +1412,79 @@ function validateStrictClientIntegration(root) {
     [/\bmessaging\s*\(\s*\)\.onMessage\s*\(/, 'foreground message listener registration'],
     [/\bmessaging\s*\(\s*\)\.onTokenRefresh\s*\(/, 'token-refresh listener registration'],
     [
+      /\bmessaging\s*\(\s*\)\.onNotificationOpenedApp\s*\(/,
+      'warm remote FCM interaction listener registration',
+    ],
+    [
       /\bNotifications\.addNotificationResponseReceivedListener\s*\(/,
-      'notification-response listener registration',
+      'foreground-local notification-response listener registration',
     ],
   ]) {
     requireCallInsideTryCatch(handlers.masked, pattern, description, 'registerNotificationHandlers');
   }
-  const handlerValidationCount = (
-    handlers.masked.match(/\bparsePushNavigationIntent\s*\(/g) || []
-  ).length;
-  if (handlerValidationCount < 2) {
-    throw new Error(
-      'registerNotificationHandlers must validate both foreground and notification-response payloads.',
-    );
-  }
+  requireEvidence(wrapperSource, [
+    {
+      pattern: /\bfunction\s+projectNavigationData\s*\(/,
+      description: 'shared semantic navigation-data projection',
+    },
+    {
+      pattern: /\bfunction\s+isForegroundLocalResponse\s*\(/,
+      description: 'foreground-local Expo response marker check',
+    },
+    {
+      pattern: /\bfunction\s+parseRemoteNotificationEvent\s*\(/,
+      description: 'remote FCM interaction parser',
+    },
+    {
+      pattern: /\bfunction\s+parseForegroundLocalEvent\s*\(/,
+      description: 'foreground-local notification interaction parser',
+    },
+    { pattern: /['"]schemaVersion['"]|\bschemaVersion\s*:/, description: 'schemaVersion projection' },
+    { pattern: /['"]destination['"]|\bdestination\s*:/, description: 'destination projection' },
+    { pattern: /['"]params['"]|\bparams\s*:/, description: 'params projection' },
+    {
+      pattern: /\bLOCAL_NOTIFICATION_SOURCE_KEY\b/,
+      description: 'app-owned foreground-local source marker key',
+    },
+    {
+      pattern: /\bLOCAL_NOTIFICATION_SOURCE_VALUE\b/,
+      description: 'app-owned foreground-local source marker value',
+    },
+    {
+      pattern: /\bparsePushNavigationIntent\s*\(\s*projectNavigationData\s*\(\s*message\s*\.\s*data\s*\)\s*\)/,
+      description: 'projected remote FCM data validation',
+    },
+    {
+      pattern: /\bif\s*\(\s*!\s*isForegroundLocalResponse\s*\(\s*response\s*\)\s*\)\s*return\b/,
+      description: 'foreground-local marker gate before Expo response parsing',
+    },
+    {
+      pattern: /\bparsePushNavigationIntent\s*\(\s*projectNavigationData\s*\(\s*response\s*\.\s*notification\s*\.\s*request\s*\.\s*content\s*\.\s*data\s*\)\s*,?\s*\)/,
+      description: 'projected foreground-local Expo response validation',
+    },
+  ], 'notification interaction ownership contract');
+  const remoteOpenedCallback = extractInlineCallbackBody(
+    handlers.body,
+    /\bmessaging\s*\(\s*\)\.onNotificationOpenedApp\b/,
+    'messaging().onNotificationOpenedApp remote interaction listener',
+  );
+  requireEvidence(maskJavaScriptStrings(remoteOpenedCallback), [
+    {
+      pattern: /\bparseRemoteNotificationEvent\s*\(\s*message\s*\)/,
+      description: 'remote FCM interaction parsing',
+    },
+  ], 'messaging().onNotificationOpenedApp callback');
+  const localResponseCallback = extractInlineCallbackBody(
+    handlers.body,
+    /\bNotifications\.addNotificationResponseReceivedListener\b/,
+    'Expo foreground-local notification response listener',
+  );
+  requireEvidence(maskJavaScriptStrings(localResponseCallback), [
+    {
+      pattern: /\bparseForegroundLocalEvent\s*\(\s*response\s*\)/,
+      description: 'marked foreground-local interaction parsing',
+    },
+  ], 'Expo foreground-local notification response callback');
   const androidHandlers = androidReachableJavaScript(handlers.body);
   requireEvidence(androidHandlers, [
     {
@@ -1469,8 +1532,12 @@ function validateStrictClientIntegration(root) {
   const foregroundMasked = maskJavaScriptStrings(foregroundCallback);
   requireEvidence(foregroundMasked, [
     {
-      pattern: /\bparsePushNavigationIntent\s*\(\s*message\s*\.\s*data\s*\)/,
-      description: 'foreground message.data validation',
+      pattern: /\bprojectNavigationData\s*\(\s*message\s*\.\s*data\s*\)/,
+      description: 'foreground message.data projection',
+    },
+    {
+      pattern: /\bparsePushNavigationIntent\s*\(\s*projectedData\s*\)/,
+      description: 'foreground projected-data validation',
     },
     {
       pattern: /\bNotifications\.scheduleNotificationAsync\s*\(/,
@@ -1504,12 +1571,12 @@ function validateStrictClientIntegration(root) {
     'messaging().onMessage foreground presentation',
   );
   if (
-    !/\bcontent\s*:\s*\{[\s\S]*?\bdata\s*:\s*message\s*\.\s*data\s*\?\?\s*\{\s*\}/.test(
+    !/\bcontent\s*:\s*\{[\s\S]*?\bdata\s*:\s*\{[\s\S]*?\.\.\.\s*projectedData[\s\S]*?\[\s*LOCAL_NOTIFICATION_SOURCE_KEY\s*\]\s*:\s*LOCAL_NOTIFICATION_SOURCE_VALUE/.test(
       maskJavaScriptStrings(scheduleArguments),
     )
   ) {
     throw new Error(
-      'foreground local notification content must preserve safe message.data with data: message.data ?? {} for response navigation.',
+      'foreground local notification content must contain projected semantic data and the app-owned foreground-local source marker.',
     );
   }
   const scheduleObject = firstCallArgument(scheduleArguments);
@@ -1600,21 +1667,38 @@ function validateStrictClientIntegration(root) {
   );
   requireEvidence(coldStart.masked, [
     {
-      pattern: /\bNotifications\.getLastNotificationResponseAsync\s*\(/,
-      description: 'cold-start response consumption',
+      pattern: /\bmessaging\s*\(\s*\)\.getInitialNotification\s*\(/,
+      description: 'terminated-state remote FCM interaction consumption',
     },
-    { pattern: /\bparsePushNavigationIntent\s*\(/, description: 'cold-start navigation-intent validation' },
+    {
+      pattern: /\bNotifications\.getLastNotificationResponseAsync\s*\(/,
+      description: 'terminated-state foreground-local response consumption',
+    },
+    {
+      pattern: /\bparseRemoteNotificationEvent\s*\(/,
+      description: 'terminated-state remote FCM interaction parsing',
+    },
+    {
+      pattern: /\bparseForegroundLocalEvent\s*\(/,
+      description: 'terminated-state foreground-local interaction parsing',
+    },
   ], 'consumeInitialNotificationIntent');
   requireAssignedCallInfluence(
     coldStart.masked,
+    /messaging\s*\(\s*\)\.getInitialNotification\s*\(/,
+    'terminated-state remote FCM interaction query',
+    'consumeInitialNotificationIntent',
+  );
+  requireAssignedCallInfluence(
+    coldStart.masked,
     /Notifications\.getLastNotificationResponseAsync\s*\(/,
-    'cold-start response query',
+    'terminated-state foreground-local response query',
     'consumeInitialNotificationIntent',
   );
   requireDiscriminatedOutcome(
     coldStart.body,
     'consumeInitialNotificationIntent',
-    ['parsePushNavigationIntent'],
+    ['parseRemoteNotificationEvent', 'parseForegroundLocalEvent'],
   );
 
   requireEvidence(wrapperSource, [

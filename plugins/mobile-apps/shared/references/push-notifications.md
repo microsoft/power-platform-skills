@@ -17,9 +17,11 @@ Presentation-ready architecture diagrams:
 ## Native ownership
 
 - `@react-native-firebase/messaging` owns FCM registration tokens, token refresh,
-  topic subscription, and foreground/background transport on Android and iOS.
+  topic subscription, foreground/background transport, and remote-notification
+  interactions on Android and iOS.
 - `expo-notifications` owns permission requests, Android channels, foreground
-  presentation, and notification-response handling.
+  local presentation, and responses only for app-marked foreground local
+  notifications.
 - `expo-router` owns navigation after the shared semantic intent is validated.
 - Screens import only `src/native/pushNotifications.ts`. They never import either
   notification package directly.
@@ -91,11 +93,12 @@ hook, or layout because those mount too late for background/quit delivery.
 The handler must be safe before auth and navigation are ready: validate the
 data payload, perform only bounded background work, and never navigate.
 
-Foreground message, token-refresh, and notification-response listeners remain
-owned by the single React provider/hook. Make registration idempotent and
-return/execute every native unsubscribe exactly once, including across Fast
-Refresh. Background registration in the entry point is separate and must not
-be duplicated by the provider.
+Foreground message, token-refresh, Firebase remote-interaction, and marked Expo
+foreground-local response listeners remain owned by the single React
+provider/hook. Make registration idempotent and return/execute every native
+unsubscribe exactly once, including across Fast Refresh. Background
+registration in the entry point is separate and must not be duplicated by the
+provider.
 
 ### Android foreground presentation and channel
 
@@ -116,10 +119,11 @@ presentation, while the second allows the notification to remain in the
 notification center/list. Channel importance, device settings, and user choices
 still control whether Android actually displays a heads-up banner.
 
-Preserve the safe FCM data payload in the scheduled notification content, for
-example `data: message.data ?? {}`, so the later Expo notification-response
-listener can run the same semantic navigation parser. Continue to validate the
-foreground payload immediately; presentation does not authorize navigation.
+Project the three semantic FCM data fields into the scheduled notification
+content and add the exact app-owned foreground-local marker so the later Expo
+response listener can identify its own presentation. Do not copy arbitrary
+sender fields. Continue to validate the foreground payload immediately;
+presentation does not authorize navigation.
 
 Use one app-owned Android channel ID consistently:
 
@@ -185,12 +189,20 @@ navigating to a fallback screen. If auth is not ready, retain one validated
 pending intent. Protected destinations opened while signed out route to login
 and resume once after sign-in.
 
-Use the Expo Notifications response APIs for both warm and cold starts. The
-provider registers one `addNotificationResponseReceivedListener` for warm
-responses and consumes `getLastNotificationResponseAsync()` once after router
-and auth readiness for a cold-start response. Run both paths through the shared
-navigation parser and one pending-intent/deduplication guard so a response
-cannot navigate twice. Foreground/background message handlers may validate the
+React Native Firebase Messaging is the cross-platform owner for remote FCM
+interactions. Register `onNotificationOpenedApp` for warm/background taps and
+consume `getInitialNotification()` once after router/auth readiness for a
+terminated-state tap. Project only `schemaVersion`, `destination`, and `params`
+from `RemoteMessage.data`, then run both paths through the shared parser and
+one pending-intent/deduplication guard.
+
+Expo Notifications owns permission UX, Android channel creation, and visible
+foreground local presentation. A local notification scheduled from
+`onMessage` must contain the projected semantic fields plus one app-owned
+foreground-local marker. Accept Expo warm/cold response APIs only when that
+marker matches; ignore unmarked Expo responses so remote FCM interactions
+cannot dispatch twice. The marker is presentation metadata, not part of the
+FCM sender contract. Foreground/background message handlers may validate the
 contract but do not navigate from `setBackgroundMessageHandler`.
 
 ## Required wrapper surface
@@ -219,7 +231,8 @@ token acquisition; auto-init after consent; token acquisition and refresh;
 topic subscribe/unsubscribe; awaited and caught foreground local presentation
 inside an Android-reachable `onMessage`; an Android-reachable notification
 handler that allows both banner and notification-center presentation;
-background, warm-response, and cold-start handling; shared deep-link
+background validation; Firebase warm/cold remote interaction handling; marked
+Expo warm/cold foreground-local interaction handling; shared deep-link
 validation; and explicit non-throwing discriminated results. Export names,
 comments, markers, hardcoded objects, and empty/no-op bodies are not
 implementation proof. The validator analyzes each required function body
