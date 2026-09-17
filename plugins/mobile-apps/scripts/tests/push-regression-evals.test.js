@@ -569,7 +569,10 @@ test('iOS push orchestration invokes owners without duplicating their workflows'
   assert.match(apns, /configured, device verification\s+pending/i);
   assert.match(apns, /Only `\/verify-ios-push`/);
   assert.match(deploy, /Power Platform \*\*web bundle deployment\*\*/);
-  assert.match(deploy, /route to `\/build-ios`/i);
+  assert.match(deploy, /route to its bounded build owner/i);
+  assert.match(deploy, /Android customer-signed direct-test APK: `\/build-android`/);
+  assert.match(deploy, /`\/verify-android-push`/);
+  assert.match(deploy, /Registered-device iOS development or ad-hoc IPA: `\/build-ios`/);
   assert.doesNotMatch(deploy, /native compile and manual device testing are user-owned/);
   assert.match(debug, /route user to `\/verify-ios-push`/);
   assert.match(debug, /Keep general Metro diagnostics here/);
@@ -577,9 +580,36 @@ test('iOS push orchestration invokes owners without duplicating their workflows'
   assert.match(readme, /\| `\/verify-ios-push` \|/);
   assert.match(readme, /development and ad-hoc\s+registered-device IPA workflows/);
   assert.match(readme, /user directly manages signing; `\/build-ios` runs the confirmed Wrap\s+command/);
+  assert.doesNotMatch(readme, /push-notifications-architecture-diagrams\.md/);
+  assert.match(readme, /push-notifications\.md/);
+  assert.match(readme, /navigation-link-contract\.md/);
   assert.match(agents, /35 skills \+ 9 agents/);
   assert.match(agents, /manual Apple Developer and Xcode guidance/);
   assert.match(agents, /user owns signing assets, registered devices/);
+});
+
+test('screen-planner navigation examples match the eight-column contract', () => {
+  const planner = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'agents/screen-planner.md'),
+    'utf8',
+  );
+  const section = planner.match(
+    /\| Route \| Destination ID \| Path params \| Query params \(UNION across all senders\) \| External params \| Requires auth \| Intent \| Returns to caller \|([\s\S]*?)\n\n### Shared Conventions/,
+  );
+
+  assert.ok(section, 'navigation-contract example table exists');
+  const rows = section[1]
+    .split('\n')
+    .filter((line) => line.startsWith('| `/(app)/'));
+
+  assert.ok(rows.length >= 7, 'navigation-contract example has representative rows');
+  for (const row of rows) {
+    assert.strictEqual(
+      row.split('|').length - 2,
+      8,
+      `navigation-contract row has eight cells: ${row}`,
+    );
+  }
 });
 
 test('push docs require official MCP-first orchestration boundaries', () => {

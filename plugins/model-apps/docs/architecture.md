@@ -160,7 +160,7 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
               ┌────────────────────────────┐   STAGE: data  (engine run 1)
               │ Data pre-build             │   build-model-app.js --stage data --apply
               │  solution + data-model     │   → tables exist for type-gen
-              │  (NOT sample-data yet)     │   13 phases unchanged; this run covers:
+              │  (NOT sample-data yet)     │   16 phases unchanged; this run covers:
               │                            │     solution · data-model
               └──────────────┬─────────────┘
                              │
@@ -178,12 +178,13 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
    ┌───────────────────────────────────────────────────────────────────┐
    │ Full idempotent build  build-model-app.js --apply --verify        │  STAGES: ui · app · publish · verify
    │  (engine run 2 — full; rediscovers data-model, then continues)   │
-   │  13 phases:                                                        │
+   │  16 phases:                                                        │
    │    solution · data-model · sample-data                (data)      │
    │    web-resources · views · charts · forms ·                       │
+   │    business-rules · business-process-flows ·                      │
    │    commands · dashboards                               (ui)        │
    │    app-shell · pages [upload + PAGEREF_ resolve +                  │
-   │      sitemap finalize] · ai-features                  (app)       │
+   │      sitemap finalize] · ai-features · security       (app)       │
    │    publish                                             (publish)   │
    │  bounded parallelism; emits [n/total] events + BuildHalt gate     │
    │  --verify: auto-reconciles spec vs deployed after apply           │
@@ -211,8 +212,8 @@ deterministic, idempotent, narrated SDK build. Create and **edit share one path*
 | **author** | main loop | *(none — design-only)* |
 | **data** | run 1 (schema) + run 2 (rows) | `solution` · `data-model` (run 1); `sample-data` (run 2) |
 | **generate-pages** | main loop + agents | *(none — writes .tsx files)* |
-| **ui** | run 2 | `web-resources` · `views` · `charts` · `forms` · `commands` · `dashboards` |
-| **app** | run 2 | `app-shell` · `pages` · `ai-features` |
+| **ui** | run 2 | `web-resources` · `views` · `charts` · `forms` · `business-rules` · `business-process-flows` · `commands` · `dashboards` |
+| **app** | run 2 | `app-shell` · `pages` · `ai-features` · `security` |
 | **publish** | run 2 | `publish` |
 | **verify** | run 2 or standalone | *(reconcile pass)* |
 

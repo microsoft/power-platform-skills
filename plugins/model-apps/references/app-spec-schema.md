@@ -59,6 +59,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "sampleData":    { /* optional, keyed by entity schemaName */ },
   "ai":            { /* optional — AI feature flags + row-summary config */ },
   "personas":      [ /* optional — one security role per persona (see below) */ ],
+  "roleGrants":    [ /* optional — ADD privileges to a role you did NOT author (see below) */ ],
   "languageCode":  1031 /* optional — LCID for Dataverse labels; defaults to the org's base language */
 }
 ```
@@ -106,8 +107,7 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
   stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
   reason, relationship and alternate-key display names) **and** form, dashboard and sitemap labels.
-  The serializers used to hardcode 1033 with no caller override
-  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)); they now take the
+  The serializers used to hardcode 1033 with no caller override; they now take the
   authoring language, so a non-English build no longer produces translated columns next to English
   form labels.
   **Normally omit it**: the build reads the organization's base language
@@ -122,6 +122,13 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
   value is rejected by validation, and a caller that bypasses validation gets a warning naming the
   discarded value rather than a silent fall-through.
+  **It is build-wide.** One LCID is resolved and applied to every table, column, choice, status
+  value, relationship and alternate key in the spec. There is **no per-table language**: an
+  `entities[].languageCode` is rejected, because the build cannot honour it — the SDK takes the
+  language as a construction-time option. To label something in **several** languages, write the
+  field itself as an LCID map (see *Localized labels* below); an `entities[].localizedLabels` block
+  is rejected too, because the map belongs beside the name it labels rather than in a parallel
+  addressing scheme.
   **Emitted by `download-model-app.js` only if you pinned it yourself.** It is deliberately never
   read from Dataverse: an LCID copied out of the source org would be re-applied verbatim when the
   spec is rebuilt somewhere else, which is exactly how a spec starts failing in an org that lacks
@@ -129,6 +136,74 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **you** wrote is carried across a download from the previous `app-spec.json` at that path, so a
   pin is not silently lost — losing it would leave newly created columns in the org default while
   the existing ones keep the pinned language, with no error anywhere.
+
+## Localized labels — one name, several languages
+
+`languageCode` above sets the **one** language every plain label is written in. To label something in
+**several** languages, write the field as a map keyed by LCID instead of a string:
+
+```jsonc
+"displayName": "Project Baseline"                                       // one language
+"displayName": { "1033": "Project Baseline", "3082": "Línea base" }     // two
+```
+
+This works on every author-facing name the SDK can localize. **Measured**, per surface, against an
+organization with 1033 and 3082 provisioned — the table is the honest scope of the claim:
+
+| Where | Field | Status |
+|---|---|---|
+| `entities[]` | `displayName`, `pluralName` | **verified** — stored in both languages |
+| `entities[].primaryAttribute` | `displayName` | **verified** |
+| `entities[].columns[]` | `displayName` | **verified** |
+| `entities[].columns[]` | inline Choice `options[]` | **verified** |
+| `relationships[].lookup` | `displayName` | **verified** |
+| `entities[].alternateKeys[]` | `displayName` | accepted; not consistently reproducible |
+| `globalChoices[]` | `displayName`, `options[]` | **REJECTED at the spec gate** — see below |
+
+**Global choices are the exception, and it is not this plugin's doing.** Measured: a global option set
+created with a two-language label stores only the base language — **including through a raw
+`POST /GlobalOptionSetDefinitions` that bypasses the SDK entirely** (0/4). Because Dataverse reports
+nothing when it drops the language, a localized `globalChoices[]` label is **rejected by validation**
+rather than sent: accepting it would produce a green build with the author's second language silently
+gone, which is the exact failure this feature exists to end. Use an **inline** Choice on the column
+(`columns[].options[]`, verified) when you need localized option labels, or set the global set's
+labels in Maker. Plain-string global-choice labels are unaffected.
+
+**Why a map on the field, not a `localizedLabels` block.** The label belongs beside the name it
+labels. A table-level block cannot address a Choice **option** or a lookup's display name without
+inventing a parallel addressing scheme, and it splits one value across two places that then drift.
+An `entities[].localizedLabels` key is therefore **not** a supported shape.
+
+**Rules**
+- Keys are **canonical positive integer LCIDs** up to 65535 — `3082`, not `"03082"` and not
+  `"es-ES"`. A language tag is rejected rather than guessed: `es-ES` is 3082 *or* 1034 depending on
+  sort order, and guessing wrong would not fail — it would label everything in the wrong language.
+- Every value must be a non-empty string; an empty map is rejected (the SDK rejects one too).
+- `pluralName` becomes **required** beside a localized `displayName`. The English fallback appends
+  `"s"`, which is not a plural rule in most languages — so the spec asks rather than inventing
+  *"Línea base del proyectos"*.
+- Omitting the spec's own `languageCode` from a map is a **warning**, not an error. Dataverse serves
+  the base-language label to every user whose UI language has none, so leaving it out usually means
+  those users read a schema name — but a deliberately single-non-English label is legal.
+- Labels for all languages are written in **one** create call. That matters: a later single-language
+  `PUT` can overwrite the base label even with merge semantics.
+- **Every LCID you name must be provisioned in the organization, and the build halts if one is not.**
+  This is the guard the feature depends on, not a nicety. Live-measured against a 1033-only org:
+  `createTable` carrying `{ "1033": …, "3082": … }` returns **success** and stores **only** the 1033
+  label — Dataverse does not warn, error, or report the drop anywhere. Without the halt you would get
+  a green build with the second language silently gone, which is the exact failure this feature
+  exists to end. The check is best-effort in the same way the existing `languageCode` check is: an
+  unreadable `RetrieveProvisionedLanguages` leaves the build unchanged, and a spec with only plain
+  string labels never pays the round trip.
+
+**Referencing a localized label.** Anywhere the spec names an artifact by its label — `sampleData`
+choosing a Choice option, or `personas[].jobs[].surfaces[]` naming a screen — **any** of its
+languages resolves to the same artifact. One option, one value, several names.
+
+**Round-trip.** `download-model-app` reconstructs localized labels from Dataverse: a table, plural,
+column or option labelled in several languages comes back as a map, and one labelled in a single
+language comes back as a plain string (so no existing spec changes shape). The download emits
+`pluralName` alongside a localized `displayName`, so its own output re-validates.
 
 ## `description` — write one on everything that takes one
 
@@ -158,6 +233,18 @@ agent later inspects an app it did not build — to extend it, debug it, or answ
 
 Good: `"Severity 1-5; drives the escalation rule and the SLA clock."`
 Weak: `"The priority column."` (restates the name and adds nothing)
+
+**`app.description` additionally has to ROUTE.** It is the one field an orchestrator reads to decide
+whether *this* app is the right place to send a request, and there is no separate "AI description"
+field — the SDK's app surface has nowhere to put one, so anything extra would be silently dropped.
+Write the routing signal into `app.description` itself: who the app is for, the tasks it covers,
+what it deliberately **excludes**, and — when two apps expose the same tables — how to tell them
+apart. Sibling apps over the same data are precisely where a purpose-only description fails.
+
+Good: `"Project-manager and portfolio work: planning projects, assigning and reprioritizing work,
+and managing sprints, budgets, risks and releases. Prefer the My Work app when the request is about
+the signed-in contributor's own assigned items."`
+Weak: `"An app for managing projects."` (no persona, no scope boundary, nothing to disambiguate)
 
 **Rules:** must be a non-empty string, max 2000 characters (the Dataverse ceiling — the platform
 truncates silently past it, so it is rejected at author time instead). Omit the field entirely rather
@@ -247,6 +334,11 @@ it exists is accepted by validation, builds green, and does not change the deplo
   ]
 }
 ```
+- **Unknown table keys are REJECTED, not ignored.** A table accepts exactly the keys above
+  plus `statusReasons` / `alternateKeys`. Anything else — a misspelled `pluralname`, or a
+  `languageCode` / `localizedLabels` asking for a per-table language or a parallel label block —
+  fails validation naming the alternative, rather than validating clean and being dropped from the
+  build.
 - **Column `type`:** `Text · Memo · Choice · MultiChoice · Boolean · Money · DateTime ·
   Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Customer`.
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
@@ -349,11 +441,27 @@ without needing a business rule or a plug-in to enforce it.
 "alternateKeys": [ { "schemaName": "new_emailkey", "displayName": "Email Key", "columns": ["new_email"] } ]
 ```
 
-## globalChoices[] (optional — shared option sets)
-```jsonc
-[ { "name": "new_priority", "displayName": "Priority", "options": ["Low","Medium","High"] } ]
-```
-Reference from a column via `"globalChoice": "new_priority"` (built before the columns that bind it).
+## Conditional features — read `app-spec-schema-advanced.md` when you use one
+
+These fields are **optional and situational**: most apps use none of them, so their full field
+reference lives in [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md) rather than
+here. This document stays the contract for everything an app always has.
+
+**Read the advanced reference when — and only when — your design uses one of these.** The table
+is deliberately here, in the document you always read, so the menu is never hidden: choosing a
+capability is the step that must not be missed, and the `/app-builder` skill body carries the same
+list with "reach for it when…" guidance.
+
+| Field | What it is |
+|---|---|
+| `globalChoices[]` | shared option sets |
+| `webResources[]` | client-side logic |
+| `commands[]` | modern command-bar buttons |
+| `businessRules[]` | declarative form logic, no code |
+| `businessProcessFlows[]` | guided, staged process on a table |
+| `dashboards[]` | chart/list/iframe/web-resource tiles |
+| `roleGrants[]` | extend a role you did NOT author |
+| `businessProcessFlows[].securityRoles` | who may run a flow |
 
 ## relationships[]
 ```jsonc
@@ -362,7 +470,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```
 - `referenced` = the "one" (parent); `referencing` = the "many" (child, gets the lookup column).
 - The relationship's schema name defaults to `<referenced>_<referencing>` and **must differ**
-  from `lookup.schemaName` (Dataverse rejects a collision — the lint enforces this).
+  from `lookup.schemaName` (Dataverse rejects a collision — `lintAppSpec` flags this, so
+`scripts/lint-app-spec.js` catches it before you deploy; note the build itself does **not**
+run the lint, so an unlinted spec hits the failure at build time instead).
 - **Relationships to a standard/system table** (e.g. `systemuser`, `account` — a common
   "bridge to a real user / owner" pattern) are handled automatically: because a system table has
   no publisher prefix, the naive default name wouldn't start with your prefix and Dataverse would
@@ -382,39 +492,23 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   the junction. Sample rows then bind **both** parents via `$parents` (see sampleData). This is the
   recommended pattern for "Technician ↔ Work Order with a Role".
 
-## webResources[] (optional — client-side logic)
+**What a download reconstructs.** `download-model-app.js` rebuilds `relationships[]` from live
+metadata, keeping the lookup's deployed casing (`new_CustomerId`, not `new_customerid`) and its
+label. It emits an explicit `schemaName` only when the deployed name differs from the generated
+default, so a rebuild into the **same** environment matches the existing relationship instead of
+creating a second one beside it. Three cases it **cannot** express are reported by name and reason
+rather than silently dropped:
+- a **polymorphic** lookup — one column targeting several tables (Dataverse surfaces it as several
+  relationships sharing one lookup attribute), where `relationships[]` declares exactly one
+  `referenced` table per lookup;
+- a parent that is a **custom table the app does not include**, which a rebuild target would not
+  have (a bridge to a *standard* table like `systemuser`/`account` is kept — every org has one);
+- an **N:N whose partner table is outside the app**.
 
-```jsonc
-[ { "name": "new_ticket.js", "displayName": "Ticket Scripts", "type": "js",
-    "content": "var Ticket={onLoad:function(ctx){},onPriority:function(ctx){}};" } ]
-```
-- `type`: `js · html · css · xml · png · jpg · gif · svg · ico · xsl · resx` (script web resources
-  should be named with a `.js` extension).
-- Source comes from **one** of: `content` (inline text), `contentPath` (a file read relative to the
-  app folder at build time), or `contentBase64` (for binary types).
-- Built **before** forms and added to the solution; reference one from a form `events[]` handler.
-- **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
-  resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
-  and the old script keeps running. Delete the web resource (or tear down) and rebuild to change it —
-  note it cannot be deleted while a command or form handler still references it.
-- **Never hardcode Choice (option-set) values in the script.** Values like `100000003` are assigned
-  per publisher, so a literal that is correct in one environment silently selects nothing in another —
-  and a `setValue` with an unknown value fails quietly. Resolve by label instead:
-  ```js
-  function setChoiceByLabel(formCtx, attr, label) {
-    var a = formCtx.getAttribute(attr);
-    var hit = (a.getOptions() || []).filter(function (o) { return o.text === label; })[0];
-    if (hit) { a.setValue(hit.value); }
-    return !!hit;
-  }
-  ```
-- **`external`** *(optional, download-emitted)* — set `true` on an entry that **download** re-declared
-  because a sitemap nav icon referenced a custom image web resource **by path** (see appShell icons
-  below). The build **creates it if missing, reuses it if present** (idempotent, no overwrite), so the
-  icon resolves after a rebuild into a **fresh** environment. Teardown **never deletes** an `external`
-  web resource: a publisher-owned WR can be shared across that publisher's other apps/solutions, and an
-  orphaned icon is recoverable while a deleted shared resource is not — so this fails safe (mirrors
-  `existing: true` on downloaded tables). You normally never hand-author this flag.
+A polymorphic lookup's **shadow attributes** (`<lookup>name`, `<lookup>yominame`) are excluded from
+`columns[]` along with it, so a rebuild does not gain invented Text columns where the lookup used to
+be. Every lookup has shadows; a polymorphic one's are physically stored rather than logical, which is
+why they need naming here at all.
 
 ## views[]
 ```jsonc
@@ -428,6 +522,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
     { "attr": "new_duedate", "op": "this-week" }                    // relative-date — no value
   ] }
 ```
+- **`columns[]` is an array of column NAMES (strings)**, and so are `sort[].attr` and
+  `filters[].attr`. Not `[{ "name": "..." }]` — that is the shape `forms[]` uses for its fields, and
+  it used to be accepted here and stringified into the view's FetchXML as `[object object]`. The
+  build then failed at the platform, mid-run, and left behind a view row that could not be read or
+  deleted, so every later build failed the same way. It is now rejected up
+  front, naming the view and the offending entry.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
@@ -466,6 +566,19 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 { "entity": "new_project", "type": "main", "name": "Project",
   "tabs": [ { "label": "General", "sections": [
     { "label": "Details", "columns": 2, "fields": ["new_name","new_budget","new_status"] } ] } ] }
+
+// explicit layout, richer: multi-column tabs, per-cell spans, visibility
+{ "entity": "new_project", "type": "main", "name": "Project",
+  "tabs": [
+    { "name": "tab_delivery", "label": "Delivery", "expanded": true, "columns": [
+      { "width": "65%", "sections": [
+        { "name": "sec_scope", "label": "Scope", "columns": 2, "fields": [
+          { "name": "new_summary", "colspan": 2 },     // span the whole 2-column section
+          "new_startdate", "new_targetdate" ] } ] },
+      { "width": "35%", "sections": [
+        { "name": "sec_status", "label": "Status", "columns": 1, "fields": ["new_status","new_owner"] } ] } ] },
+    { "name": "tab_audit", "label": "Audit", "expanded": false,
+      "sections": [ { "name": "sec_audit", "label": "Audit", "columns": 2, "fields": ["createdon","modifiedon"] } ] } ] }
 
 // per-field control options: read-only, hidden, and targeted positioning
 { "entity": "new_workitem", "name": "Work Item", "layout": "auto",
@@ -519,6 +632,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   default and only ever applies to a table THIS build owns (a custom, publisher-prefixed, non-`existing`
   table); it never touches a reused/system table. Teardown reactivates the stock form before deleting
   ours, so a torn-down table is left clean.
+- **`isDefault`** *(optional, boolean, Main forms only)* — which Main form the table **opens with**.
+  Exactly one Main form per table may set it; the fallback is the first Main form in spec order, so
+  selection is order-independent either way (it is applied once, after every form exists, rather than
+  each form racing to promote itself). A promotion the environment refuses is reported as a warning
+  and fails `--verify`, which proves the deployed `systemform.isdefault` independently — so a build
+  can no longer record a default it did not actually set.
 - **Form resolution is by `(entity, name, formType)`** — a Dataverse form name is unique only per
   `(entity, type)`, so a table's auto-created **Main**, **Quick View**, and **Card** forms can all be
   named "Information" without colliding. A `formType:"Main"` edit reconciles **only** the Main form;
@@ -535,6 +654,77 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
   The build fetches the pushed form, injects the handlers, then publishes it.
+
+### Explicit layout — tabs, form-columns, sections
+
+| Level | Key | Meaning |
+|---|---|---|
+| tab | `name` | Stable identity. Emitted as `tab_<i>` when omitted — see *editing an existing form* below. |
+| tab | `label` | Tab title. |
+| tab | `expanded` | `false` collapses the tab on open (default `true`). |
+| tab | `visible` | `false` hides the tab (default `true`). |
+| tab | `sections[]` | Shorthand for **one full-width form-column**. |
+| tab | `columns[]` | The multi-column form: each entry is `{ "width": "60%", "sections": [...] }`. |
+| form-column | `width` | Percentage string (`"60%"`). Omitted widths split evenly (3 columns → 34/33/33). |
+| section | `name` | Stable identity, `section_<tab>_<i>` when omitted. |
+| section | `label`, `showLabel`, `visible` | Section heading, whether it renders, whether the section shows. |
+| section | `columns` | `1`–`4` grid columns. |
+| section | `fields[]` | Column logical names, or `{ "name": …, … }` entries. |
+| field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it — the clamp reaches the deployed cell, not just the row packing. `rowspan` is valid only on the **last** field of a section (see below). |
+
+A tab declares **either** `sections` **or** `columns`, never both. `columns` on a **tab** is the list
+of form-columns; `columns` on a **section** is its 1–4 grid width — a number on a tab is rejected
+rather than silently discarded. Any other key is **rejected** — including `showLabel`/`labelPosition`
+on a tab and `labelPosition`/`locked` on a section, which the SDK's serializer silently discards, so
+accepting them would promise a layout Dataverse never renders.
+
+**Names are identity, and a field is placed once per form.** Two tabs — or two sections — on one
+form may not share a `name`, and a column may not be placed twice, whether in two different sections
+or twice in the same one (matching is case-insensitive, and applies to both the string and the
+`{ "name": … }` entry shape). All three are rejected at author time.
+
+The reason is that create and rebuild would otherwise disagree. The compiler emits **one cell per
+entry**, so a fresh build deploys a duplicated field twice, while every reconcile path resolves a
+field to its **first** placement — the second cell would appear on the initial create and then vanish
+on the next build of the same spec. Duplicate container names fail the same way: `name` is what the
+build matches a deployed tab or section by, so two declarations sharing one would target the same
+live container. A second form on the same table may of course place the same column — identity is
+per form.
+
+**`rowspan` must be the last field in its section.** A cell that spans down reserves its column in
+the rows beneath it, and the cells of the following row fill the section left to right — so a field
+declared after a spanning one would land in the reserved slot. Every stock Dataverse form that uses
+`rowspan` puts it on the last cell of its section, so that is the shape this plugin emits.
+
+This is a **compiler limitation, not a platform one.** Positioning a field beside a vertical span
+requires emitting an empty *spacer* cell to occupy the reserved slot, which the SDK serializes
+correctly; the compiler does not emit one yet. The restriction can be lifted once it does — tracked
+in [#581](https://github.com/microsoft/power-platform-skills/issues/581).
+
+**Editing an existing form.** An explicit layout is converged onto the deployed form rather than
+flattened into its first section: missing tabs, form-columns and sections are **created**, a
+section's `columns`/`label`/`showLabel`/`visible` are **updated in place**, and a field sitting in
+the wrong section is **moved** (never duplicated — the cell keeps its id and any control state a
+maker edited). Containers are matched by `name`, then `label`, then position, so a form built by an
+earlier `auto` layout — or by hand in Maker — converges instead of gaining a duplicate tab. Nothing
+is renamed, because form scripts and business rules can reference a section by name.
+
+Two rules keep that matching from claiming the wrong container. An index an earlier tab or section
+already matched is **not reused**, because an unlabeled container compiles to a default label
+(`General` for a tab, `Details` for a section) and several of them would otherwise all match the
+first one. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
+matched only by `name`: a label or a position is not evidence about what a container *is*, and
+matching one positionally would relabel a sub-grid and place fields in the row holding its grid.
+
+⚠ Containers are only ever added or updated, never removed. Moving a section between form-columns or
+tabs while letting its `name` be generated therefore leaves the original behind as an **empty
+section with the same label** — generated names encode position (`section_<tab>_<column>_<index>`),
+so the moved section is a different identity. Give a section an explicit `name` when you intend to
+move it, and delete a section you no longer want in Maker.
+
+⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
+layout does not list is removed (never the primary field). Set `"prune": false` to restyle or
+reorder a subset without re-declaring every other field.
 
 ### Per-field control options — `readOnly`, `hidden`, `after`
 
@@ -617,116 +807,6 @@ the text *"Error loading control"* on every record. The `auto` layout therefore 
 columns** — the column is still created and still readable/writable through the API, it just is not
 placed. An explicit layout still honours a BigInt you list by name (you may be pairing it with a
 custom control), but the spec validator emits a warning.
-
-## commands[] (optional — modern command-bar buttons)
-```jsonc
-{ "entity": "new_order", "label": "Escalate", "location": "MainTab",
-  "library": "new_order.js", "function": "Order.escalate",   // on-click JS (web resource + fn)
-  "disabled": false, "hidden": false }                        // optional static visibility
-
-// flyout (drop-down) menu: a container button whose children are the menu items
-{ "entity": "new_order", "label": "More", "type": "FlyoutAnchor", "children": [
-  { "label": "Approve", "library": "new_order.js", "function": "Order.approve" },
-  { "label": "Reject",  "library": "new_order.js", "function": "Order.reject" } ] }
-```
-- A button's on-click calls `function` in the declared `library` web resource (both lint-enforced) —
-  this is what makes it **functional** (not a structural-only button).
-- **Your function is handed the record automatically.** The build passes the standard command
-  parameters for the button's location, so the usual handler shape works as written:
-  ```js
-  function escalate(primaryControl) {
-    primaryControl.getAttribute('new_priority').setValue(100000003);
-    primaryControl.data.save();
-  }
-  ```
-  Defaults by location — `MainTab` → `PrimaryControl`; `ContextualTab` → `SelectedControl`;
-  `HomeTab` → `SelectedControl` + `SelectedControlSelectedItemIds`. Override with `parameters`
-  (a raw JSON string, e.g. `'[{"type":5,"value":null}]'`); pass `""` for a function that genuinely
-  takes no arguments. **Without a parameter the function is invoked with no arguments**, so
-  `primaryControl` is `undefined` and the button appears to do nothing — the error is visible only
-  in the browser console, and the build, the deployed rows and `--verify` all still look correct.
-- **Button edits are not applied on rebuild.** The command phase is discover-then-skip: it creates a
-  bar only when none exists. To change a deployed button, delete the entity's commands (or tear down)
-  and rebuild.
-- **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
-- **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
-  visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
-  that can't be authored headlessly.
-- **`type`** is `Button` (default), `FlyoutAnchor`, or `SplitButton`. A flyout/split container holds
-  `children[]` (each a button with its own `library`+`function`) instead of an on-click of its own —
-  the menu items live under it. Top-level buttons emit as **loose controls**; a *titled* group is not
-  supported (it needs a parent command-bar row the SDK doesn't synthesize from scratch). The command
-  lands in the Default solution but is entity-scoped, so it shows on the entity's command bar.
-
-## businessRules[] (optional — declarative form logic, no code)
-
-```jsonc
-{ "entity": "new_ticket", "name": "Hide notes on closed tickets",
-  "description": "Closed tickets are read-only history, so the working fields are hidden.",
-  "scope": "Entity",          // only Entity today
-  "status": "Active",         // Active (default) | Draft — a Draft rule is deployed but inert
-  "conditions": [             // ALL must hold (ANDed); more than one is allowed
-    { "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" }
-  ],  "actions": [
-    { "type": "SetVisibility",       "field": "new_notes",  "visible": false },
-    { "type": "LockUnlock",          "field": "new_owner",  "lock": true },
-    { "type": "SetBusinessRequired", "field": "new_reason", "required": true },
-    { "type": "SetFieldValue",       "field": "new_owner",  "value": "unassigned" }
-  ] }
-```
-
-- **Environment gate — read this first.** The SDK writes a rule through the bound
-  `CreateProcessWithWfomJson` member, the same one the modern business-rule designer uses, and has
-  **no fallback**. An environment that does not declare that member cannot host business rules at
-  all, and that is the common case rather than an edge case. The build then
-  **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
-  so you get a working app without the rules, not a half-built one. `--verify` will report those
-  rules as not deployed, which is the truth.
-- **Operators**, all of which the SDK's own table defines:
-  `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
-  `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·
-  `EndsWith` · `DoesNotEndWith` · `On` · `NotOn` (all carry a `value`), plus the presence operators
-  `ContainsData` · `DoesNotContainData`, which must **not** carry one.
-  Mind the spelling: it is `IsGreaterThan`, **not** `GreaterThan`. The SDK resolves an operator it
-  does not recognise to **Equals** rather than rejecting it, so a misspelling would deploy, activate,
-  and quietly test equality. The spec rejects anything outside the table for exactly that reason, and
-  suggests the correct spelling when it can.
-- **Actions**: `SetVisibility` (`visible`) · `LockUnlock` (`lock`) · `SetBusinessRequired`
-  (`required`) · `SetFieldValue` (`value`). The three boolean payloads must be **real booleans** — a
-  string `"false"` is truthy and would invert the intent, so it is rejected.
-  The SDK also models `SetDefaultValue`, `ShowErrorMessage` and `Recommendation`. They are not
-  exposed yet: each needs mapping that cannot be exercised end to end on an environment without the
-  bound member, and shipping unverified mapping is how a rule deploys and does the wrong thing.
-- **`conditions[]` are ANDed**, and there may be **more than one** — they are folded with the
-  platform's `LogicalAnd`. (An earlier single-condition limit came from a client-side XAML compiler
-  that has since been deleted upstream; it was never a platform limit.) `OR` is not exposed.
-- **`dataType`** (optional) — accepted values are `String` · `Memo` · `Picklist` · `State` ·
-  `Status` · `Boolean` · `Integer` · `Double` · `Decimal` · `Money`.
-  **It currently has no effect.** Measured across every accepted value, on both the condition and the
-  action path, the SDK types every literal as `String` and never consults this field. It is still
-  validated as a closed set so a typo is caught and so the surface stays forward-compatible, but do
-  not expect it to change the deployed rule. For a Choice column, give the option's **integer
-  value**, not its label — that part matters regardless.
-- Every `field` must be a column on the rule's own `entity` (its own columns, its primary name, or a
-  lookup a relationship creates). A rule naming a column that does not exist is accepted by the
-  platform and then simply **never fires**, so this is validated up front.
-- **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
-  edits are **not** re-applied. Recreate the rule to change it.
-
-## dashboards[] (optional — chart/list/iframe/web-resource tiles)
-```jsonc
-{ "name": "Operations", "description": "Daily queue health for the support lead.", "tiles": [
-  { "type": "chart", "chart": "Orders by Status", "view": "Active Orders" },  // chart needs both
-  { "type": "list",  "view": "Active Orders", "name": "Recent" },             // list needs a view
-  { "type": "iframe", "url": "https://…", "name": "Map" },
-  { "type": "webresource", "webResource": "new_widget.html", "name": "Widget" } ] }
-```
-- A **chart** tile needs both a declared `chart` (the visualization) **and** a declared `view` (its
-  data); a **list** tile needs a declared `view`. The target entity is derived from the view. `name`
-  defaults to the chart/view name; `colspan`/`rowspan` optional (default 1×4).
-- Built after views/charts (it references their ids). The dashboard is **global** (not entity-scoped)
-  and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
-  that also auto-pins it as an app component.
 
 ## pages[] (optional — generative pages / genux)  [schemaVersion 2]
 ```jsonc
@@ -887,7 +967,7 @@ custom control), but the spec validator emits a warning.
 ## sampleData (optional)
 Keyed by entity `schemaName`. Choice values are **labels** (resolved to ints) — for **both** inline
 `options[]` columns **and** `globalChoice`-backed columns (write `"Platinum"`, not `100000000`; the
-engine resolves it, and the lint flags any label that isn't a declared option). Raw option ints still
+engine resolves it, and `lintAppSpec` flags any label that isn't a declared option). Raw option ints still
 work. Relate records to parents with `$parent` (one) or `$parents` (several — for a junction row), and
 set a custom status with `statusReason`. All are topologically inserted and bound via the lookup nav-property.
 ```jsonc
@@ -903,6 +983,25 @@ set a custom status with `statusReason`. All are topologically inserted and boun
 ```
 - **`$parents`** is the array form of `$parent` — each entry binds one lookup, so a junction/intersect
   row links to every parent it points at (the engine sets each `<lookup>@odata.bind`).
+- **Self-referencing parents work.** A row may point at another row of the **same** entity — an org
+  hierarchy, a "reports to" chain — as long as the references form no cycle:
+  ```jsonc
+  "new_org": [ { "new_name": "Head Office" },
+               { "new_name": "North Region", "$parent": { "entity": "new_org", "match": { "new_name": "Head Office" } } } ]
+  ```
+  Order in the array does not matter; the engine seeds such rows in dependency waves, creating each
+  row only after the row it points at. A **cycle** (including a row that is its own parent) is
+  rejected by `validateAppSpec` — so by the build on load, and by
+  `scripts/lint-app-spec.js`, which runs it — because no creation order can satisfy it.
+- **`lookup`** (optional) names *which* relationship a parent bind goes through, by the lookup's
+  `schemaName`:
+  ```jsonc
+  "$parent": { "entity": "new_org", "lookup": "new_GroupAncestorId", "match": { "new_name": "Head Office" } }
+  ```
+  It is only needed when **two or more** `OneToMany` relationships connect the same pair — common for
+  a hierarchy table with both a "parent org" and a "group ancestor" self-lookup. Without it the bind
+  would be ambiguous, so `validateAppSpec` **rejects** it rather than silently picking the first
+  declared relationship and asserting something false about the data.
 - **`statusReason`** must match a declared `statusReasons[]` label on the entity; the engine resolves
   it to the right `statecode` + `statuscode` (so "Completed orders with Passed/Pending QA" just work).
   The status option value is captured during the **data-model** phase — if you set `statusReason` on
@@ -932,12 +1031,27 @@ entirely optional; omitting it leaves every AI feature at its platform default.
 ```jsonc
 "ai": {
   // appFeatures: opt specific AI features in or out for this app (all optional).
-  // Values are `true`/`false` (the ergonomic spellings of the underlying numeric settings' 1/0) or an
-  // explicit integer between 0 and 1000000 for a platform-defined value — notably `2` = "on for
-  // everyone". The bound mirrors the SDK's own, so an out-of-range value is rejected here rather
-  // than aborting the build half-applied.
+  //
+  // `false` DOES NOT MEAN "leave alone". It writes an explicit app-scope override that BEATS the
+  // org value, so setting it on a feature the org has enabled turns that feature OFF for this app.
+  // To leave a feature as the environment provides it, omit the whole `ai.appFeatures` block.
+  //
+  // The numeric value written is NOT a flat 1/0 — it differs by family (captured from the bundle):
+  //   formFill, formFillSuggestions, formFillSmartPaste, formFillFiles -> true writes 2, false writes 1
+  //   nlSearch, nlChart, m365                                          -> true writes 1, false writes 0
+  // For the form-fill family the tri-state is 0 = platform default, 1 = DISABLED, 2 = enabled, so
+  // `false` there means "explicitly disabled", not "unset".
+  // An explicit integer (0-1000000) is also accepted for a platform-defined value; the bound mirrors
+  // the SDK's own, so an out-of-range value is rejected here rather than aborting the build half-applied.
+  //
   // These write PER-APP settings, which are distinct from the org-level admin gates the build
-  // preflights; a feature whose org gate is off is skipped with a warning and never silently applied.
+  // preflights. The gate is NOT a precondition: every write is attempted and then verified, and a
+  // gate is read only to EXPLAIN a write that did not persist (AB#6688904 — for four of these
+  // features the "gate" IS this same per-app row, so reading it first made a brand-new app look
+  // forbidden and nothing was written at all). A feature whose write does not persist is surfaced
+  // with a warning naming the admin action; it is never silently reported as applied.
+  // DISABLING is treated identically — a `false` is written whatever the gate says, which is why an
+  // incorrect `false` is the more damaging mistake of the two.
   "appFeatures": {
     "formFill":  true,   // Copilot-assisted form fill (data entry)
     "nlSearch":  true,   // natural-language grid/view search (data exploration)
@@ -980,7 +1094,17 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - State an **explicit output shape**: a short paragraph is the recommended default.
 
 **Validation rules** (`validateAppSpec` / `lintAppSpec`):
-- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. `true`/`false` mean the underlying numeric setting's `1`/`0`; use an explicit integer (e.g. `2`) for a platform value like "on for everyone".
+
+> **The two gates are not the same, and only one of them runs on every build.**
+> `validateAppSpec` is the hard schema gate: `build-model-app.js` runs it on load, so
+> `--apply` refuses on its errors. `lintAppSpec` is the authoring guardrail, and the build
+> does **not** run it — its findings only reach you through `scripts/lint-app-spec.js`
+> (which runs migrate → `validateAppSpec` → `lintAppSpec`) or the skill's plan gate. So a
+> rule described below as enforced by the *lint* is one an unlinted spec will carry into a
+> build and fail at the platform. Where it matters, the rule names its gate.
+
+- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: the **form-fill family** (`formFill` and its siblings) writes `2` for `true` and **`1` for `false`**, where `1` means *disabled* and `0` means *platform default*; `nlSearch`/`nlChart`/`m365` write `1`/`0`. Use an explicit integer for a platform value like "on for everyone".
+- **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To inherit the environment's setting, omit `ai.appFeatures` entirely.
 - Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on and `m365` off, and `--verify` reconciles that whole resolved set.
 - `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
 - `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
@@ -1076,4 +1200,5 @@ requested access, and the rule that different entities sharing one Dataverse pri
 same scope.
 
 **Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
-security. The security surface today is role-per-persona only.
+security. The security surface today is role-per-persona plus `roleGrants[]` (below).
+

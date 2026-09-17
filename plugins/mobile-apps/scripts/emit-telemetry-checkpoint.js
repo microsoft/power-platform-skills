@@ -45,11 +45,12 @@ function emitCheckpoint(payload, opts = {}) {
     if (!invocation) return null;
 
     const createContext = opts.createTelemetryContext || telemetry.createTelemetryContext;
-    const context = createContext({});
+    const cwd = opts.cwd || process.cwd();
+    const context = createContext({}, { cwd });
     if (!context) return null;
 
     const emit = opts.emitCheckpoint || telemetry.emitCheckpoint;
-    return emit(context, invocation, { cwd: opts.cwd || process.cwd() });
+    return emit(context, invocation, { cwd });
   } catch {
     return null;
   }

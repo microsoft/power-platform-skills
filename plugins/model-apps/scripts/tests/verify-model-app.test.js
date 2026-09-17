@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { readerFor, appIdFor } = require('../verify-model-app.js');
+const { verifySpec } = require('../lib/verify-spec.js');
+const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -185,6 +187,46 @@ test('readerFor base readers normalize exact identities for tables, relationship
   assert.ok(calls.some((c) => c.method === 'retrieveSetting' && c.opts && Object.keys(c.opts).length === 0));
 });
 
+test('readerFor + verifySpec reads deployed fetchxml and systemform.isdefault through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'savedquery') {
+        return [{
+          savedqueryid: 'view-1',
+          layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+          fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="ownerid" operator="eq-userid"/></filter></entity></fetch>',
+        }];
+      }
+      if (set === 'systemform') return [{ formid: 'form-1', isdefault: false }];
+      return [];
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = {
+    solution: { publisherPrefix: 'new' },
+    app: { name: 'Support Desk', uniqueName: 'new_supportdesk' },
+    entities: [{ schemaName: 'new_ticket', columns: [] }], charts: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'My Tickets', columns: ['new_subject'], activeOnly: false, filters: [{ attr: 'modifiedon', op: 'this-week' }] }],
+    forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', isDefault: true }],
+  };
+
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+
+  assert.ok(r.missing.some((m) => m.kind === 'view-filters' && /modifiedon this-week/.test(m.detail)), 'the real reader must surface fetchxml to the filter oracle');
+  assert.ok(r.missing.some((m) => m.kind === 'form-default' && /isdefault is false/.test(m.detail)), 'the real reader must surface systemform.isdefault to the default-form oracle');
+  const viewQuery = calls.find((c) => c.set === 'savedquery');
+  assert.ok(viewQuery.opts.select.includes('fetchxml'), 'view reads must request savedquery.fetchxml');
+  const formDefaultQuery = calls.find((c) => c.set === 'systemform' && /formid eq form-1/.test(c.opts.filter));
+  assert.ok(formDefaultQuery, 'default-form proof must read the deployed form row by id');
+  assert.ok(formDefaultQuery.opts.select.includes('isdefault'), 'default-form proof must request systemform.isdefault');
+});
+
 test('appIdFor returns the deployed app id or undefined when the app is already gone', async () => {
   const filters = [];
   const sdk = {
@@ -197,6 +239,49 @@ test('appIdFor returns the deployed app id or undefined when the app is already 
   assert.strictEqual(await appIdFor(sdk, 'contoso_app'), 'app-uuid-1');
   assert.strictEqual(await appIdFor(sdk, 'missing_app'), undefined);
   assert.ok(filters.every((f) => /uniquename eq '/.test(f)), 'app lookup stays name-scoped');
+});
+
+test('readerFor.appRoleIds reads the deployed appmoduleroles_association rows', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'appmodule') return [{ appmoduleid: 'app-id-1' }];
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        return {
+          status: 200,
+          headers: {},
+          body: { value: [{ roleid: 'role-agent' }, { roleid: 'ROLE-MANAGER' }] },
+        };
+      },
+    },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(res.roleIds, ['role-agent', 'role-manager']);
+  assert.ok(calls.some((c) => c.url && /appmodules\(app-id-1\)\/appmoduleroles_association/.test(c.url)), 'must read the actual app-role association navigation property');
+});
+
+test('readerFor.appRoleIds fails closed when the association rows cannot be read', async () => {
+  const sdk = {
+    queryRecords: async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-id-1' }] : []),
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: { get: async () => ({ status: 403, headers: {}, body: { error: { message: 'forbidden' } } }) },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, false);
+  assert.match(res.reason, /403/);
 });
 
 function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false }) {
@@ -214,6 +299,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,
+        validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         readJsonArg: (arg) => {
           events.push({ type: 'readJsonArg', arg });
           return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
@@ -410,77 +496,94 @@ test('verify CLI entrypoint converts SDK startup errors into emitResult failures
 
 // ── entityPrivileges reader ──────────────────────────────────────────────────────────────────────
 // These tests exist because the original role-privileges tests injected a FAKE `entityPrivileges`
-// into verifySpec, which meant the real reader was never executed by any test. It shipped building a
-// RELATIVE url (`/EntityDefinitions(...)`). `createAzHttpClient` is the raw transport the SDK drives,
-// so it takes FULL request urls and validates them with `new URL(url)` for its same-origin guard — a
-// relative path throws there. verify-spec catches that per entity, so the failure was silent: every
-// entity would have reported "privileges unreadable" and the check would have failed on every live
-// run. A reader is only as tested as its narrowest untested seam.
+// into verifySpec, which meant the real reader was never executed by any test. That is how it shipped
+// building a RELATIVE url against a transport that requires absolute ones — a failure verify-spec
+// catches per entity, so every entity would silently have reported "privileges unreadable". A reader
+// is only as tested as its narrowest untested seam, which is why the last test here drives the REAL
+// vendored bundle rather than a hand-written SDK stub.
+//
+// The reader now goes through the SDK's `getEntityPrivileges` instead of a raw Web API call, so the
+// url-shape tests that used to live here are gone with the url they tested. What replaces them is the
+// SHAPE ADAPTATION and the fail-closed behaviour, which is what verify-spec actually depends on.
 
-test('entityPrivileges builds an ABSOLUTE url with the /api/data prefix', async () => {
+test('entityPrivileges maps the SDK camelCase rows onto the PascalCase shape the comparison reads', async () => {
+  // lib/role-privileges.js speaks Dataverse's wire vocabulary (`PrivilegeType`), which is also what
+  // the role WRITE payload uses. The SDK returns its own camelCase view. If this mapping were
+  // dropped, `ACCESS_TYPE[...] === x.PrivilegeType` would compare against undefined for every row and
+  // report every declared privilege as missing — a total, silent false failure.
   const seen = [];
-  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [{ PrivilegeId: 'p1', Name: 'prvReadAccount' }] } }; } };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+  const sdk = stubSdk();
+  sdk.getEntityPrivileges = async (logical) => {
+    seen.push(logical);
+    return [{ name: 'prvReadAccount', privilegeId: 'p1', privilegeType: 'Read', access: 'read', scopes: ['user', 'organization'] }];
+  };
+  const read = readerFor(sdk, 'app', {});
 
   const privs = await read.entityPrivileges('Account');
 
-  assert.strictEqual(seen.length, 1);
-  assert.strictEqual(
-    seen[0],
-    "https://contoso.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='account')?$select=LogicalName,Privileges",
-  );
-  assert.deepStrictEqual(privs, [{ PrivilegeId: 'p1', Name: 'prvReadAccount' }]);
+  assert.deepStrictEqual(seen, ['account'], 'the logical name is lower-cased, as Dataverse stores it');
+  assert.deepStrictEqual(privs, [{ Name: 'prvReadAccount', PrivilegeId: 'p1', PrivilegeType: 'Read' }]);
 });
 
-test('entityPrivileges survives the REAL createAzHttpClient same-origin guard', async () => {
-  // The regression test that matters: drive the reader through the actual transport rather than a
-  // hand-written stub, so the url has to satisfy the same guard it failed in production.
-  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-  const requests = [];
-  const request = async (o) => {
-    requests.push(o);
-    return { statusCode: 200, headers: {}, body: JSON.stringify({ Privileges: [{ PrivilegeId: 'p9' }] }) };
+test('entityPrivileges PROPAGATES a throw rather than returning an empty grant', async () => {
+  // The SDK throws for a table that exposes no privileges (unknown or non-securable). Swallowing that
+  // into `[]` would read as "this table exposes nothing", which passes the subset comparison
+  // vacuously — the exact false PASS the check exists to prevent. verify-spec wraps each call in a
+  // try/catch and leaves the entity ABSENT from its map, which `compareRolePrivileges` reports as a
+  // finding. So the fail-closed behaviour depends on this throw reaching it.
+  const sdk = stubSdk();
+  sdk.getEntityPrivileges = async () => { throw new Error('no privileges for co_missing'); };
+  const read = readerFor(sdk, 'app', {});
+  await assert.rejects(read.entityPrivileges('co_missing'), /no privileges for co_missing/);
+});
+
+test('entityPrivileges is ALWAYS wired now that the SDK carries the read', async () => {
+  // It used to be conditional on a raw httpClient + org url, and ABSENT when either was missing, so
+  // verify-spec skipped the role-privileges check entirely. With the read on the SDK there is no such
+  // condition left: the reader exists whenever the SDK does. Asserted so a future refactor cannot
+  // quietly reintroduce a silent skip — an absent reader disables a security check without saying so.
+  assert.strictEqual(typeof readerFor(stubSdk(), 'app', {}).entityPrivileges, 'function');
+});
+
+test('entityPrivileges REAL BUNDLE: the SDK method exists and returns the shape the mapping expects', async () => {
+  // The seam that matters. A hand-written SDK stub proves only that the mapping is self-consistent;
+  // it would stay green if `getEntityPrivileges` were renamed or dropped by a re-vendor, or if it
+  // returned a different shape. Drive the actual bundle over a fake Dataverse instead.
+  const { createMakerSdk } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'entpriv-real-'));
+  const urls = [];
+  const httpClient = {
+    get: async (url) => {
+      urls.push(url);
+      return {
+        status: 200,
+        headers: {},
+        body: {
+          LogicalName: 'co_ticket',
+          Privileges: [
+            { Name: 'prvReadco_ticket', PrivilegeId: 'p9', PrivilegeType: 'Read', CanBeBasic: true, CanBeGlobal: true },
+            { Name: 'prvCreateco_ticket', PrivilegeId: 'p10', PrivilegeType: 'Create', CanBeBasic: false, CanBeGlobal: true },
+          ],
+        },
+      };
+    },
+    post: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const httpClient = createAzHttpClient('https://contoso.crm.dynamics.com', { getToken: () => 'TOK', request });
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
 
-  const privs = await read.entityPrivileges('co_ticket');
+  const privs = await readerFor(sdk, 'app', {}).entityPrivileges('CO_Ticket');
 
-  assert.deepStrictEqual(privs, [{ PrivilegeId: 'p9' }]);
-  assert.strictEqual(requests.length, 1, 'the request must reach the transport, not be rejected by the guard');
-});
-
-test('entityPrivileges tolerates a trailing slash on the org url', async () => {
-  const seen = [];
-  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [] } }; } };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com/' });
-  await read.entityPrivileges('account');
-  assert.ok(!seen[0].includes('.com//api'), `double slash in ${seen[0]}`);
-});
-
-test('entityPrivileges escapes a quote in the logical name', async () => {
-  // odataLit doubles a single quote; without it the OData path literal would be malformed.
-  const seen = [];
-  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [] } }; } };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
-  await read.entityPrivileges("o'brien");
-  assert.match(seen[0], /LogicalName='o''brien'/);
-});
-
-test('entityPrivileges returns null on a non-2xx rather than an empty grant', async () => {
-  // null is the fail-closed signal: verify-spec reports it as a finding. An empty array would read
-  // as "this table exposes no privileges" and could pass the subset comparison vacuously.
-  const httpClient = { get: async () => ({ status: 404, body: {} }) };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
-  assert.strictEqual(await read.entityPrivileges('account'), null);
-});
-
-test('entityPrivileges is ABSENT (not broken) when the client or org url is missing', async () => {
-  // verify-spec skips role-privileges unless both readers are functions, so an unwired reader must
-  // not exist at all. A present-but-throwing reader would report a false failure on every entity.
-  assert.strictEqual(typeof readerFor(stubSdk(), 'app', {}).entityPrivileges, 'undefined');
-  assert.strictEqual(typeof readerFor(stubSdk(), 'app', { httpClient: { get: async () => ({}) } }).entityPrivileges, 'undefined');
-  assert.strictEqual(typeof readerFor(stubSdk(), 'app', { envUrl: 'https://contoso.crm.dynamics.com' }).entityPrivileges, 'undefined');
+  assert.deepStrictEqual(privs, [
+    { Name: 'prvReadco_ticket', PrivilegeId: 'p9', PrivilegeType: 'Read' },
+    { Name: 'prvCreateco_ticket', PrivilegeId: 'p10', PrivilegeType: 'Create' },
+  ], 'the bundle must still return { name, privilegeId, privilegeType } rows');
+  assert.ok(urls.some((u) => /EntityDefinitions\(LogicalName='co_ticket'\)/.test(u)),
+    `the SDK must query the entity by logical name; saw ${JSON.stringify(urls)}`);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('rolePrivileges paginates and never caps with top', async () => {
@@ -493,7 +596,7 @@ test('rolePrivileges paginates and never caps with top', async () => {
   const calls = [];
   const sdk = stubSdk();
   sdk.queryRecords = async (set, options) => { calls.push({ set, options }); return []; };
-  const read = readerFor(sdk, 'app', { httpClient: { get: async () => ({ status: 200, body: {} }) }, envUrl: 'https://contoso.crm.dynamics.com' });
+  const read = readerFor(sdk, 'app', {});
 
   await read.rolePrivileges('00000000-0000-0000-0000-000000000001');
 
@@ -501,4 +604,133 @@ test('rolePrivileges paginates and never caps with top', async () => {
   assert.ok(q, 'expected a roleprivileges query');
   assert.strictEqual(q.options.paginate, true, 'must follow @odata.nextLink to completion');
   assert.strictEqual('top' in q.options, false, 'must NOT cap with top -- Dataverse treats it as a hard cap and drops nextLink');
+});
+
+// ---------------------------------------------------------------------------
+// appEntityComponents(): the app's TABLE (type-1) components.
+//
+// These drive the REAL reader through readerFor(), not a hand-fed fake handed to verify-spec — the
+// consumer tests in verify-spec.test.js prove the CHECK, these prove the Dataverse plumbing it
+// depends on (the componenttype filter, pagination, resolution direction and failure modes).
+// ---------------------------------------------------------------------------
+
+const META = { new_order: 'aaaa0000-0000-0000-0000-000000000001', new_line: 'aaaa0000-0000-0000-0000-000000000002', entity: 'eeee0000-0000-0000-0000-00000000000e' };
+
+// `componentIds` are the type-1 rows the app carries. `calls` records every query/metadata read.
+function componentsSdk({ componentIds = [], calls = [], resolve = META, noApp = false } = {}) {
+  return {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (noApp) return [];
+      if (set === 'appmodule') return [{ appmoduleid: 'app-uuid-1', appmoduleidunique: 'uid-1' }];
+      if (set === 'appmodulecomponent') return componentIds.map((id) => ({ objectid: id, componenttype: 1 }));
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+        const logical = m && m[1];
+        if (typeof resolve === 'function') return resolve(logical);
+        const id = resolve[logical];
+        return id ? { status: 200, headers: {}, body: { MetadataId: id } } : { status: 404, headers: {}, body: null };
+      },
+    },
+  };
+}
+const readerWith = (sdk) => readerFor(sdk, 'contoso_app', { workspaceDir: os.tmpdir() });
+
+test('appEntityComponents(): filters componenttype 1 and PAGINATES rather than capping with top', async () => {
+  // `top` is a HARD cap in Dataverse and suppresses @odata.nextLink, so a capped page truncates
+  // silently — and for a MEMBERSHIP check a row that fell off the end reads as NOT PRESENT, i.e.
+  // verify would report a correctly built app as broken. The same trap was already found live on
+  // roleprivileges in this file. It would also hide the `entity` placeholder rows this check exists
+  // to find, since those are exactly what accumulates in a corrupted app.
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: [META.new_order], calls });
+  await readerWith(sdk).appEntityComponents(['new_order']);
+  const q = calls.find((c) => c.set === 'appmodulecomponent');
+  assert.ok(q, 'the component query must run');
+  assert.match(q.opts.filter, /componenttype eq 1/);
+  assert.strictEqual(q.opts.paginate, true, 'must paginate to completion');
+  assert.strictEqual(q.opts.top, undefined, 'must NOT cap with top — a truncated page reads as "missing"');
+});
+
+test('appEntityComponents(): reports present vs absent for the WANTED tables', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  assert.strictEqual(r.placeholder, false);
+});
+
+test('appEntityComponents(): detects an `entity` placeholder component', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order, META.entity] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.placeholder, true, 'a component pointing at the `entity` metadata table must be reported');
+  assert.deepStrictEqual(r.present, ['new_order'], 'and the real table is still present');
+});
+
+test('appEntityComponents(): cost is bounded by the WANTED set, not by the component count', async () => {
+  // Resolving every COMPONENT instead would scale with the app and reintroduce the need for a cap.
+  const many = Array.from({ length: 300 }, (_, i) => `bbbb0000-0000-0000-0000-${String(i).padStart(12, '0')}`);
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: many.concat(META.new_order), calls });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  const metadataReads = calls.filter((c) => c.url).length;
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  // one per wanted table + one for the `entity` placeholder probe
+  assert.strictEqual(metadataReads, 2, `expected 2 metadata reads for 301 components, got ${metadataReads}`);
+});
+
+test('appEntityComponents(): a wanted table that does not exist is ABSENT, not a read failure', async () => {
+  // A 404 means the table is not in the environment at all, which the separate entity-existence
+  // check already reports. Failing the whole answer would mask it behind an unrelated error.
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_ghost']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+});
+
+test('appEntityComponents(): a non-404 resolution error fails closed and names the TABLE, not a GUID', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order], resolve: (logical) => (logical === 'new_line' ? { status: 403, headers: {}, body: null } : { status: 200, headers: {}, body: { MetadataId: META[logical] } }) });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /new_line/, 'the reason must name the table so an operator can act on it');
+  assert.match(r.reason, /403/);
+});
+
+test('appEntityComponents(): an unresolvable app fails closed', async () => {
+  const r = await readerWith(componentsSdk({ noApp: true })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /contoso_app/);
+});
+
+test('appEntityComponents(): an app with NO table components answers ok with nothing present', async () => {
+  // This is the reported defect itself (a sitemap naming tables the app does not contain), not a
+  // read failure — and it cannot mask a permissions problem, because the sitemap is read from the
+  // same appmodulecomponent table and would fail visibly first.
+  const r = await readerWith(componentsSdk({ componentIds: [] })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, []);
+});
+
+test('appEntityComponents(): memoized per wanted-set — one live read per verify run', async () => {
+  const calls = [];
+  const reader = readerWith(componentsSdk({ componentIds: [META.new_order], calls }));
+  await reader.appEntityComponents(['new_order']);
+  await reader.appEntityComponents(['new_order']);
+  assert.strictEqual(calls.filter((c) => c.set === 'appmodulecomponent').length, 1, 'the component query must not repeat');
+});
+test('appEntityComponents(): matches an objectid whose CASING differs from the resolved MetadataId', async () => {
+  // Dataverse does not guarantee that a component `objectid` and the table's `MetadataId` come back
+  // in the same casing, and a GUID is case-insensitive. Comparing raw strings would report a
+  // correctly pinned table as MISSING — a false red build on a healthy app.
+  const sdk = componentsSdk({ componentIds: [META.new_order.toUpperCase()] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order'], 'an upper-cased objectid must still match');
 });

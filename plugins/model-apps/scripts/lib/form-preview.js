@@ -5,6 +5,7 @@
 // interactive authoring turn before approving it. Pure (no I/O); the CLI is preview-form.js.
 const { compileFormIntent } = require('./artifact-intent.js');
 const { entityByLogical } = require('./_graph.js');
+const { labelText } = require('./app-spec.js');
 
 const INNER = 63; // content width inside the box borders
 
@@ -63,19 +64,19 @@ const BOTTOM = `└${'─'.repeat(INNER + 2)}┘`;
 // Display label for a field logical name. compileFormIntent emits push-ready cells that OMIT the
 // label (the SDK adapter derives it from attribute metadata at push, per T4), so the preview
 // resolves the display name itself from the spec entity (falling back to the logical name).
-function labelFor(entity, fn) {
+function labelFor(entity, fn, lang) {
   if (!entity) return fn;
-  if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return entity.primaryAttribute.displayName || 'Name';
+  if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return labelText(entity.primaryAttribute.displayName, lang) || 'Name';
   const c = (entity.columns || []).find((x) => x.schemaName.toLowerCase() === fn);
-  return (c && (c.displayName || c.schemaName)) || fn;
+  return (c && (labelText(c.displayName, lang) || c.schemaName)) || fn;
 }
 
 // "Label * [widget]" for one field cell.
-function fieldLabel(entity, cell) {
+function fieldLabel(entity, cell, lang) {
   const fn = cell.control.fieldName;
   const req = cell.control.isRequired ? ' *' : '';
   const widget = WIDGET[fieldType(entity, fn)] || WIDGET.Text;
-  return `${cell.control.label || labelFor(entity, fn)}${req}  ${widget}`;
+  return `${cell.control.label || labelFor(entity, fn, lang)}${req}  ${widget}`;
 }
 
 // Render one form to an ASCII wireframe string.
@@ -96,22 +97,36 @@ function renderFormWireframe(spec, f) {
   }
 
   for (const tab of def.tabs) {
-    if (tabLabels.length > 1) lines.push(row(`▾ ${tab.label || 'General'}`));
+    // The banner carries the tab's authored STATE, so it must render whenever that state is not the
+    // default — not only when there are several tabs to tell apart. A single tab that is collapsed or
+    // hidden would otherwise preview as an ordinary open tab, and the wireframe IS the approval gate:
+    // silently dropping "(collapsed)" or "(hidden)" has the maker approve a different form.
+    const annotated = tab.expanded === false || tab.visible === false;
+    if (tabLabels.length > 1 || annotated) lines.push(row(`${tab.expanded === false ? '▸' : '▾'} ${tab.label || 'General'}${tab.visible === false ? '   (hidden)' : ''}${tab.expanded === false ? '   (collapsed)' : ''}`));
     // New topology inserts a FormColumn layer between tab and section.
-    for (const col of tab.columns || []) {
+    const cols = tab.columns || [];
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci];
+      // Name the form-column when a tab has more than one, so a two-column tab is visibly two
+      // columns rather than sections stacked in sequence. Rendering them truly side by side would
+      // need column-aware wrapping of every section; naming the split keeps the preview honest
+      // about the structure without pretending to be a pixel layout.
+      if (cols.length > 1) lines.push(row(`  ╷ column ${ci + 1} of ${cols.length}${col.width ? `  (${col.width})` : ''}`));
       for (const sec of col.sections || []) {
         if (sec.name === 'section_notes') {
           lines.push(rule('▤ Notes / Timeline'));
           lines.push(row('   (activity timeline + notes — type to add a note)'));
           continue;
         }
-        lines.push(rule(sec.label || 'Details'));
+        // `showLabel: false` means Dataverse renders NO section heading, so showing one here would
+        // have the approval preview promise a heading the deployed form does not have.
+        lines.push(rule(`${sec.showLabel === false ? '(no heading)' : (sec.label || 'Details')}${sec.visible === false ? '  (hidden)' : ''}`));
         for (const r of sec.rows || []) {
           // A bound field cell has control.fieldName; the notes control has none.
           const cells = (r.cells || []).filter((c) => c.control && c.control.fieldName);
           if (!cells.length) continue;
           const colW = Math.floor((INNER - 3) / Math.max(1, cells.length));
-          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c)}`, colW), colW));
+          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode)}`, colW), colW));
           lines.push(row(parts.join('')));
         }
       }

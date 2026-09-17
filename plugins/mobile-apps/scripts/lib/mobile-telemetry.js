@@ -13,7 +13,8 @@ const events = require('./telemetry/lib/events');
 const { fireAndForget } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
-const { findAppInstanceId } = require('./app-identity');
+const { ensureAppInstanceId } = require('./app-identity');
+const { resolveProcessSessionId } = require('./mobile-telemetry-session');
 
 function readPluginVersion() {
   const manifestPath = path.resolve(__dirname, '..', '..', '.claude-plugin', 'plugin.json');
@@ -200,7 +201,12 @@ function resolveCopilotRootSessionId(hostSessionId, opts) {
 
 function resolveSessionId(payload, opts = {}) {
   const hostSessionId = session.resolveHostSessionId(payload);
-  return session.getSessionId(resolveCopilotRootSessionId(hostSessionId, opts));
+  const rootSessionId = resolveCopilotRootSessionId(hostSessionId, opts);
+  return session.getSessionId(resolveProcessSessionId(rootSessionId, {
+    ...opts,
+    cwd: opts.cwd || (payload && payload.cwd),
+    configDir: configDir(opts.env),
+  }));
 }
 
 function createTelemetryContext(payload, opts = {}) {
@@ -249,7 +255,12 @@ function commonFields(context, invocation, opts = {}) {
   const eventInfo = {};
   if (invocation.source) eventInfo.invocationSource = invocation.source;
   if (invocation.additionalInfo) eventInfo.additionalInfo = invocation.additionalInfo;
-  const appInstanceId = findAppInstanceId(opts.cwd) || null;
+  let appInstanceId = null;
+  try {
+    if (opts.cwd) appInstanceId = ensureAppInstanceId(opts.cwd);
+  } catch {
+    // Identity persistence must never block a skill invocation.
+  }
   eventInfo.appInstanceId = appInstanceId;
   if (Object.keys(eventInfo).length) fields.eventInfo = eventInfo;
 
@@ -282,6 +293,34 @@ function emitSkillStarted(context, invocation, opts = {}) {
   return event;
 }
 
+// Records the user's `/setup-app-insights` selection as its own usage event.
+// It reuses the skill_started common-field allowlist and CS4.0 envelope (so
+// the wire shape and privacy guarantees stay identical), then names the event
+// `app_insights_selection` and carries the single new datum — a closed
+// `enabled`/`disabled` enum — inside the already-approved dynamic `eventInfo`
+// object, so no new allowlisted top-level column is required. The event's
+// `invocationSource` defaults to `prompt` (overridable via `opts.source`) so it
+// stays consistent with the documented Mobile Apps `eventInfo` schema.
+function emitAppInsightsSelection(context, selection, opts = {}) {
+  if (selection !== 'enabled' && selection !== 'disabled') {
+    throw new TypeError("Application Insights selection must be 'enabled' or 'disabled'.");
+  }
+
+  const skillName = opts.skillName || 'setup-app-insights';
+  const source = opts.source || 'prompt';
+  const event = events.buildSkillStarted(
+    context.eventStreamName,
+    commonFields(context, { skillName, source }, opts),
+  );
+  event.data.eventName = 'app_insights_selection';
+  event.data.eventInfo = {
+    ...(event.data.eventInfo || {}),
+    appInsightsSelection: selection,
+  };
+  dispatch(context, event, opts);
+  return event;
+}
+
 function emitCheckpoint(context, invocation, opts = {}) {
   const event = events.buildSkillStarted(
     context.eventStreamName,
@@ -295,6 +334,7 @@ function emitCheckpoint(context, invocation, opts = {}) {
 
 module.exports = {
   createTelemetryContext,
+  emitAppInsightsSelection,
   emitCheckpoint,
   emitSkillStarted,
 };

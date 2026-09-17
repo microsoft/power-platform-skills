@@ -252,7 +252,8 @@ page-intents + design**, and **(c) access**. The author never emits `.tsx`; page
 until generate-pages.
 
 > **Read the spec format once, up front** — don't reverse-engineer it from scripts:
-> [`references/app-spec-schema.md`](./app-spec-schema.md) (every field) and the worked sample
+> [`references/app-spec-schema.md`](./app-spec-schema.md) (every always-present field; conditional
+> ones are in [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)) and the worked sample
 > [`samples/app-spec.support-desk.json`](../samples/app-spec.support-desk.json). Author to that
 > shape. **Do not pre-create tables/columns/solution** during authoring — the build is
 > idempotent and creates only what's missing.
@@ -315,7 +316,10 @@ Integer · BigInt · Decimal · Double · File · Image · AutoNumber · Custome
 column needs `options[]` **or** a `globalChoice` reference. Lookups are **not** a column type —
 declare a `OneToMany` relationship instead.
 
-> **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the single source.**
+> **Author from [`references/app-spec-schema.md`](./app-spec-schema.md) — it is the source for
+> everything an app always has; [`app-spec-schema-advanced.md`](./app-spec-schema-advanced.md)
+> carries the conditional fields it points at (business rules, BPFs, commands, web resources,
+> global choices, dashboards, `roleGrants[]`).**
 > Its **modeling cheatsheet** answers the recurring questions without reading the SDK/lint/engine:
 > auto-number identity → `autoNumberFormat` on `primaryAttribute`; **N:N with attributes** (e.g.
 > Technician↔Work-Order with a Role) → a **junction entity** + two `OneToMany` (sample rows bind
@@ -332,8 +336,10 @@ columns that complement rather than duplicate what's already there. Build
 **By default, give every _custom_ table you create a meaningful table icon** so the app nav shows a
 recognizable glyph instead of the generic Dataverse table cube. This is the default authoring
 behavior — only skip it if the user declines. (A model-driven app's nav icon for an `entity`
-subarea comes from the **table's own icon**, not the sitemap subarea — a subarea `vectorIcon` is
-ignored for entity subareas.)
+subarea normally comes from the **table's own icon**, so leaving the subarea's icon unset is the
+right default. A subarea `vectorIcon` is honoured on an entity subarea when it is a resolvable
+path or `$webresource:` reference; only a bare Fluent **token** is dropped there, because that
+shape breaks the modern app designer's property pane.)
 
 **Propose the icon in words FIRST, before you author any SVG.** For each custom table, say what the
 glyph will **depict** — "a briefcase", "an outlined clipboard with a checkmark", "a laptop with a
@@ -387,7 +393,7 @@ relationship-name-vs-lookup-name collision Dataverse rejects) **before** the use
 on top of a broken model, the most expensive point to unwind:
 
 ```bash
-node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
+node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<abs-path-to-app-spec.json> --json
 ```
 
 On a data-model-only spec the linter surfaces **only** data-model findings (the forms/views/app checks
@@ -425,6 +431,23 @@ Each sub-grid renders in its **own 1-column, full-width section** (it spans the 
 is optional — omit it to title the grid with the child entity's `pluralName` (then `displayName`);
 supply it to override. To ship only your form and hide the blank stock "Information" form, set
 `"deactivateOtherMainForms": true` on the form (opt-in; only affects tables this build owns).
+
+**Choosing auto vs an explicit layout.** `auto` is the right default and already adapts: it puts
+the primary field first and switches to **two columns above six fields** (Quick Create stays one
+column, which Dataverse requires). What it cannot do is *group by task*.
+
+So prefer an **explicit** layout — tabs and sections named for the work — once a Main form is
+field-heavy or the fields fall into obviously different jobs (execution vs estimates vs approval).
+Group by what the user is doing, put the record's name and its most decision-relevant status or
+lookup first, and use `colspan` for a field that reads badly in a narrow cell (a long description,
+a full-width summary). This is a **default, not a rule**: a short form, a Quick Create, or a single
+coherent group is genuinely better as one column, and `auto` remains a correct answer.
+
+⚠ **When EDITING a deployed form, an explicit layout also switches pruning on** — a field the form
+carries that your `tabs` do not list is removed. Either re-declare the full field set, or set
+`"prune": false` to restructure a subset safely. Tabs and sections themselves now converge (they
+are created, patched and have fields moved into them), so the layout you show in the wireframe is
+the layout that lands.
 
 **Show the form wireframe.** After writing the proposed forms to `app-spec.json`, render an
 ASCII wireframe so the user can *see* each form's tabs, sections, fields, the Notes block, and
@@ -469,6 +492,20 @@ when the user asks for behaviour the data model can't express — don't add it b
 Propose one active-records view per entity. Include the primary attribute plus
 the 2–4 most useful columns for quick scanning. Set `"activeOnly": true` and
 provide a sensible `sort`.
+
+Then add a **task-oriented view** wherever a persona's job implies a question the
+default view cannot answer — *My Active Work Items*, *Blocked Work Items*,
+*High-Severity Open Risks*. Name it for the decision it supports, and sort by the
+field the user actually prioritizes by. Direct-column filters on the view's own
+table are supported, including current-user (`ownerid` / `eq-userid`) and relative
+dates; a filter **through a related table** is not expressible and must not be
+faked — say so and propose a supported alternative.
+
+Two edit-time limits worth stating up front, because both bite silently:
+an authored view whose name collides with the table's stock default view MERGES
+onto that default (its filters and sort are ignored), and an **existing** view's
+filters/sort are not reapplied on a rebuild — only its columns and description
+converge. Prefer a distinct name for anything you want filtered your way.
 
 #### Charts
 
@@ -559,8 +596,20 @@ Author the intent shape — **not `.tsx`**:
 #### App shell
 
 Also propose the `appShell` block — the sitemap areas, groups, and subAreas that
-wire each entity into the app's navigation. Keep it simple: one area, one group,
-one subArea per entity.
+wire each entity into the app's navigation.
+
+Group by the **workflow** a user is in, not by "one group per table". A handful of
+named groups that read like the jobs from Level (a) — e.g. *Delivery* (Projects,
+Work Items, Sprints), *Tracking* (Risks, Issues), *Customers* (Accounts, Contacts) —
+is what separates a polished app from a flat list, and the builder already emits
+groups and subAreas in the order you author them. For a small app (roughly four
+tables or fewer) one group is genuinely the right answer; above that, say which
+workflow each group serves.
+
+Leave a table **out** of the nav when users never start a task there — a junction
+or configuration table reached only through a parent form or a sub-grid. A table
+with no subarea still works everywhere it is referenced (verification deliberately
+allows supporting tables without navigation).
 
 #### Shippable-defaults note
 
@@ -628,12 +677,17 @@ spec — the data model was already gated by the early lint at the end of Level 
 validating the artifacts/sample-data/app layered on top):
 
 ```bash
-node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<abs-path-to-app-spec.json>');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));"
+node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<abs-path-to-app-spec.json> --json
 ```
 
 Replace `<abs-path-to-app-spec.json>` with the actual absolute path to
-`<working-dir>/app-spec.json`. Use `require()` with an absolute path so Node
-resolves it regardless of cwd.
+`<working-dir>/app-spec.json`. Pass an absolute path so it resolves regardless of cwd.
+The CLI runs migration and `validateAppSpec` — the gates the build itself runs on load — plus
+the `lintAppSpec` authoring guardrails, which the builder does **not** run. It exits non-zero on
+errors. It validates under the `plan` profile, which allows pages that are still intents (they
+are generated in Phase 1.5, after this gate); `plan` relaxes only that rule. Errors are tagged
+`schema:` (the hard gate) or `lint:` (authoring guardrails); fix the `schema:` ones first,
+because lint advice on a spec that fails the gate is advice on a spec that cannot build.
 
 **Interpret the result:**
 

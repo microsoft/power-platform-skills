@@ -316,14 +316,14 @@ OID values, token exchanges, headers, or provider responses.
 Read and execute every applicable case in
 `references/android-physical-matrix.md` in order:
 
-A. Android-version permission branch  
-B. Notification channel and signed-out foreground `allUsers`  
-C. Signed-out background `allUsers`  
-D. Terminated tap and exactly-once validated deep link  
-E. Lowercase-OID sign-in  
-F. Account switch and sign-out  
-G. Opt-out negative  
-H. Token refresh or exact same-APK re-registration positive control
+- A. Android-version permission branch
+- B. Notification channel and signed-out foreground `allUsers`
+- C. Signed-out background `allUsers`
+- D. Terminated tap and exactly-once validated deep link
+- E. Lowercase-OID sign-in
+- F. Account switch and sign-out
+- G. Opt-out negative
+- H. Token refresh or exact same-APK re-registration positive control
 
 Record `PASS`, `FAIL`, or `BLOCKED` after each case. Do not collapse foreground,
 background, and terminated states. Do not convert an Android 8-12 settings

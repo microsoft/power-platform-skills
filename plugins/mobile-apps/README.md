@@ -103,11 +103,21 @@ connector wiring.
 
 5. Start mobile app:
 
-	Run the below command in a new terminal from the app directory.
+    `/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
+    runs schema generation and type-checking before Expo starts.
+    The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
+    so `/debug-app` works after switching between VS Code, Copilot CLI, and
+    Claude Code without asking for a terminal ID.
+
+    To start Metro manually instead, run the command below from the app directory.
+    Manual starts and `/debug-app` use the same `.powernative` log source.
 
     ```bash
     npm run dev
     ```
+
+    The Metro config removes sensitive lines before writing logs. The complete
+    `.powernative/` folder is ignored by the template's `.gitignore`.
 
 6. Preview the app by scanning the QR code with the Power Apps Developer app
 
@@ -156,7 +166,7 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with `npm run dev` ready to go. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
 
 ## Quick examples
 
@@ -175,7 +185,7 @@ What happens:
 4. **4 approval gates** — data model → native capabilities → connectors → screens (with a visual `_plan_preview.html` of every screen before any code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
+7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
@@ -244,8 +254,12 @@ permission UX, auth/topic lifecycle, and a typed semantic navigation contract.
 That contract uses Expo Router and is shared by in-app actions, the configured
 custom scheme, approved HTTPS App Links/Universal Links, and notification taps.
 See
-[`shared/references/push-notifications-architecture-diagrams.md`](./shared/references/push-notifications-architecture-diagrams.md)
-for app, Power Automate, WIF, MCP ownership, and unified navigation diagrams.
+[`push-notifications.md`](./shared/references/push-notifications.md) for the
+runtime architecture, [`push-lifecycle.md`](./shared/references/push-lifecycle.md)
+for stage ownership, [`navigation-link-contract.md`](./shared/references/navigation-link-contract.md)
+for unified navigation, and
+[`push-flow-wif.md`](./shared/references/push-flow-wif.md) for the WIF sender
+sequence.
 
 Notification delivery must be tested on matching wrapped physical-device
 builds. Native client setup, sender authentication, and Power Automate flow
@@ -465,9 +479,10 @@ Example edit flows:
 | `/create-push-notification-flow` | 🟡 preview | Advanced flow resume/repair owner for sender-auth selection and Power Automate producer/sender authoring. Normally invoked by `/add-push-notifications`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
+| `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. Keeps general JS/bundle diagnostics local, but routes wrapped Android/iOS notification delivery verification to `/verify-android-push` or `/verify-ios-push`. |
+| `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Power Platform web deployment — `npm run build` then `npx power-apps push` to the env in `power.config.json`. Routes native push builds to `/build-android` or `/build-ios`; it does not run `expo run:ios` or `expo run:android`. |
-| `/debug-app` | ✅ v0 | Diagnose Metro/dev-client runtime and silent failures. Keeps general JS/bundle diagnostics local, but routes wrapped Android/iOS notification delivery verification to `/verify-android-push` or `/verify-ios-push`. |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |

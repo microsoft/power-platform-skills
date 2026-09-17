@@ -110,6 +110,12 @@ async function hydrateSpec(read) {
     return withDescription({ ...(e || {}), columns }, e && (e.description !== undefined ? e.description : e.Description));
   });
   const webResources = ((await read.webResources()) || []).map((wr) => withDescription(wr || {}, wr && (wr.description !== undefined ? wr.description : wr.Description)));
+  // Optional accessor: hydrateSpec has callers that predate relationship reconstruction (#567) and
+  // pass no `relationships`. The two states are kept APART rather than both collapsing to `[]`:
+  //   · `undefined` — nobody could look, so the key is OMITTED rather than asserting an absence,
+  //     which is the silent-absence problem the feature exists to end;
+  //   · `[]` — a real read proved there are none, which is a fact worth recording.
+  const relationships = read.relationships ? ((await read.relationships()) || []) : undefined;
   const dashboards = ((read.dashboards ? await read.dashboards() : []) || [])
     .map((d) => withDescription(d || {}, d && (d.description !== undefined ? d.description : d.Description)));
   // `prefixResolved` is a TRANSIENT download-time signal (whether recoverAppSolution trusted the publisher
@@ -120,6 +126,10 @@ async function hydrateSpec(read) {
   void prefixResolved;
   // `design` is threaded through from the page manifest (§7.3) when present; undefined for legacy apps.
   const design = read.design ? await read.design() : undefined;
+  // #564: shared option sets bound by a downloaded Choice/MultiChoice column. Emitted only when the
+  // app actually binds one — an empty `globalChoices: []` on every other download would read as a
+  // positive claim that the app uses no shared choices, which this download cannot substantiate.
+  const globalChoices = read.globalChoices ? ((await read.globalChoices()) || []) : [];
   const descriptionInventory = read.descriptionInventory ? sanitizeDescriptionInventory(await read.descriptionInventory()) : undefined;
   // When downloaded pages carry stable keys (assigned by assignPageKeys), emit the v2 shape;
   // legacy callers without keys fall back to the name-based shape for back-compat.
@@ -192,19 +202,42 @@ async function hydrateSpec(read) {
     solution,
     // Round-trip the app's REAL, immutable uniquename so a rebuild resolves the EXISTING app by identity
     // (appUniqueName prefers this over the display-name derivation) — survives a display-name rename and
-    // never creates a duplicate app (Sol review). Omitted for a legacy read that didn't surface it.
-    app: { name: app.name, description: app.description || '', ...(app.uniquename ? { uniqueName: app.uniquename } : {}) },
+    // never creates a duplicate app. Omitted for a legacy read that didn't surface it.
+    //
+    // `newLook` / `headerNavigationRefresh` are emitted ONLY when the app carries an explicit app-scope
+    // override (#514). Absent means the app inherits the environment, and the build treats an omitted
+    // field the same way, so omitting is faithful — emitting a value for an inherited setting would
+    // invent an override the app never had.
+    app: {
+      name: app.name,
+      description: app.description || '',
+      ...(app.uniquename ? { uniqueName: app.uniquename } : {}),
+      ...(typeof app.newLook === 'boolean' ? { newLook: app.newLook } : {}),
+      ...(typeof app.headerNavigationRefresh === 'boolean' ? { headerNavigationRefresh: app.headerNavigationRefresh } : {}),
+    },
     entities,
+    ...(relationships ? { relationships } : {}),
+    ...(globalChoices.length ? { globalChoices } : {}),
     webResources,
     views: [],
-    // NOT yet round-tripped (documented limitation): views, charts, forms, and commands. VIEWS were
+    // NOT reconstructed (documented limitation): views, charts, forms, and commands. VIEWS were
     // tried (F3) but reverted — the deployed savedquery set can't reliably distinguish app-builder-
     // authored views from Dataverse's auto-generated Active/Inactive/QuickFind/Lookup/AdvancedFind
     // system views (LIVE-verified: `isdefault` marks the AUTHORED primary "Active" view TRUE and the
     // SYSTEM "Inactive" view FALSE, so no `isdefault`/`querytype` filter isolates author views — it
     // grabbed the wrong one). Charts/forms/commands also need structured reads the SDK doesn't expose.
-    // All four survive on the live app — a rebuild preserves them by discovery — but are absent from the
-    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-capabilities.
+    //
+    // FORMS specifically stay out even though the SDK now exposes `formTypes` on its form listing:
+    // listing them was never the blocker. The App Spec form shape cannot express everything a
+    // deployed `formxml` carries (header/footer, business-process control, related-entity nav,
+    // control parameters, event libraries), so a reconstruction would be lossy — and a lossy form
+    // declared in the spec is worse than an absent one, because rebuilding into a FRESH environment
+    // would recreate a form that silently lost those controls while reporting success.
+    //
+    // All four survive on the live app — a rebuild into the SAME environment preserves them — but are
+    // absent from the downloaded spec, so edit them in Maker or a fresh spec. This is no longer
+    // silent: every deployed form/view/chart is listed in `descriptionInventory` below, and
+    // `download-model-app` reports the omission by class and table on every run (AB#6686423).
     charts: [],
     forms: [],
     commands: [],

@@ -37,7 +37,13 @@ status) in `scripts/lib/feature-flags.js`; their on/off value lives in
 
 | Flag | Status | Enables | Depends on |
 |---|---|---|---|
-| `connectors` | in-progress | GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) + ALM packaging of connection references | pac CLI connector verbs, the GenUX authoring control, and the maker/admin ECS setting — all live in PROD |
+| `connectors` | **ga (on by default)** | GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) + ALM packaging of connection references | pac CLI connector verbs, the GenUX authoring control, and the maker/admin ECS setting — all live in PROD |
+| `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb, and the `GenUxPluginActionAllowList` setting — all live in PROD |
+| `custom-telemetry` | in-progress | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
+
+Connector authoring is **GA and on by default**. Its flag is kept for one release as a
+rollback switch: set `GENPAGE_ENABLE_CONNECTORS=0` (or `"connectors": false`) if your
+environment turns out to be missing one of the dependencies above.
 
 **See the current state** (status, whether each flag is on, and why):
 
@@ -49,18 +55,18 @@ node scripts/lib/feature-flags.js --list
 
 ```powershell
 # Windows (PowerShell)
-$env:GENPAGE_ENABLE_CONNECTORS = "1"
+$env:GENPAGE_ENABLE_CUSTOM_API = "1"
 ```
 
 ```bash
 # macOS / Linux (bash)
-export GENPAGE_ENABLE_CONNECTORS=1
+export GENPAGE_ENABLE_CUSTOM_API=1
 ```
 
 **Enable it persistently** by flipping the value in `feature-flags.json`:
 
 ```json
-{ "connectors": true }
+{ "custom-api": true }
 ```
 
 Precedence is **env var → `feature-flags.json` → default OFF** (fail-closed). Only
@@ -76,7 +82,7 @@ use either on its own, and neither requires the other.**
 
 | Skill | Status | Use it when |
 |---|---|---|
-| [`/app-builder`](#app-builder) | **Preview** | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
+| [`/app-builder`](#app-builder) | Stable | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
 | [`/genpage`](#genpage) | Stable | You want one or more generative pages added to an app that already exists |
 
 Already have an app and just want to add a page? Use `/genpage` — you never need to run
@@ -85,10 +91,9 @@ of the build, so you don't need to run `/genpage` afterwards.
 
 ### `/app-builder`
 
-> **Preview.** This skill is under active development: its App Spec schema and CLI flags may change
-> between releases, and `--changed-only` (partial apply) is Preview within it. Prefer a scratch/dev
-> environment, review the dry-run plan before approving, and use `teardown-model-app.js --apply` to
-> clean up probes. Report issues with `/report-issue`.
+> Review the dry-run plan before approving, and use `teardown-model-app.js --apply` to clean up
+> probes. `--changed-only` (partial apply) is still experimental and off by default. Report issues
+> with `/report-issue`.
 
 Builds and edits a whole model-driven Power App from a natural-language intent, via the headless
 vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and a narrated build:
@@ -226,6 +231,7 @@ un-provisioned copies. Once enabled it is **on by default** (you opt out).
 
 ## Documentation
 
+- [Build Model-Driven Apps with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/model-driven-app-external-tools)
 - [Generative Pages with External Tools](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-page-external-tools)
 - [Generative Pages Overview](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/generative-pages)
 - [Power Apps Model-Driven Apps](https://learn.microsoft.com/en-us/power-apps/maker/model-driven-apps/model-driven-app-overview)

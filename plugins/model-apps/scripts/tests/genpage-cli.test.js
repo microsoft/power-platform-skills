@@ -104,21 +104,112 @@ test('upload builds pac args WITHOUT --add-to-sitemap and returns the pageId', a
   // The upload call is NOT calls[0] any more (before-snapshot is first); find by verb.
   const args = calls.find((a) => a[2] === 'upload');
   assert.ok(!args.includes('--add-to-sitemap'), 'never adds to sitemap (the SDK owns it)');
-  assert.ok(args.includes('--prompt') && args.includes('--agent-message'), 'always supplies pac-required prompt + agent-message');
+  assert.ok(args.includes('--prompt-file') && args.includes('--agent-message-file'), 'supplies pac-required prompt + agent-message BY FILE (multi-line safe)');
+  assert.ok(!args.includes('--prompt') && !args.includes('--agent-message'), 'never inline --prompt/--agent-message (they would be lossily newline-collapsed)');
   assert.ok(args.includes('--data-sources') && args.includes('new_o'));
   assert.ok(args.includes('--environment') && args.includes('https://x'));
 });
 
-test('upload defaults prompt + agent-message when absent (pac requires both)', async () => {
+test('upload defaults prompt + agent-message when absent (pac requires both), delivered by file', async () => {
+  const fs = require('node:fs');
   const calls = [];
+  let promptText = null;
+  let agentText = null;
   const run = async (args) => {
     calls.push(args);
     if (args[2] === 'list') return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+    // Read the temp files back while upload() still owns them (before its finally cleans up).
+    const pi = args.indexOf('--prompt-file');
+    const ai = args.indexOf('--agent-message-file');
+    promptText = fs.readFileSync(args[pi + 1], 'utf8');
+    agentText = fs.readFileSync(args[ai + 1], 'utf8');
     return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
   };
   await makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'X' });
   const uploadCall = calls.find((a) => a[2] === 'upload');
-  assert.ok(uploadCall.includes('--prompt') && uploadCall.includes('--agent-message'));
+  assert.ok(uploadCall.includes('--prompt-file') && uploadCall.includes('--agent-message-file'));
+  assert.ok(!uploadCall.includes('--prompt') && !uploadCall.includes('--agent-message'), 'defaults go by file too, never inline');
+  assert.strictEqual(promptText, 'Generative page X', 'historical default prompt preserved, just delivered by file');
+  assert.strictEqual(agentText, 'Authored by app-builder', 'historical default agent-message preserved, just delivered by file');
+});
+
+test('upload delivers the prompt via --prompt-file and a multi-line transcript round-trips verbatim (#565)', async () => {
+  const fs = require('node:fs');
+  // A real downloaded page prompt: a multi-line conversation transcript carrying BOTH \r\n and \n
+  // breaks plus non-ASCII — exactly the shape the old inline --prompt path collapsed to spaces on an
+  // edit-rebuild (`pac model genpage upload --help` documents --prompt-file for precisely this).
+  const multiline = 'Conversation with 2 prompts:\r\n1. Show an overview \u2014 caf\u00e9 \u2615\n2. Add a bar chart';
+  let promptFilePath = null;
+  let roundTripped = null;
+  const run = async (args) => {
+    if (args[2] === 'list') return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+    assert.ok(!args.includes('--prompt'), 'prompt is never passed inline (that path is lossy for newlines)');
+    const i = args.indexOf('--prompt-file');
+    assert.ok(i >= 0, 'prompt is delivered via --prompt-file');
+    promptFilePath = args[i + 1];
+    // Read the file back while upload() still owns it (before the finally cleans it up).
+    roundTripped = fs.readFileSync(promptFilePath, 'utf8');
+    return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
+  };
+  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} })
+    .upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview', prompt: multiline });
+  assert.strictEqual(r.pageId, GUID);
+  assert.strictEqual(roundTripped, multiline, 'every \\r\\n and \\n line break and the non-ASCII survive byte-for-byte');
+  assert.ok(promptFilePath && !fs.existsSync(promptFilePath), 'the prompt temp file is cleaned up on success');
+});
+
+test('upload threads --compiled-code-file only when the caller supplies it (else pac auto-transpiles) (#565)', async () => {
+  const seen = [];
+  const run = async (args) => {
+    if (args[2] === 'list') return { status: 0, stdout: LIST_EMPTY, stderr: '' };
+    seen.push(args);
+    return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
+  };
+  const cli = makeGenpageCli('https://x', { run, sleep: async () => {} });
+  // Absent → flag omitted so pac auto-transpiles the TypeScript (the live-verified default path).
+  await cli.upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' });
+  assert.ok(!seen[0].includes('--compiled-code-file'), 'no --compiled-code-file when the caller omits it');
+  // Supplied → flag present with the exact caller path.
+  await cli.upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', compiledCodeFile: 'o.js', name: 'Overview' });
+  const ci = seen[1].indexOf('--compiled-code-file');
+  assert.ok(ci >= 0 && seen[1][ci + 1] === 'o.js', 'passes --compiled-code-file <path> when supplied');
+});
+
+test('upload cleans up its temp files even when it throws after exhausting retries (#565)', async () => {
+  const fs = require('node:fs');
+  let promptPath = null;
+  let agentPath = null;
+  const run = async (args) => {
+    const pi = args.indexOf('--prompt-file');
+    const ai = args.indexOf('--agent-message-file');
+    if (pi >= 0) promptPath = args[pi + 1];
+    if (ai >= 0) agentPath = args[ai + 1];
+    // UPDATE path (caller pageId) so there is no CREATE reconcile — every attempt just fails and the
+    // wrapper throws after `attempts`. The finally must still remove the temp dir.
+    return { status: 1, stdout: '', stderr: 'boom' };
+  };
+  await assert.rejects(
+    makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
+    /pac genpage upload failed/i
+  );
+  assert.ok(promptPath && !fs.existsSync(promptPath), 'prompt temp file removed on the retry-exhaustion throw');
+  assert.ok(agentPath && !fs.existsSync(agentPath), 'agent-message temp file removed on the retry-exhaustion throw');
+});
+
+test('upload cleans up its temp files even when it throws mid-loop (I7 identity mismatch) (#565)', async () => {
+  const fs = require('node:fs');
+  let promptPath = null;
+  const run = async (args) => {
+    const pi = args.indexOf('--prompt-file');
+    if (pi >= 0) promptPath = args[pi + 1];
+    // Return a DIFFERENT id than the requested pageId → the I7 guard throws from inside the loop.
+    return { status: 0, stdout: `Page ID: ${GP_A}`, stderr: '' };
+  };
+  await assert.rejects(
+    makeGenpageCli('https://x', { run }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }),
+    /unexpected Page ID|refusing to persist/i
+  );
+  assert.ok(promptPath && !fs.existsSync(promptPath), 'temp file removed even on a mid-loop throw');
 });
 
 test('upload with a pageId updates in place (adds --page-id)', async () => {

@@ -2,6 +2,9 @@
 // Maps each assertion text in evals.json to a check function receiving { facts, spec, eval } and
 // returning { status: 'pass'|'fail'|'skip', reason? }. Mirrors evals/model-apps/genpage/lib/assertions-*.js.
 // Register every text in common_stage_assertions here; any unregistered text gets a SKIP.
+const path = require('node:path');
+// Same reach as facts.js: 4 levels up to the repo root. Pure, offline plugin primitives only.
+const { declaredColumnLogicals } = require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', 'lib', 'app-spec.js'));
 const PASS = { status: 'pass' };
 const fail = (reason) => ({ status: 'fail', reason });
 const skip = (reason) => ({ status: 'skip', reason });
@@ -312,6 +315,141 @@ ASSERTIONS.set('teardown: every declared command bar has a teardown step', ({ fa
   return steps === entities.size ? PASS : fail(`expected ${entities.size} command-bar teardown step(s), got ${steps}`);
 });
 
+// declarative logic: businessRules[] + businessProcessFlows[] ------------------------------------
+//
+// Both surfaces share one failure mode that no downstream check catches: the platform ACCEPTS a
+// definition whose column bindings are wrong or missing, and the artifact then simply does nothing.
+// A business rule that binds a column the app never creates deploys, activates and never fires; a
+// BPF is refused outright for a field-less step, but only at push time on a live environment.
+//
+// So these grade the BINDINGS, against the spec's own data model, from the same pure def builders
+// the engine pushes. Each skips when the fixture declares none, so they are safe as common
+// assertions across every fixture.
+
+// Resolve the column names an entity legitimately offers a rule or a flow.
+//
+// This delegates to the plugin's own `declaredColumnLogicals` rather than re-deriving the set here.
+// The first version of this helper did re-derive it, and guessed the lookup column as
+// `rel.lookupName || '<referenced>id'` — but the App Spec stores the authored name at
+// `rel.lookup.schemaName`. The consequence was the worst kind for an eval: with a custom lookup name
+// it REJECTED correct builder output, and it ACCEPTED the default-named column the builder had not
+// emitted. An oracle that can be wrong in both directions is worse than no oracle, so it now shares
+// the production definition and cannot drift from it.
+const boundColumnsFor = (spec, entityLogical) => {
+  // `declaredColumnLogicals` keys on the spec's EXACT `schemaName`, while the facts carry the
+  // lower-cased Dataverse logical name — so resolve back to the declared spelling first.
+  const ent = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === entityLogical);
+  if (!ent) return null;
+  return declaredColumnLogicals(spec, ent.schemaName);
+};
+
+ASSERTIONS.set('process: every business rule binds only columns the spec creates', ({ facts, spec }) => {
+  const rules = (facts.process && facts.process.rules) || [];
+  if (!rules.length) return skip('spec declares no business rules');
+  const bad = [];
+  for (const r of rules) {
+    const cols = boundColumnsFor(spec, r.entity);
+    if (!cols) { bad.push(`${r.name}: unknown entity '${r.entity}'`); continue; }
+    // An EMPTY binding set is the dangerous case, not merely an unknown one: it is what a
+    // mis-shaped condition tree produces, and it deploys as a rule with no clauses and no actions.
+    if (!r.fields.length) { bad.push(`${r.name}: compiles to NO column bindings at all`); continue; }
+    const unknown = r.fields.filter((f) => !cols.has(f));
+    if (unknown.length) bad.push(`${r.name}: binds unknown column(s) ${unknown.join(', ')}`);
+  }
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('process: every business rule compiles at least one condition and one action', ({ facts }) => {
+  const rules = (facts.process && facts.process.rules) || [];
+  if (!rules.length) return skip('spec declares no business rules');
+  const bad = rules.filter((r) => !r.operators.length || !r.actionTypes.length)
+    .map((r) => `${r.name}: ${r.operators.length} condition(s), ${r.actionTypes.length} action(s)`);
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('process: every BPF step binds a field on the flow entity', ({ facts, spec }) => {
+  const flows = (facts.process && facts.process.flows) || [];
+  if (!flows.length) return skip('spec declares no business process flows');
+  const bad = [];
+  for (const f of flows) {
+    const cols = boundColumnsFor(spec, f.entity);
+    if (!cols) { bad.push(`${f.name}: unknown entity '${f.entity}'`); continue; }
+    if (!f.stages.length) { bad.push(`${f.name}: has no stages`); continue; }
+    for (const st of f.stages) {
+      if (!st.steps.length) bad.push(`${f.name}/${st.name}: stage has no steps`);
+      // The platform rejects a field-less step outright ("datafieldname of ControlStep cannot be
+      // null or empty"), so an unbound step is a build failure, not a cosmetic gap.
+      for (const s of st.steps) {
+        if (!s.field) bad.push(`${f.name}/${st.name}/${s.name}: step binds no field`);
+        else if (!cols.has(s.field)) bad.push(`${f.name}/${st.name}/${s.name}: unknown column '${s.field}'`);
+      }
+    }
+  }
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('process: every BPF stage is scoped to the flow entity (v1 is single-entity)', ({ facts }) => {
+  const flows = (facts.process && facts.process.flows) || [];
+  if (!flows.length) return skip('spec declares no business process flows');
+  const bad = flows.flatMap((f) => f.stages.filter((st) => st.entity !== f.entity)
+    .map((st) => `${f.name}/${st.name}: stage entity '${st.entity}' != flow entity '${f.entity}'`));
+  return bad.length ? fail(bad.join('; ')) : PASS;
+});
+
+ASSERTIONS.set('teardown: every declared business rule and process flow has a teardown step', ({ facts, spec }) => {
+  const rules = (spec.businessRules || []).length;
+  const flows = (spec.businessProcessFlows || []).length;
+  if (!rules && !flows) return skip('spec declares no business rules or process flows');
+  const ruleSteps = facts.teardown.kinds.filter((k) => k === 'businessRules').length;
+  const flowSteps = facts.teardown.kinds.filter((k) => k === 'businessProcessFlows').length;
+  if (ruleSteps !== rules) return fail(`expected ${rules} business-rule teardown step(s), got ${ruleSteps}`);
+  if (flowSteps !== flows) return fail(`expected ${flows} process-flow teardown step(s), got ${flowSteps}`);
+  return PASS;
+});
+
+// per-eval expectations (eval 5 "process logic") — the declarative-logic surfaces, by value --------
+
+ASSERTIONS.set('the BPF stage order is Intake, Investigate, Resolve and every step binds a declared column', ({ facts }) => {
+  const flow = (facts.process.flows || [])[0];
+  if (!flow) return fail('no business process flow fact');
+  const order = flow.stages.map((s) => s.name);
+  if (!eq(order, ['Intake', 'Investigate', 'Resolve'])) return fail(`stage order = [${order}]`);
+  // Stage order is positional, not a sortable field: the SDK emits stages in array order and the
+  // stage bar renders them that way, so a mapping that reordered them would silently change the
+  // process an agent is walked through.
+  const unbound = flow.steps.filter((s) => !s.field).map((s) => `${s.stage}/${s.name}`);
+  return unbound.length ? fail(`step(s) with no field: ${unbound.join(', ')}`) : PASS;
+});
+
+ASSERTIONS.set('the BPF binds the relationship lookup new_accountref, not just the case table’s own columns', ({ facts }) => {
+  // A lookup column exists only because a relationship creates it, so it is absent from the
+  // entity's `columns[]`. The fixture deliberately gives it a NON-DEFAULT name: an oracle that
+  // guessed `<referenced>id` would agree with `new_customerid` here and so could neither reject a
+  // builder that emitted the wrong column nor accept the right one.
+  const flow = (facts.process.flows || [])[0];
+  if (!flow) return fail('no business process flow fact');
+  const fields = flow.steps.map((s) => s.field);
+  return fields.includes('new_accountref') ? PASS : fail(`bound fields = [${fields}]`);
+});
+
+ASSERTIONS.set('a rule with two conditions compiles both, ANDed, and neither is dropped', ({ facts }) => {
+  const rule = (facts.process.rules || []).find((r) => r.name === 'Hide the diagnosis until investigation starts');
+  if (!rule) return fail('no two-condition rule fact');
+  if (rule.operators.length !== 2) return fail(`compiled ${rule.operators.length} condition(s), expected 2: [${rule.operators}]`);
+  // The presence operator carries no value, so a mapper that assumed every clause has one would
+  // drop it — and the rule would then fire on status alone.
+  if (!rule.operators.includes('DoesNotContainData')) return fail(`presence operator lost: [${rule.operators}]`);
+  return rule.fields.includes('new_owner') ? PASS : fail(`the presence clause lost its column: [${rule.fields}]`);
+});
+
+ASSERTIONS.set('every business rule and the process flow each get exactly one teardown step', ({ facts, spec }) => {
+  const rules = facts.teardown.kinds.filter((k) => k === 'businessRules').length;
+  const flows = facts.teardown.kinds.filter((k) => k === 'businessProcessFlows').length;
+  if (rules !== (spec.businessRules || []).length) return fail(`business-rule teardown steps = ${rules}`);
+  if (flows !== (spec.businessProcessFlows || []).length) return fail(`process-flow teardown steps = ${flows}`);
+  return PASS;
+});
+
 // per-eval expectations (eval 4 "hardening") — explicit, value-specific checks of each fix ---------
 
 ASSERTIONS.set('the ticket default view keeps new_customerid even though the table has 8 scalar columns (#2)', ({ facts }) => {
@@ -348,6 +486,143 @@ ASSERTIONS.set('quick create is enabled on the new_ticket table (#8)', ({ facts 
   if (t.quickCreate !== true) return fail('new_ticket.quickCreate fact is not true');
   const planned = (facts.plan.labels || []).some((l) => /enable quick create on new_ticket/.test(l));
   return planned ? PASS : fail('the build plan has no "enable quick create on new_ticket" step');
+});
+
+// --- form layout: the shape an author wrote must be the shape that ships (#575) ----------------
+// An explicit `tabs` layout was FLATTENED on build: every field landed in the deployed form's first
+// section and no tab / form-column / section was created or resized, so a hand-authored two-column
+// form shipped as one long single-column list. It survived because the corpus graded a form's flat
+// FIELD LIST and never its SHAPE — a flattened form has exactly the right fields.
+
+ASSERTIONS.set('ui: an explicit layout compiles to the authored tab, form-column and section topology (it is not flattened)', ({ facts }) => {
+  const explicit = (facts.ui.forms || []).filter((f) => f.authoredShape);
+  if (!explicit.length) return skip('no form in this fixture declares an explicit layout');
+  for (const f of explicit) {
+    const a = f.authoredShape, c = f.compiledShape;
+    if (a.length !== c.length) return fail(`form ${f.name}: ${a.length} tab(s) authored, ${c.length} compiled`);
+    for (let i = 0; i < a.length; i++) {
+      const at = a[i], ct = c[i], where = `form ${f.name} tab ${JSON.stringify(at.label)}`;
+      if (at.label !== ct.label) return fail(`${where}: label became ${JSON.stringify(ct.label)}`);
+      if (at.expanded !== ct.expanded) return fail(`${where}: expanded ${at.expanded} became ${ct.expanded}`);
+      if (at.columnCount !== ct.columnCount) return fail(`${where}: ${at.columnCount} form-column(s) authored, ${ct.columnCount} compiled — a multi-column tab was collapsed`);
+      // Only the widths the author actually WROTE. An omitted width is split evenly by the compiler,
+      // and grading that split here would compare the compiler against a copy of itself.
+      for (let wi = 0; wi < at.declaredWidths.length; wi++) {
+        const w = at.declaredWidths[wi];
+        if (w !== null && w !== ct.declaredWidths[wi]) return fail(`${where} form-column ${wi}: authored width ${w}, compiled ${ct.declaredWidths[wi]}`);
+      }
+      if (at.sectionsByColumn.length !== ct.sectionsByColumn.length) return fail(`${where}: ${at.sectionsByColumn.length} form-column(s) of sections authored, ${ct.sectionsByColumn.length} compiled`);
+      // Compared PER FORM-COLUMN. A flat list would let a section that moved from column 0 to
+      // column 1 pass whenever its order and fields were unchanged — the exact topology this
+      // assertion exists to prove.
+      for (let ci = 0; ci < at.sectionsByColumn.length; ci++) {
+        const acol = at.sectionsByColumn[ci], ccol = ct.sectionsByColumn[ci];
+        if (acol.length !== ccol.length) return fail(`${where} form-column ${ci}: ${acol.length} section(s) authored, ${ccol.length} compiled`);
+        for (let si = 0; si < acol.length; si++) {
+          const as = acol[si], cs = ccol[si];
+          if (as.label !== cs.label) return fail(`${where} form-column ${ci} section ${si}: label ${JSON.stringify(as.label)} became ${JSON.stringify(cs.label)}`);
+          if (as.columns !== cs.columns) return fail(`${where} form-column ${ci} section ${JSON.stringify(as.label)}: ${as.columns} grid column(s) authored, ${cs.columns} compiled`);
+          if (!eq(as.fields, cs.fields)) return fail(`${where} form-column ${ci} section ${JSON.stringify(as.label)}: authored [${as.fields}] compiled [${cs.fields}]`);
+        }
+      }
+    }
+  }
+  return PASS;
+});
+
+// colspan/rowspan are the reason a two-column section is worth authoring at all — a full-width title
+// over a two-up grid. Both are dropped silently by a serializer that does not carry them, so a form
+// can look correct in the field list and still render as a plain stack.
+ASSERTIONS.set('ui: an authored colspan and rowspan survive into the compiled cell', ({ facts, spec }) => {
+  const wanted = [];
+  for (const f of spec.forms || []) {
+    for (const t of f.tabs || []) {
+      const sections = Array.isArray(t.columns) ? t.columns.flatMap((c) => (c && c.sections) || []) : (t.sections || []);
+      for (const s of sections) {
+        for (const entry of s.fields || []) {
+          if (entry && typeof entry === 'object' && (entry.colspan > 1 || entry.rowspan > 1)) {
+            wanted.push({ form: f.name, field: String(entry.name).toLowerCase(), colspan: entry.colspan || 1, rowspan: entry.rowspan || 1 });
+          }
+        }
+      }
+    }
+  }
+  if (!wanted.length) return skip('no field in this fixture authors a colspan or rowspan');
+  for (const w of wanted) {
+    const form = (facts.ui.forms || []).find((x) => x.name === w.form);
+    if (!form) return fail(`no compiled form named ${w.form}`);
+    const cell = (form.placements || []).find((p) => p.field === w.field);
+    if (!cell) return fail(`form ${w.form}: field ${w.field} was not placed at all`);
+    if (cell.colspan !== w.colspan) return fail(`form ${w.form} field ${w.field}: authored colspan ${w.colspan}, compiled ${cell.colspan}`);
+    if (cell.rowspan !== w.rowspan) return fail(`form ${w.form} field ${w.field}: authored rowspan ${w.rowspan}, compiled ${cell.rowspan}`);
+  }
+  return PASS;
+});
+
+// Universal — these hold on EVERY layout, auto included. The build-time reconcile MOVES a control
+// that sits in the wrong section rather than placing a second copy, so a field appearing twice is
+// the signature of a placement pass that created instead of moved. Dataverse accepts a duplicated
+// control and renders both, so nothing downstream would report it.
+ASSERTIONS.set('ui: every compiled form places each field exactly once', ({ facts }) => {
+  for (const f of facts.ui.forms || []) {
+    const seen = new Map();
+    for (const p of f.placements || []) seen.set(p.field, (seen.get(p.field) || 0) + 1);
+    const dupes = [...seen.entries()].filter(([, n]) => n > 1).map(([k, n]) => `${k}×${n}`);
+    if (dupes.length) return fail(`form ${f.name} places ${dupes.join(', ')}`);
+  }
+  return PASS;
+});
+
+// The converse of the duplication guard: a topology pass that creates containers and a field pass
+// that fills them can also drop a field on the floor — the form still builds, just without it.
+//
+// For an EXPLICIT layout the comparison is against what the AUTHOR wrote, not against
+// formFieldLogicals(intent). That list is derived from the same compiled object as the placements,
+// so a compiler that drops a field drops it from both sides and the two agree on the wrong answer —
+// a tautology that mutation testing caught. The authored shape is an independent statement of intent.
+ASSERTIONS.set('ui: every compiled form places exactly the fields it intends to carry', ({ facts }) => {
+  for (const f of facts.ui.forms || []) {
+    const placed = sorted([...new Set((f.placements || []).map((p) => p.field))]);
+    const intended = f.authoredShape
+      ? sorted([...new Set(f.authoredShape.flatMap((t) => t.sectionsByColumn.flat().flatMap((s) => s.fields)))])
+      : sorted([...new Set((f.fields || []).map((x) => String(x).toLowerCase()))]);
+    if (!eq(placed, intended)) {
+      const missing = intended.filter((x) => !placed.includes(x));
+      const extra = placed.filter((x) => !intended.includes(x));
+      return fail(`form ${f.name}: missing [${missing}] unplaced-extra [${extra}]`);
+    }
+  }
+  return PASS;
+});
+
+// --- download column projection: nothing invented, no shadows (#574) ---------------------------
+// Creating a lookup also materialises `<lookup>name` / `<lookup>yominame` (and `<lookup>idtype` for a
+// polymorphic one). A download that emits them declares Text columns the author never wrote, and the
+// next rebuild CREATES them for real — replacing a lookup with text fields. The facts feed both
+// shadow shapes (logical for a single-target lookup, physically stored for a polymorphic one) through
+// the real projection, so a regression in either filter shows up here.
+ASSERTIONS.set("round-trip: a lookup's shadow columns are never recovered as spec columns (#574)", ({ facts }) => {
+  const rows = (facts.download || []).filter((r) => r.shadowNames.length);
+  if (!rows.length) return skip('no table in this fixture carries a lookup');
+  for (const r of rows) {
+    const leaked = r.shadowNames.filter((s) => r.recoveredColumns.includes(s));
+    if (leaked.length) return fail(`${r.entity}: download recovered shadow column(s) ${leaked.join(', ')}`);
+  }
+  return PASS;
+});
+
+// The general form of the same rule, and the one that catches a NEW invention rather than a known
+// shadow spelling: a downloaded table must not declare a column the spec never authored. Stock
+// attributes are the other half — `createdon` and friends feed defaultViewColumns, so recovering one
+// would rewrite a customer's default views on the next build.
+ASSERTIONS.set('round-trip: a download recovers no column the spec never authored', ({ facts }) => {
+  for (const r of facts.download || []) {
+    const invented = r.recoveredColumns.filter((c) => !r.authoredColumns.includes(c));
+    if (invented.length) return fail(`${r.entity}: download invented column(s) ${invented.join(', ')}`);
+    const system = r.systemAttributes.filter((c) => r.recoveredColumns.includes(c));
+    if (system.length) return fail(`${r.entity}: download recovered stock attribute(s) ${system.join(', ')}`);
+  }
+  return PASS;
 });
 
 module.exports = { ASSERTIONS };

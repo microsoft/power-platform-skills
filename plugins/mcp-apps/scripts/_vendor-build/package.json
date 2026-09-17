@@ -1,0 +1,17 @@
+{
+  "name": "mcp-apps-runtime-vendor-build",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Dev-only build for the self-contained MCP Apps browser runtime.",
+  "scripts": {
+    "build": "node build.js",
+    "check": "node build.js --check"
+  },
+  "dependencies": {
+    "@fluentui/tokens": "1.0.0-alpha.22",
+    "@modelcontextprotocol/ext-apps": "1.7.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

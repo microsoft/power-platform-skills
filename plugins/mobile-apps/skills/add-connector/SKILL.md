@@ -27,6 +27,8 @@ The native host runtime (`@microsoft/power-apps-native-host`) handles connector 
 
 ### Step 1 — Check Memory Bank
 
+**Telemetry checkpoint: `validate_connector_project`**
+
 Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 Also confirm we're inside a Power Apps mobile app:
