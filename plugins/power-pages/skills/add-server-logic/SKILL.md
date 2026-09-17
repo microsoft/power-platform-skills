@@ -24,6 +24,7 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 - **Five functions only**: A server logic file can only export these top-level functions: `get`, `post`, `put`, `patch`, `del`. The name `delete` is a reserved word in JavaScript and cannot be used.
 - **Always return a string**: Every function must return a string. Use `JSON.stringify()` when returning objects or arrays.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Preserve frontend integrity**: If Phase 9 adds or changes SPA UI, first read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; synchronize visible states across configured locale resources and keep the UI bidirectional and expansion-safe. Backend-only runs do not need localization changes.
 
 > **Prerequisites:**
 > - An existing Power Pages code site created

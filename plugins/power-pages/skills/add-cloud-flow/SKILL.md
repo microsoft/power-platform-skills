@@ -29,6 +29,7 @@ For already-registered flows, the skill skips metadata and role creation and goe
 - **Web roles drive access**: Every flow must have at least one web role. Anonymous Users role is valid but must be confirmed.
 - **Scenario determines roles**: Understand what each flow does and who triggers it before picking roles.
 - **Use TaskCreate/TaskUpdate**: Track all phases upfront before starting any work.
+- **Preserve site integrity**: Before wiring a flow into a page or component, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; localize every new visible state when configured and keep the UI bidirectional and expansion-safe.
 
 > **Prerequisites:**
 > - An existing Power Pages code site with `.powerpages-site` deployed

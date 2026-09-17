@@ -91,6 +91,7 @@ Integrate Power Pages generative-AI summarization APIs into a SPA site. This ski
 - **Raw `fetch` + CSRF.** Every summarization request attaches `__RequestVerificationToken` (from `/_layout/tokenhtml`) and `X-Requested-With: XMLHttpRequest`. Never route through an OData wrapper.
 - **Skip `/integrate-webapi` when it's not needed.** If every confirmed target is Search Summary (which has no per-table Web API prerequisites), or every Layer 1/2 prerequisite already exists on disk, the skill goes straight from Phase 3 to Phase 5.
 - **Use TaskCreate/TaskUpdate** — create the todo list upfront with all phases before starting.
+- **Preserve site integrity.** Before adding or tweaking an AI surface, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; localization covers labels, loading, empty, error, citation, recommendation, and remediation states, and the UI must remain bidirectional and expansion-safe.
 
 > **Prerequisites:**
 >
