@@ -782,7 +782,7 @@ Set-Content -Path "<working-dir>/agent-message.txt" -Value $agentMessage  -Encod
 
 ```markdown
 ## Phase 6 — Deploy
-- Command: `node scripts/genpage-upload.js --app-id <id> --code-file <path> --data-sources '<entities>' --prompt-file <working-dir>/prompt.txt --model <model-id> --name "<page name>" --agent-message-file <working-dir>/agent-message.txt --add-to-sitemap`
+- Command: `node "${PLUGIN_ROOT}/scripts/genpage-upload.js" --env <org-url> --app-id <id> --code-file <path> --data-sources '<entities>' --prompt-file <working-dir>/prompt.txt --model <model-id> --name "<page name>" --agent-message-file <working-dir>/agent-message.txt --add-to-sitemap`
 - Prompt scope: full page description from plan's `## User Requirements` (create) — or the delta only (update)
 - Result: page-id = <returned-id>, status = success
 ```
@@ -798,8 +798,10 @@ and/or `--actions "<working-dir>/actions.json"`.
   the changes in this upload, written like a commit message, never a
   re-statement of the original.
 
-`--add-to-sitemap` is refused together with `--page-id` by the wrapper itself, so an
-update cannot add a second sitemap entry even if the flag is passed by mistake.
+`--add-to-sitemap` is **refused** together with `--page-id` — an update cannot add a sitemap
+entry, and the page it names is already placed. If a create is recovered as an update after a
+mid-flight failure, the page is deployed but **not** placed, and that is reported as a failed
+(incomplete) deployment carrying the page id, not as success.
 
 Applies in Phase 6 updates, Phase 6.5 PAGEREF re-uploads, Phase 7.5 fix
 re-deploys, and the entire edit flow.

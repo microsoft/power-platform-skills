@@ -95,10 +95,28 @@ complete visual record for the deployment summary.
 ## 7.5 Fix and Re-deploy
 
 If issues are found: fix the code, re-deploy using the **update form** from
-Phase 6 (`--page-id`, no `--add-to-sitemap`). Per the "`--prompt` semantics"
-rule, `--prompt` for this re-deploy describes the fix delta only — e.g.
+Phase 6 — `node "${PLUGIN_ROOT}/scripts/genpage-upload.js"` with `--page-id` and
+no `--add-to-sitemap`. Per the "Prompt semantics" rule, the prompt for this
+re-deploy describes the fix delta only — e.g.
 `"Fix sort handler on Name column; correct accidental DataGrid type prop"` —
-not a re-statement of the full page description.
+not a re-statement of the full page description. Write it to a file and pass
+`--prompt-file`; never put it on a command line.
+
+```powershell
+Set-Content -Path "<working-dir>/prompt.txt" -Encoding UTF8 -NoNewline `
+  -Value "Fix sort handler on Name column; correct accidental DataGrid type prop"
+Set-Content -Path "<working-dir>/agent-message.txt" -Encoding UTF8 -NoNewline `
+  -Value "Phase 7.5 fix re-deploy"
+
+node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
+  --env <org-url> `
+  --app-id <app-id> `
+  --page-id <page-id> `
+  --code-file <working-dir>/<file>.tsx `
+  --prompt-file "<working-dir>/prompt.txt" `
+  --model "<current-model-id>" `
+  --agent-message-file "<working-dir>/agent-message.txt"
+```
 
 **Common Playwright issues:**
 - "Target page, context or browser has been closed" → retry the navigation.

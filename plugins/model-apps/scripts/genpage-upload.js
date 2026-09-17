@@ -96,6 +96,30 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   const agentMessage = resolveText(flags, 'agent-message', 'agent-message-file', readFile);
   if (!agentMessage.ok) return emit(false, { error: agentMessage.error });
 
+  // An EMPTY prompt is refused rather than defaulted. `upload()` substitutes
+  // `Generative page <name>` for a blank prompt, which is reasonable when no prompt was supplied at
+  // all — but a caller who passed `--prompt-file` asked for THAT text, and silently deploying a
+  // generated placeholder instead breaks the provenance this whole path exists to protect. A file
+  // holding only whitespace, only a newline, or only a BOM is the realistic way this happens.
+  const promptGiven = typeof flags.prompt === 'string' || typeof flags['prompt-file'] === 'string';
+  if (promptGiven && !String(prompt.value || '').trim()) {
+    return emit(false, {
+      error: 'the prompt resolved to empty — refusing to deploy a generated placeholder in place of '
+        + 'the prompt you supplied. Check the file is not blank, newline-only, or BOM-only.',
+    });
+  }
+
+  const addToSitemap = flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true';
+  // REFUSED, not silently dropped. pac rejects the combination, and an update that quietly discards
+  // the flag leaves the caller believing a placement happened. The wrapper also omits it on an
+  // update as a backstop, but a backstop is not an answer to an explicit contradictory request.
+  if (addToSitemap && flags['page-id']) {
+    return emit(false, {
+      error: '--add-to-sitemap cannot be combined with --page-id: an update cannot add a sitemap '
+        + 'entry, and the page it names is already placed. Drop one of the two.',
+    });
+  }
+
   const cli = cliFactory(flags.env);
   try {
     const res = await cli.upload({
@@ -111,16 +135,26 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       model: flags.model || undefined,
       connectors: flags.connectors || undefined,
       actions: flags.actions || undefined,
-      // `--add-to-sitemap` is for the standalone skill, where nothing else writes the subarea.
-      // upload() additionally refuses to send it alongside --page-id, so an update cannot
-      // accidentally add a second sitemap entry.
-      addToSitemap: flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true',
+      addToSitemap,
     });
+    const pageId = (res && (res.pageId || res.id)) || null;
+    // A create that asked for placement, crashed mid-flight, and was recovered as an UPDATE leaves
+    // the page deployed but NOT in the sitemap — invisible in the app's navigation. That is an
+    // incomplete deployment, so it is reported as a failure WITH the page id, rather than as
+    // success, so the operator can place it instead of discovering the gap later.
+    if (res && res.sitemapPending) {
+      return emit(false, {
+        pageId,
+        appId: flags['app-id'],
+        error: `page ${pageId} was deployed but NOT added to the sitemap: the create was recovered as `
+          + 'an update, which cannot carry --add-to-sitemap. Add the page to the app navigation manually.',
+      });
+    }
     // `pageId` is the one value a caller needs in order to continue (sitemap wiring, a follow-up
     // edit). Echo the identity back rather than making the caller re-parse pac output.
     return emit(true, {
       ok: true,
-      pageId: (res && (res.pageId || res.id)) || null,
+      pageId,
       appId: flags['app-id'],
       updated: !!flags['page-id'],
     });

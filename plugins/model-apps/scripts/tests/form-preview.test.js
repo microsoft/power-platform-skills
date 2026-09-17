@@ -240,3 +240,31 @@ test('a long field name never truncates the state annotation', () => {
   // And the guarantee stated positively: no rendered line may contain a state tag that was cut off.
   assert.doesNotMatch(out, /\((?:hidden|read-only)[^)]*…/, `a state tag was truncated mid-word:\n${out}`);
 });
+
+// Adversarial review caught the fix above being INCOMPLETE. Reserving "at least one name character"
+// still lets the outer clip() eat the tag itself once the tag alone is wider than the column: a
+// combined ` (hidden, read-only)` needs 20 columns, but a three-column row gives 18 and a
+// four-column row 13. Measured before the fix: 1/4 and 0/4 tags rendered complete.
+//
+// Four columns is a valid authored layout, so the approval gate was still lying — just in narrower
+// forms than the two-column case I had tested.
+test('field state survives at EVERY supported section column count', () => {
+  const s = spec();
+  for (const i of [1, 2, 3, 4]) {
+    s.entities[0].columns.push({ schemaName: `new_col${i}`, displayName: `Column Number ${i}`, type: 'Text' });
+  }
+  for (const columns of [1, 2, 3, 4]) {
+    s.forms = [{
+      entity: 'new_wo', name: 'WO', layout: 'explicit',
+      tabs: [{ name: 't1', label: 'Main', columns: [{ sections: [{
+        name: 'a', label: 'Order', columns,
+        fields: [1, 2, 3, 4].map((i) => ({ name: `new_col${i}`, hidden: true, readOnly: true })),
+      }] }] }],
+    }];
+    const out = renderFormWireframe(s, s.forms[0]);
+    assert.doesNotMatch(out, /\((?:hidden|read-only)[^)]*…/,
+      `a state tag was truncated at columns=${columns}:\n${out}`);
+    assert.strictEqual((out.match(/\(hidden, read-only\)/g) || []).length, 4,
+      `all four fields must report their full state at columns=${columns}:\n${out}`);
+  }
+});

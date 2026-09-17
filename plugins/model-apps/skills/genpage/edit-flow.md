@@ -322,9 +322,10 @@ the regex also catches quoted keys and whitespace before the colon. Replace ever
 
 ## Edit Phase 6: Deploy Updated Page
 
-This is an **update** (existing page-id), so `--prompt` must describe the
+This is an **update** (existing page-id), so the prompt must describe the
 **delta of changes only** — not a re-statement of the original page description.
-See SKILL.md Phase 6 "`--prompt` semantics".
+It is written to a file and passed as `--prompt-file`; see SKILL.md Phase 6
+"Prompt semantics".
 
 Connector binding rules for edit deploy:
 - **Add / replace / discover / remove one connector:** the `genpage-connector-builder`

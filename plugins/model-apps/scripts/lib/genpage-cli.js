@@ -268,6 +268,10 @@ function makeGenpageCli(env, deps = {}) {
         };
         let pid = pageId;
         let lastErr = '';
+        // Set when a CREATE asked for sitemap placement but recovery adopted an existing page id,
+        // turning the retry into an UPDATE — which cannot carry --add-to-sitemap. The page then
+        // exists but is UNPLACED, and reporting plain success would hide that.
+        let sitemapPending = false;
         // Snapshot taken once (lazily on the first CREATE attempt) so the before/after diff is anchored
         // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
         // safely attribute a later uncertain result — halt to prevent a blind duplicate.
@@ -295,7 +299,7 @@ function makeGenpageCli(env, deps = {}) {
                   `pac genpage upload for '${name}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
                 );
               }
-              return { pageId: id };
+              return sitemapPending ? { pageId: id, sitemapPending: true } : { pageId: id };
             }
             lastErr = `returned no Page ID: ${lastLine(r)}`;
           } else {
@@ -314,6 +318,10 @@ function makeGenpageCli(env, deps = {}) {
             const newIds = after.ids.filter((id) => !beforeIds.has(id));
             if (newIds.length === 1) {
               pid = newIds[0]; // CREATE landed → adopt; I7 guard verifies returned id on the UPDATE
+              // The adopted retry runs as an UPDATE, so `--add-to-sitemap` is no longer emitted.
+              // Record that the placement the caller asked for did not happen rather than letting
+              // a successful-looking result imply a page that is actually unreachable from the nav.
+              if (addToSitemap) sitemapPending = true;
             } else if (newIds.length === 0) {
               // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
             } else {

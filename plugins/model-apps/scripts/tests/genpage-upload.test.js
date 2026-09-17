@@ -143,6 +143,59 @@ test('a U+FEFF inside the prompt body is preserved', async () => {
   assert.strictEqual(cli.calls[0].prompt, body, 'only a LEADING BOM is an encoding marker');
 });
 
+// Adversarial review (astra HIGH 3 / grok MEDIUM 4). The wrapper OMITS `--add-to-sitemap` on an
+// update as a backstop, but omission is not an answer to an explicit contradictory request: the
+// caller believes a placement happened and it never did. The docs claimed "refused"; now it is.
+test('--add-to-sitemap combined with --page-id is refused, not silently dropped', async () => {
+  const cli = capturingCli();
+  const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+    '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p', '--add-to-sitemap'], cli);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot be combined with --page-id/);
+  assert.strictEqual(cli.calls.length, 0, 'nothing may be uploaded on a contradictory request');
+});
+
+// grok MEDIUM 5 — `upload()` substitutes `Generative page <name>` for a blank prompt. That is fine
+// when no prompt was supplied, but a caller who passed --prompt-file asked for THAT text, and
+// deploying a generated placeholder instead is exactly the provenance break this path exists to
+// prevent. A blank, newline-only or BOM-only file is the realistic way it happens.
+test('a prompt file that resolves to empty is refused rather than silently defaulted', async () => {
+  const d = tmp();
+  for (const [label, body] of [['blank', ''], ['newline-only', '\n'], ['BOM-only', '\uFEFF'], ['whitespace', '   \n  ']]) {
+    const pf = path.join(d, `p-${label}.txt`);
+    fs.writeFileSync(pf, body, 'utf8');
+    const cli = capturingCli();
+    const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+      '--name', 'NamedPage', '--prompt-file', pf], cli);
+    assert.strictEqual(r.ok, false, `${label} must be refused`);
+    assert.match(r.payload.error, /resolved to empty/);
+    assert.strictEqual(cli.calls.length, 0, `${label}: nothing may be uploaded`);
+  }
+  // CONTROL: a file with real content still deploys, so this is not a blanket refusal.
+  const good = path.join(d, 'good.txt');
+  fs.writeFileSync(good, 'A real approved prompt', 'utf8');
+  const cli = capturingCli();
+  const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx', '--prompt-file', good], cli);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(cli.calls[0].prompt, 'A real approved prompt');
+});
+
+// astra HIGH 3b — the worse half. A CREATE that asked for placement, crashed mid-flight and was
+// recovered as an UPDATE leaves the page deployed but absent from the app's navigation, and the old
+// code returned plain success. An unreachable page is an incomplete deployment, not a success.
+test('a page deployed but left out of the sitemap is reported as incomplete, with its id', async () => {
+  const cli = {
+    calls: [],
+    factory: () => ({ upload: async (o) => { cli.calls.push(o); return { pageId: 'f3ea07fc-bd57-4d73-af69-b2b64d3ccd85', sitemapPending: true }; } }),
+  };
+  const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
+    '--name', 'N', '--prompt', 'p', '--add-to-sitemap'], cli);
+  assert.strictEqual(r.ok, false, 'an unplaced page is not a successful deployment');
+  assert.strictEqual(r.payload.pageId, 'f3ea07fc-bd57-4d73-af69-b2b64d3ccd85',
+    'the id must still be reported so the operator can place it');
+  assert.match(r.payload.error, /NOT added to the sitemap/);
+});
+
 test('an unreadable prompt file fails closed instead of deploying a default prompt', async () => {  const cli = capturingCli();
   const r = await runMain(['--env', 'https://x/', '--app-id', 'a1', '--code-file', 'p.tsx',
     '--prompt-file', path.join(tmp(), 'missing.txt')], cli);
