@@ -38,6 +38,13 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **The vendored SDK is refreshed to pick up upstream wire-correctness fixes.** Two joins on one
+  table no longer collapse into one, a join type the typed layer does not model is no longer
+  silently rewritten as an inner join, `addElement` no longer re-keys a node when handed a property
+  bag, and dashboard layout/control-id parsing is corrected. Measured against the previous bundle,
+  none of these changes this plugin's output today — it authors no view joins, and all its
+  `addElement` calls target array pointers — so this removes latent hazards rather than altering
+  behaviour.
 - **A section emptied by a layout move is reclaimed instead of left as a blank twin.** Moving a
   section between tabs or form-columns under a generated name changed its identity, so the old one
   survived as an empty duplicate-labelled section. Gated on the same `prune` opt-out the field prune

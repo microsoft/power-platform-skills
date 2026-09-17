@@ -1,14 +1,14 @@
 {
-  "commit": "9719a713a0e9cec3353ff042a1bf22c34c7ce6ed",
-  "subject": "Fix Monitoring Hub time-series routing",
+  "commit": "d13d4786bea7919ca1a82114c8d362f2222b4712",
+  "subject": "fix(cds-maker-sdk): join reconciliation correctness (review round 2)",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-17T00:49:27.419Z",
-  "newestSrcAt": "2026-09-16T22:30:59.712Z",
+  "libBuiltAt": "2026-09-17T18:32:29.699Z",
+  "newestSrcAt": "2026-09-17T18:10:05.634Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-17T00:49:41.071Z",
-  "bundleSha256": "7b3394af03f9cb701e5ac23dcd5064fbf9e31870712d642872aff0b9d0fd442b",
-  "bundleBytes": 702409
+  "builtAt": "2026-09-17T18:33:21.671Z",
+  "bundleSha256": "99cdba63c44ac9156f68021ef7a195e22e271af4701ae061005e81905a4ed9ed",
+  "bundleBytes": 707164
 }
