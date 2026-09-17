@@ -703,9 +703,10 @@ Next steps:
   - /preview-offline-scope         → estimate download size before pushing the app (not yet implemented — v0.2)
   - /edit-offline-profile <table>  → re-scope one table (not yet implemented — v0.2)
 
-Note: The Expo runtime does not yet consume this profile automatically. The profile is now
-authored in Dataverse and any compatible Power Apps client (canvas, model-driven) will use it.
-Native runtime support remains deferred until upstream host support is confirmed.
+Runtime: The template bundles @microsoft/power-apps-native-offline.
+@microsoft/power-apps-native-host consumes the profile and owns local SQLite access,
+queued synchronization, reconnect behavior, and status UX. This skill configures
+that runtime; it does not scaffold a second app-owned store, queue, or sync engine.
 ```
 
 ## Status code (final line)

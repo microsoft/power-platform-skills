@@ -354,9 +354,9 @@ planning degradation; it never relaxes `/add-dataverse` reconciliation.
 
 **Design decisions are deferred to Step 6.75** — `/design-system` (ships with this plugin) handles brand inputs, the style picker, and visual companion preference in one flow after the project is scaffolded. Do NOT ask design questions here.
 
-Set tentative defaults (used by Step 3b before `/design-system` runs):
+Set tentative defaults (the preview preference applies at Step 6.75):
 
-- `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
+- `<visual_companion> = yes` — automatically open `_plan_preview.html` in the browser at Step 6.75, after the design choice. Gate 4 remains markdown-only regardless of this preference. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
@@ -939,36 +939,26 @@ user-facing design decision without another planning question.
 
 If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
 
-#### Step 3b — Open the plan preview in the user's browser (orchestrator-owned)
+#### Step 3b — Structural review and legacy preview output
 
-The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` before each Gate 4 plan-mode entry. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
+Gate 4 remains markdown-only in this create flow, including reject/re-plan loops.
+For deferred or skipped design, screen-planner receives `skip_preview: true`, so
+no `PLAN_PREVIEW_PATH:` token is expected. Its absence is not an error, and
+`<visual_companion> = yes` does not request an earlier preview.
 
-**When to run this:** every time the planner enters or re-enters Gate 4 (initial pass + each reject loop). Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
+If a legacy planner emits `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html`,
+ignore that early preview output. Do not open it or request a replacement HTML
+preview at Gate 4. Step 6.75 produces the fresh preview after the design choice,
+using locked brand tokens or the design-system Skip path's defaults, and honors
+the persisted Visual Companion preference for automatic browser opening.
 
-**What to do:**
+After the structural review, print:
 
-1. Print the link in a dedicated message so the user always has the fallback (clickable in most terminals):
+> "Gate 4 reviewed structurally. Visual preview is deferred to Step 6.75."
 
-   > "Plan-time visual preview: file://<abs-path>/_plan_preview.html"
+With `--no-design`, Step 6.75 and its HTML preview are both skipped. Print instead:
 
-2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the planner's Gate 4 prompt.
-
-3. **Else** attempt to open in the user's default browser via the OS-portable chain:
-
-   ```bash
-   open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<abs-path>\_plan_preview.html'" 2>/dev/null \
-     || echo "Auto-open failed. Use the link above."
-   ```
-
-4. Do NOT block on success. If the chain prints "Auto-open failed", the link from step 1 is the user's fallback. Continue immediately so the planner's plan-mode prompt surfaces without delay.
-
-If the planner returns without emitting a `PLAN_PREVIEW_PATH:` line, that is **expected** — the planner passes `skip_preview: true` to screen-planner since `/design-system` (always installed) renders the single visual preview at Step 6.75 after brand locks. Print:
-
-> "→ Gate 4 reviewed structurally. Visual preview will appear at Step 6.75 after `/design-system` locks your brand tokens (~5 min from now after scaffold)."
-
-…and continue without attempting any browser open. **Do not warn or treat this as an error** — it is the documented behavior.
+> "Gate 4 reviewed structurally. HTML preview skipped (--no-design)."
 
 #### 3.9 — Post-plan publisher-prefix gate
 
@@ -1275,7 +1265,7 @@ Immediately after creating `memory-bank.md`, flush any queued planner concerns f
 **Also persist the Visual Companion preference** so re-runs (`/edit-app`, `/preview-screens`, future `/design-system` runs) honor it without re-asking. Append to the Project facts section:
 
 ```
-visual_companion: <yes|no>   # set in Step 2b — controls whether browser previews open automatically
+visual_companion: <yes|no>   # default from Step 2b; applied at Step 6.75 and later previews
 ```
 
 `/preview-screens` reads this flag when invoked from inside this project; if `no`, it prints the file path instead of opening. `/edit-app` reads it to decide whether to re-open `_plan_preview.html` after a re-plan. The flag is per-project and does not leak across apps.
@@ -1299,7 +1289,7 @@ Arguments:
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
-- `DONE` → continue to Step 6.85. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
+- `DONE` → finish the applicable preview branch below, then continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
@@ -1321,7 +1311,7 @@ The user skipped the design system but still deserves to see their screens befor
 
 2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
 
-3. **Open in browser** (if `<visual_companion> = yes`):
+3. **Print the preview path; open in browser only if `<visual_companion> = yes`:**
    ```bash
    open "<working_dir>/_plan_preview.html" 2>/dev/null \
      || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
@@ -1329,13 +1319,14 @@ The user skipped the design system but still deserves to see their screens befor
      || true
    ```
 
-4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
+4. **Auto-continue — no prompt.** The user already approved the applicable planning gates; the preview does not introduce another approval gate. Print one line and proceed:
 
-  > `→ Preview rendered with default styling. Continuing to Step 6.85. (Interrupt and re-run /design-system or /edit-app to revise.)`
+  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
 
-This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
-
-**Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
+**Preview timing:** For current and legacy planner output, Gate 4 remains markdown-only.
+Step 6.75 is the only screen-preview stage in this create flow: Branch A uses locked
+brand tokens; Branch B uses defaults. `visual_companion: no` disables automatic
+browser opening, not rendering. `--no-design` skips this stage and its HTML preview.
 
 Offline profile setup is intentionally deferred until after the approved
 Dataverse model has been materialized. Follow the shared connectivity-intent

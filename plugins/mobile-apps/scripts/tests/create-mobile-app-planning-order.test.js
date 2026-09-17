@@ -167,6 +167,39 @@ test('deferred design does not create an extra industry question', () => {
   assert.doesNotMatch(planner, /design is reviewed visually at Gate 4/i);
 });
 
+test('preview preferences keep deferred Gate 4 markdown-only', () => {
+  const preferences = section(createSkill, 'Set tentative defaults', '**`--no-design` escape hatch.**');
+  assert.match(preferences, /<visual_companion> = yes[^\r\n]*Step 6\.75/);
+  assert.match(preferences, /Gate 4 remains markdown-only/);
+  assert.doesNotMatch(preferences, /open[^\r\n]*at Gate 4/i);
+  assert.doesNotMatch(createSkill, /The planner emits[^\r\n]*before each Gate 4 plan-mode entry/);
+  const handoff = section(createSkill, '#### Step 3b', '#### 3.9');
+  assert.match(handoff, /legacy planner emits `PLAN_PREVIEW_PATH:[\s\S]*ignore that early preview output/);
+  assert.match(handoff, /Do not open it[\s\S]*at Gate 4/);
+  assert.match(handoff, /With `--no-design`, Step 6\.75 and its HTML preview are both skipped/);
+  assert.doesNotMatch(handoff, /open "|xdg-open|Start-Process/);
+  const design = section(createSkill, '### Step 6.75', 'Offline profile setup is intentionally deferred');
+  assert.match(design, /legacy[\s\S]*Gate 4 remains markdown-only/i);
+  assert.match(design, /visual_companion: no` disables automatic\s+browser opening, not rendering/);
+  assert.match(design, /`--no-design` skips this stage and its HTML preview/);
+  assert.doesNotMatch(design, /Step 6\.85|every path through the flow gets at least one visual preview/);
+  const brandedPreview = section(design, '#### Branch A', '#### Branch B');
+  assert.match(brandedPreview, /\/design-system` owns rendering of `_plan_preview\.html`/);
+  const skippedDesign = section(design, '#### Branch B', '**Preview timing:**');
+  assert.match(skippedDesign, /\*\*Render `_plan_preview\.html`\*\*/);
+  assert.match(skippedDesign, /Print the preview path; open in browser only if `<visual_companion> = yes`/);
+});
+
+test('offline completion summary reflects the bundled native host runtime', () => {
+  const offlineSkill = fs.readFileSync(
+    path.join(pluginRoot, 'skills/setup-offline-profile/SKILL.md'), 'utf8',
+  );
+  const summary = section(offlineSkill, '### Step 10 — Summary', '## Status code');
+  assert.match(summary, /@microsoft\/power-apps-native-host[\s\S]*consumes the profile/);
+  assert.match(summary, /SQLite[\s\S]*queued synchronization[\s\S]*reconnect[\s\S]*status/);
+  assert.doesNotMatch(summary, /does not yet consume|Native runtime support remains deferred/i);
+});
+
 test('inline fallback preserves architecture-first conditional modeling', () => {
   const fallback = section(
     createSkill,
