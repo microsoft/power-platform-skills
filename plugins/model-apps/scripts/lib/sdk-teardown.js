@@ -219,9 +219,14 @@ const KIND_HANDLERS = {
         const detail = failures
           .map((f) => `${f.operation} ${f.type}${f.id ? ` ${f.id}` : ''}: ${errMsg(f.error)}`)
           .join('; ');
-        throw new Error(
+        const err = new Error(
           `app "${item.name}" deleted, but ${failures.length} cascade cleanup step(s) failed (orphaned rows remain): ${detail}`
         );
+        // The app ROW is gone by this point — only a cleanup step failed. runTeardown keys its
+        // abort on this flag: here the dependents MUST still be torn down, because stopping would
+        // strand more orphans, not fewer. See #587 item 5.
+        err.appDeleted = true;
+        throw err;
       }
     },
   },
@@ -1169,7 +1174,24 @@ async function runTeardown(spec, opts = {}, deps = {}) {
       const message = errMsg(err);
       result.errors.push({ step: step.label, message });
       emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
-      // best-effort: continue to the next step so a single failure doesn't strand the rest.
+      // Best-effort continue-on-error is right for the steps AFTER the dependency root is gone — one
+      // undeletable view should not strand the rest. It is WRONG for the root itself (#587 item 5):
+      // tables, forms, views and charts are COMPONENTS of the app module, so continuing past a failed
+      // app delete strips a LIVE app of everything it renders and leaves it broken in the environment.
+      // Stopping leaves a consistent app the operator can retry against.
+      //
+      // `err.appDeleted` marks the other case: the app row WAS removed and only a cascade cleanup step
+      // failed. There the dependents are already orphaned, so continuing removes them rather than
+      // leaving more behind.
+      if (step.kind === 'app' && !err.appDeleted) {
+        for (let i = myN; i < plan.length; i += 1) {
+          const rest = plan[i];
+          const why = `${rest.label} (not attempted — the app was not deleted)`;
+          result.skipped.push(why);
+          emit({ phase: rest.phase, status: 'skip', label: why, n: i + 1, total });
+        }
+        break;
+      }
     }
   }
   return result;

@@ -38,6 +38,12 @@ downloads that round-trip Choice columns.
 
 ### Fixed
 
+- **Teardown stops instead of stripping a live app when the app delete fails** ([#587]). The app
+  module is the dependency root — tables, forms, views and charts are its components — so continuing
+  past a failed app delete removed everything a still-live app renders and left it broken. This
+  **reverses earlier best-effort behaviour** that deliberately continued; continue-on-error still
+  applies to every later step, and to the case where the app row *was* deleted and only a cascade
+  cleanup step failed, where stopping would strand more orphans rather than fewer.
 - **`--clear-workspace` no longer recursively deletes whatever `--workspace` named** ([#587]). The
   cleanup ran `rm -rf` on the caller-supplied path with no check that it was a workspace at all, and
   it runs immediately after a *successful* teardown — the moment an operator is least expecting data

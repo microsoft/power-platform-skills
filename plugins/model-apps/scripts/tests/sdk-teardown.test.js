@@ -1737,10 +1737,64 @@ test('#587 a role whose sharing check cannot be read is retained, not deleted', 
     'an unreadable sharing check must fail CLOSED and retain the role');
 });
 
-// The OTHER branch, pinned so it is not "fixed" later without thinking it through. A roleid that
+// #587 item 5 — teardown continued after the APP delete failed. The app module is the dependency
+// ROOT: tables, forms, views and charts are its components. Continuing past a failed app delete
+// therefore strips a LIVE app of everything it renders, leaving a broken app in the environment —
+// strictly worse than stopping and leaving a consistent one for the operator to retry.
+//
+// Continue-on-error is right for the steps AFTER the root is gone (one undeletable view should not
+// strand the rest); it is wrong for the root itself.
+test('#587 a failed app delete stops dependent teardown instead of stripping a live app', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    deleteAppCascade: async () => { throw new Error('HTTP 400 app delete refused'); },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+
+  assert.strictEqual(r.ok, false, 'a failed app delete must fail the run');
+  const destructive = base.calls.filter((c) => /^delete/.test(c.method) && c.method !== 'deleteAppCascade');
+  assert.deepStrictEqual(destructive.map((c) => c.method), [],
+    'nothing dependent may be deleted once the app itself was not removed');
+  assert.ok(r.errors.some((e) => /app delete refused/.test(e.message)), 'the real cause must be reported');
+  assert.strictEqual(base.db.tables.size, 3, 'the tables the live app renders must still be there');
+});
+
+// The distinction that makes the rule safe. `app.del` ALSO throws when the app record WAS removed
+// and only a cascade cleanup step failed — aborting there would strand MORE orphans, not fewer. So
+// the abort is conditioned on the app not being proven deleted, not on "the app step threw".
+test('#587 a cascade-cleanup failure still lets teardown continue — the app itself is gone', async () => {
+  const seed = {
+    appmodules: { [appUniqueName(desk)]: { appmoduleid: 'app-1', name: 'Support Desk' } },
+    tables: ['new_customer', 'new_ticket', 'new_comment'],
+    solutions: { ContosoSupportDesk: { solutionid: 'sol-1', uniquename: 'ContosoSupportDesk' } },
+  };
+  const base = mockSdk(seed);
+  const sdk = {
+    ...base,
+    deleteAppCascade: async (id, unique) => {
+      await base.deleteAppCascade(id, unique); // the app row really is removed
+      return { success: false, deleted: [], retained: [], failures: [{ operation: 'delete', type: 'sitemap', id: 's1', error: new Error('HTTP 500 cleanup failed') }] };
+    },
+  };
+  const r = await runTeardown(desk, { apply: true }, { sdk, emit: () => {} });
+
+  assert.strictEqual(r.ok, false, 'the cleanup failure is still a failure');
+  assert.strictEqual(base.db.tables.size, 0,
+    'the app is gone, so its dependents must still be torn down rather than left orphaned');
+});
 // is not a GUID skips the association query entirely — and that is deliberate: FORM_GUID_RE is an
 // injection guard on the OData filter, not an existence check. Every Dataverse `roleid` is an
-// Edm.Guid, so an id failing it never came from the platform and has no app association to protect.
+// The OTHER branch of the same resolver, pinned so it is not "fixed" later without being thought
+// through. A roleid that is not a GUID skips the association query entirely — deliberately:
+// FORM_GUID_RE is an injection guard on the OData filter, not an existence check. Every Dataverse
+// roleid is an Edm.Guid, so an id failing it never came from the platform and has no app
+// association to protect.
 // Making it fail closed was considered and rejected: no real row benefits, and role ownership would
 // start depending on id formatting.
 test('#587 a non-GUID role id still resolves — the GUID test is an injection guard, not a safety check', async () => {
